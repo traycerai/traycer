@@ -649,45 +649,87 @@ describe("body overflow inside a frame", () => {
     ]);
   });
 
-  // `content-visibility: hidden` skips the page's contents, and the engine
-  // reveals nothing inside them. Such a page lays out no taller than its
-  // view, so the viewport it is left to has no room and the walk scrolls
-  // nothing, which is what the engine does. Were it read as the containment
-  // it is, the body would be a scroller and the walk would move it to an
-  // element the engine never moves to.
-  it.each(["html", "body"])(
+  // A page whose contents are skipped. Every scroller here has room to
+  // reveal the target, which is the point: the engine still reveals nothing,
+  // so neither may the walk, and a page that happened to leave no room would
+  // pass whether the rule is there or not.
+  function skippedPage(
+    frame: Frame,
+    skipped: Record<string, string>,
+    on: string,
+  ): { html: HTMLElement; ancestor: HTMLElement; target: HTMLElement } {
+    const doc = frame.window.document;
+    const ancestor = doc.createElement("div");
+    const target = doc.createElement("button");
+    doc.body.append(ancestor);
+    ancestor.append(target);
+    const roomy = {
+      client: { height: 100, width: 100 },
+      scroll: { height: 1000, width: 1000, top: 0, left: 0 },
+    };
+    frame.place(doc.documentElement, {
+      ...roomy,
+      style: { ...VISIBLE, ...(on === "html" ? skipped : {}) },
+    });
+    frame.place(doc.body, {
+      ...roomy,
+      style: { ...VISIBLE, ...(on === "body" ? skipped : {}) },
+    });
+    frame.place(ancestor, { style: on === "an ancestor" ? skipped : {} });
+    frame.place(target, {
+      rect: { top: 300, bottom: 340, left: 20, right: 60 },
+      style: on === "the target" ? skipped : {},
+    });
+    return { html: doc.documentElement, ancestor, target };
+  }
+
+  const HIDDEN = { contentVisibility: "hidden" };
+
+  // The engine reveals nothing inside skipped contents, however much room
+  // the page leaves around them, and the target in there still reports a
+  // client rect, so the walk's empty-rect return never sees it.
+  it.each(["html", "body", "an ancestor"])(
     "scrolls nothing into view when %s is skipped",
-    (skipped) => {
+    (on) => {
       const frame = startFrame(false);
-      const doc = frame.window.document;
-      const target = doc.createElement("button");
-      doc.body.append(target);
-      const view = { height: 100, width: 100 };
-      frame.place(doc.documentElement, {
-        client: view,
-        // Skipped contents leave the root no taller than its view.
-        scroll: { height: 100, width: 100, top: 0, left: 0 },
-        style:
-          skipped === "html"
-            ? { ...VISIBLE, contentVisibility: "hidden" }
-            : VISIBLE,
-      });
-      frame.place(doc.body, {
-        client: view,
-        scroll: { height: 1000, width: 1000, top: 0, left: 0 },
-        style: {
-          overflowX: "hidden",
-          overflowY: "visible",
-          ...(skipped === "body" ? { contentVisibility: "hidden" } : {}),
-        },
-      });
-      frame.place(target, {
-        rect: { top: 300, bottom: 340, left: 20, right: 60 },
-      });
+      const { target } = skippedPage(frame, HIDDEN, on);
 
       scrollIntoView(target, { block: "start" });
 
       expect(frame.scrolls).toEqual([]);
+    },
+  );
+
+  // An element's own `hidden` skips what is inside it. The element itself is
+  // laid out and revealed as any other.
+  it("reveals a target that is itself skipped", () => {
+    const frame = startFrame(false);
+    const { html, target } = skippedPage(frame, HIDDEN, "the target");
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([
+      { scroller: html, top: 300, left: 0, behavior: "auto" },
+    ]);
+  });
+
+  // `auto` skips its contents only while they are off screen, and the engine
+  // reveals into them, so the walk must not take it for `hidden`.
+  it.each(["html", "body", "an ancestor"])(
+    "reveals into %s when it is content-visibility: auto",
+    (on) => {
+      const frame = startFrame(false);
+      const { html, target } = skippedPage(
+        frame,
+        { contentVisibility: "auto" },
+        on,
+      );
+
+      scrollIntoView(target, { block: "start" });
+
+      expect(frame.scrolls).toEqual([
+        { scroller: html, top: 300, left: 0, behavior: "auto" },
+      ]);
     },
   );
 });

@@ -339,6 +339,25 @@ function bootstrapMain(config: BootstrapConfig): void {
     const root = element.getRootNode();
     return root instanceof ShadowRoot ? root.host : null;
   };
+  // Nothing inside skipped contents is scrolled to: the engine reveals
+  // nothing in there, however much room the page leaves around it. A target
+  // in there still has a client rect, so the walk cannot tell from the
+  // target alone. Only an ancestor's `hidden` skips it — an element's own
+  // skips what is inside it, and the element itself is still revealed — and
+  // only `hidden`, since `auto` skips its contents while they are off
+  // screen and the engine reveals into them.
+  const isSkipped = (target: Element): boolean => {
+    for (
+      let element = parentOf(target);
+      element !== null;
+      element = parentOf(element)
+    ) {
+      if (window.getComputedStyle(element).contentVisibility === "hidden") {
+        return true;
+      }
+    }
+    return false;
+  };
   // Containment of any kind, on the root or on the body. `contain` names it;
   // `container-type` and `content-visibility` apply it without naming it, and
   // leave `contain` itself `none`.
@@ -349,18 +368,9 @@ function bootstrapMain(config: BootstrapConfig): void {
   // twice already, so it is read the other way round: the values that contain
   // nothing are named, and everything else contains.
   //
-  // `content-visibility: hidden` contains, and is deliberately read here as
-  // though it did not. Its contents are skipped and the engine reveals
-  // nothing inside them, while a target in there still has a client rect, so
-  // the walk cannot tell from the target alone that there is nothing to
-  // reveal. Read as containment, the body becomes a scroller and the walk
-  // moves it to that target; read as the viewport's, a page that sizes
-  // itself to its skipped contents leaves the viewport no room and the walk
-  // moves nothing, as the engine does. A page that gives itself an explicit
-  // height is the shape this does not cover: the viewport has room, and the
-  // walk scrolls it where the engine scrolls nothing. Reading `hidden` as
-  // containment does not cover it either, so it is left as it is rather than
-  // taken as a reason to call the page contained. `auto` is containment the
+  // `content-visibility: hidden` contains too, and is left out because it
+  // cannot reach here: a reveal whose target is inside skipped contents is
+  // over before the walk starts (`isSkipped`). `auto` is containment the
   // engine does reveal into, and counts.
   const contains = (element: Element | null): boolean => {
     if (element === null) return false;
@@ -401,7 +411,7 @@ function bootstrapMain(config: BootstrapConfig): void {
     inline: Align,
     behavior: ScrollBehavior,
   ): void => {
-    if (target.getClientRects().length === 0) return;
+    if (target.getClientRects().length === 0 || isSkipped(target)) return;
     const margin = window.getComputedStyle(target);
     const rect = target.getBoundingClientRect();
     let top = rect.top - pixels(margin.scrollMarginTop);
