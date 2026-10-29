@@ -1070,6 +1070,7 @@ describe("LegendList estimate recovery", () => {
       readonly endBefore: number;
       readonly land: () => void;
       readonly resize: (index: number, delta: number) => number;
+      readonly clampLikeBrowser: () => number;
     }> {
       const listRef = createRef<LegendListRef | null>();
       render(
@@ -1099,6 +1100,19 @@ describe("LegendList estimate recovery", () => {
       await advanceLegendListFrames(1);
 
       return {
+        clampLikeBrowser: () => {
+          const furthest = Math.max(
+            0,
+            list.getState().contentLength - scrollNode.clientHeight,
+          );
+          if (scrollNode.scrollTop > furthest) {
+            scrollNode.scrollTop = furthest;
+            act(() => {
+              scrollNode.dispatchEvent(new Event("scroll"));
+            });
+          }
+          return scrollNode.scrollTop;
+        },
         endBefore,
         resize: (index: number, delta: number) => {
           const before = list.getState().sizeAtIndex(index);
@@ -1173,6 +1187,28 @@ describe("LegendList estimate recovery", () => {
       const second = resize(69, 28);
       await advanceLegendListFrames(3);
       expect(scrollNode.scrollTop).toBe(endBefore + first + second);
+    });
+
+    // A row above the target can also take the content below the view. The list
+    // then moves the view to the clamped end by writing its own offset, with no
+    // adjust to carry the command's record along, and a browser clamps its
+    // scroller to the same place and reports it (jsdom has no layout, so the
+    // test does what the browser would). The reader is following a streaming
+    // reply throughout, and the row that shrank grows back: they have to be at
+    // the end it ends up at.
+    it("keeps pinning after a row above the target shrank the content", async () => {
+      const { scrollNode, endBefore, land, resize, clampLikeBrowser } =
+        await heldEndCommandAtTheEnd();
+      land();
+
+      const shrunk = resize(68, -28);
+      expect(shrunk).toBeLessThan(0);
+      await advanceLegendListFrames(3);
+      expect(clampLikeBrowser()).toBe(endBefore + shrunk);
+
+      expect(resize(69, 28)).toBeGreaterThan(0);
+      await advanceLegendListFrames(3);
+      expect(scrollNode.scrollTop).toBe(endBefore);
     });
 
     // A row above the target moves the target itself, so the view travels by
