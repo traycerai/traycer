@@ -1,4 +1,7 @@
-import type { AuthenticatedUser } from "@traycer/protocol/auth";
+import type {
+  AuthenticatedUser,
+  AuthenticatedUserCampaignCredit,
+} from "@traycer/protocol/auth";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -153,5 +156,142 @@ describe("CreditsSettingsPanel", () => {
       "account",
       expect.objectContaining({ type: "click" }),
     );
+  });
+});
+
+describe("CreditsSettingsPanel credit offers", () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  function offer(
+    overrides: Partial<AuthenticatedUserCampaignCredit>,
+  ): AuthenticatedUserCampaignCredit {
+    return {
+      campaignId: "c1",
+      name: "Launch offer",
+      description: "For the launch models",
+      grantCredits: 25,
+      remainingCredits: 12.5,
+      // Five days and an hour out, so the phrase rounds to "5 days" for the
+      // whole run.
+      endsAt: new Date(Date.now() + 5 * DAY_MS + 60 * 60 * 1000).toISOString(),
+      ...overrides,
+    };
+  }
+
+  function userWithOffers(
+    campaignCredits: AuthenticatedUserCampaignCredit[] | undefined,
+  ): AuthenticatedUser {
+    return {
+      ...userWith(
+        userSubscription({
+          totalPlanCredits: 100,
+          consumedFromPlan: 30,
+          bonusCredits: 0,
+          consumedFromBonus: 0,
+          bundleRemaining: 0,
+        }),
+        [],
+      ),
+      campaignCredits,
+    };
+  }
+
+  beforeEach(() => {
+    mocks.data = null;
+    mocks.isPending = false;
+    mocks.isError = false;
+    mocks.isFetching = false;
+    setMobileApp(false);
+  });
+
+  afterEach(() => {
+    cleanup();
+    setMobileApp(false);
+  });
+
+  it.each([undefined, []])(
+    "renders no offers section when campaignCredits is %j",
+    (campaignCredits) => {
+      mocks.data = userWithOffers(campaignCredits);
+
+      render(<CreditsSettingsPanel />);
+
+      expect(screen.getByTestId("credits-ready")).toBeTruthy();
+      expect(screen.queryByTestId("credits-offers")).toBeNull();
+    },
+  );
+
+  it("lists each offer in dollars with its name, description and time left", () => {
+    mocks.data = userWithOffers([
+      offer({}),
+      offer({
+        campaignId: "c2",
+        name: "Plain offer",
+        description: null,
+        grantCredits: 10,
+        remainingCredits: 4,
+      }),
+    ]);
+
+    render(<CreditsSettingsPanel />);
+
+    const rows = screen.getAllByTestId("credits-offer-row");
+    expect(rows).toHaveLength(2);
+    const [first, second] = rows;
+    expect(
+      first.querySelector("[data-testid=credits-offer-remaining]")?.textContent,
+    ).toBe("$12.50");
+    expect(
+      first.querySelector("[data-testid=credits-offer-grant]")?.textContent,
+    ).toBe("of $25.00");
+    expect(first.textContent).toContain("Launch offer");
+    expect(first.textContent).toContain("For the launch models");
+    expect(
+      first.querySelector("[data-testid=credits-offer-time-left]")?.textContent,
+    ).toBe("5 days left");
+    // A null description adds no line: the row is figures, name and time.
+    expect(second.textContent).toBe("$4.00of $10.00Plain offer5 days left");
+  });
+
+  it("counts offers in credits, not dollars, in the installed app", () => {
+    setMobileApp(true);
+    mocks.data = userWithOffers([offer({})]);
+
+    render(<CreditsSettingsPanel />);
+
+    expect(screen.getByTestId("credits-offer-remaining").textContent).toBe(
+      "12.50 credits",
+    );
+    expect(screen.getByTestId("credits-offer-grant").textContent).toBe(
+      "of 25.00 credits",
+    );
+  });
+
+  it("keeps offer credit out of the balance", () => {
+    mocks.data = userWithOffers([offer({ remainingCredits: 12.5 })]);
+
+    render(<CreditsSettingsPanel />);
+
+    expect(screen.getByTestId("credits-remaining").textContent).toBe(
+      "$70.00 left",
+    );
+    expect(screen.getByTestId("credits-offer-remaining").textContent).toBe(
+      "$12.50",
+    );
+  });
+
+  it("explains the terms from the About credit offers button", () => {
+    mocks.data = userWithOffers([offer({})]);
+
+    render(<CreditsSettingsPanel />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "About credit offers" }),
+    );
+
+    expect(
+      screen.getByText(
+        "Separate from your total credits, and only for each offer's models. Unused credit expires when the offer ends.",
+      ),
+    ).toBeTruthy();
   });
 });
