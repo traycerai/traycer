@@ -291,7 +291,14 @@ async function loadEnvironmentDetails(
   let status: DetailsStatus = {
     summary: detailsNowSummary(hosts),
     currentVersion: null,
-    changedBy: latest?.actor?.label ?? null,
+    // A lifecycle event names its subject in `actor`, not a person: a host
+    // the cleanup ran against is what changed, never who changed it. The
+    // guard is on the producer, so the export carries no such provenance
+    // either.
+    changedBy:
+      latest?.outcome === "host_destroyed"
+        ? null
+        : (latest?.actor?.label ?? null),
     changedAt: latest?.at ?? null,
     reason: null,
     hosts,
