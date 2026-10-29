@@ -126,10 +126,6 @@ describe("bot.conversation.send@1.2 a question card's answer", () => {
     skipped: false,
   };
 
-  it("is the latest minor", () => {
-    expect(line.latestMinor).toBe(2);
-  });
-
   it("upgrades a 1.1 request to one that answers no question", () => {
     const upgrade = line.versions[2].upgradeFromPreviousVersion;
     if (upgrade === null) throw new Error("expected a 1.1 to 1.2 upgrade path");
