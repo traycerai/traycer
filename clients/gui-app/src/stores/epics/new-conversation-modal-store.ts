@@ -28,6 +28,13 @@ import {
   setLandingDraftWorkspacePrimary,
 } from "@/stores/home/landing-draft-store";
 import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
+import {
+  parseReturnedSandbox,
+  sameStoredReturnedSandbox,
+  storeReturnedSandbox,
+  type ReturnedSandbox,
+  type StoredReturnedSandbox,
+} from "@/lib/sandboxes/returned-sandbox";
 import type { WorkspaceFolderInfo } from "@/stores/workspace/workspace-folders-store";
 
 export const createEmptyNewConversationContent = (): JsonContent => ({
@@ -79,6 +86,12 @@ export interface NewConversationModalDraftPatch {
    * host client to reach.
    */
   readonly ownerHostId: string | null;
+  /**
+   * The sandbox a message given back to this draft was going to: the
+   * composer stages it again while it holds no pick of its own. Local to
+   * this device, like the stage it restores; absent on any other draft.
+   */
+  readonly returnedSandbox?: StoredReturnedSandbox;
 }
 
 /**
@@ -165,6 +178,15 @@ interface NewConversationModalStore {
    */
   readonly clearWorkspace: (epicId: string) => void;
   readonly clearDraft: (epicId: string) => void;
+  /**
+   * Records, under the signed-in account, or drops the draft's returned
+   * sandbox. Not an edit: the draft stays as clean or dirty as it was, and no
+   * draft is made for it.
+   */
+  readonly setReturnedSandbox: (
+    epicId: string,
+    returned: ReturnedSandbox | StoredReturnedSandbox | null,
+  ) => void;
   readonly resetForTests: () => void;
 }
 
@@ -380,6 +402,26 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
           return { draftPatchesByEpicId };
         });
       },
+      setReturnedSandbox: (epicId, given) =>
+        set((state) => {
+          const current = state.draftPatchesByEpicId[epicId];
+          const returned = given === null ? null : storeReturnedSandbox(given);
+          if (
+            current === undefined ||
+            sameStoredReturnedSandbox(current.returnedSandbox ?? null, returned)
+          )
+            return state;
+          const { returnedSandbox: _previous, ...rest } = current;
+          return {
+            draftPatchesByEpicId: {
+              ...state.draftPatchesByEpicId,
+              [epicId]:
+                returned === null
+                  ? rest
+                  : { ...rest, returnedSandbox: returned },
+            },
+          };
+        }),
       resetForTests: () => {
         retiredNewChatDraftIds.clear();
         set({ draftPatchesByEpicId: {} });
@@ -437,7 +479,7 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
           // A patch with no restorable document is not a draft: it lists
           // nothing and seeds nothing.
           if (!isJsonContent(raw.content, 0)) continue;
-          draftPatchesByEpicId[epicId] = {
+          const patch: NewConversationModalDraftPatch = {
             content: raw.content,
             selection: parseNewChatSelection(raw.selection),
             settings: parseChatRunSettings(raw.settings),
@@ -452,6 +494,9 @@ export const useNewConversationModalStore = create<NewConversationModalStore>()(
             epicTitle: typeof raw.epicTitle === "string" ? raw.epicTitle : null,
             ownerHostId: parseNullableId(raw.ownerHostId),
           };
+          const returnedSandbox = parseReturnedSandbox(raw.returnedSandbox);
+          draftPatchesByEpicId[epicId] =
+            returnedSandbox === null ? patch : { ...patch, returnedSandbox };
         }
         return { ...currentState, draftPatchesByEpicId };
       },
@@ -625,7 +670,7 @@ export function applyNewChatHostDocument(document: DraftDocument): boolean {
       draftPatchesByEpicId: {
         ...state.draftPatchesByEpicId,
         [epicId]: {
-          ...current,
+          ...dropReturnedSandboxOnNewLine(current, document.draftId),
           content: document.portable.content,
           selection: document.portable.selection,
           settings: document.portable.runSettings,
@@ -643,6 +688,16 @@ export function applyNewChatHostDocument(document: DraftDocument): boolean {
     };
   });
   return contentLands;
+}
+
+/** Another draft line's text does not inherit this line's destination. */
+function dropReturnedSandboxOnNewLine(
+  current: NewConversationModalDraftPatch,
+  draftId: string,
+): NewConversationModalDraftPatch {
+  if (current.draftId === draftId) return current;
+  const { returnedSandbox: _dropped, ...rest } = current;
+  return rest;
 }
 
 export function applyNewChatHostDelete(draftId: string): void {

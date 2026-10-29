@@ -652,6 +652,7 @@ import {
   botThreadListV10,
   botThreadListV11,
   botThreadListUpgradeV10ToV11,
+  botTurnLocateV10,
   botOnboardingChooseV10,
   botOnboardingCompleteV10,
   botOnboardingReadV10,
@@ -9285,6 +9286,20 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: botThreadListV11,
           upgradeFromPreviousVersion: botThreadListUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The session turns behind a bot's replies, posts and check-ins (T86).
+  "bot.turn.locate": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botTurnLocateV10,
+          upgradeFromPreviousVersion: null,
         },
       },
       downgradePathsFromLatest: {},

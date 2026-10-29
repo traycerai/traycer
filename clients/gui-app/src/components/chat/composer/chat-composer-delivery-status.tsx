@@ -14,14 +14,17 @@ export const CHAT_STREAM_RECONNECTING_COPY =
  * Two facts, and never both. While the chat's stream is not open, sending is
  * paused and the line says so - the same sentence the disabled Send button
  * carries in its tooltip, which a person only finds by hovering a control that
- * has stopped working. While the stream IS open and a send has gone unanswered
- * past the display deadline, it says delivery is not confirmed and offers the
- * check. That second line is not a failure: the send keeps its ids and its
- * content, nothing is sent again, and it clears the moment the host answers.
+ * has stopped working. A sandbox line can explain reconnection instead.
+ * Without a reconnect line, a send unanswered past the display deadline keeps
+ * its delivery warning and check. That warning is not a failure: the send
+ * keeps its ids and content, nothing is sent again, and it clears the moment
+ * the host answers.
  */
-export function ChatComposerDeliveryStatus(): ReactNode {
+export function ChatComposerDeliveryStatus(props: {
+  readonly hideReconnecting: boolean;
+}): ReactNode {
   const stages = use(QueuedMessageStagesContext);
-  if (stages.streamReconnecting) {
+  if (stages.streamReconnecting && !props.hideReconnecting) {
     return (
       <div
         role="status"

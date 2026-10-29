@@ -75,6 +75,9 @@ const PRESENTATION: ChatBotPresentation = {
   chooseOption: null,
   questions: null,
   failedRequest: null,
+  failedRecovery: null,
+  replyReceipt: null,
+  requestReceipt: null,
 };
 
 const PERSON: BotOwner = {

@@ -119,13 +119,8 @@ import {
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { buildSubmittedChatJSONContent } from "@/lib/composer/tiptap-json-content";
-import {
-  confirmPendingSandboxSendEpic,
-  returnPendingSandboxSend,
-  handPendingSandboxSend,
-  pickedRunSettings,
-} from "@/lib/sandboxes/pending-sandbox-send";
-import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
+import { pickedRunSettings } from "@/lib/sandboxes/pending-sandbox-send";
+import { handLandingSandboxSend } from "@/components/home/hooks/landing-sandbox-send-handoff";
 import { subscribeFollowingSurfaceReset } from "@/stores/host/surface-host-selection-store";
 import {
   ComposerHostNotice,
@@ -134,6 +129,7 @@ import {
 import { LandingTeamChatLine } from "@/components/home/composer/landing-team-chat-line";
 import { useLandingOwner } from "@/hooks/home/use-landing-owner";
 import { useTeamSandboxHarnessGate } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
+import { useLandingReturnedSandbox } from "@/hooks/sandboxes/use-returned-sandbox-stage";
 import { ComposerUploadProgressNotice } from "@/components/home/composer/composer-upload-progress-notice";
 import { toggleActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
 import { useComposerHostNotice } from "@/hooks/composer/use-composer-host-notice";
@@ -372,6 +368,7 @@ export function LandingComposer(props: LandingComposerProps) {
   );
   // The window's pin key, which a staged sandbox is staged under.
   const composerSurfaceKey = useComposerSurfaceHostKey();
+  useLandingReturnedSandbox(composerSurfaceKey, draftId, activityEnabled);
   const settingsSeed = useMemo(
     () =>
       landingComposerSettingsSeedForDraft(
@@ -899,33 +896,15 @@ export function LandingComposer(props: LandingComposerProps) {
                 ? staged.target.configuration.teamId
                 : null,
             text,
-            hand: (epicId) => {
-              const id = handPendingSandboxSend({
+            hand: (epicId) =>
+              handLandingSandboxSend({
                 fromSurfaceKey: composerSurfaceKey,
                 epicId,
-                request: { kind: "chat", parentId: null, placement: null },
                 content,
                 text,
                 settings,
-                // The task is created with the send: the sandbox waits for it.
-                epicConfirmed: false,
                 now: Date.now(),
-              });
-              return id === null
-                ? null
-                : {
-                    isCurrent: () =>
-                      usePendingSandboxSendStore.getState().sends[id]
-                        ?.delivery === null,
-                    confirm: () => confirmPendingSandboxSendEpic(id),
-                    giveBack: () => {
-                      const returned = returnPendingSandboxSend(id);
-                      return returned.kind === "landing-draft"
-                        ? returned.draftId
-                        : null;
-                    },
-                  };
-            },
+              }),
           });
           raiseHostNotice(
             refusal === null

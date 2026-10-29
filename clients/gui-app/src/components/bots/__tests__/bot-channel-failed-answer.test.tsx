@@ -406,6 +406,9 @@ function mountChannelWith(
               botTitle="Release Bot"
               directive={null}
               appConversationChatId={CHANNEL_ID}
+              trunkChatId="trunk-chat"
+              openTurn={null}
+              onOpenTurn={vi.fn()}
               resolveMember={resolveMember}
               tasks={[]}
               surfaceActions={null}

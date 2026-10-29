@@ -64,6 +64,10 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ): ChatSessionStoreHandle | null =>
     chatId === CHANNEL_ID ? channelHandle() : null,
 }));
+// No check-in's turn is located here: the suite stands up no host to ask.
+vi.mock("@/hooks/bots/use-bot-turn-locate-query", () => ({
+  useBotTurnLocateQuery: () => ({ data: undefined }),
+}));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
   useChatLocateRowAnswer: (args: {
     target: { kind: string; messageId: string } | null;
@@ -246,6 +250,7 @@ function mount(
         kind: "bot",
         channelId: CHANNEL_ID,
         onOpenPost: mocks.openPost,
+        onOpenTurn: vi.fn(),
       }}
     />,
   );

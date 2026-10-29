@@ -321,7 +321,8 @@ function sandboxFactsOf(
 /**
  * The row's sandbox state: the registry's word, or the control plane's row
  * while it is still on its way to the destination the registry already reads
- * (`transitDestinationOf`), or the row's when the registry has said nothing.
+ * (`transitDestinationOf`) or once it has left a `creating` the registry still
+ * reads, or the row's when the registry has said nothing.
  */
 function sandboxStateOf(
   knownState: HostSandboxState | null,
@@ -329,6 +330,11 @@ function sandboxStateOf(
 ): HostSandboxState | null {
   if (summary === null) return knownState;
   if (knownState === null) return summary.state;
+  // A sandbox is created once, so a row past `creating` is newer than a
+  // registry still reading it and never moves the card backwards.
+  if (knownState === "creating" && summary.state !== "creating") {
+    return summary.state;
+  }
   return transitDestinationOf(summary.state) === knownState
     ? summary.state
     : knownState;

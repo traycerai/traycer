@@ -38,9 +38,10 @@ import { BotOnboardingCard } from "@/components/home/bots/bot-onboarding-card";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { BotChannelView } from "@/components/bots/bot-channel-view";
 import {
-  useBotOpenThread,
   useBotOpenThreadStore,
+  useBotRail,
   type BotOpenThread,
+  type BotOpenTurn,
 } from "@/stores/bots/bot-open-thread-store";
 import { BotChannelSidebar } from "@/components/bots/bot-channel-sidebar";
 import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
@@ -303,6 +304,64 @@ function BotTabBody(props: {
   );
 }
 
+/**
+ * The rail's one slot - a thread or one turn - held in its store, above the
+ * views, so it survives a switch between the channel's tabs; and the ways
+ * Activity and Threads open it beside the channel, switching to Messages.
+ */
+function useBotTabRail(
+  botId: string,
+  onViewChange: (view: BotTabView) => void,
+): {
+  readonly openThread: BotOpenThread | null;
+  readonly openTurn: BotOpenTurn | null;
+  readonly setOpenThread: (open: BotOpenThread | null) => void;
+  readonly setOpenTurn: (open: BotOpenTurn | null) => void;
+  readonly openPostInChannel: (open: BotOpenThread) => void;
+  readonly openTurnInChannel: (open: BotOpenTurn) => void;
+} {
+  const rail = useBotRail(botId);
+  const setRail = useBotOpenThreadStore((s) => s.setRail);
+  const openThread = rail?.kind === "thread" ? rail : null;
+  const openTurn = rail?.kind === "turn" ? rail : null;
+  const setOpenThread = useCallback(
+    (open: BotOpenThread | null) =>
+      setRail(botId, open === null ? null : { kind: "thread", ...open }),
+    [botId, setRail],
+  );
+  const setOpenTurn = useCallback(
+    (open: BotOpenTurn | null) =>
+      setRail(botId, open === null ? null : { kind: "turn", ...open }),
+    [botId, setRail],
+  );
+  // A post or a thread, from Activity or Threads: its thread opens beside the
+  // channel.
+  const openPostInChannel = useCallback(
+    (open: BotOpenThread) => {
+      setOpenThread(open);
+      onViewChange("messages");
+    },
+    [onViewChange, setOpenThread],
+  );
+  // A check-in's turn, from Activity: it opens beside the channel, in place
+  // of whatever the rail held, with nothing to go back to.
+  const openTurnInChannel = useCallback(
+    (open: BotOpenTurn) => {
+      setOpenTurn(open);
+      onViewChange("messages");
+    },
+    [onViewChange, setOpenTurn],
+  );
+  return {
+    openThread,
+    openTurn,
+    setOpenThread,
+    setOpenTurn,
+    openPostInChannel,
+    openTurnInChannel,
+  };
+}
+
 function BotTabContent(props: {
   readonly botId: string;
   readonly hostId: string;
@@ -361,26 +420,17 @@ function BotTabContent(props: {
     membersSupported,
   );
   const resolveMember = directory.resolve;
-  // The open thread is held in its store, above the views, so it survives a
-  // switch between the channel's tabs.
-  const openThread = useBotOpenThread(botId);
-  const setOpenThreadFor = useBotOpenThreadStore((s) => s.setOpenThread);
-  const setOpenThread = useCallback(
-    (open: BotOpenThread | null) => setOpenThreadFor(botId, open),
-    [botId, setOpenThreadFor],
-  );
+  const {
+    openThread,
+    openTurn,
+    setOpenThread,
+    setOpenTurn,
+    openPostInChannel,
+    openTurnInChannel,
+  } = useBotTabRail(botId, onViewChange);
   const openActivity = useCallback(
     () => onViewChange("activity"),
     [onViewChange],
-  );
-  // A post or a thread, from Activity or Threads: its thread opens beside the
-  // channel.
-  const openPostInChannel = useCallback(
-    (open: BotOpenThread) => {
-      setOpenThread(open);
-      onViewChange("messages");
-    },
-    [onViewChange, setOpenThread],
   );
   // Any host with the list lists the threads; Activity names a thread's work
   // by it, and the label tells a thread's session from the bot's other chats.
@@ -500,11 +550,14 @@ function BotTabContent(props: {
                 botTitle={snapshot.bot.title}
                 directive={snapshot.bot.directive}
                 appConversationChatId={snapshot.bot.appConversationChatId}
+                trunkChatId={snapshot.bot.trunkChatId}
                 resolveMember={resolveMember}
                 tasks={snapshot.tasks}
                 surfaceActions={snapshot.surfaceActions}
                 openThread={openThread}
                 onOpenThread={setOpenThread}
+                openTurn={openTurn}
+                onOpenTurn={setOpenTurn}
                 onOpenActivity={openActivity}
               />
             </TabsContent>
@@ -522,6 +575,7 @@ function BotTabContent(props: {
                 summary={activitySummary}
                 threads={threads}
                 onOpenPost={openPostInChannel}
+                onOpenTurn={openTurnInChannel}
               />
             </TabsContent>
             <TabsContent

@@ -10,9 +10,13 @@ import { type ReactNode } from "react";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type {
+  BotThreadSummary,
+  BotTurnRef,
+} from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   BotActivity,
+  BotCheckinTurn,
   BotNotificationSubscription,
   BotSessionActivity,
   BotTaskCheckinRecord,
@@ -21,6 +25,7 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import type { BotOpenTurn } from "@/stores/bots/bot-open-thread-store";
 import {
   __resetAgentActivityStoreForTests,
   __setAgentActivityStateForTests,
@@ -36,7 +41,12 @@ const mocks = vi.hoisted(() => {
     navigateToTabIntent: vi.fn<(...args: unknown[]) => void>(),
     openPost: vi.fn<(open: unknown) => void>(),
     sendMutate: vi.fn<(variables: unknown, options: unknown) => void>(),
+    openTurn: vi.fn<(open: BotOpenTurn) => void>(),
+    /** Each set of check-in turns the page asked the host to locate. */
+    locateAsked: [] as Array<ReadonlyArray<BotCheckinTurn>>,
     state: {
+      /** The turns the host names for the check-ins asked about. */
+      locatedTurns: [] as BotTurnRef[],
       /** Post text by chat id, then message id: the rows each chat holds. */
       rows,
       /** Task titles by task id, as the task-context read answers them. */
@@ -75,6 +85,14 @@ vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => ({
     isPending: false,
     variables: undefined,
   }),
+}));
+// The turns the host names for the check-ins the page asks about: none unless
+// a case sets them.
+vi.mock("@/hooks/bots/use-bot-turn-locate-query", () => ({
+  useBotTurnLocateQuery: (args: { turns: ReadonlyArray<BotCheckinTurn> }) => {
+    mocks.locateAsked.push(args.turns);
+    return { data: { turns: mocks.state.locatedTurns } };
+  },
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
   useChatLocateRowAnswer: () => ({ status: "waiting" }),
@@ -289,6 +307,7 @@ function Page(props: PageInputs): ReactNode {
       summary={summary}
       threads={props.threads}
       onOpenPost={mocks.openPost}
+      onOpenTurn={mocks.openTurn}
     />
   );
 }
@@ -330,6 +349,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.state.rows = {};
   mocks.state.taskTitles = {};
+  mocks.state.locatedTurns = [];
+  mocks.locateAsked.length = 0;
   __resetAgentActivityStoreForTests();
 });
 
@@ -589,6 +610,86 @@ describe("<BotActivityPage /> tasks and automations", () => {
     expect(
       within(taskRow("task-none")).queryByTestId("bot-task-checkins"),
     ).toBeNull();
+  });
+});
+
+describe("<BotActivityPage /> a check-in's turn", () => {
+  const CHECKIN_TURN: BotCheckinTurn = {
+    chatId: TRUNK_ID,
+    turnId: "turn-checkin",
+  };
+
+  /** The turn the host names for `CHECKIN_TURN`, settled in 1m 20s unless a case says otherwise. */
+  function located(overrides: Partial<BotTurnRef>): BotTurnRef {
+    return {
+      chatId: CHECKIN_TURN.chatId,
+      turnIds: [CHECKIN_TURN.turnId],
+      userMessageId: "prompt-checkin",
+      threadId: null,
+      startedAt: 100_000,
+      endedAt: 180_000,
+      summary: "Read 2 files",
+      messageIds: [],
+      requestIds: [],
+      ...overrides,
+    };
+  }
+
+  function checkinLink(): HTMLElement {
+    return within(taskRow("task-auto")).getByTestId("bot-task-checkin-turn");
+  }
+
+  it("links a received check-in to the turn the host names, by the turn's receipt, and opens it with nothing to go back to", async () => {
+    const user = userEvent.setup();
+    mocks.state.locatedTurns = [located({})];
+    mount({
+      tasks: [
+        task("task-auto", {
+          checkins: [received(NOW - 1_000, { turn: CHECKIN_TURN })],
+        }),
+      ],
+    });
+
+    expect(checkinLink().textContent).toBe("Read 2 files · 1m 20s");
+    await user.click(checkinLink());
+
+    expect(mocks.openTurn).toHaveBeenCalledWith({
+      ref: located({}),
+      question: null,
+      back: null,
+    });
+  });
+
+  it("reads Open the turn for a turn with no summary yet", () => {
+    mocks.state.locatedTurns = [located({ endedAt: null, summary: null })];
+    mount({
+      tasks: [
+        task("task-auto", {
+          checkins: [received(NOW - 1_000, { turn: CHECKIN_TURN })],
+        }),
+      ],
+    });
+
+    expect(checkinLink().textContent).toBe("Open the turn");
+  });
+
+  it("draws no link for a check-in with no turn or a turn the host does not name, and asks only for the turns of the check-ins shown", () => {
+    const hidden: BotCheckinTurn = { chatId: TRUNK_ID, turnId: "turn-beyond" };
+    mocks.state.locatedTurns = [located({ turnIds: ["turn-unrelated"] })];
+    const history: BotTaskCheckinRecord[] = [
+      received(NOW - 1_000, {}),
+      received(NOW - 2_000, { turn: CHECKIN_TURN }),
+      received(NOW - 3_000, {}),
+      received(NOW - 4_000, {}),
+      received(NOW - 5_000, {}),
+      received(NOW - 6_000, { turn: hidden }),
+    ];
+    mount({ tasks: [task("task-auto", { checkins: history })] });
+
+    expect(
+      within(taskRow("task-auto")).queryByTestId("bot-task-checkin-turn"),
+    ).toBeNull();
+    expect(mocks.locateAsked.at(-1)).toEqual([CHECKIN_TURN]);
   });
 });
 

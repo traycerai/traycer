@@ -296,3 +296,66 @@ export const botThreadListResponseSchema = lazySchema(() =>
   }),
 );
 export type BotThreadListResponse = z.infer<typeof botThreadListResponseSchema>;
+
+/** A turn of one of a bot's sessions, by the session chat and the turn. */
+export const botTurnKeySchema = lazySchema(() =>
+  z.object({
+    chatId: z.string().min(1).max(255),
+    turnId: z.string().min(1).max(255),
+  }),
+);
+export type BotTurnKey = z.infer<typeof botTurnKeySchema>;
+
+/**
+ * What a reader asks the bound host of a bot's turns: the turns behind the
+ * replies it shows (`messageIds`), the turns that took the posts it shows as
+ * not answered (`requestIds`), and turns it already knows (`turns`: a
+ * check-in's). Any host answers: the bound one from its own record, any
+ * other from what the bound host keeps in the bot's environment room.
+ *
+ * The lists carry no `.max()`: their size is what a reader has loaded, not
+ * a number. A transcript asks for the rows its window holds (a windowed
+ * subscription loads only what its byte budget admits; an older,
+ * unwindowed host does not serve this method), and the Activity page asks
+ * for the check-ins it shows, inside the week the host keeps.
+ */
+export const botTurnLocateRequestSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    messageIds: z.array(z.string().min(1).max(255)),
+    requestIds: z.array(z.string().min(1).max(255)),
+    turns: z.array(botTurnKeySchema),
+  }),
+);
+export type BotTurnLocateRequest = z.infer<typeof botTurnLocateRequestSchema>;
+
+/**
+ * One turn of a bot's session as the bound host recorded it, kept for the
+ * week the bot's Activity page shows: the session chat; every id the turn
+ * ran under (`turnIds`, oldest first: a launch's provisional id, the
+ * provider's, a retry's), which together name its rows in the session's
+ * transcript; the session's message that started it; the thread it ran for
+ * (`null` for the trunk); when it started and ended (`null` while it runs);
+ * and its activity as the transcript's group labels it (`null` while it
+ * runs). `messageIds` and `requestIds` are the asked ones that led here.
+ */
+export const botTurnRefSchema = lazySchema(() =>
+  z.object({
+    chatId: z.string().min(1),
+    turnIds: z.array(z.string().min(1)).min(1),
+    userMessageId: z.string().min(1),
+    threadId: z.string().min(1).nullable(),
+    startedAt: z.number().int(),
+    endedAt: z.number().int().nullable(),
+    summary: z.string().min(1).nullable(),
+    messageIds: z.array(z.string().min(1)),
+    requestIds: z.array(z.string().min(1)),
+  }),
+);
+export type BotTurnRef = z.infer<typeof botTurnRefSchema>;
+
+/** The asked turns the host knows; one asked for and not known is absent. */
+export const botTurnLocateResponseSchema = lazySchema(() =>
+  z.object({ turns: z.array(botTurnRefSchema) }),
+);
+export type BotTurnLocateResponse = z.infer<typeof botTurnLocateResponseSchema>;

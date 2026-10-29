@@ -15,6 +15,7 @@ import {
   hostOptionCanActivate,
   hostOptionKindLabel,
   hostOptionPickerGroup,
+  hostOptionStatusWord,
   isHostOptionSelectable,
   isSleepingSandboxPick,
   pickableHostOptions,
@@ -147,6 +148,28 @@ describe("buildHostScopeOptions sandbox facts", () => {
       sandboxes: [summary],
     }).get("sbx-host");
     expect(option?.sandbox?.state).toBe("awake");
+  });
+
+  it("reads a sandbox the registry still has as creating by the list row that is past it", () => {
+    // The send to a new sandbox dispatches on the list's `awake`; the registry
+    // is re-read only on the directory's tick, so it can still say `creating`.
+    const summary = sandboxSummaryFixture({
+      id: "sbx_1",
+      hostId: "sbx-host",
+      state: "awake",
+    });
+    const option = build({
+      registry: [
+        item({ hostId: "sbx-host", kind: "sandbox", sandboxState: "creating" }),
+      ],
+      sandboxes: [summary],
+    }).get("sbx-host");
+    expect(option?.sandbox?.state).toBe("awake");
+    expect(
+      option === undefined
+        ? null
+        : hostOptionStatusWord(option, AVAILABLE_HOST_ROW_SURFACE_STATE),
+    ).toBe("awake");
   });
 
   it("never reads a destroyed sandbox as frozen, whatever flag the registry kept", () => {

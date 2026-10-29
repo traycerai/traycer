@@ -46,7 +46,7 @@ import { useApplyRequestedSandboxesConfiguration } from "@/hooks/sandboxes/use-a
 import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { useRefreshSandboxCosts } from "@/hooks/sandboxes/use-refresh-sandbox-costs";
-import { useSandboxSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
+import { useSandboxRowSessionReport } from "@/hooks/sandboxes/use-sandbox-session-report";
 import { useSandboxSettingsStatus } from "@/hooks/sandboxes/use-sandbox-settings-status";
 import {
   sandboxSettingsFailed,
@@ -919,10 +919,11 @@ function SandboxListRow(props: {
 }): ReactNode {
   const { summary, configuration, viewerUserId } = props;
   const settings = useSandboxSettingsStatus(summary);
-  const settingsFailed = sandboxSettingsFailed(settings.data?.items ?? []);
+  const settingsItems = settings.data?.items ?? [];
+  const settingsFailed = sandboxSettingsFailed(settingsItems);
   const state = sandboxPublicState(summary);
   const awake = state === "awake";
-  const sessions = useSandboxSessionReport(summary.hostId, awake);
+  const sessions = useSandboxRowSessionReport(summary);
   const wake = useSandboxWakeString(summary);
   const now = useSampledNow();
   const unreachable = useSandboxRowUnreachable(
@@ -930,6 +931,8 @@ function SandboxListRow(props: {
     sessions.failed && sessions.report.kind !== "live",
     props.list,
   );
+  const resumePending =
+    sessions.resumePending && !settingsFailed && !unreachable;
   const reachability = {
     unreachable,
     lastContactAt: summary.lastActivityAt,
@@ -985,6 +988,7 @@ function SandboxListRow(props: {
                 wakeString: wake,
                 viewerUserId,
                 reachability,
+                resumePending,
                 now,
               })}
             </span>
@@ -995,14 +999,14 @@ function SandboxListRow(props: {
               <p>
                 {sandboxSettingsStepsLine(
                   sandboxSettingsEvidence(
-                    settings.data?.items ?? [],
+                    settingsItems,
                     props.summary.guestConfigured,
                   ),
                 )}
               </p>
             </div>
           ) : null}
-          {awake && !unreachable ? (
+          {awake && !unreachable && !resumePending ? (
             <SandboxRowSessions report={sessions.report} now={now} />
           ) : null}
         </div>

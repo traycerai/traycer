@@ -23,7 +23,10 @@ import { openEpicFromListIntent } from "@/lib/tab-navigation/intents";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicAgentActivity } from "@/stores/agent-activity-store";
-import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
+import type {
+  BotOpenThread,
+  BotOpenTurn,
+} from "@/stores/bots/bot-open-thread-store";
 import { cn } from "@/lib/utils";
 
 const EMPTY_TASK_IDS: ReadonlyArray<string> = [];
@@ -39,6 +42,8 @@ export type BotTaskListPlace =
       /** The bot's channel; `null` from a host that does not name it. */
       readonly channelId: string | null;
       readonly onOpenPost: (open: BotOpenThread) => void;
+      /** Opens a check-in's turn beside the channel. */
+      readonly onOpenTurn: (open: BotOpenTurn) => void;
     }
   | { readonly kind: "thread"; readonly threadId: string };
 
@@ -216,7 +221,12 @@ function BotTaskRow(props: {
               Open the brief
             </Button>
           </span>
-          <BotTaskCheckins task={task} />
+          <BotTaskCheckins
+            botId={botId}
+            hostId={hostId}
+            task={task}
+            onOpenTurn={place.onOpenTurn}
+          />
         </>
       ) : null}
     </div>

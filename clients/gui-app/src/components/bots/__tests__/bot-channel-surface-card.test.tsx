@@ -487,11 +487,14 @@ function mountChannel(input: {
               botTitle="Release Bot"
               directive={null}
               appConversationChatId={CHANNEL_ID}
+              trunkChatId="trunk-chat"
               resolveMember={resolveMember}
               tasks={tasks}
               surfaceActions={surfaceActions}
               openThread={null}
               onOpenThread={vi.fn()}
+              openTurn={null}
+              onOpenTurn={vi.fn()}
               onOpenActivity={vi.fn()}
             />
           </ChatExpansionTestProviders>

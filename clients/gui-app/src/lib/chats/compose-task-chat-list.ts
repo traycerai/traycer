@@ -46,3 +46,25 @@ export function uniteTaskChats(
   });
   return added.length === 0 ? viewer : [...viewer, ...added];
 }
+
+/**
+ * Whether an environment arm row is the chat `held` stands in for: a team
+ * host keys the chat it creates by its environment, so the creator holds it
+ * under their own id while the arm serves it under the environment's. A host
+ * mints its chat ids, so the same `(chatId, host)` filed under another owner
+ * is the same chat.
+ */
+export function armRowNamesHeldChat(
+  row: CloudChatSummary,
+  held: {
+    readonly id: string;
+    readonly hostId: string | null;
+    readonly userId: string | null;
+  },
+): boolean {
+  return (
+    row.identity.chatId === held.id &&
+    row.ownerHostId === held.hostId &&
+    row.identity.ownerUserId !== held.userId
+  );
+}
