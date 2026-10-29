@@ -290,7 +290,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..761f12e7e326062e23757193a0865fc4
          options.top = clampedOffset;
        }
 -      target.scrollTo(options);
-+      moveScrollerAnnounced(target, () => {
++      moveScrollerAnnounced(target, options.top !== void 0 ? options.top : target.scrollTop, () => {
 +        target.scrollTo(options);
 +      });
      },
@@ -309,7 +309,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..761f12e7e326062e23757193a0865fc4
 +        const isWindowTarget = typeof window !== "undefined" && target === window;
 +        const currentLeft = isWindowTarget ? window.scrollX : target.scrollLeft;
 +        const currentTop = isWindowTarget ? window.scrollY : target.scrollTop;
-+        moveScrollerAnnounced(target, () => {
++        moveScrollerAnnounced(target, currentTop + y, () => {
 +          target.scrollTo({ behavior: "auto", left: currentLeft + x, top: currentTop + y });
 +        });
        },
@@ -320,11 +320,11 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..761f12e7e326062e23757193a0865fc4
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
 +// Patched: every write the list makes to its scroller is announced on the
-+// scroller as it happens: the offset before and after it, and the end before
-+// it. A pan that reaches the page as scroll reports alone (iOS delivers no
-+// touch event for a contact on a fling) is told apart from the list's own
-+// movement by these.
-+function moveScrollerAnnounced(target, move) {
++// scroller as it happens: the offset before and after it, the end before it,
++// and the offset it asked for, which iOS lands after the lift under a finger.
++// A pan that reaches the page as scroll reports alone (iOS delivers no touch
++// event for a contact on a fling) is told apart from the list's by these.
++function moveScrollerAnnounced(target, intendedTop, move) {
 +  if (!target || typeof target.dispatchEvent !== "function" || typeof CustomEvent === "undefined" || typeof window !== "undefined" && target === window) {
 +    move();
 +    return;
@@ -332,7 +332,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..761f12e7e326062e23757193a0865fc4
 +  const from = target.scrollTop;
 +  const fromEnd = target.scrollHeight - target.clientHeight;
 +  move();
-+  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to: target.scrollTop } }));
++  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to: target.scrollTop, intended: Math.max(0, Math.min(intendedTop, fromEnd)) } }));
 +}
  function scrollAdjustBy(el, left, top) {
 -  el.scrollBy({ behavior: "auto", left, top });
@@ -340,7 +340,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..761f12e7e326062e23757193a0865fc4
 +  // more on the next scroll event), which doubles every position adjustment
 +  // during a touch fling. Write the absolute target instead; it lands once on
 +  // every engine.
-+  moveScrollerAnnounced(el, () => {
++  moveScrollerAnnounced(el, el.scrollTop + top, () => {
 +    el.scrollTo({ behavior: "auto", left: el.scrollLeft + left, top: el.scrollTop + top });
 +  });
  }
@@ -721,7 +721,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..4ad86b56a0478f6beda10212bd5c4e52
          options.top = clampedOffset;
        }
 -      target.scrollTo(options);
-+      moveScrollerAnnounced(target, () => {
++      moveScrollerAnnounced(target, options.top !== void 0 ? options.top : target.scrollTop, () => {
 +        target.scrollTo(options);
 +      });
      },
@@ -740,7 +740,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..4ad86b56a0478f6beda10212bd5c4e52
 +        const isWindowTarget = typeof window !== "undefined" && target === window;
 +        const currentLeft = isWindowTarget ? window.scrollX : target.scrollLeft;
 +        const currentTop = isWindowTarget ? window.scrollY : target.scrollTop;
-+        moveScrollerAnnounced(target, () => {
++        moveScrollerAnnounced(target, currentTop + y, () => {
 +          target.scrollTo({ behavior: "auto", left: currentLeft + x, top: currentTop + y });
 +        });
        },
@@ -751,11 +751,11 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..4ad86b56a0478f6beda10212bd5c4e52
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
 +// Patched: every write the list makes to its scroller is announced on the
-+// scroller as it happens: the offset before and after it, and the end before
-+// it. A pan that reaches the page as scroll reports alone (iOS delivers no
-+// touch event for a contact on a fling) is told apart from the list's own
-+// movement by these.
-+function moveScrollerAnnounced(target, move) {
++// scroller as it happens: the offset before and after it, the end before it,
++// and the offset it asked for, which iOS lands after the lift under a finger.
++// A pan that reaches the page as scroll reports alone (iOS delivers no touch
++// event for a contact on a fling) is told apart from the list's by these.
++function moveScrollerAnnounced(target, intendedTop, move) {
 +  if (!target || typeof target.dispatchEvent !== "function" || typeof CustomEvent === "undefined" || typeof window !== "undefined" && target === window) {
 +    move();
 +    return;
@@ -763,7 +763,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..4ad86b56a0478f6beda10212bd5c4e52
 +  const from = target.scrollTop;
 +  const fromEnd = target.scrollHeight - target.clientHeight;
 +  move();
-+  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to: target.scrollTop } }));
++  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to: target.scrollTop, intended: Math.max(0, Math.min(intendedTop, fromEnd)) } }));
 +}
  function scrollAdjustBy(el, left, top) {
 -  el.scrollBy({ behavior: "auto", left, top });
@@ -771,7 +771,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..4ad86b56a0478f6beda10212bd5c4e52
 +  // more on the next scroll event), which doubles every position adjustment
 +  // during a touch fling. Write the absolute target instead; it lands once on
 +  // every engine.
-+  moveScrollerAnnounced(el, () => {
++  moveScrollerAnnounced(el, el.scrollTop + top, () => {
 +    el.scrollTo({ behavior: "auto", left: el.scrollLeft + left, top: el.scrollTop + top });
 +  });
  }
@@ -1391,7 +1391,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..5578599c53375aeaf08db6749ed316cb
          options.top = clampedOffset;
        }
 -      target.scrollTo(options);
-+      moveScrollerAnnounced(target, () => {
++      moveScrollerAnnounced(target, options.top !== void 0 ? options.top : target.scrollTop, () => {
 +        target.scrollTo(options);
 +      });
      },
@@ -1410,7 +1410,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..5578599c53375aeaf08db6749ed316cb
 +        const isWindowTarget = typeof window !== "undefined" && target === window;
 +        const currentLeft = isWindowTarget ? window.scrollX : target.scrollLeft;
 +        const currentTop = isWindowTarget ? window.scrollY : target.scrollTop;
-+        moveScrollerAnnounced(target, () => {
++        moveScrollerAnnounced(target, currentTop + y, () => {
 +          target.scrollTo({ behavior: "auto", left: currentLeft + x, top: currentTop + y });
 +        });
        },
@@ -1421,11 +1421,11 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..5578599c53375aeaf08db6749ed316cb
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
 +// Patched: every write the list makes to its scroller is announced on the
-+// scroller as it happens: the offset before and after it, and the end before
-+// it. A pan that reaches the page as scroll reports alone (iOS delivers no
-+// touch event for a contact on a fling) is told apart from the list's own
-+// movement by these.
-+function moveScrollerAnnounced(target, move) {
++// scroller as it happens: the offset before and after it, the end before it,
++// and the offset it asked for, which iOS lands after the lift under a finger.
++// A pan that reaches the page as scroll reports alone (iOS delivers no touch
++// event for a contact on a fling) is told apart from the list's by these.
++function moveScrollerAnnounced(target, intendedTop, move) {
 +  if (!target || typeof target.dispatchEvent !== "function" || typeof CustomEvent === "undefined" || typeof window !== "undefined" && target === window) {
 +    move();
 +    return;
@@ -1433,7 +1433,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..5578599c53375aeaf08db6749ed316cb
 +  const from = target.scrollTop;
 +  const fromEnd = target.scrollHeight - target.clientHeight;
 +  move();
-+  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to: target.scrollTop } }));
++  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to: target.scrollTop, intended: Math.max(0, Math.min(intendedTop, fromEnd)) } }));
 +}
  function scrollAdjustBy(el, left, top) {
 -  el.scrollBy({ behavior: "auto", left, top });
@@ -1441,7 +1441,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..5578599c53375aeaf08db6749ed316cb
 +  // more on the next scroll event), which doubles every position adjustment
 +  // during a touch fling. Write the absolute target instead; it lands once on
 +  // every engine.
-+  moveScrollerAnnounced(el, () => {
++  moveScrollerAnnounced(el, el.scrollTop + top, () => {
 +    el.scrollTo({ behavior: "auto", left: el.scrollLeft + left, top: el.scrollTop + top });
 +  });
  }
@@ -2045,7 +2045,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..d202b8b3ed9e266050f47bb9de0c6ae3
          options.top = clampedOffset;
        }
 -      target.scrollTo(options);
-+      moveScrollerAnnounced(target, () => {
++      moveScrollerAnnounced(target, options.top !== void 0 ? options.top : target.scrollTop, () => {
 +        target.scrollTo(options);
 +      });
      },
@@ -2064,7 +2064,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..d202b8b3ed9e266050f47bb9de0c6ae3
 +        const isWindowTarget = typeof window !== "undefined" && target === window;
 +        const currentLeft = isWindowTarget ? window.scrollX : target.scrollLeft;
 +        const currentTop = isWindowTarget ? window.scrollY : target.scrollTop;
-+        moveScrollerAnnounced(target, () => {
++        moveScrollerAnnounced(target, currentTop + y, () => {
 +          target.scrollTo({ behavior: "auto", left: currentLeft + x, top: currentTop + y });
 +        });
        },
@@ -2075,11 +2075,11 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..d202b8b3ed9e266050f47bb9de0c6ae3
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
 +// Patched: every write the list makes to its scroller is announced on the
-+// scroller as it happens: the offset before and after it, and the end before
-+// it. A pan that reaches the page as scroll reports alone (iOS delivers no
-+// touch event for a contact on a fling) is told apart from the list's own
-+// movement by these.
-+function moveScrollerAnnounced(target, move) {
++// scroller as it happens: the offset before and after it, the end before it,
++// and the offset it asked for, which iOS lands after the lift under a finger.
++// A pan that reaches the page as scroll reports alone (iOS delivers no touch
++// event for a contact on a fling) is told apart from the list's by these.
++function moveScrollerAnnounced(target, intendedTop, move) {
 +  if (!target || typeof target.dispatchEvent !== "function" || typeof CustomEvent === "undefined" || typeof window !== "undefined" && target === window) {
 +    move();
 +    return;
@@ -2087,7 +2087,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..d202b8b3ed9e266050f47bb9de0c6ae3
 +  const from = target.scrollTop;
 +  const fromEnd = target.scrollHeight - target.clientHeight;
 +  move();
-+  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to: target.scrollTop } }));
++  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to: target.scrollTop, intended: Math.max(0, Math.min(intendedTop, fromEnd)) } }));
 +}
  function scrollAdjustBy(el, left, top) {
 -  el.scrollBy({ behavior: "auto", left, top });
@@ -2095,7 +2095,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..d202b8b3ed9e266050f47bb9de0c6ae3
 +  // more on the next scroll event), which doubles every position adjustment
 +  // during a touch fling. Write the absolute target instead; it lands once on
 +  // every engine.
-+  moveScrollerAnnounced(el, () => {
++  moveScrollerAnnounced(el, el.scrollTop + top, () => {
 +    el.scrollTo({ behavior: "auto", left: el.scrollLeft + left, top: el.scrollTop + top });
 +  });
  }
