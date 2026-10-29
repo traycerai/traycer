@@ -4781,6 +4781,20 @@ describe("useChatTimelineFollowLatch", () => {
       return mounted;
     }
 
+    it("is not the reader's when a contact lifted at the strict bottom moved nothing, and the end then grows", () => {
+      const mounted = followingWithLiveLedger();
+
+      fireTouch(mounted.node, "touchstart", 300);
+      fireTouch(mounted.node, "touchend", 300);
+      mounted.result.current.followEndIfPermitted();
+      fireNativeScroll(mounted.node);
+      shim.setGeometry(mounted.node, { scrollHeight: 1540 });
+      mounted.result.current.followEndIfPermitted();
+
+      expectNotDeparted(mounted);
+      expect(mounted.node.scrollTop).toBe(1040);
+    });
+
     it("departs a pan that follows the lift of a contact that produced no report", () => {
       const mounted = followingThroughAnAnnouncedDragThenLift();
 
