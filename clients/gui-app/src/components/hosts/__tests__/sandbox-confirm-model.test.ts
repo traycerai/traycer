@@ -22,6 +22,11 @@ describe("sandboxRestingPreview", () => {
 describe("sandboxDestroySessionsSentence", () => {
   const agent = (sessionId: string) => agentSessionFixture({ sessionId });
   const terminal = (sessionId: string) => terminalSessionFixture({ sessionId });
+  // How the host lists a session another member owns: no task, no name.
+  const othersAgent = (sessionId: string) =>
+    agentSessionFixture({ sessionId, taskId: null, name: null });
+  const othersTerminal = (sessionId: string) =>
+    terminalSessionFixture({ sessionId, taskId: null, name: null });
 
   it("names the live split of agents and terminals from the host's list", () => {
     expect(
@@ -34,32 +39,20 @@ describe("sandboxDestroySessionsSentence", () => {
           true,
         ),
         false,
-        false,
       ),
     ).toBe("Destroying ends 1 agent and 2 terminals.");
   });
 
-  it("counts an idle terminal the busy count leaves out", () => {
-    expect(
-      sandboxDestroySessionsSentence(
-        liveSessionReport({ agents: [], terminals: [terminal("t1")] }, false),
-        false,
-        false,
-      ),
-    ).toBe("Destroying ends 1 terminal.");
-  });
-
-  it("names the other members' agents on a team", () => {
+  it("names other members' agents when the list holds one", () => {
     expect(
       sandboxDestroySessionsSentence(
         liveSessionReport(
           {
-            agents: [agent("a1")],
+            agents: [othersAgent("a1")],
             terminals: [terminal("t1"), terminal("t2")],
           },
           true,
         ),
-        true,
         false,
       ),
     ).toBe(
@@ -67,24 +60,43 @@ describe("sandboxDestroySessionsSentence", () => {
     );
   });
 
-  it("falls back to the count of a report that is no longer live", () => {
+  it("names no other members for the viewer's own terminal alone", () => {
+    expect(
+      sandboxDestroySessionsSentence(
+        liveSessionReport({ agents: [], terminals: [terminal("t1")] }, false),
+        false,
+      ),
+    ).toBe("Destroying ends 1 terminal.");
+  });
+
+  it("names no other members' agents for another member's plain terminal", () => {
+    expect(
+      sandboxDestroySessionsSentence(
+        liveSessionReport(
+          { agents: [agent("a1")], terminals: [othersTerminal("t1")] },
+          false,
+        ),
+        false,
+      ),
+    ).toBe("Destroying ends 1 agent and 1 terminal.");
+  });
+
+  it("falls back to every running session, naming no one, for a report that is no longer live", () => {
     expect(
       sandboxDestroySessionsSentence(
         { kind: "stale", count: 2, at: 1_000 },
-        false,
         false,
       ),
     ).toBe("Destroying ends every running session.");
   });
 
   it("says nothing runs on a sandbox whose processes have ended, or a live list of none", () => {
-    expect(
-      sandboxDestroySessionsSentence({ kind: "unknown" }, false, true),
-    ).toBe("Nothing is running on it.");
+    expect(sandboxDestroySessionsSentence({ kind: "unknown" }, true)).toBe(
+      "Nothing is running on it.",
+    );
     expect(
       sandboxDestroySessionsSentence(
         liveSessionReport({ agents: [], terminals: [] }, false),
-        false,
         false,
       ),
     ).toBe("Nothing is running on it.");

@@ -35,6 +35,7 @@ import {
   __resetTabSyncCoordinatorForTesting,
   installTabSyncCoordinator,
 } from "@/lib/tab-sync/tab-sync-coordinator";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
@@ -669,6 +670,50 @@ describe("openNewChatDraftRow requires the row's owner host (review finding 3)",
       epicId: EPIC_ID,
       hostId: OTHER_HOST_ID,
     });
+  });
+
+  it("opens a draft another account's give-back left on its owner host, not unnamed onto that sandbox", () => {
+    function signInAs(userId: string): void {
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId, username: userId },
+      });
+    }
+    signInAs("user-a");
+    const drafts = useNewConversationModalStore.getState();
+    drafts.setContent(EPIC_ID, {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "hi" }] }],
+    });
+    drafts.setReturnedSandbox(EPIC_ID, {
+      target: {
+        kind: "existing",
+        hostId: "sbx-host",
+        sandboxId: "sbx-1",
+        name: "build-box",
+        configuration: { kind: "personal" },
+        verb: "resume",
+      },
+      clientRequestId: null,
+    });
+    const row = {
+      epicId: EPIC_ID,
+      epicTitle: "Parser work",
+      ownerHostId: OTHER_HOST_ID,
+    };
+
+    signInAs("user-b");
+    openNewChatDraftRow(makeNavigate().navigate, row);
+    const forOther = useNewConversationModalOpenStore.getState().request;
+    useNewConversationModalOpenStore.getState().close();
+    signInAs("user-a");
+    openNewChatDraftRow(makeNavigate().navigate, row);
+    const forOwn = useNewConversationModalOpenStore.getState().request;
+    useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+    useNewConversationModalStore.getState().resetForTests();
+
+    expect(forOther).toMatchObject({ hostId: OTHER_HOST_ID });
+    expect(forOwn).toMatchObject({ hostId: null });
   });
 });
 

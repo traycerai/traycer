@@ -9,18 +9,6 @@ import type { PlainTerminalScope } from "@traycer/protocol/host/terminal/plain-s
 const EPIC_TASK_CONTEXTS_METHOD = "epic.getTaskContexts" as const;
 
 export const hostQueryKeys = {
-  notificationHookRemovalBorrowedStatus: (hostId: string) =>
-    [
-      ...hostQueryKeys.scope(hostId),
-      "notificationHookRemovalBorrowedStatus",
-    ] as const,
-  notificationHookRemovalReadIds: (hostId: string) =>
-    [...hostQueryKeys.scope(hostId), "notificationHookRemovalReadIds"] as const,
-  notificationHookRemovalReadCutoff: (hostId: string) =>
-    [
-      ...hostQueryKeys.scope(hostId),
-      "notificationHookRemovalReadCutoff",
-    ] as const,
   base: () => ["host"] as const,
   scope: (hostId: string | null) =>
     hostId === null
@@ -235,22 +223,6 @@ export const hostQueryKeys = {
         typeof EPIC_TASK_CONTEXTS_METHOD
       >(hostId, EPIC_TASK_CONTEXTS_METHOD, { taskIds: [...taskIds] }),
       userId,
-    ] as const,
-  /**
-   * One task's title lookup for a task chip in a message: the
-   * `epic.getTaskContexts` family (so rename, pin and deletion patches reach
-   * it) under a tag of its own, because it lives for the session where the
-   * shared batches go stale and are collected. Matches `useHostQuery` with
-   * `cacheKeyIdentity: [userId, TASK_REFERENCE_LOOKUP_TAG]`.
-   */
-  taskReferenceLookup: (
-    hostId: string | null,
-    userId: string,
-    taskId: string,
-  ) =>
-    [
-      ...hostQueryKeys.epicTaskContexts(hostId, userId, [taskId]),
-      TASK_REFERENCE_LOOKUP_TAG,
     ] as const,
 };
 

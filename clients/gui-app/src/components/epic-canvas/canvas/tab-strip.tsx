@@ -735,6 +735,8 @@ function TabItemBody(
   const isArchived = useRegisteredEpicNodeArchived(epicId, tab.id);
   const titleGenerationPending = useEpicLiveArtifactTitleGenerating(
     tab.type === "chat" ? tab.id : null,
+    epicId,
+    tabHostId(tab),
   );
   const setRef = useMemo(
     () => mergeRefs<HTMLElement>(domRef, dragRef, dropRef),

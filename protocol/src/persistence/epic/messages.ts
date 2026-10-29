@@ -431,6 +431,74 @@ export function isConversationRequestMessageId(messageId: string): boolean {
 }
 
 /**
+ * Who settled one of a bot's questions: a member, by their answer or Skip
+ * from the card, or the bot, with the default it named.
+ */
+export const botQuestionSettlerSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("person"), userId: z.string().min(1) }),
+    z.object({ kind: z.literal("bot") }),
+  ]),
+);
+export type BotQuestionSettler = z.infer<typeof botQuestionSettlerSchema>;
+
+/**
+ * How one of a bot's questions was settled, once: the answer (`null` for a
+ * Skip), who settled it and when. The host writes it with the first answer
+ * that lands and refuses every later one.
+ */
+export const botQuestionSettlementSchema = lazySchema(() =>
+  z.object({
+    answer: z.string().min(1).nullable(),
+    skipped: z.boolean(),
+    by: botQuestionSettlerSchema,
+    at: z.number(),
+  }),
+);
+export type BotQuestionSettlement = z.infer<typeof botQuestionSettlementSchema>;
+
+export const botQuestionItemSchema = lazySchema(() =>
+  z.object({
+    text: z.string().min(1),
+    /** Choices shown as buttons; empty for a question answered in words only. */
+    options: z.array(z.string().min(1)),
+    allowFreeText: z.boolean(),
+    /** `null` while the question is open. */
+    settlement: botQuestionSettlementSchema.nullable(),
+  }),
+);
+export type BotQuestionItem = z.infer<typeof botQuestionItemSchema>;
+
+/**
+ * The questions a bot's row asks (Tracy Bots, decision 121): asked without
+ * waiting, each settled once by a member's answer or Skip, or by the bot
+ * with the default it named. `requestId` is the question's request, which
+ * the bot settles with `traycer_resolve_request`; the question is open while
+ * any of its questions is.
+ */
+export const botQuestionSchema = lazySchema(() =>
+  z.object({
+    requestId: z.string().min(1),
+    questions: z.array(botQuestionItemSchema).min(1),
+  }),
+);
+export type BotQuestion = z.infer<typeof botQuestionSchema>;
+
+/**
+ * Which question a member's message answers: the bot's row by its message
+ * id, the question's index on it, and whether the member skipped it (the
+ * message's text is then not an answer).
+ */
+export const botQuestionAnswerSchema = lazySchema(() =>
+  z.object({
+    questionMessageId: z.string().min(1),
+    questionIndex: z.number().int().nonnegative(),
+    skipped: z.boolean(),
+  }),
+);
+export type BotQuestionAnswer = z.infer<typeof botQuestionAnswerSchema>;
+
+/**
  * The live user row (`chat.subscribe@1.25`): the frozen pre-conversation
  * shape with the bot-conversation request. ABSENT means "not a conversation
  * request" - every row outside a bot conversation, and every row written
@@ -445,6 +513,13 @@ export function isConversationRequestMessageId(messageId: string): boolean {
 export const userMessageSchemaPreCanvas = lazySchema(() =>
   userMessageSchemaPreConversation.safeExtend({
     conversationRequest: conversationRequestSchema.optional(),
+    /**
+     * The bot's question this message answers (Tracy Bots, decision 121):
+     * a member's answer or Skip from the question card, written as their
+     * message on the record the question is on. Absent on every other row,
+     * and optional for `conversationRequest`'s reason.
+     */
+    questionAnswer: botQuestionAnswerSchema.optional(),
   }),
 );
 export const userMessageSchema = lazySchema(() =>
@@ -713,6 +788,14 @@ export const assistantMessageSchema = lazySchema(() =>
      * names an agent-to-agent message.
      */
     repliesTo: z.string().min(1).optional(),
+    /**
+     * The questions this bot row asks without waiting (Tracy Bots, decision
+     * 121), with each one's settlement; the host rewrites it as each settles.
+     * The row's text and `options` (the first question's) stand alone for a
+     * reader that does not draw the card. Optional and live line only, as
+     * `turnProfile`.
+     */
+    question: botQuestionSchema.optional(),
   }),
 );
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;

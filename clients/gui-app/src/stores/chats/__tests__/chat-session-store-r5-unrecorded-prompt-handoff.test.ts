@@ -31,6 +31,7 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { RemovedWorktreeRefs } from "@/lib/worktree/removed-worktree-refs";
 import { HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS } from "@/lib/drafts/unrecorded-prompt-handoff";
+import { LANDING_DRAFT_PERSIST_KEY } from "@/stores/home/landing-draft-store";
 
 import {
   createChatSessionStore,
@@ -1067,4 +1068,36 @@ describe("R5F2: the four-state x cap matrix (each state protects the session, an
       expect(JSON.stringify(installedDraftContaining(text))).toContain(text);
     });
   }
+});
+
+describe("a disposed chat's prompt whose draft the browser refuses to save", () => {
+  it("stays readable in Drafts for the session: the chat held the last copy", async () => {
+    const text = "unrecorded message whose chat is disposed";
+    harness = createHarness();
+    emitOwnerSnapshot(harness.callbacks());
+    const action = sendMessageWithContent(harness, plainContent(text));
+    rejectPlain(
+      harness,
+      action.clientActionId,
+      "The host refused the message.",
+    );
+    // Rejected while hidden: this is the session's only copy of the prompt.
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(plainContent(text));
+    const write = localStorage.setItem.bind(localStorage);
+    const refuse = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation((name, value) => {
+        if (name === LANDING_DRAFT_PERSIST_KEY)
+          throw new DOMException("No room", "QuotaExceededError");
+        write(name, value);
+      });
+    try {
+      harness.handle.dispose();
+      expect(await waitForHandedOffDraft(text, 1000)).toContain(text);
+    } finally {
+      refuse.mockRestore();
+    }
+  });
 });

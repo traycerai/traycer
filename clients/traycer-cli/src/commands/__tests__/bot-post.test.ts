@@ -201,6 +201,7 @@ describe("bot post", () => {
         announcementId: null,
         redeliver: null,
         supersedes: null,
+        answer: null,
       },
     ]);
     expect(result.human).toBe(
@@ -377,6 +378,7 @@ describe("bot reply", () => {
         announcementId: null,
         redeliver: null,
         supersedes: null,
+        answer: null,
       },
     ]);
     expect(result.human).toBe(

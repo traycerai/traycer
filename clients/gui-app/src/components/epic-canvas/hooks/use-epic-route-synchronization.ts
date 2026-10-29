@@ -25,6 +25,7 @@ import {
   useCloudChatList,
 } from "@/hooks/chats/use-cloud-chat-queries";
 import { useEnvironmentArmChats } from "@/hooks/environment/use-environment-arms";
+import { armRowNamesHeldChat } from "@/lib/chats/compose-task-chat-list";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
 import type { OpenEpicState } from "@/stores/epics/open-epic/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
@@ -136,9 +137,7 @@ export function useEpicRouteSynchronization(
         if (row.headSha256 === null) continue;
         const { chatId } = row.identity;
         if (!Object.hasOwn(chats.byId, chatId)) continue;
-        const held = chats.byId[chatId];
-        if (held.hostId !== row.ownerHostId) continue;
-        if (held.userId === row.identity.ownerUserId) continue;
+        if (!armRowNamesHeldChat(row, chats.byId[chatId])) continue;
         handle.store.getState().expirePendingChatCreationForCloudRow({
           chatId,
           ownerHostId: row.ownerHostId,

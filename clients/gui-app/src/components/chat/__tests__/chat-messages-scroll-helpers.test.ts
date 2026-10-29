@@ -10,6 +10,7 @@ import {
   chatTimelineGetItemType,
   chatTimelineLocationForMessage,
   chatTimelineNavigationLandedAtLocation,
+  chatTimelineNavigationSettledAtLocation,
   chatTimelineRowKeyForBlock,
   chatViewportAnchorRowIndex,
   CHAT_ARROW_SCROLL_STEP_PX,
@@ -202,6 +203,121 @@ describe("chatTimelineNavigationLandedAtLocation (Ticket 10)", () => {
         1,
       ),
     ).toBe(true);
+  });
+});
+
+describe("chatTimelineNavigationSettledAtLocation", () => {
+  const location = {
+    index: 5,
+    viewOffset: CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
+    animated: true,
+  } as const;
+
+  it("returns true for an exact landing within epsilon", () => {
+    expect(
+      chatTimelineNavigationSettledAtLocation(
+        {
+          positionAtIndex: (index) => (index === 5 ? 900 : undefined),
+          scroll: 900 + 40 - CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX,
+          topOffsetAdjustment: 40,
+        },
+        2000,
+        location,
+        1,
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts a landing clamped at maxScroll when the target sits beyond it", () => {
+    const target = 900 + 40 - CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX;
+    const maxScroll = target - 500;
+    expect(
+      chatTimelineNavigationSettledAtLocation(
+        {
+          positionAtIndex: (index) => (index === 5 ? 900 : undefined),
+          scroll: maxScroll,
+          topOffsetAdjustment: 40,
+        },
+        maxScroll,
+        location,
+        1,
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects a landing short of maxScroll when the target sits beyond it", () => {
+    const target = 900 + 40 - CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX;
+    const maxScroll = target - 500;
+    expect(
+      chatTimelineNavigationSettledAtLocation(
+        {
+          positionAtIndex: (index) => (index === 5 ? 900 : undefined),
+          scroll: maxScroll - 50,
+          topOffsetAdjustment: 40,
+        },
+        maxScroll,
+        location,
+        1,
+      ),
+    ).toBe(false);
+  });
+
+  it("accepts a landing clamped at 0 when the target sits below it", () => {
+    expect(
+      chatTimelineNavigationSettledAtLocation(
+        {
+          positionAtIndex: (index) => (index === 5 ? 10 : undefined),
+          scroll: 0,
+          topOffsetAdjustment: 0,
+        },
+        2000,
+        location,
+        1,
+      ),
+    ).toBe(true);
+  });
+
+  it("returns false when in range but off by more than epsilon", () => {
+    const target = 900 + 40 - CHAT_TIMELINE_NAVIGATION_VIEW_OFFSET_PX;
+    expect(
+      chatTimelineNavigationSettledAtLocation(
+        {
+          positionAtIndex: (index) => (index === 5 ? 900 : undefined),
+          scroll: target - 50,
+          topOffsetAdjustment: 40,
+        },
+        target + 1000,
+        location,
+        1,
+      ),
+    ).toBe(false);
+  });
+
+  it("returns false for an unmeasured row", () => {
+    expect(
+      chatTimelineNavigationSettledAtLocation(
+        {
+          positionAtIndex: () => undefined,
+          scroll: 0,
+          topOffsetAdjustment: 0,
+        },
+        2000,
+        location,
+        1,
+      ),
+    ).toBe(false);
+    expect(
+      chatTimelineNavigationSettledAtLocation(
+        {
+          positionAtIndex: () => NaN,
+          scroll: 0,
+          topOffsetAdjustment: 0,
+        },
+        2000,
+        location,
+        1,
+      ),
+    ).toBe(false);
   });
 });
 

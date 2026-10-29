@@ -58,11 +58,14 @@ import {
 
 interface TabContextMenuContentProps {
   readonly tab: HeaderTab;
+  readonly canClose: boolean;
   readonly canCloseOtherTabs: boolean;
   readonly canOpenInNewWindow: boolean;
   readonly canEditTitle: boolean;
   readonly taskPinnedState: TaskPinnedState | null;
   readonly isTaskPinPending: boolean;
+  /** The strip's close flow for this tab, the same one its hover × runs. */
+  readonly onClose: (tab: HeaderTab) => void;
   readonly onCloseOtherTabs: (tab: HeaderTab) => void;
   readonly onDuplicateTab: (tab: HeaderTab) => void;
   readonly onOpenInNewWindow: (tab: HeaderTab) => void;
@@ -302,13 +305,18 @@ export function TabContextMenuContent(
   const recovery = useTabRecovery();
   const reopenChord = useBindingForAction("tab.reopen");
   const duplicateChord = useBindingForAction("epic.duplicate-tab");
+  // `epic.close` is the strip tab's chord. `tab.close` (⌘W) closes the active
+  // tile INSIDE the task, so showing it here would promise the wrong close.
+  const closeChord = useBindingForAction("epic.close");
   const {
     tab,
+    canClose,
     canCloseOtherTabs,
     canOpenInNewWindow,
     canEditTitle,
     taskPinnedState,
     isTaskPinPending,
+    onClose,
     onCloseOtherTabs,
     onDuplicateTab,
     onOpenInNewWindow,
@@ -390,6 +398,24 @@ export function TabContextMenuContent(
       <ContextMenuSeparator />
       <TabStripPlacementMenuItems />
       <ContextMenuSeparator />
+      {/* The collapsed rail tile draws no hover ×, so for it this item is the
+          only pointer close. Offered everywhere so the menu reads the same in
+          every placement. */}
+      <ContextMenuItem
+        disabled={!canClose}
+        onSelect={() => onClose(tab)}
+        data-testid={`tab-close-${tab.kind}-${tab.id}-menu`}
+      >
+        <X />
+        Close Tab
+        {closeChord === null ? null : (
+          <ShortcutHint>
+            <span className="ml-auto text-ui-xs text-muted-foreground">
+              {formatChordForDisplay(closeChord)}
+            </span>
+          </ShortcutHint>
+        )}
+      </ContextMenuItem>
       <ContextMenuItem
         disabled={!canCloseOtherTabs}
         onSelect={() => onCloseOtherTabs(tab)}

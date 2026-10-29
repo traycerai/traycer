@@ -770,12 +770,6 @@ export function selectHostNotificationIds(
   return entries.map((entry) => entry.id);
 }
 
-export function selectHostNotificationUnreadCount(
-  state: HostNotificationsState,
-): number {
-  return state.summary?.unreadCount ?? 0;
-}
-
 export function selectHostNotificationRecentCursor(
   state: HostNotificationsState,
 ): HostNotificationsChronologicalCursor | null {
@@ -818,10 +812,6 @@ export function useHostNotificationIds(): ReadonlyArray<string> {
   // compare the contents so subscribers don't re-render in a loop when
   // `byId` is stable.
   return useHostNotificationsStore(useShallow(selectHostNotificationIds));
-}
-
-export function useHostNotificationUnreadCount(): number {
-  return useHostNotificationsStore(selectHostNotificationUnreadCount);
 }
 
 export function useHostNotificationById(

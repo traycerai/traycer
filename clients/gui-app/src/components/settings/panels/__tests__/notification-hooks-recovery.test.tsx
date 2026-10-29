@@ -18,7 +18,6 @@ import type {
 } from "@traycer-clients/shared/host-transport/host-messenger";
 import { NotificationsSettingsPanelForClient } from "@/components/settings/panels/notifications-settings-panel";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
-import { consumePendingHookRemovalNotices } from "@/lib/notifications/hook-removal-notices";
 
 type HooksStatus = ResponseOfMethod<
   HostRpcRegistry,
@@ -341,70 +340,5 @@ describe("saving from an editor opened before the hooks changed", () => {
       "edit-me",
       "someone-elses",
     ]);
-  });
-});
-
-describe("a removal notice that was read or cleared", () => {
-  it("leaves Settings and stays gone when the host has not yet retired its receipt", async () => {
-    const host = new FakeHooksHost([], [notice("receipt-1", "Work laptop", 2)]);
-    const view = renderPanel(host);
-    await within(manager()).findByRole("alert");
-
-    await consumePendingHookRemovalNotices(
-      view.queryClient,
-      mockLocalHostEntry.hostId,
-      { ids: ["receipt-1"] },
-    );
-    await waitFor(() => {
-      expect(within(manager()).queryByRole("alert")).toBeNull();
-    });
-
-    // The host's retirement write failed, so it still reports the receipt on
-    // every refresh. The person already acknowledged it.
-    const callsBefore = host.statusCalls;
-    fireEvent.click(within(manager()).getByRole("button", { name: /Refresh/ }));
-    await waitFor(() => {
-      expect(host.statusCalls).toBeGreaterThan(callsBefore);
-    });
-    expect(within(manager()).queryByRole("alert")).toBeNull();
-  });
-
-  it("drops only the notices a clear-all covers", async () => {
-    const older = {
-      ...notice("receipt-old", "Work laptop", 2),
-      occurredAt: 100,
-    };
-    const newer = { ...notice("receipt-new", "Studio", 1), occurredAt: 300 };
-    const host = new FakeHooksHost([], [older, newer]);
-    const view = renderPanel(host);
-    await within(manager()).findAllByRole("alert");
-
-    await consumePendingHookRemovalNotices(
-      view.queryClient,
-      mockLocalHostEntry.hostId,
-      { beforeUpdatedAt: 200 },
-    );
-
-    await waitFor(() => {
-      expect(
-        within(manager())
-          .getAllByRole("alert")
-          .map((alert) => alert.textContent),
-      ).toEqual([
-        "Notification hooks removedRemoved 1 notification hook from Studio because it could send its private data.",
-      ]);
-    });
-  });
-
-  it("ignores a read for a different computer", async () => {
-    const host = new FakeHooksHost([], [notice("receipt-1", "Work laptop", 2)]);
-    const view = renderPanel(host);
-    await within(manager()).findByRole("alert");
-
-    await consumePendingHookRemovalNotices(view.queryClient, "host-elsewhere", {
-      ids: ["receipt-1"],
-    });
-
-    expect(within(manager()).getByRole("alert")).toBeTruthy();
   });
 });

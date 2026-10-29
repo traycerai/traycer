@@ -119,9 +119,10 @@ export function EpicSessionLifecycleBridge(
       // host, profile and sign-in flag together; the tab half is separate.
       useProvidersFocusStore.getState().clearFocusHarnessId();
       useProvidersFocusStore.getState().clearFocusTab();
-      // A staged sandbox names the outgoing account's configuration, its
-      // create key and the host it made; account B would otherwise send into
-      // A's team or resubmit A's create.
+      // A composer's staged sandbox names the outgoing account's
+      // configuration, its create key and the host it made; account B would
+      // otherwise send into A's team or resubmit A's create. A send's stage
+      // stays, for its own account's driver alone, like the send below.
       useStagedSandboxStore.getState().clearAll();
       // A message sent to a sandbox is the outgoing account's. Delivered, its
       // ready line goes. Undelivered, it is the message's only copy: it stays

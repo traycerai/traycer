@@ -57,10 +57,6 @@ type GrantRequestDetail = Extract<
   SecretsNotificationDetail,
   { kind: "grant-request" }
 >;
-type ExportMintedDetail = Extract<
-  SecretsNotificationDetail,
-  { kind: "export-minted" }
->;
 
 const GRANT: GrantRequestDetail = {
   kind: "grant-request",
@@ -75,13 +71,6 @@ const GRANT: GrantRequestDetail = {
   teamName: null,
   decision: null,
   decidedBy: null,
-};
-
-const EXPORT: ExportMintedDetail = {
-  kind: "export-minted",
-  secretName: "DEPLOY_KEY",
-  exportKind: "presigned_url",
-  expiresAt: 1_700_000_900_000,
 };
 
 function buildRow(
@@ -105,7 +94,6 @@ function buildRow(
     resolvedAt: null,
     sourceRef: "request-1",
     originHostId: null,
-    providerPackAttribution: null,
     category: "task",
     ...overrides,
   };
@@ -147,7 +135,6 @@ describe("<NotificationRow /> secrets rows", () => {
     expect(
       within(card).getByTestId("secret-grant-request-approve"),
     ).toBeTruthy();
-    expect(within(entry).queryByTestId("secret-export-notice")).toBeNull();
   });
 
   it("keeps the answers outside the navigable body button", () => {
@@ -164,23 +151,7 @@ describe("<NotificationRow /> secrets rows", () => {
     ).toBeNull();
   });
 
-  it("renders the export notice for an export row, with no card", () => {
-    const entry = renderRow(
-      buildRow({
-        title: "Secret exported",
-        secrets: EXPORT,
-        hostKind: "secret.export.minted",
-        severity: "info",
-        outcome: "completed",
-      }),
-    );
-    expect(
-      within(entry).getByTestId("secret-export-notice").textContent,
-    ).toContain("An agent minted a presigned URL from DEPLOY_KEY.");
-    expect(within(entry).queryByTestId("secret-grant-request-card")).toBeNull();
-  });
-
-  it("renders neither for a row with no secrets detail", () => {
+  it("renders no card for a row with no secrets detail", () => {
     const entry = renderRow(
       buildRow({
         title: "Deploy checkout fix",
@@ -189,15 +160,13 @@ describe("<NotificationRow /> secrets rows", () => {
       }),
     );
     expect(within(entry).queryByTestId("secret-grant-request-card")).toBeNull();
-    expect(within(entry).queryByTestId("secret-export-notice")).toBeNull();
     expect(within(entry).getByTestId("notification-title").textContent).toBe(
       "Deploy checkout fix",
     );
   });
 
-  it("renders neither when the secrets field is absent", () => {
+  it("renders no card when the secrets field is absent", () => {
     const entry = renderRow(buildRow({ secrets: undefined }));
     expect(within(entry).queryByTestId("secret-grant-request-card")).toBeNull();
-    expect(within(entry).queryByTestId("secret-export-notice")).toBeNull();
   });
 });

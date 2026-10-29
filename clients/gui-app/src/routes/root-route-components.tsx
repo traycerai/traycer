@@ -18,8 +18,6 @@ import { useDesktopMenuBarActive } from "@/components/layout/header/use-desktop-
 import { MenuCommandListener } from "@/components/layout/bridges/menu-command-listener";
 import { ChatSessionWakeRetryController } from "@/components/layout/bridges/chat-session-wake-retry-controller";
 import { PreventSleepController } from "@/components/layout/bridges/prevent-sleep-controller";
-import { SandboxSettingsNoticeObservers } from "@/components/notifications/sandbox-settings-notice-observers";
-import { SandboxRestingNoticeObservers } from "@/components/notifications/sandbox-resting-notice-observers";
 import { NotificationEmissionController } from "@/components/layout/bridges/notification-emission-controller";
 import { NotificationFocusBridge } from "@/components/layout/bridges/notification-focus-bridge";
 import { SystemTabModalHost } from "@/components/layout/dialogs/system-tab-modal-host";
@@ -117,14 +115,6 @@ export function RootComponent() {
           whoever wrote it; see `HostLifecycleModeSetAnalytics`. */}
       <HostLifecycleAnalyticsBridge />
       <NotificationEmissionController />
-      {/* The sandbox notices' observers: none in a build without sandboxes
-          (`unreleased-features.ts`). */}
-      {UNRELEASED_FEATURES_ENABLED ? (
-        <>
-          <SandboxSettingsNoticeObservers />
-          <SandboxRestingNoticeObservers />
-        </>
-      ) : null}
       {/* This is the permanent route -> layout authority. It must observe
           commits while HostReadyGate swaps its children; only materialization
           is hydration-gated inside the controller.

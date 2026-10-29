@@ -18,6 +18,7 @@ import type {
   SandboxSummary,
 } from "@traycer/protocol/host/sandbox-control";
 import { SandboxRowActions } from "@/components/settings/panels/sandbox-row-actions";
+import { useSandboxDetailsStore } from "@/stores/sandboxes/sandbox-details-store";
 import { SandboxCreateError } from "@/hooks/sandboxes/use-sandbox-create-mutation";
 import { refusal } from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
@@ -120,27 +121,12 @@ vi.mock(
     useSandboxCreate: () => ({ mutate: createMutate, isPending: false }),
   }),
 );
-type SettingsOutcome = {
-  readonly settingsApplied: boolean;
-  readonly guestConfigured: boolean;
-  readonly guestConfigFailureReason: string | null;
-};
-type SettingsMutate = (
-  variables: Record<string, never>,
-  callbacks: { readonly onSuccess: (outcome: SettingsOutcome) => void },
-) => void;
-// The guest-only repair retires nothing, so its caller may pass no callback.
-type LegacyMutate = (
-  variables: Record<string, never>,
-  callbacks:
-    | { readonly onSuccess: (outcome: SettingsOutcome) => void }
-    | undefined,
-) => void;
+type SettingsMutate = (variables: Record<string, never>) => void;
 // The combined retry and the legacy guest-only repair are the network
 // boundary; whether the host negotiated the combined retry is the gate.
 const settings = vi.hoisted(() => ({
   retry: vi.fn<SettingsMutate>(),
-  legacy: vi.fn<LegacyMutate>(),
+  legacy: vi.fn<SettingsMutate>(),
   retrySupported: { value: false },
   legacySupported: { value: false },
 }));
@@ -264,12 +250,14 @@ beforeEach(() => {
   useStagedSandboxStore.setState({ bySurface: {} });
   useSurfaceHostSelectionStore.setState({ selections: {} });
   useLandingPanelStore.getState().resetForTests();
+  useSandboxDetailsStore.setState({ sandboxId: null });
 });
 
 afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
+  useSandboxDetailsStore.setState({ sandboxId: null });
 });
 
 function TerminalPaneHarness() {
@@ -1150,21 +1138,9 @@ describe("<SandboxRowActions />", () => {
 
 describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
   const REPAIR_METHOD = "host.sandbox.repairGuestConfiguration";
-  const applied: SettingsOutcome = {
-    settingsApplied: true,
-    guestConfigured: true,
-    guestConfigFailureReason: null,
-  };
-  const notApplied: SettingsOutcome = {
-    settingsApplied: false,
-    guestConfigured: true,
-    guestConfigFailureReason: null,
-  };
-
   function renderFailed(
     overrides: Partial<SandboxSummary>,
     settingsFailed: boolean,
-    onSettingsApplied: () => void,
   ): void {
     renderRow(
       <SandboxRowActions
@@ -1179,7 +1155,6 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
         unreachable={false}
         frozenNeedsOwnCredits={false}
         settingsFailed={settingsFailed}
-        onSettingsApplied={onSettingsApplied}
       />,
     );
   }
@@ -1201,7 +1176,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
     });
 
     it("offers Retry applying with the awake sandbox's own Open terminal, Stop, Choose another host and Details", () => {
-      renderFailed({ state: "awake" }, false, vi.fn());
+      renderFailed({ state: "awake" }, false);
 
       expect(
         screen.getByRole("button", { name: "Retry applying" }),
@@ -1218,7 +1193,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
     });
 
     it("offers Retry applying for an environment-only failure whose guest is fine", () => {
-      renderFailed({ state: "awake", guestConfigured: true }, true, vi.fn());
+      renderFailed({ state: "awake", guestConfigured: true }, true);
 
       expect(
         screen.getByRole("button", { name: "Retry applying" }),
@@ -1226,44 +1201,36 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
       expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
     });
 
-    it("still reaches Destroy from an awake sandbox whose settings did not apply", async () => {
-      renderFailed({ state: "awake" }, false, vi.fn());
+    it.each([
+      { guestConfigured: false, settingsFailed: false },
+      { guestConfigured: true, settingsFailed: true },
+    ])(
+      "keeps Details only inline and keeps the lifecycle menu for guestConfigured=$guestConfigured, settingsFailed=$settingsFailed",
+      async ({ guestConfigured, settingsFailed }) => {
+        renderFailed({ state: "awake", guestConfigured }, settingsFailed);
+        const details = screen.getByRole("button", { name: "Details" });
 
-      expect(await menuItems()).toContain("Destroy");
-    });
+        expect(await menuItems()).toEqual([
+          "Open terminal",
+          "Rename",
+          "Stop",
+          "Destroy",
+        ]);
+        await userEvent.keyboard("{Escape}");
+        await userEvent.click(details);
+        expect(useSandboxDetailsStore.getState().sandboxId).toBe("sbx-failed");
+      },
+    );
 
-    it("retires the notice only when the combined outcome says the settings applied", async () => {
-      const onSettingsApplied = vi.fn();
-      renderFailed({ state: "awake" }, false, onSettingsApplied);
+    it("retries with the combined retry, never the guest-only repair", async () => {
+      renderFailed({ state: "awake" }, false);
 
       await userEvent.click(
         screen.getByRole("button", { name: "Retry applying" }),
       );
+
       expect(settings.retry).toHaveBeenCalledTimes(1);
-      const [variables, callbacks] = settings.retry.mock.calls[0];
-      expect(variables).toEqual({});
-
-      callbacks.onSuccess(notApplied);
-      expect(onSettingsApplied).not.toHaveBeenCalled();
-
-      callbacks.onSuccess({ ...applied, guestConfigured: false });
-      expect(onSettingsApplied).toHaveBeenCalledTimes(1);
-    });
-
-    it("never reads the guest-only repair as settings applied", async () => {
-      const onSettingsApplied = vi.fn();
-      renderFailed({ state: "awake" }, false, onSettingsApplied);
-
-      await userEvent.click(
-        screen.getByRole("button", { name: "Retry applying" }),
-      );
-      settings.retry.mock.calls[0][1].onSuccess({
-        settingsApplied: false,
-        guestConfigured: true,
-        guestConfigFailureReason: null,
-      });
-
-      expect(onSettingsApplied).not.toHaveBeenCalled();
+      expect(settings.retry.mock.calls[0][0]).toEqual({});
       expect(settings.legacy).not.toHaveBeenCalled();
     });
   });
@@ -1276,7 +1243,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
     });
 
     it("offers Repair setup, never Retry applying, for a guest that really failed", () => {
-      renderFailed({ state: "awake" }, false, vi.fn());
+      renderFailed({ state: "awake" }, false);
 
       expect(screen.getByRole("button", { name: "Repair setup" })).toBeTruthy();
       expect(
@@ -1284,25 +1251,20 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
       ).toBeNull();
     });
 
-    it("runs the guest-only repair and never retires the settings notice, whatever it answers", async () => {
-      const onSettingsApplied = vi.fn();
-      renderFailed({ state: "awake" }, false, onSettingsApplied);
+    it("runs the guest-only repair, never the combined retry", async () => {
+      renderFailed({ state: "awake" }, false);
 
       await userEvent.click(
         screen.getByRole("button", { name: "Repair setup" }),
       );
+
       expect(settings.retry).not.toHaveBeenCalled();
       expect(settings.legacy).toHaveBeenCalledTimes(1);
-      const [variables, callbacks] = settings.legacy.mock.calls[0];
-      expect(variables).toEqual({});
-
-      callbacks?.onSuccess(notApplied);
-      callbacks?.onSuccess(applied);
-      expect(onSettingsApplied).not.toHaveBeenCalled();
+      expect(settings.legacy.mock.calls[0][0]).toEqual({});
     });
 
     it("offers no guest repair for an environment-only failure whose guest is fine", () => {
-      renderFailed({ state: "awake", guestConfigured: true }, true, vi.fn());
+      renderFailed({ state: "awake", guestConfigured: true }, true);
 
       expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
       expect(
@@ -1311,7 +1273,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
     });
 
     it("offers no guest repair while the guest fact is unknown", () => {
-      renderFailed({ state: "awake", guestConfigured: null }, true, vi.fn());
+      renderFailed({ state: "awake", guestConfigured: null }, true);
 
       expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
       expect(
@@ -1322,7 +1284,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
     it("offers no repair when the repair method is present but its version is not known to be 1.0", () => {
       settings.legacySupported.value = false;
       recordNegotiatedHostMethods("host-failed", [REPAIR_METHOD]);
-      renderFailed({ state: "awake" }, false, vi.fn());
+      renderFailed({ state: "awake" }, false);
 
       expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
       expect(
@@ -1333,7 +1295,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
     it("offers no repair when the host has no repair method at all", () => {
       settings.legacySupported.value = false;
       recordNegotiatedHostMethods("host-failed", ["terminal.plain.create"]);
-      renderFailed({ state: "awake" }, false, vi.fn());
+      renderFailed({ state: "awake" }, false);
 
       expect(screen.queryByRole("button", { name: "Repair setup" })).toBeNull();
     });
@@ -1346,7 +1308,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
     });
 
     it("starts a stopped sandbox and cannot stop or open a terminal on it", async () => {
-      renderFailed({ state: "stopped" }, false, vi.fn());
+      renderFailed({ state: "stopped" }, false);
 
       expect(screen.getByRole("button", { name: "Start" })).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
@@ -1362,7 +1324,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
     });
 
     it("offers neither Stop nor Open terminal on a sandbox being destroyed", () => {
-      renderFailed({ state: "destroying" }, false, vi.fn());
+      renderFailed({ state: "destroying" }, false);
 
       expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
       expect(
@@ -1374,7 +1336,7 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
     });
 
     it("still resumes a suspended sandbox", async () => {
-      renderFailed({ state: "suspended" }, false, vi.fn());
+      renderFailed({ state: "suspended" }, false);
 
       expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy();
       expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
@@ -1389,7 +1351,6 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
           destroyAt: Date.now() + 1_000,
         },
         false,
-        vi.fn(),
       );
 
       expect(screen.getByTestId("sandbox-row-give-another")).toBeTruthy();
@@ -1398,9 +1359,10 @@ describe("<SandboxRowActions /> a sandbox whose settings did not apply", () => {
 
   describe("on a sandbox whose settings applied", () => {
     it("keeps the full awake menu and Suspend", async () => {
-      renderFailed({ state: "awake", guestConfigured: true }, false, vi.fn());
+      renderFailed({ state: "awake", guestConfigured: true }, false);
 
       expect(screen.getByRole("button", { name: "Suspend" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
       expect(await menuItems()).toEqual([
         "Open a tab",
         "Open terminal",

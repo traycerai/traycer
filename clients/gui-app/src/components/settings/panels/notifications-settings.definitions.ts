@@ -73,7 +73,7 @@ export const HOST_NOTIFICATIONS = defineSettingsSection("notifications", {
     group: "inAppNotifications",
     search: { contributesTo: "page" },
     label: "Info",
-    description: "Background host operations, including worktree cleanup.",
+    description: "Updates that need nothing from you.",
     availableWhen: alwaysAvailable,
     keywords: [],
   },

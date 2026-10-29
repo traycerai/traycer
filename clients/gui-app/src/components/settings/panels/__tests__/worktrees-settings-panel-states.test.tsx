@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { UNNAMED_HOST_LABEL } from "@/hooks/agent/use-host-reachability";
 import {
   act,
   cleanup,
@@ -62,7 +63,10 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: state.hosts }),
 }));
 
-vi.mock("@/hooks/agent/use-host-reachability", () => ({
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/agent/use-host-reachability")
+  >()),
   useHostReachability: () => state.reachability,
 }));
 
@@ -276,6 +280,22 @@ describe("WorktreesSettingsPanel host-scoped states", () => {
     );
     const refresh = screen.getByRole("button", { name: "Refresh worktrees" });
     expect(refresh.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("opens the offline sentence with The host, never an id, when the host has no name", () => {
+    state.hosts = [host({ hostId: "host-a", label: "" })];
+    state.activeHostId = "host-a";
+    // What `useHostReachability` answers for a host it has no name for.
+    state.reachability = {
+      status: "unreachable",
+      hostLabel: UNNAMED_HOST_LABEL,
+    };
+
+    renderPanel();
+
+    screen.getByText(
+      "The host is offline. Worktrees can only be managed on a reachable host.",
+    );
   });
 
   it("prompts sign-in when the host is reachable but no client is bound", () => {

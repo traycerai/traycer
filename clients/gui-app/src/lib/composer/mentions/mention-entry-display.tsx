@@ -25,6 +25,7 @@ import type {
 } from "@/lib/composer/types";
 import { dirnameOfPath, mentionPathTree } from "@/lib/path";
 import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
+import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
 
 /**
  * Row-display mapping for @mention suggestion entries: the picker's
@@ -128,7 +129,7 @@ export function descriptionForSuggestion(
   // the whole reason the row behaves differently.
   if (entry.kind === "browser-tab") {
     return entry.contextOnly
-      ? `Snapshot from ${entry.hostLabel ?? entry.hostId}`
+      ? `Snapshot from ${hostNameFromLabel(entry.hostLabel, entry.hostId)}`
       : "";
   }
   return entry.description;

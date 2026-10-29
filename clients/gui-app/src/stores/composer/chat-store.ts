@@ -3,6 +3,7 @@ import { create } from "zustand";
 import type { AutoJudgeNoticeMarker } from "@traycer/protocol/persistence/chat-transcript/row-order";
 import type {
   BotAnnouncement,
+  BotQuestion,
   ConversationRequest,
 } from "@traycer/protocol/persistence/epic/messages";
 import type {
@@ -780,6 +781,13 @@ export interface ChatMessage {
    * Absent on every other row.
    */
   options?: ReadonlyArray<string>;
+  /**
+   * The questions a bot's row asks without waiting (Tracy Bots, decision
+   * 121), each with how it was settled: drawn as the question card in place
+   * of the row's text and `options`, which are there for an older client.
+   * Absent on every other row.
+   */
+  question?: BotQuestion;
   /**
    * The member's post a bot's direct reply answers, by its message id (Tracy
    * Bots, reply mode `direct`), on the bot's row in its channel. Absent on

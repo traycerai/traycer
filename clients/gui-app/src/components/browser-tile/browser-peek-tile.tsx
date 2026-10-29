@@ -52,6 +52,7 @@ import {
   CREDENTIALED_URL_REFUSAL_DESCRIPTION,
   credentialedUrlRefusal,
 } from "@/hooks/host/use-host-credential-refusal";
+import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
 
 /**
  * `touch-none`: the controller translates a finger drag into wheel frames
@@ -588,7 +589,7 @@ function peekHostLabel(
   hostEntry: HostDirectoryEntry | null,
   hostId: string,
 ): string {
-  return hostEntry?.label ?? hostId;
+  return hostNameFromLabel(hostEntry?.label ?? null, hostId);
 }
 
 function browserPeekStatus(args: {

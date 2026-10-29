@@ -23,7 +23,6 @@ import {
   chatLoadWaitBeganAt,
   chatPreContentElapsed,
   chatPreContentReport,
-  chatTileHostLabel,
   describeChatPreContent,
   STALLED_CHAT_LOAD_ELAPSED_MS,
   type ChatPreContentInput,
@@ -31,6 +30,7 @@ import {
   type ChatTileFatalDetails,
   type ChatTilePreContentFrame,
 } from "./chat-pre-content";
+import { useChatTileHostLabel } from "./use-chat-tile-host-label";
 import { ChatStateLineContext } from "./chat-state-line";
 import { useChatTileHostUpdate } from "./use-chat-tile-host-update";
 
@@ -83,6 +83,7 @@ export function ChatTilePreContent(props: {
   const lease = useHostLease(tabHostId);
   const hostUpdate = useChatTileHostUpdate();
   const ended = useEndedSandboxHost(tabHostId);
+  const hostLabel = useChatTileHostLabel(frame.reachability, tabHostId);
   const stateLine = useContext(ChatStateLineContext);
   const retries = session?.retries ?? null;
   const reloadStartedAt = session?.reloadStartedAt ?? null;
@@ -109,7 +110,7 @@ export function ChatTilePreContent(props: {
     lease,
     reachabilityStatus: frame.reachability.status,
     hostKind: frame.reachability.hostKind,
-    hostLabel: chatTileHostLabel(frame.reachability, tabHostId),
+    hostLabel,
     // The versions are the only skew evidence a wait has: there is no close
     // to read a code or a guidance off. The predicate answers from the two
     // alone, where `describeVersionSkew`'s fallback would warn and offer a

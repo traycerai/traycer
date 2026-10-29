@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  secretExportNotice,
   secretGrantDecisions,
   secretGrantDefaultConfirmation,
   secretGrantRequestDestination,
@@ -15,11 +14,6 @@ type GrantRequestDetail = Extract<
   SecretsNotificationDetail,
   { kind: "grant-request" }
 >;
-type ExportMintedDetail = Extract<
-  SecretsNotificationDetail,
-  { kind: "export-minted" }
->;
-
 const GRANT_PAYLOAD = {
   kind: "secret_grant_request",
   requestId: "request-1",
@@ -69,18 +63,6 @@ function grantDetail(
     teamName: null,
     decision: null,
     decidedBy: null,
-    ...overrides,
-  };
-}
-
-function exportDetail(
-  overrides: Partial<ExportMintedDetail>,
-): ExportMintedDetail {
-  return {
-    kind: "export-minted",
-    secretName: "DEPLOY_KEY",
-    exportKind: "presigned_url",
-    expiresAt: 1_700_000_900_000,
     ...overrides,
   };
 }
@@ -166,17 +148,6 @@ describe("secretsNotificationDetail", () => {
       teamName: null,
       decision: null,
       decidedBy: null,
-    });
-  });
-
-  it("reads a minted export into its detail", () => {
-    expect(
-      secretsNotificationDetail("secret.export.minted", EXPORT_PAYLOAD),
-    ).toEqual({
-      kind: "export-minted",
-      secretName: "DEPLOY_KEY",
-      exportKind: "presigned_url",
-      expiresAt: 1_700_000_900_000,
     });
   });
 
@@ -355,43 +326,5 @@ describe("secretRequestStatusLine", () => {
 
   it("does not read an inherited object property as a known status", () => {
     expect(secretRequestStatusLine("toString")).toBe("This request is closed.");
-  });
-});
-
-describe("secretExportNotice", () => {
-  function formatTime(at: number): string {
-    return `T+${at}`;
-  }
-
-  it("names the secret, the export kind and the formatted expiry", () => {
-    expect(
-      secretExportNotice(
-        exportDetail({ exportKind: "presigned_url", expiresAt: 42 }),
-        formatTime,
-      ),
-    ).toBe(
-      "An agent minted a presigned URL from DEPLOY_KEY. It works until T+42 wherever it is copied.",
-    );
-  });
-
-  it("words short-lived credentials", () => {
-    expect(
-      secretExportNotice(
-        exportDetail({
-          exportKind: "short_lived_credentials",
-          secretName: "AWS_ROLE",
-        }),
-        formatTime,
-      ),
-    ).toContain("minted short-lived credentials from AWS_ROLE");
-  });
-
-  it("falls back to generic wording for an export kind it does not know", () => {
-    expect(
-      secretExportNotice(
-        exportDetail({ exportKind: "signed_cookie" }),
-        formatTime,
-      ),
-    ).toContain("minted a short-lived export from DEPLOY_KEY");
   });
 });

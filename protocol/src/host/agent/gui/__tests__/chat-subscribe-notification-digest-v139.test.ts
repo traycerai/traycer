@@ -331,8 +331,9 @@ describe("bot.subscribe@1.2 notificationSubscriptions", () => {
     };
   }
 
-  it("registers 1.2 as the head, with 1.1 frozen on its own frame schema", () => {
-    expect(subscribeLine.latestMinor).toBe(2);
+  // The line's head is asserted with the minor that heads it (1.3, in
+  // `bot-task-entry-schema.test.ts`).
+  it("registers 1.2, with 1.1 frozen on its own frame schema", () => {
     expect(v12.schemaVersion).toEqual({ major: 1, minor: 2 });
     expect(v11.serverFrameSchema).not.toBe(v12.serverFrameSchema);
   });

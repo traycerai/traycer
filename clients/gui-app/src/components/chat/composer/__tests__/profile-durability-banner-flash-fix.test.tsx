@@ -49,6 +49,11 @@ const mocks = vi.hoisted(() => ({
   providersByClient: new Map<unknown, ProviderCliState[]>(),
 }));
 
+// The cloud's Traycer catalog, read only for a Traycer pick sent to a sandbox.
+vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
+  useSandboxTraycerModels: () => ({ data: undefined }),
+}));
+
 vi.mock("@/hooks/providers/use-tab-providers-list-query", () => ({
   useTabProvidersList: (activity: { enabled: boolean }) =>
     activity.enabled

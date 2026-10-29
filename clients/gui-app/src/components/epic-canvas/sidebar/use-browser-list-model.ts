@@ -21,6 +21,7 @@ import {
   type BrowserSidebarTabRow,
 } from "./use-browser-tab-rows";
 import { isBrowserDeviceOffline } from "./browser-device-availability";
+import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
 
 export interface BrowserDeviceGroupModel {
   readonly hostId: string;
@@ -124,7 +125,7 @@ function groupBrowserRows(args: {
   }
   return [...grouped].map(([hostId, rows]) => ({
     hostId,
-    name: args.hosts.get(hostId)?.name ?? hostId,
+    name: hostNameFromLabel(args.hosts.get(hostId)?.name ?? null, hostId),
     isLocal: hostId === args.localHostId,
     offline: isBrowserDeviceOffline(args.hosts.get(hostId)),
     expanded:

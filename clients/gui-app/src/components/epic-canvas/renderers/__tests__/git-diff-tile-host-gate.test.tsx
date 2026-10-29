@@ -79,7 +79,10 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => state.activeHostId,
 }));
 
-vi.mock("@/hooks/agent/use-host-reachability", () => ({
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/agent/use-host-reachability")
+  >()),
   useHostReachability: () => state.reachability,
   resolvedHostLabel: (r: { status: string; hostLabel: string | null }) =>
     r.status === "checking" ? null : r.hostLabel,
