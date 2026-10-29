@@ -519,6 +519,7 @@ describe("body overflow inside a frame", () => {
   function pageWithBody(
     frame: Frame,
     htmlStyle: Record<string, string>,
+    bodyContain: string,
   ): { html: HTMLElement; body: HTMLElement; target: HTMLElement } {
     const doc = frame.window.document;
     const target = doc.createElement("button");
@@ -530,7 +531,11 @@ describe("body overflow inside a frame", () => {
     frame.place(doc.documentElement, { ...page, style: htmlStyle });
     frame.place(doc.body, {
       ...page,
-      style: { overflowX: "hidden", overflowY: "visible" },
+      style: {
+        overflowX: "hidden",
+        overflowY: "visible",
+        contain: bodyContain,
+      },
     });
     frame.place(target, {
       rect: { top: 300, bottom: 340, left: 20, right: 60 },
@@ -540,7 +545,7 @@ describe("body overflow inside a frame", () => {
 
   it("moves the viewport, not body, when html's overflow is visible", () => {
     const frame = startFrame(false);
-    const { html, target } = pageWithBody(frame, VISIBLE);
+    const { html, target } = pageWithBody(frame, VISIBLE, "none");
 
     scrollIntoView(target, { block: "start" });
 
@@ -551,10 +556,11 @@ describe("body overflow inside a frame", () => {
 
   it("treats body as a scroller when html's overflow is not visible", () => {
     const frame = startFrame(false);
-    const { body, target } = pageWithBody(frame, {
-      overflowX: "visible",
-      overflowY: "auto",
-    });
+    const { body, target } = pageWithBody(
+      frame,
+      { overflowX: "visible", overflowY: "auto" },
+      "none",
+    );
 
     scrollIntoView(target, { block: "start" });
 
@@ -562,6 +568,40 @@ describe("body overflow inside a frame", () => {
       { scroller: body, top: 300, left: 0, behavior: "auto" },
     ]);
   });
+
+  // Layout or paint containment on either element keeps the body's overflow
+  // its own, whatever the root's overflow says.
+  it.each(["paint", "layout", "content", "strict"])(
+    "keeps body a scroller when html has contain: %s",
+    (contain) => {
+      const frame = startFrame(false);
+      const { body, target } = pageWithBody(
+        frame,
+        { ...VISIBLE, contain },
+        "none",
+      );
+
+      scrollIntoView(target, { block: "start" });
+
+      expect(frame.scrolls).toEqual([
+        { scroller: body, top: 300, left: 0, behavior: "auto" },
+      ]);
+    },
+  );
+
+  it.each(["paint", "layout", "content", "strict"])(
+    "keeps body a scroller when body has contain: %s",
+    (contain) => {
+      const frame = startFrame(false);
+      const { body, target } = pageWithBody(frame, VISIBLE, contain);
+
+      scrollIntoView(target, { block: "start" });
+
+      expect(frame.scrolls).toEqual([
+        { scroller: body, top: 300, left: 0, behavior: "auto" },
+      ]);
+    },
+  );
 });
 
 describe("scrollIntoViewIfNeeded inside a frame", () => {
@@ -656,6 +696,29 @@ describe("focus inside a frame", () => {
     target.focus();
 
     expect(frame.scrolls).toEqual([]);
+  });
+
+  it("reveals an element focused inside a closed shadow root", () => {
+    const frame = startFrame(false);
+    const { scroller } = singleScroller(frame, { top: 300, left: 20 });
+    const host = frame.window.document.createElement("div");
+    const input = frame.window.document.createElement("input");
+    scroller.append(host);
+    host.attachShadow({ mode: "closed" }).append(input);
+    frame.place(host, { rect: { top: 300, bottom: 340, left: 20, right: 60 } });
+    frame.place(input, {
+      rect: { top: 300, bottom: 340, left: 20, right: 60 },
+    });
+
+    input.focus();
+
+    expect(frame.nativeFocusArgs).toEqual([[{ preventScroll: true }]]);
+    expect(only(frame)).toEqual({
+      scroller,
+      top: 270,
+      left: 0,
+      behavior: "auto",
+    });
   });
 
   it("covers SVG elements too", () => {

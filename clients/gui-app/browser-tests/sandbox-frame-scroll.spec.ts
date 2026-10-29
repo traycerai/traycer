@@ -21,6 +21,7 @@ for (const command of [
   "scroll-into-view",
   "scroll-into-view-if-needed",
   "focus",
+  "closed-shadow-focus",
 ] as const) {
   test(`the app's ${command} scrolls its own page and not the transcript`, async ({
     page,
@@ -99,6 +100,12 @@ test("the app's focus while the window is in the background scrolls its own page
 for (const reveal of [
   { command: "body-overflow", target: "#mid", from: 0, block: "start" },
   {
+    command: "contained-body-overflow",
+    target: "#mid",
+    from: 0,
+    block: "start",
+  },
+  {
     command: "covering-nearest",
     target: "#cover",
     from: 800,
@@ -117,9 +124,10 @@ for (const reveal of [
       (name) => document.body.dataset.did === name,
       reveal.command,
     );
-    const contained = await page.evaluate(() =>
-      Number(document.body.dataset.appScrollY),
-    );
+    const contained = await page.evaluate(() => ({
+      scrollY: Number(document.body.dataset.appScrollY),
+      bodyScrollTop: Number(document.body.dataset.appBodyScrollTop),
+    }));
     const frame = page
       .frames()
       .find((candidate) => candidate !== page.mainFrame());
@@ -137,10 +145,13 @@ for (const reveal of [
     const native = await plain.evaluate(({ target, from, block }) => {
       window.scrollTo(0, from);
       document.querySelector(target)?.scrollIntoView({ block });
-      return Math.round(window.scrollY);
+      return {
+        scrollY: Math.round(window.scrollY),
+        bodyScrollTop: Math.round(document.body.scrollTop),
+      };
     }, reveal);
     await plain.close();
 
-    expect(contained).toBe(native);
+    expect(contained).toEqual(native);
   });
 }

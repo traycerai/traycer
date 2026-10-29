@@ -339,6 +339,29 @@ function bootstrapMain(config: BootstrapConfig): void {
     const root = element.getRootNode();
     return root instanceof ShadowRoot ? root.host : null;
   };
+  // With the root's overflow `visible`, the body's overflow is the
+  // viewport's, and the body is no scroller of its own, unless layout or
+  // paint containment on either keeps it the body's.
+  const contains = (style: CSSStyleDeclaration): boolean =>
+    /layout|paint|content|strict/.test(style.contain);
+  const bodyOverflowIsViewports = (): boolean => {
+    const rootStyle = window.getComputedStyle(document.documentElement);
+    // `document.body` is typed non-null but is absent in a frameset.
+    const body = document.querySelector("body");
+    return (
+      rootStyle.overflowX === "visible" &&
+      rootStyle.overflowY === "visible" &&
+      !contains(rootStyle) &&
+      (body === null || !contains(window.getComputedStyle(body)))
+    );
+  };
+  const scrollsItself = (
+    element: Element,
+    style: CSSStyleDeclaration,
+    bodyPropagates: boolean,
+  ): boolean =>
+    !(element === document.body && bodyPropagates) &&
+    /auto|scroll|hidden|overlay/.test(style.overflowX + style.overflowY);
   const reveal = (
     target: Element,
     block: Align,
@@ -353,11 +376,7 @@ function bootstrapMain(config: BootstrapConfig): void {
     let left = rect.left - pixels(margin.scrollMarginLeft);
     let right = rect.right + pixels(margin.scrollMarginRight);
     const viewport = document.scrollingElement;
-    // With the root's overflow `visible`, the body's overflow is the
-    // viewport's, and the body is no scroller of its own.
-    const rootStyle = window.getComputedStyle(document.documentElement);
-    const bodyPropagates =
-      rootStyle.overflowX === "visible" && rootStyle.overflowY === "visible";
+    const bodyPropagates = bodyOverflowIsViewports();
     for (
       let scroller = parentOf(target);
       scroller !== null;
@@ -366,8 +385,7 @@ function bootstrapMain(config: BootstrapConfig): void {
       const style = window.getComputedStyle(scroller);
       if (
         scroller !== viewport &&
-        ((scroller === document.body && bodyPropagates) ||
-          !/auto|scroll|hidden|overlay/.test(style.overflowX + style.overflowY))
+        !scrollsItself(scroller, style, bodyPropagates)
       ) {
         continue;
       }
@@ -476,14 +494,15 @@ function bootstrapMain(config: BootstrapConfig): void {
     );
     // A focus the caller lets scroll is revealed as the browser reveals it
     // (centred when out of view), inside the frame only. Focus is read from
-    // the active element: `:focus` matches only while the frame itself has
-    // focus, and the reader may be typing in the app around it.
+    // the active element of the element's own document or shadow root, open
+    // or closed: `:focus` matches only while the frame itself has focus, and
+    // the reader may be typing in the app around it.
     const isFocused = (element: Element): boolean => {
-      let active = document.activeElement;
-      while (active !== null && active !== element) {
-        active = active.shadowRoot?.activeElement ?? null;
-      }
-      return active === element;
+      const root = element.getRootNode();
+      return (
+        (root instanceof Document || root instanceof ShadowRoot) &&
+        root.activeElement === element
+      );
     };
     const focusables: { readonly prototype: Element }[] = [
       HTMLElement,
