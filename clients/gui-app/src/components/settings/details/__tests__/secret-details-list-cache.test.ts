@@ -7,7 +7,7 @@
  * request and no more - and a list already in that cache never stands in for
  * the read, however fresh the client calls it.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   hostRpcServingTierHostId,
   readProcessHostRpcTierPlan,
@@ -23,6 +23,7 @@ import {
 import { loadSecretDetails } from "@/components/settings/details/secret-details-status";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type { DetailsStatus } from "@/lib/settings-details-entry";
 
 type SecretsList = ResponseOfMethod<
@@ -33,6 +34,7 @@ type SecretsList = ResponseOfMethod<
 const AT = Date.UTC(2026, 9, 20, 9, 30);
 const ENVIRONMENT = "env-a";
 const SECRET = "sec-1";
+const VIEWER = "user-me";
 
 const REMOVED: SecretsList["removed"][number] = {
   id: SECRET,
@@ -75,9 +77,15 @@ const listScope = (hostId: string | null): readonly unknown[] =>
     "environment.secrets.list",
   );
 
+/**
+ * The whole key the page's own read files its answer under: the viewer is
+ * part of it (`useEnvironmentSecretsQuery`'s `cacheKeyIdentity`), because a
+ * configuration-scoped list is one viewer's answer.
+ */
 const listKey = (hostId: string | null): readonly unknown[] => [
   ...listScope(hostId),
   { environmentId: ENVIRONMENT },
+  VIEWER,
 ];
 
 const mountDetails = (): TeamPageHarness =>
@@ -100,8 +108,15 @@ const mountDetails = (): TeamPageHarness =>
     }),
   });
 
+beforeEach(() => {
+  useAuthStore.setState({
+    contextMetadata: { userId: VIEWER, username: "me" },
+  });
+});
+
 afterEach(() => {
   resetTeamPageHarness();
+  useAuthStore.setState({ contextMetadata: null });
 });
 
 describe("loadSecretDetails for a removed secret whose host failed", () => {
@@ -122,10 +137,16 @@ describe("loadSecretDetails for a removed secret whose host failed", () => {
     );
 
     expect(loaded.status.summary).toContain("dev-box couldn't delete its copy");
-    const cachedRemoved = harness.queryClient
-      .getQueriesData<SecretsList>({ queryKey: listScope(hostId) })
-      .flatMap(([, list]) => list?.removed ?? []);
-    expect(cachedRemoved).toEqual([REMOVED]);
+    const cached = harness.queryClient.getQueriesData<SecretsList>({
+      queryKey: listScope(hostId),
+    });
+    // Under the page's own whole key, and ONLY there: a second entry of our
+    // own would be one no observer ever refetches, which a sweep over this
+    // scope would go on reading after the page's answer had moved on.
+    expect(cached.map(([key]) => key)).toEqual([listKey(hostId)]);
+    expect(cached.flatMap(([, list]) => list?.removed ?? [])).toEqual([
+      REMOVED,
+    ]);
     expect(harness.paramsOf("environment.secrets.list")).toEqual([
       { environmentId: ENVIRONMENT },
     ]);

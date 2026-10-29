@@ -6,6 +6,7 @@ import {
 import { removalLabel } from "@/components/settings/details/details-copy";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type {
   EnvironmentSecretRemoval,
   EnvironmentSecretRemovalV12,
@@ -205,9 +206,16 @@ async function singleSecretDetails(
 
 /**
  * The configuration's secrets, read the way the Secrets page reads them: the
- * same request, filed under the same method key, so one list answers both and
- * a shared Retry can read the structured host failure (`failedAt`) that the
- * version read does not carry.
+ * same request under the SAME WHOLE KEY, so one list answers both and a shared
+ * Retry can read the structured host failure (`failedAt`) that the version
+ * read does not carry.
+ *
+ * The page's read appends the viewer to its key
+ * (`useEnvironmentSecretsQuery`'s `cacheKeyIdentity`), because a
+ * configuration-scoped list is one viewer's answer, so the viewer is part of
+ * the key here too. An imperative read under a key of its own would file a
+ * second entry that no observer ever refetches, and a sweep over the method's
+ * scope would go on reading its answer long after the page's own had moved on.
  *
  * `staleTime: 0` keeps the read itself. Every open asks the host again, as
  * the direct call did, so the answer is as fresh and as authorized as before;
@@ -217,17 +225,21 @@ async function readSecretsList(
   environmentId: string,
   context: DetailsProviderContext,
 ): Promise<SecretsList> {
+  const viewerId = useAuthStore.getState().contextMetadata?.userId ?? "";
   return context.queryClient.fetchQuery({
-    queryKey: hostQueryKeys.method<HostRpcRegistry, "environment.secrets.list">(
-      hostRpcServingTierHostId(
+    queryKey: [
+      ...hostQueryKeys.method<HostRpcRegistry, "environment.secrets.list">(
+        hostRpcServingTierHostId(
+          "environment.secrets.list",
+          context.hostId,
+          readProcessHostRpcTierPlan(),
+          null,
+        ),
         "environment.secrets.list",
-        context.hostId,
-        readProcessHostRpcTierPlan(),
-        null,
+        { environmentId },
       ),
-      "environment.secrets.list",
-      { environmentId },
-    ),
+      viewerId,
+    ],
     queryFn: ({ signal }) =>
       context.client.requestWithSignalRequiringHostMethodVersion(
         "environment.secrets.list",
