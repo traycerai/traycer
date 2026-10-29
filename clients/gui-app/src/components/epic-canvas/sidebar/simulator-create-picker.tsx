@@ -56,6 +56,7 @@ import {
 import type { HostRpcRegistry } from "@/lib/host";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { coldSimulatorDevices } from "@/lib/simulator-view/simulator-cold-devices";
 import { simulatorVerbsAreV11 } from "@/lib/simulator-view/simulator-host-version";
 import { simulatorVersionLabel } from "@/lib/simulator-view/simulator-labels";
 import { suggestedSimulatorHostId } from "@/lib/simulator-view/suggested-simulator-host";
@@ -415,52 +416,16 @@ function pickerNote(args: {
 
 type PickInstance = "auto" | "new" | { readonly key: string };
 
-const NO_RUNNING_DEVICES: ReadonlySet<string> = new Set();
-
-/**
- * The devices whose OWN copy is running, under the key a COLD device is
- * listed by: an instance's `instanceKey` is its device's id while that device
- * is cold on both platforms - an iOS udid for life, an Android AVD name until
- * its emulator takes a serial - where the instance's own `simulatorId` is
- * that serial. So this set is only ever probed with a row the device list
- * calls cold, which is all `coldMatches` below asks it, and never with a
- * booted Android row, whose id is a serial no key equals.
- *
- * The picker folds two separately cached reads, and the instance read is the
- * fresher one - it polls while the picker is open, where `simulator.list`
- * neither polls nor follows a boot this client did not send (an agent's,
- * another window's). So a device the instances show running is never offered
- * Boot, however stale the device list's own `booted` flag is; without this
- * the same device was listed twice, once under Running and once with a live
- * Boot button, until the list's 60 s freshness window ran out.
- *
- * A clone is not its source: a device can be cold and bootable while a copy
- * of it runs.
- *
- * Null is no instance read to go on, which is UNKNOWN and not "nothing is
- * running": removing a row needs a read that says the device is up, so while
- * the answer is owed the device list's own flag decides alone, exactly as it
- * did before this set existed. Suppressing on the strength of an owed read
- * would take a bootable device off the picker over a question nobody had
- * answered yet.
- */
-function runningDeviceIds(
-  instances: readonly SimulatorHostInstance[] | null,
-): ReadonlySet<string> {
-  if (instances === null) return NO_RUNNING_DEVICES;
-  return new Set(
-    instances
-      .filter((instance) => instance.cloneOf === null)
-      .map((instance) => instance.instanceKey),
-  );
-}
-
 /**
  * The two sections. `instances` is the `@1.1` host's `simulator.instances`,
  * and null is NO instance read to go on - a `@1.0` host, which has none, or a
  * `@1.1` one that still owes its answer. Both fall back to the device list's
  * own `booted` flag, which is the only thing either has, and both refuse Boot
  * another: a copy is asked for by naming an instance, and neither can.
+ *
+ * ONE read drives both sections, which is what makes them a partition of the
+ * machine's devices rather than two answers that can disagree - see
+ * {@link coldSimulatorDevices}, which holds that invariant.
  */
 function PickerContent(props: {
   readonly note: string | null;
@@ -499,14 +464,10 @@ function PickerContent(props: {
   const runningMatches = running.filter((row) =>
     matchesQuery(row.target, query),
   );
-  const runningDevices = runningDeviceIds(instances);
-  const coldMatches = state.simulators.filter(
-    (simulator) =>
-      !simulator.booted &&
-      !simulator.physical &&
-      !runningDevices.has(simulator.simulatorId) &&
-      matchesQuery(simulator, query),
-  );
+  const coldMatches = coldSimulatorDevices({
+    simulators: state.simulators,
+    instances,
+  }).filter((simulator) => matchesQuery(simulator, query));
   return (
     <>
       <PickerSection title="Running">

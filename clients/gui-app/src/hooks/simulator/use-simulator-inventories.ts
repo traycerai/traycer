@@ -15,6 +15,7 @@ import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
+import { coldSimulatorDevices } from "@/lib/simulator-view/simulator-cold-devices";
 import { simulatorVerbsAreV11 } from "@/lib/simulator-view/simulator-host-version";
 import type { SimulatorOpenTarget } from "./use-simulator-instance-open";
 
@@ -70,6 +71,13 @@ function target(args: {
  * A machine's entries: on a `@1.1` host every instance (`simulator.instances`)
  * then every cold device; on a `@1.0` host, which has no instances, its
  * booted devices stand in for them.
+ *
+ * ONE read decides both halves, which is what makes them a partition of the
+ * machine's devices rather than two answers that can disagree - see
+ * {@link coldSimulatorDevices}, which holds that invariant. The two reads
+ * below describe one moment only as far as two round trips can, so a device
+ * that powers off between them answers booted here and is absent from the
+ * instances; reading the flag for the cold half would list it in neither.
  */
 export function simulatorInventoryEntries(args: {
   readonly hostId: string;
@@ -97,16 +105,17 @@ export function simulatorInventoryEntries(args: {
           target: target(instance),
           drivenByAgent: instance.drivenByAgent,
         }));
-  const cold: SimulatorInventoryEntry[] = simulators
-    .filter((simulator) => !simulator.booted && !simulator.physical)
-    .map((simulator) => ({
-      key: JSON.stringify([hostId, "device", simulator.simulatorId]),
-      hostId,
-      kind: "device",
-      instanceKey: null,
-      target: target(simulator),
-      drivenByAgent: false,
-    }));
+  const cold: SimulatorInventoryEntry[] = coldSimulatorDevices({
+    simulators,
+    instances,
+  }).map((simulator) => ({
+    key: JSON.stringify([hostId, "device", simulator.simulatorId]),
+    hostId,
+    kind: "device",
+    instanceKey: null,
+    target: target(simulator),
+    drivenByAgent: false,
+  }));
   return [...running, ...cold];
 }
 
@@ -136,10 +145,11 @@ function simulatorInventoryQuery(args: {
     queryFn: async (): Promise<readonly SimulatorInventoryEntry[]> => {
       const client = requireClient(resolveClient(hostId));
       // Deliberately its own `simulator.list`, not the contact read's cached
-      // answer below: the cold rows come from this answer and the running rows
-      // from `simulator.instances`, and the two have to describe ONE moment.
-      // Fold a cached device list into a fresh instance list and a simulator
-      // booted since would be listed twice - running, and still cold.
+      // answer below: the cold rows come from this answer, so a device the
+      // machine has gained or lost since - or an Android one listed under a
+      // new id since - would be a row from before. WHICH devices are running
+      // no longer rests on how old this answer is; that is the instance
+      // read's alone (see `coldSimulatorDevices`).
       const state = await client.request("simulator.list", { epicId });
       const instances = speaksV11
         ? (await client.request("simulator.instances", {})).instances

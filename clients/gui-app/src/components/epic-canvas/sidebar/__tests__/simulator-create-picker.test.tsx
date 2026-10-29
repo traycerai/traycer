@@ -616,6 +616,28 @@ describe("SimulatorCreatePicker", () => {
     await user.keyboard("{Escape}");
   });
 
+  it("offers Boot for a device the instance read no longer shows running, however the device list still calls it booted", async () => {
+    // The other half of the same rule: a power off this client did not send -
+    // the idle deadline, another window. The instance poll picks it up and
+    // the device leaves Running; `simulator.list` is inside its freshness
+    // window with `booted: true` for it and nothing to move it, so a cold
+    // section reading that flag would never take it - leaving the device in
+    // NEITHER section, with no way to boot it again while the picker is open.
+    queryClient = createAppQueryClient();
+    const user = await openPicker();
+    expect(
+      await screen.findByTestId("simulator-picker-running-udid-1"),
+    ).toBeTruthy();
+
+    booted.delete("udid-1");
+    await tickInstancePoll();
+
+    const cold = await screen.findByTestId("simulator-picker-cold-udid-1");
+    expect(within(cold).getByRole("button", { name: "Boot" })).toBeTruthy();
+    expect(screen.queryByTestId("simulator-picker-running-udid-1")).toBeNull();
+    await user.keyboard("{Escape}");
+  });
+
   it("falls back to the device list's own flag while a `@1.1` host still owes its instance read", async () => {
     // The read is not refused, just not back yet. Reading that as "nothing
     // is running" is this surface answering a question nobody has answered:

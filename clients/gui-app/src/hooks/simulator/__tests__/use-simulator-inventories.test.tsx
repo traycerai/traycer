@@ -22,9 +22,9 @@ import { createAppQueryClient } from "@/lib/query-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
- * Two facts about the palette's per-machine inventory read, both about its
- * CACHE IDENTITY rather than its arithmetic (which
- * `simulatorInventoryEntries` is unit-covered for).
+ * Three facts about the palette's per-machine inventory read, the first two
+ * about its CACHE IDENTITY rather than its arithmetic (whose own join rule is
+ * unit-covered in `simulator-cold-devices.test.ts`).
  *
  * 1. The read's shape is decided by the host's negotiated simulator minor: a
  *    `@1.1` host answers `simulator.instances`, a `@1.0` host has none and its
@@ -35,6 +35,9 @@ import { useAuthStore } from "@/stores/auth/auth-store";
  *    invalidations the simulator mutations already send reach it - otherwise
  *    the palette reopened inside the 60 s freshness window serves an
  *    inventory from before the open.
+ * 3. Its two halves are one read's: the instance read decides which devices
+ *    are running, so a device that powers off between the fetcher's two round
+ *    trips is a Boot row rather than nothing at all.
  */
 
 const HOST_ID = mockLocalHostEntry.hostId;
@@ -84,8 +87,16 @@ const LIST: SimulatorListResponse = {
 /** Whether an agent still holds the instance; a close is what ends that. */
 const agentHolds = { on: true };
 
+/**
+ * Whether the device powered off between the fetcher's two round trips - its
+ * idle deadline, another window - so the device list answers `booted: true`
+ * for a device the instance read no longer carries.
+ */
+const poweredOff = { on: false };
+
 /** The same device on the `@1.1` branch, where an agent drives its instance. */
 function instancesNow(): SimulatorInstancesResponse {
+  if (poweredOff.on) return { instances: [] };
   return {
     instances: [
       {
@@ -302,6 +313,7 @@ afterEach(() => {
   resetNegotiatedManifests();
   hostBindingMock.current = null;
   agentHolds.on = true;
+  poweredOff.on = false;
   useAuthStore.setState(useAuthStore.getInitialState(), true);
   vi.clearAllMocks();
 });
@@ -392,6 +404,40 @@ describe("useSimulatorInventories", () => {
           version: "26.0",
         },
         drivenByAgent: true,
+      },
+    ]);
+  });
+
+  it("offers Boot for a device the instance read does not list, however the device list calls it booted", async () => {
+    // The fetcher's two reads describe one moment only as far as two round
+    // trips can: a device that powers off between them - its idle deadline,
+    // another window - comes back booted in the device list and absent from
+    // the instances. A cold row read off that flag would leave the machine's
+    // one device in NEITHER half of the inventory, so the palette would list
+    // nothing at all for a machine with a device to boot.
+    poweredOff.on = true;
+    negotiateV11();
+    const { spine } = buildSpine({ reachable: () => true });
+    hostBindingMock.current = { hostClient: spine };
+
+    const { result } = renderInventories();
+
+    await waitFor(() => {
+      expect(result.current.inventories[0]?.status).toBe("ready");
+    });
+    expect(result.current.inventories[0]?.entries).toEqual([
+      {
+        key: JSON.stringify([HOST_ID, "device", "udid-1"]),
+        hostId: HOST_ID,
+        kind: "device",
+        instanceKey: null,
+        target: {
+          simulatorId: "udid-1",
+          platform: "ios",
+          name: "iPhone 17",
+          version: "26.0",
+        },
+        drivenByAgent: false,
       },
     ]);
   });
