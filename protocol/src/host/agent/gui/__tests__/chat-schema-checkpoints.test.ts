@@ -203,7 +203,8 @@ function schemaDigest(schema: z.ZodType, io: "input" | "output"): string {
 // a user row the optional `questionAnswer`, in place; 1.0–1.22 did not move.
 // Entries 1.23–1.32 were regenerated a seventh time when a bot's row gained
 // the optional `surface` (Tracy Bots T89, what in a task the post points
-// at), in place; 1.0–1.22 did not move.
+// at), in place, and again when its browser kind gained the park's id;
+// 1.0–1.22 did not move.
 const SERVER_FRAME_DIGESTS = {
   0: [
     "ca66e3d49016048e7390b4c9904f6978f7c31d9098dd2ce4369f51239d0f411e",
@@ -298,27 +299,27 @@ const SERVER_FRAME_DIGESTS = {
     "216acc0693d0dd96ad6ec383481ae964fdcd8392a20db3d3fcc005c48cebc5a6",
   ],
   23: [
-    "f149962af0fe453993e936ec4f4be5c91fd7018b1a55bec38ddc5636b9710ad6",
-    "3fd3a1dd102fa92c22997b32bc05f1389c72383ba1760c064d03c9e987dc32fa",
+    "bf3aeb58c237c1565e925a3e084df419e659c216d22534b2a381b0b122fd5118",
+    "5b70ba72b3881759743985dd5a00c8cd22648b6968e927fe1c02da6d8812b01b",
   ],
   // Captured from the live schema the moment before 1.25 opened above it: the
   // cron next-run line, with no bot-conversation request on a user row and no
   // conversation-message queue item.
   24: [
-    "6e7ef11f83efeecd1ba64c32166a6abd4ad40872c6a2c16ec4527b0532bb4d7f",
-    "46339fe80876d672bc2d106cf46f1db423d5eb6ea0fc39962cf3fcef2e011433",
+    "f1e91dd0e3fb8354d3c35cafbb604b10a22ee030ab772e9584da3618fcbffa70",
+    "60c355b9255cabc3f8d72082892edd5017842c0417c93bf40dbb0804caa13f93",
   ],
   // Captured from the live schema the moment before 1.26 opened above it: the
   // bot-conversation line, with no task-checkin queue item.
   25: [
-    "d9e2209693b5ce37f444c468d18a950f4286a2704e7e4ff0fd11e5bf8d747afc",
-    "cb5e0d13dc47258155f971852786977a6a7d60e4465ba3fcf7964f45040c02bf",
+    "988b6609457f4f51a5b60d5534db80d533a5c370a9554805ee176327d8b9246a",
+    "40d3340102096c4e188f6d67b1f252f5f03e17215cc7a50635c3972121715087",
   ],
   // Captured from the live schema the moment before 1.27 opened above it: the
   // task-checkin line, with no task-overdue queue item.
   26: [
-    "3c0385706d010b95d828bdd1be376fdb497f11ef56f0473ced0fa86b36c05e67",
-    "7bc727a10acb16db1af841b1e857a2fe0bcc802ac328da7487d038dee3a9e15c",
+    "d13ebcc95feead1075be2401fd1cf03ac234e1a2434f709a4e2b89d419497622",
+    "a1bc873d99a5b4e12b8345691d427b5bca26d40c5e03bb5a474b68a282ca5a6b",
   ],
   // Captured from the live schema the moment before 1.28 opened above it: the
   // task-overdue line, with no `signInParked` on a queued prompt and operation
@@ -327,8 +328,8 @@ const SERVER_FRAME_DIGESTS = {
   // one this tree pinned before main's 1.28 landed, and the merged tree's
   // frozen 1.27 reproduces it.
   27: [
-    "13b5924ba9f2dca9fcccf7a5c4a04be5316269c8f1ce723e14e852dd38e9d42a",
-    "c241f575effa2485595dcf7a75c3f05fb50bf0c2d13316c845758fe37e048381",
+    "03d84eb3535a09bb9de2b461e884a181e96ddcb4f8b6684e277594f92944a8da",
+    "328a808328b0c2c876dabb63507530770a8e2ba52954c4e36129a0f468850cae",
   ],
   // The sign-in park line (main's 1.28): a queued prompt may carry
   // `signInParked`; operation blocks and events keep the four markdown kinds.
@@ -337,8 +338,8 @@ const SERVER_FRAME_DIGESTS = {
   // 1.27 above, and 1.29–1.31 reproduce the values this tree pinned for them
   // as 1.28–1.30, so the re-mint moved nothing else.
   28: [
-    "0536a002caf7dc83033a915311298df19930ea96e26f29d834e5b12bfe40037f",
-    "4698f2228576412dd1302c2d8261016d20fd44c149f6e6e91efa378ead168711",
+    "da49112bfac4bee61d549c097f0ba826ed9e4e3e9875665bc2c46ac1b81b35d4",
+    "164f04130a480a3a49847b77ab44f2dd1f75940b6183455dd3a4e9955889c91d",
   ],
   // The delivery line (main's 1.29): a tool block may carry
   // `agentMessageDelivery`; operation blocks and events keep the four markdown
@@ -347,26 +348,26 @@ const SERVER_FRAME_DIGESTS = {
   // stamp gained `targetHostOffline` (traycer#2421): no stable release carries
   // 1.29 or above, and every line through 1.28 reproduces its value.
   29: [
-    "0b0199b31c3b4d3eab6b7e59c9f9e8302eb4ce162bb1bcf99ea86bc53db05bfa",
-    "af7eab5a7b5292ea218de185db8cb457f96ed38ba7f44cea3fca28071e631187",
+    "e260121a7db075fad147c9dd6463835ec7a0582c637e1c4f03fdb2689de2aac0",
+    "6c867969d2b9f870339eb86baedce6d01f7604b17c60d6ae1bc2fc138f0ee126",
   ],
   // The html/canvas/file artifact-kind line, with tool calls carrying no
   // `artifact` stamp. Re-minted above main's 1.29.
   30: [
-    "d6dac319c72d2e5c0a6588e159207996f81c1848d1782f27549a7d03bd3f12bb",
-    "68132fe408a206c27d030df9e46cf1cb7468684f5b55d994b9e09ace7a588561",
+    "cb1dd0a535ad85316427702a9a4d3805de9d90d7ae21d02707107de17d146cec",
+    "d9c2f68f08c6876054e9ccb92a9bd9326daeb2bcd07184a2d6a44028ef6adc41",
   ],
   // The artifact-stamp line, with no canvas annotations. Re-minted above
   // main's 1.29.
   31: [
-    "32db15c926f5b5592a912baa7fccd78ffc3e4da1f4a4f70e3e0901eefb1ad9f4",
-    "869fbb8124991c15a270bb00da36da33bbebf62d42ec237e8546ad6524346f76",
+    "283c7bb59e3e1bd5ce7b6d1bf2aab377a65b20a66beb957064f991856faee1d0",
+    "476d75740c797a230194aafb04f1d2404a115ed444808ef8b465d9adcba9e931",
   ],
   // The canvas-annotation line, before 1.33 widened checkpoint artifact tags.
   // Re-minted above main's 1.29.
   32: [
-    "a6cfd77d47a76ee5c21f5bea313e0bb5eb731b9d4cb265f021e845e359215877",
-    "ed2c4778a92a2bf52c60083c03d2724868ae89a655dbec71c6676c974d5fe641",
+    "224fc4ca3d808110780499ec3cbf26c6e748498d796410a2197d978a937e37c0",
+    "9623021c7506345642718eb0a3bf001f3d6346bef56061a587f863d3af62428f",
   ],
 } as const;
 

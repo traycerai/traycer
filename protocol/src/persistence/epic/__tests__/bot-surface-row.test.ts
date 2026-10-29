@@ -80,6 +80,7 @@ describe("a bot post's surface reference (T89)", () => {
         hostId: "host-1",
         chatId: null,
         sessionId: "session-1",
+        parkId: "park-1",
         tabId: null,
         resolution: null,
       },
@@ -103,6 +104,23 @@ describe("a bot post's surface reference (T89)", () => {
     expect(
       assistantMessageSchema.safeParse({ ...BOT_ROW, surface: withoutBlock })
         .success,
+    ).toBe(false);
+  });
+
+  it("refuses a browser surface that does not name its park", () => {
+    expect(
+      assistantMessageSchema.safeParse({
+        ...BOT_ROW,
+        surface: {
+          kind: "browser",
+          epicId: "task-1",
+          hostId: "host-1",
+          chatId: null,
+          sessionId: "session-1",
+          tabId: null,
+          resolution: null,
+        },
+      }).success,
     ).toBe(false);
   });
 });

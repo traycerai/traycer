@@ -80,7 +80,9 @@ export function openSurfaceOf(
           );
         case "browser":
           return (
-            open.kind === "browser" && open.sessionId === surface.sessionId
+            open.kind === "browser" &&
+            open.sessionId === surface.sessionId &&
+            open.parkId === surface.parkId
           );
         case "artifact":
           return false;
@@ -235,6 +237,7 @@ function refusalOf(
   ) {
     return hostAction.code;
   }
+  if (entry.phase === "unconfirmed") return "NOT_REACHABLE";
   return entry.phase === "refused" ? entry.code : null;
 }
 

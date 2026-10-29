@@ -7481,6 +7481,11 @@ export const epicSchemaSurfaceBaseline = {
                                 "minLength": 1,
                                 "maxLength": 255
                               },
+                              "parkId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 255
+                              },
                               "tabId": {
                                 "anyOf": [
                                   {
@@ -7555,6 +7560,7 @@ export const epicSchemaSurfaceBaseline = {
                               "hostId",
                               "chatId",
                               "sessionId",
+                              "parkId",
                               "tabId",
                               "resolution"
                             ]
@@ -18069,6 +18075,11 @@ export const epicSchemaSurfaceBaseline = {
                                 "minLength": 1,
                                 "maxLength": 255
                               },
+                              "parkId": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 255
+                              },
                               "tabId": {
                                 "anyOf": [
                                   {
@@ -18145,6 +18156,7 @@ export const epicSchemaSurfaceBaseline = {
                               "hostId",
                               "chatId",
                               "sessionId",
+                              "parkId",
                               "tabId",
                               "resolution"
                             ],

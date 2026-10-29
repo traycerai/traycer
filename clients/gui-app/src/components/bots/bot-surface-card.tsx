@@ -95,8 +95,14 @@ function SurfaceCard(props: {
   const send = (action: BotSurfaceAction): void => {
     const act = cards.act;
     if (act === null || messageId === null) return;
+    // The same action sent again after the call failed unanswered keeps its
+    // id: the host may hold it, and takes the resend as the same one. A
+    // refusal is an answer: a retry after one is a new action.
     const actionId =
-      entry !== null && sameAction(entry.action, action)
+      entry !== null &&
+      entry.phase === "unconfirmed" &&
+      cards.hostAction(entry.actionId)?.state !== "refused" &&
+      sameAction(entry.action, action)
         ? entry.actionId
         : uuidv4();
     const settle = (next: BotSurfaceActionEntry): void => {
@@ -124,8 +130,7 @@ function SurfaceCard(props: {
           phase: response.outcome,
           code: response.code,
         }),
-      () =>
-        settle({ actionId, action, phase: "refused", code: "NOT_REACHABLE" }),
+      () => settle({ actionId, action, phase: "unconfirmed", code: null }),
     );
   };
 

@@ -7,14 +7,21 @@ import type { BotSurfaceAction } from "@traycer/protocol/host/bot/surface-schema
  * T89), as this window last heard of it: `sending` while the tab's host has
  * not answered; `forwarded` once it sent it on to the task's machine, until
  * the post shows the resolution; `settled` when the tab's host recorded it,
- * shown at once until the post's resolution lands; `refused` with why.
- * `actionId` is minted once per action and reused when the same action is
- * sent again, so the host takes a resend as the same action.
+ * shown at once until the post's resolution lands; `refused` with why;
+ * `unconfirmed` when the call failed without an answer, so the host may
+ * have the action. `actionId` is reused only for an unconfirmed action sent
+ * again, so the host takes the resend as the same action; any other retry
+ * is a new action.
  */
 export interface BotSurfaceActionEntry {
   readonly actionId: string;
   readonly action: BotSurfaceAction;
-  readonly phase: "sending" | "forwarded" | "settled" | "refused";
+  readonly phase:
+    | "sending"
+    | "forwarded"
+    | "settled"
+    | "refused"
+    | "unconfirmed";
   /** Why it was refused; `null` in every other phase. */
   readonly code: BotSurfaceActionRefusalCode | null;
 }

@@ -242,6 +242,7 @@ const BROWSER: BotSurfaceReference = {
   hostId: TASK_HOST_ID,
   chatId: AGENT_CHAT_ID,
   sessionId: "session-1",
+  parkId: "park-1",
   tabId: "tab-1",
   resolution: null,
 };
@@ -261,7 +262,7 @@ function surfaceIdOf(surface: BotInputNeeded["surface"]): string {
     case "approval":
       return surface.approvalId;
     case "browser":
-      return `${surface.sessionId}@1`;
+      return surface.parkId;
   }
 }
 
@@ -309,6 +310,7 @@ const OPEN_BROWSER = openItem({
   title: "Sign in to Example",
   reason: "Needs your login",
   parkedAt: 1,
+  parkId: "park-1",
 });
 
 function task(inputNeeded: ReadonlyArray<BotInputNeeded> | null): BotTaskEntry {
@@ -662,6 +664,31 @@ describe("<BotChannelView /> a post's surface card: what it shows", () => {
     expect(cardButtons()).toEqual(["Open"]);
   });
 
+  it("shows Open alone for a page whose session was parked again since the post", () => {
+    mountChannel({
+      rows: [post(BROWSER)],
+      tasks: [
+        task([
+          openItem({
+            kind: "browser",
+            sessionId: "session-1",
+            tabId: "tab-1",
+            url: "https://accounts.example.com/login",
+            title: "Sign in to Example",
+            reason: "Needs your login",
+            parkedAt: 5,
+            parkId: "park-2",
+          }),
+        ]),
+      ],
+      surfaceActions: [],
+    });
+
+    expect(card().getAttribute("data-state")).toBe("unknown");
+    expect(stateLine()).toBeNull();
+    expect(cardButtons()).toEqual(["Open"]);
+  });
+
   it("shows Open alone, with the state, where the tab's host takes no answer from the card", () => {
     mocks.unsupported.add("bot.surface.act");
     mountChannel({
@@ -945,7 +972,7 @@ describe("<BotChannelView /> a post's surface card: answering and deciding", () 
     expect(cardButtons()).toEqual(["Open"]);
   });
 
-  it("keeps the answer and offers it again when the task's machine cannot be reached", async () => {
+  it("keeps the answer when the task's machine cannot be reached, and sends it again as a new action", async () => {
     const user = userEvent.setup();
     answer = () => Promise.resolve(FORWARDED);
     const channel = mountChannel({
@@ -982,7 +1009,97 @@ describe("<BotChannelView /> a post's surface card: answering and deciding", () 
 
     answer = () => Promise.resolve(SETTLED);
     await user.click(submit);
-    expect(acts.map((each) => each.actionId)).toEqual([actionId, actionId]);
+    expect(acts).toHaveLength(2);
+    expect(acts[1]?.actionId).toMatch(UUID);
+    expect(acts[1]?.actionId).not.toBe(actionId);
+    expect(acts[1]?.action).toEqual(acts[0]?.action);
+  });
+
+  it("sends an answer again as a new action once the tab's host reports the unanswered one refused", async () => {
+    const user = userEvent.setup();
+    answer = () => Promise.reject(new Error("socket closed"));
+    const channel = mountChannel({
+      rows: [post(QUESTION)],
+      tasks: [task([OPEN_QUESTION])],
+      surfaceActions: [],
+    });
+
+    await user.click(within(card()).getByRole("button", { name: "main" }));
+    await user.click(within(card()).getByRole("button", { name: "Submit" }));
+    await vi.waitFor(() =>
+      expect(stateLine()).toBe("Couldn't reach the task. Your answer is kept."),
+    );
+    const actionId = acts[0]?.actionId ?? "";
+    channel.serve(
+      [task([OPEN_QUESTION])],
+      [
+        {
+          actionId,
+          messageId: POST_ID,
+          state: "refused",
+          code: "NOT_REACHABLE",
+        },
+      ],
+    );
+
+    answer = () => Promise.resolve(SETTLED);
+    await user.click(within(card()).getByRole("button", { name: "Submit" }));
+    expect(acts).toHaveLength(2);
+    expect(acts[1]?.actionId).toMatch(UUID);
+    expect(acts[1]?.actionId).not.toBe(actionId);
+  });
+
+  it("sends an answer again as a new action after the tab's host says the task cannot be reached", async () => {
+    const user = userEvent.setup();
+    answer = () =>
+      Promise.resolve({ outcome: "refused", code: "NOT_REACHABLE" });
+    mountChannel({
+      rows: [post(QUESTION)],
+      tasks: [task([OPEN_QUESTION])],
+      surfaceActions: [],
+    });
+
+    await user.click(within(card()).getByRole("button", { name: "main" }));
+    await user.click(within(card()).getByRole("button", { name: "Submit" }));
+    await vi.waitFor(() =>
+      expect(stateLine()).toBe("Couldn't reach the task. Your answer is kept."),
+    );
+
+    answer = () => Promise.resolve(SETTLED);
+    await user.click(within(card()).getByRole("button", { name: "Submit" }));
+    expect(acts).toHaveLength(2);
+    expect(acts[1]?.actionId).toMatch(UUID);
+    expect(acts[1]?.actionId).not.toBe(acts[0]?.actionId);
+    await vi.waitFor(() => expect(stateLine()).toBe("Answered by you"));
+  });
+
+  it("sends an answer again as the same action when the tab's host gave no answer, keeping it meanwhile", async () => {
+    const user = userEvent.setup();
+    answer = () => Promise.reject(new Error("socket closed"));
+    mountChannel({
+      rows: [post(QUESTION)],
+      tasks: [task([OPEN_QUESTION])],
+      surfaceActions: [],
+    });
+
+    await user.click(within(card()).getByRole("button", { name: "release" }));
+    await user.click(within(card()).getByRole("button", { name: "Submit" }));
+    await vi.waitFor(() =>
+      expect(stateLine()).toBe("Couldn't reach the task. Your answer is kept."),
+    );
+    expect(
+      within(card())
+        .getByRole("button", { name: "release" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    answer = () => Promise.resolve(SETTLED);
+    await user.click(within(card()).getByRole("button", { name: "Submit" }));
+    expect(acts.map((each) => each.actionId)).toEqual([
+      acts[0]?.actionId,
+      acts[0]?.actionId,
+    ]);
+    expect(acts[1]?.action).toEqual(acts[0]?.action);
   });
 
   it("offers a decision again when the tab's own host does not answer", async () => {

@@ -559,6 +559,8 @@ export const botSurfaceReferenceSchema = lazySchema(() =>
       hostId: botSurfaceIdSchema,
       chatId: botSurfaceIdSchema.nullable(),
       sessionId: botSurfaceIdSchema,
+      /** The park the post names: a session parked again is another surface. */
+      parkId: botSurfaceIdSchema,
       tabId: botSurfaceIdSchema.nullable(),
       resolution: botSurfaceResolutionSchema.nullable(),
     }),

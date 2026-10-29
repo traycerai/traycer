@@ -6529,6 +6529,11 @@ export const chatSyncSchemaSurfaceBaseline = {
                                     "minLength": 1,
                                     "maxLength": 255
                                   },
+                                  "parkId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  },
                                   "tabId": {
                                     "anyOf": [
                                       {
@@ -6605,6 +6610,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                                   "hostId",
                                   "chatId",
                                   "sessionId",
+                                  "parkId",
                                   "tabId",
                                   "resolution"
                                 ],

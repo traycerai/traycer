@@ -812,6 +812,8 @@ export const botInputNeededSurfaceSchema = lazySchema(() =>
       title: z.string().nullable(),
       reason: z.string(),
       parkedAt: z.number().int().nonnegative(),
+      /** The park's own id: a session parked again is another surface. */
+      parkId: z.string().min(1),
     }),
   ]),
 );
