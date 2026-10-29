@@ -57,6 +57,20 @@ export const authQueryKeys = {
     authService,
     userId,
   ],
+  // Settings ▸ Credits' claimable offers, keyed to the live AuthService and
+  // signed-in user like `userSessions`, so one account's offers never render
+  // for its replacement.
+  creditOffers: (authService: object, userId: string): readonly unknown[] => [
+    "auth",
+    "credit-offers",
+    authService,
+    userId,
+  ],
+  creditOffersMissing: (): readonly unknown[] => [
+    "auth",
+    "credit-offers",
+    "missing",
+  ],
   // Stable, disabled key for when no `AuthService` binding is available yet
   // (mirrors `uiQueryKeys.hostPickerMissing`).
   registeredHostsMissing: (): readonly unknown[] => [
