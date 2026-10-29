@@ -408,6 +408,7 @@ function mountChannelWith(
               appConversationChatId={CHANNEL_ID}
               resolveMember={resolveMember}
               tasks={[]}
+              surfaceActions={null}
               openThread={openThread}
               onOpenThread={onOpenThread}
               onOpenActivity={vi.fn()}

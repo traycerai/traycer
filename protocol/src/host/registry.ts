@@ -668,6 +668,8 @@ import {
   botSubscribeV12,
   botSubscribeV13,
   botSubscribeV14,
+  botSubscribeV15,
+  botSurfaceActV10,
   botUpdateRunSettingsV10,
   botUpdateDirectiveV10,
   botUpdateReplyModeV10,
@@ -9253,6 +9255,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // A member's answer or decision from a bot's surface card (T89), settled
+  // by the host that runs the task's chat.
+  "bot.surface.act": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botSurfaceActV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   // The threads of a bot's channel (T41), answered by its bound host.
   "bot.thread.list": {
     degrade: { kind: "unsupported" },
@@ -15542,7 +15559,10 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
       // @1.4 carries each task's check-in history (`checkins`) and when each
       // notification subscription started (`since`, T86); @1.3 is frozen
       // without them.
-      latestMinor: 4,
+      // @1.5 carries what each task's agents wait on a person for
+      // (`inputNeeded`) and the subscriber's own card actions in flight
+      // (`surfaceActions`, T89); @1.4 is frozen without them.
+      latestMinor: 5,
       versions: {
         0: {
           contract: botSubscribeV10,
@@ -15558,6 +15578,9 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
         },
         4: {
           contract: botSubscribeV14,
+        },
+        5: {
+          contract: botSubscribeV15,
         },
       },
     },

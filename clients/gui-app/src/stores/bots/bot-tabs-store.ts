@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import { useBotSurfaceActionsStore } from "@/stores/bots/bot-surface-actions-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 
 /**
@@ -105,6 +106,7 @@ export const useBotTabsStore = create<BotTabsState>()(
         // one's session.
         useBotOpenThreadStore.getState().setOpenThread(botId, null);
         useBotDraftsStore.getState().forgetBot(botId);
+        useBotSurfaceActionsStore.getState().forgetBot(botId);
       },
       setBotTabTitle: (botId, title) => {
         const existing = lookupBotTab(get().tabs, botId);

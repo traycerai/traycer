@@ -499,6 +499,83 @@ export const botQuestionAnswerSchema = lazySchema(() =>
 export type BotQuestionAnswer = z.infer<typeof botQuestionAnswerSchema>;
 
 /**
+ * How a surface a bot's post points at stopped waiting, once its task's host
+ * reported it: a question answered or skipped, an approval allowed or
+ * denied, a parked browser session resumed, or the wait ended with its
+ * turn, chat or session. `by` is the member who settled it, `null` when no
+ * person did (the agent's runtime, the judge or the mode) or the task's host
+ * did not say.
+ */
+export const botSurfaceResolutionSchema = lazySchema(() =>
+  z.object({
+    state: z.enum([
+      "answered",
+      "skipped",
+      "allowed",
+      "denied",
+      "resumed",
+      "ended",
+    ]),
+    by: z
+      .object({ kind: z.literal("person"), userId: z.string().min(1) })
+      .nullable(),
+    at: z.number(),
+  }),
+);
+export type BotSurfaceResolution = z.infer<typeof botSurfaceResolutionSchema>;
+
+const botSurfaceIdSchema = lazySchema(() => z.string().min(1).max(255));
+
+/**
+ * What in a task a bot's post points at (Tracy Bots T89, decision 120): a
+ * question or a tool approval an agent of the task waits on, a browser
+ * session (parked for a person, or any of the task's), or an artifact. One
+ * per post. `hostId` is the host that runs the task's agent (or serves the
+ * artifact); `epicId` the task. `resolution` is written by the bot's bound
+ * host when the task's host reports the surface settled; `null` while it is
+ * open, and always for an artifact.
+ */
+export const botSurfaceReferenceSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("question"),
+      epicId: botSurfaceIdSchema,
+      hostId: botSurfaceIdSchema,
+      chatId: botSurfaceIdSchema,
+      blockId: botSurfaceIdSchema,
+      resolution: botSurfaceResolutionSchema.nullable(),
+    }),
+    z.object({
+      kind: z.literal("approval"),
+      epicId: botSurfaceIdSchema,
+      hostId: botSurfaceIdSchema,
+      chatId: botSurfaceIdSchema,
+      approvalId: botSurfaceIdSchema,
+      resolution: botSurfaceResolutionSchema.nullable(),
+    }),
+    z.object({
+      kind: z.literal("browser"),
+      epicId: botSurfaceIdSchema,
+      hostId: botSurfaceIdSchema,
+      chatId: botSurfaceIdSchema.nullable(),
+      sessionId: botSurfaceIdSchema,
+      tabId: botSurfaceIdSchema.nullable(),
+      resolution: botSurfaceResolutionSchema.nullable(),
+    }),
+    z.object({
+      kind: z.literal("artifact"),
+      epicId: botSurfaceIdSchema,
+      hostId: botSurfaceIdSchema,
+      /** The artifact's path inside its task, as the bot named it. */
+      artifactPath: z.string().min(1).max(4096),
+      resolution: z.null(),
+    }),
+  ]),
+);
+export type BotSurfaceReference = z.infer<typeof botSurfaceReferenceSchema>;
+export type BotSurfaceKind = BotSurfaceReference["kind"];
+
+/**
  * The live user row (`chat.subscribe@1.25`): the frozen pre-conversation
  * shape with the bot-conversation request. ABSENT means "not a conversation
  * request" - every row outside a bot conversation, and every row written
@@ -796,6 +873,14 @@ export const assistantMessageSchema = lazySchema(() =>
      * `turnProfile`.
      */
     question: botQuestionSchema.optional(),
+    /**
+     * What in a task this bot post points at (Tracy Bots T89), drawn as a
+     * card under the post's text; the bound host rewrites its `resolution`
+     * when the task's host reports it settled. The text stands alone for a
+     * reader that does not draw the card. Optional and live line only, as
+     * `turnProfile`.
+     */
+    surface: botSurfaceReferenceSchema.optional(),
   }),
 );
 export type AssistantMessage = z.infer<typeof assistantMessageSchema>;

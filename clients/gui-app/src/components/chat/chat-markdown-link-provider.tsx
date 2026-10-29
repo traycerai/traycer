@@ -10,6 +10,7 @@ import {
   type MarkdownLinkPolicy,
 } from "@/markdown/links/markdown-link-context";
 import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
+import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
 import { buildChatLinkPolicy } from "@/components/chat/build-chat-link-policy";
 import { toast } from "sonner";
 
@@ -35,13 +36,70 @@ export function ChatMarkdownLinkProvider({
   workspaceRoots,
   children,
 }: ChatMarkdownLinkProviderProps) {
-  const { openTile } = useEpicTileNavigation();
-  const queryClient = useQueryClient();
   const tabHostId = useTabHostId();
-  const tabHostClient = useTabHostClient();
-  const navigate = useNavigate();
   const openEpicId = useOpenEpicId();
   const epicHandle = useOpenEpicHandle();
+  return (
+    <MarkdownLinkPolicyProvider
+      tabId={tabId}
+      tabHostId={tabHostId}
+      workspaceRoots={workspaceRoots}
+      openEpic={{ epicId: openEpicId, handle: epicHandle }}
+    >
+      {children}
+    </MarkdownLinkPolicyProvider>
+  );
+}
+
+/**
+ * The chat link policy on a surface that is no task and has no working
+ * directories (a bot's channel): an artifact link opens in its task, as a
+ * link to another task does in a chat tile, and a plain file link opens
+ * nothing.
+ */
+export function TasklessMarkdownLinkProvider(props: {
+  readonly tabId: string;
+  /** The host the surface is bound to; artifacts are resolved through it. */
+  readonly tabHostId: string;
+  readonly children: ReactNode;
+}) {
+  return (
+    <MarkdownLinkPolicyProvider
+      tabId={props.tabId}
+      tabHostId={props.tabHostId}
+      workspaceRoots={null}
+      openEpic={null}
+    >
+      {props.children}
+    </MarkdownLinkPolicyProvider>
+  );
+}
+
+function MarkdownLinkPolicyProvider({
+  tabId,
+  tabHostId,
+  workspaceRoots,
+  openEpic,
+  children,
+}: {
+  readonly tabId: string;
+  readonly tabHostId: string;
+  /** `null`: no working directories, so no file link opens. */
+  readonly workspaceRoots: ReadonlyArray<string> | null;
+  /** The task the surface is in; `null` outside one. */
+  readonly openEpic: {
+    readonly epicId: string;
+    readonly handle: OpenEpicStoreHandle;
+  } | null;
+  readonly children: ReactNode;
+}) {
+  const { openTile } = useEpicTileNavigation();
+  const queryClient = useQueryClient();
+  const tabHostClient = useTabHostClient();
+  const navigate = useNavigate();
+  const openEpicId = openEpic?.epicId ?? "";
+  const epicHandle = openEpic?.handle ?? null;
+  const opensFiles = workspaceRoots !== null;
 
   // The same-epic open kicks off a projection wait (`store.subscribe` + a 30s
   // timeout) that settles asynchronously. Retain its cancel handle so a
@@ -75,14 +133,16 @@ export function ChatMarkdownLinkProvider({
     if (tabHostClient === null) return null;
     return buildChatLinkPolicy({
       tabId,
-      hostId: tabHostId,
-      workspaceRoots,
+      // No host for a file link where the surface has no working
+      // directories: the policy then opens none.
+      hostId: opensFiles ? tabHostId : null,
+      workspaceRoots: workspaceRoots ?? [],
       activeHostId: tabHostId,
       openEpicId,
       epicHandle,
       queryClient,
       client: tabHostClient,
-      workspaceClient: tabHostClient,
+      workspaceClient: opensFiles ? tabHostClient : null,
       navigate,
       openTile,
     });
@@ -91,6 +151,7 @@ export function ChatMarkdownLinkProvider({
     navigate,
     openEpicId,
     openTile,
+    opensFiles,
     queryClient,
     tabHostClient,
     tabHostId,

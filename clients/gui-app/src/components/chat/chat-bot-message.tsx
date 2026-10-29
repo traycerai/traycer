@@ -28,6 +28,7 @@ import {
   MemberAvatar,
 } from "@/components/bots/bot-avatars";
 import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
+import { BotSurfaceCard } from "@/components/bots/bot-surface-card";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import {
@@ -61,7 +62,8 @@ import { TextSegment } from "./segments/text-segment";
  * proposal carries the line of the thread a member answers it in, and a
  * reply that asks carries its options as buttons. A row that asks without
  * waiting (decision 121) draws the question card in place of its text and
- * options, and carries its thread's line as a question does. A bot that
+ * options, and carries its thread's line as a question does. A post that
+ * points into a task (T89) draws the surface's card under its text. A bot that
  * answers posts itself (reply mode `direct`) replies in the channel, as a
  * plain row.
  *
@@ -215,6 +217,13 @@ function BotRow(props: {
         />
       ) : (
         <BotRowBody announcement={announcement} body={body} />
+      )}
+      {message.surface === undefined ? null : (
+        <BotSurfaceCard
+          messageId={message.persistentMessageId}
+          surface={message.surface}
+          postText={message.content}
+        />
       )}
       {message.options === undefined || questions !== null ? null : (
         <ReplyOptions

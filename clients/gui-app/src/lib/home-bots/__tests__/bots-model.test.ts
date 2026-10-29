@@ -72,6 +72,7 @@ function trackingTask(taskId: string, spun: boolean | null): BotTaskEntry {
     originRequestId: null,
     createdByChatId: null,
     checkins: null,
+    inputNeeded: null,
   };
 }
 
@@ -97,6 +98,7 @@ function snapshot(input: {
     openRequestCount: input.openRequestCount,
     conversationsRevision: null,
     notificationSubscriptions: null,
+    surfaceActions: null,
     boundHost: { hostId: input.hostId, epoch: 2, isThisHost: input.isThisHost },
     activity: null,
   };

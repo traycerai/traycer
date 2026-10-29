@@ -417,6 +417,7 @@ function mount(options: MountOptions): {
             appConversationChatId={mocks.state.appConversationChatId}
             resolveMember={resolveMember}
             tasks={[]}
+            surfaceActions={null}
             openThread={openThread}
             onOpenThread={onOpenThread}
             onOpenActivity={onOpenActivity}

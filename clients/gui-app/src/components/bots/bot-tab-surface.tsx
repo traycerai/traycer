@@ -502,6 +502,7 @@ function BotTabContent(props: {
                 appConversationChatId={snapshot.bot.appConversationChatId}
                 resolveMember={resolveMember}
                 tasks={snapshot.tasks}
+                surfaceActions={snapshot.surfaceActions}
                 openThread={openThread}
                 onOpenThread={setOpenThread}
                 onOpenActivity={openActivity}

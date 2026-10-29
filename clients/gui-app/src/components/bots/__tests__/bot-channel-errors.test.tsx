@@ -238,6 +238,7 @@ function mount(openThread: BotOpenThread | null): void {
             appConversationChatId={CHANNEL_ID}
             resolveMember={resolveMember}
             tasks={[]}
+            surfaceActions={null}
             openThread={openThread}
             onOpenThread={vi.fn()}
             onOpenActivity={onOpenActivity}
