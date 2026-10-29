@@ -3,6 +3,11 @@ import {
   provisionInstalledHostCredential,
   type HostCredentialProvisionOutcome,
 } from "./credential-provisioning";
+import {
+  isValidLocalHostWebsocketUrl,
+  publishedHostProcessGone,
+  readHostPidMetadata,
+} from "./pid-metadata";
 import { resolveHostAuth, type HostAuth } from "../internal/host-auth";
 import { errorFromUnknown } from "../logger";
 import { toCliError } from "../runner/errors";
@@ -37,8 +42,11 @@ import type { CommandContext } from "../runner/runner";
 //     there would have the starting host dial itself;
 //   - `host restart` / `host free-port-and-restart` cycle an EXISTING
 //     host whose provisioning state was set by whichever command installed
-//     it - they create no new unprovisioned host, and a host that was
-//     already unprovisioned self-heals on the next minting client.
+//     it - they create no new unprovisioned host. A host that was already
+//     unprovisioned stays that way until a minting client connects, and on
+//     a machine without Desktop nothing does on its own: `traycer login`
+//     is the CLI's way to credential a host that is already running
+//     (`provisionRunningHostCredential` below).
 //
 // A fourth entry used to sit here: `maybeAutoBootstrap`, which started a
 // host implicitly off `traycer host status`. It was excluded on the grounds
@@ -63,6 +71,13 @@ import type { CommandContext } from "../runner/runner";
 // (`provisionInstalledHostCredential`), so the host comes up holding its own
 // `aud: "host"` credential instead of waiting for the first minting client.
 // Best-effort and deadline-bounded; failures warn.
+//
+// `traycer login` runs the same probe against a host that is ALREADY
+// running on this machine (`provisionRunningHostCredential`), and nothing
+// else: it never installs, downloads or starts one. That is the only CLI
+// path that credentials a host left unprovisioned by an earlier run - a
+// failed post-start probe, a host started while signed out, a sign-in that
+// expired - without restarting it.
 
 // Outcome of the sign-in pre-flight, surfaced verbatim as `authPreflight`
 // in the result payload so NDJSON consumers can tell an authorized run
@@ -231,8 +246,11 @@ export async function maybeProvisionCredential(
   // surface that most needs a credentialed host, and a Desktop shellout
   // racing the GUI's own mint resolves inside the probe (a superseded mint
   // verifies the winner's credential rather than failing).
-  const auth = await resolveHostAuthOrNull(ctx, "provision");
-  if (auth === null) {
+  const outcome = await provisionWithStoredAuth(
+    ctx,
+    "authorizing the installed host (waiting for it to come up)...",
+  );
+  if (outcome === "signed-out") {
     // Still nothing to mint with. What that MEANS depends on what the
     // pre-flight saw: a sign-in that has since disappeared (concurrent
     // sign-out, corrupted file) must not be reported as a silent no-op -
@@ -242,6 +260,54 @@ export async function maybeProvisionCredential(
     // was never signed in has already warned in the pre-flight and needs no
     // second verdict here.
     return preflightSawSignIn ? { kind: "unauthorized" } : null;
+  }
+  return outcome;
+}
+
+/**
+ * `traycer login`'s follow-up: hands a host that is ALREADY running on this
+ * machine its credential, using the sign-in the login just stored. `null`
+ * when there is no such host - no pid record, an endpoint that is not a
+ * local host's, or a recorded process that is provably gone - and then
+ * nothing is dialed, installed or started.
+ *
+ * The probe itself decides whether a mint is needed: a host that already
+ * holds a credential acks `active` on the first connection and nothing is
+ * minted.
+ */
+export async function provisionRunningHostCredential(
+  ctx: CommandContext,
+): Promise<HostCredentialProvisionOutcome | null> {
+  const environment = ctx.runtime.environment;
+  const metadata = await readHostPidMetadata(environment);
+  if (
+    metadata === null ||
+    !isValidLocalHostWebsocketUrl(metadata.websocketUrl) ||
+    publishedHostProcessGone(metadata)
+  ) {
+    ctx.runtime.logger.info(
+      "Login found no running host to provision a credential for",
+      { environment, hasPidMetadata: metadata !== null },
+    );
+    return null;
+  }
+  const outcome = await provisionWithStoredAuth(
+    ctx,
+    "authorizing the running host...",
+  );
+  // The login that just returned stored this sign-in, so losing it here is a
+  // concurrent sign-out or an unreadable file - either way the host was not
+  // given a credential, and signing in again is the remedy.
+  return outcome === "signed-out" ? { kind: "unauthorized" } : outcome;
+}
+
+async function provisionWithStoredAuth(
+  ctx: CommandContext,
+  progressMessage: string,
+): Promise<HostCredentialProvisionOutcome | "signed-out"> {
+  const auth = await resolveHostAuthOrNull(ctx, "provision");
+  if (auth === null) {
+    return "signed-out";
   }
   const progress = (message: string): void => {
     ctx.progress({
@@ -253,11 +319,12 @@ export async function maybeProvisionCredential(
       workUnits: null,
     });
   };
-  progress("authorizing the installed host (waiting for it to come up)...");
+  progress(progressMessage);
   // Belt and braces on the advisory contract. The probe maps its own failures
-  // to an outcome and should never throw - but it runs AFTER the bytes are
-  // swapped and the service started, so "should never" is not good enough
-  // here: an escape would report a completed command as a failed one.
+  // to an outcome and should never throw - but it runs AFTER the command's
+  // own work is done (bytes swapped and the service started, or the sign-in
+  // stored), so "should never" is not good enough here: an escape would
+  // report a completed command as a failed one.
   let outcome: HostCredentialProvisionOutcome;
   try {
     outcome = await provisionInstalledHostCredential({
@@ -270,7 +337,7 @@ export async function maybeProvisionCredential(
   } catch (err) {
     const error = errorFromUnknown(err);
     ctx.runtime.logger.warn(
-      "Host install credential provisioning threw; the install itself was unaffected",
+      "Host credential provisioning threw; the command itself was unaffected",
       {
         environment: ctx.runtime.environment,
         errorName: error.name,
@@ -279,7 +346,7 @@ export async function maybeProvisionCredential(
     );
     outcome = { kind: "error", message: error.message };
   }
-  ctx.runtime.logger.info("Host install credential provisioning settled", {
+  ctx.runtime.logger.info("Host credential provisioning settled", {
     environment: ctx.runtime.environment,
     outcome: outcome.kind,
   });
@@ -288,32 +355,34 @@ export async function maybeProvisionCredential(
 
 // Terminal-line rendering of the provisioning outcome. `null` (not attempted)
 // and "already credentialed" stay quiet; a fresh mint is confirmed; every
-// failure is a warning that names the self-heal, because none of them makes
-// the command itself less successful.
+// failure is a warning, because none of them makes the command itself less
+// successful. The failures point at `traycer host doctor` rather than
+// promising that a later client will fix it: on a machine without Desktop no
+// client connects on its own, and the doctor reports a host left without its
+// credential.
 export function formatCredentialProvisionNote(
   outcome: HostCredentialProvisionOutcome | null,
 ): string | null {
   if (outcome === null) {
     return null;
   }
-  const selfHeal = "it will be provisioned when a Traycer client next connects";
+  const nextStep = "run `traycer host doctor` to see how to fix it";
   switch (outcome.kind) {
     case "active":
       return outcome.minted ? "host credential provisioned" : null;
     case "unreachable":
-      return `host credential not provisioned (the host did not come up in time) - ${selfHeal}`;
+      return `host credential not provisioned (the host did not respond in time) - ${nextStep}`;
     case "unsupported":
       return "host credential not provisioned (this host cannot accept a delegated credential from this client)";
     case "mint-unavailable":
-      return `host credential not provisioned (the credential handoff did not complete) - ${selfHeal}`;
+      return `host credential not provisioned (the credential handoff did not complete) - ${nextStep}`;
     case "not-adopted":
-      return `host credential not provisioned (the host did not adopt it in time) - ${selfHeal}`;
-    // The one outcome that must NOT promise the self-heal: a dead sign-in
-    // stops every other client from minting too, so the command leaves an
-    // unusable host until the user actually signs in again.
+      return `host credential not provisioned (the host did not adopt it in time) - ${nextStep}`;
+    // A dead sign-in stops every client from minting, so the one thing that
+    // helps is signing in again - say that directly.
     case "unauthorized":
       return `host credential not provisioned - your sign-in is no longer valid. ${SIGN_IN_LATER_HINT}`;
     case "error":
-      return `host credential not provisioned (${outcome.message}) - ${selfHeal}`;
+      return `host credential not provisioned (${outcome.message}) - ${nextStep}`;
   }
 }

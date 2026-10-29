@@ -107,7 +107,7 @@ Common issues:
 | **Host stops at logout (lingering disabled)** | Linux only. Run `loginctl enable-linger <user>` so the host keeps running after you log out. |
 | **Host service is failing to start** | Linux only. The card gives a `journalctl` command that prints why the service failed. |
 | **Host rejected the stored credentials** | Run `traycer login`. |
-| **Host credential needs re-authorization** | Open Traycer Desktop, signed in as the host's owner, and let it connect. It replaces the credential on its own. Signing in again doesn't fix this. |
+| **Host credential needs re-authorization** | While the host is running, run `traycer login` as the host's owner, or open Traycer Desktop signed in as the host's owner and let it connect. Either replaces the credential. |
 | **Service managed by Traycer Desktop** | Not a problem. Traycer Desktop manages this host's startup on macOS. |
 
 ## Logs
