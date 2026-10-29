@@ -197,3 +197,53 @@ describe("claimCreditOfferViaHttp", () => {
     ).toEqual({ kind: "network-error" });
   });
 });
+
+describe("a response whose body stalls after its headers", () => {
+  /**
+   * Headers arrive at once; the body never does. As a real fetch does, the
+   * request's signal errors the body stream when it aborts.
+   */
+  function respondThenStall(status: number): void {
+    fetchMock.mockImplementation((_url, init) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          init?.signal?.addEventListener("abort", () => {
+            controller.error(init.signal?.reason);
+          });
+        },
+      });
+      return Promise.resolve(
+        new Response(body, {
+          status,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("times the list out as a network error", async () => {
+    respondThenStall(200);
+
+    const result = listCreditOffersViaHttp(AUTHN_BASE_URL, BEARER, null);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(await result).toEqual({ kind: "network-error" });
+  });
+
+  it("times a refused claim out as a network error, so it never stays pending", async () => {
+    respondThenStall(409);
+
+    const result = claimCreditOfferViaHttp(AUTHN_BASE_URL, BEARER, CARD.id);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(await result).toEqual({ kind: "network-error" });
+  });
+});

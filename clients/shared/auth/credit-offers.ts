@@ -59,15 +59,28 @@ function authnApiUrl(authnBaseUrl: string, path: string): string {
   ).toString();
 }
 
+/** A response read to the end: its status and its JSON body, or `null`. */
+interface ReadResponse {
+  readonly status: number;
+  readonly body: unknown;
+}
+
+/**
+ * One request, its body included, under one timeout. The body is read before
+ * the abort is cleared: a server that sends headers and then stalls must
+ * still time out, or a claim would stay pending, and every Claim button
+ * disabled, for good. A body that cannot be read, a timed-out one included,
+ * is `null`.
+ */
 async function request(
   url: string,
   init: { method: "GET" | "POST"; body: string | null },
   bearerToken: string,
   signal: AbortSignal | null,
-): Promise<Response | null> {
+): Promise<ReadResponse | null> {
   const abort = composeRequestAbort(signal, CREDIT_OFFERS_FETCH_TIMEOUT_MS);
   try {
-    return await fetch(url, {
+    const response = await fetch(url, {
       method: init.method,
       headers: {
         Authorization: `Bearer ${bearerToken}`,
@@ -77,6 +90,8 @@ async function request(
       body: init.body,
       signal: abort.signal,
     });
+    const body: unknown = await response.json().catch(() => null);
+    return { status: response.status, body };
   } catch {
     return null;
   } finally {
@@ -84,8 +99,7 @@ async function request(
   }
 }
 
-async function readErrorCode(response: Response): Promise<string | null> {
-  const body: unknown = await response.json().catch(() => null);
+function errorCode(body: unknown): string | null {
   if (body === null || typeof body !== "object" || !("error" in body)) {
     return null;
   }
@@ -113,8 +127,7 @@ export async function listCreditOffersViaHttp(
   if (response.status < 200 || response.status >= 300) {
     return { kind: "network-error" };
   }
-  const body: unknown = await response.json().catch(() => null);
-  const parsed = listCreditOffersResponseSchema.safeParse(body);
+  const parsed = listCreditOffersResponseSchema.safeParse(response.body);
   return parsed.success
     ? { kind: "ok", offers: parsed.data.campaigns }
     : { kind: "network-error" };
@@ -140,7 +153,7 @@ export async function claimCreditOfferViaHttp(
   }
   if (response.status === 403) {
     // A plan refusal is a 403 too; only its code tells it from an auth one.
-    return (await readErrorCode(response)) === PLAN_INELIGIBLE
+    return errorCode(response.body) === PLAN_INELIGIBLE
       ? { kind: "unavailable", reason: "ineligible" }
       : { kind: "unauthorized" };
   }
@@ -148,7 +161,7 @@ export async function claimCreditOfferViaHttp(
     return { kind: "unavailable", reason: "not-running" };
   }
   if (response.status === 409) {
-    switch (await readErrorCode(response)) {
+    switch (errorCode(response.body)) {
       case ALREADY_CLAIMED:
         return { kind: "conflict" };
       case SOLD_OUT:
@@ -162,8 +175,8 @@ export async function claimCreditOfferViaHttp(
   if (response.status < 200 || response.status >= 300) {
     return { kind: "network-error" };
   }
-  const body: unknown = await response.json().catch(() => null);
-  const parsed = claimCreditOfferResponseSchema.safeParse(body);
-  // The body is read only for the card: a 2xx means the claim took.
+  const parsed = claimCreditOfferResponseSchema.safeParse(response.body);
+  // The body is read only for the card: a 2xx means the claim took, even when
+  // the card never arrived.
   return { kind: "ok", offer: parsed.success ? parsed.data.campaign : null };
 }
