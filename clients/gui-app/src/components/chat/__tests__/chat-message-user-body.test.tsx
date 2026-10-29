@@ -14,6 +14,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
 import { UserMessageBody } from "@/components/chat/chat-message-user-body";
+import { CHAT_TIMELINE_SCROLLER_MOVED_EVENT } from "@/components/chat/chat-timeline-follow-latch";
 import type { SetupWorkspaceState } from "@/components/chat/segments/setup-card-segment";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -896,6 +897,30 @@ describe("<UserMessageBody /> agent messages", () => {
       const scroller = screen.getByTestId("scroller");
       const scrollTo = vi.fn();
       scroller.scrollTo = scrollTo;
+      const moves: unknown[] = [];
+      // The edited row sits inside the viewport until the reveal is asked
+      // for, so only the focus restores write the scroller before it.
+      let rowBottomPx = 480;
+      rectSpy = vi
+        .spyOn(Element.prototype, "getBoundingClientRect")
+        .mockImplementation(function (this: Element) {
+          const bottom = this === scroller ? 500 : rowBottomPx;
+          const height = this === scroller ? 100 : 60;
+          return {
+            x: 0,
+            y: bottom - height,
+            width: 400,
+            height,
+            top: bottom - height,
+            right: 400,
+            bottom,
+            left: 0,
+            toJSON: () => ({}),
+          };
+        });
+      scroller.addEventListener(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, (event) => {
+        if (event instanceof CustomEvent) moves.push(event.detail);
+      });
       const editor = await screen.findByRole("textbox", {
         name: "Edit message",
       });
@@ -903,31 +928,25 @@ describe("<UserMessageBody /> agent messages", () => {
       // it asks for; run them all before the offset is replaced so a late
       // restore neither throws nor overwrites it.
       drainFrames();
+      // Each restore is the app's write to the transcript's scroller, and is
+      // announced as the list announces its own.
+      expect(moves).not.toHaveLength(0);
+      moves.length = 0;
       Object.defineProperty(scroller, "scrollTop", {
         configurable: true,
         writable: true,
         value: 300,
       });
-      // The scroller's viewport ends at 500; the edited row ends 120px below
-      // it. iOS WebKit lands a relative `scrollBy` twice, so the reveal must
-      // write the absolute target: the current offset plus the overflow and
-      // padding.
-      rectSpy = vi
-        .spyOn(Element.prototype, "getBoundingClientRect")
-        .mockImplementation(function (this: Element) {
-          const bottom = this === scroller ? 500 : 620;
-          return {
-            x: 0,
-            y: bottom - 100,
-            width: 400,
-            height: 100,
-            top: bottom - 100,
-            right: 400,
-            bottom,
-            left: 0,
-            toJSON: () => ({}),
-          };
-        });
+      // A real scroller lands on the offset it is asked for, so the announced
+      // move's end is the write's own target.
+      scrollTo.mockImplementation((options: ScrollToOptions) => {
+        if (options.top !== undefined) scroller.scrollTop = options.top;
+      });
+      // The scroller's viewport ends at 500; the edited row will end 120px
+      // below it. iOS WebKit lands a relative `scrollBy` twice, so the reveal
+      // must write the absolute target: the current offset plus the overflow
+      // and padding.
+      rowBottomPx = 620;
       fireEvent.paste(editor, {
         clipboardData: {
           files: [],
@@ -940,6 +959,7 @@ describe("<UserMessageBody /> agent messages", () => {
         drainFrames();
         expect(scrollTo).toHaveBeenCalledWith({ top: 436, behavior: "auto" });
       });
+      expect(moves).toEqual([{ from: 300, fromEnd: 0, to: 436 }]);
       expect(scrollTo).not.toHaveBeenCalledWith(
         expect.objectContaining({ top: 620 - 500 + 16 }),
       );
