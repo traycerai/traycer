@@ -98,9 +98,8 @@ export interface ChatTimelineFollowLatch {
   readonly hasPendingEndCorrection: () => boolean;
   /** Routes every native or library scroll report through this authority. */
   readonly observeLiveGeometry: () => void;
-  /** The latest turn finished: a reader the end fell onto while it ran, or
-   *  whose gesture away from it the end absorbed, and who still sits at the
-   *  strict bottom, follows again. */
+  /** The latest turn finished: a reader the end fell onto while it ran, and
+   *  who still sits at the strict bottom, follows again. */
   readonly reconcileTurnAtRest: () => void;
 }
 
@@ -1426,9 +1425,14 @@ export function useChatTimelineFollowLatch(
   ]);
 
   const reconcileTurnAtRest = useCallback((): void => {
+    if (!holdsDepartedReaderAtEnd()) return;
+    // A gesture's arm is left as it is: the strict bottom cannot tell a
+    // wheel whose scroll is still coming from one the end absorbed, and the
+    // one still coming must be the reader's departure when it lands. So a
+    // held reader with one pending stays held: following them would retire
+    // it (`setFollowIntent`).
     const arm = armedReaderDepartureRef.current;
-    const holdsGestureAway = arm?.source === "gesture" && arm.departsOnGrowth;
-    if (!holdsDepartedReaderAtEnd() && !holdsGestureAway) return;
+    if (arm?.source === "gesture" && arm.blocksAutomaticCorrection) return;
     const node = listRef.current?.getScrollableNode();
     if (!node) return;
     const geometry = readScrollGeometry(node);
@@ -1438,11 +1442,9 @@ export function useChatTimelineFollowLatch(
     ) {
       return;
     }
-    // Nothing will grow past them now: a gesture away the end absorbed is
-    // no departure, and the next turn's growth must not make it one. What
-    // still holds a detached reader at the strict bottom (a suppression, a
-    // recovering transcript) still decides.
-    if (holdsGestureAway) armedReaderDepartureRef.current = null;
+    // Nothing will grow past them now. What still holds a detached reader at
+    // the strict bottom (a suppression, a recovering transcript) still
+    // decides.
     readerDepartureScrollTopRef.current = null;
     reconcileMaintenanceAtStrictBottom(geometry);
   }, [holdsDepartedReaderAtEnd, listRef, reconcileMaintenanceAtStrictBottom]);

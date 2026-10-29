@@ -1660,6 +1660,27 @@ describe("useChatTimelineFollowLatch", () => {
       expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
     });
 
+    // Following them would retire the wheel's arm, and its scroll, landing
+    // after the turn's end, would read as the list's and be corrected.
+    it("keeps a held reader detached whose wheel up is still awaiting its scroll when the turn ends", () => {
+      let turnRunning = true;
+      const { node, listRef, onFollowIntentChange, result } = clampedOntoNewEnd(
+        () => turnRunning,
+      );
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+      turnRunning = false;
+      result.current.reconcileTurnAtRest();
+      shim.setGeometry(node, { scrollTop: END - NOTCH_PX });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      shim.setGeometry(node, { scrollHeight: 1600 });
+      result.current.followEndIfPermitted();
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      expect(node.scrollTop).toBe(END - NOTCH_PX);
+    });
+
     // Control: a held reader the turn's end finds away from the strict
     // bottom has nothing to follow into.
     it("control: a held reader away from the strict bottom stays detached when the turn ends", () => {
@@ -2043,7 +2064,7 @@ describe("useChatTimelineFollowLatch", () => {
     });
   });
 
-  describe("a wheel away the end absorbs, across the turn's end", () => {
+  describe("a wheel up at the strict bottom, across the turn's end", () => {
     function followingAtStrictBottom(isTurnRunning: () => boolean) {
       const node = shim.makeNode({
         scrollTop: 1000,
@@ -2064,23 +2085,39 @@ describe("useChatTimelineFollowLatch", () => {
       return { node, listRef, onFollowIntentChange, onReaderGesture, result };
     }
 
-    it("an absorbed wheel up does not outlive the turn", () => {
-      const { node, listRef, onFollowIntentChange, onReaderGesture, result } =
+    // The turn ends between the wheel's event and the browser applying its
+    // smooth scroll: the view is still at the strict bottom then.
+    it("keeps a wheel's departure whose scroll lands after the turn ended", () => {
+      const { node, listRef, onFollowIntentChange, result } =
         followingAtStrictBottom(() => false);
 
-      // The end absorbs the wheel: nothing scrolls and nothing grows.
       node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
       result.current.reconcileTurnAtRest();
-      onReaderGesture.mockClear();
+      shim.setGeometry(node, { scrollTop: 880 });
+      fireNativeScroll(node);
 
-      // The next turn's growth is followed, not read as the wheel's departure.
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      result.current.followEndIfPermitted();
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      expect(node.scrollTop).toBe(880);
+    });
+
+    // No report tells that wheel from one the end absorbed, so the absorbed
+    // one keeps its arm too: the next turn's growth is the reader's
+    // departure, and they keep their place with the pill.
+    it("leaves an absorbed wheel's arm to depart at the next turn's growth", () => {
+      const { node, listRef, onFollowIntentChange, result } =
+        followingAtStrictBottom(() => false);
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+      result.current.reconcileTurnAtRest();
       shim.setGeometry(node, { scrollHeight: 1700 });
       result.current.followEndIfPermitted();
 
-      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
-      expect(node.scrollTop).toBe(1200);
-      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
-      expect(onReaderGesture).not.toHaveBeenCalled();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      expect(node.scrollTop).toBe(1000);
     });
 
     it("R3's departure and the end pad's clamp agree: held through the turn, following after it", () => {
