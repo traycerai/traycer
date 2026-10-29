@@ -5,6 +5,7 @@ import {
   returnPendingSandboxSendToDraft,
   type PendingSandboxSendInput,
 } from "@/lib/sandboxes/pending-sandbox-send";
+import { markReturnedSandboxRestored } from "@/lib/sandboxes/returned-sandbox";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   readStagedSandbox,
@@ -84,10 +85,12 @@ export function handLandingSandboxSend(
           clientRequestId: stage.clientRequestId,
         });
       // The draft keeps where its message was going, so a reload stages it
-      // again (`useReturnedSandboxStage`).
+      // again (`useReturnedSandboxStage`); the stage is that draft's restored
+      // one, so it leaves the composer with the draft.
       useLandingDraftStore
         .getState()
         .setDraftReturnedSandbox(returned.draftId, returnedSandbox);
+      markReturnedSandboxRestored(input.fromSurfaceKey, returnedSandbox);
       return { kind: "opened", draftId: returned.draftId };
     },
   };

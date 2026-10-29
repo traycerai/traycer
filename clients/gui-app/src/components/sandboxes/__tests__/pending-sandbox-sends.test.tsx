@@ -5688,6 +5688,27 @@ describe("a send held on settings that didn't apply, once its sandbox leaves awa
     ).toBeUndefined();
   });
 
+  it("takes the given-back sandbox off the task composer when it closes, and back on when it reopens", async () => {
+    await mountHeld();
+    answerSandboxRows([rowIn("suspended")], FRESH + 1);
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    const taskSurface = newConversationSurfaceKey("epic-1");
+    const composer = renderHook(() =>
+      useNewConversationReturnedSandbox("epic-1", null),
+    );
+
+    composer.unmount();
+    expect(readStagedSandbox(taskSurface)).toBeNull();
+
+    renderHook(() => useNewConversationReturnedSandbox("epic-1", null));
+    expect(readStagedSandbox(taskSurface)).toMatchObject({
+      phase: "staged",
+      target: { kind: "existing", sandboxId: SANDBOX_ID, verb: "resume" },
+    });
+  });
+
   it("keeps a second message given back to the same composer across a reload", async () => {
     await mountHeld();
     answerSandboxRows([rowIn("suspended")], FRESH + 1);

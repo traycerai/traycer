@@ -32,6 +32,7 @@ import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-sett
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useInitialChatHandoffStore } from "@/stores/epics/initial-chat-handoff-store";
 import {
+  emptyLandingDraftWorkspaceSnapshot,
   LANDING_DRAFT_PERSIST_KEY,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
@@ -677,6 +678,69 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       queryClient.clear();
     },
   );
+
+  it("takes a given-back sandbox off the composer when another draft is shown, and back on with its key", async () => {
+    useStagedSandboxStore.getState().stage(SURFACE, TEAM_TARGET);
+    landingMocks.request.mockImplementation((method: string) =>
+      method === "epic.attachEnvironment"
+        ? Promise.reject(
+            new HostRpcError({
+              code: "FORBIDDEN",
+              message: "This task cannot be attached to that team.",
+              requestId: "request-attach-refused",
+              method,
+              fatalDetails: null,
+            }),
+          )
+        : Promise.resolve({ roomInfo: null }),
+    );
+    const queryClient = newQueryClient();
+    const { result } = renderHook(
+      () => useLandingComposerActions(useTestPlacementTarget()),
+      { wrapper: queryClientWrapper(queryClient) },
+    );
+    act(() => {
+      result.current.startTaskOnStagedSandbox({
+        draftId: null,
+        owner: null,
+        sandboxTeamId: "team-9",
+        text: SUBMITTED_PROMPT,
+        hand,
+      });
+    });
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    const returnedDraft = useLandingDraftStore.getState().drafts[0];
+    const requestId = readStagedSandbox(SURFACE)?.clientRequestId;
+    if (requestId === null || requestId === undefined)
+      throw new Error("expected the create's key back on the composer");
+    useLandingDraftStore.getState().installLandingDraft({
+      id: "draft-other",
+      content: MESSAGE_CONTENT,
+      selection: null,
+      lastTouchedAt: Date.now(),
+      settings: PICKED_SETTINGS,
+      composerMode: "chat",
+      workspace: emptyLandingDraftWorkspaceSnapshot(),
+      closed: false,
+    });
+    const composer = renderHook<void, { readonly draftId: string }>(
+      (props) => useLandingReturnedSandbox(SURFACE, props.draftId, true),
+      { initialProps: { draftId: returnedDraft.id } },
+    );
+
+    composer.rerender({ draftId: "draft-other" });
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+
+    composer.rerender({ draftId: returnedDraft.id });
+    expect(readStagedSandbox(SURFACE)).toMatchObject({
+      target: TEAM_TARGET,
+      phase: "staged",
+      clientRequestId: requestId,
+    });
+    queryClient.clear();
+  });
 
   it("gives the sandbox back as a fresh stage, carrying only the create's key", async () => {
     useStagedSandboxStore.getState().stage(SURFACE, TEAM_TARGET);
