@@ -441,6 +441,36 @@ function indeterminateArmHoldsFollow(
   );
 }
 
+/**
+ * Whether a press's report stepped the view toward the end, past the offset
+ * its arm carries. Only the reader can put it there: an announced write
+ * carries that offset along with the view (`noteScrollerMoved`), and an
+ * unannounced clamp only ever lands the view on the end, never past where it
+ * already stood.
+ *
+ * The press is then measured from here, a step at a time, as a finger is
+ * (`touchStep`) - so a press that drags to the end and back off it has moved
+ * away from where it last stood, which one measurement from the first offset
+ * cannot see: it dragged back to the very offset it pressed at. The step
+ * itself departs nothing. A press dragging toward the tail is asking for it,
+ * and one that stops short of it never steps away again, so the release
+ * follows it there.
+ */
+function pressArmSteppedTowardEnd(
+  arm: ArmedReaderDeparture,
+  geometry: ChatTimelineScrollGeometry,
+): arm is ReaderGestureArm {
+  if (arm?.source !== "gesture" || arm.direction !== "indeterminate") {
+    return false;
+  }
+  const start = arm.geometryAtGesture;
+  return (
+    start !== null &&
+    restingScrollTop(geometry) >
+      restingScrollTop(start) + CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
+  );
+}
+
 /** A gesture's geometry with an announced write applied: its offset moves
  *  with the view, and its distance from the end stays the reader's. */
 function geometryMovedBy(
@@ -1578,6 +1608,21 @@ export function useChatTimelineFollowLatch(
     [],
   );
 
+  // A press's own step toward the end: where its landing is measured from
+  // moves with it, so the step after it is the reader's however they reached
+  // the offset they are at (`pressArmSteppedTowardEnd`).
+  const notePressStep = useCallback(
+    (geometry: ChatTimelineScrollGeometry): void => {
+      const arm = armedReaderDepartureRef.current;
+      if (!pressArmSteppedTowardEnd(arm, geometry)) return;
+      armedReaderDepartureRef.current = {
+        ...arm,
+        geometryAtGesture: geometry,
+      };
+    },
+    [],
+  );
+
   // A following reader's non-bottom report under their arm: the departure,
   // once the arm says it is one.
   const publishArmedReport = useCallback(
@@ -1605,6 +1650,10 @@ export function useChatTimelineFollowLatch(
     noteReportAfterLiftLanding(geometry);
     const movedAway = noteReportMovement(geometry);
     if (noteReportAfterDeparture(geometry)) return;
+    // Before the strict bottom reconciles or the arm decides: a press's drag
+    // to the end is a step of its own, and the end it reaches is not where
+    // the next step is measured from.
+    notePressStep(geometry);
     const momentumArrived = noteReaderMomentum(geometry);
     if (isChatTimelineAtStrictBottom(geometry)) {
       reconcileStrictBottom(geometry, false);
@@ -1649,6 +1698,7 @@ export function useChatTimelineFollowLatch(
     noteReportAfterDeparture,
     noteReportAfterLiftLanding,
     noteReportMovement,
+    notePressStep,
     publishArmedReport,
     publishFreeTouchWhileSuppressed,
     publishUnannouncedDeparture,

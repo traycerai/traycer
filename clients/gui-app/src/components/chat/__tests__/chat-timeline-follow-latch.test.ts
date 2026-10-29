@@ -3699,17 +3699,15 @@ describe("useChatTimelineFollowLatch", () => {
     expect(listRef.scrollToEnd).not.toHaveBeenCalled();
   });
 
-  // TLA+ modeling found that `gestureScrollLanded`'s current two-half
-  // predicate (up from the carried offset AND farther from the end) can miss
-  // a real drag when an end pad the press began inside drops mid-press: the
-  // end's own drop shrinks "distance from end" out from under the reader,
-  // so a later drag that moves the view up can still read as closer to the
-  // (now nearer) end than the press was, and "farther from the end" never
-  // holds. PR #3048 round 2 (not on this branch) fixes the helper to require
-  // only "up from the carried offset" once the view is off the strict
-  // bottom. EXPECTED RED here until that round lands and this branch merges
-  // main - do not weaken this test or touch `gestureScrollLanded` to force
-  // it green.
+  // TLA+ modeling found that `gestureScrollLanded`'s old two-half predicate
+  // (up from the carried offset AND farther from the end) missed a real drag
+  // when an end pad the press began inside drops mid-press: the end's own
+  // drop shrinks "distance from end" out from under the reader, so a later
+  // drag that moves the view up could still read as closer to the (now
+  // nearer) end than the press was, and "farther from the end" never held.
+  // PR #3048 round 2 fixed the helper to require only "up from the carried
+  // offset" once the view is off the strict bottom, with the distance half
+  // applying only on the strict bottom. Regression test for that fix.
   it("departs a following reader whose drag moves up but lands closer to an end a mid-press pad drop shrank", () => {
     // Starts at the strict bottom (matching `initialScrollAtEnd`) so mount's
     // own `followEndIfPermitted()` call is a no-op; the pad is opened below,
@@ -3758,6 +3756,112 @@ describe("useChatTimelineFollowLatch", () => {
 
     expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
     expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+  });
+
+  // TLA+ modeling (the `pressstep` finding, 17 steps) found a press measured
+  // once from the offset it first pressed at misses a reader who drags to
+  // the end (which reports) and then back off it (which reports) to the very
+  // offset they pressed at: "up from where it started" never holds, so they
+  // read as still following although they dragged away from where they last
+  // stood. `pressArmSteppedTowardEnd` + `notePressStep` re-base the arm's
+  // carried offset on every report that steps toward the end, so the final
+  // drag is measured from the end it reached, not the press's own start.
+  it("departs a following reader whose press drags to the end and back off it, to the very offset it pressed at", () => {
+    // Starts at the strict bottom (matching `initialScrollAtEnd`) so mount's
+    // own `followEndIfPermitted()` call is a no-op.
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
+      }),
+    );
+
+    result.current.noteReaderGesture({
+      direction: "indeterminate",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+    });
+    // An append moves the end away with no move of the view: the arm blocks
+    // the maintain trigger from correcting it while the press is held.
+    shim.setGeometry(node, { scrollHeight: 1800 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+
+    // The drag reaches the (grown) strict bottom and reports - the step that
+    // must re-base the arm's carried offset to here.
+    shim.setGeometry(node, { scrollTop: 1300 });
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+
+    // The drag moves back up off the end, to the very offset the press began
+    // at, and reports. One measurement from the press's own start would read
+    // this as never having left 1000; re-based from the end it just reached,
+    // it is a real departure.
+    shim.setGeometry(node, { scrollTop: 1000 });
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
+  // The guard the model warned a naive "the press moved at all" flag would
+  // break: a press dragging toward the end but stopping short of it is
+  // asking for the tail, not departing from it, so it must neither depart
+  // nor correct while still held - only re-base, and only the release (with
+  // the arm by then unconsumed) lets the correction that growth held off run.
+  it("keeps a following reader whose press drags toward the end but stops short, correcting only at release", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
+      }),
+    );
+
+    result.current.noteReaderGesture({
+      direction: "indeterminate",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+    });
+    // An append moves the end away with no move of the view.
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+
+    // The drag moves toward the end (1000 -> 1100) but stops short of it
+    // (end is 1200) and reports: a step toward the end re-bases the arm, but
+    // must neither depart nor correct while the press is still held.
+    shim.setGeometry(node, { scrollTop: 1100 });
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+
+    // The press ends with no further move: the reader was asking for the
+    // tail, and the release lets the held-off correction run.
+    node.dispatchEvent(new PointerEvent("pointerup"));
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
   });
 
   it("converges a toward-end reader landing when content grows before scroll delivery", () => {
