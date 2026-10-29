@@ -373,7 +373,9 @@ describe("CreditsSettingsPanel credit offers", () => {
       first.querySelector<HTMLElement>('[aria-hidden="true"] > div')?.style
         .width,
     ).toBe("50%");
-    const timeLeft = first.querySelector("[data-testid=credits-offer-time-left]");
+    const timeLeft = first.querySelector(
+      "[data-testid=credits-offer-time-left]",
+    );
     if (timeLeft === null) throw new Error("no time-left trigger");
     expect(tooltipTextFor(timeLeft)).toBe(
       CREDITS_PAGE.offerEnds(
