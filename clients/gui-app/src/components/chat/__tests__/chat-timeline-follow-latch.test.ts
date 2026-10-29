@@ -3118,6 +3118,28 @@ describe("useChatTimelineFollowLatch", () => {
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
     });
 
+    // A read sees the pan before its scroll event: the departure is published
+    // ahead of that event, which the view's move makes sure comes. The end
+    // meeting them until then is the list's, and the event leaves them free.
+    it("a pan a read published ahead of its scroll event stays held when the end meets them idle, and its event leaves them free", () => {
+      const { node, listRef, onFollowIntentChange, result, turnRunning } =
+        followingWithTurn();
+      turnRunning.current = false;
+
+      shim.setGeometry(node, { scrollTop: 960 });
+      result.current.followEndIfPermitted();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+      shim.setGeometry(node, { scrollHeight: 1460 });
+      result.current.followEndIfPermitted();
+      shim.setGeometry(node, { scrollTop: 920 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange.mock.calls).toEqual([[false]]);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      expect(node.scrollTop).toBe(920);
+    });
+
     // iOS delivers no `touchmove`: the finger's report is the departure.
     it("guard: with the turn finished, the end meeting a reader a finger's report departed follows them", () => {
       const { node, onFollowIntentChange, result, turnRunning } =

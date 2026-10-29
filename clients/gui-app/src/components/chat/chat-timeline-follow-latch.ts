@@ -801,9 +801,10 @@ export function useChatTimelineFollowLatch(
   // not the reader moving either.
   const readerDepartureScrollTopRef = useRef<number | null>(null);
   // Whether the departure was published ahead of its gesture's report (the
-  // tail moving away from a wheel up that has not reported), until a report
-  // arrives. Only then is a report of the reader's own still to come, so only
-  // then does the end meeting them hold them whether or not the turn runs.
+  // tail moving away from a wheel up that has not reported, or a read seeing
+  // a pan before its scroll event), until a report arrives. Only then is a
+  // report of the reader's own still to come, so only then does the end
+  // meeting them hold them whether or not the turn runs.
   const departureAwaitsReportRef = useRef(false);
   const armedReaderDepartureRef = useRef<ArmedReaderDeparture>(null);
   const activeCorrectionRef = useRef<ActiveEndCorrection | null>(null);
@@ -1737,8 +1738,12 @@ export function useChatTimelineFollowLatch(
       reconcileMaintenanceAtStrictBottom(geometry);
       return;
     }
-    // A scroll applied ahead of its report: correcting it would undo it.
-    if (publishUnannouncedDeparture(geometry, movedAway)) return;
+    // A scroll applied ahead of its report: correcting it would undo it. The
+    // view moved, so that report is coming.
+    if (publishUnannouncedDeparture(geometry, movedAway)) {
+      departureAwaitsReportRef.current = true;
+      return;
+    }
     if (followReachedReaderEnd(list, node)) return;
     if (followReaderMomentumArrival(node, momentumArrived)) return;
     if (!permissionRef.current) return;
