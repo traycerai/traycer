@@ -1106,11 +1106,7 @@ export function useChatTimelineFollowLatch(
   );
 
   const reconcileStrictBottom = useCallback(
-    (
-      isNativeScrollReport: boolean,
-      geometry: ChatTimelineScrollGeometry,
-      isOwnedLanding: boolean,
-    ): void => {
+    (geometry: ChatTimelineScrollGeometry, isOwnedLanding: boolean): void => {
       cancelActiveCorrection();
       const readerCandidate = readerEndCandidateRef.current;
       readerEndCandidateRef.current = null;
@@ -1120,17 +1116,21 @@ export function useChatTimelineFollowLatch(
       // arm may already be spent on a report that arrived late. While it owns
       // the view, its completion reconciles the geometry it settles on.
       if (ownsFreeNavigationRef.current && !isOwnedLanding) return;
-      const isTouchArrival =
-        armedDeparture?.source === "touch" && isNativeScrollReport;
-      if (isTouchArrival) {
-        // The finger reached the tail mid-contact (streaming grew it past
-        // the contact offset): later movement is measured from here, or a
-        // drag back to the original offset would read as a tap and the lift
-        // would correct the reader to the tail.
+      const isTouchContact = armedDeparture?.source === "touch";
+      if (isTouchContact) {
+        // The view is on the tail mid-contact, by the finger (streaming grew
+        // it past the contact offset) or by a clamp a read saw before its
+        // report: later movement is measured from here. Otherwise a drag back
+        // to the original offset would read as a tap, and the lift would
+        // correct the reader to the tail; and the clamp's report, with the
+        // end moved again, would read as the finger leaving.
         armedReaderDepartureRef.current = touchArmAt(geometry, listRef.current);
       }
+      // A finger reaching the tail is the reader's (a read under a finger
+      // never gets here while a recovery holds a detached reader: the
+      // maintain path leaves them first).
       if (
-        !isTouchArrival &&
+        !isTouchContact &&
         !isOwnedLanding &&
         !permissionRef.current &&
         isReattachSuppressed?.() === true
@@ -1195,7 +1195,7 @@ export function useChatTimelineFollowLatch(
       isChatTimelineGeometryMeasurable(geometry) &&
       isChatTimelineAtStrictBottom(geometry)
     ) {
-      reconcileStrictBottom(false, geometry, true);
+      reconcileStrictBottom(geometry, true);
       return;
     }
     setFollowIntent(false);
@@ -1470,7 +1470,7 @@ export function useChatTimelineFollowLatch(
     if (noteReportAfterDeparture(geometry)) return;
     const momentumArrived = noteReaderMomentum(geometry);
     if (isChatTimelineAtStrictBottom(geometry)) {
-      reconcileStrictBottom(true, geometry, false);
+      reconcileStrictBottom(geometry, false);
       return;
     }
     // Ahead of a correction in flight: its own writes only move the view
@@ -1580,7 +1580,7 @@ export function useChatTimelineFollowLatch(
       // leave a jump pill visible when there is no useful bottom to reach.
       // This performs no imperative navigation, preserving destructive-clamp
       // behavior while allowing subsequent streaming growth to stay latched.
-      reconcileStrictBottom(false, geometry, false);
+      reconcileStrictBottom(geometry, false);
     },
     [
       cancelActiveCorrection,

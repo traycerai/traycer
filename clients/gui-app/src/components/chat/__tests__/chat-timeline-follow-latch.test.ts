@@ -2646,6 +2646,94 @@ describe("useChatTimelineFollowLatch", () => {
     });
   });
 
+  describe("a resting finger whose view a strict-bottom read saw clamped", () => {
+    const TAIL_ROW_KEY = "tail-row";
+
+    /** A following reader with a finger resting at the end, a tail row as
+     *  the reference row, and the end shrunk 40 under it: the browser clamped
+     *  the view onto the new end, and a maintenance read saw that. */
+    function fingerClampedOntoLowerEnd() {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      installEdgeLayout(node);
+      const listRef = makeFakeListRef(node);
+      listRef.setRowTop(TAIL_ROW_KEY, 1200);
+      const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+      const onReaderGesture = vi.fn();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+          onReaderGesture,
+        }),
+      );
+      fireTouch(node, "touchstart", 300);
+
+      shim.setGeometry(node, { scrollHeight: 1460, scrollTop: 960 });
+      result.current.followEndIfPermitted();
+      // Before the clamp's report, the row in view grows 40: the end moves
+      // past the view, and the rows below it shift with the growth.
+      shim.setGeometry(node, { scrollHeight: 1500 });
+      listRef.setRowTop(TAIL_ROW_KEY, 1240);
+      return { node, onFollowIntentChange, onReaderGesture };
+    }
+
+    it("a clamp onto a lower end that a maintenance read saw is not the finger's, though the end moved again before its report", () => {
+      const { node, onFollowIntentChange, onReaderGesture } =
+        fingerClampedOntoLowerEnd();
+
+      fireNativeScroll(node);
+
+      expect(onReaderGesture).not.toHaveBeenCalled();
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    });
+
+    it("the finger's real pan away from the end after that clamp is still their departure", () => {
+      const { node, onFollowIntentChange, onReaderGesture } =
+        fingerClampedOntoLowerEnd();
+
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollTop: 900 });
+      fireNativeScroll(node);
+
+      expect(onReaderGesture).toHaveBeenCalledTimes(1);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    });
+
+    function detachedUnderFingerOnRecoveringList() {
+      const node = shim.makeNode({
+        scrollTop: 900,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, false, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+          isReattachSuppressed: () => true,
+        }),
+      );
+      fireTouch(node, "touchstart", 300);
+      // The recovering list clamps the view onto the strict bottom.
+      shim.setGeometry(node, { scrollHeight: 1400 });
+      return { node, onFollowIntentChange, result };
+    }
+
+    it("a recovering list's clamp onto the strict bottom, seen by a read under a finger, is not the finger arriving", () => {
+      const { onFollowIntentChange, result } =
+        detachedUnderFingerOnRecoveringList();
+
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+    });
+  });
+
   describe("an end correction's write while the list pads its content end", () => {
     const PAD_PX = 80;
 
