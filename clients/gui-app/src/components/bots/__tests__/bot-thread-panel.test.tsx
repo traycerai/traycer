@@ -162,6 +162,13 @@ vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
     mocks.locateTargets.push(args.target);
     return mocks.locatedOrdinal;
   },
+  useChatLocateRowAnswer: (args: ChatLocateRowArgs) => {
+    if (args.target === null) return { status: "waiting" };
+    mocks.locateTargets.push(args.target);
+    return mocks.locatedOrdinal === null
+      ? { status: "waiting" }
+      : { status: "found", ordinal: mocks.locatedOrdinal };
+  },
 }));
 vi.mock("@/components/chat/chat-messages", async () => {
   const { ChatExpansionTestProviders: Providers } =

@@ -167,6 +167,9 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
   useChatLocateRow: (_args: ChatLocateRowArgs) => null,
+  useChatLocateRowAnswer: (_args: ChatLocateRowArgs) => ({
+    status: "waiting",
+  }),
 }));
 vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
   ...(await importOriginal<

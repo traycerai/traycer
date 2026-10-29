@@ -2,16 +2,19 @@
  * A bot's Threads tab (Tracy Bots T86): the listed threads, each named by the
  * post it hangs off, and a choice opening that thread beside the channel. The
  * real page runs over a real query result; only the channel's session (the
- * rows the posts are read from) and the host's locate-row read, which fetches
- * a post the channel has not loaded, are replaced.
+ * rows the posts are read from) and the host's `chat.locateRow` query, which
+ * fetches a post the channel has not loaded, are replaced; the locate-row
+ * hook that maps the host's answer runs for real.
  */
-import { type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import {
   QueryClient,
   QueryClientProvider,
+  queryOptions,
   useQuery,
+  type UseQueryResult,
 } from "@tanstack/react-query";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -31,18 +34,39 @@ const mocks = vi.hoisted(() => ({
   channel: null as ChatSessionStoreHandle | null,
   /** Every post the page asked the host to locate, by message id. */
   located: [] as string[],
+  /** How the host answers `chat.locateRow`. */
+  locateAnswer: "found" as "found" | "not-found" | "rejects",
 }));
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
-  useTabHostClient: () => ({ stub: "tab-host-client" }),
+  useTabHostClient: () => ({ getActiveHostId: () => "host-1" }),
 }));
-vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
-  useChatLocateRow: (args: { target: { messageId: string } | null }) => {
-    if (args.target === null) return null;
-    if (!mocks.located.includes(args.target.messageId)) {
-      mocks.located.push(args.target.messageId);
+vi.mock("@/lib/chats/chat-serving-witness", () => ({
+  useChatServingHostId: () => "host-1",
+}));
+// The host's `chat.locateRow`: asked once per mounted reader that wants the
+// row, answered as `locateAnswer` says.
+vi.mock("@/hooks/host/use-host-query", () => ({
+  useHostQuery: (args: {
+    params: { target: { kind: string; messageId?: string } };
+    cacheKeyIdentity: ReadonlyArray<number>;
+    options: { enabled: boolean };
+  }) => {
+    const { enabled } = args.options;
+    const messageId = args.params.target.messageId ?? "";
+    useEffect(() => {
+      if (enabled) mocks.located.push(messageId);
+    }, [enabled, messageId]);
+    if (!enabled || mocks.locateAnswer === "rejects") {
+      return { data: undefined, isError: enabled };
     }
-    return 1;
+    return {
+      data:
+        mocks.locateAnswer === "found"
+          ? { found: true, ordinal: 1, epoch: args.cacheKeyIdentity[0] }
+          : { found: false },
+      isError: false,
+    };
   },
 }));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
@@ -91,15 +115,17 @@ function Page(props: {
   readonly threads: ReadonlyArray<BotThreadSummary>;
   readonly listed: boolean;
 }): ReactNode {
-  const list = useQuery<BotThreadListResponse, HostRpcError>({
-    queryKey: ["threads", props.threads],
-    queryFn: () =>
-      Promise.resolve({
-        threads: [...props.threads],
-        trunkCostUsd: null,
-        threadAnchors: null,
-      }),
-  });
+  const list: UseQueryResult<BotThreadListResponse, HostRpcError> = useQuery(
+    queryOptions<BotThreadListResponse, HostRpcError>({
+      queryKey: ["threads", props.threads],
+      queryFn: () =>
+        Promise.resolve({
+          threads: [...props.threads],
+          trunkCostUsd: null,
+          threadAnchors: null,
+        }),
+    }),
+  );
   return (
     <BotThreadsPage
       botId={BOT_ID}
@@ -126,6 +152,7 @@ beforeEach(() => {
   mocks.channelPosts = null;
   mocks.channel = null;
   mocks.located = [];
+  mocks.locateAnswer = "found";
 });
 
 afterEach(() => {
@@ -190,6 +217,65 @@ describe("<BotThreadsPage />", () => {
     });
     expect(row.textContent).toContain("Please review the release");
     expect(row.getAttribute("aria-busy")).toBe("false");
+  });
+
+  it.each(["not-found", "rejects"] as const)(
+    "stops being busy and says so, with Retry, when the host's lookup of the post ends without it (%s), and opens nothing",
+    async (answer) => {
+      const user = userEvent.setup();
+      mocks.channelPosts = {};
+      mocks.locateAnswer = answer;
+      mount([thread(1)], true);
+
+      await user.click(await screen.findByTestId("bot-thread-row"));
+
+      expect(mocks.located).toEqual([POST_ID]);
+      const row = screen.getByTestId("bot-thread-row");
+      expect(row.getAttribute("aria-busy")).toBe("false");
+      expect(row.hasAttribute("disabled")).toBe(true);
+      const failure = screen.getByTestId("bot-thread-row-error");
+      expect(failure.textContent).toContain("Couldn't load this thread.");
+      expect(
+        within(failure).getByRole("button", { name: "Retry" }),
+      ).toBeTruthy();
+      expect(mocks.openPost).not.toHaveBeenCalled();
+    },
+  );
+
+  it("asks the host again on Retry, and opens the thread once the post is read", async () => {
+    const user = userEvent.setup();
+    mocks.channelPosts = {};
+    mocks.locateAnswer = "not-found";
+    mount([thread(1)], true);
+    await user.click(await screen.findByTestId("bot-thread-row"));
+    expect(mocks.located).toEqual([POST_ID]);
+
+    mocks.locateAnswer = "found";
+    await user.click(
+      within(screen.getByTestId("bot-thread-row-error")).getByRole("button", {
+        name: "Retry",
+      }),
+    );
+
+    expect(mocks.located).toEqual([POST_ID, POST_ID]);
+    expect(screen.queryByTestId("bot-thread-row-error")).toBeNull();
+    expect(screen.getByTestId("bot-thread-row").getAttribute("aria-busy")).toBe(
+      "true",
+    );
+    expect(mocks.openPost).not.toHaveBeenCalled();
+
+    act(() => {
+      mocks.channel?.store.setState({
+        messages: [postRow(POST_ID, "Please review the release")],
+      });
+    });
+    expect(mocks.openPost).toHaveBeenCalledTimes(1);
+    expect(mocks.openPost).toHaveBeenCalledWith({
+      anchorMessageId: POST_ID,
+      announcement: false,
+      answer: false,
+      sent: null,
+    });
   });
 
   it("leaves a thread with no anchor post unopenable", async () => {

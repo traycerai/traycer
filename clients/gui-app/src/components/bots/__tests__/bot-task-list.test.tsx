@@ -65,16 +65,16 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
     chatId === CHANNEL_ID ? channelHandle() : null,
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
-  useChatLocateRow: (args: {
+  useChatLocateRowAnswer: (args: {
     target: { kind: string; messageId: string } | null;
   }) => {
-    if (args.target === null) return null;
+    if (args.target === null) return { status: "waiting" };
     const { messageId } = args.target;
     mocks.state.located.add(messageId);
     const ordinal =
       mocks.state.ordinals.get(messageId) ?? mocks.state.ordinals.size + 1;
     mocks.state.ordinals.set(messageId, ordinal);
-    return ordinal;
+    return { status: "found", ordinal };
   },
 }));
 

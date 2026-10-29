@@ -77,7 +77,7 @@ vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => ({
   }),
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
-  useChatLocateRow: () => null,
+  useChatLocateRowAnswer: () => ({ status: "waiting" }),
 }));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<

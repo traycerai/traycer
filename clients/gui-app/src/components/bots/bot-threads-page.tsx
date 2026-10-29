@@ -103,7 +103,8 @@ function EmptyLine(props: { readonly text: string }): ReactNode {
  * loaded; a thread whose post is older is named "Thread" until chosen, when
  * this row alone locates its post, holds it while it shows, and opens the
  * thread once it is read (the one reader that fetched it owns the hold, as a
- * task row's does).
+ * task row's does). A lookup that ends without the post says so, with Retry,
+ * which asks again.
  */
 function ThreadRow(props: {
   readonly botId: string;
@@ -113,6 +114,8 @@ function ThreadRow(props: {
 }): ReactNode {
   const { botId, hostId, thread, onOpenPost } = props;
   const [wanted, setWanted] = useState(false);
+  // Each Retry is a fresh reader, which asks the host again.
+  const [attempt, setAttempt] = useState(0);
   const replies =
     thread.replyCount === 1 ? "1 reply" : `${thread.replyCount} replies`;
   const anchor = thread.anchor;
@@ -128,19 +131,22 @@ function ThreadRow(props: {
   }
   return (
     <ChannelPost
+      key={attempt}
       botId={botId}
       hostId={hostId}
       conversationId={thread.conversationId}
       messageId={anchor.messageId}
       fetchCold={wanted}
     >
-      {(row) => (
+      {(row, missing) => (
         <ThreadRowFromPost
           row={row}
+          missing={missing}
           anchorMessageId={anchor.messageId}
           replies={replies}
           wanted={wanted}
           onWant={() => setWanted(true)}
+          onRetry={() => setAttempt((count) => count + 1)}
           onOpenPost={onOpenPost}
         />
       )}
@@ -150,14 +156,18 @@ function ThreadRow(props: {
 
 function ThreadRowFromPost(props: {
   readonly row: OpenMessage | null;
+  /** The lookup of a chosen row's post ended without it. */
+  readonly missing: boolean;
   readonly anchorMessageId: string;
   readonly replies: string;
   /** Chosen before its post was read: it opens once the post is. */
   readonly wanted: boolean;
   readonly onWant: () => void;
+  readonly onRetry: () => void;
   readonly onOpenPost: (open: BotOpenThread) => void;
 }): ReactNode {
-  const { row, anchorMessageId, replies, wanted, onWant, onOpenPost } = props;
+  const { row, missing, anchorMessageId, replies, wanted, onWant } = props;
+  const { onRetry, onOpenPost } = props;
   const open = row === null ? null : threadOpenOf(row);
   const openThread = (): void => {
     if (open === null) return;
@@ -173,6 +183,23 @@ function ThreadRowFromPost(props: {
   useEffect(() => {
     if (readAfterChosen) openOnRead();
   }, [readAfterChosen]);
+  if (row === null && missing) {
+    return (
+      <div className="flex flex-col gap-1">
+        <ThreadRowBody
+          title="Thread"
+          replies={replies}
+          onOpen={null}
+          pending={false}
+        />
+        <BotReadFailure
+          message="Couldn't load this thread."
+          onRetry={onRetry}
+          testId="bot-thread-row-error"
+        />
+      </div>
+    );
+  }
   if (row === null) {
     return (
       <ThreadRowBody
