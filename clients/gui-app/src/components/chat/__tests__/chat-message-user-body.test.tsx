@@ -959,7 +959,8 @@ describe("<UserMessageBody /> agent messages", () => {
         drainFrames();
         expect(scrollTo).toHaveBeenCalledWith({ top: 436, behavior: "auto" });
       });
-      expect(moves).toEqual([{ from: 300, fromEnd: 0, to: 436 }]);
+      // The fixture lays out no scroll range, so the target clamps to it.
+      expect(moves).toEqual([{ from: 300, fromEnd: 0, to: 436, intended: 0 }]);
       expect(scrollTo).not.toHaveBeenCalledWith(
         expect.objectContaining({ top: 620 - 500 + 16 }),
       );

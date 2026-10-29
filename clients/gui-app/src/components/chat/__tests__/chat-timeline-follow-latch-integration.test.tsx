@@ -397,9 +397,13 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     const ownedUnderLanding = vi
       .spyOn(list, "scrollToEnd")
       .mockImplementation((): Promise<void> => {
-        moveChatTimelineScroller(node, () => {
-          node.scrollTop = Math.max(0, maxScrollTop(node) - 72);
-        });
+        moveChatTimelineScroller(
+          node,
+          Math.max(0, maxScrollTop(node) - 72),
+          () => {
+            node.scrollTop = Math.max(0, maxScrollTop(node) - 72);
+          },
+        );
         fireNativeScroll(node);
         return Promise.resolve();
       });
@@ -481,7 +485,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     const correctionLanding = vi
       .spyOn(list, "scrollToEnd")
       .mockImplementation((): Promise<void> => {
-        moveChatTimelineScroller(node, () => {
+        moveChatTimelineScroller(node, maxScrollTop(node), () => {
           node.scrollTop = maxScrollTop(node);
         });
         fireNativeScroll(node);
@@ -550,9 +554,13 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     const scrollToEnd = vi
       .spyOn(list, "scrollToEnd")
       .mockImplementation((): Promise<void> => {
-        moveChatTimelineScroller(node, () => {
-          node.scrollTop = Math.max(0, maxScrollTop(node) - 40);
-        });
+        moveChatTimelineScroller(
+          node,
+          Math.max(0, maxScrollTop(node) - 40),
+          () => {
+            node.scrollTop = Math.max(0, maxScrollTop(node) - 40);
+          },
+        );
         fireNativeScroll(node);
         return Promise.resolve();
       });
@@ -571,7 +579,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
         freezeInFlightScroll: true,
         publishesReaderPosition: false,
       });
-      moveChatTimelineScroller(node, () => {
+      moveChatTimelineScroller(node, Math.max(0, node.scrollTop - 180), () => {
         node.scrollTop = Math.max(0, node.scrollTop - 180);
       });
       fireNativeScroll(node);
@@ -591,7 +599,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     // The Todo dock now increases the lower-surface inset. Following must
     // remain live and land at the new end instead of surfacing the pill.
     scrollToEnd.mockImplementation((): Promise<void> => {
-      moveChatTimelineScroller(node, () => {
+      moveChatTimelineScroller(node, maxScrollTop(node), () => {
         node.scrollTop = maxScrollTop(node);
       });
       fireNativeScroll(node);
@@ -1311,7 +1319,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       return { node, list, moves };
     }
 
-    it("announces a visible-content adjustment with where it started, where the end was and where it landed", async () => {
+    it("announces a visible-content adjustment with where it started, where the end was, where it landed and where it asked for", async () => {
       const { node, list, moves } = await mountDetachedAt(1500);
       const end = maxScrollTop(node);
 
@@ -1319,7 +1327,9 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
         list.setVisibleContentAnchorOffset(120);
       });
 
-      expect(moves).toEqual([{ from: 1500, fromEnd: end, to: 1620 }]);
+      expect(moves).toEqual([
+        { from: 1500, fromEnd: end, to: 1620, intended: 1620 },
+      ]);
     });
 
     it("announces a scroll to the end from where the reader was", async () => {
@@ -1331,7 +1341,12 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       });
       await settleLegendList();
 
-      expect(moves).toContainEqual({ from: 2000, fromEnd: end, to: end });
+      expect(moves).toContainEqual({
+        from: 2000,
+        fromEnd: end,
+        to: end,
+        intended: end,
+      });
     });
   });
 });

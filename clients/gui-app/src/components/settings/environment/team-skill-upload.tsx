@@ -1,4 +1,7 @@
-import { ENVIRONMENT_SKILL_ARCHIVE_MAX_BYTES } from "@traycer/protocol/host/environment/configuration-contracts";
+import {
+  ENVIRONMENT_SKILL_ARCHIVE_MAX_BYTES,
+  ENVIRONMENT_SKILL_READ_ONLY_REASON,
+} from "@traycer/protocol/host/environment/configuration-contracts";
 import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,9 +10,12 @@ import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
 import { bytesToBase64Async } from "@/lib/composer/image-base64";
 import { useConfigurationSkillsUploadMutation } from "@/hooks/environment/team/use-skills-upload-mutation";
 import { useConfigurationSource } from "./configuration-source";
+import { readOnlyUploadRefusal } from "./mcp-skills-copy";
 
 export function TeamSkillUpload(props: {
   readonly onNotServed: () => void;
+  /** The other way to add a skill, beside the upload; `null` for none. */
+  readonly importAction: ReactNode;
 }): ReactNode {
   const source = useConfigurationSource();
   const mutation = useConfigurationSkillsUploadMutation();
@@ -35,7 +41,9 @@ export function TeamSkillUpload(props: {
             else if (result.outcome === "saved") {
               setName("");
               setFile(null);
-            } else setProblem("Couldn't add this skill.");
+            } else if (result.reason === ENVIRONMENT_SKILL_READ_ONLY_REASON)
+              setProblem(readOnlyUploadRefusal(name.trim()));
+            else setProblem("Couldn't add this skill.");
           },
         },
       );
@@ -70,17 +78,19 @@ export function TeamSkillUpload(props: {
           {problem}
         </p>
       )}
-      <Button
-        type="button"
-        size="sm"
-        className="self-end"
-        disabled={
-          file === null || name.trim().length === 0 || mutation.isPending
-        }
-        onClick={() => void upload()}
-      >
-        Add a skill{mutation.isPending ? <MutedAgentSpinner /> : null}
-      </Button>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {props.importAction}
+        <Button
+          type="button"
+          size="sm"
+          disabled={
+            file === null || name.trim().length === 0 || mutation.isPending
+          }
+          onClick={() => void upload()}
+        >
+          Add a skill{mutation.isPending ? <MutedAgentSpinner /> : null}
+        </Button>
+      </div>
     </section>
   );
 }
