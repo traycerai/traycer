@@ -303,7 +303,7 @@ function mountTranscript(
           surface={surface}
           resolveMember={members}
           showConnecting
-          landOnMessageId={null}
+          landOn={null}
         />
       </QueryClientProvider>
     </StrictMode>

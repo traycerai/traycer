@@ -8,6 +8,7 @@ import {
   botSubscribeServerFrameSchema,
   type BotActivity,
   type BotNotificationSubscription,
+  type BotStoppedNotificationWatch,
   type BotRecord,
   type BotSubscribeServerFrame,
   type BotSurfaceActionState,
@@ -74,6 +75,11 @@ export interface BotSubscriptionSnapshot {
    * `null` from a host that predates them.
    */
   readonly surfaceActions: ReadonlyArray<BotSurfaceActionState> | null;
+  /**
+   * The watches members stopped from the Activity page (T92), with who and
+   * when. `null` like `notificationSubscriptions`.
+   */
+  readonly stoppedNotificationWatches: ReadonlyArray<BotStoppedNotificationWatch> | null;
 }
 
 /**
@@ -257,6 +263,7 @@ function toSnapshot(
     activity: frame.activity,
     notificationSubscriptions: frame.notificationSubscriptions,
     surfaceActions: frame.surfaceActions,
+    stoppedNotificationWatches: frame.stoppedNotificationWatches,
   };
 }
 

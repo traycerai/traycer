@@ -114,6 +114,9 @@ const tasks: ReadonlyArray<BotTaskEntry> = Array.from(
     createdByChatId: THREAD_ID,
     checkins: null,
     inputNeeded: null,
+    pause: null,
+    stop: null,
+    runRequest: null,
   }),
 );
 

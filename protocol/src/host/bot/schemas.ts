@@ -729,6 +729,38 @@ export const botCheckinTurnSchema = lazySchema(() =>
 );
 export type BotCheckinTurn = z.infer<typeof botCheckinTurnSchema>;
 
+/** A member as the bot's records name one: their user id. */
+const botMemberIdSchema = lazySchema(() => z.string().min(1).max(36));
+
+/**
+ * An automation a member paused (T92): its check-ins wait, unread by the
+ * bot, until they resume it; `since` is when they paused it.
+ */
+export const botTaskPauseSchema = lazySchema(() =>
+  z.object({ byUserId: botMemberIdSchema, since: z.number().int() }),
+);
+export type BotTaskPause = z.infer<typeof botTaskPauseSchema>;
+
+/** An automation a member stopped (T92): its entry ended `by-bot` at `at`. */
+export const botTaskStopSchema = lazySchema(() =>
+  z.object({ byUserId: botMemberIdSchema, at: z.number().int() }),
+);
+export type BotTaskStop = z.infer<typeof botTaskStopSchema>;
+
+/**
+ * A member's Run now not answered yet (T92): `running` when the bound host
+ * composes the pass itself, `requested` when the task runs only on other
+ * hosts, whose next report answers it.
+ */
+export const botTaskRunRequestSchema = lazySchema(() =>
+  z.object({
+    byUserId: botMemberIdSchema,
+    requestedAt: z.number().int(),
+    state: z.enum(["running", "requested"]),
+  }),
+);
+export type BotTaskRunRequest = z.infer<typeof botTaskRunRequestSchema>;
+
 /**
  * One entry of a task's check-in history (`bot.subscribe@1.4`, T86), newest
  * first, as the bot's bound host kept it:
@@ -756,6 +788,12 @@ export const botTaskCheckinRecordSchema = lazySchema(() =>
       ticketsClosed: z.number().int().nonnegative(),
       backgroundEvents: z.number().int().nonnegative(),
       turn: botCheckinTurnSchema.nullable(),
+      /**
+       * The member whose Run now this report answered (T92): the first
+       * report filed after they asked. `null` for a pass on the task's own
+       * cadence, and from a host that predates it.
+       */
+      requestedByUserId: botMemberIdSchema.nullable().default(null),
     }),
     z.object({
       kind: z.literal("missed"),
@@ -956,6 +994,16 @@ export const botTaskEntrySchema = lazySchema(() =>
        * room.
        */
       inputNeeded: z.array(botInputNeededSchema).nullable().default(null),
+      /**
+       * What members did to the automation from the Activity page (T92),
+       * kept by the bot's bound host and mirrored into its environment room
+       * like `checkins`: who paused it and since when, who stopped it, and a
+       * Run now not answered yet. `null` for none, and from a host that
+       * predates them.
+       */
+      pause: botTaskPauseSchema.nullable().default(null),
+      stop: botTaskStopSchema.nullable().default(null),
+      runRequest: botTaskRunRequestSchema.nullable().default(null),
     })
     .superRefine((entry, ctx) => {
       if ((entry.state === "ended") !== (entry.endedReason !== null)) {
@@ -978,8 +1026,8 @@ export type BotTaskEntry = z.infer<typeof botTaskEntrySchema>;
 
 /**
  * The task entry of `bot.subscribe@1.4`, frozen by hand: with the check-in
- * history and without the `@1.5` open surfaces, so a 1.4 peer's re-parse
- * strips them.
+ * history and the members' pause, stop and Run now (T92), and without the
+ * `@1.5` open surfaces, so a 1.4 peer's re-parse strips them.
  */
 const botTaskEntrySchemaV14 = lazySchema(() =>
   z
@@ -999,6 +1047,9 @@ const botTaskEntrySchemaV14 = lazySchema(() =>
       originRequestId: z.string().min(1).max(64).nullable().default(null),
       createdByChatId: z.string().min(1).max(36).nullable().default(null),
       checkins: z.array(botTaskCheckinRecordSchema).nullable().default(null),
+      pause: botTaskPauseSchema.nullable().default(null),
+      stop: botTaskStopSchema.nullable().default(null),
+      runRequest: botTaskRunRequestSchema.nullable().default(null),
     })
     .superRefine((entry, ctx) => {
       if ((entry.state === "ended") !== (entry.endedReason !== null)) {
@@ -1199,10 +1250,50 @@ export const botNotificationSubscriptionSchema = lazySchema(() =>
     attentionOnly: z.boolean(),
     everySeconds: z.number().int().positive().nullable(),
     since: z.number().int().nullable().default(null),
+    /**
+     * The digests the chat was handed (T92), newest first, bounded as a
+     * task's check-in history is; `null` from a host that predates them.
+     */
+    digests: z.array(botNotificationDigestSchema).nullable().default(null),
   }),
 );
 export type BotNotificationSubscription = z.infer<
   typeof botNotificationSubscriptionSchema
+>;
+
+/**
+ * One digest a subscribed chat was handed (T92): when its turn took it, how
+ * many notifications it listed and how many of those needed the person, and
+ * the queue item it travelled as.
+ */
+export const botNotificationDigestSchema = lazySchema(() =>
+  z.object({
+    deliveredAt: z.number().int(),
+    itemCount: z.number().int().nonnegative(),
+    attentionCount: z.number().int().nonnegative(),
+    queueItemId: z.string().min(1),
+  }),
+);
+export type BotNotificationDigest = z.infer<typeof botNotificationDigestSchema>;
+
+/**
+ * A chat's notification watch a member stopped from the Activity page (T92),
+ * kept beside the live ones until the chat watches again: what it watched,
+ * who stopped it and when, and the digests it had been handed.
+ */
+export const botStoppedNotificationWatchSchema = lazySchema(() =>
+  z.object({
+    target: botActivityTargetSchema,
+    attentionOnly: z.boolean(),
+    everySeconds: z.number().int().positive().nullable(),
+    since: z.number().int(),
+    stoppedAt: z.number().int(),
+    stoppedByUserId: botMemberIdSchema,
+    digests: z.array(botNotificationDigestSchema),
+  }),
+);
+export type BotStoppedNotificationWatch = z.infer<
+  typeof botStoppedNotificationWatchSchema
 >;
 
 /** The subscription of `bot.subscribe@1.2` and `@1.3`, frozen without `since`. */
@@ -1285,6 +1376,15 @@ export const botSubscribeServerFrameSchema = lazySchema(() =>
         .array(botSurfaceActionStateSchema)
         .nullable()
         .default(null),
+      /**
+       * The watches members stopped (T92), apart from the live ones so a
+       * reader that predates the key never shows one as live. Kept on the
+       * bound host only, like `notificationSubscriptions`.
+       */
+      stoppedNotificationWatches: z
+        .array(botStoppedNotificationWatchSchema)
+        .nullable()
+        .default(null),
       hasBinaryPayload: z.literal(false),
     }),
     /**
@@ -1314,10 +1414,10 @@ export type BotSubscribeServerFrame = z.infer<
 
 // ---- bot.subscribe@1.4, frozen ------------------------------------------ //
 //
-// A hand-written copy of the 1.4 snapshot frame, its task entries without the
-// `@1.5` open surfaces and the snapshot without `surfaceActions`, so a 1.4
-// peer's re-parse strips them. The frames that did not change at 1.5 are the
-// live ones.
+// A hand-written copy of the 1.4 snapshot frame (with T92's stopped watches),
+// its task entries without the `@1.5` open surfaces and the snapshot without
+// `surfaceActions`, so a 1.4 peer's re-parse strips them. The frames that did
+// not change at 1.5 are the live ones.
 
 export const botSubscribeServerFrameSchemaV14 = lazySchema(() =>
   z.discriminatedUnion("kind", [
@@ -1335,6 +1435,10 @@ export const botSubscribeServerFrameSchemaV14 = lazySchema(() =>
       activity: botActivitySchema.nullable(),
       notificationSubscriptions: z
         .array(botNotificationSubscriptionSchema)
+        .nullable()
+        .default(null),
+      stoppedNotificationWatches: z
+        .array(botStoppedNotificationWatchSchema)
         .nullable()
         .default(null),
       hasBinaryPayload: z.literal(false),
@@ -1590,4 +1694,116 @@ export const botListChangedClientFrameSchema = lazySchema(() =>
 );
 export type BotListChangedClientFrame = z.infer<
   typeof botListChangedClientFrameSchema
+>;
+
+// ---- bot.memory.subscribe (T87) ----------------------------------------- //
+
+/**
+ * One bot's memory as the person reads it (Tracy Bots T87): opened with the
+ * bot and the environment whose room keeps the pool. The serving host reads
+ * the room it holds for that environment; the environment's every member
+ * may read it.
+ */
+export const botMemorySubscribeOpenRequestSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    environmentId: z.string().min(1).max(36),
+  }),
+);
+export type BotMemorySubscribeOpenRequest = z.infer<
+  typeof botMemorySubscribeOpenRequestSchema
+>;
+
+/**
+ * Who wrote an entry: the bot and its chat (its trunk, or a thread's
+ * session), and the member's post the chat was answering, by its request
+ * id. `botId` and `chatId` are `null` for an entry copied in from the bots'
+ * earlier notes; `requestId` is `null` for one written before entries
+ * recorded it, or by a turn that answered no post.
+ */
+export const botMemoryWriterSchema = lazySchema(() =>
+  z.object({
+    botId: z.string().min(1).nullable(),
+    chatId: z.string().min(1).nullable(),
+    requestId: z.string().min(1).nullable(),
+  }),
+);
+export type BotMemoryWriter = z.infer<typeof botMemoryWriterSchema>;
+
+/**
+ * One entry of the pool. `at` is when it was written and `confirmedAt` when
+ * a bot last said it still holds, each `null` where the room gives no time
+ * a reader can use. `tags` names the bots it is for: bot ids, and `all` for
+ * every bot of the environment.
+ */
+export const botMemoryEntrySchema = lazySchema(() =>
+  z.object({
+    id: z.string().min(1),
+    text: z.string(),
+    tags: z.array(z.string().min(1)),
+    writtenBy: botMemoryWriterSchema,
+    at: z.number().nullable(),
+    confirmedAt: z.number().nullable(),
+  }),
+);
+export type BotMemoryEntry = z.infer<typeof botMemoryEntrySchema>;
+
+/**
+ * What one tag holds against its ceiling: its entries, the characters they
+ * take, and the characters it may take before the bot is told to tidy it.
+ */
+export const botMemoryTagUsageSchema = lazySchema(() =>
+  z.object({
+    entries: z.number().int().nonnegative(),
+    chars: z.number().int().nonnegative(),
+    ceiling: z.number().int().positive(),
+  }),
+);
+export type BotMemoryTagUsage = z.infer<typeof botMemoryTagUsageSchema>;
+
+/**
+ * The entries the bot reads before every reply - those tagged its id and
+ * those tagged `all` - and the usage of each of the two tags.
+ */
+export const botMemorySchema = lazySchema(() =>
+  z.object({
+    entries: z.array(botMemoryEntrySchema),
+    own: botMemoryTagUsageSchema,
+    shared: botMemoryTagUsageSchema,
+  }),
+);
+export type BotMemory = z.infer<typeof botMemorySchema>;
+
+/**
+ * `snapshot` carries the bot's memory whole, on open and again after every
+ * change to the pool, from any host or bot. `memory` is `null` while the
+ * serving host cannot read the environment's room.
+ */
+export const botMemorySubscribeServerFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      memory: botMemorySchema.nullable(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+export type BotMemorySubscribeServerFrame = z.infer<
+  typeof botMemorySubscribeServerFrameSchema
+>;
+
+export const botMemorySubscribeClientFrameSchema = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("ping"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+export type BotMemorySubscribeClientFrame = z.infer<
+  typeof botMemorySubscribeClientFrameSchema
 >;

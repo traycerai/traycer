@@ -232,6 +232,9 @@ function task(taskId: string, overrides: Partial<BotTaskEntry>): BotTaskEntry {
     createdByChatId: null,
     checkins: null,
     inputNeeded: null,
+    pause: null,
+    stop: null,
+    runRequest: null,
     ...overrides,
   };
 }
@@ -251,6 +254,8 @@ function mount(
         channelId: CHANNEL_ID,
         onOpenPost: mocks.openPost,
         onOpenTurn: vi.fn(),
+        boundHere: false,
+        nameOf: (userId) => userId,
       }}
     />,
   );

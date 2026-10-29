@@ -1951,6 +1951,9 @@ describe("<BotThreadPanel /> the thread's tasks", () => {
       createdByChatId: THREAD_ID,
       checkins: null,
       inputNeeded: null,
+      pause: null,
+      stop: null,
+      runRequest: null,
       ...overrides,
     };
   }

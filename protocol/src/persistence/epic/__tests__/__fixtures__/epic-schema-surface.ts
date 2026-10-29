@@ -9142,6 +9142,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "deletionUnderstood": {
+                  "default": false,
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -9250,6 +9254,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "deletionUnderstood": {
+                  "default": false,
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -9358,6 +9366,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "deletionUnderstood": {
+                  "default": false,
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -19785,6 +19797,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "deletionUnderstood": {
+                  "default": false,
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -19792,7 +19808,8 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "title",
                 "artifactRoomId",
-                "deletedAt"
+                "deletedAt",
+                "deletionUnderstood"
               ],
               "additionalProperties": false
             },
@@ -19894,6 +19911,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "deletionUnderstood": {
+                  "default": false,
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -19901,7 +19922,8 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "title",
                 "artifactRoomId",
-                "deletedAt"
+                "deletedAt",
+                "deletionUnderstood"
               ],
               "additionalProperties": false
             },
@@ -20003,6 +20025,10 @@ export const epicSchemaSurfaceBaseline = {
                       "type": "null"
                     }
                   ]
+                },
+                "deletionUnderstood": {
+                  "default": false,
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -20010,7 +20036,8 @@ export const epicSchemaSurfaceBaseline = {
                 "id",
                 "title",
                 "artifactRoomId",
-                "deletedAt"
+                "deletedAt",
+                "deletionUnderstood"
               ],
               "additionalProperties": false
             }

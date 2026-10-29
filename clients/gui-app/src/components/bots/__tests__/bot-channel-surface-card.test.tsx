@@ -355,6 +355,9 @@ function task(inputNeeded: ReadonlyArray<BotInputNeeded> | null): BotTaskEntry {
     createdByChatId: null,
     checkins: null,
     inputNeeded: inputNeeded === null ? null : [...inputNeeded],
+    pause: null,
+    stop: null,
+    runRequest: null,
   };
 }
 
@@ -523,6 +526,10 @@ function mountChannel(input: {
               onOpenThread={vi.fn()}
               openTurn={null}
               onOpenTurn={vi.fn()}
+              openMemory={null}
+              onOpenMemory={vi.fn()}
+              environmentId="env-1"
+              botNameOf={() => null}
               onOpenActivity={vi.fn()}
             />
           </ChatExpansionTestProviders>

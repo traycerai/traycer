@@ -3,3 +3,4 @@ export * from "./schemas";
 export * from "./conversation-schemas";
 export * from "./onboarding-schemas";
 export * from "./surface-schemas";
+export * from "./task-action-schemas";

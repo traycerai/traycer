@@ -19,6 +19,7 @@ import type {
   BotCheckinTurn,
   BotNotificationSubscription,
   BotSessionActivity,
+  BotStoppedNotificationWatch,
   BotTaskCheckinRecord,
   BotTaskEntry,
   BotTaskLastCheckin,
@@ -44,13 +45,19 @@ const mocks = vi.hoisted(() => {
     openTurn: vi.fn<(open: BotOpenTurn) => void>(),
     /** Each set of check-in turns the page asked the host to locate. */
     locateAsked: [] as Array<ReadonlyArray<BotCheckinTurn>>,
+    /** Each member action the page sent, by method. */
+    actions: [] as Array<{ method: string; variables: unknown }>,
     state: {
+      /** The optional methods the tab's host advertised. */
+      supported: new Set<string>(),
       /** The turns the host names for the check-ins asked about. */
       locatedTurns: [] as BotTurnRef[],
       /** Post text by chat id, then message id: the rows each chat holds. */
       rows,
       /** Task titles by task id, as the task-context read answers them. */
       taskTitles,
+      /** The variables of each member action still pending, by method. */
+      pending: new Map<string, unknown>(),
     },
   };
 });
@@ -77,7 +84,27 @@ vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSchemaVersion: () => ({ major: 1, minor: 9 }),
+  useHostMethodSupport: (_hostId: string | null, method: string) =>
+    mocks.state.supported.has(method),
 }));
+// The member actions' writes: each records the method and what it was sent,
+// and stays pending with those variables while the case's `pending` holds it.
+vi.mock("@/hooks/bots/use-bot-task-action-mutations", () => {
+  const recording = (method: string) => () => ({
+    mutate: (variables: unknown) => {
+      mocks.actions.push({ method, variables });
+      mocks.state.pending.set(method, variables);
+    },
+    isPending: mocks.state.pending.has(method),
+    variables: mocks.state.pending.get(method),
+  });
+  return {
+    useBotTaskRunNowMutation: recording("bot.task.runNow"),
+    useBotTaskSetPausedMutation: recording("bot.task.setPaused"),
+    useBotTaskStopMutation: recording("bot.task.stop"),
+    useBotNotificationsStopMutation: recording("bot.notifications.stop"),
+  };
+});
 vi.mock("@/hooks/bots/use-bot-mutations", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-mutations")>()),
   useBotConversationSendMutation: () => ({
@@ -136,6 +163,9 @@ function task(taskId: string, overrides: Partial<BotTaskEntry>): BotTaskEntry {
     createdByChatId: null,
     checkins: null,
     inputNeeded: null,
+    pause: null,
+    stop: null,
+    runRequest: null,
     ...overrides,
   };
 }
@@ -155,6 +185,7 @@ function received(
     ticketsClosed: 2,
     backgroundEvents: 0,
     turn: null,
+    requestedByUserId: null,
     ...overrides,
   };
 }
@@ -279,6 +310,9 @@ type PageInputs = {
   readonly activity: BotActivity | null;
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
   readonly notificationSubscriptions: ReadonlyArray<BotNotificationSubscription> | null;
+  readonly stoppedNotificationWatches: ReadonlyArray<BotStoppedNotificationWatch> | null;
+  /** Whether the tab's host runs the bot. */
+  readonly boundHere: boolean;
 };
 
 const NONE: PageInputs = {
@@ -286,7 +320,14 @@ const NONE: PageInputs = {
   activity: null,
   threads: [],
   notificationSubscriptions: null,
+  stoppedNotificationWatches: null,
+  boundHere: true,
 };
+
+/** The environment's member directory: one member it names. */
+const MEMBER_ID = "user-ada";
+const resolveMember = (userId: string) =>
+  userId === MEMBER_ID ? { displayName: "Ada", avatarUrl: null } : null;
 
 function Page(props: PageInputs): ReactNode {
   const summary = useBotActivitySummary({
@@ -300,10 +341,12 @@ function Page(props: PageInputs): ReactNode {
     <BotActivityPage
       botId={BOT_ID}
       hostId={HOST_ID}
-      boundHost={{ hostId: HOST_ID, isThisHost: true }}
+      boundHost={{ hostId: HOST_ID, isThisHost: props.boundHere }}
       channelId={CHANNEL_ID}
       tasks={props.tasks}
       notificationSubscriptions={props.notificationSubscriptions}
+      stoppedNotificationWatches={props.stoppedNotificationWatches}
+      resolveMember={resolveMember}
       summary={summary}
       threads={props.threads}
       onOpenPost={mocks.openPost}
@@ -351,6 +394,9 @@ beforeEach(() => {
   mocks.state.taskTitles = {};
   mocks.state.locatedTurns = [];
   mocks.locateAsked.length = 0;
+  mocks.actions.length = 0;
+  mocks.state.supported = new Set();
+  mocks.state.pending.clear();
   __resetAgentActivityStoreForTests();
 });
 
@@ -703,12 +749,14 @@ describe("<BotActivityPage /> notifications", () => {
           attentionOnly: true,
           everySeconds: null,
           since,
+          digests: null,
         },
         {
           target: { kind: "thread", threadId: "thread-a" },
           attentionOnly: false,
           everySeconds: 3_600,
           since: null,
+          digests: null,
         },
       ],
     });
@@ -722,6 +770,133 @@ describe("<BotActivityPage /> notifications", () => {
     );
     expect(other.textContent).toContain("every hour");
     expect(other.textContent).not.toContain("since");
+  });
+
+  it("lists each watch's digests newest first, and Stop watching sends the watch's chat where the host has the method", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(["bot.notifications.stop"]);
+    mount({
+      notificationSubscriptions: [
+        {
+          target: { kind: "thread", threadId: "thread-a" },
+          attentionOnly: false,
+          everySeconds: null,
+          since: NOW - DAY,
+          digests: [
+            {
+              deliveredAt: NOW - 1_000,
+              itemCount: 3,
+              attentionCount: 1,
+              queueItemId: "q-2",
+            },
+            {
+              deliveredAt: NOW - 2_000,
+              itemCount: 1,
+              attentionCount: 0,
+              queueItemId: "q-1",
+            },
+          ],
+        },
+      ],
+    });
+    const [watch] = screen.getAllByTestId("bot-notification-watch");
+
+    expect(
+      within(watch)
+        .getAllByTestId("bot-notification-digest")
+        .map((row) => row.textContent),
+    ).toEqual([
+      `${formatAbsoluteDateTime(NOW - 1_000)} · 3 notifications, 1 needing you`,
+      `${formatAbsoluteDateTime(NOW - 2_000)} · 1 notification`,
+    ]);
+    await user.click(
+      within(watch).getByRole("button", { name: "Stop watching" }),
+    );
+    expect(mocks.actions).toEqual([
+      {
+        method: "bot.notifications.stop",
+        variables: {
+          botId: BOT_ID,
+          target: { kind: "thread", threadId: "thread-a" },
+        },
+      },
+    ]);
+  });
+
+  it("keeps the pending Stop watching on its watch when a snapshot re-reads the watches", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(["bot.notifications.stop"]);
+    const watches = (): ReadonlyArray<BotNotificationSubscription> => [
+      {
+        target: { kind: "thread", threadId: "thread-a" },
+        attentionOnly: false,
+        everySeconds: null,
+        since: NOW - DAY,
+        digests: null,
+      },
+      {
+        target: { kind: "thread", threadId: "thread-b" },
+        attentionOnly: false,
+        everySeconds: null,
+        since: NOW - DAY,
+        digests: null,
+      },
+    ];
+    const { rerender } = render(
+      <Page {...NONE} notificationSubscriptions={watches()} />,
+    );
+    await user.click(
+      within(screen.getAllByTestId("bot-notification-watch")[0]).getByRole(
+        "button",
+        { name: "Stop watching" },
+      ),
+    );
+
+    // The next snapshot frame parses the watches into new objects while the
+    // stop is still pending.
+    rerender(<Page {...NONE} notificationSubscriptions={watches()} />);
+    const [stopping, other] = screen.getAllByTestId("bot-notification-watch");
+    expect(
+      within(stopping).queryByTestId("bot-notification-stop-pending"),
+    ).not.toBeNull();
+    expect(
+      within(other).queryByTestId("bot-notification-stop-pending"),
+    ).toBeNull();
+  });
+
+  it("offers no Stop watching from a host that does not run the bot, and lists a stopped watch with who stopped it", () => {
+    mocks.state.supported = new Set(["bot.notifications.stop"]);
+    const stoppedAt = NOW - 1_000;
+    mount({
+      boundHere: false,
+      notificationSubscriptions: [
+        {
+          target: { kind: "trunk" },
+          attentionOnly: true,
+          everySeconds: null,
+          since: NOW - DAY,
+          digests: null,
+        },
+      ],
+      stoppedNotificationWatches: [
+        {
+          target: { kind: "thread", threadId: "thread-a" },
+          attentionOnly: false,
+          everySeconds: null,
+          since: NOW - DAY,
+          stoppedAt,
+          stoppedByUserId: MEMBER_ID,
+          digests: [],
+        },
+      ],
+    });
+
+    expect(screen.queryByRole("button", { name: "Stop watching" })).toBeNull();
+    expect(
+      screen.getByTestId("bot-notification-watch-stopped").textContent,
+    ).toContain(
+      `Stopped watching your notifications · by Ada · ${formatAbsoluteDateTime(stoppedAt)}`,
+    );
   });
 });
 
@@ -774,6 +949,201 @@ describe("<BotActivityPage /> finished", () => {
       "task-silent",
     ]);
     expect(all[1].textContent).toContain("Archived");
-    expect(all[2].textContent).toContain("Stopped by the bot");
+    expect(
+      within(all[2]).getByTestId("bot-activity-finished-reason").textContent,
+    ).toBe("Stopped");
+  });
+
+  it("lists an automation a member stopped as stopped by them, this week from when they stopped it", () => {
+    mocks.state.taskTitles = { "task-auto": "Release watch" };
+    mount({
+      tasks: [
+        task("task-auto", {
+          state: "ended",
+          endedReason: "by-bot",
+          stop: { byUserId: MEMBER_ID, at: NOW - 1_000 },
+        }),
+      ],
+    });
+
+    expect(screen.queryAllByTestId("bot-task-row")).toHaveLength(0);
+    const [row] = within(section("bot-activity-finished")).getAllByTestId(
+      "bot-activity-finished-row",
+    );
+    expect(row.getAttribute("data-task-id")).toBe("task-auto");
+    expect(
+      within(row).getByTestId("bot-activity-finished-reason").textContent,
+    ).toBe("Stopped by Ada");
+  });
+});
+
+const TASK_ACTIONS = [
+  "bot.task.runNow",
+  "bot.task.setPaused",
+  "bot.task.stop",
+] as const;
+
+describe("<BotActivityPage /> member actions on an automation", () => {
+  it("offers Run now, Pause and Stop on a running automation and sends each for that task", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(TASK_ACTIONS);
+    mount({ tasks: [task("task-auto", {})] });
+    const row = taskRow("task-auto");
+
+    await user.click(within(row).getByRole("button", { name: "Run now" }));
+    await user.click(within(row).getByRole("button", { name: "Pause" }));
+    await user.click(within(row).getByRole("button", { name: "Stop" }));
+
+    expect(mocks.actions).toEqual([
+      {
+        method: "bot.task.runNow",
+        variables: { botId: BOT_ID, taskId: "task-auto" },
+      },
+      {
+        method: "bot.task.setPaused",
+        variables: { botId: BOT_ID, taskId: "task-auto", paused: true },
+      },
+      {
+        method: "bot.task.stop",
+        variables: { botId: BOT_ID, taskId: "task-auto" },
+      },
+    ]);
+  });
+
+  it("offers each action only where the host has its method, and none from a host that does not run the bot or on a one-off task", () => {
+    mocks.state.supported = new Set(["bot.task.setPaused"]);
+    mount({
+      tasks: [
+        task("task-auto", {}),
+        task("task-once", { cadence: { kind: "on-completion" } }),
+      ],
+    });
+
+    expect(
+      within(taskRow("task-auto"))
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Pause", "Open the brief"]);
+    expect(
+      within(taskRow("task-once")).queryByRole("button", { name: "Pause" }),
+    ).toBeNull();
+
+    cleanup();
+    mocks.state.supported = new Set(TASK_ACTIONS);
+    mount({ tasks: [task("task-auto", {})], boundHere: false });
+    for (const name of ["Run now", "Pause", "Stop"]) {
+      expect(
+        within(taskRow("task-auto")).queryByRole("button", { name }),
+      ).toBeNull();
+    }
+  });
+
+  it("says who paused an automation and since when, offers Resume, and says a Run now runs once and leaves it paused", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(TASK_ACTIONS);
+    const since = NOW - DAY;
+    mount({
+      tasks: [
+        task("task-auto", {
+          pause: { byUserId: MEMBER_ID, since },
+          runRequest: {
+            byUserId: MEMBER_ID,
+            requestedAt: NOW,
+            state: "running",
+          },
+        }),
+      ],
+    });
+    const row = taskRow("task-auto");
+
+    expect(within(row).getByTestId("bot-task-paused").textContent).toBe(
+      `Paused by Ada since ${formatAbsoluteDateTime(since)}`,
+    );
+    expect(within(row).getByTestId("bot-task-run-request").textContent).toBe(
+      "Runs now, then stays paused",
+    );
+    // One Run now at a time: the waiting one is answered first.
+    expect(within(row).getByRole("button", { name: "Run now" })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    await user.click(within(row).getByRole("button", { name: "Resume" }));
+    expect(mocks.actions).toEqual([
+      {
+        method: "bot.task.setPaused",
+        variables: { botId: BOT_ID, taskId: "task-auto", paused: false },
+      },
+    ]);
+  });
+
+  it("names a member the directory does not know as a member, never by their id", () => {
+    const since = NOW - DAY;
+    mount({
+      tasks: [
+        task("task-auto", {
+          pause: { byUserId: "user-departed", since },
+        }),
+      ],
+    });
+
+    expect(
+      within(taskRow("task-auto")).getByTestId("bot-task-paused").textContent,
+    ).toBe(`Paused by a member since ${formatAbsoluteDateTime(since)}`);
+  });
+
+  it("says on Stop that it ends the automation for good", async () => {
+    const user = userEvent.setup();
+    mocks.state.supported = new Set(TASK_ACTIONS);
+    mount({ tasks: [task("task-auto", {})] });
+
+    await user.hover(
+      within(taskRow("task-auto")).getByRole("button", { name: "Stop" }),
+    );
+
+    expect((await screen.findByRole("tooltip")).textContent).toBe(
+      "Ends the automation. It can't be resumed.",
+    );
+  });
+
+  it("says a Run now this host cannot run waits for the task's next report", () => {
+    mount({
+      tasks: [
+        task("task-auto", {
+          runRequest: {
+            byUserId: MEMBER_ID,
+            requestedAt: NOW,
+            state: "requested",
+          },
+        }),
+      ],
+    });
+
+    expect(
+      within(taskRow("task-auto")).getByTestId("bot-task-run-request")
+        .textContent,
+    ).toBe("Requested; runs when the task next reports");
+  });
+
+  it("names the member whose Run now a check-in answered", () => {
+    mount({
+      tasks: [
+        task("task-auto", {
+          checkins: [
+            received(NOW - 1_000, { requestedByUserId: MEMBER_ID }),
+            received(NOW - 2_000, {}),
+          ],
+        }),
+      ],
+    });
+
+    const [asked, scheduled] = within(taskRow("task-auto")).getAllByTestId(
+      "bot-task-checkin",
+    );
+    expect(
+      within(asked).getByTestId("bot-task-checkin-requested").textContent,
+    ).toBe("· Run now by Ada");
+    expect(
+      within(scheduled).queryByTestId("bot-task-checkin-requested"),
+    ).toBeNull();
   });
 });

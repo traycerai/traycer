@@ -137,6 +137,7 @@ function snapshot(activity: BotActivity): BotSubscribeServerFrame {
     conversationsRevision: 0,
     notificationSubscriptions: null,
     surfaceActions: null,
+    stoppedNotificationWatches: null,
     boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
     activity,
     hasBinaryPayload: false,

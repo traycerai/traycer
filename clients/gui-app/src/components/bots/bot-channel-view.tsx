@@ -25,12 +25,17 @@ import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import {
   BotChatTranscript,
+  type BotTranscriptLanding,
   type BotTranscriptSurface,
   type BotTurnOpen,
   type QuestionAnswerSend,
 } from "@/components/bots/bot-chat-transcript";
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
 import { BotTurnPanel } from "@/components/bots/bot-turn-panel";
+import {
+  BotMemoryPanel,
+  type BotMemoryNavigation,
+} from "@/components/bots/bot-memory-panel";
 import {
   BotMessageComposer,
   type BotComposerEdit,
@@ -76,6 +81,7 @@ import {
 import { isDocumentFocused } from "@/lib/notifications/notification-presence";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import type {
+  BotOpenMemory,
   BotOpenThread,
   BotOpenTurn,
 } from "@/stores/bots/bot-open-thread-store";
@@ -195,6 +201,13 @@ export function BotChannelView(props: {
   /** The turn open beside the channel in the thread's place; `null` for none. */
   readonly openTurn: BotOpenTurn | null;
   readonly onOpenTurn: (open: BotOpenTurn | null) => void;
+  /** The bot's memory open beside the channel in the thread's place; `null` for none. */
+  readonly openMemory: BotOpenMemory | null;
+  readonly onOpenMemory: (open: BotOpenMemory | null) => void;
+  /** The bot's environment, whose room keeps its memory. */
+  readonly environmentId: string;
+  /** Another bot of the environment by its id, for a shared memory's writer. */
+  readonly botNameOf: (botId: string) => string | null;
   /** Opens the bot's Activity tab, from the open thread's header. */
   readonly onOpenActivity: () => void;
 }): ReactNode {
@@ -214,6 +227,10 @@ export function BotChannelView(props: {
     onOpenThread,
     openTurn,
     onOpenTurn,
+    openMemory,
+    onOpenMemory,
+    environmentId,
+    botNameOf,
     onOpenActivity,
   } = props;
   const openThreadPostId = open?.anchorMessageId ?? null;
@@ -392,8 +409,32 @@ export function BotChannelView(props: {
   const { openTurnFromChannel, openTurnFromThread } = useRailTurnOpeners({
     open,
     openTurn,
+    openMemory,
     onOpenTurn,
   });
+  // A memory's link to the post it was learned from shows the channel there,
+  // each follow a new visit, so the same link followed again lands again.
+  const [landing, setLanding] = useState<BotTranscriptLanding | null>(null);
+  const memoryNavigation = useMemo(
+    (): BotMemoryNavigation => ({
+      openThread: (anchorMessageId) =>
+        onOpenThread({
+          anchorMessageId,
+          announcement: false,
+          answer: false,
+          sent: null,
+        }),
+      showInChannel: (messageId) => {
+        onOpenMemory(null);
+        if (messageId === null) return;
+        setLanding((previous) => ({
+          messageId,
+          visit: (previous?.visit ?? 0) + 1,
+        }));
+      },
+    }),
+    [onOpenMemory, onOpenThread],
+  );
   const surface = useMemo<BotTranscriptSurface>(
     () => ({
       kind: "channel",
@@ -471,11 +512,11 @@ export function BotChannelView(props: {
 
   const trunkReply = channelTrunkReply(activity);
 
-  // The rail holds one of a thread or a turn: a turn open leaves no thread
-  // open (`open` is `null`).
+  // The rail holds one of a thread, a turn or the memory: a turn or the
+  // memory open leaves no thread open (`open` is `null`).
   const railThreadPostId = threadListSupported ? openThreadPostId : null;
   const threadOpen = railThreadPostId !== null;
-  const railOpen = threadOpen || openTurn !== null;
+  const railOpen = threadOpen || openTurn !== null || openMemory !== null;
   const openThread =
     openThreadPostId === null
       ? null
@@ -589,7 +630,7 @@ export function BotChannelView(props: {
               surface={surface}
               resolveMember={resolveMember}
               showConnecting
-              landOnMessageId={null}
+              landOn={landing}
             />
             <BotReplyingStrip
               botTitle={botTitle}
@@ -627,6 +668,27 @@ export function BotChannelView(props: {
             resolveMember={resolveMember}
             onOpenThread={onOpenThread}
             onOpenTurn={onOpenTurn}
+          />
+          <ChannelMemoryPane
+            memory={openMemory}
+            render={(memory) => (
+              <BotMemoryPanel
+                botId={botId}
+                hostId={hostId}
+                environmentId={environmentId}
+                botTitle={botTitle}
+                channelId={channel.conversationId}
+                trunkChatId={trunkChatId}
+                threads={threadList.data?.threads ?? null}
+                botNameOf={botNameOf}
+                back={memory.back}
+                onBack={
+                  memory.back === null ? null : () => onOpenThread(memory.back)
+                }
+                onClose={() => onOpenMemory(null)}
+                navigation={memoryNavigation}
+              />
+            )}
           />
           <ChannelThreadPane
             postId={railThreadPostId}
@@ -713,19 +775,20 @@ function useSurfaceCards(args: {
 /**
  * How a receipt opens its turn in the rail's one slot: in place of the
  * thread open there, which the turn's header brings back. A turn opened from
- * the channel over a turn keeps the thread the first displaced; one opened
- * from the thread's panel displaces that thread.
+ * the channel over a turn or the memory keeps the thread the first
+ * displaced; one opened from the thread's panel displaces that thread.
  */
 function useRailTurnOpeners(args: {
   readonly open: BotOpenThread | null;
   readonly openTurn: BotOpenTurn | null;
+  readonly openMemory: BotOpenMemory | null;
   readonly onOpenTurn: (open: BotOpenTurn | null) => void;
 }): {
   readonly openTurnFromChannel: BotTurnOpen;
   readonly openTurnFromThread: BotTurnOpen;
 } {
-  const { open, openTurn, onOpenTurn } = args;
-  const displaced = openTurn?.back ?? open;
+  const { open, openTurn, openMemory, onOpenTurn } = args;
+  const displaced = openTurn?.back ?? openMemory?.back ?? open;
   const openTurnOver = useCallback(
     (back: BotOpenThread | null): BotTurnOpen =>
       (ref, question) =>
@@ -741,6 +804,27 @@ function useRailTurnOpeners(args: {
     [open, openTurnOver],
   );
   return { openTurnFromChannel, openTurnFromThread };
+}
+
+/** The bot's memory open in the rail; nothing for none (`null`). */
+function ChannelMemoryPane(props: {
+  readonly memory: BotOpenMemory | null;
+  readonly render: (memory: BotOpenMemory) => ReactNode;
+}): ReactNode {
+  const { memory, render } = props;
+  if (memory === null) return null;
+  return (
+    <BotResizablePane
+      pane="thread"
+      edge="left"
+      label="Resize panel"
+      className="flex min-h-0 min-w-0 flex-1 flex-col @3xl:w-(--bot-pane-width) @3xl:max-w-[60%] @3xl:flex-none @3xl:border-l @3xl:border-border/60"
+      handleClassName="hidden @3xl:block"
+      testId="bot-memory-pane"
+    >
+      {render(memory)}
+    </BotResizablePane>
+  );
 }
 
 /** The thread open in the rail, by its post's id; nothing for none (`null`). */

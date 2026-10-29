@@ -16,4 +16,8 @@ export const botMutationKeys = {
   surfaceAct: () => ["bot.surface.act"] as const,
   onboardingChoose: () => ["bot.onboarding.choose"] as const,
   onboardingComplete: () => ["bot.onboarding.complete"] as const,
+  taskRunNow: () => ["bot.task.runNow"] as const,
+  taskSetPaused: () => ["bot.task.setPaused"] as const,
+  taskStop: () => ["bot.task.stop"] as const,
+  notificationsStop: () => ["bot.notifications.stop"] as const,
 };

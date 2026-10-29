@@ -16,7 +16,10 @@ import "@/index.css";
  * over a LegendList exactly as `chat-timeline.tsx` wires it, with plain text
  * rows, in a phone-sized scroller. `window.__appendRow()` adds a row,
  * `window.__growLastRow()` streams text into the last one,
- * `window.__geometry()` reads the scroll node, `body[data-following]`
+ * `window.__growRowAboveView()` streams text into the rendered row nearest
+ * above the view (the list moves `scrollTop` to hold the view),
+ * `window.__geometry()` reads the scroll node, `window.__readingRow()` the
+ * row under its top edge, `body[data-following]`
  * mirrors the latch's follow intent, and `body[data-swallow-touchmove]`
  * withholds `touchmove` from the list, as iOS WebKit does once its native pan
  * owns the touch. `browser-tests/chat-follow-latch-touch.spec.ts` drives it.
@@ -54,6 +57,7 @@ export function Harness() {
     isCorrectionSuppressed: undefined,
     resolveSuppressedEndLanding: undefined,
     isReattachSuppressed: undefined,
+    isTurnRunning: undefined,
   });
 
   useLayoutEffect(() => {
@@ -85,6 +89,31 @@ export function Harness() {
             { ...last, text: `${last.text} More streamed text arrives here.` },
           ];
         }),
+      // The rendered row nearest above the scroller's top edge: growing it
+      // is a re-measure above the view, which the list compensates.
+      __growRowAboveView: () => {
+        const node = listRef.current?.getScrollableNode();
+        if (!node) return null;
+        const edge = node.getBoundingClientRect().top;
+        let above: { id: string; bottom: number } | null = null;
+        for (const row of node.querySelectorAll<HTMLElement>("[data-row]")) {
+          const box = row.getBoundingClientRect();
+          if (box.height === 0 || box.bottom > edge) continue;
+          if (above === null || box.bottom > above.bottom) {
+            above = { id: row.dataset.row ?? "", bottom: box.bottom };
+          }
+        }
+        if (above === null) return null;
+        const id = above.id;
+        setRows((current) =>
+          current.map((row) =>
+            row.id === id
+              ? { ...row, text: `${row.text} More streamed text arrives here.` }
+              : row,
+          ),
+        );
+        return id;
+      },
       __geometry: () => {
         const node = listRef.current?.getScrollableNode();
         if (!node) return null;
@@ -93,6 +122,23 @@ export function Harness() {
           scrollHeight: node.scrollHeight,
           clientHeight: node.clientHeight,
         };
+      },
+      // The row under the scroller's top edge, by geometry: the list recycles
+      // its containers, so document order is not screen order.
+      __readingRow: () => {
+        const node = listRef.current?.getScrollableNode();
+        if (!node) return null;
+        const edge = node.getBoundingClientRect().top;
+        let reading: { id: string; top: number } | null = null;
+        for (const row of node.querySelectorAll<HTMLElement>("[data-row]")) {
+          const box = row.getBoundingClientRect();
+          if (box.height === 0 || box.bottom <= edge) continue;
+          const top = box.top - edge;
+          if (reading === null || top < reading.top) {
+            reading = { id: row.dataset.row ?? "", top };
+          }
+        }
+        return reading;
       },
     });
   }, []);

@@ -16,6 +16,9 @@ import {
   botListRequestSchema,
   botListResponseSchema,
   botListResponseSchemaV10,
+  botMemorySubscribeClientFrameSchema,
+  botMemorySubscribeOpenRequestSchema,
+  botMemorySubscribeServerFrameSchema,
   botOpenRequestSchema,
   botOpenResponseSchema,
   botReadRequestSchema,
@@ -63,6 +66,15 @@ import {
   botSurfaceActRequestSchema,
   botSurfaceActResponseSchema,
 } from "./surface-schemas";
+import {
+  botNotificationsStopRequestSchema,
+  botNotificationsStopResponseSchema,
+  botTaskActionRequestSchema,
+  botTaskRunNowResponseSchema,
+  botTaskSetPausedRequestSchema,
+  botTaskSetPausedResponseSchema,
+  botTaskStopResponseSchema,
+} from "./task-action-schemas";
 
 /**
  * The `bot.*` namespace (Tracy Bots, T5). Brand-new v1.0 methods, none on
@@ -303,6 +315,40 @@ export const botTurnLocateV10 = defineRpcContract({
 });
 
 /**
+ * `bot.task.*@1.0` and `bot.notifications.stop@1.0` (T92): what a member does
+ * to the bot's automations and notification watches from the Activity page,
+ * answered by the bound host alone. Same optional posture as the namespace:
+ * a host without them shows none of the actions.
+ */
+export const botTaskRunNowV10 = defineRpcContract({
+  method: "bot.task.runNow",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botTaskActionRequestSchema,
+  responseSchema: botTaskRunNowResponseSchema,
+});
+
+export const botTaskSetPausedV10 = defineRpcContract({
+  method: "bot.task.setPaused",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botTaskSetPausedRequestSchema,
+  responseSchema: botTaskSetPausedResponseSchema,
+});
+
+export const botTaskStopV10 = defineRpcContract({
+  method: "bot.task.stop",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botTaskActionRequestSchema,
+  responseSchema: botTaskStopResponseSchema,
+});
+
+export const botNotificationsStopV10 = defineRpcContract({
+  method: "bot.notifications.stop",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botNotificationsStopRequestSchema,
+  responseSchema: botNotificationsStopResponseSchema,
+});
+
+/**
  * `bot.onboarding.*@1.0` (T48): a team environment's onboarding. The read
  * and the choice answer from any host (the set is authn's, the choice the
  * cloud's); the completion creates the chosen bots on the serving host, so
@@ -386,7 +432,10 @@ export const botSubscribeV13 = defineStreamRpcContract({
  * `bot.subscribe@1.4` (T86): each task entry carries its check-in history
  * (`checkins`), and each notification subscription when it started
  * (`since`). A 1.3 subscriber's snapshot carries neither, and reads the last
- * check-in alone.
+ * check-in alone. Grown in place by T92 (the namespace is unreleased): each
+ * entry's pause, stop and pending Run now, each received check-in's
+ * requester, each subscription's digests and the stopped watches, all
+ * defaulted `null`.
  */
 export const botSubscribeV14 = defineStreamRpcContract({
   method: "bot.subscribe",
@@ -435,4 +484,18 @@ export const botListChangedV10 = defineStreamRpcContract({
   openRequestSchema: botListChangedOpenRequestSchema,
   serverFrameSchema: botListChangedServerFrameSchema,
   clientFrameSchema: botListChangedClientFrameSchema,
+});
+
+/**
+ * `bot.memory.subscribe@1.0` (T87) - what a bot knows: the entries of the
+ * environment's memory pool tagged the bot or `all`, whole, on open and
+ * after every change to the pool. Read-only: nothing on the stream changes
+ * an entry; the bot writes them through its memory tool.
+ */
+export const botMemorySubscribeV10 = defineStreamRpcContract({
+  method: "bot.memory.subscribe",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: botMemorySubscribeOpenRequestSchema,
+  serverFrameSchema: botMemorySubscribeServerFrameSchema,
+  clientFrameSchema: botMemorySubscribeClientFrameSchema,
 });

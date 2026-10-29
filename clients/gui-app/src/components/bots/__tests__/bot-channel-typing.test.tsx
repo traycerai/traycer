@@ -370,6 +370,7 @@ function emitActivity(activity: BotActivity): void {
       conversationsRevision: null,
       notificationSubscriptions: null,
       surfaceActions: null,
+      stoppedNotificationWatches: null,
       boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
       activity,
       hasBinaryPayload: false,
@@ -504,6 +505,10 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
       trunkChatId="trunk-chat"
       openTurn={null}
       onOpenTurn={vi.fn()}
+      openMemory={null}
+      onOpenMemory={vi.fn()}
+      environmentId="env-1"
+      botNameOf={() => null}
       resolveMember={resolveMember}
       tasks={[]}
       surfaceActions={null}
