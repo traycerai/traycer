@@ -240,8 +240,13 @@ const messengerFactory: MessengerFactory<HostRpcRegistry> = ({ registry }) =>
         install: null,
         processMemory: null,
         crossHostMessaging: null,
+        sessions: null,
       }),
-      "host.notifications.indicatorState": () => ({ epics: {}, chats: {} }),
+      "host.notifications.indicatorState": () => ({
+        epics: {},
+        chats: {},
+        complete: true,
+      }),
       "providers.profileSync.overview": () => overview(),
       "providers.profileSync.syncNow": (params) => {
         if (holdingRequests) return held();

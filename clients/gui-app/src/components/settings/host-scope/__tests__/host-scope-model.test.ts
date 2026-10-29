@@ -632,7 +632,8 @@ describe("buildHostScopeOptions the computer's OS in the composer sub-line", () 
     const line = (hostId: string): string => {
       const option = options.find((candidate) => candidate.hostId === hostId);
       if (option === undefined) throw new Error(`no row for ${hostId}`);
-      return composerComputerSubLine(option, true);
+      // The composer row is titled `This computer`, so the name goes below.
+      return composerComputerSubLine(option, true, true);
     };
     return { local: line("windows-host"), other: line("linux-host") };
   }
