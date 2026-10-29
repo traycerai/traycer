@@ -114,15 +114,17 @@ export function useLandingReturnedSandbox(
 }
 
 /**
- * Puts a draft's returned sandbox back on its composer once, when the draft
- * is shown (opened, or after a reload) and the composer holds no stage: its
- * Send goes to that sandbox again, with the same create key. A stage of the
- * composer's own always wins. Any pick in the composer's picker forgets the
- * returned sandbox, and so does its stage leaving the composer (sent, or
- * replaced). The restored stage leaves with its draft: when the composer
- * stops showing the draft, it takes the stage off the surface and the draft
- * keeps it, to restore when it is shown again. `surfaceKey` is null while
- * the composer is inactive.
+ * The only thing that stages a draft's returned sandbox: a give-back writes
+ * the draft's record and nothing else. Puts it on the composer when the
+ * draft is shown (opened, or after a reload) and the composer holds no
+ * stage: its Send goes to that sandbox again, with the same create key. A
+ * stage of the composer's own always wins. Any pick in the composer's picker
+ * forgets the returned sandbox, and so does its stage leaving the composer
+ * (sent, or replaced); a teardown taking every stage is neither, and the
+ * stage is put back. The restored stage leaves with its draft: when the
+ * composer stops showing the draft, it takes the stage off the surface and
+ * the draft keeps it, to restore when it is shown again. `surfaceKey` is null
+ * while the composer is inactive.
  */
 function useReturnedSandboxStage(
   surfaceKey: string | null,
@@ -155,6 +157,9 @@ function useReturnedSandboxStage(
     };
   }, [returned, surfaceKey]);
 
+  // A teardown (`clearAll`, an account change) takes every stage, and may run
+  // after this composer installed: the install runs again after it.
+  const teardowns = useStagedSandboxStore((state) => state.teardowns);
   useEffect(() => {
     if (surfaceKey === null || returned === null) return;
     // The live stores, not this render's: another composer or a pick may
@@ -169,18 +174,24 @@ function useReturnedSandboxStage(
     if (returned.clientRequestId !== null)
       staged.report(surfaceKey, { clientRequestId: returned.clientRequestId });
     markReturnedSandboxRestored(surfaceKey, returned);
-  }, [read, returned, surfaceKey]);
+  }, [read, returned, surfaceKey, teardowns]);
 
   const stage = useStagedSandbox(surfaceKey ?? "");
-  const previousRef = useRef<StagedSandbox | null>(null);
+  const previousRef = useRef<{
+    readonly stage: StagedSandbox | null;
+    readonly teardowns: number;
+  }>({ stage: null, teardowns });
   useEffect(() => {
     const previous = previousRef.current;
-    previousRef.current = stage;
+    previousRef.current = { stage, teardowns };
     if (surfaceKey === null || returned === null) return;
+    // A stage a teardown took was neither sent nor replaced: the draft keeps
+    // its destination, and the install above puts it back.
+    if (previous.teardowns !== teardowns) return;
     if (
-      stageIsReturnedSandbox(previous, returned) &&
+      stageIsReturnedSandbox(previous.stage, returned) &&
       !stageIsReturnedSandbox(stage, returned)
     )
       forget();
-  }, [forget, returned, stage, surfaceKey]);
+  }, [forget, returned, stage, surfaceKey, teardowns]);
 }

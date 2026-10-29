@@ -1002,6 +1002,51 @@ describe("useSandboxStaging host picks", () => {
     expect(staging().composer.stagedLabel).toBe("box-stopped · awake");
   });
 
+  // A draft's returned sandbox comes back with the verb its give-back knew;
+  // the chip says what the sandbox is now.
+  it.each([
+    { row: AWAKE, label: "box-awake · awake" },
+    { row: STOPPED, label: "box-stopped · stopped, starts on send" },
+    { row: SUSPENDED, label: "box-suspended · suspended, resumes on send" },
+  ])(
+    "labels a restored sandbox by its row's state: $label",
+    ({ row, label }) => {
+      mount([LAPTOP, row]);
+
+      act(() =>
+        useStagedSandboxStore.getState().stage(SURFACE, {
+          kind: "existing",
+          hostId: row.hostId,
+          sandboxId: `sbx-${row.hostId}`,
+          name: row.hostId,
+          configuration: { kind: "personal" },
+          verb: "resume",
+        }),
+      );
+
+      expect(staging().composer.stagedLabel).toBe(label);
+    },
+  );
+
+  it("labels a restored sandbox by its verb while no row is listed for it", () => {
+    mount([LAPTOP]);
+
+    act(() =>
+      useStagedSandboxStore.getState().stage(SURFACE, {
+        kind: "existing",
+        hostId: "box-unlisted",
+        sandboxId: "sbx-box-unlisted",
+        name: "box-unlisted",
+        configuration: { kind: "personal" },
+        verb: "start",
+      }),
+    );
+
+    expect(staging().composer.stagedLabel).toBe(
+      "box-unlisted · stopped, starts on send",
+    );
+  });
+
   it("stages a stopped sandbox to start", () => {
     const { composer } = mount([LAPTOP, STOPPED]);
 

@@ -3,7 +3,7 @@
  * the draft: the composer stages it again after a reload, never over a pick
  * of its own, and a deleted draft takes it along.
  */
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, render, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { DraftDocument } from "@traycer/protocol/host";
@@ -13,10 +13,12 @@ import {
 } from "@/lib/drafts/draft-inventory-actions";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
-import type {
-  ReturnedSandbox,
-  StoredReturnedSandbox,
+import {
+  markReturnedSandboxRestored,
+  type ReturnedSandbox,
+  type StoredReturnedSandbox,
 } from "@/lib/sandboxes/returned-sandbox";
+import { EpicSessionLifecycleBridge } from "@/providers/auth-lifecycle-bridge";
 import {
   readStagedSandbox,
   useStagedSandboxStore,
@@ -26,7 +28,10 @@ import {
   applyNewChatHostDocument,
   useNewConversationModalStore,
 } from "@/stores/epics/new-conversation-modal-store";
-import { newConversationSurfaceKey } from "@/stores/host/surface-host-selection-store";
+import {
+  newConversationSurfaceKey,
+  useSurfaceHostSelectionStore,
+} from "@/stores/host/surface-host-selection-store";
 import {
   emptyLandingDraftWorkspaceSnapshot,
   useLandingDraftStore,
@@ -246,6 +251,87 @@ describe("a task draft the host replaces with another line while its composer sh
   });
 });
 
+describe("a draft's record written while no composer shows it", () => {
+  it("is staged when the composer opens, and leaves when it closes", () => {
+    giveBack();
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+
+    const composer = renderHook(() =>
+      useNewConversationReturnedSandbox(EPIC_ID, null),
+    );
+    expect(readStagedSandbox(SURFACE)?.target).toEqual(RETURNED.target);
+
+    composer.unmount();
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+    expect(returnedOnDraft()).toEqual(stored(RETURNED));
+  });
+
+  it("stages nothing when the draft is deleted before its composer ever opens", () => {
+    giveBack();
+    const draftId =
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+        ?.draftId ?? null;
+    if (draftId === null) throw new Error("expected a draft id");
+    deleteNewChatDraftRow(
+      { epicId: EPIC_ID, draftId, ownerHostId: null },
+      null,
+    );
+
+    mountComposer();
+
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+  });
+});
+
+describe("a newer destination marked while an older one is shown", () => {
+  it("keeps the newer mark when the older stage is released, so the newer one leaves with its draft", () => {
+    giveBack();
+    const composer = renderHook(() =>
+      useNewConversationReturnedSandbox(EPIC_ID, null),
+    );
+    expect(readStagedSandbox(SURFACE)?.target).toEqual(RETURNED.target);
+    const stopped: ReturnedSandbox = {
+      target: {
+        kind: "existing",
+        hostId: "sbx-host",
+        sandboxId: "sbx-1",
+        name: "build-box",
+        configuration: { kind: "personal" },
+        verb: "start",
+      },
+      clientRequestId: null,
+    };
+
+    // The draft's destination moves to the same sandbox, now stopped, and
+    // the newer one is on the surface and marked before the older releases.
+    act(() => {
+      useNewConversationModalStore
+        .getState()
+        .setReturnedSandbox(EPIC_ID, stopped);
+      useStagedSandboxStore.getState().stage(SURFACE, stopped.target);
+      markReturnedSandboxRestored(SURFACE, stopped);
+    });
+    expect(readStagedSandbox(SURFACE)?.target).toEqual(stopped.target);
+
+    composer.unmount();
+
+    expect(readStagedSandbox(SURFACE)).toBeNull();
+  });
+});
+
+describe("a teardown that clears every stage", () => {
+  it("puts the shown draft's stage back, and never forgets its record", () => {
+    mountComposer();
+    act(() => giveBack());
+    expect(readStagedSandbox(SURFACE)?.target).toEqual(RETURNED.target);
+
+    act(() => useStagedSandboxStore.getState().clearAll());
+
+    expect(returnedOnDraft()).toEqual(stored(RETURNED));
+    expect(readStagedSandbox(SURFACE)?.target).toEqual(RETURNED.target);
+  });
+});
+
 describe("a returned sandbox across an account switch", () => {
   it("is never restored into the next account's task composer", () => {
     signInAs("user-a");
@@ -358,6 +444,45 @@ describe("useLandingReturnedSandbox", () => {
     );
 
     expect(readStagedSandbox(WINDOW_SURFACE)).toBeNull();
+  });
+
+  it("restores the owner's stage through the real identity teardown, and keeps the record across the switch", () => {
+    installReturnedDraft("draft-a", RETURNED);
+    function Composer(): null {
+      useLandingReturnedSandbox(WINDOW_SURFACE, "draft-a", true);
+      return null;
+    }
+    render(
+      <EpicSessionLifecycleBridge>
+        <Composer />
+      </EpicSessionLifecycleBridge>,
+    );
+    expect(readStagedSandbox(WINDOW_SURFACE)?.target).toEqual(RETURNED.target);
+
+    act(() => signInAs("user-b"));
+    expect(readStagedSandbox(WINDOW_SURFACE)).toBeNull();
+    expect(landingReturned("draft-a")).toEqual(stored(RETURNED));
+
+    act(() => signInAs("user-a"));
+    expect(readStagedSandbox(WINDOW_SURFACE)?.target).toEqual(RETURNED.target);
+
+    act(() =>
+      useAuthStore.setState({ status: "signed-out", contextMetadata: null }),
+    );
+    expect(readStagedSandbox(WINDOW_SURFACE)).toBeNull();
+    expect(landingReturned("draft-a")).toEqual(stored(RETURNED));
+  });
+
+  it("never writes the window's host pin when it restores", () => {
+    installReturnedDraft("draft-a", RETURNED);
+    const before = useSurfaceHostSelectionStore.getState().selections;
+
+    renderHook(() =>
+      useLandingReturnedSandbox(WINDOW_SURFACE, "draft-a", true),
+    );
+
+    expect(readStagedSandbox(WINDOW_SURFACE)?.target).toEqual(RETURNED.target);
+    expect(useSurfaceHostSelectionStore.getState().selections).toBe(before);
   });
 
   it("stages only the shown draft's sandbox when a hidden draft's composer is also mounted", () => {

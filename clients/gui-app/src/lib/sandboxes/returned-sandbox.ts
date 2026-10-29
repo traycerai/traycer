@@ -95,14 +95,18 @@ export function markReturnedSandboxRestored(
   restoredBySurface.set(surfaceKey, returned);
 }
 
-/** Drops the surface's mark, and says whether it was `returned`'s. */
+/**
+ * Takes the surface's mark if it is `returned`'s, and says whether it was. A
+ * different one is a newer restore's, and stays for it to release.
+ */
 export function takeReturnedSandboxRestored(
   surfaceKey: string,
   returned: ReturnedSandbox,
 ): boolean {
-  const restored = restoredBySurface.get(surfaceKey) ?? null;
+  if (!sameReturnedSandbox(restoredBySurface.get(surfaceKey) ?? null, returned))
+    return false;
   restoredBySurface.delete(surfaceKey);
-  return sameReturnedSandbox(restored, returned);
+  return true;
 }
 
 /**
