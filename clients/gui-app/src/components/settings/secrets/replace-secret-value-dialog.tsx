@@ -4,7 +4,7 @@ import { HostMethodVersionUnsatisfiedError } from "@traycer-clients/shared/host-
 import type { EnvironmentSecret } from "@traycer/protocol/host/environment-schemas";
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { custodySentence } from "@/components/settings/environment/mcp-skills-copy";
-import { usePickedTeamLabel } from "@/components/settings/environment/team-pick-label";
+import { useConfigurationName } from "@/components/settings/environment/team-pick-label";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
@@ -45,9 +45,7 @@ export function ReplaceSecretValueDialog(props: {
   const source = useConfigurationSource();
   const personal =
     source.kind === "host" || source.configuration === "personal";
-  const name =
-    usePickedTeamLabel(source.kind === "pool" ? source.environmentId : "") ??
-    "this team";
+  const name = useConfigurationName();
   const [value, setValue] = useState("");
   // The value a Replace sends, read at dispatch.
   const sentValue = useRef("");

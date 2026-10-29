@@ -1,4 +1,5 @@
 import "../../../../../__tests__/test-browser-apis";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
@@ -67,6 +68,24 @@ describe("Add a secret's custody sentence", () => {
         onOpenChange={() => undefined}
       />,
       { wrapper: harness.Wrapper },
+    );
+    expect(screen.getByTestId("secret-custody-sentence").textContent).toBe(
+      SECRET_CUSTODY_SENTENCE,
+    );
+  });
+
+  it("keeps Personal's own sentence in host mode, with no cloud configuration source", () => {
+    const harness = mountTeamPage(poolSource("editor"), HANDLERS);
+    render(
+      <QueryClientProvider client={harness.queryClient}>
+        <AddSecretDialog
+          open
+          initialKind="api_key"
+          prefill={null}
+          client={requireTeamHostClient()}
+          onOpenChange={() => undefined}
+        />
+      </QueryClientProvider>,
     );
     expect(screen.getByTestId("secret-custody-sentence").textContent).toBe(
       SECRET_CUSTODY_SENTENCE,
