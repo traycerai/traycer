@@ -313,23 +313,6 @@ function useSessionMemory(session: SimulatorSession | null): {
 }
 
 /**
- * This tile's `simulator.open`, held by the tile rather than by the inventory
- * gate that triggers it: the session the host records usually reaches the
- * tile on the sessions stream BEFORE the RPC answers, and the gate unmounts
- * for the live view at that moment. A mutation observer that unmounts has
- * its per-call callbacks skipped, so the answer - which is what makes the
- * session this tile's own, and what carries an Android serial - has to land
- * on an observer that outlives the gate.
- *
- * `connecting` is the inventory's "in flight" from the person's side: set
- * when this tile sends an open, cleared when that open settles OR when the
- * session shows up on the stream, whichever is first. The stream is what the
- * open is for, so a session that arrives - and may later end under the tile
- * through the stall path - is the open having done its work, whatever the
- * RPC still owes; a tile that kept waiting on the RPC alone showed a disabled
- * "Boot and connect" over an inventory the host reported idle.
- */
-/**
  * The open that reaches `target`.
  *
  * A COPY that is not running is gone, not asleep: the host removes a clone
@@ -362,6 +345,23 @@ function openFor(
   };
 }
 
+/**
+ * This tile's `simulator.open`, held by the tile rather than by the inventory
+ * gate that triggers it: the session the host records usually reaches the
+ * tile on the sessions stream BEFORE the RPC answers, and the gate unmounts
+ * for the live view at that moment. A mutation observer that unmounts has
+ * its per-call callbacks skipped, so the answer - which is what makes the
+ * session this tile's own, and what carries an Android serial - has to land
+ * on an observer that outlives the gate.
+ *
+ * `connecting` is the inventory's "in flight" from the person's side: set
+ * when this tile sends an open, cleared when that open settles OR when the
+ * session shows up on the stream, whichever is first. The stream is what the
+ * open is for, so a session that arrives - and may later end under the tile
+ * through the stall path - is the open having done its work, whatever the
+ * RPC still owes; a tile that kept waiting on the RPC alone showed a disabled
+ * "Boot and connect" over an inventory the host reported idle.
+ */
 function useSimulatorConnect(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string;
