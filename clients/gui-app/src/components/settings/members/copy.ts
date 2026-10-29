@@ -48,14 +48,10 @@ export function inviteAcceptTitle(teamName: string): string {
 export const INVITATION_GONE = "This invitation is no longer open.";
 
 /**
- * A removal still waiting on the team's hosts: "removing · waiting for 2
- * hosts", or "removing" while the count is unknown. A done removal leaves
- * the list, so it has no label.
+ * A removal that has not committed yet. A committed removal leaves the list,
+ * so it has no label.
  */
-export function pendingRemovalLabel(hostCount: number | null): string {
-  if (hostCount === null || hostCount === 0) return "removing";
-  return `removing · waiting for ${countNoun(hostCount, "host")}`;
-}
+export const PENDING_REMOVAL_LABEL = "removing";
 
 export const RETRY_LABEL = "Retry";
 
@@ -376,12 +372,8 @@ export function removeCannotRecall(
   return `Files ${memberName} already copied off a host and work already done upstream with ${teamName}'s services. What ${memberName} started stays, labelled "started by a former member".`;
 }
 
-export function removePendingUntilDone(
-  memberName: string,
-  teamName: string,
-): string {
-  return `Removal shows as pending until every ${teamName} host has confirmed it, then as done. ${memberName} is told once: "You are no longer a member of ${teamName}."`;
-}
+export const REMOVE_PENDING_UNTIL_COMMITTED =
+  "Removal shows as pending until it commits.";
 
 export function removeConfirmLabel(firstName: string): string {
   return `Remove ${firstName}`;

@@ -93,10 +93,7 @@ export function autoCleanupTargetMessage(
   }
 }
 
-/**
- * The one-line summary on a run row. Reads the same way the notification does,
- * so a user who saw the toast recognizes the row it points at.
- */
+/** The one-line summary on a run row. */
 export function autoCleanupRunSummaryLine(counts: {
   readonly deletedCount: number;
   readonly skippedCount: number;

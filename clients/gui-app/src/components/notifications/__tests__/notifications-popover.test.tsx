@@ -1730,31 +1730,9 @@ describe("NotificationsPopover", () => {
     expect(timestamp.textContent).toBe("2m ago");
   });
 
-  it("uses workspace glyphs for worktree lifecycle notifications", async () => {
+  it("uses the folder glyph for a failed workspace operation", async () => {
     applyHostSnapshot(
       [
-        {
-          id: "worktree.deletion:command-1",
-          updatedAt: 200,
-          readAt: null,
-          kind: "host.operation.finished",
-          sourceRef: "command-1",
-          severity: "done",
-          outcome: "completed",
-          epicId: null,
-          chatId: null,
-          payload: {
-            kind: "worktree_deletion",
-            operation: "worktree.deletion",
-            title: "Worktree deleted",
-            message: "Deleted 1 worktree.",
-            commandId: "command-1",
-            source: "settings",
-            requestedCount: 1,
-            deletedCount: 1,
-            failedCount: 0,
-          },
-        },
         {
           id: "workspace.operation.failed:event-1",
           updatedAt: 100,
@@ -1778,7 +1756,7 @@ describe("NotificationsPopover", () => {
           },
         },
       ],
-      { unreadCount: 2, attentionCount: 1 },
+      { unreadCount: 1, attentionCount: 1 },
     );
     const captured: TargetCapture = {
       epicId: null,
@@ -1789,21 +1767,12 @@ describe("NotificationsPopover", () => {
     const { router } = buildRouterWithCapture(captured, () => undefined);
     renderRouter(router);
 
-    await screen.findByText("Worktree deleted");
-    const rows = screen.getAllByTestId("notification-entry");
-    const deletionRow = rows.find(
-      (row) =>
-        row.dataset.notificationId === "host:worktree.deletion:command-1",
-    );
+    const rows = await screen.findAllByTestId("notification-entry");
     const creationFailureRow = rows.find(
       (row) =>
         row.dataset.notificationId ===
         "host:workspace.operation.failed:event-1",
     );
-    expect(deletionRow?.querySelector(".lucide-trash-2")).not.toBeNull();
-    expect(
-      deletionRow?.querySelector(".lucide-message-square-check"),
-    ).toBeNull();
     expect(
       creationFailureRow?.querySelector(".lucide-folder-x"),
     ).not.toBeNull();
