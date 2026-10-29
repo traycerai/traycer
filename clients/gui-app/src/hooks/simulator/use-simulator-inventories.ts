@@ -15,7 +15,7 @@ import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { stampHostRpcMethod } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { withHostQueryErrorBoundary } from "@/lib/query/host-query-error-boundary";
-import { coldSimulatorDevices } from "@/lib/simulator-view/simulator-cold-devices";
+import { splitSimulatorDevices } from "@/lib/simulator-view/simulator-device-split";
 import { simulatorVerbsAreV11 } from "@/lib/simulator-view/simulator-host-version";
 import type { SimulatorOpenTarget } from "./use-simulator-instance-open";
 
@@ -68,16 +68,16 @@ function target(args: {
 }
 
 /**
- * A machine's entries: on a `@1.1` host every instance (`simulator.instances`)
- * then every cold device; on a `@1.0` host, which has no instances, its
- * booted devices stand in for them.
+ * A machine's entries: on a `@1.1` host every running copy
+ * (`simulator.instances`) then every cold device; on a `@1.0` host, which has
+ * no instances, its booted devices stand in for them.
  *
- * ONE read decides both halves, which is what makes them a partition of the
- * machine's devices rather than two answers that can disagree - see
- * {@link coldSimulatorDevices}, which holds that invariant. The two reads
- * below describe one moment only as far as two round trips can, so a device
- * that powers off between them answers booted here and is absent from the
- * instances; reading the flag for the cold half would list it in neither.
+ * ONE verdict per device decides both halves, which is what makes them a
+ * partition of the machine's devices rather than two answers that can leave a
+ * device in neither - see {@link splitSimulatorDevices}, which holds that
+ * invariant. Here the instance answer is always the later one: the fetcher
+ * below awaits it second, so a device that powers off between the two round
+ * trips is a Boot row rather than nothing at all.
  */
 export function simulatorInventoryEntries(args: {
   readonly hostId: string;
@@ -85,30 +85,30 @@ export function simulatorInventoryEntries(args: {
   readonly instances: readonly SimulatorHostInstance[] | null;
 }): readonly SimulatorInventoryEntry[] {
   const { hostId, simulators, instances } = args;
-  const running: SimulatorInventoryEntry[] =
-    instances === null
-      ? simulators
-          .filter((simulator) => simulator.booted)
-          .map((simulator) => ({
-            key: JSON.stringify([hostId, "instance", simulator.simulatorId]),
-            hostId,
-            kind: "instance",
-            instanceKey: simulator.simulatorId,
-            target: target(simulator),
-            drivenByAgent: false,
-          }))
-      : instances.map((instance) => ({
-          key: JSON.stringify([hostId, "instance", instance.instanceKey]),
-          hostId,
-          kind: "instance",
-          instanceKey: instance.instanceKey,
-          target: target(instance),
-          drivenByAgent: instance.drivenByAgent,
-        }));
-  const cold: SimulatorInventoryEntry[] = coldSimulatorDevices({
+  const split = splitSimulatorDevices({
     simulators,
     instances,
-  }).map((simulator) => ({
+    fresher: "instances",
+  });
+  const running: SimulatorInventoryEntry[] = split.running.map((copy) => {
+    // A stand-in is addressed by the device's own id, which is what an
+    // instance key IS for every copy a device list can name on its own.
+    const row = copy.kind === "instance" ? copy.instance : copy.device;
+    const instanceKey =
+      copy.kind === "instance"
+        ? copy.instance.instanceKey
+        : copy.device.simulatorId;
+    return {
+      key: JSON.stringify([hostId, "instance", instanceKey]),
+      hostId,
+      kind: "instance",
+      instanceKey,
+      target: target(row),
+      drivenByAgent:
+        copy.kind === "instance" ? copy.instance.drivenByAgent : false,
+    };
+  });
+  const cold: SimulatorInventoryEntry[] = split.cold.map((simulator) => ({
     key: JSON.stringify([hostId, "device", simulator.simulatorId]),
     hostId,
     kind: "device",
@@ -149,7 +149,7 @@ function simulatorInventoryQuery(args: {
       // machine has gained or lost since - or an Android one listed under a
       // new id since - would be a row from before. WHICH devices are running
       // no longer rests on how old this answer is; that is the instance
-      // read's alone (see `coldSimulatorDevices`).
+      // read's alone (see `splitSimulatorDevices`).
       const state = await client.request("simulator.list", { epicId });
       const instances = speaksV11
         ? (await client.request("simulator.instances", {})).instances

@@ -75,9 +75,10 @@ const NO_INVALIDATIONS: ReadonlyArray<keyof HostRpcRegistry & string> = [];
  * instance at all. Dropping the devices leaves a `@1.0` host's booted one
  * offering Boot for the 60 s freshness window - the instance poll does not
  * touch that read, and the picker's pack-following effect never fires, because
- * a boot does not move the pack. A surface holding an instance read no longer
- * needs that flag for its cold rows (see `coldSimulatorDevices`), so this
- * keeps the rows themselves current rather than the split honest.
+ * a boot does not move the pack. It is also what makes the devices the FRESHER
+ * of the two answers a surface holds for the seconds until the instance read
+ * polls again, which is how a device booted from here is running on screen at
+ * once rather than when that poll lands (see `splitSimulatorDevices`).
  *
  * Shared with the instance open (`useSimulatorInstanceOpen`), which sends its
  * own `simulator.open` and sweeps the same pair.

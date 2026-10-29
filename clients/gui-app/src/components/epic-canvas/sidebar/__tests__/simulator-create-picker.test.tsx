@@ -291,6 +291,20 @@ async function tickInstancePoll(): Promise<void> {
   });
 }
 
+/**
+ * The other order: the DEVICE list answers again and the instance read stays
+ * on the answer it is holding, which is what an open's own sweep does between
+ * two instance polls. After this the devices are the fresher of the two
+ * answers in hand.
+ */
+async function tickDeviceRead(): Promise<void> {
+  await act(async () => {
+    await queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(HOST, "simulator.list"),
+    });
+  });
+}
+
 async function openPicker() {
   const user = userEvent.setup();
   render(
@@ -592,6 +606,22 @@ describe("SimulatorCreatePicker", () => {
     });
   });
 
+  /**
+   * The four states the picker meets with two separately cached reads, and
+   * what it shows in each. The four tests below are them in order.
+   *
+   * 1. The instance answer is the later one and NAMES the device: its
+   *    instance row runs, and no Boot is offered on it.
+   * 2. The instance answer is the later one and does not name it: it powered
+   *    off, so it is a Boot row under Not running.
+   * 3. The DEVICE list is the later answer - it was asked again after an open
+   *    and the instance read has not polled since - so the flag decides and
+   *    the device stands in for its own copy under Running. Never a Boot
+   *    (the device is up, and a second boot of it reaches the host), and
+   *    never neither section.
+   * 4. There is no instance answer at all: the flag decides both halves, as
+   *    it did before there was an instance read.
+   */
   it("offers no Boot for a device the instance read shows running, however the device list still calls it", async () => {
     // A boot this client did not send - an agent's, another window's. The
     // host-wide instance read polls and picks it up; `simulator.list` is
@@ -635,6 +665,27 @@ describe("SimulatorCreatePicker", () => {
     const cold = await screen.findByTestId("simulator-picker-cold-udid-1");
     expect(within(cold).getByRole("button", { name: "Boot" })).toBeTruthy();
     expect(screen.queryByTestId("simulator-picker-running-udid-1")).toBeNull();
+    await user.keyboard("{Escape}");
+  });
+
+  it("stands a device in under Running while the device list is the later answer and the instance read has not polled since", async () => {
+    // The venue: a Boot's own open sweeps the device list, that answer lands
+    // between two instance polls, and the instance answer in hand is one
+    // from before the boot. Reading it as current offers Boot on a device
+    // that is already up - a second boot that reaches the host - and leaving
+    // the flag to the cold half alone shows the device in neither section.
+    queryClient = createAppQueryClient();
+    const user = await openPicker();
+    expect(
+      await screen.findByTestId("simulator-picker-cold-udid-cold"),
+    ).toBeTruthy();
+
+    booted.add("udid-cold");
+    await tickDeviceRead();
+
+    const row = await screen.findByTestId("simulator-picker-running-udid-cold");
+    expect(within(row).getByRole("button", { name: "Open" })).toBeTruthy();
+    expect(screen.queryByTestId("simulator-picker-cold-udid-cold")).toBeNull();
     await user.keyboard("{Escape}");
   });
 
