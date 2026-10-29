@@ -165,7 +165,7 @@ function cardPresentation(
 }
 
 /** One entry per visible card, everything a card prints already derived. */
-export function gettingStartedEntries(
+function gettingStartedEntries(
   facts: GettingStartedFacts,
 ): readonly GettingStartedEntry[] {
   return gettingStartedVisibleCards(facts).map((card) => ({

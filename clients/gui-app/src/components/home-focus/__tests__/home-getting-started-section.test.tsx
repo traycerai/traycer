@@ -48,7 +48,7 @@ vi.mock("@/hooks/host/use-requester-host-id", () => ({
 
 // This computer and where its settings stand: the move card's own boundary,
 // faked here so these cases stay about the cards. The move card has its own
-// suite (`getting-started-move-card.test.tsx`).
+// suite (`panels/__tests__/getting-started-settings-panel.test.tsx`).
 vi.mock("@/components/settings/move/this-computer", () => ({
   useThisComputer: () => ({
     hostId: null,

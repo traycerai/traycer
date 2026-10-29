@@ -65,13 +65,22 @@ const AWAITING_CONSENT: EnvironmentStatusResponseV11 = environmentStatusFixture(
   },
 );
 
-/** Accepted, uploading: `applied` of three items are in Personal. */
+/**
+ * Accepted, uploading: `applied` of three items are in Personal.
+ *
+ * `consent` is `null` throughout, which is what a first move really reports:
+ * the status serves the migration MARKER's consent, and the host writes that
+ * marker only once the upload has finished
+ * (`traycer-host/src/domain/environment/migration/migrator.ts`, step 5). A
+ * fixture that sets it here would let a cadence keyed on the consent pass a
+ * test the real feed fails.
+ */
 function moving(applied: number): EnvironmentStatusResponseV11 {
   const keys = ["ANTHROPIC_AUTH_TOKEN", "DEPLOY_KEY", "github"];
   return environmentStatusFixture({
     principal: { kind: "personal" },
     planes: { records: "local", broker: "local", room: "local" },
-    consent: { acceptedAt: ACCEPTED_AT, planHash: "plan-1" },
+    consent: null,
     setup: { stage: "moving_settings", state: "running" },
     items: keys.map((key, index) =>
       itemStatusFixture({
@@ -206,11 +215,36 @@ describe("the status read while this computer's move runs", () => {
     expect(reads()).toBe(1);
   });
 
+  it("leaves a computer that stopped sharing on the steady cadence", async () => {
+    // `Stop sharing from this computer` KEEPS the migration marker, so the
+    // status still carries that marker's consent - the old `acceptedAt` and
+    // all - while first start runs again and rests at `awaiting_consent`
+    // waiting to be asked (`traycer-host/.../migration/marker.ts`, and
+    // `environment-move-after-stop.test.ts` asserts the pair). Nobody is
+    // being asked anything and nothing is uploading.
+    const stoppedSharing = environmentStatusFixture({
+      principal: { kind: "personal" },
+      planes: { records: "stopped", broker: "stopped", room: "stopped" },
+      consent: { acceptedAt: ACCEPTED_AT, planHash: "plan-1" },
+      setup: { stage: "moving_settings", state: "awaiting_consent" },
+    });
+    const { reads } = renderNote(() => stoppedSharing);
+    await waitFor(() =>
+      expect(screen.getByTestId("local-row-note").textContent).toContain(
+        "not in Personal yet",
+      ),
+    );
+
+    await holdFor(BEFORE_THE_STEADY_READ_MS);
+
+    expect(reads()).toBe(1);
+  });
+
   it("leaves a stopped move on the steady cadence: Retry is what asks again", async () => {
     const stopped = environmentStatusFixture({
       principal: { kind: "personal" },
       planes: { records: "local", broker: "local", room: "local" },
-      consent: { acceptedAt: ACCEPTED_AT, planHash: "plan-1" },
+      consent: null,
       setup: { stage: "moving_settings", state: "failed" },
       items: [
         itemStatusFixture({ kind: "env_var", key: "A", status: "failed" }),

@@ -7,13 +7,13 @@ import type {
   RpcSchedulingPolicy,
 } from "@traycer-clients/shared/host-client/rpc-scheduling-policy";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
-import type { EnvironmentStatusResponseV11 } from "@traycer/protocol/host/environment-schemas";
 import type {
   ProviderManagedInstallState,
   ProviderManagedVersions,
 } from "@traycer/protocol/host/provider-schemas";
 import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-definitive";
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
+import { moveIsRunning } from "@/lib/environment/move-in-progress";
 import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
 import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
 import { SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/simulator-open-response-timeout";
@@ -420,37 +420,23 @@ const ENVIRONMENT_STATUS_STEADY_POLL_LANE: ConditionPollLane = {
   initialDelayMs: 5 * SECOND_MS,
   maxDelayMs: 5 * SECOND_MS,
 };
-/** The read itself failed: the host's reachability is the scope's problem first. */
+/**
+ * The read itself failed. Pinned at the steady cadence, deliberately: this
+ * method was a fixed 5 s poll before the lanes above, and a fixed interval
+ * keeps firing in the error state, so a reader whose host drops a read has
+ * always re-asked 5 s later. Backing off here would have slowed every
+ * existing reader's recovery - `useSandboxSettingsStatus` is the readiness
+ * gate a send to a just-woken sandbox waits on, where a dropped dial is
+ * ordinary - and the branded poller takes no ordinary retry under it.
+ */
 const ENVIRONMENT_STATUS_ERROR_POLL_LANE: ConditionPollLane = {
   id: "environment.status.error",
   initialDelayMs: 5 * SECOND_MS,
-  maxDelayMs: MINUTE_MS,
+  maxDelayMs: 5 * SECOND_MS,
 };
 const ENVIRONMENT_STATUS_RESET_LANES: ReadonlySet<string> = new Set([
   ENVIRONMENT_STATUS_STEADY_POLL_LANE.id,
 ]);
-/** Why a move stopped (`hostSettingsCardState`); `state` is open, so these are named. */
-const MOVE_STOPPED_STATES: ReadonlySet<string> = new Set(["stalled", "failed"]);
-
-/**
- * Whether the host reports a move that can still move: the person accepted it
- * (`consent`) and setup has not left `moving_settings`, with no reason
- * recorded for having stopped.
- *
- * The consent is what makes this precise. An un-moved computer rests at
- * `moving_settings`/`awaiting_consent` for as long as nobody moves it, so the
- * stage alone would put every un-moved computer on the fast lane for ever. A
- * stopped move is terminal until a Retry, which re-reads the status itself.
- */
-function moveCanStillProgress(data: EnvironmentStatusResponseV11): boolean {
-  const setup = data.setup;
-  return (
-    setup !== null &&
-    setup.stage === "moving_settings" &&
-    data.consent !== null &&
-    !MOVE_STOPPED_STATES.has(setup.state)
-  );
-}
 
 const LATEST_SCHEDULING = {
   mode: "latest",
@@ -2525,7 +2511,7 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: defineConditionPolicy("environment.status", {
       classify: (data) => {
         if (data === undefined) return ENVIRONMENT_STATUS_STEADY_POLL_LANE;
-        return moveCanStillProgress(data)
+        return moveIsRunning(data)
           ? ENVIRONMENT_MOVE_RUNNING_POLL_LANE
           : ENVIRONMENT_STATUS_STEADY_POLL_LANE;
       },
