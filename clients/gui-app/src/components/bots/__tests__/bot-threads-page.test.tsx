@@ -2,7 +2,8 @@
  * A bot's Threads tab (Tracy Bots T86): the listed threads, each named by the
  * post it hangs off, and a choice opening that thread beside the channel. The
  * real page runs over a real query result; only the channel's session (the
- * rows the posts are read from) is replaced.
+ * rows the posts are read from) and the host's locate-row read, which fetches
+ * a post the channel has not loaded, are replaced.
  */
 import { type ReactNode } from "react";
 import {
@@ -10,7 +11,7 @@ import {
   QueryClientProvider,
   useQuery,
 } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -20,28 +21,39 @@ import type {
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
-import { chatSessionWithPosts } from "./bot-channel-rows-test-support";
+import { chatSessionWithPosts, postRow } from "./bot-channel-rows-test-support";
 
 const mocks = vi.hoisted(() => ({
   openPost: vi.fn<(open: unknown) => void>(),
   /** The channel's posts by message id; none while the channel is not loaded. */
   channelPosts: null as Record<string, string> | null,
+  /** The channel's session, built once per case so rows can land in it. */
+  channel: null as ChatSessionStoreHandle | null,
+  /** Every post the page asked the host to locate, by message id. */
+  located: [] as string[],
 }));
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => ({ stub: "tab-host-client" }),
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
-  useChatLocateRow: () => null,
+  useChatLocateRow: (args: { target: { messageId: string } | null }) => {
+    if (args.target === null) return null;
+    if (!mocks.located.includes(args.target.messageId)) {
+      mocks.located.push(args.target.messageId);
+    }
+    return 1;
+  },
 }));
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
   >()),
-  useChatSessionHandleForContainer: (): ChatSessionStoreHandle | null =>
-    mocks.channelPosts === null
-      ? null
-      : chatSessionWithPosts(mocks.channelPosts),
+  useChatSessionHandleForContainer: (): ChatSessionStoreHandle | null => {
+    if (mocks.channelPosts === null) return null;
+    mocks.channel ??= chatSessionWithPosts(mocks.channelPosts);
+    return mocks.channel;
+  },
 }));
 
 import { BotThreadsPage } from "@/components/bots/bot-threads-page";
@@ -51,17 +63,23 @@ const CHANNEL_ID = "conversation-channel";
 const POST_ID = conversationRequestMessageId("req-a");
 
 function thread(replyCount: number): BotThreadSummary {
+  return withAnchor(replyCount, true);
+}
+
+function withAnchor(replyCount: number, anchored: boolean): BotThreadSummary {
   return {
     threadId: "thread-a",
     conversationId: CHANNEL_ID,
     sessionChatId: "session-thread-a",
-    anchor: {
-      messageId: POST_ID,
-      requestId: "req-a",
-      senderUserId: "user-1",
-      sentAt: 1_000,
-      resolvedAt: null,
-    },
+    anchor: anchored
+      ? {
+          messageId: POST_ID,
+          requestId: "req-a",
+          senderUserId: "user-1",
+          sentAt: 1_000,
+          resolvedAt: null,
+        }
+      : null,
     replyCount,
     lastReplyAt: 2_000,
     openRequestCount: 0,
@@ -106,6 +124,8 @@ function mount(
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.channelPosts = null;
+  mocks.channel = null;
+  mocks.located = [];
 });
 
 afterEach(() => {
@@ -134,13 +154,49 @@ describe("<BotThreadsPage />", () => {
     });
   });
 
-  it("leaves a thread unopenable until the channel has its post", async () => {
-    mocks.channelPosts = null;
+  it("opens an older thread whose post the channel has not loaded: chosen, it fetches the post, shows busy, and opens once the post is read", async () => {
+    const user = userEvent.setup();
+    // The channel is loaded, but the thread's post is older than its window.
+    mocks.channelPosts = {};
     mount([thread(1)], true);
 
     const row = await screen.findByTestId("bot-thread-row");
     expect(row.textContent).toContain("Thread");
     expect(row.textContent).toContain("1 reply");
+    expect(row.hasAttribute("disabled")).toBe(false);
+    expect(row.getAttribute("aria-busy")).toBe("false");
+    expect(mocks.located).toEqual([]);
+
+    await user.click(row);
+
+    expect(mocks.located).toEqual([POST_ID]);
+    expect(row.hasAttribute("disabled")).toBe(true);
+    expect(row.getAttribute("aria-busy")).toBe("true");
+    expect(mocks.openPost).not.toHaveBeenCalled();
+
+    // The located row lands in the channel's session.
+    act(() => {
+      mocks.channel?.store.setState({
+        messages: [postRow(POST_ID, "Please review the release")],
+      });
+    });
+
+    expect(mocks.openPost).toHaveBeenCalledTimes(1);
+    expect(mocks.openPost).toHaveBeenCalledWith({
+      anchorMessageId: POST_ID,
+      announcement: false,
+      answer: false,
+      sent: null,
+    });
+    expect(row.textContent).toContain("Please review the release");
+    expect(row.getAttribute("aria-busy")).toBe("false");
+  });
+
+  it("leaves a thread with no anchor post unopenable", async () => {
+    mocks.channelPosts = {};
+    mount([withAnchor(1, false)], true);
+
+    const row = await screen.findByTestId("bot-thread-row");
     expect(row.hasAttribute("disabled")).toBe(true);
   });
 

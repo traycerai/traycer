@@ -7,7 +7,7 @@ import type {
 import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 
 /** A member's post, as a chat's session holds it. */
-function postRow(messageId: string, text: string): Message {
+export function postRow(messageId: string, text: string): Message {
   return {
     role: "user",
     messageId,
