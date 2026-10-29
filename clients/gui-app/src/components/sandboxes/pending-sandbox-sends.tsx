@@ -1201,6 +1201,15 @@ function returnWatchedSend(
     returnStoppedPendingSend(send.id);
     return;
   }
+  // Ended with its sandbox still up: its task is gone, so the saved draft
+  // keeps the sandbox.
+  if (
+    send.ended === true &&
+    (rowState === "awake" || restingVerb(rowState) !== null)
+  ) {
+    returnPendingSandboxSendOnItsSandbox(send.id);
+    return;
+  }
   if (
     send.request.kind !== "chat" ||
     stage === null ||

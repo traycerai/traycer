@@ -5162,6 +5162,54 @@ describe("a message whose sandbox may still be created, put in a draft", () => {
       restoreLocks();
     }
   });
+
+  it("keeps the awake sandbox on the draft when its task is deleted and the first draft write fails", async () => {
+    const restoreLocks = installImmediateExclusiveLocks();
+    const install = useLandingDraftStore.getState().installLandingDraft;
+    let writes = 0;
+    useLandingDraftStore.setState({
+      installLandingDraft: (draft) => {
+        writes += 1;
+        if (writes === 1) throw new Error("storage full");
+        return install(draft);
+      },
+    });
+    try {
+      seed({ ...SEEDED, phase: "creating", created: true });
+      const awake = sandboxSummaryFixture({
+        id: SANDBOX_ID,
+        hostId: SANDBOX_HOST,
+        state: "awake",
+      });
+      mocks.listSandboxes.mockResolvedValue(listAnswers([awake]));
+      answerSandboxRows([awake], Date.now() + 60_000);
+      mount();
+      await screen.findByTestId("pending-sandbox-sends");
+
+      recoverPendingSandboxSendsAfterTaskLoss(["epic-1"], "user-1");
+
+      await waitFor(() =>
+        expect(usePendingSandboxSendStore.getState().sends).toEqual({}),
+      );
+      expect(writes).toBe(2);
+      expect(useLandingDraftStore.getState().drafts).toMatchObject([
+        {
+          content: MESSAGE_CONTENT,
+          returnedSandbox: {
+            target: {
+              kind: "existing",
+              hostId: SANDBOX_HOST,
+              sandboxId: SANDBOX_ID,
+            },
+            clientRequestId: null,
+          },
+        },
+      ]);
+    } finally {
+      useLandingDraftStore.setState({ installLandingDraft: install });
+      restoreLocks();
+    }
+  });
 });
 
 describe("a send that named no model, ready on its sandbox", () => {
