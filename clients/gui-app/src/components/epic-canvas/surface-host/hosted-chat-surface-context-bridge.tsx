@@ -5,6 +5,7 @@ import { useEpicPermissionRole } from "@/lib/epic-selectors";
 import { renderTile } from "@/components/epic-canvas/renderers/tile-render";
 import {
   EpicSessionContext,
+  EpicSessionHostClientContext,
   getEpicSessionHandleHostId,
 } from "@/lib/registries/epic-session-registry";
 import { EpicViewTabContext } from "@/components/epic-canvas/view-tab-context";
@@ -32,47 +33,53 @@ export function HostedChatSurfaceContextBridge(props: {
   );
   return (
     <EpicSessionContext.Provider value={environment.services.openEpicHandle}>
-      <EpicViewTabContext.Provider value={environment.placement.viewTabId}>
-        <PaneSurfaceActivityContext.Provider
-          value={{
-            visible: environment.presentation.topLevelVisible,
-            focused: environment.presentation.topLevelFocused,
-          }}
-        >
-          <PaneVisibilityContext.Provider
-            value={environment.presentation.topLevelVisible}
+      {/* The session's reads (task hosts, collaborators) key on its host; a
+          hosted tile without this client keys them on none and never asks. */}
+      <EpicSessionHostClientContext.Provider
+        value={environment.services.hostClient}
+      >
+        <EpicViewTabContext.Provider value={environment.placement.viewTabId}>
+          <PaneSurfaceActivityContext.Provider
+            value={{
+              visible: environment.presentation.topLevelVisible,
+              focused: environment.presentation.topLevelFocused,
+            }}
           >
-            <BrowserSessionsHostProvider
-              hostId={hostId}
-              hostClient={environment.services.hostClient}
-              scope={{ kind: "epic", epicId: environment.placement.epicId }}
+            <PaneVisibilityContext.Provider
+              value={environment.presentation.topLevelVisible}
             >
-              <BrowserOpenSessionsProvider
-                epicId={environment.placement.epicId}
-                tabId={environment.placement.viewTabId}
+              <BrowserSessionsHostProvider
+                hostId={hostId}
+                hostClient={environment.services.hostClient}
+                scope={{ kind: "epic", epicId: environment.placement.epicId }}
               >
-                <PaneActivationFocusIntentContext.Provider
-                  value={environment.paneActivation.focusIntent}
+                <BrowserOpenSessionsProvider
+                  epicId={environment.placement.epicId}
+                  tabId={environment.placement.viewTabId}
                 >
-                  <PaneFocusProbeContext.Provider
-                    value={environment.services.isPaneFocusedNow}
+                  <PaneActivationFocusIntentContext.Provider
+                    value={environment.paneActivation.focusIntent}
                   >
-                    <PanePortalContainerContext.Provider
-                      value={environment.services.panePortalContainer}
+                    <PaneFocusProbeContext.Provider
+                      value={environment.services.isPaneFocusedNow}
                     >
-                      <TabBodySelectedContext.Provider
-                        value={environment.canvasActivity.tabSelected}
+                      <PanePortalContainerContext.Provider
+                        value={environment.services.panePortalContainer}
                       >
-                        <HostedChatSurfaceBody environment={environment} />
-                      </TabBodySelectedContext.Provider>
-                    </PanePortalContainerContext.Provider>
-                  </PaneFocusProbeContext.Provider>
-                </PaneActivationFocusIntentContext.Provider>
-              </BrowserOpenSessionsProvider>
-            </BrowserSessionsHostProvider>
-          </PaneVisibilityContext.Provider>
-        </PaneSurfaceActivityContext.Provider>
-      </EpicViewTabContext.Provider>
+                        <TabBodySelectedContext.Provider
+                          value={environment.canvasActivity.tabSelected}
+                        >
+                          <HostedChatSurfaceBody environment={environment} />
+                        </TabBodySelectedContext.Provider>
+                      </PanePortalContainerContext.Provider>
+                    </PaneFocusProbeContext.Provider>
+                  </PaneActivationFocusIntentContext.Provider>
+                </BrowserOpenSessionsProvider>
+              </BrowserSessionsHostProvider>
+            </PaneVisibilityContext.Provider>
+          </PaneSurfaceActivityContext.Provider>
+        </EpicViewTabContext.Provider>
+      </EpicSessionHostClientContext.Provider>
     </EpicSessionContext.Provider>
   );
 }
