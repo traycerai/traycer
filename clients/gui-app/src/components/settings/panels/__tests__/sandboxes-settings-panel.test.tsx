@@ -135,6 +135,7 @@ const mocks = vi.hoisted(() => ({
   report: { kind: "unknown" } as SandboxSessionReport,
   sessionFailed: false,
   resumePending: false,
+  realSessions: false,
   costs: null as UserSandboxCost | null,
   /** `GET /api/sandboxes/automation`; `null` while it has not answered. */
   automation: null as SandboxAutomationResponse | null,
@@ -225,7 +226,8 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "laptop",
 }));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
+  useHostClientForHostId: () =>
+    mocks.realSessions ? requireTeamHostClient() : null,
 }));
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => mocks.entry,
@@ -233,17 +235,31 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
   useSandboxControlUnavailableReason: () => null,
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
-  useSandboxSessionReport: () => ({
-    report: mocks.report,
-    failed: mocks.sessionFailed,
-  }),
-  useSandboxRowSessionReport: () => ({
-    report: mocks.report,
-    failed: mocks.sessionFailed,
-    resumePending: mocks.resumePending,
-  }),
-}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-session-report",
+  async (importOriginal) => {
+    const original =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-session-report")
+      >();
+    return {
+      useSandboxSessionReport: () => ({
+        report: mocks.report,
+        failed: mocks.sessionFailed,
+      }),
+      useSandboxRowSessionReport: (summary: SandboxSummary) => {
+        const real = original.useSandboxRowSessionReport(summary);
+        return mocks.realSessions
+          ? real
+          : {
+              report: mocks.report,
+              failed: mocks.sessionFailed,
+              resumePending: mocks.resumePending,
+            };
+      },
+    };
+  },
+);
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-automation-query",
   async (importOriginal) => {
@@ -423,6 +439,7 @@ function descriptor(
 
 /** What the host answers for the account's environments, item rows and rosters. */
 const host = {
+  status: vi.fn(() => new Promise<never>(() => undefined)),
   environments: [] as EnvironmentDescriptorV11[],
   items: {} as Record<string, EnvironmentConfigurationItem[]>,
   members: [] as Array<{
@@ -462,6 +479,7 @@ function defaultsItem(
 
 function hostPage(): TeamPageHarness {
   harness = mountTeamPage(poolSource("owner"), {
+    "host.status": host.status,
     "environment.list": () => ({ environments: host.environments }),
     "environment.configuration.items": (params) => ({
       items: host.items[params.environmentId] ?? [],
@@ -523,6 +541,8 @@ describe("<SandboxesSettingsPanel />", () => {
     mocks.report = { kind: "unknown" };
     mocks.sessionFailed = false;
     mocks.resumePending = false;
+    mocks.realSessions = false;
+    host.status.mockClear();
     mocks.costs = null;
     mocks.automation = null;
     mocks.realAutomation = false;
@@ -1961,6 +1981,62 @@ describe("<SandboxesSettingsPanel />", () => {
     mocks.sandboxes = [{ ...sandbox, state: "stopped" }];
     panel.rerender(<SandboxesSettingsPanel />);
     expect(clock()).toContain("Stopped");
+  });
+
+  it("yields an unanswered Resume to the lifecycle-confirmed unreachable line", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "u-viewer", username: "viewer" },
+    });
+    mocks.realSessions = true;
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    const resuming = row("sbx-resume-unreachable", { state: "resuming" });
+    const awake = { ...resuming, state: "awake" } satisfies SandboxSummary;
+    const online = sandboxHostEntry(resuming.hostId, null);
+    mocks.entry = online;
+    const confirmation = Promise.withResolvers<SandboxListFetchResult>();
+    binding.auth.listSandboxes
+      .mockResolvedValueOnce({
+        kind: "ok",
+        response: { sandboxes: [resuming] },
+      })
+      .mockResolvedValueOnce({ kind: "ok", response: { sandboxes: [awake] } })
+      .mockReturnValue(confirmation.promise);
+    const page = hostPage();
+    const panel = renderUi(<SandboxesSettingsPanel />);
+    const clock = (): string =>
+      within(rowOf(resuming.id)).getByTestId("sandboxes-row-clock").textContent;
+    await waitFor(() => expect(host.status).toHaveBeenCalledTimes(1));
+    expect(clock()).toBe("Resuming · pending");
+
+    await act(() =>
+      page.queryClient.invalidateQueries({
+        queryKey: sandboxQueryKeys.list(binding.auth, "u-viewer"),
+      }),
+    );
+    expect(clock()).toBe("Resuming · pending");
+
+    const offline: RemoteHostDirectoryEntry = {
+      ...online,
+      transportDialability: "not-dialable",
+      remoteStatus: { ...online.remoteStatus, connectivity: "offline" },
+    };
+    mocks.entry = offline;
+    panel.rerender(<SandboxesSettingsPanel />);
+    await waitFor(() =>
+      expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(3),
+    );
+    // Losing the host alone does not replace the pending lifecycle line.
+    expect(clock()).toBe("Resuming · pending");
+    await act(async () => {
+      confirmation.resolve({ kind: "ok", response: { sandboxes: [awake] } });
+      await confirmation.promise;
+    });
+    // host.status is still unanswered; the fresh lifecycle read owns this verdict.
+    await waitFor(() =>
+      expect(clock()).toBe("Running, but Traycer can't connect"),
+    );
   });
 
   it.each(["destroying", "awake", "destroyed"] as const)(

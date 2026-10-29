@@ -919,11 +919,11 @@ function SandboxListRow(props: {
 }): ReactNode {
   const { summary, configuration, viewerUserId } = props;
   const settings = useSandboxSettingsStatus(summary);
-  const settingsFailed = sandboxSettingsFailed(settings.data?.items ?? []);
+  const settingsItems = settings.data?.items ?? [];
+  const settingsFailed = sandboxSettingsFailed(settingsItems);
   const state = sandboxPublicState(summary);
   const awake = state === "awake";
   const sessions = useSandboxRowSessionReport(summary);
-  const resumePending = sessions.resumePending && !settingsFailed;
   const wake = useSandboxWakeString(summary);
   const now = useSampledNow();
   const unreachable = useSandboxRowUnreachable(
@@ -931,6 +931,8 @@ function SandboxListRow(props: {
     sessions.failed && sessions.report.kind !== "live",
     props.list,
   );
+  const resumePending =
+    sessions.resumePending && !settingsFailed && !unreachable;
   const reachability = {
     unreachable,
     lastContactAt: summary.lastActivityAt,
@@ -997,7 +999,7 @@ function SandboxListRow(props: {
               <p>
                 {sandboxSettingsStepsLine(
                   sandboxSettingsEvidence(
-                    settings.data?.items ?? [],
+                    settingsItems,
                     props.summary.guestConfigured,
                   ),
                 )}
