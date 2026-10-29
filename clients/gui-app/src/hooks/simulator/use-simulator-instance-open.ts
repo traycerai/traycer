@@ -11,6 +11,7 @@ import type {
   SimulatorInstanceChoice,
   SimulatorPlatform,
 } from "@traycer/protocol/host/simulator/schemas";
+import { INSTANCE_INVALIDATIONS } from "@/hooks/simulator/use-simulator-mutations";
 import { useHostBinding, useHostDirectory } from "@/lib/host";
 import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { toastFromHostError } from "@/lib/host-error-toast";
@@ -121,12 +122,11 @@ export function useSimulatorInstanceOpen(epicId: string): {
       }
     },
     onSettled: (_data, _error, variables) => {
-      void queryClient.invalidateQueries({
-        queryKey: hostQueryKeys.methodScope(
-          variables.hostId,
-          "simulator.instances",
-        ),
-      });
+      for (const method of INSTANCE_INVALIDATIONS) {
+        void queryClient.invalidateQueries({
+          queryKey: hostQueryKeys.methodScope(variables.hostId, method),
+        });
+      }
     },
     onError: (error) => {
       if (error instanceof HostRpcError)
