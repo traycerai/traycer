@@ -612,6 +612,37 @@ describe("a bot's trunk session, read whole", () => {
     await user.type(input, "Ship tonight");
     await waitFor(() => expect(bar.textContent).toContain("1 of 1"));
   });
+
+  it("finds a reply's next-steps prose as the card paints it", async () => {
+    const user = userEvent.setup();
+    mountOneSend(
+      sendCall({
+        blockId: "send-next-steps",
+        toolName: "mcp__traycer_a2a__traycer_reply",
+        fields: {
+          conversationId: CHANNEL_ID,
+          text: "<TRAYCER_NEXT_STEPS>\nChoose the release window.\n\n- [] Ship tonight\n</TRAYCER_NEXT_STEPS>",
+          repliesTo: POST_ID,
+        },
+        error: null,
+        at: 2_000,
+      }),
+    );
+    await settleLegendList();
+
+    const [reply] = sendCards();
+    expect(within(reply).getByTestId("bot-send-text").textContent).toContain(
+      "Choose the release window.",
+    );
+
+    act(() => {
+      useTileFindStore.getState().openForTile(`bot-session:${TRUNK_ID}`);
+    });
+    const bar = await within(view()).findByTestId("tile-find-bar");
+    const input = within(bar).getByRole("textbox", { name: "Find in tile" });
+    await user.type(input, "release window");
+    await waitFor(() => expect(bar.textContent).toContain("1 of 1"));
+  });
 });
 
 describe("a thread's session, read whole", () => {

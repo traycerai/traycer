@@ -164,8 +164,8 @@ export function buildChatFindRows(
 
 /**
  * What a bot's send card paints of what it posted: a question's text and
- * options, or a reply's or announcement's Markdown as rendered and a reply's
- * choices.
+ * options, or a reply's or announcement's text as its `TextSegment` paints
+ * it and a reply's choices.
  */
 function botSendSearchText(send: BotSend): string {
   if (send.kind === "ask") {
@@ -177,7 +177,19 @@ function botSendSearchText(send: BotSend): string {
   }
   const choices = send.kind === "reply" ? send.options : [];
   return normalizeSearchableText(
-    [markdownToChatSearchText(send.text), ...choices].join("\n"),
+    [...textSegmentSearchText(send.text, false), ...choices].join("\n"),
+  );
+}
+
+/** What `TextSegment` paints of Markdown: its next-step blocks' prose, and the rest as rendered. */
+function textSegmentSearchText(
+  markdown: string,
+  isStreaming: boolean,
+): ReadonlyArray<string> {
+  return parseTraycerNextStepsMarkdown(markdown, isStreaming).map((part) =>
+    markdownToChatSearchText(
+      part.kind === "markdown" ? part.markdown : part.prose,
+    ),
   );
 }
 
@@ -662,15 +674,7 @@ function interviewSearchUnits(
 function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
   switch (segment.kind) {
     case "text":
-      return parseTraycerNextStepsMarkdown(
-        segment.markdown,
-        segment.isStreaming,
-      ).flatMap((part) => {
-        if (part.kind === "markdown") {
-          return [markdownToChatSearchText(part.markdown)];
-        }
-        return [markdownToChatSearchText(part.prose)];
-      });
+      return textSegmentSearchText(segment.markdown, segment.isStreaming);
     case "reasoning":
       return reasoningSegmentSearchText(segment);
     case "tool":
