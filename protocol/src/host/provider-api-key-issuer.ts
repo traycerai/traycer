@@ -1,6 +1,10 @@
 import { PROVIDER_DISPLAY_NAMES, type ProviderId } from "./provider-schemas";
 
-/** Recognizable issuers, never a list of required formats for a target. */
+/**
+ * Recognizable issuers. Acceptance never requires a target's own shape —
+ * an unrecognized value, or a target absent here, both stay accepted — but
+ * a target's own row is read to name its shape in the refusal.
+ */
 const API_KEY_ISSUERS = [
   // https://platform.claude.com/docs/en/manage-claude/authentication
   { providerId: "claude-code", label: "Anthropic", prefix: "sk-ant-" },
