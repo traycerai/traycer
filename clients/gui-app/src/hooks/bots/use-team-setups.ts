@@ -40,6 +40,8 @@ const BOT_ONBOARDING_SETUP_VERSION = { major: 1, minor: 1 } as const;
  * read failed, or the host does not answer `setup` (no method, or a line
  * before it). Such a team sets up nothing, and a channel opened on its main
  * bot is neither shown nor taken for a deleted bot until `retry` reads it.
+ * `retryable` when a read failed, the one cause `retry` can change: a host
+ * that does not answer `setup` stays unresolved until its methods change.
  * `readAt` is when the newest read answered (0 before any): a team's setup
  * gone in it means the team has a bot, which a list read before it may not
  * carry yet.
@@ -52,6 +54,7 @@ export function useTeamSetups(input: {
   readonly settled: boolean;
   readonly setups: ReadonlyArray<TeamSetup>;
   readonly unresolved: boolean;
+  readonly retryable: boolean;
   readonly retry: () => void;
   readonly readAt: number;
 } {
@@ -88,10 +91,10 @@ export function useTeamSetups(input: {
     input.groups !== null &&
     support !== null &&
     (!answersSetup || reads.every((read) => read.status !== "pending"));
+  const readFailed =
+    answersSetup && reads.some((read) => read.status === "error");
   const unresolved =
-    settled &&
-    teams.length > 0 &&
-    (!answersSetup || reads.some((read) => read.status === "error"));
+    settled && teams.length > 0 && (!answersSetup || readFailed);
   const setups = teams.flatMap((team, index): TeamSetup[] => {
     const setup = reads[index]?.data?.setup ?? null;
     if (setup === null) return [];
@@ -113,6 +116,7 @@ export function useTeamSetups(input: {
     settled,
     setups: setups.length === 0 ? NO_SETUPS : setups,
     unresolved,
+    retryable: readFailed,
     retry,
     readAt: Math.max(0, ...reads.map((read) => read.dataUpdatedAt)),
   };

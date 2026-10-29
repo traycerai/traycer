@@ -23,8 +23,8 @@ export function botTabRouteOf(input: {
   readonly seenListed: boolean;
   /** Both lists hold an answer. */
   readonly listsAnswered: boolean;
-  /** The bot list's last read failed. */
-  readonly listFailed: boolean;
+  /** Either list's last read failed. */
+  readonly listsFailed: boolean;
   /** The team setup whose bot this is; `null` for none. */
   readonly setup: TeamSetup | null;
   /** The bot list is older than the tab or than the newest setup read. */
@@ -36,7 +36,7 @@ export function botTabRouteOf(input: {
   if (input.seenListed) return { kind: "bot" };
   if (!input.listsAnswered) return { kind: "unresolved" };
   if (input.setup !== null) return { kind: "setup", setup: input.setup };
-  if (input.listFailed) return { kind: "unresolved" };
+  if (input.listsFailed) return { kind: "unresolved" };
   if (input.listStale || !input.setupsSettled) return { kind: "connecting" };
   return input.setupsUnresolved ? { kind: "unresolved" } : { kind: "bot" };
 }

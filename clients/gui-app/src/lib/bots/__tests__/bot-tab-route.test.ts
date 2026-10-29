@@ -14,7 +14,7 @@ const SETTLED: RouteInput = {
   listsPending: false,
   seenListed: false,
   listsAnswered: true,
-  listFailed: false,
+  listsFailed: false,
   setup: null,
   listStale: false,
   setupsSettled: true,
@@ -23,10 +23,10 @@ const SETTLED: RouteInput = {
 
 describe("botTabRouteOf", () => {
   it.each<readonly [string, Partial<RouteInput>]>([
-    // The route takes one `listsAnswered` for both lists; `listFailed` is the
-    // bot list's own failure, so the two cold causes differ only by it.
-    ["the bot list never answered", { listsAnswered: false, listFailed: true }],
-    ["the environment list never answered", { listsAnswered: false }],
+    // The route takes one `listsAnswered` and one `listsFailed` for both
+    // lists; a cold failure leaves the lists unanswered, failed or not.
+    ["a list's first read failed", { listsAnswered: false, listsFailed: true }],
+    ["a list has no answer", { listsAnswered: false }],
   ])(
     "is unresolved when %s, though the setups are known and the list is fresh",
     (_name, override) => {

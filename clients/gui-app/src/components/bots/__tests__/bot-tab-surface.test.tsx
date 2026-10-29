@@ -95,8 +95,10 @@ const mocks = vi.hoisted(() => ({
      * it had kept, or none when `listedBotIds` is `undefined` (a cold read).
      */
     listFailed: false,
-    /** The environment list's status; `error` and `pending` carry no data. */
+    /** The environment list's status; `pending` carries no data. */
     environmentsStatus: "success",
+    /** A failed environment list kept `environments` from before; else none. */
+    environmentsKept: false,
     /** The bot list query's freshness, as TanStack reports it. */
     list: {
       dataUpdatedAt: 1_000,
@@ -272,7 +274,9 @@ vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ({
     status: mocks.state.environmentsStatus,
     data:
-      mocks.state.environmentsStatus === "success"
+      mocks.state.environmentsStatus === "success" ||
+      (mocks.state.environmentsStatus === "error" &&
+        mocks.state.environmentsKept)
         ? { environments: mocks.state.environments }
         : undefined,
     refetch: mocks.environmentsRefetch,
@@ -533,6 +537,7 @@ beforeEach(() => {
   mocks.state.readAt = 1_000;
   mocks.state.listFailed = false;
   mocks.state.environmentsStatus = "success";
+  mocks.state.environmentsKept = false;
   mocks.state.list = {
     dataUpdatedAt: 1_000,
     errorUpdatedAt: 0,
@@ -745,16 +750,50 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
   );
 
   /**
-   * The team's setup cannot be told from a deleted bot: the read failed, or
-   * the host does not answer it. The tab says so and offers to read again.
+   * The team's setup read failed, so it cannot be told from a deleted bot.
+   * The tab says so, and Retry reads the setup again, and only it.
+   */
+  it("shows the setup could not be read, never opening, subscribing to or closing the tab, when the setup read fails; Retry reads it again and the setup then shows", async () => {
+    mocks.reads["env-new"] = "fails";
+    const user = userEvent.setup();
+    const view = render(surfaceFor(SETUP_BOT_ID));
+
+    const notice = screen.getByTestId("bot-tab-error");
+    expect(notice.textContent).toContain("Couldn't load this channel.");
+    expect(screen.queryByTestId("team-setup-channel")).toBeNull();
+    expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(mocks.subscribed).toEqual([]);
+    expect(mocks.readRefetch).not.toHaveBeenCalled();
+    expect(
+      lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
+    ).not.toBeNull();
+
+    mocks.readRefetch.mockImplementation(() => {
+      mocks.reads["env-new"] = {
+        setup: { botId: SETUP_BOT_ID, title: "Tracy" },
+      };
+    });
+    await user.click(within(notice).getByRole("button", { name: "Retry" }));
+
+    expect(mocks.readRefetch).toHaveBeenCalled();
+    expect(mocks.listRefetch).not.toHaveBeenCalled();
+    expect(mocks.environmentsRefetch).not.toHaveBeenCalled();
+    view.rerender(surfaceFor(SETUP_BOT_ID));
+
+    expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
+    expect(screen.queryByTestId("bot-tab-error")).toBeNull();
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(mocks.subscribed).toEqual([]);
+  });
+
+  /**
+   * The host does not answer a team's setup, so the team cannot be told from
+   * a deleted bot. Nothing failed, so asking again would answer the same:
+   * the tab says the channel could not be loaded, with no Retry, and shows
+   * the setup once the host's methods answer it.
    */
   it.each<readonly [string, () => void]>([
-    [
-      "the setup read fails",
-      () => {
-        mocks.reads["env-new"] = "fails";
-      },
-    ],
     [
       "the host lacks bot.onboarding.read",
       () => {
@@ -768,14 +807,14 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       },
     ],
   ])(
-    "shows the setup could not be read, with Retry, and never opens, subscribes to or closes the tab, when %s",
-    async (_name, script) => {
+    "shows the channel could not be loaded, without Retry, and never opens, subscribes to or closes the tab, when %s",
+    (_name, script) => {
       script();
-      const user = userEvent.setup();
       const view = render(surfaceFor(SETUP_BOT_ID));
 
       const notice = screen.getByTestId("bot-tab-error");
       expect(notice.textContent).toContain("Couldn't load this channel.");
+      expect(within(notice).queryByRole("button")).toBeNull();
       expect(screen.queryByTestId("team-setup-channel")).toBeNull();
       expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
       expect(mocks.open).not.toHaveBeenCalled();
@@ -784,42 +823,58 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
       ).not.toBeNull();
 
-      // Retry reads again (the host now answers, where it did not); once the
-      // read answers the setup, its channel shows.
-      mocks.readRefetch.mockImplementation(() => {
-        mocks.reads["env-new"] = {
-          setup: { botId: SETUP_BOT_ID, title: "Tracy" },
-        };
-      });
       mocks.state.onboardingSupport = true;
       mocks.state.onboardingVersion = { major: 1, minor: 1 };
-      await user.click(within(notice).getByRole("button", { name: "Retry" }));
-
-      expect(mocks.listRefetch).not.toHaveBeenCalled();
-      expect(mocks.environmentsRefetch).not.toHaveBeenCalled();
       view.rerender(surfaceFor(SETUP_BOT_ID));
 
       expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
       expect(screen.queryByTestId("bot-tab-error")).toBeNull();
       expect(mocks.open).not.toHaveBeenCalled();
       expect(mocks.subscribed).toEqual([]);
-      expect(
-        lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
-      ).not.toBeNull();
     },
   );
 
-  it("re-reads a failed setup read on Retry", async () => {
-    mocks.reads["env-new"] = "fails";
+  /**
+   * The environment list's refresh failed and TanStack kept a list from
+   * before the team, so the team's setup is never read and the bot list,
+   * fresh, does not carry the bot. Only a list that was read says a bot is
+   * absent: the tab does not open the bot, which would find it gone and
+   * close the tab, and reads the environments again only on Retry.
+   */
+  it("shows the channel could not be loaded, never opening or closing the tab, when the environment list's refresh failed over a list from before the team; Retry reads it again and the setup then shows", async () => {
+    mocks.state.environments = [
+      { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
+    ];
+    mocks.state.environmentsStatus = "error";
+    mocks.state.environmentsKept = true;
     const user = userEvent.setup();
-    render(surfaceFor(SETUP_BOT_ID));
+    const view = render(surfaceFor(SETUP_BOT_ID));
 
-    expect(mocks.readRefetch).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Retry" }));
-
-    expect(mocks.readRefetch).toHaveBeenCalled();
-    expect(mocks.listRefetch).not.toHaveBeenCalled();
+    const notice = screen.getByTestId("bot-tab-error");
+    expect(notice.textContent).toContain("Couldn't load this channel.");
+    expect(screen.queryByTestId("team-setup-channel")).toBeNull();
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(mocks.subscribed).toEqual([]);
     expect(mocks.environmentsRefetch).not.toHaveBeenCalled();
+    expect(
+      lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
+    ).not.toBeNull();
+
+    mocks.environmentsRefetch.mockImplementation(() => {
+      setUpNewTeam();
+      mocks.state.environmentsStatus = "success";
+    });
+    await user.click(within(notice).getByRole("button", { name: "Retry" }));
+
+    expect(mocks.environmentsRefetch).toHaveBeenCalledTimes(1);
+    expect(mocks.listRefetch).not.toHaveBeenCalled();
+    view.rerender(surfaceFor(SETUP_BOT_ID));
+
+    expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(
+      lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
+    ).not.toBeNull();
   });
 
   /**

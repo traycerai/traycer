@@ -155,8 +155,8 @@ export function BotTabSurface(props: {
  * what is absent: while either list has not answered or its last read
  * failed, or a team with no bot cannot be told apart (`unresolved`: its
  * setup read failed, or the host does not answer it), the tab says the
- * channel could not be loaded and offers to read what failed again
- * (`botTabRouteOf`).
+ * channel could not be loaded and, when a read failed, offers to read it
+ * again (`botTabRouteOf`).
  */
 function BotTabRoute(props: {
   readonly botId: string;
@@ -186,22 +186,25 @@ function BotTabRoute(props: {
     ? teamSetups.setups.find((entry) => entry.botId === botId)
     : undefined;
   // A refresh that failed keeps the list it had: it is asked again only on
-  // Retry, never in a loop.
-  const listFailed = botList.status === "error";
+  // Retry, never in a loop. A kept environment list may predate a team, whose
+  // setup would then go unread, so its failure is the bot list's too.
+  const botListFailed = botList.status === "error";
+  const environmentsFailed = environments.status === "error";
+  const listsFailed = botListFailed || environmentsFailed;
   const listStale =
     unlisted &&
     setup === undefined &&
     (!botList.isFetchedAfterMount || botList.dataUpdatedAt < teamSetups.readAt);
   const { isFetching: listFetching, refetch: refetchList } = botList;
   useEffect(() => {
-    if (listStale && !listFailed && !listFetching) void refetchList();
-  }, [listFailed, listFetching, listStale, refetchList]);
+    if (listStale && !listsFailed && !listFetching) void refetchList();
+  }, [listsFailed, listFetching, listStale, refetchList]);
   const route = botTabRouteOf({
     listsPending:
       botList.status === "pending" || environments.status === "pending",
     seenListed: !unlisted,
     listsAnswered: groups !== null,
-    listFailed,
+    listsFailed,
     setup: setup ?? null,
     listStale,
     setupsSettled: teamSetups.settled,
@@ -215,11 +218,14 @@ function BotTabRoute(props: {
     return (
       <ErrorNotice
         text="Couldn't load this channel."
-        onRetry={() => {
-          if (listFailed) void refetchList();
-          if (environments.status === "error") void environments.refetch();
-          teamSetups.retry();
-        }}
+        onRetry={retryFailedReads([
+          { failed: botListFailed, retry: () => void refetchList() },
+          {
+            failed: environmentsFailed,
+            retry: () => void environments.refetch(),
+          },
+          { failed: teamSetups.retryable, retry: teamSetups.retry },
+        ])}
         className="m-4"
       />
     );
@@ -741,9 +747,28 @@ function BotTabConnecting(): ReactNode {
   );
 }
 
+/**
+ * Reads again each read that failed, or `null` when none did: a host that
+ * does not answer a team's setup answers the same however often it is asked,
+ * so it is offered no Retry.
+ */
+function retryFailedReads(
+  reads: ReadonlyArray<{
+    readonly failed: boolean;
+    readonly retry: () => void;
+  }>,
+): (() => void) | null {
+  const failed = reads.filter((read) => read.failed);
+  if (failed.length === 0) return null;
+  return () => {
+    for (const read of failed) read.retry();
+  };
+}
+
+/** An error, with Retry unless `onRetry` is `null`: nothing to ask again. */
 function ErrorNotice(props: {
   readonly text: string;
-  readonly onRetry: () => void;
+  readonly onRetry: (() => void) | null;
   readonly className: string;
 }): ReactNode {
   return (
@@ -756,9 +781,16 @@ function ErrorNotice(props: {
       )}
     >
       <span>{props.text}</span>
-      <Button type="button" variant="outline" size="sm" onClick={props.onRetry}>
-        Retry
-      </Button>
+      {props.onRetry === null ? null : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={props.onRetry}
+        >
+          Retry
+        </Button>
+      )}
     </div>
   );
 }
