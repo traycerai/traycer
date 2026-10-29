@@ -57,10 +57,12 @@ interface OpenVariables {
  * instances: the + picker, the palette and the mobile switcher.
  *
  * On a `@1.1` host the open is sent here, before any tile exists, with the
- * instance and a `requestId` that keys the panel's pending row. The answer,
- * or the sessions stream's session carrying that `requestId`, places the tile
- * (see `SimulatorCatalogProvider`). An answer that never arrives is not a
- * failure: the stream says how it ended.
+ * instance and a `requestId` the host names it by. The answer, or the
+ * sessions stream's session carrying that `requestId`, places the tile (see
+ * `SimulatorCatalogProvider`). An answer that never arrives is not a
+ * failure: the stream says how it ended. A repeated click is its own open,
+ * answered in its own right; the panel's pending row is keyed by what the
+ * open NAMED, so the two share one (see `buildSimulatorListGroups`).
  *
  * A `@1.0` host ignores `instance`, so Boot another is refused there rather
  * than silently sharing the device, and Boot and Watch keep today's path:
