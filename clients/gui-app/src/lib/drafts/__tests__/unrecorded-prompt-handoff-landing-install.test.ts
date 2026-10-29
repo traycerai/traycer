@@ -31,6 +31,7 @@ import {
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 import { pngBytesOfSize } from "@/lib/composer/__tests__/image-fixtures";
 import {
+  LANDING_DRAFT_PERSIST_KEY,
   useLandingDraftStore,
   type LandingDraftTab,
 } from "@/stores/home/landing-draft-store";
@@ -188,6 +189,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
       readHashImage,
       stillCurrent: () => true,
       returnedSandbox: null,
+      durability: "in-memory",
     });
 
     const draft = installed(draftId);
@@ -217,6 +219,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
       readHashImage,
       stillCurrent: () => true,
       returnedSandbox: null,
+      durability: "in-memory",
     });
 
     const rendered = contentText(installed(draftId).content);
@@ -244,6 +247,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
       readHashImage,
       stillCurrent: () => true,
       returnedSandbox: null,
+      durability: "in-memory",
     });
 
     const rendered = contentText(installed(draftId).content);
@@ -270,6 +274,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
       readHashImage,
       stillCurrent: () => true,
       returnedSandbox: null,
+      durability: "in-memory",
     });
 
     await vi.advanceTimersByTimeAsync(HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 50);
@@ -300,6 +305,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
       readHashImage,
       stillCurrent: () => true,
       returnedSandbox: null,
+      durability: "in-memory",
     });
 
     const draft = installed(draftId);
@@ -337,6 +343,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
       readHashImage,
       stillCurrent: () => true,
       returnedSandbox: null,
+      durability: "in-memory",
     });
 
     const rendered = contentText(installed(draftId).content);
@@ -370,6 +377,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
       readHashImage,
       stillCurrent: () => true,
       returnedSandbox: null,
+      durability: "in-memory",
     });
 
     await vi.advanceTimersByTimeAsync(HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 50);
@@ -422,6 +430,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
       readHashImage,
       stillCurrent: () => current,
       returnedSandbox: null,
+      durability: "in-memory",
     });
 
     expect(draftId).toBeNull();
@@ -442,6 +451,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
       readHashImage: () => Promise.resolve(null),
       stillCurrent: () => true,
       returnedSandbox: null,
+      durability: "saved",
     });
 
     expect(draftId).toBe("recovered-draft-1");
@@ -468,6 +478,7 @@ describe("unrecorded prompt handoff - landing install round trip (R5F1)", () => 
         readHashImage: () => Promise.resolve(null),
         stillCurrent: () => true,
         returnedSandbox: null,
+        durability: "saved",
       });
 
     const first = await run();
@@ -534,6 +545,7 @@ describe("unrecorded prompt handoff - a returned sandbox rides in the install", 
         }),
       stillCurrent: () => true,
       returnedSandbox: RETURNED,
+      durability: "saved",
     });
 
     await vi.advanceTimersByTimeAsync(HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 50);
@@ -568,6 +580,7 @@ describe("unrecorded prompt handoff - a returned sandbox rides in the install", 
           Promise.resolve(candidate === hash ? bytes : null),
         stillCurrent: () => true,
         returnedSandbox: RETURNED,
+        durability: "saved",
       });
 
       expect(contentText(installed(draftId).content)).toContain(
@@ -579,6 +592,100 @@ describe("unrecorded prompt handoff - a returned sandbox rides in the install", 
       });
     } finally {
       first.stop();
+      full?.release();
+    }
+  });
+});
+
+/**
+ * An install that is not saved is not an install. A draft write the browser
+ * refuses fails the handoff on every path, text-only fallback included, and
+ * leaves no row behind for a later attempt to mistake for a saved one.
+ */
+describe("unrecorded prompt handoff - a refused draft write", () => {
+  const RECOVERY = { draftId: "refused-draft", settings: PICKED_SETTINGS };
+  let restoreWrites: () => void = () => undefined;
+
+  beforeEach(() => {
+    const write = localStorage.setItem.bind(localStorage);
+    const refuse = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation((name, value) => {
+        if (name === LANDING_DRAFT_PERSIST_KEY)
+          throw new DOMException("No room", "QuotaExceededError");
+        write(name, value);
+      });
+    restoreWrites = () => refuse.mockRestore();
+  });
+
+  afterEach(() => {
+    restoreWrites();
+  });
+
+  it("rejects when the imported draft and its text-only fallback cannot be saved", async () => {
+    const bytes = pngBytesOfSize(32);
+    const hash = sourceHash("imported");
+
+    await expect(
+      buildUnrecordedPromptHandoff({
+        recovery: RECOVERY,
+        content: hashOnlyDoc(hash, "words with a picture", bytes.byteLength),
+        browserAnnotations: [],
+        reason: REASON,
+        readHashImage: (candidate) =>
+          Promise.resolve(candidate === hash ? bytes : null),
+        stillCurrent: () => true,
+        returnedSandbox: null,
+        durability: "saved",
+      }),
+    ).rejects.toThrow("No room");
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+  });
+
+  it("rejects when a timed-out read's text-only draft cannot be saved", async () => {
+    vi.useFakeTimers();
+    const pending = buildUnrecordedPromptHandoff({
+      recovery: RECOVERY,
+      content: hashOnlyDoc(sourceHash("stalled"), "words before a stall", 32),
+      browserAnnotations: [],
+      reason: REASON,
+      readHashImage: () =>
+        new Promise<Uint8Array<ArrayBuffer> | null>(() => {
+          // never settles
+        }),
+      stillCurrent: () => true,
+      returnedSandbox: null,
+      durability: "saved",
+    });
+    const rejected = expect(pending).rejects.toThrow("No room");
+
+    await vi.advanceTimersByTimeAsync(HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS + 50);
+    await rejected;
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+  });
+
+  it("rejects when a capacity refusal's text-only draft cannot be saved", async () => {
+    const bytes = pngBytesOfSize(32);
+    const hash = sourceHash("crowded");
+    const full = tryReserveLandingImageResidency([
+      { hash: sourceHash("probe"), bytes: LANDING_IMAGE_BUDGET_BYTES },
+    ]);
+    try {
+      await expect(
+        buildUnrecordedPromptHandoff({
+          recovery: RECOVERY,
+          content: hashOnlyDoc(hash, "words over budget", bytes.byteLength),
+          browserAnnotations: [],
+          reason: REASON,
+          readHashImage: (candidate) =>
+            Promise.resolve(candidate === hash ? bytes : null),
+          stillCurrent: () => true,
+          returnedSandbox: null,
+          durability: "saved",
+        }),
+      ).rejects.toThrow("No room");
+      expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    } finally {
       full?.release();
     }
   });

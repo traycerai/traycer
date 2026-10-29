@@ -163,6 +163,15 @@ export interface LandingDraftWorkspaceSnapshot {
   readonly primaryPath: string | null;
 }
 
+/**
+ * What an install must be to count, when storage refuses its row. `"saved"`:
+ * the row is taken back out and the install throws - for a caller that keeps
+ * a saved source to retry from until the row is saved. `"in-memory"`: the row
+ * stays, readable until the window closes, and the install throws - for a
+ * caller whose source is already gone, so that row is the last copy there is.
+ */
+export type LandingDraftDurability = "saved" | "in-memory";
+
 /** The row {@link LandingDraftStoreState.installLandingDraft} writes. */
 export interface InstallLandingDraftInput {
   readonly id: string;
@@ -179,6 +188,7 @@ export interface InstallLandingDraftInput {
    * stamps it; a stored record keeps its own.
    */
   readonly returnedSandbox: ReturnedSandbox | StoredReturnedSandbox | null;
+  readonly durability: LandingDraftDurability;
 }
 
 interface LandingDraftStoreState {
@@ -213,6 +223,8 @@ interface LandingDraftStoreState {
    * touching `activeDraftId` - the stash migration installs many rows at
    * once and Undo restores one the user is not looking at, so neither may
    * hijack the composer. False when `id` is retired or already present.
+   * Throws when storage refuses the row; `durability` says whether the row
+   * stays in memory.
    *
    * Deliberately not `createDraftWithId` + `closeDraft`: that pair sets and
    * then clears the active draft, and fires an image reconcile between the
@@ -752,10 +764,28 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
               ? null
               : storeReturnedSandbox(input.returnedSandbox),
         };
-        // Partial set: `activeDraftId` is deliberately left where it is.
-        set((state) => ({
-          drafts: [...uniqueLandingDrafts(state.drafts), next],
-        }));
+        const before = get().drafts;
+        try {
+          // Partial set: `activeDraftId` is deliberately left where it is.
+          set((state) => ({
+            drafts: [...uniqueLandingDrafts(state.drafts), next],
+          }));
+        } catch (error: unknown) {
+          // persist sets memory first, then writes storage, and a refused
+          // write throws out of `set` with the row already in memory. For a
+          // saved install, take it back out: a row only memory holds is gone
+          // on reload, and a caller that saw it would end the only copy that
+          // is saved.
+          if (input.durability === "saved") {
+            try {
+              set({ drafts: before });
+            } catch {
+              // Storage still holds the snapshot from before the refused
+              // write.
+            }
+          }
+          throw error;
+        }
         notifyDraftLocalEdit(input.id);
         scheduleLandingImageReconcile();
         return true;

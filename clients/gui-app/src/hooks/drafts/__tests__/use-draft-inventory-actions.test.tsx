@@ -116,6 +116,7 @@ function installLandingDraft(
     workspace: emptyLandingDraftWorkspaceSnapshot(),
     closed: false,
     returnedSandbox: null,
+    durability: "saved",
     ...overrides,
   });
 }

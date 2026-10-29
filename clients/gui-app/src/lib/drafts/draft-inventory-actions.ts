@@ -248,6 +248,8 @@ function restoreLandingDraft(draft: LandingDraftTab): void {
     closed: draft.closed,
     // Stored: it keeps the account it was returned under.
     returnedSandbox: draft.returnedSandbox,
+    // The deleted row is gone: memory is the last copy of it.
+    durability: "in-memory",
   });
 }
 

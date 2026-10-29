@@ -802,6 +802,8 @@ async function returnBoundMessage(
       readHashImage: (hash) => resolveDraftImageBytes(hash, target),
       stillCurrent: () => boundReturnCurrent(send),
       returnedSandbox: destination,
+      // The pending copy stays until the draft is saved.
+      durability: "saved",
     });
     // The pending copy and its image roots stay until the reads settle.
     await outcome.readsSettled;
@@ -867,6 +869,7 @@ function installReturnedLandingDraft(
     workspace: emptyLandingDraftWorkspaceSnapshot(),
     closed: true,
     returnedSandbox: destination,
+    durability: "saved",
   });
 }
 
