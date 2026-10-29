@@ -1275,11 +1275,11 @@ export function HostOverviewPanel(props: {
     // without this the one shot is spent on a dialog closed in the same pass
     // for a retirement that ends a few seconds later.
     //
-    // The catalog's FIRST answer too (`awaitingFirstAnswer`): until it lands
-    // the region is un-retired only because it has not asked, and the check
-    // is a CLI spawn that always answers after the status read that put the
-    // park on screen - so without this the shot fires in that window and the
-    // first `cli-unavailable` closes it, the exact sequence above.
+    // An outstanding catalog answer too (`awaitingAnswer`): until it lands
+    // the region is un-retired only because it has not heard back, and the
+    // check is a CLI spawn that always answers after the status read that put
+    // the park on screen - so without this the shot fires in that window and
+    // a `cli-unavailable` answer closes it, the exact sequence above.
     //
     // A foreground run on this machine too: the rule after the restart
     // confirm's closes any offer opened under one, so firing now would spend
@@ -1287,7 +1287,7 @@ export function HostOverviewPanel(props: {
     gateArmed:
       anyPending ||
       updates.degrade !== null ||
-      updates.awaitingFirstAnswer ||
+      updates.awaitingAnswer ||
       restartDegrade === "terminal-run",
     supported: updates.activate !== null,
     dispatch: updateDispatch,
@@ -1514,10 +1514,20 @@ export function HostOverviewPanel(props: {
   // page-wide one are the same two the legacy handlers take, for the same
   // reasons — an offer whose confirm the render-time rules would close in the
   // same commit is not a control.
+  // A manual open of the ACTIVATE offer spends the auto-open's one shot too.
+  // The auto-open can be on hold while this control is live (a catalog answer
+  // in flight, `awaitingAnswer`), and a shot still unspent when the hold ends
+  // would replace the dialog the person opened, or bring back one they had
+  // just deferred.
   const openBoundOffer =
     attemptControl === null || updates.degrade !== null || anyPending
       ? null
-      : () => setBoundOffer(attemptControl);
+      : () => {
+          if (attemptControl.intent === "activate") {
+            setAutoOpenedFor(attemptControl.attemptId);
+          }
+          setBoundOffer(attemptControl);
+        };
   // The card's force handler for a PARK, hoisted because the sentence beside
   // the button now has to know whether the button is there. It was this exact
   // expression inline; naming it is what keeps the two from disagreeing.
