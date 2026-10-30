@@ -72,6 +72,95 @@ function loadUpdateOneItemSize(
   };
 }
 
+interface AnnouncedMove {
+  readonly from: number;
+  readonly fromEnd: number;
+  readonly to: number;
+  readonly intended: number;
+}
+
+interface ClampingScroller {
+  scrollHeight: number;
+  clientHeight: number;
+  scrollTop: number;
+  dispatchEvent: (event: CustomEvent<AnnouncedMove>) => boolean;
+}
+
+/**
+ * A scroll node whose `scrollTop` jsdom does not clamp on its own: reading it
+ * back clamps to the live range, as a real scroller's does the instant a
+ * write (the test's own `write`, standing in for the pad restore) shrinks
+ * `scrollHeight` out from under the stored offset.
+ */
+function makeClampingScroller(initial: {
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+}): { scroller: ClampingScroller; announcements: AnnouncedMove[] } {
+  let storedScrollTop = initial.scrollTop;
+  const announcements: AnnouncedMove[] = [];
+  const scroller: ClampingScroller = {
+    scrollHeight: initial.scrollHeight,
+    clientHeight: initial.clientHeight,
+    get scrollTop(): number {
+      return Math.max(
+        0,
+        Math.min(
+          storedScrollTop,
+          scroller.scrollHeight - scroller.clientHeight,
+        ),
+      );
+    },
+    set scrollTop(value: number) {
+      storedScrollTop = value;
+    },
+    dispatchEvent(event: CustomEvent<AnnouncedMove>): boolean {
+      announcements.push(event.detail);
+      return true;
+    },
+  };
+  return { scroller, announcements };
+}
+
+/**
+ * `moveScrollerByRangeAnnounced` of the installed build, evaluated on its
+ * own along with the two helpers it calls (`announcesScrollerMoves`,
+ * `announceScrollerMove`) and the unrelated `moveScrollerAnnounced` the same
+ * slice carries - the function is not exported, so there is nothing to
+ * import. A bare vm context defines no DOM globals, so `CustomEvent` is
+ * supplied as a factory argument; `window` is left undefined, which is what
+ * lets `announcesScrollerMoves` see the fake scroller as "not window", as it
+ * would in a browser.
+ */
+function loadMoveScrollerByRangeAnnounced(
+  source: string,
+): (target: ClampingScroller, write: () => void) => void {
+  const start = source.indexOf("function announcesScrollerMoves(");
+  const end = source.indexOf("function scrollAdjustBy(", start);
+  if (start === -1 || end === -1) {
+    throw new Error(
+      "the announced-move helpers are not in the installed build",
+    );
+  }
+  const body = source.slice(start, end);
+  const factory: unknown = runInNewContext(
+    `(function (CustomEvent) { ${body}\n return moveScrollerByRangeAnnounced; })`,
+    {},
+  );
+  if (typeof factory !== "function") throw new Error("no factory");
+  const moveScrollerByRangeAnnounced: unknown = Reflect.apply(
+    factory,
+    undefined,
+    [CustomEvent],
+  );
+  if (typeof moveScrollerByRangeAnnounced !== "function") {
+    throw new Error("no moveScrollerByRangeAnnounced");
+  }
+  return (target, write) => {
+    Reflect.apply(moveScrollerByRangeAnnounced, undefined, [target, write]);
+  };
+}
+
 /** A list of two rows, `a` and `k`, whose `k` changes item type as the chat's
  *  transcript does when a placeholder hydrates. */
 function twoRowList() {
@@ -237,6 +326,63 @@ describe("@legendapp/list web patch", () => {
       );
       expect(source).toContain(
         "        clearBootstrapInitialScrollSession(state);\n        finishInitialScroll(ctx, {\n          recalculateItems: true,\n          resolvedOffset: getObservedBootstrapInitialScrollOffset(state)\n        });\n      }\n      return true;",
+      );
+    });
+
+    // The end pad's rAF restore shrinks the scroll range it grew, and the
+    // browser clamps the view down with it in the same layout the restore's
+    // own forced read lands in. Left unannounced, that clamp reads to the
+    // chat's follow latch as the reader scrolling up. The announced helper is
+    // what makes it land through the same channel as every other write of the
+    // list's.
+    it(`${file} announces a write that clamps the view, and nothing for a write that leaves it reachable`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      const moveScrollerByRangeAnnounced =
+        loadMoveScrollerByRangeAnnounced(source);
+
+      // The range shrinks under the view: the browser clamps the stored 1000
+      // down to the new end, 900, and that clamp is announced.
+      const shrinks = makeClampingScroller({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      moveScrollerByRangeAnnounced(shrinks.scroller, () => {
+        shrinks.scroller.scrollHeight = 1400;
+      });
+      expect(shrinks.announcements).toEqual([
+        { from: 1000, fromEnd: 1000, to: 900, intended: 900 },
+      ]);
+
+      // The common restore: the range shrinks by as much, but the content has
+      // grown past the view since the pad went up, so the end stays above it
+      // and the view never moves. Nothing is announced.
+      const staysReachable = makeClampingScroller({
+        scrollTop: 500,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      moveScrollerByRangeAnnounced(staysReachable.scroller, () => {
+        staysReachable.scroller.scrollHeight = 1400;
+      });
+      expect(staysReachable.announcements).toEqual([]);
+    });
+
+    // The restore cannot be sliced out of the build on its own (it closes
+    // over `resetPaddingRafRef`/`contentNode`/`axis`), so this pins the call
+    // site instead: the restore's write goes through the announced helper,
+    // forces the same layout read the pad's own growth does, and the bare
+    // unannounced assignment the patch replaced is gone.
+    it(`${file} routes the pad restore through the announced write, forcing the clamp into this frame`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        "moveScrollerByRangeAnnounced(el, () => {\n                contentNode.style[axis.paddingEndProp] = previousPaddingEnd;",
+      );
+      expect(source).toContain(
+        "void contentNode.offsetHeight;\n              });\n            });",
+      );
+      expect(source).not.toContain(
+        "contentNode.style[axis.paddingEndProp] = previousPaddingEnd;\n            });",
       );
     });
 
