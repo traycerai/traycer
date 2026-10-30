@@ -359,6 +359,7 @@ test("a narrow desktop composer keeps Ultracode beside the harness glyph", async
 
 for (const [style, display, width] of [
   ["icon-text", "", 320],
+  ["icon-text", "&display=responsive", 400],
   ["icon", "&display=responsive", 400],
 ] as const) {
   test(`the ${style} Ultracode style keeps its mark inside the chip at ${String(width)}px (${display || "model-only"})`, async ({
