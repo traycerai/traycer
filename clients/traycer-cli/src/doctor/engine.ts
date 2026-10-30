@@ -1052,7 +1052,9 @@ async function serviceDefinitionIssues(
   const state: ServiceDefinitionState = await refresher.inspect(
     serviceLabelFor(environment),
   );
-  if (state.kind === "stale") {
+  // A stale stop budget does not change how the host is launched, so it does
+  // not affect parking; the supervisor's own start refreshes it.
+  if (state.kind === "stale" && state.form !== "exit-timeout") {
     return [
       {
         code: DOCTOR_ISSUE_CODES.HOST_SERVICE_DEFINITION_STALE,
