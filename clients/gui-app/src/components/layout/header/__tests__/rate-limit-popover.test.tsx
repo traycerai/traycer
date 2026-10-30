@@ -4024,6 +4024,7 @@ describe("<RateLimitPopover /> limited profiles", () => {
       hidden: false,
       state: "live",
       reason: null,
+      chatCredential: null,
       fetching: false,
       retryOffered: false,
       windows: [window],

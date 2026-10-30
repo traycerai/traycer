@@ -64,6 +64,7 @@ function segmentFixture(overrides: {
     hidden: false,
     state: overrides.state ?? "live",
     reason: overrides.reason ?? null,
+    chatCredential: null,
     fetching: overrides.fetching ?? false,
     retryOffered: overrides.retryOffered ?? false,
     windows,

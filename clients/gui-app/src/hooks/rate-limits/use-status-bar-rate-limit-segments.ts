@@ -3,6 +3,7 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   ProviderRateLimits,
+  RateLimitChatCredential,
   RateLimitUnavailableReason,
 } from "@traycer/protocol/host";
 import {
@@ -158,6 +159,12 @@ export interface StatusBarProviderSegmentModel {
    * report and gets the generic sentence.
    */
   readonly reason: RateLimitUnavailableReason | null;
+  /**
+   * The credential chats on this account use instead of the plan, when an
+   * `unavailable` segment's provider named one: the tooltip says that in
+   * place of the reason. `null` everywhere else.
+   */
+  readonly chatCredential: RateLimitChatCredential | null;
   /**
    * Whether a read of this account's usage is in flight right now, whoever
    * started it. Only the `transient` state draws it: that is the state which
@@ -475,6 +482,7 @@ function segmentState(
 ): {
   readonly state: StatusBarProviderSegmentState;
   readonly reason: RateLimitUnavailableReason | null;
+  readonly chatCredential: RateLimitChatCredential | null;
 } {
   if (rateLimits === null) {
     // A read that REJECTED - the transport gave up, the frame budget ran out -
@@ -502,8 +510,8 @@ function segmentState(
     // account, so it carries the episode over, and a transient failure after
     // it is still owed that run's one re-read.
     return envelope === null && reads.erroredEver && reads.readable
-      ? { state: "transient", reason: null }
-      : { state: "cold", reason: null };
+      ? { state: "transient", reason: null, chatCredential: null }
+      : { state: "cold", reason: null, chatCredential: null };
   }
   if (!rateLimits.available) {
     // A transient failure only REACHES this branch with nothing retained:
@@ -522,18 +530,21 @@ function segmentState(
           ? "transient"
           : "unavailable",
       reason: rateLimits.reason,
+      chatCredential: rateLimits.chatCredential ?? null,
     };
   }
   const degradedReason = envelopeDegradedReason(envelope);
   if (degradedReason !== null) {
-    return { state: "degraded", reason: degradedReason };
+    return { state: "degraded", reason: degradedReason, chatCredential: null };
   }
   // A query that threw retains its data too, and the strip has to say so - but
   // a thrown fetch carries no wire reason, so the tooltip falls back to the
   // generic sentence rather than inventing one. NOW, not ever: a reading that
   // arrived after the error is not degraded by it.
-  if (reads.erroredNow) return { state: "degraded", reason: null };
-  return { state: "live", reason: null };
+  if (reads.erroredNow) {
+    return { state: "degraded", reason: null, chatCredential: null };
+  }
+  return { state: "live", reason: null, chatCredential: null };
 }
 
 function liveWindows(
@@ -699,7 +710,7 @@ function toSegments(
       ),
     );
     const reported = context.sample
-      ? { state: "live" as const, reason: null }
+      ? { state: "live" as const, reason: null, chatCredential: null }
       : segmentState(retained, envelope, {
           erroredNow: query.isError,
           erroredEver: query.isError || query.errorUpdateCount > 0,

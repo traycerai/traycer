@@ -9,6 +9,7 @@ import type {
   AntigravityRateLimitWindow,
   ProviderRateLimits,
   ProviderRateLimitWindow,
+  RateLimitChatCredential,
   RateLimitUnavailableReason,
 } from "@traycer/protocol/host";
 import {
@@ -42,6 +43,7 @@ import {
   namedCadenceForDuration,
 } from "@/lib/rate-limits/window-duration-cadence";
 import {
+  formatChatCredentialNotice,
   formatUnavailableReason,
   resolveProviderRateLimitViewState,
   titleCaseFromToken,
@@ -1663,6 +1665,9 @@ export function ProviderRateLimitBody(
     );
   }
   const data = state.data;
+  if (!data.available && data.chatCredential !== undefined) {
+    return <ChatCredentialNotice credential={data.chatCredential} />;
+  }
   if (!data.available) {
     return (
       <div className="flex flex-col items-start gap-1.5">
@@ -1700,6 +1705,32 @@ export function ProviderRateLimitBody(
       />
       <div className="opacity-60">{detail}</div>
     </div>
+  );
+}
+
+/**
+ * Says which credential chats on this account use instead of the plan, in
+ * place of "Usage limits unavailable". Shared by the Settings card and the
+ * header popover so both say the same thing.
+ */
+export function ChatCredentialNotice({
+  credential,
+}: {
+  readonly credential: RateLimitChatCredential;
+}): ReactNode {
+  return (
+    <p className="rounded-md border border-warning/30 bg-warning/10 px-2 py-1.5 text-ui-xs text-warning-foreground">
+      {/* A notice's runs never repeat, so each run's text is its key. */}
+      {formatChatCredentialNotice(credential).map((part) =>
+        part.code ? (
+          <code key={part.text} className="font-mono">
+            {part.text}
+          </code>
+        ) : (
+          <span key={part.text}>{part.text}</span>
+        ),
+      )}
+    </p>
   );
 }
 

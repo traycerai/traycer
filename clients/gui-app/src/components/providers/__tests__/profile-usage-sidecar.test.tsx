@@ -137,6 +137,7 @@ describe("ProfileUsageSidecar states", () => {
           kind: "unavailable",
           severity: "unknown",
           reason: "fetch_failed",
+          chatCredential: null,
           compactWindow: null,
           windows: [],
           checkedAt: null,
