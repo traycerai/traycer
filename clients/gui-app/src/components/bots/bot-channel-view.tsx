@@ -30,7 +30,7 @@ import {
   type QuestionAnswerSend,
 } from "@/components/bots/bot-chat-transcript";
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
-import { ChannelPost } from "@/components/bots/bot-channel-post";
+import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
 import { threadOpenOf } from "@/lib/bots/bot-trunk-model";
 import {
   BotMemoryPanel,
@@ -524,30 +524,44 @@ export function BotChannelView(props: {
       ? null
       : (threadsByPost.get(openThreadPostId) ?? null);
   const { refetch: refetchThreads } = threadList;
-  const panelThreadFor = useCallback(
-    (sendable: boolean): BotThreadPanelThread => {
-      const retry = threadList.isError ? () => void refetchThreads() : null;
-      // A listed thread, one its post opened and a box that starts one keep
-      // what the list last said, the box and its draft through a failed read.
-      if (openThread !== null) {
-        return { kind: "listed", thread: openThread, retry, sendable };
-      }
-      if (open !== null && open.sent !== null) {
-        return {
-          kind: "posted",
-          threadId: open.sent.threadId,
-          retry,
-          sendable,
-        };
-      }
-      if (open?.announcement === true) {
-        return { kind: "unopened", retry, sendable };
-      }
-      if (retry !== null) return { kind: "failed", retry };
-      return { kind: "pending" };
-    },
-    [open, openThread, refetchThreads, threadList.isError],
-  );
+  // The row the open thread hangs off, as the channel's session has it: the
+  // panel's own read of it fetches it when cold. Read beside the panel, not
+  // around it, so the panel keeps its place while the session comes and goes.
+  const anchorRow = useChannelRow({
+    botId,
+    hostId,
+    conversationId: channel?.conversationId ?? null,
+    messageId: railThreadPostId,
+  });
+  const panelThread = useMemo((): BotThreadPanelThread => {
+    const sendable = anchorSendable({
+      open,
+      listed: openThread,
+      post: anchorRow,
+      threadAnchorKinds,
+    });
+    const retry = threadList.isError ? () => void refetchThreads() : null;
+    // A listed thread, one its post opened and a box that starts one keep
+    // what the list last said, the box and its draft through a failed read.
+    if (openThread !== null) {
+      return { kind: "listed", thread: openThread, retry, sendable };
+    }
+    if (open !== null && open.sent !== null) {
+      return { kind: "posted", threadId: open.sent.threadId, retry, sendable };
+    }
+    if (open?.announcement === true) {
+      return { kind: "unopened", retry, sendable };
+    }
+    if (retry !== null) return { kind: "failed", retry };
+    return { kind: "pending" };
+  }, [
+    anchorRow,
+    open,
+    openThread,
+    refetchThreads,
+    threadAnchorKinds,
+    threadList.isError,
+  ]);
   useReadThreadWhilePresented({
     client,
     botId,
@@ -691,43 +705,25 @@ export function BotChannelView(props: {
           <ChannelThreadPane
             postId={railThreadPostId}
             render={(postId) => (
-              <ChannelPost
+              <BotThreadPanel
                 key={postId}
                 botId={botId}
                 hostId={hostId}
+                boundHostId={boundHostId}
+                botTitle={botTitle}
                 conversationId={channel.conversationId}
-                messageId={postId}
-                fetchCold
-              >
-                {(post, missing) => (
-                  <BotThreadPanel
-                    botId={botId}
-                    hostId={hostId}
-                    boundHostId={boundHostId}
-                    botTitle={botTitle}
-                    conversationId={channel.conversationId}
-                    originMessageId={postId}
-                    sent={open?.sent ?? null}
-                    thread={panelThreadFor(
-                      anchorSendable({
-                        open,
-                        listed: openThread,
-                        post,
-                        missing,
-                        threadAnchorKinds,
-                      }),
-                    )}
-                    tasks={tasks}
-                    anchorSenderLabel={anchorSenderLabel}
-                    resolveMember={resolveMember}
-                    onClose={() => onOpenThread(null)}
-                    onOpenActivity={onOpenActivity}
-                    onEditPost={editPostFromThread}
-                    onOpenTurn={onOpenTurn}
-                    onOpenSession={onOpenSession}
-                  />
-                )}
-              </ChannelPost>
+                originMessageId={postId}
+                sent={open?.sent ?? null}
+                thread={panelThread}
+                tasks={tasks}
+                anchorSenderLabel={anchorSenderLabel}
+                resolveMember={resolveMember}
+                onClose={() => onOpenThread(null)}
+                onOpenActivity={onOpenActivity}
+                onEditPost={editPostFromThread}
+                onOpenTurn={onOpenTurn}
+                onOpenSession={onOpenSession}
+              />
             )}
           />
         </div>
@@ -961,24 +957,55 @@ function useChannelThreads(args: {
  * row the thread hangs off once the channel has it, whatever opened the
  * thread (a memory's link and a session's "Open thread" name the anchor
  * only): a row of the bot takes a send only while the bot's binding names
- * it among the rows a thread roots on. Until the row is read, a listed
- * thread whose anchor no member wrote takes none; one that names its kind,
- * one on a member's post, one on a post being sent and one whose row is
- * gone go by what they say.
+ * it among the rows a thread roots on. A listed thread whose anchor no
+ * member wrote takes none until its row says which row it is, however its
+ * read ends; one that names its kind, one on a member's post, one on a post
+ * being sent and one whose anchor the list says is gone go by what they
+ * say.
  */
 function anchorSendable(input: {
   readonly open: BotOpenThread | null;
   readonly listed: BotThreadSummary | null;
   readonly post: OpenMessage | null;
-  readonly missing: boolean;
   readonly threadAnchorKinds: readonly string[];
 }): boolean {
   const { open, listed, post } = input;
   const kind =
     post === null ? (open?.anchorKind ?? null) : threadOpenOf(post).anchorKind;
   if (kind !== null) return input.threadAnchorKinds.includes(kind);
-  const botAnchor = listed?.anchor?.senderUserId === null;
-  return post !== null || input.missing || !botAnchor;
+  return post !== null || listed?.anchor?.senderUserId !== null;
+}
+
+/**
+ * Channel row `messageId` as the channel's session holds it; `null` while
+ * it holds none, or there is no session or row to read.
+ */
+function useChannelRow(input: {
+  readonly botId: string;
+  readonly hostId: string;
+  readonly conversationId: string | null;
+  readonly messageId: string | null;
+}): OpenMessage | null {
+  const { conversationId, messageId } = input;
+  const handle = useChatSessionHandleForContainer(
+    input.botId,
+    conversationId ?? "",
+    input.hostId,
+    conversationId !== null,
+  );
+  const store = handle?.store ?? null;
+  const subscribe = useCallback(
+    (onChange: () => void) =>
+      store === null ? () => undefined : store.subscribe(onChange),
+    [store],
+  );
+  return useSyncExternalStore(subscribe, () =>
+    store === null || messageId === null
+      ? null
+      : (store
+          .getState()
+          .messages.find((message) => message.messageId === messageId) ?? null),
+  );
 }
 
 /**

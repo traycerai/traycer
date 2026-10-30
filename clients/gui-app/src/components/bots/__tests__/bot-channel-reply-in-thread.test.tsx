@@ -50,6 +50,10 @@ const mocks = vi.hoisted(() => ({
   sessions: {} as Record<string, ChatSessionStoreHandle>,
   threadAnchors: null as BotThreadAnchors | null,
   threads: [] as BotThreadSummary[],
+  /** How the host answers a cold read of a channel row. */
+  locate: { status: "waiting" } as
+    | { readonly status: "waiting" }
+    | { readonly status: "missing" },
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
@@ -107,7 +111,7 @@ vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
   useChatLocateRow: () => null,
-  useChatLocateRowAnswer: () => ({ status: "waiting" }),
+  useChatLocateRowAnswer: () => mocks.locate,
 }));
 // The row sheet re-asserts the app theme where it portals; the provider is
 // not under test.
@@ -220,6 +224,7 @@ afterEach(() => {
   mocks.client = null;
   mocks.threadAnchors = null;
   mocks.threads = [];
+  mocks.locate = { status: "waiting" };
 });
 
 function rowOf(messageId: string): HTMLElement {
@@ -377,4 +382,33 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
 
     expect(await sendEnabledAfterTyping()).toBe(true);
   });
+
+  it.each([
+    ["only the rows an older host roots threads on", BOUND_EPOCH, ["answer"]],
+    ["another epoch of the binding", BOUND_EPOCH - 1, ["answer", "message"]],
+    ["every row of the bot", BOUND_EPOCH, ["answer", "message"]],
+  ])(
+    "takes no send while its row cannot be read, under a binding naming %s",
+    async (_label, epoch, kinds) => {
+      // The anchor is not in the channel the session holds, and the host's
+      // read of it fails.
+      mocks.locate = { status: "missing" };
+      mocks.threads = [
+        {
+          ...NOTICE_THREAD,
+          anchor:
+            NOTICE_THREAD.anchor === null
+              ? null
+              : { ...NOTICE_THREAD.anchor, messageId: "notice-cold" },
+        },
+      ];
+      mocks.threadAnchors = { hostId: BOUND_HOST_ID, epoch, kinds: [...kinds] };
+      useBotOpenThreadStore
+        .getState()
+        .setRail(BOT_ID, { ...BY_ANCHOR, anchorMessageId: "notice-cold" });
+      render(<MountedChannel />);
+
+      expect(await sendEnabledAfterTyping()).toBe(false);
+    },
+  );
 });

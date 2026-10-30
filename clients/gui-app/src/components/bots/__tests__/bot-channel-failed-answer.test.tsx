@@ -10,7 +10,7 @@
  * is, Edit loads the text into the channel's box and the send replaces the
  * failed post, and Sign in opens the provider on the bot's host.
  */
-import { StrictMode } from "react";
+import { StrictMode, type ReactElement } from "react";
 import {
   act,
   cleanup,
@@ -91,6 +91,7 @@ type ChannelTranscriptState = Pick<
 
 const mocks = vi.hoisted(() => ({
   channelHandle: null as ChatSessionStoreHandle | null,
+  threadHandle: null as ChatSessionStoreHandle | null,
   client: null as HostRequester<HostRpcRegistry> | null,
   threads: [] as BotThreadSummary[],
   openSettings: vi.fn<(opts: OpenSettingsModalOpts) => void>(),
@@ -100,12 +101,15 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/lib/registries/chat-session-registry")
   >()),
-  // The channel reads its own session; a thread's session has no rows here.
+  // The channel reads its own session; a thread's has rows where a case
+  // gives it some.
   useChatSessionHandleForContainer: (
     _botId: string,
     chatId: string,
-  ): ChatSessionStoreHandle | null =>
-    chatId === CHANNEL_ID ? mocks.channelHandle : null,
+  ): ChatSessionStoreHandle | null => {
+    if (chatId === CHANNEL_ID) return mocks.channelHandle;
+    return chatId === THREAD_ID ? mocks.threadHandle : null;
+  },
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
@@ -389,11 +393,11 @@ function mountChannel(openThread: BotOpenThread | null, post: Message): void {
 function mountChannelWith(
   openThread: BotOpenThread | null,
   posts: ReadonlyArray<Message>,
-): void {
+): () => void {
   mocks.channelHandle = {
     store: createChannelStore(posts),
   } as ChatSessionStoreHandle;
-  render(
+  const tree = (): ReactElement => (
     <StrictMode>
       <QueryClientProvider client={new QueryClient()}>
         <TooltipProvider>
@@ -424,8 +428,10 @@ function mountChannelWith(
           </ChatExpansionTestProviders>
         </TooltipProvider>
       </QueryClientProvider>
-    </StrictMode>,
+    </StrictMode>
   );
+  const view = render(tree());
+  return () => view.rerender(tree());
 }
 
 function channelBox(): HTMLTextAreaElement {
@@ -457,6 +463,7 @@ afterEach(() => {
   cleanup();
   resetBotFailedRequestSupport();
   mocks.channelHandle = null;
+  mocks.threadHandle = null;
   mocks.client = null;
 });
 
@@ -761,6 +768,76 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
       expect(screen.queryByTestId("bot-channel-composer-editing")).toBeNull();
     });
     expect(box.value).toBe("");
+  });
+
+  it("keeps an edit of a message in the open thread, its text and the message it replaces, while the channel's session goes and comes back", async () => {
+    const user = userEvent.setup();
+    const THREAD_REQUEST = "req-in-thread";
+    const THREAD_TEXT = "And the release branch?";
+    mocks.threads = [postThread(VIEWER_USER_ID)];
+    mocks.threadHandle = {
+      store: createChannelStore([
+        {
+          role: "user",
+          messageId: "thread-message-1",
+          sender: { type: "user", userId: VIEWER_USER_ID },
+          sessionAnchor: null,
+          message: {
+            kind: "user",
+            content: textDoc(THREAD_TEXT),
+            browserAnnotations: [],
+          },
+          timestamp: 3_000,
+          conversationRequest: {
+            requestId: THREAD_REQUEST,
+            resolvedAt: null,
+            resolvedByMessageId: null,
+          },
+        },
+      ]),
+    } as ChatSessionStoreHandle;
+    activityStore.setState({
+      activity: {
+        trunk: null,
+        threads: { [THREAD_ID]: failedOn(THREAD_REQUEST) },
+      },
+    });
+    const rerender = mountChannelWith(
+      {
+        anchorMessageId: POST_ID,
+        announcement: false,
+        anchorKind: null,
+        sent: null,
+      },
+      [memberPost(VIEWER_USER_ID)],
+    );
+    const panel = screen.getByTestId("bot-thread-panel");
+    const messages = within(panel).getByTestId("chat-messages-stub");
+    await user.click(
+      within(within(messages).getByTestId("bot-member-row")).getByTestId(
+        "bot-message-edit",
+      ),
+    );
+    const box = within(panel).getByTestId("bot-thread-composer-input");
+    if (!(box instanceof HTMLTextAreaElement))
+      throw new Error("not a textarea");
+    await user.type(box, " Since Monday.");
+
+    const channel = mocks.channelHandle;
+    mocks.channelHandle = null;
+    rerender();
+    mocks.channelHandle = channel;
+    rerender();
+
+    expect(box.isConnected).toBe(true);
+    expect(box.value).toBe(`${THREAD_TEXT} Since Monday.`);
+    expect(screen.getByTestId("bot-thread-composer-editing")).toBeTruthy();
+    await user.click(screen.getByTestId("bot-thread-composer-send"));
+    expect(sent.at(-1)).toMatchObject({
+      threadId: THREAD_ID,
+      text: `${THREAD_TEXT} Since Monday.`,
+      supersedes: THREAD_REQUEST,
+    });
   });
 
   it("opens the replacement's thread when the bot answers it in one", async () => {
