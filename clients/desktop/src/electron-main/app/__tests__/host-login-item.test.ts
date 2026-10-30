@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import electronLog from "electron-log";
+import { LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS } from "@traycer-clients/shared/host-start-adoption/spawn-edge-bounds";
 import type { ProbeCommandResult } from "@traycer-clients/shared/host-lifecycle";
 import {
   chmodSync,
@@ -1289,7 +1290,7 @@ describe("runLaunchctlBootout", () => {
   // the register cycle treats the latter as best-effort and proceeds, while
   // the uninstall teardown treats it as a failed deregistration.
 
-  it("invokes `/bin/launchctl bootout <target>` with `stdio: ignore` so output never leaks into the Electron main process", async () => {
+  it("invokes `/bin/launchctl bootout --wait <target>` with `stdio: ignore` so output never leaks into the Electron main process", async () => {
     const fake = makeFakeChild();
     const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
     queueMicrotask(() => {
@@ -1302,6 +1303,7 @@ describe("runLaunchctlBootout", () => {
     expect(spawnFn.mock.calls[0]?.[0]).toBe("/bin/launchctl");
     expect(spawnFn.mock.calls[0]?.[1]).toEqual([
       "bootout",
+      "--wait",
       "gui/501/ai.traycer.host.staging",
     ]);
     expect(spawnFn.mock.calls[0]?.[2]).toEqual({ stdio: "ignore" });
@@ -1368,9 +1370,12 @@ describe("runLaunchctlBootout", () => {
     const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
 
     const promise = runLaunchctlBootout("gui/501/test.label", spawnFn);
-    // Advance past the 5s bootout timeout; the child never fires
-    // exit or error, so only the setTimeout path can resolve us.
-    await vi.advanceTimersByTimeAsync(5_000);
+    // Advance to the derived `bootout --wait` bound; the child never fires
+    // exit or error, so only the setTimeout path can resolve us. Just before
+    // it the drain is still being waited on.
+    await vi.advanceTimersByTimeAsync(LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS - 1);
+    expect(fake.killCalls).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
 
     await expect(promise).resolves.toBe(false);
     expect(fake.killCalls).toContain("SIGTERM");
@@ -2706,6 +2711,45 @@ describe("registerHostLoginItem / unregisterHostLoginItemGuarded - launchctl boo
     // Both bootout edges ran and failed: the legacy retirement's CLI-label
     // bootout and the step-4 agent-label BTM flush.
     expect(spawnStub).toHaveBeenCalledTimes(2);
+  });
+
+  // The old job's drain is what the bootout must wait for: registering over a
+  // job still draining its shutdown can fail, or start a replacement that sees
+  // the still-serving incumbent and exits 0 (KeepAlive does not revive it).
+  it("register cycle: the agent registration does not start until the old job's bootout has returned", async () => {
+    let releaseAgentBootout: () => void = () => undefined;
+    let calls = 0;
+    const bootoutArgs: Array<readonly string[]> = [];
+    const spawnStub = vi.fn((_command: string, args: readonly string[]) => {
+      calls += 1;
+      bootoutArgs.push(args);
+      const fake = makeFakeChild();
+      if (calls === 1) {
+        queueMicrotask(() => fake.child.emit("exit", 0, null));
+      } else {
+        // The agent label's bootout: the old job is still draining.
+        releaseAgentBootout = () => fake.child.emit("exit", 0, null);
+      }
+      return fake.child;
+    });
+    setBootoutSpawnFnForTests(spawnStub);
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: legacy
+      .mockReturnValueOnce({ status: "not-registered" }) // post-clear read
+      .mockReturnValueOnce({ status: "enabled" }); // post-register (BTM committed)
+
+    const cycle = registerHostLoginItem(undefined, null);
+    await vi.waitFor(() => expect(spawnStub).toHaveBeenCalledTimes(2));
+    const mutationsWhileDraining = setLoginItemSettings.mock.calls.length;
+    releaseAgentBootout();
+    await expect(cycle).resolves.toBe("enabled");
+
+    expect(bootoutArgs.map((args) => args[1])).toEqual(["--wait", "--wait"]);
+    // Only the legacy retirement's clear may have run before the agent bootout
+    // returned; the agent's clear and register came after it.
+    expect(mutationsWhileDraining).toBeLessThan(3);
+    expect(setLoginItemSettings).toHaveBeenCalledTimes(3);
   });
 
   // The confirmed-target callback is the second half of the same guard the

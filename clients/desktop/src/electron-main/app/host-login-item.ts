@@ -1,3 +1,4 @@
+import { LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS } from "@traycer-clients/shared/host-start-adoption/spawn-edge-bounds";
 import { app } from "electron";
 import { execFile, spawn } from "node:child_process";
 import {
@@ -964,7 +965,7 @@ function runAgentPrint(target: string): Promise<ProbeCommandResult> {
     execFile(
       "/bin/launchctl",
       ["print", target],
-      { timeout: BOOTOUT_TIMEOUT_MS, encoding: "utf8" },
+      { timeout: PRINT_TIMEOUT_MS, encoding: "utf8" },
       (error, stdout, stderr) => {
         if (error === null) {
           resolve({
@@ -1559,13 +1560,12 @@ function inAppLaunchAgentPlistPath(): string {
 }
 
 /**
- * Time we let `launchctl bootout` run before killing it. Bootout is a
- * fast launchd RPC; observed wall-clock is <50ms on a healthy system.
- * The 5s ceiling exists to bound a launchd hang (rare, but seen during
- * launchd recovery after a wake-from-sleep) so the register cycle
- * isn't held hostage by a wedged subprocess.
+ * Time we let `launchctl print` run before killing it. A launchd RPC;
+ * observed wall-clock is <50ms on a healthy system. The 5s ceiling bounds a
+ * launchd hang (rare, but seen during launchd recovery after a wake-from-
+ * sleep) so the register cycle isn't held hostage by a wedged subprocess.
  */
-const BOOTOUT_TIMEOUT_MS = 5_000;
+const PRINT_TIMEOUT_MS = 5_000;
 
 /**
  * Forcibly drop the job under `labelId` from launchd's GUI domain so BTM
@@ -1660,7 +1660,7 @@ export type BootoutSpawnFn = (
 
 /**
  * Spawn `launchctl bootout <target>` and wait for it to exit, or kill
- * it once `BOOTOUT_TIMEOUT_MS` has elapsed. Resolves either way — the
+ * it once `LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS` has elapsed. Resolves either way — the
  * BTM-clearing side effect is durable: a process that hangs after
  * issuing the bootout RPC still leaves BTM cleared.
  *
@@ -1684,7 +1684,13 @@ export function runLaunchctlBootout(
   spawnFn: BootoutSpawnFn,
 ): Promise<boolean> {
   return new Promise((resolve) => {
-    const child = spawnFn("/bin/launchctl", ["bootout", target], {
+    // `--wait`: a bare bootout returns when launchd ACCEPTS the request, and
+    // the registration that follows would run while the old job is still
+    // draining its shutdown (a failed register, or a replacement that sees
+    // the still-serving incumbent and exits 0, which KeepAlive does not
+    // revive). The bundled plist's `ExitTimeOut` bounds the drain, and
+    // `LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS` is derived from it.
+    const child = spawnFn("/bin/launchctl", ["bootout", "--wait", target], {
       stdio: "ignore",
     });
     let settled = false;
@@ -1698,10 +1704,10 @@ export function runLaunchctlBootout(
       child.kill("SIGTERM");
       log.warn("[host-login-item] launchctl bootout exceeded timeout, killed", {
         target,
-        timeoutMs: BOOTOUT_TIMEOUT_MS,
+        timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
       });
       settle(false);
-    }, BOOTOUT_TIMEOUT_MS);
+    }, LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS);
     child.once("error", (err) => {
       log.warn("[host-login-item] launchctl bootout errored", {
         target,
