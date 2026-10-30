@@ -143,21 +143,24 @@ export interface ChatBotPresentation {
   /** Opens the thread of a channel post; `null` in a thread. */
   readonly openThread: ((postMessageId: string) => void) | null;
   /**
-   * Opens the thread under a question, a proposal, a direct post or, where
-   * `answer`, the bot's direct reply, by the row's message id: its thread
-   * when it has one, else a box whose first reply opens it. `null` in a
-   * thread.
+   * Opens the thread under a question, a proposal, a direct post or another
+   * row of the bot, by the row's message id: its thread when it has one,
+   * else a box whose first reply opens it. `anchorKind` is the thread
+   * anchor the bot's host must name for that box to send (`"answer"` for
+   * its direct reply, `"message"` for any other row of it), `null` for a
+   * row every host takes a reply under. `null` in a thread.
    */
   readonly openAnnouncementThread:
-    | ((announcementId: string, answer: boolean) => void)
+    | ((announcementId: string, anchorKind: string | null) => void)
     | null;
   /**
-   * Whether the bot's host opens a thread under a direct reply of the bot
-   * (decision 114), so the reply opens its own thread and carries its line;
-   * `false` where it does not say, and a direct reply then opens the thread
-   * under the post it answers.
+   * The rows beyond a post, a question, a proposal and a direct post that
+   * the bot's host opens a thread under (`threadAnchors.kinds`, decision 114
+   * and T68): a row it names opens its own thread and carries its line.
+   * Empty where it does not say: a direct reply then opens the thread under
+   * the post it answers, and any other row of the bot opens none.
    */
-  readonly answerThreads: boolean;
+  readonly threadAnchorKinds: readonly string[];
   /**
    * Posts one of a bot reply's options as the person's next message: in the
    * thread, or a new post in the channel for a direct reply's; `null` where

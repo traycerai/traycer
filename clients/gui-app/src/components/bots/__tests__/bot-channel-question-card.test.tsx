@@ -647,7 +647,7 @@ describe("<BotChannelView /> a question the bot asks without waiting", () => {
     expect(onOpenThread).toHaveBeenLastCalledWith({
       anchorMessageId: QUESTION_ID,
       announcement: true,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
   });
@@ -795,7 +795,7 @@ describe("<BotChannelView /> a question settled while a member was answering (de
     const opened: BotOpenThread = {
       anchorMessageId: QUESTION_ID,
       announcement: true,
-      answer: false,
+      anchorKind: null,
       sent: null,
     };
     expect(onOpenThread).toHaveBeenLastCalledWith(opened);
@@ -828,7 +828,7 @@ function holdField(): HTMLTextAreaElement {
 const QUESTION_THREAD: BotOpenThread = {
   anchorMessageId: QUESTION_ID,
   announcement: true,
-  answer: false,
+  anchorKind: null,
   sent: null,
 };
 
@@ -1213,7 +1213,7 @@ describe("<BotChannelView /> a question a thread's session asks in its thread", 
   const POST_THREAD: BotOpenThread = {
     anchorMessageId: POST_ID,
     announcement: false,
-    answer: false,
+    anchorKind: null,
     sent: null,
   };
 

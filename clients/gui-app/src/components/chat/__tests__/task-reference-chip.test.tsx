@@ -820,7 +820,7 @@ describe("a task id in a bot's row", () => {
     threadLine: null,
     openThread: null,
     openAnnouncementThread: null,
-    answerThreads: false,
+    threadAnchorKinds: [],
     chooseOption: null,
     questions: null,
     failedRequest: null,

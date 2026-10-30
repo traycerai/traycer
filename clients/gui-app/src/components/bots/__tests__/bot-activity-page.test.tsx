@@ -543,7 +543,7 @@ describe("<BotActivityPage /> running now", () => {
     expect(mocks.openPost).toHaveBeenCalledWith({
       anchorMessageId: messageId,
       announcement: true,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
   });

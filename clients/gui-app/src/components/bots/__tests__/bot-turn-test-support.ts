@@ -502,7 +502,7 @@ export const openedSessions: BotSessionTarget[] = [];
 export const THREAD_OPEN: BotOpenThread = {
   anchorMessageId: POST_ID,
   announcement: false,
-  answer: false,
+  anchorKind: null,
   sent: null,
 };
 

@@ -698,7 +698,7 @@ describe("<BotChannelView /> a teammate's post the bot failed to answer", () => 
       {
         anchorMessageId: POST_ID,
         announcement: false,
-        answer: false,
+        anchorKind: null,
         sent: null,
       },
       memberPost(TEAMMATE_USER_ID),
@@ -856,7 +856,7 @@ describe("<BotChannelView /> Edit on a post the bot failed to answer", () => {
       {
         anchorMessageId: POST_ID,
         announcement: false,
-        answer: false,
+        anchorKind: null,
         sent: null,
       },
       memberPost(VIEWER_USER_ID),
@@ -1118,7 +1118,7 @@ describe("<BotChannelView /> the line under a post the bot did not answer", () =
       {
         anchorMessageId: POST_ID,
         announcement: false,
-        answer: false,
+        anchorKind: null,
         sent: null,
       },
       memberPost(VIEWER_USER_ID),

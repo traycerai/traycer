@@ -203,7 +203,7 @@ describe("<BotThreadsPage />", () => {
     expect(mocks.openPost).toHaveBeenCalledWith({
       anchorMessageId: POST_ID,
       announcement: false,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
   });
@@ -239,7 +239,7 @@ describe("<BotThreadsPage />", () => {
     expect(mocks.openPost).toHaveBeenCalledWith({
       anchorMessageId: POST_ID,
       announcement: false,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
     expect(row.textContent).toContain("Please review the release");
@@ -301,7 +301,7 @@ describe("<BotThreadsPage />", () => {
     expect(mocks.openPost).toHaveBeenCalledWith({
       anchorMessageId: POST_ID,
       announcement: false,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
   });
@@ -338,7 +338,7 @@ describe("<BotThreadsPage />", () => {
       expect(mocks.openPost).toHaveBeenCalledWith({
         anchorMessageId: POST_ID,
         announcement: false,
-        answer: false,
+        anchorKind: null,
         sent: null,
       });
     },

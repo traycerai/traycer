@@ -513,7 +513,7 @@ function originPresentation(
     threadLine: null,
     openThread: null,
     openAnnouncementThread: null,
-    answerThreads: false,
+    threadAnchorKinds: [],
     chooseOption: null,
     questions,
     failedRequest,
