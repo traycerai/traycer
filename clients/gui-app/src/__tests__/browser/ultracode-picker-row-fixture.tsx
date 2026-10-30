@@ -24,6 +24,7 @@ import {
 import { hostQueryKeys } from "@/lib/query-keys";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 
 /**
  * Drives the public chat picker against a local mock host. The toolbar store
@@ -310,11 +311,7 @@ export function UltracodePickerRowFixture() {
               {/* Every composer ends its right-hand cluster with the model
                   chip, so the chip grows leftward and the end-aligned panel
                   stays put as its text changes. */}
-              <div
-                className={
-                  RESPONSIVE ? "@container flex min-w-0" : "flex min-w-0"
-                }
-              >
+              <div className={cn("flex min-w-0", RESPONSIVE && "@container")}>
                 <div className="ml-auto flex min-w-0 shrink items-center gap-1">
                   <FixturePicker store={store} />
                 </div>
