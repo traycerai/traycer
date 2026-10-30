@@ -100,6 +100,7 @@ function segment(
     hidden: false,
     state,
     reason: null,
+    chatCredential: null,
     fetching: false,
     retryOffered: false,
     windows: live ? [reading] : [],

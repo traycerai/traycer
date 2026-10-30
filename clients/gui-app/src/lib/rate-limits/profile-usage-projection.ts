@@ -9,6 +9,7 @@ import {
   type ProviderRateLimits,
   type ProviderRateLimitSeverity,
   type ProviderRateLimitWindow,
+  type RateLimitChatCredential,
   type RateLimitUnavailableReason,
 } from "@traycer/protocol/host/rate-limit";
 import type { ProviderProfileRateLimitStatus } from "@traycer/protocol/host/provider-schemas";
@@ -73,6 +74,8 @@ export type ProfileUsageProjection =
         | "expired"
         | "missing_windows"
         | "unknown";
+      /** The credential chats use instead of the plan, when the host named one. */
+      readonly chatCredential: RateLimitChatCredential | null;
     });
 
 export interface ProfileUsageProjectionInput {
@@ -108,6 +111,7 @@ function semanticProjection(
       kind: "unavailable",
       severity: "unknown",
       reason: "fetch_failed",
+      chatCredential: null,
       compactWindow: null,
       windows: [],
       checkedAt: input.usageUpdatedAt,
@@ -139,6 +143,7 @@ function semanticProjection(
     kind: "unavailable",
     severity: "unknown",
     reason: "unknown",
+    chatCredential: null,
     compactWindow: null,
     windows: [],
     checkedAt: input.usageUpdatedAt,
@@ -542,6 +547,7 @@ function emptyDetailProjection(
       providerRateLimitWindows(rateLimits).length > 0
         ? "expired"
         : "missing_windows",
+    chatCredential: null,
     compactWindow: null,
     windows: [],
     checkedAt,
@@ -586,6 +592,7 @@ export function projectProfileUsage(
       kind: "unavailable",
       severity: "unknown",
       reason: retained.reason,
+      chatCredential: retained.chatCredential ?? null,
       compactWindow: null,
       windows: [],
       checkedAt: input.usageUpdatedAt,
@@ -611,6 +618,7 @@ export function projectProfileUsage(
       kind: "unavailable",
       severity,
       reason: "unknown",
+      chatCredential: null,
       compactWindow: null,
       windows: [],
       checkedAt: envelope.lastGoodAt ?? input.usageUpdatedAt,
