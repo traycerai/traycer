@@ -4297,7 +4297,6 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
-        isTurnRunning: undefined,
       }),
     );
 
@@ -4350,7 +4349,6 @@ describe("useChatTimelineFollowLatch", () => {
         isCorrectionSuppressed: undefined,
         resolveSuppressedEndLanding: undefined,
         isReattachSuppressed: undefined,
-        isTurnRunning: undefined,
       }),
     );
 
