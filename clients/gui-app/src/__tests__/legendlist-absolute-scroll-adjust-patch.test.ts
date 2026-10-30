@@ -91,6 +91,12 @@ interface ClampingScroller {
  * back clamps to the live range, as a real scroller's does the instant a
  * write (the test's own `write`, standing in for the pad restore) shrinks
  * `scrollHeight` out from under the stored offset.
+ *
+ * The clamp sticks, as the browser's does: it moves the offset the scroller
+ * holds, so growing the range afterwards leaves the view where the clamp put
+ * it rather than springing it back. The whole defect this patch fixes lives
+ * on that: the restore's clamp and a commit that regrows the end land in one
+ * frame, and the view stays down at the clamp while the end goes back up.
  */
 function makeClampingScroller(initial: {
   scrollTop: number;
@@ -103,13 +109,14 @@ function makeClampingScroller(initial: {
     scrollHeight: initial.scrollHeight,
     clientHeight: initial.clientHeight,
     get scrollTop(): number {
-      return Math.max(
+      storedScrollTop = Math.max(
         0,
         Math.min(
           storedScrollTop,
           scroller.scrollHeight - scroller.clientHeight,
         ),
       );
+      return storedScrollTop;
     },
     set scrollTop(value: number) {
       storedScrollTop = value;
@@ -353,6 +360,14 @@ describe("@legendapp/list web patch", () => {
       expect(shrinks.announcements).toEqual([
         { from: 1000, fromEnd: 1000, to: 900, intended: 900 },
       ]);
+
+      // The frame the defect lives in: a commit regrows the end right after
+      // the clamp. The view stays where the clamp left it, so the offset the
+      // announcement carried is still the reader's - and the regrowth, moving
+      // no view, announces nothing of its own.
+      shrinks.scroller.scrollHeight = 1450;
+      expect(shrinks.scroller.scrollTop).toBe(900);
+      expect(shrinks.announcements).toHaveLength(1);
 
       // The common restore: the range shrinks by as much, but the content has
       // grown past the view since the pad went up, so the end stays above it
