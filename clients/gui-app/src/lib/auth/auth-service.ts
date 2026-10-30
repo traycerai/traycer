@@ -61,6 +61,12 @@ import {
   fetchEnvironmentInvitations,
   acceptEnvironmentInvitation,
 } from "@traycer-clients/shared/auth/environment-invitations";
+import {
+  claimCreditOfferViaHttp,
+  listCreditOffersViaHttp,
+  type ClaimCreditOfferFetchResult,
+  type ListCreditOffersFetchResult,
+} from "@traycer-clients/shared/auth/credit-offers";
 import type {
   EnvironmentInvitationsListResponse,
   EnvironmentInvitationsAcceptResponse,
@@ -4589,6 +4595,40 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.respondLinkLogin(bearer, code, approve);
+  }
+
+  /**
+   * Settings ▸ Credits: the credit offers the signed-in user can see. The raw
+   * bearer stays inside this auth boundary, and a refusal is a result kind
+   * the panel renders as no list, never a sign-out.
+   */
+  async listCreditOffers(
+    signal: AbortSignal,
+  ): Promise<ListCreditOffersFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return listCreditOffersViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      signal,
+    );
+  }
+
+  /** Claims one credit offer for the signed-in user. */
+  async claimCreditOffer(
+    campaignId: string,
+  ): Promise<ClaimCreditOfferFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return claimCreditOfferViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      campaignId,
+    );
   }
 
   /**

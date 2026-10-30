@@ -1028,7 +1028,7 @@ describe("buildHostInstallCommand", () => {
       authPreflight: { state: "signed-in-inline", reason: null },
       credentialProvision: { kind: "active", minted: true },
     });
-    expect(result.human ?? "").toMatch(/host credential provisioned$/);
+    expect(result.human ?? "").toMatch(/host authorized$/);
   });
 
   it("signed out + interactive, device flow declined: install still commits, reports sign-in-incomplete", async () => {
@@ -1350,7 +1350,7 @@ describe("buildHostInstallCommand", () => {
       ]);
     });
 
-    it("{ kind: active, minted: true }: human ends with 'host credential provisioned'", async () => {
+    it("{ kind: active, minted: true }: human ends with 'host authorized'", async () => {
       mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
       mocks.createServiceInstallLifecycleMock.mockReturnValue(
         sampleLifecycleHandle(),
@@ -1368,11 +1368,11 @@ describe("buildHostInstallCommand", () => {
       const command = buildHostInstallCommand(baseArgs({}));
       const result = await command(fakeCtx());
 
-      expect(result.human ?? "").toMatch(/host credential provisioned$/);
+      expect(result.human ?? "").toMatch(/host authorized$/);
       expect(result.exitCode).toBe(0);
     });
 
-    it("{ kind: not-adopted }: human names the self-heal, exit code stays 0", async () => {
+    it("{ kind: not-adopted }: human says the authorization is not confirmed, exit code stays 0", async () => {
       mocks.stageHostInstallSourceMock.mockResolvedValue(sampleStaged());
       mocks.createServiceInstallLifecycleMock.mockReturnValue(
         sampleLifecycleHandle(),
@@ -1393,7 +1393,7 @@ describe("buildHostInstallCommand", () => {
         credentialProvision: { kind: "not-adopted" },
       });
       expect(result.human).toContain(
-        "host credential not provisioned (the host did not adopt it in time)",
+        "host authorization not confirmed (the host did not confirm it in time)",
       );
       expect(result.exitCode).toBe(0);
     });

@@ -85,9 +85,40 @@ export type BotOnboardingReadRequest = z.infer<
 >;
 
 /**
- * A team environment's onboarding, for a member of it. `unlocked` is whether
- * the GitHub set holds a repository and works: the bots can then be created.
- * `choice` is `null` before any member chose.
+ * `bot.onboarding.read@1.0`'s response, frozen: a team environment's
+ * onboarding, for a member of it. `unlocked` is whether the GitHub set holds
+ * a repository and works: the bots can then be created. `choice` is `null`
+ * before any member chose.
+ */
+export const botOnboardingReadResponseSchemaV10 = lazySchema(() =>
+  z.object({
+    github: botOnboardingGithubSchema,
+    unlocked: z.boolean(),
+    choice: botOnboardingChoiceSchema.nullable(),
+    catalog: z.array(botOnboardingAreaSchema),
+  }),
+);
+
+/**
+ * The team's main bot while it is still to be set up (Tracy Bots T67): the
+ * team has no live bot, so the bot does not exist yet and no host the team
+ * can use runs it. `botId` is the id it will be created under, the one its
+ * environment derives, so a channel opened on it now is the bot's channel
+ * once it exists; `title` is the name it will be created with.
+ */
+export const botOnboardingSetupSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    title: z.string().min(1),
+  }),
+);
+export type BotOnboardingSetup = z.infer<typeof botOnboardingSetupSchema>;
+
+/**
+ * `bot.onboarding.read@1.1` adds `setup`: the team's main bot while it is
+ * still to be set up, `null` once the team has a live bot (or had its bots
+ * before onboarding existed). `null` too when the answering host predates it
+ * (a `1.0` response upgraded), which offers no setup.
  */
 export const botOnboardingReadResponseSchema = lazySchema(() =>
   z.object({
@@ -95,6 +126,7 @@ export const botOnboardingReadResponseSchema = lazySchema(() =>
     unlocked: z.boolean(),
     choice: botOnboardingChoiceSchema.nullable(),
     catalog: z.array(botOnboardingAreaSchema),
+    setup: botOnboardingSetupSchema.nullable(),
   }),
 );
 export type BotOnboardingReadResponse = z.infer<
