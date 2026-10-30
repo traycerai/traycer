@@ -89,11 +89,17 @@ export type MembersReadState = "loading" | "failed" | "unsupported" | "ready";
 /**
  * P3's drawer subject. Members rows use kind `member` and key = userId;
  * the legacy notice / page uses kind `member` and an empty key.
+ *
+ * `roleLabel` is the role the row holds, which the drawer cannot read for
+ * itself: a member's role is committed inside the item's value and
+ * `environment.history` ships no values. `null` for the page's own subject,
+ * which names no member.
  */
 export interface MembersDetailsSubject {
   readonly environmentId: string;
   readonly kind: "member";
   readonly key: string;
+  readonly roleLabel: string | null;
 }
 
 export function isTeamRole(value: string): value is TeamRole {

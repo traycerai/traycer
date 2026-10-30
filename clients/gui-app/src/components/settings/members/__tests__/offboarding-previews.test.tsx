@@ -2,7 +2,10 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { DemotionPreviewDialog } from "@/components/settings/members/demotion-preview";
 import { RemovePreviewDialog } from "@/components/settings/members/remove-preview";
-import type { RemovePreviewModel } from "@/components/settings/members/types";
+import type {
+  RemovePreviewModel,
+  TeamRole,
+} from "@/components/settings/members/types";
 
 afterEach(cleanup);
 
@@ -139,17 +142,22 @@ describe("RemovePreviewDialog", () => {
 });
 
 describe("DemotionPreviewDialog", () => {
-  it("shows the plan-unlink table and the lost-powers line, no clock", () => {
+  function renderDemotion(options: {
+    readonly currentRole: TeamRole;
+    readonly nextRole: TeamRole;
+    readonly planLabel: string;
+  }): string {
     render(
       <DemotionPreviewDialog
         open
         memberName="Priya"
         teamName="Acme"
-        nextRoleLabel="Viewer"
+        currentRole={options.currentRole}
+        nextRole={options.nextRole}
         preview={{
           status: "ready",
           preview: {
-            planLabel: "Claude Max",
+            planLabel: options.planLabel,
             turnsOnPlan: 2,
             whatKeepsWorking: "Sandboxes keep running.",
           },
@@ -161,14 +169,75 @@ describe("DemotionPreviewDialog", () => {
         onConfirm={() => undefined}
       />,
     );
-    const text = screen.getByTestId("members-demotion-preview").textContent;
-    expect(text).toContain("2 turns on Claude Code");
-    expect(text).toContain("Sandboxes keep running.");
+    return screen.getByTestId("members-demotion-preview").textContent;
+  }
+
+  it("asks the question, says what is lost and names the role on the button", () => {
+    const text = renderDemotion({
+      currentRole: "admin",
+      nextRole: "editor",
+      planLabel: "Claude Max",
+    });
+    expect(
+      screen.getByText("Change Priya's role in Acme to editor?"),
+    ).toBeTruthy();
     expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
-      "Priya can no longer invite, change roles or edit the approval policy.",
+      "Priya can no longer invite people, change roles or edit the approval policy.",
     );
-    expect(text).toContain("Change role · Viewer");
+    expect(screen.getByTestId("members-demotion-confirm").textContent).toBe(
+      "Change to editor",
+    );
+    expect(text).not.toContain("Change role · ");
     expect(text).not.toContain("within a minute");
     expect(text).not.toContain("next turn");
+  });
+
+  it("gives an editor going to viewer its own question, loss line and button", () => {
+    renderDemotion({
+      currentRole: "editor",
+      nextRole: "viewer",
+      planLabel: "",
+    });
+    expect(
+      screen.getByText("Change Priya's role in Acme to viewer?"),
+    ).toBeTruthy();
+    expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
+      "Priya can no longer change Acme's settings. They can still see them.",
+    );
+    expect(screen.getByTestId("members-demotion-confirm").textContent).toBe(
+      "Change to viewer",
+    );
+  });
+
+  it("says both losses when an admin goes straight to viewer", () => {
+    renderDemotion({
+      currentRole: "admin",
+      nextRole: "viewer",
+      planLabel: "",
+    });
+    expect(screen.getByTestId("members-demotion-loss").textContent).toBe(
+      "Priya can no longer invite people, change roles or edit the approval policy. Priya can no longer change Acme's settings. They can still see them.",
+    );
+  });
+
+  it("shows the plan rows only for a demotion that unlinks a plan", () => {
+    const withPlan = renderDemotion({
+      currentRole: "admin",
+      nextRole: "editor",
+      planLabel: "Claude Max",
+    });
+    expect(withPlan).toContain("2 turns on Claude Code");
+    expect(withPlan).toContain("Sandboxes keep running.");
+    expect(screen.getByTestId("members-demotion-preview-table")).toBeTruthy();
+    cleanup();
+
+    const withoutPlan = renderDemotion({
+      currentRole: "admin",
+      nextRole: "editor",
+      planLabel: "",
+    });
+    expect(screen.queryByTestId("members-demotion-preview-table")).toBeNull();
+    expect(withoutPlan).not.toContain("Agents on it now");
+    expect(withoutPlan).not.toContain("stop using this plan");
   });
 });

@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { toast } from "sonner";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -13,6 +14,7 @@ import { RevokeInviteDialog } from "@/components/settings/members/revoke-invite-
 import {
   INVITE_LABEL,
   LAST_ADMIN_REFUSAL,
+  MEMBER_REMOVED_TOAST,
   REMOVE_FAILED,
   REMOVE_FORBIDDEN_REFUSAL,
   SET_ROLE_FAILED,
@@ -21,12 +23,13 @@ import {
   MANAGE_SEATS_LABEL,
   MEMBERS_NEED_UPDATED_HOST,
   RETRY_LABEL,
-  ROLE_LABELS,
   acceptedPeopleCount,
   addPlanOnDashboardLabel,
   demotionWhatKeepsWorking,
+  isRoleDemotion,
   memberDisplayName,
   memberFirstName,
+  memberRemovedToastBody,
   membersHeaderLine,
   membersReadFailed,
   planRequiredRefusal,
@@ -61,6 +64,36 @@ type PendingDemotion = {
   readonly member: MembersListMember;
   readonly nextRole: TeamRole;
 };
+
+/**
+ * The two roles the demotion confirm asks about. A closed dialog asks about
+ * nothing, and the member it last named is already gone from the state, so it
+ * reads the lowest role rather than claiming one it cannot see.
+ */
+function demotionRoles(demotion: PendingDemotion | null): {
+  readonly currentRole: TeamRole;
+  readonly nextRole: TeamRole;
+} {
+  if (demotion === null) return { currentRole: "viewer", nextRole: "viewer" };
+  return {
+    currentRole: demotion.member.effectiveRole,
+    nextRole: demotion.nextRole,
+  };
+}
+
+/**
+ * A removal that committed says so, by the one name the rest of the page uses.
+ * A revoked invitation removes nobody, so it says nothing.
+ */
+function announceRemoval(removed: PendingRemove, teamName: string): void {
+  if (removed.kind !== "accepted") return;
+  toast.success(MEMBER_REMOVED_TOAST, {
+    description: memberRemovedToastBody(
+      memberDisplayName(removed.member),
+      teamName,
+    ),
+  });
+}
 
 /**
  * A dialog's preview from its read: the answer once read (while no re-read
@@ -281,6 +314,7 @@ export function MembersView(props: {
   const removing = removeTargetOfKind(removeTarget, "accepted");
   const revoking = removeTargetOfKind(removeTarget, "pending-invite");
   const demoting = demotion === null ? null : demotion.member;
+  const demotionRoleChange = demotionRoles(demotion);
   const removeQuery = useEnvironmentMembersRemovePreviewQuery(
     client,
     environmentId,
@@ -348,56 +382,77 @@ export function MembersView(props: {
     });
   };
 
+  /**
+   * One role write for both paths, the promotion written straight through and
+   * the confirmed demotion: a refusal is said in the banner and handed back,
+   * so a dialog that asked for the change stays open on it.
+   */
+  const writeRole = (
+    input: { readonly userId: string; readonly role: TeamRole },
+    onRefused: (line: string) => void,
+    onWritten: () => void,
+  ): void => {
+    void onSetRole(input).then((outcome) => {
+      const refusal = refusalFromSetRole(teamName, outcome);
+      if (refusal === null) {
+        onWritten();
+        return;
+      }
+      onRefused(refusal);
+      setBanner(refusal);
+    });
+  };
+
   const openRoleChange = (member: MembersListMember, role: TeamRole): void => {
     if (role === member.effectiveRole) return;
-    if (member.effectiveRole === "admin" && role !== "admin") {
+    // Every demotion is confirmed, because it takes something away; a
+    // promotion gives, so it is written straight through.
+    if (isRoleDemotion(member.effectiveRole, role)) {
       setDemotionRefusal(null);
       setDemotion({ member, nextRole: role });
       return;
     }
-    void onSetRole({ userId: member.userId, role }).then((outcome) => {
-      const refusal = refusalFromSetRole(teamName, outcome);
-      if (refusal !== null) setBanner(refusal);
-    });
+    writeRole(
+      { userId: member.userId, role },
+      () => undefined,
+      () => undefined,
+    );
   };
 
   const confirmRemove = (): void => {
     if (removeTarget === null) return;
-    void onRemove({ userId: removeTarget.member.userId }).then((outcome) => {
+    const removed = removeTarget;
+    void onRemove({ userId: removed.member.userId }).then((outcome) => {
       const refusal = refusalFromRemove(teamName, outcome);
       if (refusal !== null) {
         setRemoveRefusal(refusal);
         setBanner(refusal);
         return;
       }
+      announceRemoval(removed, teamName);
       closeRemove();
     });
   };
 
   const confirmDemotion = (): void => {
     if (demotion === null) return;
-    void onSetRole({
-      userId: demotion.member.userId,
-      role: demotion.nextRole,
-    }).then((outcome) => {
-      const refusal = refusalFromSetRole(teamName, outcome);
-      if (refusal !== null) {
-        setDemotionRefusal(refusal);
-        setBanner(refusal);
-        return;
-      }
-      closeDemotion();
-    });
+    writeRole(
+      { userId: demotion.member.userId, role: demotion.nextRole },
+      setDemotionRefusal,
+      closeDemotion,
+    );
   };
 
   const seatsPage = (signInUrl: string): string => {
     return seatsManagementUrl(signInUrl, teamHandle) ?? signInUrl;
   };
 
+  // The notice is about the update, not about one member, so it names no role.
   const noticeSubject: MembersDetailsSubject = {
     environmentId,
     kind: "member",
     key: "",
+    roleLabel: null,
   };
 
   return (
@@ -497,7 +552,8 @@ export function MembersView(props: {
         open={demoting !== null}
         memberName={targetName(demoting)}
         teamName={teamName}
-        nextRoleLabel={demotion === null ? "" : ROLE_LABELS[demotion.nextRole]}
+        currentRole={demotionRoleChange.currentRole}
+        nextRole={demotionRoleChange.nextRole}
         preview={demotionPreview}
         busy={setRolePending}
         blockedReason={demotionRefusal}

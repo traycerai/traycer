@@ -11,6 +11,14 @@ export const authQueryKeys = {
     authService,
     userId,
   ],
+  // PREFIX over every `environmentInvitations` entry, whatever AuthService or
+  // user it is keyed to, for a caller that holds neither — cancelling the
+  // invitations read in flight, say, where what has to stop is whichever
+  // entry is answering it in this window.
+  environmentInvitationsAll: (): readonly unknown[] => [
+    "auth",
+    "environment-invitations",
+  ],
   // `authService: object` keys the query to the live AuthService instance,
   // mirroring the runner-host `traycerCli` keying. Prefix-stable so a broad
   // `["auth"]` invalidation still drops it.

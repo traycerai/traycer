@@ -9,6 +9,13 @@ export interface DetailsSubject {
    */
   readonly kind: string;
   readonly key: string;
+  /**
+   * The role the surface that opened the drawer knows its subject holds,
+   * where a read cannot answer it: a member's role is committed inside the
+   * item's value, and `environment.history` ships no values. Absent for every
+   * other kind.
+   */
+  readonly roleLabel?: string | null;
 }
 
 export type DetailsReaderScope = "full" | "own" | "status_only";
