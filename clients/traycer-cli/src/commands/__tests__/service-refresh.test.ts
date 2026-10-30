@@ -155,11 +155,12 @@ describe("describeServiceDefinitionRefresh", () => {
       outcomeFor({
         kind: "refreshed",
         form: "exit-timeout",
-        appliesAt: "next-start",
+        appliesAt: "next-login",
       }),
     );
     expect(line).toContain("now gives the host its full time to shut down");
-    expect(line).not.toContain("current launcher");
+    expect(line).toContain("applies at the next login");
+    expect(line).not.toContain("launcher");
   });
 
   it("every case names the label's own id, not a generic 'the service'", () => {
