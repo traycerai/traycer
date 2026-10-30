@@ -1158,6 +1158,29 @@ function touchArmAt(
   };
 }
 
+/** Whether a lift leaves the reader away from an end that came down onto
+ *  them. The step is carried by every announced write since
+ *  (`noteScrollerMoved`), so it stands where the view would be had the finger
+ *  not moved: a step above the view the lift sees is the finger's own
+ *  movement away from the end, whatever offset the view now reads.
+ *
+ *  It is asked at the strict bottom because that is the one place nothing
+ *  else can answer. Off the end, a view short of the end is itself the
+ *  evidence and the catch-up report decides it. On the end, a range that
+ *  shrank onto the reader - an end pad resetting - leaves them at the strict
+ *  bottom without their having returned to it, so their position proves
+ *  nothing and only the carried step still holds what they did. */
+function liftLeavesReaderAwayFromEnd(
+  arm: ReaderTouchArm,
+  geometry: ChatTimelineScrollGeometry,
+): boolean {
+  return (
+    isChatTimelineAtStrictBottom(geometry) &&
+    arm.scrollTopAtStep - geometry.scrollTop >
+      CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
+  );
+}
+
 /** Which way the finger moved a following reader since the arm's step. The
  *  list can move `scrollTop` under the finger to compensate growth, so the
  *  finger's own movement has two measures, and neither alone is fooled into
@@ -2789,23 +2812,23 @@ export function useChatTimelineFollowLatch(
       lastTouchClientYRef.current = null;
       const liveNode = listRef.current?.getScrollableNode();
       const liveGeometry = liveNode ? readScrollGeometry(liveNode) : null;
+      const measured =
+        liveGeometry !== null && isChatTimelineGeometryMeasurable(liveGeometry)
+          ? liveGeometry
+          : null;
       // Everything up to the lift was the reader's movement, so the ledger
       // resumes from the view as it stands rather than waiting on a report
       // the contact may never have produced.
-      if (
-        liveGeometry !== null &&
-        isChatTimelineGeometryMeasurable(liveGeometry)
-      ) {
-        expectedScrollTopRef.current = restingScrollTop(liveGeometry);
+      if (measured !== null) {
+        expectedScrollTopRef.current = restingScrollTop(measured);
       }
       const armedDeparture = armedReaderDepartureRef.current;
       if (armedDeparture?.source !== "touch") return;
       if (
         permissionRef.current &&
-        liveGeometry !== null &&
-        isChatTimelineGeometryMeasurable(liveGeometry) &&
-        !isChatTimelineAtStrictBottom(liveGeometry) &&
-        Math.abs(liveGeometry.scrollTop - armedDeparture.scrollTopAtStep) >
+        measured !== null &&
+        !isChatTimelineAtStrictBottom(measured) &&
+        Math.abs(measured.scrollTop - armedDeparture.scrollTopAtStep) >
           CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
       ) {
         // The finger moved the view since its last decided step, and that
@@ -2816,10 +2839,26 @@ export function useChatTimelineFollowLatch(
         // and the catch-up below follows it.
         observeLiveGeometry();
       }
+      // At the strict bottom that branch cannot run, and a reader the end
+      // came down onto is there without having returned: the step the arm
+      // carries is the only thing that still holds their own movement away.
+      // Published from here, because `followEndIfPermitted` below would
+      // otherwise re-grant follow and a correction would then move the
+      // content they are holding.
+      const departureAtLift =
+        measured !== null &&
+        liftLeavesReaderAwayFromEnd(armedDeparture, measured)
+          ? measured
+          : null;
       // The lift ends the contact. After a departure, follow is already off
       // and the catch-up is a no-op; after a tap it lets streaming follow
       // again and corrects any growth the contact held back.
       armedReaderDepartureRef.current = null;
+      if (departureAtLift !== null) {
+        // The arm is released first: an unannounced departure is the view's
+        // own, and an arm still standing would make this one the arm's.
+        publishUnannouncedDeparture(departureAtLift, true);
+      }
       followEndIfPermitted();
       if (touchWriteMayLandRef.current) {
         // A write the contact held back may land now, unannounced: the view
@@ -2954,6 +2993,7 @@ export function useChatTimelineFollowLatch(
     noteReaderLift,
     noteScrollerMoved,
     observeLiveGeometry,
+    publishUnannouncedDeparture,
     supersedePendingEndCorrection,
   ]);
 

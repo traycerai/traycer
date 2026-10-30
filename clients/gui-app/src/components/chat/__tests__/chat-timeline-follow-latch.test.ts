@@ -5834,6 +5834,113 @@ describe("useChatTimelineFollowLatch", () => {
     expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
   });
 
+  // A lift at the strict bottom that the range came down onto. iOS WebKit
+  // stops delivering `touchmove` once its native pan owns the touch, so the
+  // finger's movement away from the end is never reported; the carried step
+  // is the only thing that still holds it.
+  //
+  // 1. Following, {scrollTop: 70, scrollHeight: 570, clientHeight: 500} - max
+  //    70, the strict bottom. `touchstart` arms the step at 70.
+  // 2. The finger moves the view to 60, no scroll report.
+  // 3. An announced range write resets the end pad: the view goes 60 -> 50
+  //    and the max becomes 50. The arm's step is carried 70 -> 60.
+  // 4. `touchend`: the view reads 50 of max 50 - the strict bottom, because
+  //    the range came down onto the reader, not because they returned.
+  // 5. The tail grows 10px and a correction would move the view 50 -> 60.
+  function fingerAwayThenRangeCameDownOnto() {
+    const node = shim.makeNode({
+      scrollTop: 70,
+      scrollHeight: 570,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+    fireTouch(node, "touchstart", 400);
+    shim.setGeometry(node, { scrollTop: 60 });
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: { from: 60, fromEnd: 70, to: 50, intended: 50, cause: "range" },
+      }),
+    );
+    shim.setGeometry(node, { scrollTop: 50, scrollHeight: 550 });
+    fireTouch(node, "touchend", 400);
+    return { node, listRef, onFollowIntentChange, result };
+  }
+
+  it("leaves a reader who moved away from the end where they hold the content when a range came down onto them and the tail then grows", () => {
+    const { node, listRef, onFollowIntentChange, result } =
+      fingerAwayThenRangeCameDownOnto();
+
+    shim.setGeometry(node, { scrollHeight: 560 });
+    result.current.followEndIfPermitted();
+
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    expect(node.scrollTop).toBe(50);
+  });
+
+  it("re-grants follow to a reader whose finger moved toward the end and reached the strict bottom", () => {
+    const node = shim.makeNode({
+      scrollTop: 70,
+      scrollHeight: 570,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+    fireTouch(node, "touchstart", 400);
+    // The tail grows under the held finger and the pan carries the view down
+    // to the new end, with no report in between: the carried step (70) sits
+    // above nothing - it is short of the live offset.
+    shim.setGeometry(node, { scrollTop: 100, scrollHeight: 600 });
+    fireTouch(node, "touchend", 400);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    shim.setGeometry(node, { scrollHeight: 610 });
+    result.current.followEndIfPermitted();
+    expect(node.scrollTop).toBe(110);
+  });
+
+  it("keeps follow for a tap at the strict bottom that moved nothing", () => {
+    const node = shim.makeNode({
+      scrollTop: 70,
+      scrollHeight: 570,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+    fireTouch(node, "touchstart", 400);
+    fireTouch(node, "touchend", 400);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    shim.setGeometry(node, { scrollHeight: 580 });
+    result.current.followEndIfPermitted();
+    expect(node.scrollTop).toBe(80);
+  });
+
   // N6 - the in-between state the delta form gets wrong. A range move's
   // `fromEnd - to` is how much content it actually took away; the view's own
   // `to - from` is how far the view itself moved. They coincide only when the
