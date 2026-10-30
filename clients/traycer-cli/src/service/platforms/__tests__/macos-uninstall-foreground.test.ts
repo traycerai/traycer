@@ -50,8 +50,26 @@ describe("macOS service uninstall - foreground-leave field is inert", () => {
       readonly command: string;
       readonly args: readonly string[];
     }> = [];
+    // `uninstallService` now waits for each bootout to drain (polling
+    // `print` until the label is positively gone) before moving on - see
+    // `bootoutAndWait` in `macos.ts`. The two ownership-probe `print` calls
+    // happen before any bootout and still see the job loaded (exit 0); the
+    // drain-poll `print` after each bootout reports the label gone on its
+    // first call, so the wait never reaches its real budget.
+    let bootedOut = false;
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
+      if (args[0] === "bootout") {
+        bootedOut = true;
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+      if (args[0] === "print" && bootedOut) {
+        return {
+          stdout: "",
+          stderr: `Could not find service in domain for user gui: 501\n`,
+          exitCode: 113,
+        };
+      }
       return { stdout: "", stderr: "", exitCode: 0 };
     };
     const controller = createMacosController(runner);
@@ -72,7 +90,14 @@ describe("macOS service uninstall - foreground-leave field is inert", () => {
       expect(["print", "bootout"]).toContain(call.args[0]);
     }
     const verbs = calls.map((call) => call.args[0]);
-    expect(verbs).toEqual(["print", "print", "bootout", "bootout"]);
+    expect(verbs).toEqual([
+      "print",
+      "print",
+      "bootout",
+      "print",
+      "bootout",
+      "print",
+    ]);
 
     // pid.json is untouched: exists, byte-identical to what was there before
     // the call. `leaveForegroundRun` is not read by macOS's uninstall at all.
