@@ -243,6 +243,20 @@ describe("Slack app transport results", () => {
     });
   });
 
+  it.each([
+    { field: "an empty appId", app: { ...APP, appId: "" } },
+    { field: "a lowercase teamId", app: { ...APP, teamId: "t0abc" } },
+  ])("maps a 2xx app with $field to a network error", async ({ app }) => {
+    stubFetch(async () => jsonResponse(200, { app }));
+
+    await expect(
+      readSlackAppViaHttp(BASE, BEARER, null, BOT_ID),
+    ).resolves.toEqual({
+      kind: "network-error",
+      detail: "the Slack app read answer did not match the contract",
+    });
+  });
+
   it("never echoes the register request's secrets in a failure", async () => {
     stubFetch(
       async () =>

@@ -49,6 +49,7 @@ import {
   type SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
 import {
+  slackAppBotRequestSchema,
   slackAppRegisterRequestSchema,
   type SlackAppRegisterRequest,
 } from "@traycer/protocol/host/slack-app";
@@ -701,6 +702,15 @@ export function parseSlackAppRegisterRequest(
     );
   }
   return checked.data;
+}
+
+/** The bot a Slack app call names, against the protocol's bounds. */
+export function parseSlackAppBotId(value: unknown, name: string): string {
+  const checked = slackAppBotRequestSchema.safeParse({ botId: value });
+  if (!checked.success) {
+    throw new Error(`${name}: ${checked.error.issues[0].message}`);
+  }
+  return checked.data.botId;
 }
 
 /** `null` stays `null` (the server's default); anything else must parse. */

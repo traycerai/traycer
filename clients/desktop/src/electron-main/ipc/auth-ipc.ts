@@ -68,6 +68,7 @@ import {
   parseSandboxVerbGesture,
   parseSandboxPatchRequest,
   parseSecretRequestDecision,
+  parseSlackAppBotId,
   parseSlackAppRegisterRequest,
   parseStoredAuthTokens,
   parseStoredCredentialsIdentity,
@@ -323,7 +324,7 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
       channel,
       async (_event, bearerToken: unknown, botId: unknown) => {
         assertString(bearerToken, `${channel}.bearerToken`);
-        const parsedBotId = parseRequiredId(botId, `${channel}.botId`);
+        const parsedBotId = parseSlackAppBotId(botId, `${channel}.botId`);
         return viaHttp(
           config.serverBaseUrl,
           bearerToken,

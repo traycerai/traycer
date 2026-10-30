@@ -18,6 +18,17 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
  * vocabulary and still fails a parse on a value this build does not know.
  */
 
+/** A Slack id: a workspace, user or app id (`T…`, `U…`, `A…`). */
+const slackIdSchema = lazySchema(() =>
+  z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[A-Z0-9]+$/),
+);
+
+const botIdSchema = lazySchema(() => z.string().min(1).max(36));
+
 /** `POST /api/slack/apps/register`: the credentials from the app's Basic Information page. */
 export interface SlackAppRegisterRequest {
   readonly botId: string;
@@ -30,12 +41,8 @@ export interface SlackAppRegisterRequest {
 export const slackAppRegisterRequestSchema: z.ZodType<SlackAppRegisterRequest> =
   lazySchema(() =>
     z.object({
-      botId: z.string().min(1).max(36),
-      appId: z
-        .string()
-        .min(1)
-        .max(64)
-        .regex(/^[A-Z0-9]+$/),
+      botId: botIdSchema,
+      appId: slackIdSchema,
       clientId: z
         .string()
         .min(1)
@@ -50,6 +57,9 @@ export const slackAppRegisterRequestSchema: z.ZodType<SlackAppRegisterRequest> =
 export interface SlackAppBotRequest {
   readonly botId: string;
 }
+
+export const slackAppBotRequestSchema: z.ZodType<SlackAppBotRequest> =
+  lazySchema(() => z.object({ botId: botIdSchema }));
 
 /**
  * `registered`: credentials stored, never installed. `installed`: a
@@ -79,13 +89,13 @@ export interface SlackAppView {
 
 export const slackAppViewSchema: z.ZodType<SlackAppView> = lazySchema(() =>
   z.object({
-    botId: z.string(),
-    appId: z.string(),
+    botId: botIdSchema,
+    appId: slackIdSchema,
     clientId: z.string(),
     installState: z.enum(SLACK_INSTALL_STATES),
-    teamId: z.string().nullable(),
+    teamId: slackIdSchema.nullable(),
     teamName: z.string().nullable(),
-    botUserId: z.string().nullable(),
+    botUserId: slackIdSchema.nullable(),
     installedAt: z.number().int().nullable(),
   }),
 );
@@ -122,9 +132,7 @@ export interface SlackAppInstallUrlResponse {
 }
 
 export const slackAppInstallUrlResponseSchema: z.ZodType<SlackAppInstallUrlResponse> =
-  lazySchema(() =>
-    z.object({ url: z.string().min(1), expiresAt: z.number().int() }),
-  );
+  lazySchema(() => z.object({ url: z.string(), expiresAt: z.number().int() }));
 
 /**
  * The server's error body (`{ statusCode, error, code }`). `code` is the word
