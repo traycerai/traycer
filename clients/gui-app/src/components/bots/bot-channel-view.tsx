@@ -150,15 +150,33 @@ function channelLandingOf(
 }
 
 /**
+ * The listed thread whose panel is drawn: none while the channel's own read
+ * failed, loads, or found no channel, which draw no panel, or while no
+ * thread is open beside it.
+ */
+function drawnPanelThreadId(args: {
+  readonly channelReadFailed: boolean;
+  readonly channel: BotConversationRecord | null;
+  readonly threadOpen: boolean;
+  readonly openThread: BotThreadSummary | null;
+}): string | null {
+  if (args.channelReadFailed || args.channel === null || !args.threadOpen) {
+    return null;
+  }
+  return args.openThread?.threadId ?? null;
+}
+
+/**
  * The landing the open thread's panel takes, held from the channel's mount:
- * one on a message of the listed thread open beside it. It waits through the
- * thread list's first load; once handed to that thread's panel it lands
- * there once, so the thread leaving the panel - another thread, the memory
- * in its place, the panel closed - spends it, and so does `spend`.
+ * one on a message of the listed thread whose panel is drawn
+ * (`drawnThreadId`). It waits through the first loads that draw no panel;
+ * once handed to that thread's panel it lands there once, so the panel
+ * going - another thread, the memory in its place, the panel closed, the
+ * channel's read failing - spends it, and so does `spend`.
  */
 function useThreadPanelLanding(
   landOn: BotChannelLanding | null,
-  openThreadId: string | null,
+  drawnThreadId: string | null,
 ): {
   readonly landing: BotTranscriptLanding | null;
   readonly spend: () => void;
@@ -168,13 +186,13 @@ function useThreadPanelLanding(
       ? { landing: landOn, handed: false }
       : null,
   );
-  const showing = held !== null && openThreadId === held.landing.threadId;
+  const showing = held !== null && drawnThreadId === held.landing.threadId;
   if (held !== null && showing && !held.handed) {
     setHeld({ landing: held.landing, handed: true });
   } else if (
     held !== null &&
     !showing &&
-    (held.handed || openThreadId !== null)
+    (held.handed || drawnThreadId !== null)
   ) {
     setHeld(null);
   }
@@ -573,7 +591,12 @@ export function BotChannelView(props: {
       : (threadsByPost.get(openThreadPostId) ?? null);
   const threadLanding = useThreadPanelLanding(
     props.landOn,
-    openThread?.threadId ?? null,
+    drawnPanelThreadId({
+      channelReadFailed: conversations.isError,
+      channel,
+      threadOpen,
+      openThread,
+    }),
   );
   const { refetch: refetchThreads } = threadList;
   const panelThread = useMemo<BotThreadPanelThread>(() => {

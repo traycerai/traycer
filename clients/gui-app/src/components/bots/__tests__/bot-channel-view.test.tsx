@@ -94,6 +94,8 @@ const mocks = vi.hoisted(() => {
       // `false`: the thread list has not answered (pending, or failed).
       threadListAnswered: true,
       threadListError: false,
+      // Whether the read of the bot's conversations failed.
+      conversationsError: false,
       // Whether a `bot.conversation.send` is in flight.
       sending: false,
       chats,
@@ -116,7 +118,7 @@ vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
     data: { conversations: mocks.state.conversations },
-    isError: false,
+    isError: mocks.state.conversationsError,
     refetch: vi.fn(),
   }),
 }));
@@ -489,6 +491,7 @@ beforeEach(() => {
   mocks.answerIds = [];
   mocks.state.threadListAnswered = true;
   mocks.state.threadListError = false;
+  mocks.state.conversationsError = false;
   mocks.state.sending = false;
   mocks.state.chats = {};
   mocks.postIds = [];
@@ -1409,6 +1412,30 @@ describe("<BotChannelView /> open thread", () => {
       answer: false,
       sent: null,
     });
+
+    expect(threadLanding()).toBe("none");
+  });
+
+  it("lands the thread once: a failed read of the channel and its retry draw it where it opens", () => {
+    mountLanding = {
+      messageId: "reply-a9",
+      sendPostId: null,
+      threadId: "thread-a",
+      visit: 1,
+    };
+    const view = mount({ openThreadPostId: "post-a" });
+    const threadLanding = (): string | null =>
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on");
+    expect(threadLanding()).toBe("reply-a9");
+
+    mocks.state.conversationsError = true;
+    view.rerender();
+    expect(screen.getByTestId("bot-channel-error")).toBeTruthy();
+    expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
+    mocks.state.conversationsError = false;
+    view.rerender();
 
     expect(threadLanding()).toBe("none");
   });
