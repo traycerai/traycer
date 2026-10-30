@@ -67,7 +67,13 @@ async function startServer(): Promise<TestServer> {
         code: payload.length >= 2 ? payload.readUInt16BE(0) : 1005,
         reason: payload.subarray(2).toString("utf8"),
       });
-      socket.end(Buffer.concat([Buffer.from([0x88, payload.length]), payload]));
+      // A server-initiated close has already ended this socket; the client's
+      // echo then needs no reply.
+      if (!socket.writableEnded) {
+        socket.end(
+          Buffer.concat([Buffer.from([0x88, payload.length]), payload]),
+        );
+      }
     });
     legs.push({
       path: req.url ?? "",
@@ -231,6 +237,10 @@ describe("dev relay drop switch", () => {
     lastLeg(relay).closeFromServer(1000);
     await peerClosed;
 
+    expect(await lastLeg(relay).clientClosed).toEqual({
+      code: 1000,
+      reason: "",
+    });
     expect(dropRelay()).toBe(0);
   });
 
