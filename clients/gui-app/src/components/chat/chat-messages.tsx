@@ -2818,21 +2818,26 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // apply this key's deterministic step as the replacement movement. The
       // resulting native `scroll` event is what determines follow, via
       // the latch's geometry observer - no separate reattach check needed here.
+      const towardEnd =
+        scrollAction === "page-down" ||
+        scrollAction === "line-down" ||
+        scrollAction === "bottom";
       cancelTimelineLiveFollowForUserNavigation({
-        direction:
-          scrollAction === "page-down" ||
-          scrollAction === "line-down" ||
-          scrollAction === "bottom"
-            ? "toward-end"
-            : "away-from-end",
+        direction: towardEnd ? "toward-end" : "away-from-end",
         freezeInFlightScroll: true,
         publishesReaderPosition: true,
       });
+      const scrollTopBefore = scroller.scrollTop;
       applyChatKeyboardScroll(
         scroller,
         scrollAction,
         chatTimelineEndScrollTop(timeline, scroller),
       );
+      // A step toward the end that moved nothing sends no scroll event: at
+      // the end, as a wheel down there, it is the reader asking for the end.
+      if (towardEnd && scroller.scrollTop === scrollTopBefore) {
+        followLatchRef.current?.followEndIfPermitted();
+      }
     },
     [cancelTimelineLiveFollowForUserNavigation],
   );
