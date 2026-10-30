@@ -360,6 +360,28 @@ const CHAT_TIMELINE_NAVIGATION_LANDING_EPSILON_PX = 1;
  *  multiple manual pill re-clicks to converge and the goal is to absorb that
  *  automatically in one operation. */
 const CHAT_TIMELINE_NAVIGATION_MAX_RETRIES = 3;
+/** How far the saved row's own position may differ between two consecutive
+ *  settles and still count as having HELD STILL, for the restore's
+ *  still-settling check below. A tolerance, never a cap: it is not a budget
+ *  and nothing is refused for exceeding it.
+ *
+ *  It exists because the row's position never comes perfectly to rest. Both a
+ *  half-measured and a fully-measured transcript wobble by 12px indefinitely
+ *  (the pump's padding cycle - a scroll height alternating 11319/11331 for a
+ *  hundred consecutive frames, with `scrollAdjustBy` tracking it, measured in
+ *  CI), so strict equality would hold only when two settles happened to catch
+ *  the same phase of it: a coin flip rather than convergence, and a loop that
+ *  could re-issue forever against a transcript that is perfectly healthy.
+ *
+ *  The error it has to catch is three orders larger: a restore that accepted
+ *  while the transcript was half measured put the saved row at 4430 where a
+ *  settled one puts it at ~10250, a 5,820px miss. Anything comfortably above
+ *  the wobble and far below that separates them, so this sits five times the
+ *  measured wobble and ninety times inside the failure. Acceptance itself
+ *  still uses `CHAT_TIMELINE_NAVIGATION_LANDING_EPSILON_PX`; this only decides
+ *  whether the position is still moving. If either measurement above changes,
+ *  this comment needs updating with the number. */
+const CHAT_TIMELINE_RESTORE_POSITION_HELD_EPSILON_PX = 64;
 
 // TEMPORARY DIAGNOSTIC - probe branch only, never for `main`. Records which
 // terminal path the mount-time measured restore takes, so a real CI failure of
@@ -977,11 +999,24 @@ function awaitChatTimelineScrollPromiseSettle(
  * once every retry is exhausted and the landing is still off, or
  * `shouldYieldToReader` fires (neither ever called if `isAborted` fires
  * first).
+ *
+ * `isStillSettling` separates "the target is not where it will end up yet"
+ * from "this landing missed". A caller whose target can MOVE under it while
+ * the list measures - the rows above a saved row resolving from estimates to
+ * real heights - would otherwise spend its whole budget on placements aimed at
+ * a coordinate that no longer existed, and then report the last one as the
+ * reader's arrival. When it answers true the same semantic target is re-issued
+ * and the loop re-settles WITHOUT consuming a retry, because those placements
+ * were not aimed badly. The budget still covers real undershoots, and the
+ * reader checks above still end the loop, so a caller that answers true
+ * forever is bounded by the reader rather than by the count: its own predicate
+ * has to be one that goes false once the target stops moving.
  */
 function settleChatTimelineNavigation(input: {
   readonly awaitSettle: (onSettle: () => void) => () => void;
   readonly isAborted: () => boolean;
   readonly shouldYieldToReader: () => boolean;
+  readonly isStillSettling: () => boolean;
   readonly validate: () => boolean;
   readonly reissue: () => void;
   readonly onSettledValid: () => void;
@@ -1000,6 +1035,14 @@ function settleChatTimelineNavigation(input: {
       }
       if (input.shouldYieldToReader()) {
         input.onSettledInvalid();
+        return;
+      }
+      // Deliberately below `shouldYieldToReader`: a real gesture outranks a
+      // target that is still moving, or a caller waiting for its own geometry
+      // to settle would keep re-issuing over a reader who has taken over.
+      if (input.isStillSettling()) {
+        input.reissue();
+        attempt(retriesLeft);
         return;
       }
       if (input.validate()) {
@@ -2734,6 +2777,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         // its own - a real gesture already bumps the generation and is
         // caught by `isAborted` above.
         shouldYieldToReader: () => false,
+        // This target cannot move under the loop while it settles: a
+        // precomputed offset or an already-measured row, not a position summed
+        // over rows that are still resolving from estimates.
+        isStillSettling: () => false,
         // While the reader still follows, a landing short of the end is a
         // tail that outgrew it - a streaming reply can grow past every retry
         // before its `scrollend` - and the latch's own corrections chase it.
@@ -3390,6 +3437,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         // No reader-departure detection here - a real gesture already bumps
         // the generation and is caught above.
         shouldYieldToReader: () => false,
+        // This target cannot move under the loop while it settles: a
+        // precomputed offset or an already-measured row, not a position summed
+        // over rows that are still resolving from estimates.
+        isStillSettling: () => false,
         validate: () =>
           !lastSettleTimedOut &&
           chatTimelineNavigationSettledAtLocation(
@@ -3595,6 +3646,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         () => pendingRestoreScrollPromise,
       );
       let lastRestoreSettleTimedOut = false;
+      // The saved row's own position as of the PREVIOUS settle, for the
+      // still-settling check below. A closure local, not a ref: it belongs to
+      // this one restore, and a newer restore or navigation gets a fresh one
+      // after superseding this loop through the cleanup above. `null` means no
+      // settle has read it yet.
+      let rowPositionAtPreviousSettle: number | null = null;
       const cancelSettle = settleChatTimelineNavigation({
         awaitSettle: (onSettle) =>
           awaitChatTimelineScrollPromiseSettle(
@@ -3620,6 +3677,45 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           isAborted() ||
           readerPositionGenerationRef.current !== generationAtIssue,
         shouldYieldToReader: () => false,
+        // The saved row's position is a sum over the rows ABOVE it, which
+        // resolve from estimates to real heights over several commits, so it
+        // keeps moving while the transcript measures - and the landing check
+        // compares it against a `scrollTop` those same estimates produced.
+        // Both sides then read one number and agree with each other wherever
+        // it happens to point: observed on CI accepting the saved row at 4430
+        // on a half-measured transcript that settled with the row at ~10250,
+        // leaving the reader a screenful away with the row never mounted and
+        // the restore reporting a valid landing. Require the position to have
+        // HELD STILL since the previous settle before the landing check is
+        // allowed to speak. Growth below the row - a streaming reply arriving
+        // under the reader - cannot move a row above it, so it never defers
+        // acceptance here.
+        isStillSettling: () => {
+          // A wait that EXPIRED never settled, so the position it would read
+          // says nothing about whether the target is still moving - the
+          // command behind it may not have run at all. An expiry is the
+          // abnormal case the retry budget already exists for: leave it to
+          // `validate`, which fails it, and to the budget, which bounds it.
+          if (lastRestoreSettleTimedOut) return false;
+          const index = targetIndex();
+          if (index === null) return false;
+          const livePosition = measureFreeRestoreGeometry(
+            list,
+            index,
+          ).rowPosition;
+          const previousPosition = rowPositionAtPreviousSettle;
+          rowPositionAtPreviousSettle = livePosition;
+          if (livePosition === null || previousPosition === null) {
+            // The first settle has nothing to compare against, so it cannot
+            // tell a landed restore from one whose target is still moving.
+            // Re-issue once and judge the position against this reading.
+            return true;
+          }
+          return (
+            Math.abs(livePosition - previousPosition) >
+            CHAT_TIMELINE_RESTORE_POSITION_HELD_EPSILON_PX
+          );
+        },
         validate: () => !lastRestoreSettleTimedOut && landedAtSavedLocation(),
         reissue: () => {
           const index = targetIndex();
@@ -3816,6 +3912,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           return true;
         },
         shouldYieldToReader: () => false,
+        // This target cannot move under the loop while it settles: a
+        // precomputed offset or an already-measured row, not a position summed
+        // over rows that are still resolving from estimates.
+        isStillSettling: () => false,
         validate: () => !lastSettleTimedOut && landedOnHydratedRow(),
         reissue: () => {
           const index = targetIndex();
