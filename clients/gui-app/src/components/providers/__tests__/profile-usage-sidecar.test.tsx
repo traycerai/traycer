@@ -159,6 +159,37 @@ describe("ProfileUsageSidecar states", () => {
     expect(screen.getByRole("button", { name: action })).toBeDefined();
   });
 
+  it("says which credential chats use, in place of the refresh failure", async () => {
+    render(
+      <ProfileUsageSidecar
+        anchor={anchor}
+        profile={PROFILE}
+        entry={entry({
+          refreshStatus: "idle",
+          projection: {
+            kind: "unavailable",
+            severity: "unknown",
+            reason: "rate_limits_not_available",
+            chatCredential: {
+              kind: "token",
+              source: "CLAUDE_CODE_OAUTH_TOKEN",
+            },
+            compactWindow: null,
+            windows: [],
+            checkedAt: NOW,
+          },
+        })}
+        isHostReady
+      />,
+    );
+    expect(await screen.findByText("Usage unavailable")).toBeDefined();
+    expect(
+      screen.getByText(
+        "Chats here sign in with CLAUDE_CODE_OAUTH_TOKEN instead of your Claude login.",
+      ),
+    ).toBeDefined();
+  });
+
   it("retains and dims last-good windows after failure with retry", async () => {
     render(
       <ProfileUsageSidecar

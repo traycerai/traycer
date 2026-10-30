@@ -35,6 +35,7 @@ import {
 } from "@traycer/protocol/host/agent/profiles";
 import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
+  degradeProviderRateLimitsToV151,
   providerRateLimitsSchema,
   providerRateLimitsSchemaV151,
   providersConsumeRateLimitResetCreditRequestSchema,
@@ -2319,6 +2320,111 @@ describe("host.getRateLimitUsage v6.0 kimi arm + downgrade bridges", () => {
         expect(
           downgradeResponseAcrossMajors(profileRegistry, 8, toMajor, response),
         ).toEqual({ ok: true, value: response });
+      },
+    );
+  });
+  describe("the unavailable arm's chatCredential", () => {
+    const withCredential = {
+      provider: "claude-code" as const,
+      available: false as const,
+      reason: "rate_limits_not_available" as const,
+      chatCredential: { kind: "api-key" as const, source: "ANTHROPIC_API_KEY" },
+    };
+    const bare = {
+      provider: "claude-code" as const,
+      available: false as const,
+      reason: "rate_limits_not_available" as const,
+    };
+
+    it("is kept on the live 6.0 / 4.0 / 8.0 responses", () => {
+      expect(usage(withCredential).providerRateLimits).toEqual(withCredential);
+      expect(
+        providersRefreshProfileStatusResponseSchema.parse({
+          providerRateLimits: withCredential,
+        }).providerRateLimits,
+      ).toEqual(withCredential);
+      expect(
+        agentGetProviderProfileRateLimitsResponseSchemaV8.parse({
+          rateLimits: withCredential,
+          usageUpdatedAt: null,
+        }).rateLimits,
+      ).toEqual(withCredential);
+    });
+
+    it("rejects an unknown kind and an empty source on the live union", () => {
+      expect(
+        providerRateLimitsSchema.safeParse({
+          ...withCredential,
+          chatCredential: { kind: "password", source: "x" },
+        }).success,
+      ).toBe(false);
+      expect(
+        providerRateLimitsSchema.safeParse({
+          ...withCredential,
+          chatCredential: { kind: "token", source: "" },
+        }).success,
+      ).toBe(false);
+    });
+
+    it("degradeProviderRateLimitsToV151 drops it and leaves the rest of the row alone", () => {
+      expect(degradeProviderRateLimitsToV151(withCredential)).toEqual(bare);
+      expect(degradeProviderRateLimitsToV151(bare)).toEqual(bare);
+    });
+
+    it.each([5, 4, 3, 2, 1] as const)(
+      "host.getRateLimitUsage 6 -> %i never carries it",
+      (toMajor) => {
+        expect(
+          downgradeResponseAcrossMajors(
+            registry,
+            6,
+            toMajor,
+            usage(withCredential),
+          ),
+        ).toEqual({
+          ok: true,
+          value: {
+            totalTokens: 0,
+            remainingTokens: 0,
+            providerRateLimits: bare,
+          },
+        });
+      },
+    );
+
+    it.each([3, 2, 1] as const)(
+      "providers.refreshProfileStatus 4 -> %i never carries it",
+      (toMajor) => {
+        expect(
+          downgradeResponseAcrossMajors(
+            hostRpcRegistry["providers.refreshProfileStatus"],
+            4,
+            toMajor,
+            providersRefreshProfileStatusResponseSchema.parse({
+              providerRateLimits: withCredential,
+            }),
+          ),
+        ).toEqual({ ok: true, value: { providerRateLimits: bare } });
+      },
+    );
+
+    it.each([7, 6, 5, 4, 3, 2, 1] as const)(
+      "agent.getProviderProfileRateLimits 8 -> %i never carries it",
+      (toMajor) => {
+        expect(
+          downgradeResponseAcrossMajors(
+            hostRpcRegistry["agent.getProviderProfileRateLimits"],
+            8,
+            toMajor,
+            agentGetProviderProfileRateLimitsResponseSchemaV8.parse({
+              rateLimits: withCredential,
+              usageUpdatedAt: 1_735_689_600_000,
+            }),
+          ),
+        ).toEqual({
+          ok: true,
+          value: { rateLimits: bare, usageUpdatedAt: 1_735_689_600_000 },
+        });
       },
     );
   });
