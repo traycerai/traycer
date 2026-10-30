@@ -3213,6 +3213,9 @@ ${programArgsXml}
 const PROGRAM_ARGUMENTS_PATTERN =
   /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/;
 
+const EXIT_TIMEOUT_PATTERN =
+  /<key>ExitTimeOut<\/key>\s*<integer>(\d+)<\/integer>/;
+
 async function readRegisteredCliInvocation(
   label: ServiceLabel,
 ): Promise<CliInvocation | null> {
@@ -3269,6 +3272,8 @@ type MacosDefinitionPlan =
       readonly kind: "stale";
       readonly form: ServiceDefinitionForm;
       readonly appliesAt: ServiceDefinitionAppliesAt;
+      /** Whether the launcher file is rewritten. */
+      readonly writeLauncher: boolean;
       /** The patched plist, or `null` when only the launcher file changes. */
       readonly plistText: string | null;
     };
@@ -3364,6 +3369,37 @@ function patchProgramArguments(
   );
 }
 
+/**
+ * Whether the plist gives the job at least today's `ExitTimeOut`. A job
+ * without one gets launchd's 5 s default, and a stop then SIGKILLs the
+ * supervisor while the host it runs is still shutting down.
+ */
+function exitTimeOutIsCurrent(xml: string): boolean {
+  const seconds = xml.match(EXIT_TIMEOUT_PATTERN)?.[1];
+  return (
+    seconds !== undefined &&
+    Number.parseInt(seconds, 10) >= LAUNCHD_EXIT_TIMEOUT_SECONDS
+  );
+}
+
+/**
+ * The plist with today's `ExitTimeOut`: the existing value replaced, or the
+ * key added at the end of the top-level dict. The rest is kept byte for
+ * byte, as in {@link patchProgramArguments}. `null` when the key holds
+ * something other than an integer, or the plist has no closing dict to add
+ * it to.
+ */
+function patchExitTimeOut(xml: string): string | null {
+  const entry = `<key>ExitTimeOut</key>\n  <integer>${LAUNCHD_EXIT_TIMEOUT_SECONDS}</integer>`;
+  if (EXIT_TIMEOUT_PATTERN.test(xml)) {
+    return xml.replace(EXIT_TIMEOUT_PATTERN, () => entry);
+  }
+  if (xml.includes("<key>ExitTimeOut</key>")) return null;
+  const close = xml.lastIndexOf("</dict>");
+  if (close === -1) return null;
+  return `${xml.slice(0, close)}  ${entry}\n${xml.slice(close)}`;
+}
+
 async function planMacosDefinition(
   label: ServiceLabel,
 ): Promise<MacosDefinitionPlan> {
@@ -3393,35 +3429,52 @@ async function planMacosDefinition(
       reason: "its ProgramArguments are not a Traycer host start",
     };
   }
+  // The loaded job keeps the plist launchd read until it is unloaded (a
+  // loaded job whose file is gone keeps running from memory until logout -
+  // see `retireCompetingRegistration`), and unloading it is the `bootout`
+  // this path must not run. So a plist rewrite waits for the next load.
+  const exitTimeOutStale = !exitTimeOutIsCurrent(xml);
   if (registered.form === "launcher-file") {
     // `ProgramArguments` already names the launcher with the registered
     // invocation after it, which is exactly the vector `buildPlist` emits,
-    // so the launcher file's body is the whole question.
-    if (await launcherFileIsCurrent(label)) return { kind: "current" };
-    // launchd execs `ProgramArguments[0]` on every spawn, so a rewritten
-    // launcher file applies from the next one - in-session respawns too.
+    // so the launcher file's body is the rest of the question.
+    const launcherStale = !(await launcherFileIsCurrent(label));
+    if (!launcherStale && !exitTimeOutStale) return { kind: "current" };
+    const plistText = exitTimeOutStale ? patchExitTimeOut(xml) : null;
+    if (exitTimeOutStale && plistText === null) return unreadableExitTimeOut;
     return {
       kind: "stale",
-      form: "launcher-file",
-      appliesAt: "next-start",
-      plistText: null,
+      form: launcherStale ? "launcher-file" : "exit-timeout",
+      // launchd execs `ProgramArguments[0]` on every spawn, so a rewritten
+      // launcher file alone applies from the next one - in-session respawns
+      // too.
+      appliesAt: exitTimeOutStale ? "next-login" : "next-start",
+      writeLauncher: launcherStale,
+      plistText,
     };
   }
+  const withLauncher = patchProgramArguments(xml, [
+    serviceLauncherScriptPath(label),
+    registered.cli.command,
+    ...registered.cli.args,
+  ]);
+  const plistText = exitTimeOutStale
+    ? patchExitTimeOut(withLauncher)
+    : withLauncher;
+  if (plistText === null) return unreadableExitTimeOut;
   return {
     kind: "stale",
     form: registered.form,
-    // The loaded job keeps the `ProgramArguments` launchd cached until it is
-    // unloaded (a loaded job whose file is gone keeps running from memory
-    // until logout - see `retireCompetingRegistration`), and unloading it is
-    // the `bootout` this path must not run. So the rewrite waits for login.
     appliesAt: "next-login",
-    plistText: patchProgramArguments(xml, [
-      serviceLauncherScriptPath(label),
-      registered.cli.command,
-      ...registered.cli.args,
-    ]),
+    writeLauncher: true,
+    plistText,
   };
 }
+
+const unreadableExitTimeOut: MacosDefinitionPlan = {
+  kind: "unrecognized",
+  reason: "its ExitTimeOut is not an integer",
+};
 
 /** Read-only: what a refresh would find. No write, no `launchctl`. */
 export async function inspectMacosServiceDefinition(
@@ -3433,9 +3486,10 @@ export async function inspectMacosServiceDefinition(
 }
 
 /**
- * Write the current launcher file and, for a plist that predates it, patch
- * the plist's `ProgramArguments` to run it - the launcher first, because the
- * plist it is patched into executes it. No `launchctl` at all.
+ * Write the current launcher file when it is stale and, for a plist that
+ * predates it or gives the job less than today's `ExitTimeOut`, patch the
+ * plist - the launcher first, because the plist it is patched into executes
+ * it. No `launchctl` at all.
  */
 export async function refreshMacosServiceDefinition(
   label: ServiceLabel,
@@ -3456,14 +3510,16 @@ export async function refreshMacosServiceDefinition(
       break;
   }
   try {
-    const launcherPath = serviceLauncherScriptPath(label);
     await verifyServiceMutationAuthority();
-    await mkdir(dirname(launcherPath), { recursive: true });
-    await replaceDefinitionFile(
-      launcherPath,
-      buildHostStartLauncherScript(label.id),
-      0o755,
-    );
+    if (plan.writeLauncher) {
+      const launcherPath = serviceLauncherScriptPath(label);
+      await mkdir(dirname(launcherPath), { recursive: true });
+      await replaceDefinitionFile(
+        launcherPath,
+        buildHostStartLauncherScript(label.id),
+        0o755,
+      );
+    }
     if (plan.plistText !== null) {
       const manifestPath = serviceManifestPath(label);
       await replaceDefinitionFile(
@@ -3476,7 +3532,7 @@ export async function refreshMacosServiceDefinition(
     if (isServiceMutationAuthorityError(cause)) throw cause;
     throw serviceDefinitionRefreshFailed({
       subject,
-      reason: `the launcher could not be rewritten (${describeCause(cause)})`,
+      reason: `the definition could not be rewritten (${describeCause(cause)})`,
       remedy: SERVICE_REFRESH_COMMAND,
     });
   }
