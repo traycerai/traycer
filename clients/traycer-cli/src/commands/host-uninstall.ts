@@ -42,6 +42,16 @@ import {
   getPublishedProcessIdentityVerdict,
   type PublishedProcessIdentityVerdict,
 } from "../store/process-identity";
+import {
+  SHUTDOWN_FORCE_EXIT_MS,
+  STOP_EXIT_GRACE_MARGIN_MS,
+} from "@traycer/protocol/host/lifecycle-constants";
+
+// How long the captured host gets to finish exiting after the stop: the
+// host's own force-exit watchdog plus the stop margin, the same derivation as
+// the platform stop paths' exit timeout.
+const HOST_EXIT_WAIT_MS = SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS;
+const HOST_EXIT_POLL_MS = 150;
 
 // `traycer host uninstall [--all]`:
 //   default → cooperatively stop a running host, then remove the installed +
@@ -413,7 +423,10 @@ async function runHostUninstallWithActuators(
     if (published !== null) {
       observed.set(
         publishedProcessKey(published),
-        await observeLiveness(deps, ctx, published),
+        // A refused stop (a busy host) left it alive on purpose: nothing to wait for.
+        stopResolved
+          ? await observeLivenessUntilExit(deps, ctx, published)
+          : await observeLiveness(deps, ctx, published),
       );
     }
     // Registration is verified too, for the same reason: on Linux the unit
@@ -801,6 +814,50 @@ async function observeLiveness(
       errorMessage: err instanceof Error ? err.message : String(err),
     });
     return "unknown";
+  }
+}
+
+/**
+ * `observeLiveness` that gives a process not yet proven gone until it exits,
+ * bounded by the host's own shutdown budget.
+ *
+ * Only `gone` ends the wait early. `unknown` keeps polling too: the identity
+ * probe reads liveness and then the start identity, so a normal exit between the
+ * two reads answers `indeterminate` for a process that is dead. Persistent
+ * `unknown` still ends at the deadline as `unknown`, which keeps the install.
+ *
+ * The stop above cannot be trusted to have waited. On macOS `--all` deregisters
+ * the job first, and `launchctl bootout --wait` returns after launchd's 5 s
+ * `ExitTimeOut` has SIGKILLed only the supervisor; the host child lives on as
+ * an orphan through its own graceful shutdown, and has already deleted
+ * `pid.json`. The stop then reads no record, has no pid to wait on, and
+ * resolves at once. This is the one place that still holds the pid captured
+ * before the teardown.
+ */
+async function observeLivenessUntilExit(
+  deps: RunHostUninstallDeps,
+  ctx: RunHostUninstallContext,
+  published: PublishedHost,
+): Promise<LivenessObservation> {
+  const deadline = Date.now() + HOST_EXIT_WAIT_MS;
+  let waiting = false;
+  for (;;) {
+    const verdict = await observeLiveness(deps, ctx, published);
+    if (verdict === "gone" || Date.now() >= deadline) return verdict;
+    if (!waiting) {
+      waiting = true;
+      ctx.progress({
+        stage: "service-stop",
+        message: `waiting for the ${ctx.environment} host to finish shutting down`,
+        percent: null,
+        bytes: null,
+        totalBytes: null,
+        workUnits: null,
+      });
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, HOST_EXIT_POLL_MS);
+    });
   }
 }
 

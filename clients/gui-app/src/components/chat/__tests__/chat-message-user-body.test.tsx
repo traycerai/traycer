@@ -959,8 +959,11 @@ describe("<UserMessageBody /> agent messages", () => {
         drainFrames();
         expect(scrollTo).toHaveBeenCalledWith({ top: 436, behavior: "auto" });
       });
-      // The fixture lays out no scroll range, so the target clamps to it.
-      expect(moves).toEqual([{ from: 300, fromEnd: 0, to: 436, intended: 0 }]);
+      // The fixture lays out no scroll range, so the target clamps to it. The
+      // reveal writes the offset, so it announces `cause: "offset"`.
+      expect(moves).toEqual([
+        { from: 300, fromEnd: 0, to: 436, intended: 0, cause: "offset" },
+      ]);
       expect(scrollTo).not.toHaveBeenCalledWith(
         expect.objectContaining({ top: 620 - 500 + 16 }),
       );

@@ -30,6 +30,7 @@ import {
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
+import { recordNegotiatedHostManifest } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   BotConversationSendRequest,
@@ -93,6 +94,8 @@ const mocks = vi.hoisted(() => ({
   channelHandle: null as ChatSessionStoreHandle | null,
   threadHandle: null as ChatSessionStoreHandle | null,
   client: null as HostRequester<HostRpcRegistry> | null,
+  /** The client of the host that runs the bot, which takes an Update. */
+  boundClient: null as HostRequester<HostRpcRegistry> | null,
   threads: [] as BotThreadSummary[],
   openSettings: vi.fn<(opts: OpenSettingsModalOpts) => void>(),
 }));
@@ -113,6 +116,13 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
+}));
+// The app's host binding names a client per host; here only the host that
+// runs the bot has one.
+vi.mock("@/lib/host/binding-host-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host/binding-host-client")>()),
+  resolveNamedHostClient: (_binding: unknown, hostId: string) =>
+    hostId === BOUND_HOST_ID ? mocks.boundClient : null,
 }));
 vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
   ...(await importOriginal<
@@ -385,6 +395,34 @@ function hostClientRecordingSends(): HostRequester<HostRpcRegistry> {
   return spine.createRequester(mockRemoteHostEntry);
 }
 
+/** What the bot's host was asked to update, in order. */
+let ensured: ReadonlyArray<string>;
+
+/** The bot's host's client, over a messenger whose `providers.ensurePack` records the provider. */
+function boundHostClientRecordingUpdates(): HostRequester<HostRpcRegistry> {
+  const messenger = new MockHostMessenger<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    requestId: () => "request-update",
+    handlers: {
+      "providers.ensurePack": (params) => {
+        ensured = [...ensured, params.providerId];
+        return Promise.resolve({ managedInstallState: null });
+      },
+    },
+  });
+  const spine = new HostClient<HostRpcRegistry>({
+    registry: hostRpcRegistry,
+    invalidator: createHostQueryInvalidator(new QueryClient()),
+    findHostById: (hostId) =>
+      hostId === mockRemoteHostEntry.hostId ? mockRemoteHostEntry : null,
+    messenger,
+  });
+  spine.setRequestContext(
+    createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
+  );
+  return spine.createRequester(mockRemoteHostEntry);
+}
+
 /** The channel with `post` in it, the viewer's own unless a case says otherwise. */
 function mountChannel(openThread: BotOpenThread | null, post: Message): void {
   mountChannelWith(openThread, [post]);
@@ -397,9 +435,11 @@ function mountChannelWith(
   mocks.channelHandle = {
     store: createChannelStore(posts),
   } as ChatSessionStoreHandle;
+  // One client for the mount, as the app has: a rerender keeps its cache.
+  const queryClient = new QueryClient();
   const tree = (): ReactElement => (
     <StrictMode>
-      <QueryClientProvider client={new QueryClient()}>
+      <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <ChatExpansionTestProviders tileInstanceId="tile-1">
             <BotChannelView
@@ -452,6 +492,8 @@ beforeEach(() => {
   mocks.threads = [];
   activityStore.setState({ activity: null });
   mocks.client = hostClientRecordingSends();
+  ensured = [];
+  mocks.boundClient = boundHostClientRecordingUpdates();
   // A host that can retry and replace, and a viewer who wrote the post.
   negotiateBotSend(HOST_ID, { major: 1, minor: 1 });
   signInViewer(VIEWER_USER_ID);
@@ -465,6 +507,7 @@ afterEach(() => {
   mocks.channelHandle = null;
   mocks.threadHandle = null;
   mocks.client = null;
+  mocks.boundClient = null;
 });
 
 describe("<BotChannelView /> Retry on a post the bot failed to answer", () => {
@@ -1095,6 +1138,49 @@ describe("<BotChannelView /> the line under a post the bot did not answer", () =
     expect(mocks.openSettings.mock.calls[0][0].section).toBe("providers");
     expect(mocks.openSettings.mock.calls[0][0].hostId).toBe(BOUND_HOST_ID);
     expect(sent).toEqual([]);
+  });
+
+  it("adds Update for an out-of-date command-line tool, which updates the provider on the host that runs the bot", async () => {
+    const user = userEvent.setup();
+    recordNegotiatedHostManifest(BOUND_HOST_ID, {
+      "providers.ensurePack": { major: 1, minor: 0 },
+    });
+    activityStore.setState({
+      activity: trunkWithReason("failed", {
+        summary: "Grok's command-line tool is out of date.",
+        code: "provider_outdated",
+        harnessId: "grok",
+        action: "update-provider",
+      }),
+    });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+
+    const line = lineOf(screen.getByTestId("bot-member-row"));
+    expect(line.textContent).toBe(
+      "Not answered: Grok's command-line tool is out of date. · Retry · Edit · Update",
+    );
+    await user.click(within(line).getByRole("button", { name: "Update" }));
+
+    await waitFor(() => expect(ensured).toEqual(["grok"]));
+    expect(sent).toEqual([]);
+  });
+
+  it("offers no Update where the bot's host cannot update the tool, and says who does", () => {
+    const owner =
+      "Grok's command-line tool is out of date. The host's owner can update it.";
+    activityStore.setState({
+      activity: trunkWithReason("failed", {
+        summary: owner,
+        code: "provider_outdated_host_owner",
+        harnessId: "grok",
+        action: "none",
+      }),
+    });
+    mountChannel(null, memberPost(VIEWER_USER_ID));
+
+    expect(lineOf(screen.getByTestId("bot-member-row")).textContent).toBe(
+      `Not answered: ${owner} · Retry · Edit`,
+    );
   });
 
   it("offers no Sign in while no host runs the bot, and still says why", () => {

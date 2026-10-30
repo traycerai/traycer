@@ -1154,11 +1154,13 @@ export type BotSubscribeOpenRequest = z.infer<
 >;
 
 /**
- * What the person can do about a failed turn: sign in to the provider, or
- * nothing here.
+ * What the person can do about a failed turn: sign in to the provider,
+ * update the provider's command-line tool on the bot's host
+ * (`update-provider`, `bot.subscribe@1.6`; the provider is the reason's
+ * `harnessId`), or nothing here.
  */
 export const botActivityActionSchema = lazySchema(() =>
-  z.enum(["sign-in", "none"]),
+  z.enum(["sign-in", "update-provider", "none"]),
 );
 export type BotActivityAction = z.infer<typeof botActivityActionSchema>;
 
@@ -1412,12 +1414,91 @@ export type BotSubscribeServerFrame = z.infer<
   typeof botSubscribeServerFrameSchema
 >;
 
+// ---- bot.subscribe@1.5, frozen ------------------------------------------ //
+//
+// Hand-written copies of the activity schemas from before `update-provider`
+// joined the action (`@1.6`), and of the 1.5 frames over them. An unknown
+// enum value fails a peer's whole parse rather than being stripped, so the
+// host also stops emitting it below 1.6 (it sends `none`); these copies are
+// what every line from 1.1 to 1.5 binds.
+
+const botActivityReasonSchemaV15 = lazySchema(() =>
+  z.object({
+    summary: z.string().min(1),
+    code: z.string().nullable().default(null),
+    harnessId: z.string().min(1).max(64),
+    action: z.enum(["sign-in", "none"]),
+  }),
+);
+
+const botSessionActivitySchemaV15 = lazySchema(() =>
+  z.object({
+    state: z.enum(["idle", "replying", "parked", "failed"]),
+    startedAt: z.number().int().nullable(),
+    step: z.string().nullable(),
+    requestId: z.string().min(1).nullable(),
+    reason: botActivityReasonSchemaV15.nullable().default(null),
+  }),
+);
+
+const botActivitySchemaV15 = lazySchema(() =>
+  z.object({
+    trunk: botSessionActivitySchemaV15.nullable(),
+    threads: z.record(z.string().min(1), botSessionActivitySchemaV15),
+  }),
+);
+
+export const botSubscribeServerFrameSchemaV15 = lazySchema(() =>
+  z.discriminatedUnion("kind", [
+    z.object({
+      kind: z.literal("snapshot"),
+      bot: botRecordSchema,
+      tasks: z.array(botTaskEntrySchema),
+      openRequestCount: z.number().int().nonnegative().nullable(),
+      conversationsRevision: z.number().int().nonnegative().nullable(),
+      boundHost: z.object({
+        hostId: hostIdSchema.nullable(),
+        epoch: z.number().int().nonnegative(),
+        isThisHost: z.boolean(),
+      }),
+      activity: botActivitySchemaV15.nullable(),
+      notificationSubscriptions: z
+        .array(botNotificationSubscriptionSchema)
+        .nullable()
+        .default(null),
+      surfaceActions: z
+        .array(botSurfaceActionStateSchema)
+        .nullable()
+        .default(null),
+      stoppedNotificationWatches: z
+        .array(botStoppedNotificationWatchSchema)
+        .nullable()
+        .default(null),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("activity"),
+      target: botActivityTargetSchema,
+      entry: botSessionActivitySchemaV15.nullable(),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("deleted"),
+      hasBinaryPayload: z.literal(false),
+    }),
+    z.object({
+      kind: z.literal("pong"),
+      hasBinaryPayload: z.literal(false),
+    }),
+  ]),
+);
+
 // ---- bot.subscribe@1.4, frozen ------------------------------------------ //
 //
 // A hand-written copy of the 1.4 snapshot frame (with T92's stopped watches),
 // its task entries without the `@1.5` open surfaces and the snapshot without
-// `surfaceActions`, so a 1.4 peer's re-parse strips them. The frames that did
-// not change at 1.5 are the live ones.
+// `surfaceActions`, so a 1.4 peer's re-parse strips them. Its activity is the
+// 1.5 copy; the frames that did not change at 1.5 are the live ones.
 
 export const botSubscribeServerFrameSchemaV14 = lazySchema(() =>
   z.discriminatedUnion("kind", [
@@ -1432,7 +1513,7 @@ export const botSubscribeServerFrameSchemaV14 = lazySchema(() =>
         epoch: z.number().int().nonnegative(),
         isThisHost: z.boolean(),
       }),
-      activity: botActivitySchema.nullable(),
+      activity: botActivitySchemaV15.nullable(),
       notificationSubscriptions: z
         .array(botNotificationSubscriptionSchema)
         .nullable()
@@ -1446,7 +1527,7 @@ export const botSubscribeServerFrameSchemaV14 = lazySchema(() =>
     z.object({
       kind: z.literal("activity"),
       target: botActivityTargetSchema,
-      entry: botSessionActivitySchema.nullable(),
+      entry: botSessionActivitySchemaV15.nullable(),
       hasBinaryPayload: z.literal(false),
     }),
     z.object({
@@ -1464,8 +1545,8 @@ export const botSubscribeServerFrameSchemaV14 = lazySchema(() =>
 //
 // A hand-written copy of the 1.3 snapshot frame, its task entries without the
 // `@1.4` check-in history and its subscriptions without `since`, so a 1.3
-// peer's re-parse strips them. The frames that did not change at 1.4 are the
-// live ones.
+// peer's re-parse strips them. Its activity is the 1.5 copy; the frames that
+// did not change at 1.4 are the live ones.
 
 export const botSubscribeServerFrameSchemaV13 = lazySchema(() =>
   z.discriminatedUnion("kind", [
@@ -1480,7 +1561,7 @@ export const botSubscribeServerFrameSchemaV13 = lazySchema(() =>
         epoch: z.number().int().nonnegative(),
         isThisHost: z.boolean(),
       }),
-      activity: botActivitySchema.nullable(),
+      activity: botActivitySchemaV15.nullable(),
       notificationSubscriptions: z
         .array(botNotificationSubscriptionSchemaV13)
         .nullable()
@@ -1490,7 +1571,7 @@ export const botSubscribeServerFrameSchemaV13 = lazySchema(() =>
     z.object({
       kind: z.literal("activity"),
       target: botActivityTargetSchema,
-      entry: botSessionActivitySchema.nullable(),
+      entry: botSessionActivitySchemaV15.nullable(),
       hasBinaryPayload: z.literal(false),
     }),
     z.object({
@@ -1507,8 +1588,8 @@ export const botSubscribeServerFrameSchemaV13 = lazySchema(() =>
 // ---- bot.subscribe@1.2, frozen ------------------------------------------ //
 //
 // A hand-written copy of the 1.2 snapshot frame, its task entries without the
-// `@1.3` provenance, so an older peer's re-parse strips it. The frames that
-// did not change at 1.3 are the live ones.
+// `@1.3` provenance, so an older peer's re-parse strips it. Its activity is
+// the 1.5 copy; the frames that did not change at 1.3 are the live ones.
 
 export const botSubscribeServerFrameSchemaV12 = lazySchema(() =>
   z.discriminatedUnion("kind", [
@@ -1523,7 +1604,7 @@ export const botSubscribeServerFrameSchemaV12 = lazySchema(() =>
         epoch: z.number().int().nonnegative(),
         isThisHost: z.boolean(),
       }),
-      activity: botActivitySchema.nullable(),
+      activity: botActivitySchemaV15.nullable(),
       notificationSubscriptions: z
         .array(botNotificationSubscriptionSchemaV13)
         .nullable()
@@ -1533,7 +1614,7 @@ export const botSubscribeServerFrameSchemaV12 = lazySchema(() =>
     z.object({
       kind: z.literal("activity"),
       target: botActivityTargetSchema,
-      entry: botSessionActivitySchema.nullable(),
+      entry: botSessionActivitySchemaV15.nullable(),
       hasBinaryPayload: z.literal(false),
     }),
     z.object({
@@ -1550,8 +1631,9 @@ export const botSubscribeServerFrameSchemaV12 = lazySchema(() =>
 // ---- bot.subscribe@1.1, frozen ------------------------------------------ //
 //
 // A hand-written copy of the 1.1 snapshot frame, without
-// `notificationSubscriptions`, so an older peer's re-parse strips it. The
-// frames that did not change at 1.2 are the live ones.
+// `notificationSubscriptions`, so an older peer's re-parse strips it. Its
+// activity is the 1.5 copy; the frames that did not change at 1.2 are the
+// live ones.
 
 export const botSubscribeServerFrameSchemaV11 = lazySchema(() =>
   z.discriminatedUnion("kind", [
@@ -1566,13 +1648,13 @@ export const botSubscribeServerFrameSchemaV11 = lazySchema(() =>
         epoch: z.number().int().nonnegative(),
         isThisHost: z.boolean(),
       }),
-      activity: botActivitySchema.nullable(),
+      activity: botActivitySchemaV15.nullable(),
       hasBinaryPayload: z.literal(false),
     }),
     z.object({
       kind: z.literal("activity"),
       target: botActivityTargetSchema,
-      entry: botSessionActivitySchema.nullable(),
+      entry: botSessionActivitySchemaV15.nullable(),
       hasBinaryPayload: z.literal(false),
     }),
     z.object({

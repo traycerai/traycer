@@ -9,11 +9,14 @@ import { useSurfaceNotificationIndicatorState } from "@/components/notifications
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import {
   EPIC_NODE_ICONS,
+  FILE_ARTIFACT_VIEWER_ICONS,
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
+import type { ArtifactFileViewer } from "@/lib/files/artifact-file-viewer";
 import {
   useMaybeEpicTuiAgentHarnessId,
   useRegisteredEpicActiveAgentIds,
+  useRegisteredEpicFileArtifactViewer,
   useRegisteredEpicNodeArchived,
 } from "@/lib/epic-selectors";
 import type { AgentActivityCoverage } from "@/lib/agent-activity";
@@ -149,9 +152,31 @@ function EpicNodeTabIconContent(props: {
       />
     );
   }
+  if (props.node.type === "file") {
+    return (
+      <FileArtifactTabIcon
+        epicId={props.epicId}
+        nodeId={props.node.id}
+        className={props.className}
+      />
+    );
+  }
   return (
     <StaticEpicNodeIcon type={props.node.type} className={props.className} />
   );
+}
+
+/** A file tab shows the same viewer glyph as the file's sidebar row. */
+function FileArtifactTabIcon(props: {
+  readonly epicId: string;
+  readonly nodeId: string;
+  readonly className: string;
+}) {
+  const viewer = useRegisteredEpicFileArtifactViewer(
+    props.epicId,
+    props.nodeId,
+  );
+  return <FileArtifactIcon viewer={viewer} className={props.className} />;
 }
 
 function TerminalNodeTabIcon(props: {
@@ -264,6 +289,24 @@ export function StaticEpicNodeIcon(props: {
 }) {
   const Icon = EPIC_NODE_ICONS[props.type];
   const tone = useEpicNodeIconTone(props.type);
+  return (
+    <Icon className={cn(props.className, tone.className)} style={tone.style} />
+  );
+}
+
+/**
+ * A file artifact's glyph for the viewer it opens in, tinted as the file kind.
+ * `null` is a file whose viewer is not known here, which keeps the plain file.
+ */
+export function FileArtifactIcon(props: {
+  readonly viewer: ArtifactFileViewer | null;
+  readonly className: string;
+}) {
+  const Icon =
+    props.viewer === null
+      ? EPIC_NODE_ICONS.file
+      : FILE_ARTIFACT_VIEWER_ICONS[props.viewer];
+  const tone = useEpicNodeIconTone("file");
   return (
     <Icon className={cn(props.className, tone.className)} style={tone.style} />
   );

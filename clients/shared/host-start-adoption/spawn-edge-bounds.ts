@@ -1,4 +1,5 @@
 import {
+  HARD_EXIT_DEADLINE_MS,
   SHUTDOWN_FORCE_EXIT_MS,
   STOP_EXIT_GRACE_MARGIN_MS,
   WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS,
@@ -56,96 +57,6 @@ export const LAUNCHCTL_INSTALL_KICKSTART_TIMEOUT_MS = 30_000;
  */
 export const LAUNCHD_THROTTLE_INTERVAL_SECONDS = 10;
 
-/**
- * The most launchd may wait, in SECONDS, between the SIGTERM a recycle sends
- * the job and the SIGKILL it escalates to: the job's `ExitTimeOut`.
- *
- * Neither plist that registers the host sets that key - `buildPlist`, and
- * Desktop's SMAppService plist (`inject-host-launch-agent.cjs`) - so the job
- * runs on launchd's default, which Apple documents only as "system-defined".
- * Current launchd prints `exit timeout = 5` for these jobs (the captured
- * `launchctl print` fixtures in `clients/shared/host-lifecycle`, our own
- * SMAppService agent among them); the open-source launchd's default was 20. So
- * 20 is a CEILING, not the observed value: a release that moves the default
- * back toward it must not reopen a false failure.
- */
-const LAUNCHD_EXIT_TIMEOUT_CEILING_SECONDS = 20;
-
-/**
- * Headroom above launchd's own bounds for `launchctl` itself to spawn, reach
- * launchd over XPC and return - the same bound every other launchctl call is
- * given in full.
- */
-const LAUNCHCTL_RECYCLE_MARGIN_MS = LAUNCHCTL_CALL_TIMEOUT_MS;
-
-/**
- * The runner timeout for a recycle (`launchctl kickstart -k`), derived from
- * what launchd itself may make that call wait for.
- *
- * `kickstart -k` does the whole recycle before it returns: it SIGTERMs the
- * running job, waits for it to exit - SIGKILL at `ExitTimeOut` - and then
- * starts it again, a start launchd may hold back by up to `ThrottleInterval`
- * (why `installService` avoids `-k` on a healthy host). The job's process is
- * the `host start` supervisor, so on a restart there is always an exit to
- * wait for: the stop leaves the supervisor either mid post-mortem, or already
- * relaunched by `KeepAlive` - a `restart` stop intent makes it exit non-zero
- * (`RESTART_OWED_EXIT_CODE` in host-start.ts) so the manager owes the
- * comeback - and a relaunched job is inside its throttle window when the
- * recycle's start comes due.
- *
- * (20s ExitTimeOut ceiling + 10s ThrottleInterval) + 10s margin = 40s. The
- * recycle is a spawn edge - the grant is published immediately before it - so
- * this is one of the bounds the host-start adoption window is derived from,
- * and the supervisor it starts finds its grant by construction.
- *
- * It was 10s - shorter than launchd's own bound. When that fired, the CLI
- * killed `launchctl`, which withdraws nothing launchd had accepted, and
- * reported a failed restart that launchd then finished (field, 2026-09-22:
- * `kickstart -k` timed out at 10s and the new host was up 3s later). A
- * timeout past THIS budget is not launchd being slow within its rules, so it
- * stays a failure - but one reported as unconfirmed, never as a restart that
- * failed (`recycleFailure` in `platforms/macos.ts`).
- */
-export const LAUNCHCTL_RECYCLE_TIMEOUT_MS =
-  (LAUNCHD_EXIT_TIMEOUT_CEILING_SECONDS + LAUNCHD_THROTTLE_INTERVAL_SECONDS) *
-    1_000 +
-  LAUNCHCTL_RECYCLE_MARGIN_MS;
-
-/**
- * The longest macOS `installService` can run from its install edge to the
- * return of its last spawn edge - the longest path of any platform, so the one
- * the window is sized by.
- *
- * The install edge sits in front of the install's first write, so a refused
- * publication touches nothing (`atServiceInstallEdge`). After it: the
- * launcher and plist writes (local files, no subprocess), the bare `bootout`
- * of a loaded registration, then `bootstrap` (`RunAtLoad` launches the
- * supervisor from it). When that loses the reload race,
- * `reloadRegisteredService` re-probes, boots out and bootstraps again, and on a
- * second benign failure probes once more; the kickstart comes last. Every step
- * runs to its own timeout in the worst case, so a launch can come as late as
- * the kickstart's return:
- *
- *     bootout (loaded registration)  10s
- *   + bootstrap                      10s  (spawn edge 1)
- *   + print (race re-probe)          10s
- *   + bootout                        10s
- *   + bootstrap                      10s  (spawn edge 2)
- *   + print (post-race)              10s
- *   + kickstart                      30s  (spawn edge 3)
- *   = 90s
- *
- * The two ownership probes in front of the install edge are not counted.
- */
-export const LAUNCHCTL_INSTALL_SPAWN_EDGE_BOUND_MS =
-  LAUNCHCTL_CALL_TIMEOUT_MS +
-  LAUNCHCTL_CALL_TIMEOUT_MS +
-  LAUNCHCTL_CALL_TIMEOUT_MS +
-  LAUNCHCTL_CALL_TIMEOUT_MS +
-  LAUNCHCTL_CALL_TIMEOUT_MS +
-  LAUNCHCTL_CALL_TIMEOUT_MS +
-  LAUNCHCTL_INSTALL_KICKSTART_TIMEOUT_MS;
-
 // --- systemd -----------------------------------------------------------------
 
 /**
@@ -190,11 +101,14 @@ export const STDERR_END_WAIT_TIMEOUT_MS = 2_000;
  *
  *     SHUTDOWN_FORCE_EXIT_MS       30s  host force-exit watchdog (protocol
  *                                       host/lifecycle-constants.ts)
+ *   + HARD_EXIT_DEADLINE_MS        10s  the detached watchdog's SIGKILL of a host
+ *                                       still alive after that watchdog's
+ *                                       `process.exit` (same file)
  *   + STDERR_END_WAIT_TIMEOUT_MS    2s  above
  *   + STDERR_FLUSH_TIMEOUT_MS       1s  above
  *   + CRASH_REPORT_SCAN_TIMEOUT_MS  2s  above
  *   + STOP_EXIT_GRACE_MARGIN_MS     2s  protocol host/lifecycle-constants.ts
- *   = 37s
+ *   = 47s
  *
  * The three post-mortem terms are the ones `runHostStart` awaits after its
  * child dies (host-start.ts names them where it stamps the child's death);
@@ -218,12 +132,121 @@ export const STDERR_END_WAIT_TIMEOUT_MS = 2_000;
  */
 export const SYSTEMD_TIMEOUT_STOP_SECONDS = Math.ceil(
   (SHUTDOWN_FORCE_EXIT_MS +
+    HARD_EXIT_DEADLINE_MS +
     STDERR_END_WAIT_TIMEOUT_MS +
     STDERR_FLUSH_TIMEOUT_MS +
     CRASH_REPORT_SCAN_TIMEOUT_MS +
     STOP_EXIT_GRACE_MARGIN_MS) /
     1_000,
 );
+
+// --- launchd stop bounds -----------------------------------------------------
+// After the systemd stop bound they derive from, so the shared terms are
+// defined before they are read at module load.
+
+/**
+ * The plist's `ExitTimeOut`, in SECONDS: how long launchd lets the job run
+ * between the SIGTERM a `bootout` or a `kickstart -k` sends it and the SIGKILL
+ * it escalates to.
+ *
+ * Without the key the job runs on launchd's default, which current launchd
+ * prints as `exit timeout = 5` for these jobs. The job's process is the
+ * `host start` supervisor, and the host's own graceful shutdown routinely
+ * takes 5 to 7 s, so the SIGKILL landed on the supervisor mid-shutdown: the
+ * host child lived on as an orphan, `bootout --wait` returned while it was
+ * still exiting, and the teardown that asked for the stop could not tell.
+ *
+ * The same bound as `TimeoutStopSec` on the systemd unit, for the same
+ * reason: what a deliberate stop legitimately takes, the host's shutdown
+ * (through its hard-exit watchdog) and then the supervisor's post-mortem. Both plist writers emit it - `buildPlist`
+ * (`platforms/macos.ts`) from this constant, and Desktop's
+ * `inject-host-launch-agent.cjs`, which cannot import it, as a literal that
+ * its test pins to this value.
+ */
+export const LAUNCHD_EXIT_TIMEOUT_SECONDS = SYSTEMD_TIMEOUT_STOP_SECONDS;
+
+/**
+ * Headroom above launchd's own bounds for `launchctl` itself to spawn, reach
+ * launchd over XPC and return - the same bound every other launchctl call is
+ * given in full.
+ */
+const LAUNCHCTL_RECYCLE_MARGIN_MS = LAUNCHCTL_CALL_TIMEOUT_MS;
+
+/**
+ * The runner timeout for `launchctl bootout --wait`, which returns when the job
+ * has exited: at worst the whole `ExitTimeOut`, then `launchctl` itself.
+ */
+export const LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS =
+  LAUNCHD_EXIT_TIMEOUT_SECONDS * 1_000 + LAUNCHCTL_RECYCLE_MARGIN_MS;
+
+/**
+ * The runner timeout for a recycle (`launchctl kickstart -k`), derived from
+ * what launchd itself may make that call wait for.
+ *
+ * `kickstart -k` does the whole recycle before it returns: it SIGTERMs the
+ * running job, waits for it to exit - SIGKILL at `ExitTimeOut` - and then
+ * starts it again, a start launchd may hold back by up to `ThrottleInterval`
+ * (why `installService` avoids `-k` on a healthy host). The job's process is
+ * the `host start` supervisor, so on a restart there is always an exit to
+ * wait for: the stop leaves the supervisor either mid post-mortem, or already
+ * relaunched by `KeepAlive` - a `restart` stop intent makes it exit non-zero
+ * (`RESTART_OWED_EXIT_CODE` in host-start.ts) so the manager owes the
+ * comeback - and a relaunched job is inside its throttle window when the
+ * recycle's start comes due.
+ *
+ * (47s ExitTimeOut + 10s ThrottleInterval) + 10s margin = 67s. The
+ * recycle is a spawn edge - the grant is published immediately before it - so
+ * this is one of the bounds the host-start adoption window is derived from,
+ * and the supervisor it starts finds its grant by construction.
+ *
+ * It was 10s - shorter than launchd's own bound. When that fired, the CLI
+ * killed `launchctl`, which withdraws nothing launchd had accepted, and
+ * reported a failed restart that launchd then finished (field, 2026-09-22:
+ * `kickstart -k` timed out at 10s and the new host was up 3s later). A
+ * timeout past THIS budget is not launchd being slow within its rules, so it
+ * stays a failure - but one reported as unconfirmed, never as a restart that
+ * failed (`recycleFailure` in `platforms/macos.ts`).
+ */
+export const LAUNCHCTL_RECYCLE_TIMEOUT_MS =
+  (LAUNCHD_EXIT_TIMEOUT_SECONDS + LAUNCHD_THROTTLE_INTERVAL_SECONDS) * 1_000 +
+  LAUNCHCTL_RECYCLE_MARGIN_MS;
+
+/**
+ * The longest macOS `installService` can run from its install edge to the
+ * return of its last spawn edge - the longest path of any platform, so the one
+ * the window is sized by.
+ *
+ * The install edge sits in front of the install's first write, so a refused
+ * publication touches nothing (`atServiceInstallEdge`). After it: the
+ * launcher and plist writes (local files, no subprocess), the `bootout --wait`
+ * of a loaded registration, then `bootstrap` (`RunAtLoad` launches the
+ * supervisor from it). The bootout waits for the old job to exit - a bootstrap
+ * over a job still draining its shutdown fails - so it can run to the job's
+ * whole `ExitTimeOut`. When the bootstrap loses the reload race,
+ * `reloadRegisteredService` re-probes, boots out (waiting again) and
+ * bootstraps again, and on a second benign failure probes once more; the
+ * kickstart comes last. Every step runs to its own timeout in the worst case,
+ * so a launch can come as late as the kickstart's return:
+ *
+ *     bootout --wait (loaded registration)  57s
+ *   + bootstrap                             10s  (spawn edge 1)
+ *   + print (race re-probe)                 10s
+ *   + bootout --wait                        57s
+ *   + bootstrap                             10s  (spawn edge 2)
+ *   + print (post-race)                     10s
+ *   + kickstart                             30s  (spawn edge 3)
+ *   = 184s
+ *
+ * The two ownership probes in front of the install edge are not counted.
+ */
+export const LAUNCHCTL_INSTALL_SPAWN_EDGE_BOUND_MS =
+  LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS +
+  LAUNCHCTL_CALL_TIMEOUT_MS +
+  LAUNCHCTL_CALL_TIMEOUT_MS +
+  LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS +
+  LAUNCHCTL_CALL_TIMEOUT_MS +
+  LAUNCHCTL_CALL_TIMEOUT_MS +
+  LAUNCHCTL_INSTALL_KICKSTART_TIMEOUT_MS;
 
 /**
  * The runner timeout for a `systemctl` verb that queues no job - `daemon-reload`,
@@ -249,9 +272,9 @@ export const SYSTEMCTL_CALL_TIMEOUT_MS = 10_000;
  * while systemd SIGTERMs whatever is left in the cgroup. So any of these can
  * block for the whole stop bound before its start begins.
  *
- * 37s TimeoutStopSec + 15s = 52s, the 15s being what these calls had for the
+ * 47s TimeoutStopSec + 15s = 62s, the 15s being what these calls had for the
  * start alone. Each of these calls is a spawn edge - the grant is published
- * immediately before it - and the stop is SIGKILL-bounded at 37s while a
+ * immediately before it - and the stop is SIGKILL-bounded at 47s while a
  * `Type=simple` start is immediate, so this is also the longest a Linux start
  * or restart can take to launch its supervisor after publishing.
  *
@@ -259,7 +282,7 @@ export const SYSTEMCTL_CALL_TIMEOUT_MS = 10_000;
  * killed `systemctl`, which withdraws nothing systemd has queued, and reported
  * a failure systemd went on to complete. A timeout past THIS budget is still a
  * failure, but reported as unconfirmed (`systemctlJobFailure`) - and so is a
- * stop in the 52-90s gap on a unit not yet re-registered with the pin, which
+ * stop in the 62-90s gap on a unit not yet re-registered with the pin, which
  * still runs on systemd's default.
  */
 export const SYSTEMCTL_JOB_TIMEOUT_MS =
@@ -268,7 +291,7 @@ export const SYSTEMCTL_JOB_TIMEOUT_MS =
 /**
  * The longest Linux `installService` can run from its install edge, in front
  * of the unit write, to the launch: the unit write (a local file),
- * `daemon-reload`, then the `enable --now` job - 10s + 52s = 62s.
+ * `daemon-reload`, then the `enable --now` job - 10s + 62s = 72s.
  */
 export const SYSTEMCTL_INSTALL_SPAWN_EDGE_BOUND_MS =
   SYSTEMCTL_CALL_TIMEOUT_MS + SYSTEMCTL_JOB_TIMEOUT_MS;
@@ -399,16 +422,17 @@ export const SUPERVISOR_SPAWN_ACK_MARGIN_MS = 10_000;
  * every path's launch of the supervisor that consumes the grant, and over the
  * one return that comes later than every launch.
  *
- *   Windows install's return (the launch below,      135.25s  the max
+ *   macOS install (install edge, bootout --wait,       184s  the max
+ *     reload race)
+ *   Windows install's return (the launch below,      135.25s
  *     then the failed verify's late poll and
  *     its Last Run Result `/Query`)
  *   Windows install (budgeted `/Create`, the `/Run`  125s
  *     gate's read, verified `/Run`)
- *   macOS install (install edge, bootout, reload race)  90s
- *   Linux install (`daemon-reload` + `enable --now`)    62s
- *   Linux start / restart job                           52s
+ *   Linux install (`daemon-reload` + `enable --now`)    72s
+ *   Linux start / restart job                           62s
  *   Windows start / restart (verified `/Run`)           45s
- *   macOS recycle (`kickstart -k`)                      40s
+ *   macOS recycle (`kickstart -k`)                      67s
  *   macOS plain kickstart                               10s
  *
  * The return belongs here because the parent's ack wait starts at the return,
@@ -447,11 +471,14 @@ export function finiteDurationMs(name: string, value: number): number {
 }
 
 /**
- * How long a published grant stays usable: 135.25s + 40s = 175.25s. Derived,
+ * How long a published grant stays usable: 184s + 40s = 224s. Derived,
  * not chosen - the longest a controller call holds the grant's clock after
  * publishing it, plus what a launcher takes to consume it.
  *
- * It was 60s through cli-v1.3.0 and 130s from #2097. Two things made it grow.
+ * It was 60s through cli-v1.3.0 and 130s from #2097, then 175.25s, set by the
+ * Windows install; the macOS install now outlasts it because its `bootout`
+ * waits for the old job to exit (up to the job's `ExitTimeOut`), twice on the
+ * reload race. Two things grew it before that.
  * The Windows install's gated `/Create` reads ownership again after the install
  * edge and runs inside its budget. The install's `/Run` gate read comes after
  * that edge too. So the Windows install's return outlasts every launch.
@@ -472,24 +499,24 @@ export function finiteDurationMs(name: string, value: number): number {
  * published call's end is named here (edge to return, then the 50s ack wait;
  * `host-start-adoption-window.test.ts` pins each row):
  *
- *   Windows install, verify fails, then `/Query`    135.25s -> 185.25s  the cap
+ *   macOS install, kickstart times out              184s    -> 234s     the cap
+ *   Windows install, verify fails, then `/Query`    135.25s -> 185.25s
  *     (the budgeted `/Create` 55s, the `/Run`
  *     gate's ownership read 25s, the verified
  *     `/Run` 45s, one late poll, the `/Query` 10s)
- *   macOS install, kickstart times out              90s     -> 140s
  *   Windows restart, same, then the stop-intent     69.75s  -> 119.75s
  *     retirement probe (`withStopIntent`: 1.5s
  *     activity probe + 13s process identity -
  *     `tasklist` 3s, the start-identity read 5s,
  *     the denied-read fallback 5s)
- *   Linux install, `enable --now` runs its whole    62s     -> 112s
+ *   Linux install, `enable --now` runs its whole    72s     -> 122s
  *     job timeout and returns (one that TIMES OUT
  *     rolls the unit back - `disable --now` and
  *     `daemon-reload`, 10s each - and throws at
- *     82s, cancelling the lease at the throw)
+ *     92s, cancelling the lease at the throw)
  *   Windows start / relaunch, verify fails          55.25s  -> 105.25s
- *   Linux start / restart / relaunch job            52s     -> 102s
- *   macOS restart / relaunch (`kickstart -k`)       40s     ->  90s
+ *   Linux start / restart / relaunch job            62s     -> 112s
+ *   macOS restart / relaunch (`kickstart -k`)       67s     -> 117s
  *   macOS start (plain kickstart)                   10s     ->  60s
  *
  * The quarter seconds are the Windows verify loop's last poll

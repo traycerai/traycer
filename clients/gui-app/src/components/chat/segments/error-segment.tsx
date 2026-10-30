@@ -13,6 +13,7 @@ import {
 } from "@/components/chat/fallback/routing-settled-card";
 import { routingSettledReportText } from "@/components/chat/fallback/routing-receipt";
 import { sandboxRefusalCopyFor } from "@/components/chat/segments/sandbox-refusal-copy";
+import { ProviderUpdateAction } from "@/components/chat/segments/provider-update-action";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { Button } from "@/components/ui/button";
 import {
@@ -324,6 +325,7 @@ export function ErrorSegment({
           {code === ENV_CREDENTIAL_AUTH_ERROR_CODE ? (
             <EnvCredentialSettingsAction harnessId={harnessId} />
           ) : null}
+          <ProviderUpdateAction code={code} harnessId={harnessId} />
           {actions}
         </div>
         {reportAction}

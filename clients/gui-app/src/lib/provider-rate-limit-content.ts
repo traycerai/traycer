@@ -1,5 +1,6 @@
 import type {
   ProviderRateLimits,
+  RateLimitChatCredential,
   RateLimitUnavailableReason,
 } from "@traycer/protocol/host";
 import type { ProviderRateLimitQueryState } from "@/components/settings/panels/provider-rate-limit-views";
@@ -148,6 +149,82 @@ export function formatUnavailableReason(
   return RATE_LIMIT_UNAVAILABLE_REASON_LABELS[reason];
 }
 
+/** One run of a chat-credential notice; `code` runs name a setting or variable. */
+export interface ChatCredentialNoticePart {
+  readonly text: string;
+  readonly code: boolean;
+}
+
+const CLOUD_PROVIDER_NAMES: Readonly<Record<string, string>> = {
+  bedrock: "Amazon Bedrock",
+  vertex: "Google Vertex AI",
+  foundry: "Microsoft Foundry",
+};
+
+const NO_PLAN_LIMITS =
+  ", not your Claude plan, so there are no plan limits to show.";
+
+/**
+ * What every surface says, in place of "Usage limits unavailable", when the
+ * host reports that chats on this account use a credential other than the
+ * plan. Parts rather than a string so a surface that can style the variable
+ * name does; `chatCredentialNoticeText` joins them for the ones that cannot.
+ */
+export function formatChatCredentialNotice(
+  credential: RateLimitChatCredential,
+): ReadonlyArray<ChatCredentialNoticePart> {
+  const text = (value: string): ChatCredentialNoticePart => ({
+    text: value,
+    code: false,
+  });
+  const code = (value: string): ChatCredentialNoticePart => ({
+    text: value,
+    code: true,
+  });
+  switch (credential.kind) {
+    case "api-key":
+      if (credential.source === "apiKeyHelper") {
+        return [
+          text("Chats here are billed to the key from your "),
+          code("apiKeyHelper"),
+          text(NO_PLAN_LIMITS),
+        ];
+      }
+      if (credential.source === "/login managed key") {
+        return [
+          text(
+            `Chats here are billed to your Anthropic Console key${NO_PLAN_LIMITS}`,
+          ),
+        ];
+      }
+      return [
+        text("Chats here are billed to "),
+        code(credential.source),
+        text(NO_PLAN_LIMITS),
+      ];
+    case "token":
+      return [
+        text("Chats here sign in with "),
+        code(credential.source),
+        text(" instead of your Claude login."),
+      ];
+    case "cloud-provider":
+      return [
+        text(
+          `Chats here run on ${CLOUD_PROVIDER_NAMES[credential.source] ?? credential.source}, so there are no plan limits to show.`,
+        ),
+      ];
+  }
+}
+
+export function chatCredentialNoticeText(
+  credential: RateLimitChatCredential,
+): string {
+  return formatChatCredentialNotice(credential)
+    .map((part) => part.text)
+    .join("");
+}
+
 /**
  * The header popover's per-provider display state - richer than
  * `resolveProviderRateLimitViewState` (which the Settings card uses) because
@@ -170,6 +247,8 @@ export type PopoverProviderRateLimitState =
       readonly kind: "unavailable";
       readonly provider: ProviderRateLimits["provider"];
       readonly reason: RateLimitUnavailableReason;
+      /** The credential chats use instead of the plan, when the host named one. */
+      readonly chatCredential: RateLimitChatCredential | null;
     }
   | {
       readonly kind: "ready";
@@ -229,6 +308,7 @@ export function resolvePopoverProviderRateLimitState(
       kind: "unavailable",
       provider: data.provider,
       reason: data.reason,
+      chatCredential: data.chatCredential ?? null,
     };
   }
   // A last-known-good snapshot is present, either fresh (`data` came straight

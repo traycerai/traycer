@@ -512,6 +512,9 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
       state: "failed",
       summary: "Your Grok CLI version (1.0.5) is outdated.",
       signIn: null,
+      update: null,
+      updating: false,
+      updateFailure: null,
       retry,
       retrying,
       edit,
@@ -562,6 +565,9 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
         state: "failed",
         summary: "Claude is signed out.",
         signIn,
+        update: null,
+        updating: false,
+        updateFailure: null,
         retry: vi.fn(),
         retrying: false,
         edit: null,
@@ -576,6 +582,66 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
     expect(signIn).toHaveBeenCalledTimes(1);
   });
 
+  function outdated(
+    update: () => void,
+    updating: boolean,
+    updateFailure: string | null,
+  ): ChatBotPresentation {
+    return failingWith({
+      state: "failed",
+      summary: "Grok's command-line tool is out of date.",
+      signIn: null,
+      update,
+      updating,
+      updateFailure,
+      retry: vi.fn(),
+      retrying: false,
+      edit: null,
+    });
+  }
+
+  it("adds Update to the line when an out-of-date command-line tool is the fix", async () => {
+    const user = userEvent.setup();
+    const update = vi.fn<() => void>();
+    renderRow(memberPost(OPEN_REQUEST), outdated(update, false, null));
+
+    const line = screen.getByTestId("bot-message-unanswered");
+    expect(line.textContent).toBe(
+      "Not answered: Grok's command-line tool is out of date. · Retry · Update",
+    );
+    await user.click(within(line).getByRole("button", { name: "Update" }));
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds the line's Update while the update runs, keeping its label with dots after it", () => {
+    renderRow(memberPost(OPEN_REQUEST), outdated(vi.fn(), true, null));
+
+    const update = within(
+      screen.getByTestId("bot-message-unanswered"),
+    ).getByRole("button", { name: "Update" });
+    expect(update.hasAttribute("disabled")).toBe(true);
+    expect(
+      within(update).getByTestId("bot-message-unanswered-update-pending"),
+    ).toBeTruthy();
+  });
+
+  it("says under the line why the update did not take, and keeps Update to try again", () => {
+    renderRow(
+      memberPost(OPEN_REQUEST),
+      outdated(vi.fn(), false, "Grok is disabled on this host."),
+    );
+
+    // Announced where it appears: focus stays on the line's buttons.
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Grok is disabled on this host.",
+    );
+    expect(
+      within(screen.getByTestId("bot-message-unanswered"))
+        .getByRole("button", { name: "Update" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
   it("says why with no Retry or Edit, on the line or on hover, where the message cannot be sent again", () => {
     renderRow(
       memberPost(OPEN_REQUEST),
@@ -583,6 +649,9 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
         state: "failed",
         summary: "Claude is signed out.",
         signIn: vi.fn(),
+        update: null,
+        updating: false,
+        updateFailure: null,
         retry: null,
         retrying: false,
         edit: null,
@@ -607,6 +676,9 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
         state: "parked",
         summary: "The queue is paused.",
         signIn: vi.fn(),
+        update: null,
+        updating: false,
+        updateFailure: null,
         retry: vi.fn(),
         retrying: false,
         edit: vi.fn(),
@@ -633,6 +705,9 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
         state: "failed",
         summary: null,
         signIn: null,
+        update: null,
+        updating: false,
+        updateFailure: null,
         retry: vi.fn(),
         retrying: true,
         edit: null,

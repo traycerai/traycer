@@ -5,6 +5,9 @@ export const providersMutationKeys = {
   setEnabled: () => ["providers.setEnabled"] as const,
   promoteToPersonal: () =>
     ["providers.nativeMutate", "promoteToPersonal"] as const,
+  // One Update press on a provider's out-of-date command-line tool (T71).
+  updateProvider: (hostId: string | null) =>
+    ["providers.update", hostId] as const,
   setProfileEnabled: (hostId: string | null, providerId: string | null) =>
     ["providers.setProfileEnabled", hostId, providerId] as const,
   setApiKey: () => ["providers.setApiKey"] as const,

@@ -1,5 +1,5 @@
 import {
-  SANDBOX_ARTIFACT_SPAN_BYTES,
+  ARTIFACT_OBJECT_SPAN_BYTES,
   type SandboxArtifactReply,
 } from "../../ipc-contracts/sandbox-artifact-types";
 import type { IpcMainEvent, IpcMainInvokeEvent } from "electron";
@@ -816,7 +816,7 @@ export function parseSandboxArtifactReply(
   if (
     record.kind !== "bytes" ||
     !(record.bytes instanceof Uint8Array) ||
-    record.bytes.byteLength > SANDBOX_ARTIFACT_SPAN_BYTES + 1024 ||
+    record.bytes.byteLength > ARTIFACT_OBJECT_SPAN_BYTES + 1024 ||
     typeof record.offset !== "number" ||
     !Number.isSafeInteger(record.offset) ||
     record.offset < 0 ||
