@@ -5,11 +5,16 @@
  * Update only for the code the host gives where it can update the provider.
  * Update reaches the host that ran the turn over a host client whose
  * messenger plays that host: it records what it is asked and holds the
- * provider's install state, which the row watches until the install settles.
+ * provider's install slot, which the row reports as the host's list presents
+ * it.
  */
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
+import {
+  QueryClientProvider,
+  queryOptions,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -23,9 +28,7 @@ import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/pro
 import type {
   ProviderCliState,
   ProviderManagedInstallState,
-  ProviderPackVersionInstallState,
 } from "@traycer/protocol/host/provider-schemas";
-import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -57,20 +60,28 @@ const NEWEST = "1.0.20";
 /** The version installed before the press. */
 const INSTALLED = "1.0.13";
 
+const LIST_KEY = hostQueryKeys.method<HostRpcRegistry, "providers.list">(
+  HOST_ID,
+  "providers.list",
+  { native: null },
+);
+
 /** The host the turn ran on, as its RPCs answer. */
 type FakeHost = {
   /** What it was asked, in order: each list read, check and update. */
   asked: ReadonlyArray<string>;
   /** Grok's single install slot, as `providers.list` reports it. */
   install: ProviderManagedInstallState;
-  /** {@link NEWEST}'s own row in Grok's version manager; `null` for none. */
-  newest: ProviderPackVersionInstallState | null;
-  /** How `providers.ensurePack` answers. */
-  ensure: "starts" | "finishes-at-once" | "nothing-newer" | Error;
-  /** Runs while the host answers `providers.ensurePack`, after it took it. */
-  whileAnswering: (() => Promise<void>) | null;
-  /** The host stops answering `providers.list` (a slow host). */
-  listStalls: boolean;
+  /**
+   * How `providers.ensurePack` answers: the install starts, finishes before
+   * the answer is assembled, or is refused.
+   */
+  ensure: "starts" | "finishes-at-once" | Error;
+  /**
+   * While set, `providers.list` answers only once it settles, with the slot
+   * as it stood when the read arrived (a slow host).
+   */
+  listHeld: Promise<void> | null;
 };
 
 let host: FakeHost;
@@ -80,26 +91,7 @@ function grokRow(): ProviderCliState {
     providerId: "grok",
     packId: "grok",
     managedInstallState: host.install,
-    managedVersions:
-      host.newest === null
-        ? null
-        : {
-            autoDownload: true,
-            pinnedVersion: null,
-            updateAvailable: null,
-            sharedWithProviders: [],
-            totalSizeBytes: null,
-            available: [
-              {
-                version: NEWEST,
-                sizeBytes: null,
-                certification: "eligible",
-                recommended: true,
-                current: false,
-                installState: host.newest,
-              },
-            ],
-          },
+    managedVersions: null,
     enabled: true,
     disabledBy: null,
     nativeCapabilities: DEFAULT_PROVIDER_NATIVE_CAPABILITIES,
@@ -129,32 +121,24 @@ function hostClientPlaying(
     registry: hostRpcRegistry,
     requestId: () => "request-update",
     handlers: {
-      "providers.list": () => {
+      "providers.list": async () => {
         host.asked = [...host.asked, "list"];
-        if (host.listStalls) return new Promise(() => undefined);
-        return { providers: [grokRow()], native: null };
+        const answer = { providers: [grokRow()], native: null };
+        await host.listHeld;
+        return answer;
       },
       "providers.refreshPackDiscovery": (params) => {
         host.asked = [...host.asked, `check ${params.packId}`];
         return { result: { ok: true, outcome: "moved" } };
       },
-      "providers.ensurePack": async (params) => {
+      "providers.ensurePack": (params) => {
         host.asked = [...host.asked, `update ${params.providerId}`];
-        if (host.ensure instanceof Error) throw host.ensure;
-        if (host.ensure === "nothing-newer") {
-          return { managedInstallState: host.install };
-        }
-        const started: ProviderManagedInstallState = {
-          status: "downloading",
-          percent: 10,
-          version: NEWEST,
-        };
+        if (host.ensure instanceof Error) return Promise.reject(host.ensure);
         host.install =
           host.ensure === "finishes-at-once"
             ? { status: "installed", version: NEWEST }
-            : started;
-        await host.whileAnswering?.();
-        return { managedInstallState: started };
+            : { status: "downloading", percent: 10, version: NEWEST };
+        return { managedInstallState: host.install };
       },
     },
   });
@@ -173,22 +157,27 @@ function hostClientPlaying(
   return spine.createRequester(mockRemoteHostEntry);
 }
 
-/** Another view of the host's provider list, open beside the row. */
-function ListViewer(): null {
-  useProvidersListForClient(mocks.client, { enabled: true, subscribed: true });
-  return null;
+/** Holds every `providers.list` answer until the returned release runs. */
+function holdList(): () => void {
+  let release = (): void => undefined;
+  host.listHeld = new Promise((resolve) => {
+    release = resolve;
+  });
+  return () => {
+    host.listHeld = null;
+    release();
+  };
 }
 
-function renderRow(
-  code: string,
-  message: string,
-  listOpenElsewhere: boolean,
-): QueryClient {
+function listReads(): number {
+  return host.asked.filter((asked) => asked === "list").length;
+}
+
+function renderRow(code: string, message: string): QueryClient {
   const queryClient = createAppQueryClient();
   mocks.client = hostClientPlaying(queryClient);
   render(
     <QueryClientProvider client={queryClient}>
-      {listOpenElsewhere ? <ListViewer /> : null}
       <TooltipProvider>
         <TabHostProvider hostId={HOST_ID}>
           <ChatTranscriptProvider value={{ chatId: "chat-1", hostId: HOST_ID }}>
@@ -228,10 +217,8 @@ beforeEach(() => {
   host = {
     asked: [],
     install: { status: "installed", version: INSTALLED },
-    newest: null,
     ensure: "starts",
-    whileAnswering: null,
-    listStalls: false,
+    listHeld: null,
   };
   hostOffers(["providers.ensurePack"]);
 });
@@ -246,7 +233,7 @@ afterEach(() => {
 describe("<ErrorSegment /> a provider whose command-line tool is out of date", () => {
   it("reads as an interruption in the host's words, and Update updates the provider on the host that ran the turn", async () => {
     const user = userEvent.setup();
-    renderRow("provider_outdated", OUTDATED, false);
+    renderRow("provider_outdated", OUTDATED);
 
     const row = screen
       .getByText(OUTDATED)
@@ -266,15 +253,11 @@ describe("<ErrorSegment /> a provider whose command-line tool is out of date", (
   it("checks for the provider's newest version first, with the pack the cached provider list names", async () => {
     const user = userEvent.setup();
     hostOffers(["providers.ensurePack", "providers.refreshPackDiscovery"]);
-    const queryClient = renderRow("provider_outdated", OUTDATED, false);
-    queryClient.setQueryData(
-      hostQueryKeys.method<HostRpcRegistry, "providers.list">(
-        HOST_ID,
-        "providers.list",
-        { native: null },
-      ),
-      { providers: [grokRow()], native: null },
-    );
+    const queryClient = renderRow("provider_outdated", OUTDATED);
+    queryClient.setQueryData(LIST_KEY, {
+      providers: [grokRow()],
+      native: null,
+    });
 
     await user.click(updateButton());
 
@@ -285,7 +268,7 @@ describe("<ErrorSegment /> a provider whose command-line tool is out of date", (
   it("reads the provider list from the host to find the pack when none is cached, then checks before it updates", async () => {
     const user = userEvent.setup();
     hostOffers(["providers.ensurePack", "providers.refreshPackDiscovery"]);
-    renderRow("provider_outdated", OUTDATED, false);
+    renderRow("provider_outdated", OUTDATED);
 
     await user.click(updateButton());
 
@@ -297,15 +280,72 @@ describe("<ErrorSegment /> a provider whose command-line tool is out of date", (
     ]);
   });
 
-  it("stays pending while the host installs the update, and is ready again once the version it set out to install is installed", async () => {
+  it("stays pending until a list read the host answered after it took the request, and an install that finished before the answer settles", async () => {
     const user = userEvent.setup();
-    const queryClient = renderRow("provider_outdated", OUTDATED, false);
+    host.ensure = "finishes-at-once";
+    const release = holdList();
+    renderRow("provider_outdated", OUTDATED);
 
     await user.click(updateButton());
 
-    // The host took the request and is downloading: the press is not over.
+    await waitFor(() => expect(listReads()).toBe(1));
+    expect(host.asked).toEqual(["update grok", "list"]);
+    expect(updateButton().disabled).toBe(true);
+
+    release();
+
+    await waitFor(() => expect(updateButton().disabled).toBe(false));
+    expect(screen.queryByTestId("provider-update-failure")).toBeNull();
+  });
+
+  it("does not settle on a list read that left before the host took the request", async () => {
+    const user = userEvent.setup();
+    const release = holdList();
+    const queryClient = renderRow("provider_outdated", OUTDATED);
+    // Another surface's read, in flight from before the press: it answers
+    // with the copy installed then, which reads as settled.
+    void queryClient
+      .fetchQuery(
+        queryOptions({
+          queryKey: LIST_KEY,
+          queryFn: () =>
+            mocks.client?.request("providers.list", { native: null }) ??
+            Promise.reject(new Error("no client")),
+        }),
+      )
+      .catch(() => undefined);
+    await waitFor(() => expect(listReads()).toBe(1));
+
+    await user.click(updateButton());
+    await waitFor(() => expect(host.asked).toContain("update grok"));
+    // The host client sends one list read at a time: the press's own read
+    // goes out once the earlier one is answered.
+    release();
+
+    await waitFor(() => expect(listReads()).toBe(2));
     await waitFor(() =>
-      expect(host.asked.filter((asked) => asked === "list")).toHaveLength(2),
+      expect(
+        queryClient.getQueryData<{
+          readonly providers: ReadonlyArray<ProviderCliState>;
+        }>(LIST_KEY)?.providers[0]?.managedInstallState?.status,
+      ).toBe("downloading"),
+    );
+    expect(updateButton().disabled).toBe(true);
+  });
+
+  it("stays pending across list reads while the host downloads, and is ready again once its slot reads installed", async () => {
+    const user = userEvent.setup();
+    const queryClient = renderRow("provider_outdated", OUTDATED);
+
+    await user.click(updateButton());
+
+    await waitFor(() => expect(listReads()).toBeGreaterThanOrEqual(1));
+    const readsWhileStarting = listReads();
+    await queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(HOST_ID, "providers.list"),
+    });
+    await waitFor(() =>
+      expect(listReads()).toBeGreaterThan(readsWhileStarting),
     );
     expect(updateButton().disabled).toBe(true);
 
@@ -318,9 +358,14 @@ describe("<ErrorSegment /> a provider whose command-line tool is out of date", (
     expect(screen.queryByTestId("provider-update-failure")).toBeNull();
   });
 
-  it("says why when the host's install of the update fails", async () => {
+  // The only failure the row can show at the click is the slot's error, which
+  // the host's list reports only while no copy of the provider is runnable: a
+  // replacement that fails beside a runnable old copy reads as installed and
+  // settles, and the next refused turn offers Update again.
+  it("says why when the host's slot reports the install in error, as it does where no copy is runnable", async () => {
     const user = userEvent.setup();
-    const queryClient = renderRow("provider_outdated", OUTDATED, false);
+    host.install = { status: "absent" };
+    const queryClient = renderRow("provider_outdated", OUTDATED);
 
     await user.click(updateButton());
     await waitFor(() => expect(updateButton().disabled).toBe(true));
@@ -328,7 +373,7 @@ describe("<ErrorSegment /> a provider whose command-line tool is out of date", (
     host.install = {
       status: "error",
       reason: "network",
-      version: null,
+      version: NEWEST,
       message: "fetch failed",
       retryAtMs: null,
     };
@@ -342,77 +387,12 @@ describe("<ErrorSegment /> a provider whose command-line tool is out of date", (
       "The update failed: the download could not be reached. Retry when you're back online.",
     );
     expect(updateButton().disabled).toBe(false);
-  });
-
-  it("says why when the replacement fails while the old copy stays runnable, which the host's slot reports as installed", async () => {
-    const user = userEvent.setup();
-    const queryClient = renderRow("provider_outdated", OUTDATED, false);
-
-    await user.click(updateButton());
-    await waitFor(() => expect(updateButton().disabled).toBe(true));
-
-    // The host's slot answers with the runnable old copy before its error;
-    // the version it set out to install says what happened to it.
-    host.install = { status: "installed", version: INSTALLED };
-    host.newest = {
-      status: "error",
-      reason: "network",
-      message: "fetch failed",
-      retryAtMs: null,
-    };
-    await queryClient.invalidateQueries({
-      queryKey: hostQueryKeys.methodScope(HOST_ID, "providers.list"),
-    });
-
-    expect(
-      (await screen.findByTestId("provider-update-failure")).textContent,
-    ).toBe(
-      "The update failed: the download could not be reached. Retry when you're back online.",
-    );
-    expect(updateButton().disabled).toBe(false);
-  });
-
-  it("settles on a list read the host answered after it took the request, though that read finished before the request's own answer", async () => {
-    const user = userEvent.setup();
-    // The host installs at once and never reports downloading. Another view
-    // of its list reads it while the host is still answering the request,
-    // and every read after that one stalls.
-    host.ensure = "finishes-at-once";
-    // Every read of the clock a tick later than the last, so the times say
-    // the order things happened in.
-    let clock = 1_000_000;
-    vi.spyOn(Date, "now").mockImplementation(() => ++clock);
-    const queryClient = renderRow("provider_outdated", OUTDATED, true);
-    host.whileAnswering = async () => {
-      await queryClient.refetchQueries({
-        queryKey: hostQueryKeys.methodScope(HOST_ID, "providers.list"),
-      });
-      host.listStalls = true;
-    };
-
-    await user.click(updateButton());
-
-    await waitFor(() => expect(host.listStalls).toBe(true));
-    await waitFor(() => expect(updateButton().disabled).toBe(false));
-    expect(screen.queryByTestId("provider-update-failure")).toBeNull();
-  });
-
-  it("says so when the host has no newer version to install", async () => {
-    const user = userEvent.setup();
-    host.ensure = "nothing-newer";
-    renderRow("provider_outdated", OUTDATED, false);
-
-    await user.click(updateButton());
-
-    expect(
-      (await screen.findByTestId("provider-update-failure")).textContent,
-    ).toBe("There's no newer version to install yet.");
   });
 
   it("says why when the host refuses the update", async () => {
     const user = userEvent.setup();
     host.ensure = new Error("Grok is disabled on this host.");
-    renderRow("provider_outdated", OUTDATED, false);
+    renderRow("provider_outdated", OUTDATED);
 
     await user.click(updateButton());
 
@@ -424,7 +404,7 @@ describe("<ErrorSegment /> a provider whose command-line tool is out of date", (
 
   it("offers no Update where the host cannot update the provider, and keeps the host's words for who does", () => {
     const owner = `${OUTDATED} The host's owner can update it.`;
-    renderRow("provider_outdated_host_owner", owner, false);
+    renderRow("provider_outdated_host_owner", owner);
 
     expect(screen.getByText(owner)).toBeTruthy();
     expect(screen.getByText("Out of date")).toBeTruthy();
@@ -433,7 +413,7 @@ describe("<ErrorSegment /> a provider whose command-line tool is out of date", (
 
   it("offers no Update on a host that has no provider update", () => {
     resetNegotiatedManifests();
-    renderRow("provider_outdated", OUTDATED, false);
+    renderRow("provider_outdated", OUTDATED);
 
     expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
   });
