@@ -29,7 +29,7 @@ import type {
   BotThreadSummary,
   BotTurnRef,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import type { BotTranscriptLanding } from "@/components/bots/bot-chat-transcript";
+import type { BotChannelLanding } from "@/components/bots/bot-channel-view";
 import type { BotOpenSession } from "@/components/bots/bot-session-view";
 import type {
   BotOpenThread,
@@ -316,7 +316,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     botTitle: string;
     appConversationChatId: string | null;
     openThread: BotOpenThread | null;
-    landOn: BotTranscriptLanding | null;
+    landOn: BotChannelLanding | null;
     trunkChatId: string;
     onOpenActivity: () => void;
     onOpenTurn: BotTurnOpen;
@@ -333,6 +333,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
       data-app-conversation-chat-id={props.appConversationChatId ?? "none"}
       data-open-thread={props.openThread?.anchorMessageId ?? "none"}
       data-land-on={props.landOn?.messageId ?? "none"}
+      data-land-on-thread={props.landOn?.threadId ?? "none"}
       data-trunk-chat-id={props.trunkChatId}
       data-teammate-name={
         props.resolveMember("user-teammate")?.displayName ?? "unresolved"
@@ -346,7 +347,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
       <button
         type="button"
         data-testid="stub-channel-open-turn"
-        onClick={() => props.onOpenTurn(REPLY_TURN)}
+        onClick={() => props.onOpenTurn(REPLY_TURN, null)}
       />
       <button
         type="button"
@@ -356,6 +357,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
             chatId: "session-thread-1",
             threadId: "thread-1",
             messageId: null,
+            sendPostId: null,
           })
         }
       />
@@ -369,7 +371,7 @@ vi.mock("@/components/bots/bot-session-view", () => ({
     session: BotOpenSession;
     onClose: () => void;
     onOpenChannel: (messageId: string | null) => void;
-    onOpenThread: (threadId: string) => void;
+    onOpenThread: (threadId: string, messageId: string | null) => void;
   }) => (
     <div
       data-testid="stub-session"
@@ -396,7 +398,12 @@ vi.mock("@/components/bots/bot-session-view", () => ({
       <button
         type="button"
         data-testid="stub-session-thread"
-        onClick={() => props.onOpenThread("thread-1")}
+        onClick={() => props.onOpenThread("thread-1", null)}
+      />
+      <button
+        type="button"
+        data-testid="stub-session-thread-post"
+        onClick={() => props.onOpenThread("thread-1", "thread-reply-9")}
       />
     </div>
   ),
@@ -430,17 +437,20 @@ vi.mock("@/components/bots/bot-activity-page", () => ({
         type="button"
         data-testid="stub-activity-open-turn"
         onClick={() =>
-          props.onOpenTurn({
-            chatId: "trunk-1",
-            turnIds: ["turn-checkin"],
-            userMessageId: "prompt-checkin",
-            threadId: null,
-            startedAt: 1_000,
-            endedAt: 2_000,
-            summary: null,
-            messageIds: [],
-            requestIds: [],
-          })
+          props.onOpenTurn(
+            {
+              chatId: "trunk-1",
+              turnIds: ["turn-checkin"],
+              userMessageId: "prompt-checkin",
+              threadId: null,
+              startedAt: 1_000,
+              endedAt: 2_000,
+              summary: null,
+              messageIds: [],
+              requestIds: [],
+            },
+            null,
+          )
         }
       />
     </div>
@@ -1884,6 +1894,37 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
     expect(
       screen.getByTestId("stub-channel").getAttribute("data-open-thread"),
     ).toBe("post-7");
+  });
+
+  it("shows a thread beside the channel landed on the post a session's send wrote in it", async () => {
+    const user = userEvent.setup();
+    mocks.state.threads = [
+      {
+        threadId: "thread-1",
+        conversationId: "conversation-app",
+        sessionChatId: "session-thread-1",
+        anchor: {
+          messageId: "post-7",
+          requestId: "req-7",
+          senderUserId: "user-1",
+          sentAt: 1_000,
+          resolvedAt: 1_001,
+        },
+        replyCount: 1,
+        lastReplyAt: 2_000,
+        openRequestCount: 0,
+        costUsd: null,
+      },
+    ];
+    render(surface());
+
+    await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+    await user.click(screen.getByTestId("stub-session-thread-post"));
+
+    const channel = screen.getByTestId("stub-channel");
+    expect(channel.getAttribute("data-open-thread")).toBe("post-7");
+    expect(channel.getAttribute("data-land-on")).toBe("thread-reply-9");
+    expect(channel.getAttribute("data-land-on-thread")).toBe("thread-1");
   });
 
   it("gives the channel the bot's trunk session", () => {

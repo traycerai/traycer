@@ -30,6 +30,28 @@ export function replyRowIdFor(
 }
 
 /**
+ * The card of the send that wrote the post `postId` (Tracy Bots T94): the
+ * rendered row that carries its tool call, and the call's block, by the post
+ * its `botSendReceipt` names. `null` when no rendered row carries it.
+ */
+export function sendCardFor(
+  messages: ReadonlyArray<ChatMessage>,
+  postId: string,
+): { readonly rowId: string; readonly blockId: string } | null {
+  for (const message of messages) {
+    for (const segment of message.segments) {
+      if (
+        segment.kind === "tool" &&
+        segment.botSendReceipt?.messageId === postId
+      ) {
+        return { rowId: message.id, blockId: segment.id };
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Whether the reply `replyMessageId` renders in the row right after the post
  * `postMessageId`, where the reader sees the answer without a jump. `false`
  * when either is not in the rendered rows.
