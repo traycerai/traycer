@@ -33,6 +33,7 @@ import {
 } from "@/lib/bots/bot-member-names";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { BotChannelIntro } from "@/components/bots/bot-channel-intro";
+import { ChatTimelineHeaderContext } from "@/components/chat/chat-timeline-header-context";
 import {
   ChatMessages,
   type ChatMessageScrollRequest,
@@ -97,6 +98,11 @@ export type BotTranscriptSurface =
         readonly botTitle: string;
         readonly directive: string | null;
       };
+      /**
+       * A live team main bot's setup history (T67b), above every post and in
+       * place of the intro; `null` for any other channel.
+       */
+      readonly history: ReactNode;
     }
   | {
       readonly kind: "thread";
@@ -321,6 +327,26 @@ export function BotChatTranscript(props: {
 }
 
 type ChannelIntro = Extract<BotTranscriptSurface, { kind: "channel" }>["intro"];
+
+/** The setup history a channel surface keeps at its top; `null` elsewhere. */
+function channelHistoryOf(surface: BotTranscriptSurface | null): ReactNode {
+  return surface?.kind === "channel" ? surface.history : null;
+}
+
+/** An empty channel's first screen: its setup history, or else its intro. */
+function BotChannelOpening(props: {
+  readonly history: ReactNode;
+  readonly intro: ChannelIntro;
+}): ReactNode {
+  return (
+    props.history ?? (
+      <BotChannelIntro
+        botTitle={props.intro.botTitle}
+        directive={props.intro.directive}
+      />
+    )
+  );
+}
 
 /**
  * A channel nobody has written in opens with what it is for, as Slack's
@@ -564,6 +590,7 @@ function BotChatTranscriptBody(props: {
   const transcriptWindow = isWindowedTranscript(state)
     ? state.transcriptWindow
     : null;
+  const channelHistory = channelHistoryOf(surface);
   const intro = channelIntro(
     surface,
     state.snapshotLoaded,
@@ -579,10 +606,7 @@ function BotChatTranscriptBody(props: {
         data-testid="bot-channel-not-here-yet"
         className="flex min-h-0 flex-1 flex-col"
       >
-        <BotChannelIntro
-          botTitle={surface.intro.botTitle}
-          directive={surface.intro.directive}
-        />
+        <BotChannelOpening history={surface.history} intro={surface.intro} />
       </div>
     );
   }
@@ -597,36 +621,40 @@ function BotChatTranscriptBody(props: {
           className="flex min-h-0 flex-1 flex-col"
         >
           {intro !== null ? (
-            <BotChannelIntro
-              botTitle={intro.botTitle}
-              directive={intro.directive}
-            />
+            <BotChannelOpening history={channelHistory} intro={intro} />
           ) : (
-            <TasklessMarkdownLinkProvider tabId={instanceId} tabHostId={hostId}>
-              <ChatMessages
-                taskTitle={title}
-                taskId={chatId}
-                epicId={botId}
-                hostId={hostId}
-                messages={messages}
-                transcriptWindow={transcriptWindow}
-                onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
-                onFindReadOrdinalChange={state.requestFindReadOrdinal}
-                baselineEpoch={state.transcriptBaselineEpoch}
-                hydrationSequence={state.transcriptHydrationSequence}
-                coldRewrittenMessageIds={state.coldRewrittenMessageIds}
-                backgroundItems={state.backgroundItems}
-                getMessageActions={getMessageActions}
-                nextStepActions={null}
-                instanceId={instanceId}
-                visible
-                systemOverlayActive={false}
-                scrollRequest={scrollRequest}
-                onScrollRequestSettled={onScrollRequestSettled}
-                composerOverlayHeight={0}
-                subagentDrillIn={subagentDrillIn}
-              />
-            </TasklessMarkdownLinkProvider>
+            <ChatTimelineHeaderContext value={channelHistory}>
+              <TasklessMarkdownLinkProvider
+                tabId={instanceId}
+                tabHostId={hostId}
+              >
+                <ChatMessages
+                  taskTitle={title}
+                  taskId={chatId}
+                  epicId={botId}
+                  hostId={hostId}
+                  messages={messages}
+                  transcriptWindow={transcriptWindow}
+                  onVisibleOrdinalRangeChange={
+                    state.reportVisibleTranscriptRange
+                  }
+                  onFindReadOrdinalChange={state.requestFindReadOrdinal}
+                  baselineEpoch={state.transcriptBaselineEpoch}
+                  hydrationSequence={state.transcriptHydrationSequence}
+                  coldRewrittenMessageIds={state.coldRewrittenMessageIds}
+                  backgroundItems={state.backgroundItems}
+                  getMessageActions={getMessageActions}
+                  nextStepActions={null}
+                  instanceId={instanceId}
+                  visible
+                  systemOverlayActive={false}
+                  scrollRequest={scrollRequest}
+                  onScrollRequestSettled={onScrollRequestSettled}
+                  composerOverlayHeight={0}
+                  subagentDrillIn={subagentDrillIn}
+                />
+              </TasklessMarkdownLinkProvider>
+            </ChatTimelineHeaderContext>
           )}
         </div>
       </ChatBotPresentationContext.Provider>

@@ -1719,7 +1719,11 @@ export const HOST_METHOD_POLL_TABLE = {
   },
   // A team's onboarding (T48): the read is refetched when its card mounts or
   // a choice or completion lands; the two writes persist, so they queue.
-  "bot.onboarding.read": { ...LATEST_SCHEDULING, poll: null },
+  // Opt-in polling (`poll: true`) from a team's setup channel only, while it
+  // is on screen and the setup still needs a host (T67b): a bot created under
+  // the team host's own context rings no other host's bot list, so this is
+  // how a member watching the setup sees it go live.
+  "bot.onboarding.read": { ...LATEST_SCHEDULING, poll: ON_SCREEN_FIXED_POLL },
   "bot.onboarding.choose": {
     mode: "fifo",
     joinResponseTimeoutMs: null,

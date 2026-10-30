@@ -63,6 +63,7 @@ import {
   botOnboardingReadRequestSchema,
   botOnboardingReadResponseSchema,
   botOnboardingReadResponseSchemaV10,
+  botOnboardingReadResponseSchemaV11,
 } from "./onboarding-schemas";
 import {
   botSurfaceActRequestSchema,
@@ -372,7 +373,7 @@ export const botOnboardingReadV11 = defineRpcContract({
   method: "bot.onboarding.read",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: botOnboardingReadRequestSchema,
-  responseSchema: botOnboardingReadResponseSchema,
+  responseSchema: botOnboardingReadResponseSchemaV11,
 });
 export const botOnboardingReadUpgradeV10ToV11 = defineUpgradePath<
   typeof botOnboardingReadV10,
@@ -382,6 +383,34 @@ export const botOnboardingReadUpgradeV10ToV11 = defineUpgradePath<
   to: botOnboardingReadV11.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({ ...response, setup: null }),
+});
+
+/**
+ * `bot.onboarding.read@1.2` (T67b): the setup stays once the team's main bot
+ * exists, `live`, with how the team's host came. A `1.1` setup is a main bot
+ * still to be set up; a `1.1` caller is served `null` once it is live
+ * (`WITHIN_MAJOR_RESPONSE_PROJECTIONS` on the host).
+ */
+export const botOnboardingReadV12 = defineRpcContract({
+  method: "bot.onboarding.read",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: botOnboardingReadRequestSchema,
+  responseSchema: botOnboardingReadResponseSchema,
+});
+export const botOnboardingReadUpgradeV11ToV12 = defineUpgradePath<
+  typeof botOnboardingReadV11,
+  typeof botOnboardingReadV12
+>({
+  from: botOnboardingReadV11.schemaVersion,
+  to: botOnboardingReadV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    setup:
+      response.setup === null
+        ? null
+        : { ...response.setup, state: "needs_host", arrival: null },
+  }),
 });
 
 export const botOnboardingChooseV10 = defineRpcContract({

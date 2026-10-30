@@ -281,6 +281,8 @@ export function BotChannelView(props: {
   readonly botNameOf: (botId: string) => string | null;
   /** Opens the bot's Activity tab, from the open thread's header. */
   readonly onOpenActivity: () => void;
+  /** A live team main bot's setup history at the top of the channel (T67b); `null` for none. */
+  readonly setupHistory: ReactNode;
 }): ReactNode {
   const {
     botId,
@@ -303,6 +305,7 @@ export function BotChannelView(props: {
     environmentId,
     botNameOf,
     onOpenActivity,
+    setupHistory,
   } = props;
   const openThreadPostId = open?.anchorMessageId ?? null;
   const client = useTabHostClient();
@@ -544,6 +547,7 @@ export function BotChannelView(props: {
       openTurn: onOpenTurn,
       sessionChatId: trunkChatId,
       intro: { botTitle, directive },
+      history: setupHistory,
     }),
     [
       answerQuestion,
@@ -562,6 +566,7 @@ export function BotChannelView(props: {
       onOpenTurn,
       resolveMember,
       sending,
+      setupHistory,
       threadListSupported,
       threadAnchorKinds,
       threadsByPost,

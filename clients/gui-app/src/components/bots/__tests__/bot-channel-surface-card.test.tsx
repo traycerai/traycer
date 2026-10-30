@@ -532,6 +532,7 @@ function mountChannel(input: {
               environmentId="env-1"
               botNameOf={() => null}
               onOpenActivity={vi.fn()}
+              setupHistory={null}
             />
           </ChatExpansionTestProviders>
         </TooltipProvider>

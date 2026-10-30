@@ -15,6 +15,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { BotsUnavailableNotice } from "@/components/bots/bots-unavailable-notice";
 import {
@@ -29,7 +31,11 @@ import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-memb
 import { useBotOpenMutation } from "@/hooks/bots/use-bot-mutations";
 import { useTeamSetups } from "@/hooks/bots/use-team-setups";
 import { botTabRouteOf } from "@/lib/bots/bot-tab-route";
-import { TeamSetupChannel } from "@/components/bots/team-setup-channel";
+import {
+  TeamSetupChannel,
+  TeamSetupHistoryRows,
+} from "@/components/bots/team-setup-channel";
+import { useTeamSetupHistory } from "@/hooks/bots/use-team-setup-history";
 import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import {
@@ -222,7 +228,9 @@ function BotTabRoute(props: {
   });
   if (route.kind === "connecting") return <BotTabConnecting />;
   if (route.kind === "setup") {
-    return <TeamSetupChannel setup={route.setup} hostId={hostId} />;
+    return (
+      <TeamSetupChannel setup={route.setup} client={client} hostId={hostId} />
+    );
   }
   if (route.kind === "unresolved") {
     return (
@@ -570,6 +578,43 @@ function useBotTabSession(args: {
   };
 }
 
+/**
+ * The top of a team's main bot's live channel (T67b): the setup the bot was
+ * born from and how the team's host came; `null` for any other bot, and until
+ * the environment list names the bot's team.
+ */
+function useChannelSetupHistory(input: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly hostId: string;
+  readonly bot: {
+    readonly botId: string;
+    readonly environmentId: string;
+    readonly title: string;
+  };
+  readonly environment: {
+    readonly label: string;
+    readonly ownerKind: string;
+  } | null;
+  readonly isMain: boolean | null;
+}): ReactNode {
+  const { bot, environment } = input;
+  const history = useTeamSetupHistory({
+    client: input.client,
+    hostId: input.hostId,
+    botId: bot.botId,
+    environmentId: bot.environmentId,
+    team: environment?.ownerKind === "organization" && input.isMain === true,
+  });
+  if (history === null || environment === null) return null;
+  return (
+    <TeamSetupHistoryRows
+      botTitle={bot.title}
+      teamName={environment.label}
+      history={history}
+    />
+  );
+}
+
 function BotTabContent(props: {
   readonly botId: string;
   readonly hostId: string;
@@ -610,6 +655,13 @@ function BotTabContent(props: {
   // Only a personal environment's bot may answer posts itself; a list not
   // read yet draws no reply-mode control.
   const personal = environment?.ownerKind === "user";
+  const setupHistory = useChannelSetupHistory({
+    client,
+    hostId,
+    bot: snapshot.bot,
+    environment,
+    isMain,
+  });
   const botList = useBotListQuery(client, true);
   const environmentBots = useMemo(
     () =>
@@ -809,6 +861,7 @@ function BotTabContent(props: {
                     environmentId={snapshot.bot.environmentId}
                     botNameOf={botNameOf}
                     onOpenActivity={openActivity}
+                    setupHistory={setupHistory}
                   />
                 </TabsContent>
                 <TabsContent

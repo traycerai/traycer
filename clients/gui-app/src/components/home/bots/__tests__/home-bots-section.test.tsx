@@ -29,12 +29,11 @@ import type {
   EnvironmentDescriptor,
   EnvironmentHostRecord,
 } from "@traycer/protocol/host/environment/contracts";
+import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { TeamSetup } from "@/hooks/bots/use-team-setups";
 
 /** What a scripted `bot.onboarding.read` answers for one environment. */
-type OnboardingScript =
-  | { setup: { botId: string; title: string } | null }
-  | "fails";
+type OnboardingScript = { setup: BotOnboardingSetup | null } | "fails";
 
 const mocks = vi.hoisted(() => {
   const initialSupport = (): boolean | null => true;
@@ -686,7 +685,12 @@ describe("HomeBotsSection what each group is told", () => {
  * answers it at 1.1 or later, and handed to that team's group alone.
  */
 describe("HomeBotsSection team setup", () => {
-  const SETUP = { botId: "bot-tracy-env-team", title: "Tracy" };
+  const SETUP: BotOnboardingSetup = {
+    botId: "bot-tracy-env-team",
+    title: "Tracy",
+    state: "needs_host",
+    arrival: null,
+  };
 
   /** The personal environment holds a bot; the team holds none. */
   function resolveWithBotlessTeam(): void {
