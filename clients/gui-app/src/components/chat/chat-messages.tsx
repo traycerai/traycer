@@ -361,6 +361,20 @@ const CHAT_TIMELINE_NAVIGATION_LANDING_EPSILON_PX = 1;
  *  automatically in one operation. */
 const CHAT_TIMELINE_NAVIGATION_MAX_RETRIES = 3;
 
+// TEMPORARY DIAGNOSTIC - probe branch only, never for `main`. Records which
+// terminal path the mount-time measured restore takes, so a real CI failure of
+// `chat-scroll-restore-first-paint.spec.ts:568` can say whether the restore
+// validated, aborted, or exhausted its retries.
+function probeRestorePath(path: string): void {
+  const log: unknown = Reflect.get(globalThis, "__restorePath");
+  const entry = `${path}@${String(Math.round(performance.now()))}ms`;
+  if (Array.isArray(log)) {
+    log.push(entry);
+    return;
+  }
+  Reflect.set(globalThis, "__restorePath", [entry]);
+}
+
 /** The controller's own follow-vs-free scroll state - a pure mirror of
  *  LegendList's strict `isAtEnd`, never an independent source of truth. */
 type ChatTimelineScrollMode = "following-end" | "free-scrolling";
@@ -3816,8 +3830,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   useLayoutEffect(() => {
     const pending = pendingMeasuredFreeRestoreRef.current;
-    if (pending === null) return;
-    if (timelineScrollModeRef.current !== "free-scrolling") return;
+    if (pending === null) {
+      probeRestorePath("skip:no-pending");
+      return;
+    }
+    if (timelineScrollModeRef.current !== "free-scrolling") {
+      probeRestorePath(`skip:mode=${String(timelineScrollModeRef.current)}`);
+      return;
+    }
+    probeRestorePath("enter");
 
     // Fixup (atomic-reader-supersession): freeze the target and the content/
     // geometry fingerprint actually issued below - `isAborted` must compare
@@ -3910,13 +3931,16 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           }
           resolvePendingRestoreEndLandingRef.current = null;
           pendingMeasuredFreeRestoreRef.current = null;
+          probeRestorePath("aborted");
           return true;
         },
         onValidated: () => {
           resolvePendingRestoreEndLandingRef.current = null;
+          probeRestorePath("validated");
         },
         onExhausted: () => {
           resolvePendingRestoreEndLandingRef.current = null;
+          probeRestorePath("exhausted");
           // A bounded whole-row restore accepts its clamped fallback. A part's
           // provisional owner position still cannot replace the exact saved
           // coordinate while its hydration is pending.
@@ -3932,6 +3956,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // hydration catch-up, a visibility replay, a navigation) is not judged
     // against it: a strict bottom resolved against this target would cancel
     // that loop instead.
+    probeRestorePath(issued ? "issued" : "not-issued");
     const settleCleanup = activeNavigationSettleCleanupRef.current;
     if (issued && settleCleanup !== null) {
       activeNavigationSettleCleanupRef.current = (): void => {
@@ -4082,6 +4107,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       pendingMeasuredFreeRestoreRef.current = null;
       reconcileInvalidTimelineLanding();
     };
+    probeRestorePath("site:visibility-replay");
     const issued = restorePersistedTimelineLocation(
       replay.anchorMessageId,
       replay.offset,
@@ -4281,6 +4307,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       return;
     }
     const rawOffset = rawSavedTabState?.offset ?? 0;
+    probeRestorePath("site:hydration-catchup");
     restorePersistedTimelineLocation(anchorId, rawOffset, {
       isAborted: () => false,
       onValidated: () => {
