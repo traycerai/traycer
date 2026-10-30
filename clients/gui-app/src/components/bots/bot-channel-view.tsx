@@ -151,8 +151,10 @@ function channelLandingOf(
 
 /**
  * The landing the open thread's panel takes, held from the channel's mount:
- * one on a message of the listed thread open beside it. Another thread
- * opened there, or the panel closed (`spend`), spends it.
+ * one on a message of the listed thread open beside it. It waits through the
+ * thread list's first load; once handed to that thread's panel it lands
+ * there once, so the thread leaving the panel - another thread, the memory
+ * in its place, the panel closed - spends it, and so does `spend`.
  */
 function useThreadPanelLanding(
   landOn: BotChannelLanding | null,
@@ -162,20 +164,22 @@ function useThreadPanelLanding(
   readonly spend: () => void;
 } {
   const [held, setHeld] = useState(() =>
-    landOn !== null && landOn.threadId !== null ? landOn : null,
+    landOn !== null && landOn.threadId !== null
+      ? { landing: landOn, handed: false }
+      : null,
   );
-  if (
+  const showing = held !== null && openThreadId === held.landing.threadId;
+  if (held !== null && showing && !held.handed) {
+    setHeld({ landing: held.landing, handed: true });
+  } else if (
     held !== null &&
-    openThreadId !== null &&
-    openThreadId !== held.threadId
+    !showing &&
+    (held.handed || openThreadId !== null)
   ) {
     setHeld(null);
   }
   const spend = useCallback(() => setHeld(null), []);
-  return {
-    landing: held !== null && openThreadId === held.threadId ? held : null,
-    spend,
-  };
+  return { landing: showing ? held.landing : null, spend };
 }
 
 /**

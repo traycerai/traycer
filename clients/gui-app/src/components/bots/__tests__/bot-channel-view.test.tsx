@@ -1386,6 +1386,54 @@ describe("<BotChannelView /> open thread", () => {
     ).toBe("none");
   });
 
+  it("lands the thread once: the memory taking its place and Back to it open it where it opens", () => {
+    mountLanding = {
+      messageId: "reply-a9",
+      sendPostId: null,
+      threadId: "thread-a",
+      visit: 1,
+    };
+    const view = mount({ openThreadPostId: "post-a" });
+    const threadLanding = (): string | null =>
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on");
+    expect(threadLanding()).toBe("reply-a9");
+
+    // The memory takes the thread's slot; its Back puts the thread back.
+    view.reopen(null);
+    expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
+    view.reopen({
+      anchorMessageId: "post-a",
+      announcement: false,
+      answer: false,
+      sent: null,
+    });
+
+    expect(threadLanding()).toBe("none");
+  });
+
+  it("holds the landing while the thread list has not answered, and lands once it does", () => {
+    mocks.state.threadListAnswered = false;
+    mountLanding = {
+      messageId: "reply-a9",
+      sendPostId: null,
+      threadId: "thread-a",
+      visit: 1,
+    };
+    const view = mount({ openThreadPostId: "post-a" });
+    expect(screen.queryByTestId("stub-transcript-thread")).toBeNull();
+
+    mocks.state.threadListAnswered = true;
+    view.rerender();
+
+    expect(
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on"),
+    ).toBe("reply-a9");
+  });
+
   it("lands no thread on a message the tab named for another thread", () => {
     mountLanding = {
       messageId: "reply-b9",
