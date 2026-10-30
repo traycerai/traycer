@@ -32,6 +32,7 @@ const EDIT_ACTION_ID = "edit-action";
 const FOLLOW_UP_ACTION_ID = "follow-up-action";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",

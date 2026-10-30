@@ -168,7 +168,8 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // re-emission carries the key through an older reader. No reader floor: an
 // older reader draws the send without the post's state. The receipt's `slack`
 // (a send posted in Slack, S4b) rides the same minor, defaulted `null`.
-export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 11 } as const;
+// 1.12 adds the per-chat Ultracode request to core.settings.
+export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 12 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;
 

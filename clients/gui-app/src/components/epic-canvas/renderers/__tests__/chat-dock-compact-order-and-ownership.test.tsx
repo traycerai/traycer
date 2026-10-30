@@ -223,6 +223,7 @@ function surfacesProps(patch: {
       steerCapable: false,
       steerProtocolSupported: true,
       autoPermissionModeProtocolSupported: null,
+      ultracodeProtocolSupported: false,
       getDraftBlobBridgeSupported: () => false,
       getActiveTurnForSteer: () => null,
       getStopConfirmationTarget: () => ({

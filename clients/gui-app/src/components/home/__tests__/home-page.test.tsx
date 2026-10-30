@@ -322,6 +322,7 @@ vi.mock("@/components/home/composer/landing-composer", () => ({
         teamSandboxHarnessBlocked: false,
         settled: null,
         toolbar: {
+          ultracode: false,
           selection: {
             harnessId: "codex",
             modelSlug: "gpt-5-codex",

@@ -295,6 +295,7 @@ function renderToolbar(): void {
             reasoningFallback: "model-default",
             seedKey: TILE,
             values: {
+              ultracode: false,
               permission: "supervised",
               selection: {
                 harnessId: "claude",
@@ -307,6 +308,7 @@ function renderToolbar(): void {
             onSettingsChange: null,
             tuiOnly: false,
             chatLineCarriesAutoMode: null,
+            ultracodeCarried: false,
             hostId: null,
           })}
           onAttachImages={() => undefined}

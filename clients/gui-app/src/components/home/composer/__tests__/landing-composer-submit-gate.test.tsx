@@ -296,6 +296,7 @@ vi.mock("@/stores/composer/composer-run-settings-store", () => {
 
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
   const toolbarStore = createStore(() => ({
+    ultracode: false,
     selection: {
       get harnessId() {
         return testState.displayedHarness;
@@ -316,6 +317,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", () => {
     },
     // The raw pick; `selection` above is what this host's catalog shows.
     values: {
+      ultracode: false,
       selection: {
         get harnessId() {
           return testState.pickHarness;
@@ -1350,6 +1352,7 @@ describe("LandingComposer direct submit gate", () => {
       await sendFromComposer();
 
       expect(onlyPendingSend().settings).toEqual({
+        ultracode: false,
         harnessId: "codex",
         model: "gpt-6.1-sol",
         permissionMode: "supervised",

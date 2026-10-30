@@ -110,7 +110,7 @@ export function createStreamProxyHost(
         prepared === null ? NO_TRANSFER : prepared.transfer,
       );
     });
-    session.onStatusChange((status, reason, retryCause) => {
+    session.onStatusChange((status, reason, retryCause, continuity) => {
       // Version BEFORE status, so a worker reacting to `open` already reads the
       // version negotiated for it. Achievable because the real session sets its
       // version before transitioning and clears it on the first line of
@@ -128,7 +128,7 @@ export function createStreamProxyHost(
       push(
         {
           kind: "stream/status",
-          status: { streamId, status, reason, retryCause },
+          status: { streamId, status, reason, retryCause, continuity },
         },
         NO_TRANSFER,
       );
@@ -147,6 +147,7 @@ export function createStreamProxyHost(
           streamId,
           status: "closed",
           retryCause: null,
+          continuity: null,
           reason: {
             kind: "fatalError",
             details: {
@@ -250,6 +251,7 @@ export function createStreamProxyHost(
               status: "closed",
               reason: { kind: "caller" },
               retryCause: null,
+              continuity: null,
             },
           },
           NO_TRANSFER,

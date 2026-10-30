@@ -2,7 +2,7 @@ import { z } from "zod";
 import { commonRecordRegistry } from "@traycer/protocol/common/registry";
 import { getRecordSchema } from "@traycer/protocol/framework/index";
 import {
-  chatRunSettingsStrictSchema,
+  chatRunSettingsStrictSchemaPreUltracode,
   chatRunSettingsStrictSchemaPreCommandCode,
 } from "@traycer/protocol/persistence/epic/foundation";
 import { browserAnnotationRecordSchemaPreCanvas } from "@traycer/protocol/persistence/epic/messages";
@@ -69,7 +69,7 @@ export const draftComposerPortableSchema = lazySchema(() =>
   z.object({
     content: jsonContentSchema,
     selection: draftSelectionSchema.nullable(),
-    runSettings: chatRunSettingsStrictSchema.nullable(),
+    runSettings: chatRunSettingsStrictSchemaPreUltracode.nullable(),
     composerMode: draftComposerModeSchema,
     blobHashes: z.array(sha256HexSchema),
     closed: z.boolean().default(false),

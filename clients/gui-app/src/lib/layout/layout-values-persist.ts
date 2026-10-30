@@ -302,6 +302,11 @@ function modelPatch(value: unknown): Partial<ModelValues> {
     stored.style === "bars-text"
       ? { style: stored.style }
       : {}),
+    ...(stored.ultracodeStyle === "text" ||
+    stored.ultracodeStyle === "icon" ||
+    stored.ultracodeStyle === "icon-text"
+      ? { ultracodeStyle: stored.ultracodeStyle }
+      : {}),
     ...(stored.reasoningControl === "slider" ||
     stored.reasoningControl === "list"
       ? { reasoningControl: stored.reasoningControl }

@@ -301,6 +301,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
     };
   }
   const toolbarStore = createStore<ToolbarMockState>(() => ({
+    ultracode: false,
     selection: {
       harnessId: "claude",
       modelSlug: "claude-sonnet",

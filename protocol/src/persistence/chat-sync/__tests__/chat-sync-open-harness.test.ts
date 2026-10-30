@@ -145,6 +145,7 @@ const futureSettings: JsonObject = {
   serviceTier: null,
   agentMode: "regular",
   profileId: null,
+  ultracode: false,
 };
 
 const futureEvent: JsonObject = {

@@ -149,6 +149,7 @@ function sendTestMessage(harness: Harness, content: JsonContent): void {
     content,
     sender: { type: "user", userId: OWNER_ID },
     settings: {
+      ultracode: false,
       harnessId: "codex",
       model: "gpt-5-codex",
       permissionMode: "supervised",
@@ -192,7 +193,7 @@ function emitSnapshot(
   events: ReadonlyArray<ChatEvent>,
   messages: ReadonlyArray<Message>,
 ): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -248,7 +249,7 @@ function emitWindowedSnapshot(
   callbacks: ChatStreamCallbacks,
   restorableSetupInterruption: RestorableSetupInterruption | null,
 ): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onWindowedSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -438,6 +439,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
         content: failedContent,
         sender: { type: "user", userId: OWNER_ID },
         settings: {
+          ultracode: false,
           harnessId: "codex",
           model: "gpt-5-codex",
           permissionMode: "supervised",

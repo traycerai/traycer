@@ -3,6 +3,7 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import { landingComposerSettingsSeedForDraft } from "@/components/home/composer/landing-composer-settings-seed";
 
 const DRAFT_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "haiku",
   permissionMode: "supervised",
@@ -13,6 +14,7 @@ const DRAFT_SETTINGS: ChatRunSettings = {
 };
 
 const GLOBAL_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "sonnet",
   permissionMode: "supervised",

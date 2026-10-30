@@ -208,6 +208,7 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
       </ToolbarPillButton>
       <div className="ml-auto flex min-w-0 shrink items-center gap-1">
         <HarnessModelPicker
+          withUltracode
           store={store}
           maxModeContext={maxModeContext}
           withServiceTier

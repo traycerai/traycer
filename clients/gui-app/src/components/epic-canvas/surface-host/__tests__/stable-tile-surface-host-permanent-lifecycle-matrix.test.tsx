@@ -338,6 +338,7 @@ const ALL_CHATS: ReadonlyArray<EpicCanvasTileRef> = [
 ];
 
 const CHAT_RUN_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-sonnet",
   permissionMode: "supervised",
@@ -569,7 +570,7 @@ function installChatStreamFactory(
   __setChatStreamClientFactoryForTests((_epicId, chatId, callbacks) => {
     callbacksByChatId.set(chatId, callbacks);
     setTimeout(() => {
-      callbacks.onConnectionStatus("open", null, null);
+      callbacks.onConnectionStatus("open", null, null, null);
       const chat = ALL_CHATS.find((candidate) => candidate.id === chatId);
       if (chat !== undefined) {
         emitChatSnapshot(chat, callbacks, messagesStore.get(chat.id));

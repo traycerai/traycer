@@ -272,6 +272,8 @@ export function regionStyleDepiction(
 ): ReactNode {
   if (region === "model" && styleKey === "reasoningControl")
     return <ModelFooterDepiction control={values.model.reasoningControl} />;
+  if (region === "model" && styleKey === "ultracodeStyle")
+    return depictModelUltracode(values.model);
   if (region === "usageLimits" && styleKey === "readingStyle")
     return regionDepiction(region, values, {
       ...arrangement,
@@ -439,6 +441,7 @@ function specimenSegment(
     hidden: false,
     state: "live",
     reason: null,
+    chatCredential: null,
     fetching: false,
     retryOffered: false,
     windows: drawn,
@@ -818,7 +821,36 @@ function depictTodo(values: SizedValues): ReactNode {
 function depictModel(values: ModelValues): ReactNode {
   return (
     <HarnessModelTrigger
+      ultracode={null}
       selection={{ harnessId: "codex", modelSlug: "specimen", profileId: null }}
+      label="Model"
+      reasoningLabel="Medium"
+      reasoningStep={{ index: 2, count: 4 }}
+      reasoningIndicator={values.style}
+      serviceTierLabel={null}
+      serviceTierActive={false}
+      profileLabel={null}
+      profileAccentDot={null}
+      isLoading={false}
+      disabled={false}
+      labelDisplay="responsive"
+    />
+  );
+}
+
+/**
+ * Model's Ultracode row: a Claude chip with the request on, the only harness
+ * that offers it, so each example shows how the request is drawn.
+ */
+function depictModelUltracode(values: ModelValues): ReactNode {
+  return (
+    <HarnessModelTrigger
+      ultracode={values.ultracodeStyle}
+      selection={{
+        harnessId: "claude",
+        modelSlug: "specimen",
+        profileId: null,
+      }}
       label="Model"
       reasoningLabel="Medium"
       reasoningStep={{ index: 2, count: 4 }}

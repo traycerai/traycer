@@ -969,6 +969,7 @@ function chat(id: string, harnessId: GuiHarnessId | null): ChatProjection {
     harnessId === null
       ? null
       : {
+          ultracode: false,
           harnessId,
           model: "test-model",
           permissionMode: "supervised",

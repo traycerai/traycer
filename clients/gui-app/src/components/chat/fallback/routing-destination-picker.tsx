@@ -14,6 +14,7 @@ import type {
   LastFailedAttempt,
   PendingFallback,
 } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { ChatRunSettingsPreUltracode } from "@traycer/protocol/persistence/epic/foundation";
 import type {
   ChatFallbackListTargetsResponse,
   FallbackActionOutcome,
@@ -402,6 +403,7 @@ function RoutingModelPicker(props: {
   );
   return (
     <HarnessModelPicker
+      withUltracode={false}
       store={props.store}
       maxModeContext={maxModeContext}
       withServiceTier={false}
@@ -472,7 +474,17 @@ function useRoutingListing(input: {
     setHeld(targets.data);
   }
   const data = targets.data ?? held;
-  const failedTuple = data?.failedTuple ?? entryTuple;
+  const listedFailedTuple = data?.failedTuple ?? null;
+  // The unary listing predates Ultracode. Its tuple describes the failed
+  // destination, while the entry carries this attempt's saved request.
+  const failedTuple: ChatRunSettings =
+    listedFailedTuple === null
+      ? entryTuple
+      : {
+          ...listedFailedTuple,
+          ultracode:
+            listedFailedTuple.harnessId === "claude" && entryTuple.ultracode,
+        };
   const labelFor = useFallbackProfileLabels(client, open);
   // The failed tuple's harness, plus one per equivalent-model row: the
   // destinations a listed target can name.
@@ -764,6 +776,7 @@ function useRoutingStore(seed: ChatRunSettings): {
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: null,
     }),
   );
@@ -873,6 +886,7 @@ function seedValues(seed: ChatRunSettings): ComposerToolbarValues {
     },
     reasoning: seed.reasoningEffort ?? "",
     serviceTier: seed.serviceTier ?? "",
+    ultracode: seed.ultracode,
   };
 }
 
@@ -909,6 +923,7 @@ function RoutingCatalogSync({
     store.getState().setCatalog({
       hostId: null,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       harnesses,
       modelsHarnessId: harnessId,
       models: models ?? [],
@@ -1091,13 +1106,18 @@ function confirmTarget(
         )?.id ?? "");
   const listed = listedTarget(pick, data);
   if (listed !== null) {
-    return { ...listed, serviceTier: tier.length === 0 ? null : tier };
+    return {
+      ...listed,
+      serviceTier: tier.length === 0 ? null : tier,
+      ultracode: listed.harnessId === "claude" && failedTuple.ultracode,
+    };
   }
   const effort = reasoning.length === 0 ? null : reasoning;
   return {
     ...failedTuple,
     harnessId: selection.harnessId,
     model: selection.modelSlug,
+    ultracode: selection.harnessId === "claude" && failedTuple.ultracode,
     profileId: selection.profileId,
     reasoningEffort: effort,
     serviceTier: tier.length === 0 ? null : tier,
@@ -1116,7 +1136,7 @@ function confirmTarget(
 function listedTarget(
   pick: RoutingPick,
   data: ChatFallbackListTargetsResponse | undefined,
-): ChatRunSettings | null {
+): ChatRunSettingsPreUltracode | null {
   if (data === undefined) return null;
   const { selection } = pick;
   for (const row of data.modelTargets) {
@@ -1313,7 +1333,8 @@ function sameRunSettings(a: ChatRunSettings, b: ChatRunSettings): boolean {
     a.reasoningEffort === b.reasoningEffort &&
     a.serviceTier === b.serviceTier &&
     a.agentMode === b.agentMode &&
-    a.profileId === b.profileId
+    a.profileId === b.profileId &&
+    a.ultracode === b.ultracode
   );
 }
 

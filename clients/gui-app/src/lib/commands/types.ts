@@ -120,6 +120,7 @@ export interface CommandItem {
   };
   /** Artifact-tree presentation metadata used by the Artifacts opener. */
   readonly artifactTreeRow?: {
+    readonly epicId: string;
     readonly nodeId: string;
     readonly depth: number;
     readonly ancestorIds: ReadonlyArray<string>;

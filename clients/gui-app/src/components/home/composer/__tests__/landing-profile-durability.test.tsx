@@ -167,6 +167,7 @@ function createLandingToolbarStore(
     reasoningFallback: "model-default",
     seedKey: `landing-durability:${profileId ?? "ambient"}`,
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: "claude",
@@ -179,6 +180,7 @@ function createLandingToolbarStore(
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: "host-a",
   });
 }
@@ -214,6 +216,7 @@ function LandingRateLimitBannerHarness(props: {
   // switch is observable on the epic.create payload shape.
   const toolbarState = props.toolbarStore.getState();
   const submitSettings = buildChatRunSettings({
+    ultracode: false,
     selection: {
       ...toolbarState.selection,
       profileId,
@@ -671,6 +674,7 @@ describe("Landing rate-limit banner durability", () => {
       // Same builder `use-landing-composer-actions` uses at submit time.
       expect(
         buildChatRunSettings({
+          ultracode: false,
           selection: toolbarStore.getState().selection,
           permission: toolbarStore.getState().permission,
           reasoning: toolbarStore.getState().reasoning,
@@ -737,6 +741,7 @@ describe("Landing rate-limit banner durability", () => {
       expect(toolbarStore.getState().selection.profileId).toBe("second");
       expect(
         buildChatRunSettings({
+          ultracode: false,
           selection: toolbarStore.getState().selection,
           permission: toolbarStore.getState().permission,
           reasoning: toolbarStore.getState().reasoning,

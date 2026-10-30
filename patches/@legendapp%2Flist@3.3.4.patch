@@ -1,3 +1,9 @@
+diff --git a/node_modules/@legendapp/list/.bun-tag-4b52ac0e691df484 b/.bun-tag-4b52ac0e691df484
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/@legendapp/list/.bun-tag-4c2b088007216e56 b/.bun-tag-4c2b088007216e56
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/react-native.web.d.ts b/react-native.web.d.ts
 index b6c7481603f4119495551b3e4c1c071984c144af..54cfca30be22310b025fc2ad0af66f91dba32bba 100644
 --- a/react-native.web.d.ts
@@ -25,7 +31,7 @@ index b6c7481603f4119495551b3e4c1c071984c144af..54cfca30be22310b025fc2ad0af66f91
       * Sets whether scroll processing is enabled.
       * @param enabled - If true, scroll processing is enabled.
 diff --git a/react-native.web.js b/react-native.web.js
-index ea0348877ff08eb9962ff97efebf2cc19cffad11..ed4647a6a78537a4032aa412122a0f19159f0714 100644
+index ea0348877ff08eb9962ff97efebf2cc19cffad11..3558665f19fc60ad1f7ad5106a5c4f2242b225b5 100644
 --- a/react-native.web.js
 +++ b/react-native.web.js
 @@ -789,7 +789,15 @@ function recalculateSettledScroll(ctx) {
@@ -448,7 +454,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..ed4647a6a78537a4032aa412122a0f19
        },
        scrollTo: (options) => {
          const { x = 0, y = 0, animated = true } = options;
-@@ -6389,8 +6641,29 @@ function getScrollAdjustTarget(ctx, contentNode) {
+@@ -6389,8 +6641,68 @@ function getScrollAdjustTarget(ctx, contentNode) {
    }
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
@@ -457,15 +463,54 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..ed4647a6a78537a4032aa412122a0f19
 +// and the offset it asked for, which iOS lands after the lift under a finger.
 +// A pan that reaches the page as scroll reports alone (iOS delivers no touch
 +// event for a contact on a fling) is told apart from the list's by these.
++function announcesScrollerMoves(target) {
++  return !!target && typeof target.dispatchEvent === "function" && typeof CustomEvent !== "undefined" && !(typeof window !== "undefined" && target === window);
++}
++// Patched: `cause` says what moved the view, which is what a consumer needs
++// to know whether its own content-relative references owe the move. "offset"
++// is a write of the offset itself, which this list makes to hold content still
++// as it grows, so the content moved with it. "range" is a write that moves the
++// view only by changing what the scroller can reach, so the browser clamps it
++// onto the new end and NO content position moves. Only the end-pad restore
++// below is of the second kind, and it is the one write a consumer cannot net
++// out against the content it can see.
++function announceScrollerMove(target, from, fromEnd, to, intendedTop, cause) {
++  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to, intended: Math.max(0, Math.min(intendedTop, fromEnd)), cause } }));
++}
 +function moveScrollerAnnounced(target, intendedTop, move) {
-+  if (!target || typeof target.dispatchEvent !== "function" || typeof CustomEvent === "undefined" || typeof window !== "undefined" && target === window) {
++  if (!announcesScrollerMoves(target)) {
 +    move();
 +    return;
 +  }
 +  const from = target.scrollTop;
 +  const fromEnd = target.scrollHeight - target.clientHeight;
 +  move();
-+  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to: target.scrollTop, intended: Math.max(0, Math.min(intendedTop, fromEnd)) } }));
++  announceScrollerMove(target, from, fromEnd, target.scrollTop, intendedTop, "offset");
++}
++// Patched: a write of the list's that moves the view only by changing what the
++// scroller can reach. The browser clamps the view to the new end in the layout
++// that write lands in, so `write` forces that layout and the clamp is
++// announced like every other write of the list's. Left unannounced, a reader's
++// ledger and a press's reference keep an offset the view no longer has, and
++// the first read of the frame - which can see the clamped view beside an end a
++// React commit has already regrown - reads the list's own clamp as the reader
++// scrolling up, and stops following them.
++function moveScrollerByRangeAnnounced(target, write) {
++  if (!announcesScrollerMoves(target)) {
++    write();
++    return;
++  }
++  const from = target.scrollTop;
++  const fromEnd = target.scrollHeight - target.clientHeight;
++  write();
++  const to = target.scrollTop;
++  if (to === from) {
++    return;
++  }
++  // A clamp asks for nothing but the end it leaves the view at, and lands
++  // there in full, so `intended` is `to`: it is not a write iOS held back
++  // under a finger.
++  announceScrollerMove(target, from, fromEnd, to, to, "range");
 +}
  function scrollAdjustBy(el, left, top) {
 -  el.scrollBy({ behavior: "auto", left, top });
@@ -479,7 +524,22 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..ed4647a6a78537a4032aa412122a0f19
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6757,6 +7030,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+@@ -6436,7 +6748,13 @@ function ScrollAdjust() {
+             resetPaddingRafRef.current = requestAnimationFrame(() => {
+               resetPaddingRafRef.current = void 0;
+               resetPaddingBaselineRef.current = void 0;
+-              contentNode.style[axis.paddingEndProp] = previousPaddingEnd;
++              moveScrollerByRangeAnnounced(el, () => {
++                contentNode.style[axis.paddingEndProp] = previousPaddingEnd;
++                // Lands the clamp in this frame, as the pad's own growth above
++                // does, so the offset read after this write is the one the
++                // reader is left looking at.
++                void contentNode.offsetHeight;
++              });
+             });
+           } else {
+             scrollBy();
+@@ -6757,6 +7075,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -487,7 +547,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..ed4647a6a78537a4032aa412122a0f19
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
    }
-@@ -7001,6 +7275,7 @@ function onScroll(ctx, event) {
+@@ -7001,6 +7320,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -495,7 +555,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..ed4647a6a78537a4032aa412122a0f19
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7103,7 +7378,15 @@ var ScrollAdjustHandler = class {
+@@ -7103,7 +7423,15 @@ var ScrollAdjustHandler = class {
            targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
            targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
          } else {
@@ -512,7 +572,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..ed4647a6a78537a4032aa412122a0f19
          }
          const adjustment = targetScroll - state.scroll;
          if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
-@@ -7283,6 +7566,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7283,6 +7611,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -525,7 +585,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..ed4647a6a78537a4032aa412122a0f19
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7333,6 +7622,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7333,6 +7667,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -533,7 +593,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..ed4647a6a78537a4032aa412122a0f19
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
      state.pendingTotalSize = void 0;
-@@ -7370,6 +7660,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7370,6 +7705,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
@@ -542,7 +602,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..ed4647a6a78537a4032aa412122a0f19
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7448,6 +7740,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7448,6 +7785,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -578,7 +638,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..ed4647a6a78537a4032aa412122a0f19
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7845,6 +8166,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7845,6 +8211,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
@@ -589,7 +649,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..ed4647a6a78537a4032aa412122a0f19
          columns: [],
          containerItemGenerations: [],
 diff --git a/react-native.web.mjs b/react-native.web.mjs
-index c96345be154d77f66c26ea42cea15a18e22f5dfa..f5aa49de11a722bc5bee838d85504627f8520fef 100644
+index c96345be154d77f66c26ea42cea15a18e22f5dfa..9c0cb47c5974e05965816218e21e09cb9c2606d4 100644
 --- a/react-native.web.mjs
 +++ b/react-native.web.mjs
 @@ -768,7 +768,15 @@ function recalculateSettledScroll(ctx) {
@@ -1012,7 +1072,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..f5aa49de11a722bc5bee838d85504627
        },
        scrollTo: (options) => {
          const { x = 0, y = 0, animated = true } = options;
-@@ -6368,8 +6620,29 @@ function getScrollAdjustTarget(ctx, contentNode) {
+@@ -6368,8 +6620,68 @@ function getScrollAdjustTarget(ctx, contentNode) {
    }
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
@@ -1021,15 +1081,54 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..f5aa49de11a722bc5bee838d85504627
 +// and the offset it asked for, which iOS lands after the lift under a finger.
 +// A pan that reaches the page as scroll reports alone (iOS delivers no touch
 +// event for a contact on a fling) is told apart from the list's by these.
++function announcesScrollerMoves(target) {
++  return !!target && typeof target.dispatchEvent === "function" && typeof CustomEvent !== "undefined" && !(typeof window !== "undefined" && target === window);
++}
++// Patched: `cause` says what moved the view, which is what a consumer needs
++// to know whether its own content-relative references owe the move. "offset"
++// is a write of the offset itself, which this list makes to hold content still
++// as it grows, so the content moved with it. "range" is a write that moves the
++// view only by changing what the scroller can reach, so the browser clamps it
++// onto the new end and NO content position moves. Only the end-pad restore
++// below is of the second kind, and it is the one write a consumer cannot net
++// out against the content it can see.
++function announceScrollerMove(target, from, fromEnd, to, intendedTop, cause) {
++  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to, intended: Math.max(0, Math.min(intendedTop, fromEnd)), cause } }));
++}
 +function moveScrollerAnnounced(target, intendedTop, move) {
-+  if (!target || typeof target.dispatchEvent !== "function" || typeof CustomEvent === "undefined" || typeof window !== "undefined" && target === window) {
++  if (!announcesScrollerMoves(target)) {
 +    move();
 +    return;
 +  }
 +  const from = target.scrollTop;
 +  const fromEnd = target.scrollHeight - target.clientHeight;
 +  move();
-+  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to: target.scrollTop, intended: Math.max(0, Math.min(intendedTop, fromEnd)) } }));
++  announceScrollerMove(target, from, fromEnd, target.scrollTop, intendedTop, "offset");
++}
++// Patched: a write of the list's that moves the view only by changing what the
++// scroller can reach. The browser clamps the view to the new end in the layout
++// that write lands in, so `write` forces that layout and the clamp is
++// announced like every other write of the list's. Left unannounced, a reader's
++// ledger and a press's reference keep an offset the view no longer has, and
++// the first read of the frame - which can see the clamped view beside an end a
++// React commit has already regrown - reads the list's own clamp as the reader
++// scrolling up, and stops following them.
++function moveScrollerByRangeAnnounced(target, write) {
++  if (!announcesScrollerMoves(target)) {
++    write();
++    return;
++  }
++  const from = target.scrollTop;
++  const fromEnd = target.scrollHeight - target.clientHeight;
++  write();
++  const to = target.scrollTop;
++  if (to === from) {
++    return;
++  }
++  // A clamp asks for nothing but the end it leaves the view at, and lands
++  // there in full, so `intended` is `to`: it is not a write iOS held back
++  // under a finger.
++  announceScrollerMove(target, from, fromEnd, to, to, "range");
 +}
  function scrollAdjustBy(el, left, top) {
 -  el.scrollBy({ behavior: "auto", left, top });
@@ -1043,7 +1142,22 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..f5aa49de11a722bc5bee838d85504627
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6736,6 +7009,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+@@ -6415,7 +6727,13 @@ function ScrollAdjust() {
+             resetPaddingRafRef.current = requestAnimationFrame(() => {
+               resetPaddingRafRef.current = void 0;
+               resetPaddingBaselineRef.current = void 0;
+-              contentNode.style[axis.paddingEndProp] = previousPaddingEnd;
++              moveScrollerByRangeAnnounced(el, () => {
++                contentNode.style[axis.paddingEndProp] = previousPaddingEnd;
++                // Lands the clamp in this frame, as the pad's own growth above
++                // does, so the offset read after this write is the one the
++                // reader is left looking at.
++                void contentNode.offsetHeight;
++              });
+             });
+           } else {
+             scrollBy();
+@@ -6736,6 +7054,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -1051,7 +1165,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..f5aa49de11a722bc5bee838d85504627
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
    }
-@@ -6980,6 +7254,7 @@ function onScroll(ctx, event) {
+@@ -6980,6 +7299,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -1059,7 +1173,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..f5aa49de11a722bc5bee838d85504627
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7082,7 +7357,15 @@ var ScrollAdjustHandler = class {
+@@ -7082,7 +7402,15 @@ var ScrollAdjustHandler = class {
            targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
            targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
          } else {
@@ -1076,7 +1190,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..f5aa49de11a722bc5bee838d85504627
          }
          const adjustment = targetScroll - state.scroll;
          if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
-@@ -7262,6 +7545,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7262,6 +7590,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -1089,7 +1203,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..f5aa49de11a722bc5bee838d85504627
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7312,6 +7601,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7312,6 +7646,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -1097,7 +1211,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..f5aa49de11a722bc5bee838d85504627
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
      state.pendingTotalSize = void 0;
-@@ -7349,6 +7639,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7349,6 +7684,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
@@ -1106,7 +1220,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..f5aa49de11a722bc5bee838d85504627
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7427,6 +7719,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7427,6 +7764,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -1142,7 +1256,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..f5aa49de11a722bc5bee838d85504627
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7824,6 +8145,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7824,6 +8190,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
@@ -1179,7 +1293,7 @@ index b6c7481603f4119495551b3e4c1c071984c144af..54cfca30be22310b025fc2ad0af66f91
       * Sets whether scroll processing is enabled.
       * @param enabled - If true, scroll processing is enabled.
 diff --git a/react.js b/react.js
-index ea0348877ff08eb9962ff97efebf2cc19cffad11..1e1ddcd0248b7d52387148800603f13af518edb6 100644
+index ea0348877ff08eb9962ff97efebf2cc19cffad11..e769e146d97b11af7449df1026ef634297729c17 100644
 --- a/react.js
 +++ b/react.js
 @@ -785,11 +785,31 @@ function checkThresholds(ctx, allowedEdge) {
@@ -1815,7 +1929,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1e1ddcd0248b7d52387148800603f13a
        },
        scrollTo: (options) => {
          const { x = 0, y = 0, animated = true } = options;
-@@ -6389,8 +6727,29 @@ function getScrollAdjustTarget(ctx, contentNode) {
+@@ -6389,8 +6727,68 @@ function getScrollAdjustTarget(ctx, contentNode) {
    }
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
@@ -1824,15 +1938,54 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1e1ddcd0248b7d52387148800603f13a
 +// and the offset it asked for, which iOS lands after the lift under a finger.
 +// A pan that reaches the page as scroll reports alone (iOS delivers no touch
 +// event for a contact on a fling) is told apart from the list's by these.
++function announcesScrollerMoves(target) {
++  return !!target && typeof target.dispatchEvent === "function" && typeof CustomEvent !== "undefined" && !(typeof window !== "undefined" && target === window);
++}
++// Patched: `cause` says what moved the view, which is what a consumer needs
++// to know whether its own content-relative references owe the move. "offset"
++// is a write of the offset itself, which this list makes to hold content still
++// as it grows, so the content moved with it. "range" is a write that moves the
++// view only by changing what the scroller can reach, so the browser clamps it
++// onto the new end and NO content position moves. Only the end-pad restore
++// below is of the second kind, and it is the one write a consumer cannot net
++// out against the content it can see.
++function announceScrollerMove(target, from, fromEnd, to, intendedTop, cause) {
++  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to, intended: Math.max(0, Math.min(intendedTop, fromEnd)), cause } }));
++}
 +function moveScrollerAnnounced(target, intendedTop, move) {
-+  if (!target || typeof target.dispatchEvent !== "function" || typeof CustomEvent === "undefined" || typeof window !== "undefined" && target === window) {
++  if (!announcesScrollerMoves(target)) {
 +    move();
 +    return;
 +  }
 +  const from = target.scrollTop;
 +  const fromEnd = target.scrollHeight - target.clientHeight;
 +  move();
-+  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to: target.scrollTop, intended: Math.max(0, Math.min(intendedTop, fromEnd)) } }));
++  announceScrollerMove(target, from, fromEnd, target.scrollTop, intendedTop, "offset");
++}
++// Patched: a write of the list's that moves the view only by changing what the
++// scroller can reach. The browser clamps the view to the new end in the layout
++// that write lands in, so `write` forces that layout and the clamp is
++// announced like every other write of the list's. Left unannounced, a reader's
++// ledger and a press's reference keep an offset the view no longer has, and
++// the first read of the frame - which can see the clamped view beside an end a
++// React commit has already regrown - reads the list's own clamp as the reader
++// scrolling up, and stops following them.
++function moveScrollerByRangeAnnounced(target, write) {
++  if (!announcesScrollerMoves(target)) {
++    write();
++    return;
++  }
++  const from = target.scrollTop;
++  const fromEnd = target.scrollHeight - target.clientHeight;
++  write();
++  const to = target.scrollTop;
++  if (to === from) {
++    return;
++  }
++  // A clamp asks for nothing but the end it leaves the view at, and lands
++  // there in full, so `intended` is `to`: it is not a write iOS held back
++  // under a finger.
++  announceScrollerMove(target, from, fromEnd, to, to, "range");
 +}
  function scrollAdjustBy(el, left, top) {
 -  el.scrollBy({ behavior: "auto", left, top });
@@ -1846,7 +1999,22 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1e1ddcd0248b7d52387148800603f13a
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6757,6 +7116,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+@@ -6436,7 +6834,13 @@ function ScrollAdjust() {
+             resetPaddingRafRef.current = requestAnimationFrame(() => {
+               resetPaddingRafRef.current = void 0;
+               resetPaddingBaselineRef.current = void 0;
+-              contentNode.style[axis.paddingEndProp] = previousPaddingEnd;
++              moveScrollerByRangeAnnounced(el, () => {
++                contentNode.style[axis.paddingEndProp] = previousPaddingEnd;
++                // Lands the clamp in this frame, as the pad's own growth above
++                // does, so the offset read after this write is the one the
++                // reader is left looking at.
++                void contentNode.offsetHeight;
++              });
+             });
+           } else {
+             scrollBy();
+@@ -6757,6 +7161,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -1854,7 +2022,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1e1ddcd0248b7d52387148800603f13a
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
    }
-@@ -7001,6 +7361,7 @@ function onScroll(ctx, event) {
+@@ -7001,6 +7406,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -1862,7 +2030,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1e1ddcd0248b7d52387148800603f13a
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7054,7 +7415,8 @@ var ScheduledWork = class {
+@@ -7054,7 +7460,8 @@ var ScheduledWork = class {
      const work = this.work.get(key);
      if (work) {
        this.work.delete(key);
@@ -1872,7 +2040,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1e1ddcd0248b7d52387148800603f13a
      }
    }
    has(key) {
-@@ -7103,7 +7465,15 @@ var ScrollAdjustHandler = class {
+@@ -7103,7 +7510,15 @@ var ScrollAdjustHandler = class {
            targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
            targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
          } else {
@@ -1889,7 +2057,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1e1ddcd0248b7d52387148800603f13a
          }
          const adjustment = targetScroll - state.scroll;
          if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
-@@ -7283,6 +7653,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7283,6 +7698,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -1902,7 +2070,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1e1ddcd0248b7d52387148800603f13a
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7333,6 +7709,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7333,6 +7754,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -1910,7 +2078,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1e1ddcd0248b7d52387148800603f13a
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
      state.pendingTotalSize = void 0;
-@@ -7370,6 +7747,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7370,6 +7792,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
@@ -1919,7 +2087,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1e1ddcd0248b7d52387148800603f13a
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7448,6 +7827,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7448,6 +7872,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -1955,7 +2123,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1e1ddcd0248b7d52387148800603f13a
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7845,6 +8253,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7845,6 +8298,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},
@@ -1966,7 +2134,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..1e1ddcd0248b7d52387148800603f13a
          columns: [],
          containerItemGenerations: [],
 diff --git a/react.mjs b/react.mjs
-index c96345be154d77f66c26ea42cea15a18e22f5dfa..a82770b003cae2bedea88ccc58c43a1808716b8c 100644
+index c96345be154d77f66c26ea42cea15a18e22f5dfa..034bfed9cbbf5e4bdaae65c18a3d2059cb533451 100644
 --- a/react.mjs
 +++ b/react.mjs
 @@ -764,11 +764,31 @@ function checkThresholds(ctx, allowedEdge) {
@@ -2602,7 +2770,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..a82770b003cae2bedea88ccc58c43a18
        },
        scrollTo: (options) => {
          const { x = 0, y = 0, animated = true } = options;
-@@ -6368,8 +6706,29 @@ function getScrollAdjustTarget(ctx, contentNode) {
+@@ -6368,8 +6706,68 @@ function getScrollAdjustTarget(ctx, contentNode) {
    }
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
@@ -2611,15 +2779,54 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..a82770b003cae2bedea88ccc58c43a18
 +// and the offset it asked for, which iOS lands after the lift under a finger.
 +// A pan that reaches the page as scroll reports alone (iOS delivers no touch
 +// event for a contact on a fling) is told apart from the list's by these.
++function announcesScrollerMoves(target) {
++  return !!target && typeof target.dispatchEvent === "function" && typeof CustomEvent !== "undefined" && !(typeof window !== "undefined" && target === window);
++}
++// Patched: `cause` says what moved the view, which is what a consumer needs
++// to know whether its own content-relative references owe the move. "offset"
++// is a write of the offset itself, which this list makes to hold content still
++// as it grows, so the content moved with it. "range" is a write that moves the
++// view only by changing what the scroller can reach, so the browser clamps it
++// onto the new end and NO content position moves. Only the end-pad restore
++// below is of the second kind, and it is the one write a consumer cannot net
++// out against the content it can see.
++function announceScrollerMove(target, from, fromEnd, to, intendedTop, cause) {
++  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to, intended: Math.max(0, Math.min(intendedTop, fromEnd)), cause } }));
++}
 +function moveScrollerAnnounced(target, intendedTop, move) {
-+  if (!target || typeof target.dispatchEvent !== "function" || typeof CustomEvent === "undefined" || typeof window !== "undefined" && target === window) {
++  if (!announcesScrollerMoves(target)) {
 +    move();
 +    return;
 +  }
 +  const from = target.scrollTop;
 +  const fromEnd = target.scrollHeight - target.clientHeight;
 +  move();
-+  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to: target.scrollTop, intended: Math.max(0, Math.min(intendedTop, fromEnd)) } }));
++  announceScrollerMove(target, from, fromEnd, target.scrollTop, intendedTop, "offset");
++}
++// Patched: a write of the list's that moves the view only by changing what the
++// scroller can reach. The browser clamps the view to the new end in the layout
++// that write lands in, so `write` forces that layout and the clamp is
++// announced like every other write of the list's. Left unannounced, a reader's
++// ledger and a press's reference keep an offset the view no longer has, and
++// the first read of the frame - which can see the clamped view beside an end a
++// React commit has already regrown - reads the list's own clamp as the reader
++// scrolling up, and stops following them.
++function moveScrollerByRangeAnnounced(target, write) {
++  if (!announcesScrollerMoves(target)) {
++    write();
++    return;
++  }
++  const from = target.scrollTop;
++  const fromEnd = target.scrollHeight - target.clientHeight;
++  write();
++  const to = target.scrollTop;
++  if (to === from) {
++    return;
++  }
++  // A clamp asks for nothing but the end it leaves the view at, and lands
++  // there in full, so `intended` is `to`: it is not a write iOS held back
++  // under a finger.
++  announceScrollerMove(target, from, fromEnd, to, to, "range");
 +}
  function scrollAdjustBy(el, left, top) {
 -  el.scrollBy({ behavior: "auto", left, top });
@@ -2633,7 +2840,22 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..a82770b003cae2bedea88ccc58c43a18
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -6736,6 +7095,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+@@ -6415,7 +6813,13 @@ function ScrollAdjust() {
+             resetPaddingRafRef.current = requestAnimationFrame(() => {
+               resetPaddingRafRef.current = void 0;
+               resetPaddingBaselineRef.current = void 0;
+-              contentNode.style[axis.paddingEndProp] = previousPaddingEnd;
++              moveScrollerByRangeAnnounced(el, () => {
++                contentNode.style[axis.paddingEndProp] = previousPaddingEnd;
++                // Lands the clamp in this frame, as the pad's own growth above
++                // does, so the offset read after this write is the one the
++                // reader is left looking at.
++                void contentNode.offsetHeight;
++              });
+             });
+           } else {
+             scrollBy();
+@@ -6736,6 +7140,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -2641,7 +2863,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..a82770b003cae2bedea88ccc58c43a18
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
    }
-@@ -6980,6 +7340,7 @@ function onScroll(ctx, event) {
+@@ -6980,6 +7385,7 @@ function onScroll(ctx, event) {
    }
    state.scrollPending = newScroll;
    updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
@@ -2649,7 +2871,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..a82770b003cae2bedea88ccc58c43a18
    trackInitialScrollNativeProgress(state, newScroll);
    clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
    if (state.scrollingTo) {
-@@ -7033,7 +7394,8 @@ var ScheduledWork = class {
+@@ -7033,7 +7439,8 @@ var ScheduledWork = class {
      const work = this.work.get(key);
      if (work) {
        this.work.delete(key);
@@ -2659,7 +2881,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..a82770b003cae2bedea88ccc58c43a18
      }
    }
    has(key) {
-@@ -7082,7 +7444,15 @@ var ScrollAdjustHandler = class {
+@@ -7082,7 +7489,15 @@ var ScrollAdjustHandler = class {
            targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
            targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
          } else {
@@ -2676,7 +2898,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..a82770b003cae2bedea88ccc58c43a18
          }
          const adjustment = targetScroll - state.scroll;
          if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
-@@ -7262,6 +7632,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7262,6 +7677,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -2689,7 +2911,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..a82770b003cae2bedea88ccc58c43a18
      state.scheduledWork.cancel("imperativeScrollReady");
      const token = ++imperativeScrollToken;
      settlePendingImperativeScroll(state);
-@@ -7312,6 +7688,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7312,6 +7733,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
@@ -2697,7 +2919,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..a82770b003cae2bedea88ccc58c43a18
      state.minIndexSizeChanged = 0;
      state.scrollForNextCalculateItemsInView = void 0;
      state.pendingTotalSize = void 0;
-@@ -7349,6 +7726,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7349,6 +7771,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
        endBuffered: state.endBuffered,
        getAverageItemSizes: () => getAverageItemSizes(state),
        indexByKey: (key) => state.indexByKey.get(key),
@@ -2706,7 +2928,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..a82770b003cae2bedea88ccc58c43a18
        isAtEnd: peek$(ctx, "isAtEnd"),
        isAtStart: peek$(ctx, "isAtStart"),
        isEndReached: state.isEndReached,
-@@ -7427,6 +7806,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+@@ -7427,6 +7851,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
      setItemSize: (itemKey, size) => {
        updateItemSizes(ctx, { itemKey, size });
      },
@@ -2742,7 +2964,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..a82770b003cae2bedea88ccc58c43a18
      setScrollProcessingEnabled: (enabled) => {
        state.scrollProcessingEnabled = enabled;
      },
-@@ -7824,6 +8232,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+@@ -7824,6 +8277,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
        ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
        ctx.state = {
          averageSizes: {},

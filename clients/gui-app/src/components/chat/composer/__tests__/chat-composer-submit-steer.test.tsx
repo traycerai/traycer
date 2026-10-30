@@ -683,6 +683,7 @@ function mountSubmit(input: MountSubmitInput): {
     reasoningFallback: "model-default",
     seedKey: "chat-submit-steer-test",
     values: {
+      ultracode: false,
       permission,
       selection: {
         harnessId: "claude",
@@ -695,6 +696,7 @@ function mountSubmit(input: MountSubmitInput): {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
 

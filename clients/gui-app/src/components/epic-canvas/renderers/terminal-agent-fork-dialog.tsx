@@ -282,6 +282,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
       tuiOnly: true,
       // Terminal agents have no `chat.subscribe` stream at all.
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       stagedSurfaceKey: null,
       sendsToRestingSandbox: false,
     },
@@ -770,6 +771,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
                 </div>
                 <div className="flex min-w-0 items-center gap-2 rounded-md">
                   <HarnessModelPicker
+                    withUltracode={false}
                     maxModeContext={{ kind: "none" }}
                     labelDisplay="responsive"
                     key={terminalForkModelPickerKey(target)}
@@ -908,6 +910,7 @@ function terminalForkButtonLabel(intent: TerminalAgentForkIntent): string {
 
 function terminalForkSettingsSeed(agent: ForkableTuiAgent): ChatRunSettings {
   return {
+    ultracode: false,
     harnessId: agent.harnessId,
     model: agent.model ?? "",
     permissionMode: "supervised",

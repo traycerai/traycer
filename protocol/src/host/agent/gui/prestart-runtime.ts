@@ -2,14 +2,14 @@ import { z } from "zod";
 import { accountContextSchema } from "@traycer/protocol/common/schemas";
 import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 import { defineRpcContract } from "@traycer/protocol/framework/versioned-rpc";
-import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/schemas";
+import { chatRunSettingsSchemaPreUltracode } from "@traycer/protocol/persistence/epic/schemas";
 
 /** Typing may warm an already-open chat; this request never sends a message. */
 export const chatPrestartRuntimeRequestSchema = lazySchema(() =>
   z.strictObject({
     epicId: z.string(),
     chatId: z.string(),
-    settings: chatRunSettingsSchema,
+    settings: chatRunSettingsSchemaPreUltracode,
     accountContext: accountContextSchema,
   }),
 );

@@ -315,6 +315,7 @@ export const runtimeAgentRunInputSchema = lazySchema(() =>
     model: z.string().min(1),
     reasoningEffort: runtimeReasoningEffortSchema.default(null),
     serviceTier: z.string().nullable().default(null),
+    ultracode: z.boolean().default(false),
     imageAttachments: z.array(runtimeImageAttachmentSchema).default([]),
     permissionMode: runtimePermissionModeSchema,
     // Live provider launch/workspace payload for this turn. This must be derived

@@ -1,4 +1,8 @@
 import {
+  chatRunSettingsSchemaPreUltracode,
+  type ChatRunSettingsPreUltracode,
+} from "@traycer/protocol/persistence/epic/foundation";
+import {
   pruneRecoveryDraft,
   recoveryDraftIds,
 } from "@/lib/tab-recovery/history";
@@ -14,6 +18,7 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import type { DraftDocument, DraftPublication } from "@traycer/protocol/host";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/schemas";
+import type { DraftComposerPortable } from "@traycer/protocol/persistence/draft/schemas";
 import {
   adoptDraftImageHandoff,
   draftImageHashes,
@@ -79,6 +84,7 @@ import {
 } from "@/lib/drafts/draft-local-edits";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
+import { runSettingsFromDraftEcho } from "@/lib/drafts/draft-write-codec";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
@@ -1076,6 +1082,10 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
       partialize: (state) => ({
         drafts: state.drafts.map((draft) => ({
           ...draft,
+          settings:
+            draft.settings === null
+              ? null
+              : chatRunSettingsSchemaPreUltracode.parse(draft.settings),
           ...stripBase64ImageNodesWithSelection(draft.content, draft.selection),
         })),
         activeDraftId: state.activeDraftId,
@@ -1325,13 +1335,13 @@ function parseComposerMode(value: unknown): ComposerMode {
 export function parseChatRunSettings(value: unknown): ChatRunSettings | null {
   if (value === null || value === undefined) return null;
   const parsed = chatRunSettingsSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
+  return parsed.success ? { ...parsed.data, ultracode: false } : null;
 }
 
 function copyChatRunSettings(
-  settings: ChatRunSettings | null,
+  settings: ChatRunSettingsPreUltracode | null,
 ): ChatRunSettings | null {
-  return settings === null ? null : { ...settings };
+  return settings === null ? null : { ...settings, ultracode: false };
 }
 
 export function sameNullableChatRunSettings(
@@ -1344,8 +1354,9 @@ export function sameNullableChatRunSettings(
 
 function sameChatRunSettings(a: ChatRunSettings, b: ChatRunSettings): boolean {
   return (
+    a.ultracode === b.ultracode &&
     JSON.stringify(normalizeChatRunSettings(a)) ===
-    JSON.stringify(normalizeChatRunSettings(b))
+      JSON.stringify(normalizeChatRunSettings(b))
   );
 }
 
@@ -2018,6 +2029,17 @@ function keptReturnedSandbox(
 }
 
 /**
+ * A host document's frozen settings carry no Ultracode request; the row's own
+ * same-draft Claude request survives the echo.
+ */
+function echoedRunSettings(
+  runSettings: DraftComposerPortable["runSettings"],
+  existing: LandingDraftTab | undefined,
+): ChatRunSettings | null {
+  return runSettingsFromDraftEcho(runSettings, existing?.settings ?? null);
+}
+
+/**
  * Applies a landing document to the store. Returns whether the row was
  * mutated by it: a retired id, or an older document from the row's current
  * owner, is rejected without touching the row.
@@ -2063,7 +2085,7 @@ export function applyLandingHostDocument(
     content,
     selection: document.portable.selection,
     lastTouchedAt: document.lastTouchedAt,
-    settings: document.portable.runSettings,
+    settings: echoedRunSettings(document.portable.runSettings, existing),
     composerMode: document.portable.composerMode,
     workspace:
       document.workspace === null

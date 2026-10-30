@@ -201,6 +201,7 @@ export interface ChatLowerTurnState {
    * scope - and it gates whether the toolbar may OFFER Auto at all.
    */
   readonly autoPermissionModeProtocolSupported: boolean | null;
+  readonly ultracodeProtocolSupported: boolean;
   /** Own live stream's draft-blob bridge capability. */
   readonly getDraftBlobBridgeSupported: () => boolean;
   readonly getQueuedSteerRestartConfirmationSupported?: () => boolean;
@@ -390,6 +391,7 @@ export function ChatLowerInteractionSurfaces(
   const turnSteerProtocolSupported = props.turn.steerProtocolSupported;
   const turnAutoPermissionModeProtocolSupported =
     props.turn.autoPermissionModeProtocolSupported;
+  const turnUltracodeProtocolSupported = props.turn.ultracodeProtocolSupported;
   const turnGetDraftBlobBridgeSupported =
     props.turn.getDraftBlobBridgeSupported;
   const turnGetQueuedSteerRestartConfirmationSupported =
@@ -443,6 +445,7 @@ export function ChatLowerInteractionSurfaces(
       steerProtocolSupported: turnSteerProtocolSupported,
       autoPermissionModeProtocolSupported:
         turnAutoPermissionModeProtocolSupported,
+      ultracodeProtocolSupported: turnUltracodeProtocolSupported,
       getDraftBlobBridgeSupported: turnGetDraftBlobBridgeSupported,
       getQueuedSteerRestartConfirmationSupported:
         turnGetQueuedSteerRestartConfirmationSupported,
@@ -456,6 +459,7 @@ export function ChatLowerInteractionSurfaces(
       turnSteerCapable,
       turnSteerProtocolSupported,
       turnAutoPermissionModeProtocolSupported,
+      turnUltracodeProtocolSupported,
       turnGetDraftBlobBridgeSupported,
       turnGetQueuedSteerRestartConfirmationSupported,
       turnGetActiveTurnForSteer,
@@ -973,6 +977,7 @@ function LiveChatComposer(props: {
       autoPermissionModeProtocolSupported={
         model.turn.autoPermissionModeProtocolSupported
       }
+      ultracodeProtocolSupported={model.turn.ultracodeProtocolSupported}
       getDraftBlobBridgeSupported={model.turn.getDraftBlobBridgeSupported}
       getQueuedSteerRestartConfirmationSupported={
         model.turn.getQueuedSteerRestartConfirmationSupported

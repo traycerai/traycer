@@ -499,6 +499,7 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
     const harness = guiHarnessIdSchema.safeParse(bot.harness);
     if (!harness.success) return null;
     return {
+      ultracode: false,
       harnessId: harness.data,
       model: bot.model,
       permissionMode: defaultPermission,
@@ -517,6 +518,7 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
       hostId,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       stagedSurfaceKey: null,
       sendsToRestingSandbox: false,
     },
@@ -548,6 +550,7 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <HarnessModelPicker
+          withUltracode={false}
           labelDisplay="responsive"
           maxModeContext={maxModeContext}
           store={toolbarStore}

@@ -774,10 +774,15 @@ describe("managed-command output window", () => {
     // No snapshot ever arrives: the host refused the open. Without this the
     // window sits blank forever, titled "Output", with nothing to read.
     act(() => {
-      stub.emit().onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: COMMAND_GONE,
-      });
+      stub.emit().onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: COMMAND_GONE,
+        },
+        null,
+        null,
+      );
     });
 
     const panel = screen.getByTestId("managed-command-output-availability");
@@ -795,7 +800,7 @@ describe("managed-command output window", () => {
     openAtTail(stub.emit, [line("stdout", "watching src/")]);
 
     act(() => {
-      stub.emit().onConnectionStatus("reconnecting", null);
+      stub.emit().onConnectionStatus("reconnecting", null, null, null);
     });
 
     const banner = screen.getByTestId("managed-command-output-availability");
@@ -873,10 +878,15 @@ describe("managed-command output window", () => {
     openAtTail(stub.emit, [line("stdout", "watching src/")]);
 
     act(() => {
-      stub.emit().onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: VIEWER_UNAUTHORIZED,
-      });
+      stub.emit().onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: VIEWER_UNAUTHORIZED,
+        },
+        null,
+        null,
+      );
     });
 
     expect(
@@ -896,10 +906,15 @@ describe("managed-command output window", () => {
     openAtTail(stub.emit, [line("stdout", "before the failure")]);
 
     act(() => {
-      stub.emit().onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: STREAM_FAILED,
-      });
+      stub.emit().onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: STREAM_FAILED,
+        },
+        null,
+        null,
+      );
     });
 
     const banner = screen.getByTestId("managed-command-output-availability");
@@ -955,7 +970,7 @@ describe("managed-command output window", () => {
     // The socket declaring itself open is not the snapshot landing - the host
     // only serves the tail after its first log read.
     act(() => {
-      stub.emit().onConnectionStatus("open", null);
+      stub.emit().onConnectionStatus("open", null, null, null);
     });
     expect(screen.getByText("Connecting…")).not.toBeNull();
     expect(screen.queryByRole("log")).toBeNull();
@@ -1010,10 +1025,15 @@ describe("managed-command output window", () => {
     ).not.toBeNull();
 
     act(() => {
-      stub.emit().onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: STREAM_FAILED,
-      });
+      stub.emit().onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: STREAM_FAILED,
+        },
+        null,
+        null,
+      );
     });
 
     expect(

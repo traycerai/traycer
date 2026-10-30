@@ -120,6 +120,7 @@ vi.mock("@/lib/epic-selectors", () => ({
       ? projection.deleted[id]
       : null;
   },
+  useEpicFileArtifactViewer: () => null,
   useOpenEpicId: () => "epic-1",
 }));
 

@@ -99,6 +99,7 @@ import {
 const HOST_A = "host-a";
 
 const HAIKU_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "haiku",
   permissionMode: "supervised",
@@ -109,6 +110,7 @@ const HAIKU_SETTINGS: ChatRunSettings = {
 };
 
 const SONNET_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "sonnet",
   permissionMode: "supervised",

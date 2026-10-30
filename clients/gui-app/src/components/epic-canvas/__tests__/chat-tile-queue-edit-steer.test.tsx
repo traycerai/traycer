@@ -231,6 +231,7 @@ const QUEUED_CONTENT: JsonContent = {
   ],
 };
 const QUEUED_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-sonnet",
   permissionMode: "supervised",
@@ -336,7 +337,7 @@ function createChatHarness(): {
         (_epicId, _chatId, nextCallbacks) => {
           callbacks = nextCallbacks;
           setTimeout(() => {
-            nextCallbacks.onConnectionStatus("open", null, null);
+            nextCallbacks.onConnectionStatus("open", null, null, null);
             emitChatSnapshot(nextCallbacks, access, queueItems);
           }, 0);
           const client: ChatStreamClientHandle = {

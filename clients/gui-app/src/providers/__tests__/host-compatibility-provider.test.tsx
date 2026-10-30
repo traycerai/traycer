@@ -67,6 +67,7 @@ const RESTORED_PHASE_ID = "phase-restored-persisted";
 const RESTORED_PHASE_TAB_ID = "phase-restored-tab";
 
 const HANDOFF_SETTINGS = {
+  ultracode: false,
   harnessId: "codex",
   model: "codex-test",
   permissionMode: "supervised",

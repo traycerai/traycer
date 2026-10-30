@@ -42,6 +42,7 @@ const CONTENT: JsonContent = {
 };
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-sonnet-4-5",
   permissionMode: "supervised",
@@ -347,7 +348,7 @@ describe("chat-session-store messageDelivery: deferred-windowed-snapshot superse
     const harness = createWindowedHarness();
     try {
       const callbacks = harness.callbacks();
-      callbacks.onConnectionStatus("open", null, null);
+      callbacks.onConnectionStatus("open", null, null, null);
       // `sendMessage` gates on `canSendAction` (connectionStatus + canAct);
       // this harness never folds a snapshot, so `access` needs setting by
       // hand for the send below to go through at all.

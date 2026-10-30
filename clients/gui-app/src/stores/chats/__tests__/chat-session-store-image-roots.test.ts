@@ -30,6 +30,7 @@ const OWNER_ID = "owner-roots";
 const IMAGE_HASH = "a".repeat(64);
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -101,7 +102,7 @@ function createHarness(): Harness {
 
 /** A minimal open, owned, idle snapshot - just enough for `sendMessage` to accept. */
 function emitOwnerSnapshot(callbacks: ChatStreamCallbacks): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   const chat: Chat = {
     id: CHAT_ID,
     parentId: null,

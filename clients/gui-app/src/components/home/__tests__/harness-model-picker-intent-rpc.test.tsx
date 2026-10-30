@@ -458,6 +458,7 @@ function renderPickerWithActivity(
     reasoningFallback: "model-default",
     seedKey: "picker-intent-rpc-test",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection,
       reasoning: "",
@@ -466,6 +467,7 @@ function renderPickerWithActivity(
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: "host-a",
   });
   const tree = (active: boolean): ReactElement => (
@@ -473,6 +475,7 @@ function renderPickerWithActivity(
       <SurfaceActivityProvider active={active}>
         <TooltipProvider delayDuration={0}>
           <HarnessModelPicker
+            withUltracode={false}
             labelDisplay="responsive"
             store={store}
             maxModeContext={{ kind: "none" }}

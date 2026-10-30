@@ -78,6 +78,7 @@ function makeToolbarStore() {
     reasoningFallback: "model-default",
     seedKey: "test",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: { harnessId: "claude", modelSlug: "", profileId: null },
       reasoning: "",
@@ -86,6 +87,7 @@ function makeToolbarStore() {
     onSettingsChange: null,
     tuiOnly: true,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: "host-a",
   });
   // The Start gate reads the selected harness's runtime `modes` from the
@@ -116,6 +118,7 @@ function makeToolbarStore() {
     modelsLoaded: true,
     tuiOnly: true,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     keepsUnavailablePick: false,
   });
   return store;
@@ -127,6 +130,7 @@ function makeGuiOnlyToolbarStore() {
     reasoningFallback: "model-default",
     seedKey: "test",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: { harnessId: "traycer", modelSlug: "", profileId: null },
       reasoning: "",
@@ -135,6 +139,7 @@ function makeGuiOnlyToolbarStore() {
     onSettingsChange: null,
     tuiOnly: true,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: "host-a",
   });
   // A GUI-only harness cannot back a terminal agent. The Start gate follows
@@ -160,6 +165,7 @@ function makeGuiOnlyToolbarStore() {
     modelsLoaded: true,
     tuiOnly: true,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     keepsUnavailablePick: false,
   });
   return store;
@@ -312,6 +318,7 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
       reasoningFallback: "model-default",
       seedKey: "test",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: { harnessId: "claude", modelSlug: "", profileId: null },
         reasoning: "",
@@ -320,6 +327,7 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
       onSettingsChange: null,
       tuiOnly: true,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: null,
     });
     const onStart = vi.fn();

@@ -667,6 +667,7 @@ function PickTileContent(
       </ChoiceTileDescription>
       {state.row === "loading" ? null : (
         <HarnessModelPicker
+          withUltracode={false}
           store={picker.toolbar.store}
           maxModeContext={maxModeContext}
           // No Fast setting to carry; the effort footer per

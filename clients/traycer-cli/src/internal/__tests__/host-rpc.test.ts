@@ -468,6 +468,14 @@ describe("callHostRpc", () => {
         "The host machine is out of disk space. Free some space on it, then try again.",
     },
     {
+      // A transcript read whose only copy is behind a cloud that gave no
+      // verdict: not a not-found, and not a CLI defect.
+      wire: "E_CLOUD_UNREACHABLE" as const,
+      cli: CLI_ERROR_CODES.CLOUD_UNREACHABLE,
+      message:
+        "agent.getTranscript: cannot read agent 'a1' because the cloud could not be reached, so its published copy could not be read. Check this machine's network and try again.",
+    },
+    {
       // Sent for a reply on a thread that belongs to another pair
       // (RESPONSE_ID_MISMATCH): the caller's own input.
       wire: "E_INVALID_ARGUMENT" as const,

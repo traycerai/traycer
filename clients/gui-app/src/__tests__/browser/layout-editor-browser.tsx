@@ -201,6 +201,7 @@ function LiveToolbar(): ReactNode {
       reasoningFallback: "model-default",
       seedKey: "layout-editor-browser-fixture",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: {
           harnessId: "claude",
@@ -213,6 +214,7 @@ function LiveToolbar(): ReactNode {
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: null,
     }),
   );

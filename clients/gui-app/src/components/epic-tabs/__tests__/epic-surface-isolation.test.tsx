@@ -433,7 +433,7 @@ describe("<EpicSurface /> split isolation", () => {
 
     act(() => {
       streams.forEach((stream) => {
-        stream.callbacks.onConnectionStatus("open", null, true);
+        stream.callbacks.onConnectionStatus("open", null, true, null);
         stream.callbacks.onSnapshot(
           snapshotMeta(stream.epicId),
           Y.encodeStateAsUpdate(new Y.Doc()),

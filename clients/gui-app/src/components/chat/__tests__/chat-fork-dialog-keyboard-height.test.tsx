@@ -231,6 +231,7 @@ function forkTarget(): ChatForkDialogTarget {
     interviewBlockId: null,
     parentId: null,
     settingsSeed: {
+      ultracode: false,
       harnessId: "claude",
       model: "claude-opus-4-7",
       permissionMode: "supervised",

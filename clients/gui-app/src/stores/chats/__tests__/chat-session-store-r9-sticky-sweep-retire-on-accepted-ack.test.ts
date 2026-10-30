@@ -62,6 +62,7 @@ const OWNER_ID = "owner-r9-ack-retire";
 const HOST_ID = "host-r9-ack-retire";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -148,7 +149,7 @@ function createHarness(): Harness {
 }
 
 function emitOwnerSnapshot(callbacks: ChatStreamCallbacks): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   const chat: Chat = {
     id: CHAT_ID,
     parentId: null,

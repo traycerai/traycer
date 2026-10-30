@@ -13,6 +13,7 @@ import {
 } from "@/lib/drafts/landing-draft-retirement";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "sonnet",
   permissionMode: "supervised",
