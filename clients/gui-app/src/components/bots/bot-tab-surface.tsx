@@ -18,23 +18,19 @@ import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { BotsUnavailableNotice } from "@/components/bots/bots-unavailable-notice";
 import {
-  useConnectableHostIds,
-  type ConnectableHosts,
-} from "@/hooks/host/use-connectable-host-ids";
-import {
   useBotSubscriptionForHost,
   type BotSubscriptionSnapshot,
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
-import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-members-query";
 import { useBotOpenMutation } from "@/hooks/bots/use-bot-mutations";
-import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
-import { useTeamOnboardingGate } from "@/hooks/bots/use-team-onboarding-gate";
-import { BotOnboardingCard } from "@/components/home/bots/bot-onboarding-card";
+import { useTeamSetups } from "@/hooks/bots/use-team-setups";
+import { botTabRouteOf } from "@/lib/bots/bot-tab-route";
+import { TeamSetupChannel } from "@/components/bots/team-setup-channel";
+import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { BotChannelView } from "@/components/bots/bot-channel-view";
 import {
@@ -102,12 +98,12 @@ function isBotTabView(value: string): value is BotTabView {
  * above the channel, and a post waits for delivery. The background work
  * under Activity alone is the bot's host's to show.
  *
- * While its team's onboarding locks the team's chat (`teamOnboardingGate`,
- * as the sidebar's channel rows read it) the tab is not opened and shows the
- * onboarding instead of the channel, so a restored tab or a direct
- * navigation is no way around the lock. Until the gate is known - the bot
- * and environment lists and the onboarding read answered - the tab neither
- * opens nor shows the channel.
+ * A team's main bot that is still to be set up (`useTeamSetups`, T67) has no
+ * row yet: its tab shows the channel where the team is set up
+ * (`TeamSetupChannel`) and opens nothing, until the bot exists under the
+ * same id. Until the lists say which it is - the bot and environment lists,
+ * and the onboarding of a team with no bot - the tab neither opens nor shows
+ * a channel.
  *
  * Laid out as Slack is (decision 41): the person's environments and their
  * bots as channels down the side, and the bot's channel beside them, with
@@ -128,7 +124,6 @@ export function BotTabSurface(props: {
   readonly hostId: string;
 }): ReactNode {
   const { botId, hostId } = props;
-  const connectable = useConnectableHostIds();
   // A tab is created only from Home's bots band, which draws nothing until
   // the host advertises `bot.list`; a RESTORED tab (the store persists per
   // window) meets whatever that host advertises now. `bot.open` is the
@@ -149,17 +144,108 @@ export function BotTabSurface(props: {
   }
   return (
     <TabHostProvider key={hostId} hostId={hostId}>
-      <BotTabBody botId={botId} hostId={hostId} connectable={connectable} />
+      <BotTabRoute botId={botId} hostId={hostId} />
     </TabHostProvider>
   );
+}
+
+/**
+ * Whether the tab's bot is a listed bot, whose channel the tab opens, or a
+ * team's main bot still to be set up, whose setup it shows. A bot that is
+ * neither is a listed bot's tab all the same, which closes itself once the
+ * list does not carry it.
+ *
+ * A bot this tab has shown listed is that bot until a list without it closes
+ * the tab. Any other bot may be a team's main bot still to be set up, so it
+ * is never taken for a deleted one on a list older than the tab or than the
+ * newest setup read: the list is read again first, so a main bot created
+ * since is found rather than its tab closed. Only lists that were read say
+ * what is absent: while either list has not answered or its last read
+ * failed, or a team with no bot cannot be told apart (`unresolved`: its
+ * setup read failed, or the host does not answer it), the tab says the
+ * channel could not be loaded and, when a read failed, offers to read it
+ * again (`botTabRouteOf`).
+ */
+function BotTabRoute(props: {
+  readonly botId: string;
+  readonly hostId: string;
+}): ReactNode {
+  const { botId, hostId } = props;
+  const client = useTabHostClient();
+  const botList = useBotListQuery(client, true);
+  const environments = useEnvironmentListQuery(client, true);
+  const listed = botList.data?.bots.some((bot) => bot.botId === botId) ?? false;
+  const groups = useMemo(
+    () =>
+      botList.data === undefined || environments.data === undefined
+        ? null
+        : buildHomeBotsModel({
+            environments: environments.data.environments,
+            bots: botList.data.bots,
+            mainBotIds: botList.data.mainBotIds,
+          }).groups,
+    [botList.data, environments.data],
+  );
+  const teamSetups = useTeamSetups({ client, hostId, groups });
+  const [shownListed, setShownListed] = useState(false);
+  if (listed && !shownListed) setShownListed(true);
+  const unlisted = !listed && !shownListed;
+  const setup = unlisted
+    ? teamSetups.setups.find((entry) => entry.botId === botId)
+    : undefined;
+  // A refresh that failed keeps the list it had: it is asked again only on
+  // Retry, never in a loop. A kept environment list may predate a team, whose
+  // setup would then go unread, so its failure is the bot list's too.
+  const botListFailed = botList.status === "error";
+  const environmentsFailed = environments.status === "error";
+  const listsFailed = botListFailed || environmentsFailed;
+  const listStale =
+    unlisted &&
+    setup === undefined &&
+    (!botList.isFetchedAfterMount || botList.dataUpdatedAt < teamSetups.readAt);
+  const { isFetching: listFetching, refetch: refetchList } = botList;
+  useEffect(() => {
+    if (listStale && !listsFailed && !listFetching) void refetchList();
+  }, [listsFailed, listFetching, listStale, refetchList]);
+  const route = botTabRouteOf({
+    listsPending:
+      botList.status === "pending" || environments.status === "pending",
+    seenListed: !unlisted,
+    listsAnswered: groups !== null,
+    listsFailed,
+    setup: setup ?? null,
+    listStale,
+    setupsSettled: teamSetups.settled,
+    setupsUnresolved: teamSetups.unresolved,
+  });
+  if (route.kind === "connecting") return <BotTabConnecting />;
+  if (route.kind === "setup") {
+    return <TeamSetupChannel setup={route.setup} hostId={hostId} />;
+  }
+  if (route.kind === "unresolved") {
+    return (
+      <ErrorNotice
+        text="Couldn't load this channel."
+        onRetry={retryFailedReads([
+          { failed: botListFailed, retry: () => void refetchList() },
+          {
+            failed: environmentsFailed,
+            retry: () => void environments.refetch(),
+          },
+          { failed: teamSetups.retryable, retry: teamSetups.retry },
+        ])}
+        className="m-4"
+      />
+    );
+  }
+  return <BotTabBody {...props} />;
 }
 
 function BotTabBody(props: {
   readonly botId: string;
   readonly hostId: string;
-  readonly connectable: ConnectableHosts;
 }): ReactNode {
-  const { botId, hostId, connectable } = props;
+  const { botId, hostId } = props;
   const subscription = useBotSubscriptionForHost({
     botId,
     hostId,
@@ -172,9 +258,6 @@ function BotTabBody(props: {
 
   const botList = useBotListQuery(client, true);
   const listedBots = botList.data?.bots;
-  const environments = useEnvironmentListQuery(client, true);
-  const onboarding = useBotTeamOnboarding(botId, hostId, botList, environments);
-  const clear = onboarding.kind === "clear";
 
   // Open once per (bot, tab host) - this body remounts with the host - and
   // again on Retry or when the tab comes back into view. A mutation, not a
@@ -200,8 +283,8 @@ function BotTabBody(props: {
     [botId, openBot],
   );
   useEffect(() => {
-    if (clear) reopen();
-  }, [clear, reopen]);
+    reopen();
+  }, [reopen]);
 
   const openState = botTabOpenState({
     response: answer,
@@ -236,9 +319,9 @@ function BotTabBody(props: {
   // mounted, hidden).
   const { resubscribe } = subscription;
   const refresh = useCallback(() => {
-    if (clear) reopen();
+    reopen();
     resubscribe();
-  }, [clear, reopen, resubscribe]);
+  }, [reopen, resubscribe]);
   const paneVisible = usePaneVisible();
   const wasVisibleRef = useRef(paneVisible);
   useEffect(() => {
@@ -259,21 +342,6 @@ function BotTabBody(props: {
       document.removeEventListener("visibilitychange", onVisibilityChange);
   }, [paneVisible]);
 
-  if (onboarding.kind === "locked") {
-    return (
-      <div
-        className="flex h-full justify-center overflow-y-auto p-4"
-        data-testid="bot-tab-onboarding"
-      >
-        <div className="flex w-full max-w-md flex-col">
-          <LockedTeamOnboarding
-            {...onboarding.team}
-            connectable={connectable}
-          />
-        </div>
-      </div>
-    );
-  }
   if (openState.kind === "failed") {
     return (
       <ErrorNotice
@@ -293,11 +361,7 @@ function BotTabBody(props: {
       />
     );
   }
-  if (
-    onboarding.kind === "settling" ||
-    snapshot === null ||
-    openState.kind === "opening"
-  ) {
+  if (snapshot === null || openState.kind === "opening") {
     return <BotTabConnecting />;
   }
 
@@ -780,108 +844,6 @@ function BotTabContent(props: {
   );
 }
 
-/** A team whose onboarding locks its chat, as its card reads it. */
-type LockedTeam = {
-  readonly environmentId: string;
-  readonly teamName: string;
-  readonly botCount: number;
-};
-
-/**
- * Whether the bot's team's onboarding keeps its channel closed: the same
- * gate, on the same host's read, as the sidebar's channel rows. `settling`
- * until the lists that name the bot's team and the team's onboarding read
- * have answered; a list that failed never locks, as a failed read does not.
- */
-type BotTabOnboarding =
-  | { readonly kind: "settling" }
-  | { readonly kind: "locked"; readonly team: LockedTeam }
-  | { readonly kind: "clear" };
-
-function useBotTeamOnboarding(
-  botId: string,
-  hostId: string,
-  botList: {
-    readonly status: "pending" | "error" | "success";
-    readonly data: { readonly bots: ReadonlyArray<BotRecord> } | undefined;
-  },
-  environmentList: {
-    readonly status: "pending" | "error" | "success";
-    readonly data:
-      | { readonly environments: ReadonlyArray<EnvironmentDescriptor> }
-      | undefined;
-  },
-): BotTabOnboarding {
-  const client = useTabHostClient();
-  const { environment, botCount } = botTeamOf(
-    botId,
-    botList.data?.bots ?? [],
-    environmentList.data?.environments ?? [],
-  );
-  // Read only for a team the list names: anything else is never locked.
-  const { gate } = useTeamOnboardingGate({
-    client,
-    hostId,
-    environmentId: environment?.environmentId ?? "",
-    isTeam: environment?.ownerKind === "organization",
-    botCount,
-  });
-  if (
-    botList.status === "pending" ||
-    environmentList.status === "pending" ||
-    gate === "pending"
-  ) {
-    return { kind: "settling" };
-  }
-  if (gate !== "locked" || environment === null) return { kind: "clear" };
-  return {
-    kind: "locked",
-    team: {
-      environmentId: environment.environmentId,
-      teamName: environment.label,
-      botCount,
-    },
-  };
-}
-
-/** The environment the lists name for a bot, with its live bots' count. */
-type BotTeam = {
-  readonly environment: EnvironmentDescriptor | null;
-  readonly botCount: number;
-};
-
-function botTeamOf(
-  botId: string,
-  bots: ReadonlyArray<BotRecord>,
-  environments: ReadonlyArray<EnvironmentDescriptor>,
-): BotTeam {
-  const environmentId =
-    bots.find((bot) => bot.botId === botId)?.environmentId ?? null;
-  if (environmentId === null) return { environment: null, botCount: 0 };
-  return {
-    environment:
-      environments.find((entry) => entry.environmentId === environmentId) ??
-      null,
-    botCount: environmentBotsOf(bots, environmentId).filter(
-      (bot) => bot.archivedAt === null,
-    ).length,
-  };
-}
-
-function LockedTeamOnboarding(
-  props: LockedTeam & { readonly connectable: ConnectableHosts },
-): ReactNode {
-  const { connectable, ...team } = props;
-  const bindings = useHostEnvironmentBindings(connectable.hostIds, true);
-  return (
-    <BotOnboardingCard
-      {...team}
-      connectableHostIds={connectable.hostIds}
-      environmentBindings={bindings}
-    />
-  );
-}
-
 /** The bots of one environment, as the list names them. */
 function environmentBotsOf(
   bots: ReadonlyArray<BotRecord>,
@@ -907,9 +869,28 @@ function BotTabConnecting(): ReactNode {
   );
 }
 
+/**
+ * Reads again each read that failed, or `null` when none did: a host that
+ * does not answer a team's setup answers the same however often it is asked,
+ * so it is offered no Retry.
+ */
+function retryFailedReads(
+  reads: ReadonlyArray<{
+    readonly failed: boolean;
+    readonly retry: () => void;
+  }>,
+): (() => void) | null {
+  const failed = reads.filter((read) => read.failed);
+  if (failed.length === 0) return null;
+  return () => {
+    for (const read of failed) read.retry();
+  };
+}
+
+/** An error, with Retry unless `onRetry` is `null`: nothing to ask again. */
 function ErrorNotice(props: {
   readonly text: string;
-  readonly onRetry: () => void;
+  readonly onRetry: (() => void) | null;
   readonly className: string;
 }): ReactNode {
   return (
@@ -922,9 +903,16 @@ function ErrorNotice(props: {
       )}
     >
       <span>{props.text}</span>
-      <Button type="button" variant="outline" size="sm" onClick={props.onRetry}>
-        Retry
-      </Button>
+      {props.onRetry === null ? null : (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={props.onRetry}
+        >
+          Retry
+        </Button>
+      )}
     </div>
   );
 }
