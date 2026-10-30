@@ -57,6 +57,32 @@ function framesOf(gap: ResumeGap): readonly Uint8Array[] {
   return gap.frames;
 }
 
+/**
+ * Exact byte equality without Vitest's element-by-element walk, which takes
+ * seconds on the MiB-sized frames these tests hold. Primitive assertions also
+ * keep a mismatch from formatting the whole frame as a failure diff.
+ */
+function expectBytes(
+  actual: Uint8Array | undefined,
+  expected: Uint8Array,
+): void {
+  if (actual === undefined) {
+    throw new Error("expected a frame, got none");
+  }
+  expect(actual.byteLength).toBe(expected.byteLength);
+  expect(Buffer.compare(actual, expected)).toBe(0);
+}
+
+function expectFrames(
+  actual: readonly Uint8Array[],
+  expected: readonly Uint8Array[],
+): void {
+  expect(actual.length).toBe(expected.length);
+  for (const [k, frame] of expected.entries()) {
+    expectBytes(actual[k], frame);
+  }
+}
+
 interface SessionPair {
   readonly initiator: NoiseSession;
   readonly responder: NoiseSession;
@@ -126,7 +152,7 @@ describe("ResumeLedger counting", () => {
     expect(ledger.append(plain(MuxFrameType.REQUEST, 20, 3))).toBe(1);
     expect(ledger.receive(plain(MuxFrameType.RESPONSE, 20, 4))).toBe(1);
     expect([ledger.sent, ledger.received]).toEqual([2, 2]);
-    expect(framesOf(ledger.gapFrom(0))[0]).toEqual(open);
+    expectBytes(framesOf(ledger.gapFrom(0))[0], open);
   });
 
   it("does not count or retain RESUME on either side", () => {
@@ -215,9 +241,9 @@ describe("ResumeLedger ring", () => {
     ledger.append(original);
     original.fill(0xee);
     const first = framesOf(ledger.gapFrom(0));
-    expect(first[0]).toEqual(pristine);
+    expectBytes(first[0], pristine);
     first[0].fill(0xdd);
-    expect(framesOf(ledger.gapFrom(0))[0]).toEqual(pristine);
+    expectBytes(framesOf(ledger.gapFrom(0))[0], pristine);
   });
 
   it("keeps exactly RESUME_RING_BYTES and evicts the oldest frame once beyond it", () => {
@@ -262,7 +288,7 @@ describe("ResumeLedger ring", () => {
     for (const frame of all) ledger.append(frame);
 
     ledger.trimReceived(2);
-    expect(framesOf(ledger.gapFrom(2))).toEqual(all.slice(2));
+    expectFrames(framesOf(ledger.gapFrom(2)), all.slice(2));
     expect(ledger.gapFrom(1)).toEqual({ kind: "unrecoverable" });
     expect(reports.at(-1)).toMatchObject({ oldest: 2, ringFrames: 3 });
 
@@ -270,7 +296,7 @@ describe("ResumeLedger ring", () => {
     expect(ledger.gapFrom(1)).toEqual({ kind: "unrecoverable" });
 
     ledger.trimReceived(5);
-    expect(framesOf(ledger.gapFrom(5))).toEqual([]);
+    expectFrames(framesOf(ledger.gapFrom(5)), []);
     expect(reports.at(-1)).toMatchObject({ ringFrames: 0, ringBytes: 0 });
     expect(ledger.sent).toBe(5);
   });
@@ -282,7 +308,7 @@ describe("ResumeLedger ring", () => {
     );
     for (const frame of frames) ledger.append(frame);
     for (let k = 0; k <= frames.length; k++) {
-      expect(framesOf(ledger.gapFrom(k))).toEqual(frames.slice(k));
+      expectFrames(framesOf(ledger.gapFrom(k)), frames.slice(k));
     }
     expect(reports[1]).toEqual({
       received: 1,
@@ -318,7 +344,7 @@ describe("ResumeLedger ring", () => {
     const unwritten = plain(MuxFrameType.REQUEST, 11, 2); // write failed / frame held
     ledger.append(written);
     ledger.append(unwritten);
-    expect(framesOf(ledger.gapFrom(1))).toEqual([unwritten]);
+    expectFrames(framesOf(ledger.gapFrom(1)), [unwritten]);
   });
 
   it("throws RangeError for an invalid trim and treats an invalid gapFrom as unrecoverable", () => {
@@ -411,7 +437,7 @@ class Peer {
   /** An opened inbound plaintext: count it, check its index against the sender's order, dispatch. */
   accept(plaintext: Uint8Array, sender: Peer): void {
     const index = this.ledger.receive(plaintext);
-    expect(sender.authored[index ?? -1]).toEqual(plaintext);
+    expectBytes(sender.authored[index ?? -1], plaintext);
     const message = this.reassembler.accept(decodeMuxFrame(plaintext));
     if (message !== null) {
       this.dispatched.push({
@@ -748,7 +774,7 @@ describe("two ledgers over a lossy link", () => {
           recoverable: false,
         });
       } else {
-        expect(framesOf(gap)).toEqual(frames.slice(delivered));
+        expectFrames(framesOf(gap), frames.slice(delivered));
         expect(sender.reports[0]).toMatchObject({
           oldest: 2,
           recoverable: true,
