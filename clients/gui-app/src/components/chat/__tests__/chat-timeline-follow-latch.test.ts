@@ -230,8 +230,8 @@ interface FakeListRef {
   readonly setRowElement: (key: string, element: HTMLElement) => void;
   /** The last row the list has rendered, when it lags the data's end. */
   readonly setRenderedEnd: (index: number) => void;
-  /** How tall the list holds a row: its estimate while the row is
-   *  unrendered, its measurement once it is. */
+  /** Records that the list has measured a row, and how tall. A row it has
+   *  never measured has no size at all. */
   readonly setRowSize: (key: string, size: number) => void;
   readonly cancelPendingScroll: Mock<() => boolean>;
   readonly scrollToEnd: Mock<() => Promise<void>>;
@@ -281,6 +281,11 @@ function makeFakeListState(list: {
     scroll: 0,
     scrollLength: 0,
     scrollVelocity: 0,
+    // The list answers `sizesKnown.get(...)`, so a row it has never
+    // measured has no size - it does not fall back to the estimate it lays
+    // the row out with. Its type says `number`, so a row never measured is
+    // spelled 0 here; no fixture measures a row at 0, so the two cannot be
+    // confused.
     sizeAtIndex: (index) => rowSizes.get(keys[index]) ?? 0,
     sizes: new Map(),
     start: 0,
@@ -3149,7 +3154,11 @@ describe("useChatTimelineFollowLatch", () => {
   });
 
   describe("the end a lifted finger was thrown at, tracked by its own block", () => {
-    function liftedBelowTheEnd(withUnrenderedTail: boolean) {
+    /** `rendered`: the list has laid the last row out, so its tail block is
+     *  there to capture. `measured`: the list has not rendered it now but
+     *  has measured it before, so it knows its size. `unmeasured`: it has
+     *  never measured it, so it knows only where it starts. */
+    function liftedBelowTheEnd(tail: "rendered" | "measured" | "unmeasured") {
       const node = shim.makeNode({
         scrollTop: 1000,
         scrollHeight: 1600,
@@ -3157,11 +3166,10 @@ describe("useChatTimelineFollowLatch", () => {
       });
       const listRef = makeFakeListRef(node);
       const layout = installTailBlockLayout(node, listRef);
-      if (withUnrenderedTail) {
-        // A row past the one laid out, which the list has not rendered:
-        // the list holds only its own estimate of how tall it is.
+      if (tail !== "rendered") {
+        // A row past the one laid out, which the list has not rendered.
         listRef.setRowTop("unrendered-last-row", 1600);
-        listRef.setRowSize("unrendered-last-row", 300);
+        if (tail === "measured") listRef.setRowSize("unrendered-last-row", 300);
         listRef.setRenderedEnd(0);
       }
       const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
@@ -3192,7 +3200,7 @@ describe("useChatTimelineFollowLatch", () => {
 
     it("does not follow a fling that stops where an image growing above the tail has moved the end from", () => {
       const { node, listRef, layout, onFollowIntentChange } =
-        liftedBelowTheEnd(false);
+        liftedBelowTheEnd("rendered");
 
       // The image resolves to a taller aspect ratio below the view's top
       // edge. The row's top does not move and the list writes nothing, but
@@ -3209,7 +3217,7 @@ describe("useChatTimelineFollowLatch", () => {
 
     it("control: a fling that carries on to where the growing image put the tail arrives", () => {
       const { node, listRef, layout, onFollowIntentChange } =
-        liftedBelowTheEnd(false);
+        liftedBelowTheEnd("rendered");
 
       layout.growImage(60);
       shim.setGeometry(node, { scrollHeight: 1660 });
@@ -3227,7 +3235,7 @@ describe("useChatTimelineFollowLatch", () => {
 
     it("control: streaming into the tail paragraph still arrives at the end it was thrown at", () => {
       const { node, listRef, layout, onFollowIntentChange } =
-        liftedBelowTheEnd(false);
+        liftedBelowTheEnd("rendered");
 
       // The reply streams on into the same paragraph. It grows downward, so
       // where it starts - the content the finger was thrown at - stands.
@@ -3243,7 +3251,7 @@ describe("useChatTimelineFollowLatch", () => {
 
     it("keeps answering when the reply streams a token into a tail paragraph shorter than the head", () => {
       const { node, listRef, layout, onFollowIntentChange } =
-        liftedBelowTheEnd(false);
+        liftedBelowTheEnd("rendered");
 
       // The paragraph the finger was thrown at is 40 characters, under the
       // head's 64, so the next token extends the head the lift recorded.
@@ -3262,7 +3270,7 @@ describe("useChatTimelineFollowLatch", () => {
 
     it("control: a block appended after the tail still arrives at the end it was thrown at", () => {
       const { node, listRef, layout, onFollowIntentChange } =
-        liftedBelowTheEnd(false);
+        liftedBelowTheEnd("rendered");
 
       layout.appendBlock("a second paragraph the reply went on to write", 80);
       shim.setGeometry(node, { scrollHeight: 1680 });
@@ -3276,7 +3284,7 @@ describe("useChatTimelineFollowLatch", () => {
 
     it("falls back to the row when the list has re-mounted the tail block", () => {
       const { node, listRef, layout, onFollowIntentChange } =
-        liftedBelowTheEnd(false);
+        liftedBelowTheEnd("rendered");
 
       // The list reuses the row for other content. The recorded block is
       // gone, so its movement says nothing, and the row's shift answers
@@ -3295,7 +3303,7 @@ describe("useChatTimelineFollowLatch", () => {
 
     it("falls back to the row when the list has reused the tail block for other content", () => {
       const { node, listRef, layout, onFollowIntentChange } =
-        liftedBelowTheEnd(false);
+        liftedBelowTheEnd("rendered");
 
       // The element stays, so nothing about it is gone - but the list has
       // put a different message in it, standing somewhere else, and where
@@ -3311,12 +3319,13 @@ describe("useChatTimelineFollowLatch", () => {
       expect(listRef.scrollToEnd).toHaveBeenCalled();
     });
 
-    it("follows a fling to an end whose unrendered row is the size the lift read", () => {
+    it("follows a fling to an end whose measured row is still that size", () => {
       // The list named no container for the row it had not rendered, so no
-      // tail block was captured. The row is still the size the lift read,
-      // so nothing grew inside it, and the row's own shift answers as it
-      // always has.
-      const { node, listRef, onFollowIntentChange } = liftedBelowTheEnd(true);
+      // tail block was captured - but it had measured that row before, so
+      // there is a size the lift could read. It is still that size, so
+      // nothing grew inside it, and the row's own shift answers as always.
+      const { node, listRef, onFollowIntentChange } =
+        liftedBelowTheEnd("measured");
 
       shim.setGeometry(node, { scrollTop: 1100, scrollHeight: 1700 });
       fireResizeObservers();
@@ -3326,6 +3335,26 @@ describe("useChatTimelineFollowLatch", () => {
       expect(listRef.scrollToEnd).toHaveBeenCalled();
     });
 
+    it("does not follow a fling whose last row the list had never measured", () => {
+      // The list knows where this row starts and nothing about how tall it
+      // is, so there is no size for the lift to read. Its first
+      // measurement is not evidence that nothing grew, it is the first
+      // evidence of anything at all, so the end is unreadable and the
+      // fling is not carried to it - whatever that measurement turns out
+      // to be, the row's own estimate included.
+      const { node, listRef, onFollowIntentChange } =
+        liftedBelowTheEnd("unmeasured");
+
+      listRef.setRenderedEnd(1);
+      listRef.setRowSize("unrendered-last-row", 300);
+      shim.setGeometry(node, { scrollTop: 1100, scrollHeight: 1700 });
+      fireResizeObservers();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
     it("does not follow a fling whose unrendered last row changed size after the lift", () => {
       // The model's 19-state order: the row becomes renderable mid-fling
       // and grows, and the row's top does not move. Whether that growth
@@ -3333,7 +3362,8 @@ describe("useChatTimelineFollowLatch", () => {
       // that paragraph, which leaves the end where it was, the list reports
       // only the one size - so the end moved by an amount nothing can read
       // back, and the fling is not carried to it.
-      const { node, listRef, onFollowIntentChange } = liftedBelowTheEnd(true);
+      const { node, listRef, onFollowIntentChange } =
+        liftedBelowTheEnd("measured");
 
       listRef.setRenderedEnd(1);
       listRef.setRowSize("unrendered-last-row", 360);
@@ -3349,7 +3379,8 @@ describe("useChatTimelineFollowLatch", () => {
       // The neighbouring order, which capturing the block at the first
       // observation would not have caught: the growth lands before any
       // read, so the first look already sees the grown row.
-      const { node, listRef, onFollowIntentChange } = liftedBelowTheEnd(true);
+      const { node, listRef, onFollowIntentChange } =
+        liftedBelowTheEnd("measured");
 
       listRef.setRowSize("unrendered-last-row", 360);
       listRef.setRenderedEnd(1);
@@ -3366,7 +3397,8 @@ describe("useChatTimelineFollowLatch", () => {
       // recorded, and nothing left reads back what that row did. The
       // appended row being the same size as the one the lift read is no
       // answer: it is a different row.
-      const { node, listRef, onFollowIntentChange } = liftedBelowTheEnd(true);
+      const { node, listRef, onFollowIntentChange } =
+        liftedBelowTheEnd("measured");
 
       listRef.setRowTop("appended-row", 1900);
       listRef.setRowSize("appended-row", 300);
@@ -3382,7 +3414,8 @@ describe("useChatTimelineFollowLatch", () => {
       // The near reader. Their end is tracked by its own block, so a row
       // growing below the tail - the reply streaming on - never reaches
       // the size check at all.
-      const { node, listRef, onFollowIntentChange } = liftedBelowTheEnd(false);
+      const { node, listRef, onFollowIntentChange } =
+        liftedBelowTheEnd("rendered");
 
       listRef.setRowSize(FAKE_LAST_ROW_KEY, 980);
       shim.setGeometry(node, { scrollTop: 1100, scrollHeight: 1700 });
@@ -3395,7 +3428,7 @@ describe("useChatTimelineFollowLatch", () => {
 
     it("declines when the list has re-mounted the tail block and replaced the rows too", () => {
       const { node, listRef, layout, onFollowIntentChange } =
-        liftedBelowTheEnd(false);
+        liftedBelowTheEnd("rendered");
 
       // Neither the block nor the row can say what the list moved.
       layout.remountTail();
