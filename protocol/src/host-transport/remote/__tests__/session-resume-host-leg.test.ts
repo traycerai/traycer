@@ -188,6 +188,8 @@ class FakeSocket implements StreamWebSocketLike {
   onerror: ((event: WebSocketErrorEvent) => void) | null = null;
   onclose: ((event: WebSocketCloseEvent) => void) | null = null;
   closed = false;
+  /** Binary frames the client put on this socket, lost or not. */
+  binarySends = 0;
 
   private readonly onSend: (data: string | Uint8Array) => void;
 
@@ -196,6 +198,9 @@ class FakeSocket implements StreamWebSocketLike {
   }
 
   send(data: string | Uint8Array): void {
+    if (typeof data !== "string") {
+      this.binarySends += 1;
+    }
     this.onSend(data);
   }
 
@@ -1417,6 +1422,154 @@ describe("RemoteSession host-leg resume", () => {
       expect(session.isReady()).toBe(true);
     });
 
+    describe("the outage ends when the replay has gone out", () => {
+      const LOST_CALLS = 100;
+
+      /** Seals `LOST_CALLS` calls the relay then loses. */
+      async function loseGap(fixture: Fixture): Promise<CallOutcome[]> {
+        fixture.host.live().dropInbound = true;
+        const calls: CallOutcome[] = [];
+        for (let index = 0; index < LOST_CALLS; index += 1) {
+          calls.push(track(callStatus(fixture.session)));
+        }
+        await step(1_000);
+        return calls;
+      }
+
+      /** Attaches and waits for the replay to stall on the pacer mid-way. */
+      async function attachIntoReplay(fixture: Fixture): Promise<void> {
+        const { host } = fixture;
+        host.attach();
+        await until(() => host.requestStreamIds.length > 0);
+        // Fake time is frozen: only the pacer's burst is out.
+        await realDelay(300);
+        expect(host.requestStreamIds.length).toBeGreaterThan(0);
+        expect(host.requestStreamIds.length).toBeLessThan(LOST_CALLS);
+      }
+
+      /** A detach during the replay stops it: no further frame is sealed. */
+      async function detachAndExpectReplayStopped(
+        fixture: Fixture,
+      ): Promise<void> {
+        const { host } = fixture;
+        const socket = host.live().socket;
+        host.detach();
+        await host.settle();
+        const sealed = socket.binarySends;
+        await step(500);
+        expect(socket.binarySends).toBe(sealed);
+      }
+
+      it("holds readiness, the resumed edge and every announcement until the last resent frame is out", async () => {
+        const fixture = await readyFixture(LIVE);
+        const { host, session, spies } = fixture;
+        const calls = await loseGap(fixture);
+        host.detach();
+        await step(RESUME_MASK_MS);
+        expect(fixture.statuses).toEqual([HELD]);
+
+        await attachIntoReplay(fixture);
+        expect(session.isReady()).toBe(false);
+        expect(fixture.statuses).toEqual([HELD]);
+        expect(spies.sessionEstablished).toHaveBeenCalledTimes(1);
+        expect(fixture.recovered).not.toHaveBeenCalled();
+
+        await advanceUntil(
+          () => host.requestStreamIds.length === LOST_CALLS,
+          5_000,
+        );
+        await until(() => session.isReady());
+        await until(() => calls.every((call) => call.settled));
+
+        expect(fixture.statuses).toEqual([HELD, CONTINUED]);
+        expect(spies.sessionEstablished).toHaveBeenCalledTimes(2);
+        expect(fixture.recovered).toHaveBeenCalledTimes(1);
+        expect(new Set(host.requestStreamIds).size).toBe(LOST_CALLS);
+      });
+
+      it("stops the replay on a detach from down, stays down, and a later host_attached finishes it exactly once", async () => {
+        const fixture = await readyFixture(LIVE);
+        const { host, session, spies } = fixture;
+        const calls = await loseGap(fixture);
+        host.detach();
+        await step(RESUME_MASK_MS);
+        await attachIntoReplay(fixture);
+
+        await detachAndExpectReplayStopped(fixture);
+        expect(session.isReady()).toBe(false);
+        expect(fixture.readinessLost).toHaveBeenCalledTimes(1);
+        expect(spies.sessionLost).toHaveBeenCalledTimes(1);
+        expect(fixture.statuses).toEqual([HELD]);
+        expect(fixture.recovered).not.toHaveBeenCalled();
+
+        await step(2_000);
+        host.attach();
+        await advanceUntil(
+          () => host.requestStreamIds.length === LOST_CALLS,
+          5_000,
+        );
+        await until(() => session.isReady());
+        await until(() => calls.every((call) => call.settled));
+        await host.settle();
+
+        expect(host.requestStreamIds).toHaveLength(LOST_CALLS);
+        expect(new Set(host.requestStreamIds).size).toBe(LOST_CALLS);
+        expect(fixture.statuses).toEqual([HELD, CONTINUED]);
+        expect(host.handshakes).toBe(1);
+        expect(host.connections).toHaveLength(1);
+      });
+
+      it("measures the hold from the original detach when the replay is interrupted near its end", async () => {
+        const fixture = await readyFixture(LIVE);
+        const { host, session } = fixture;
+        await loseGap(fixture);
+        host.detach();
+        await step(RESUME_HOLD_MS - 2_000);
+        expect(fixture.statuses).toEqual([HELD]);
+        await attachIntoReplay(fixture);
+
+        await detachAndExpectReplayStopped(fixture);
+        // 58 000 + the 500 ms spent proving the replay stopped.
+        await step(RESUME_HOLD_MS - 58_500 - 1);
+        expect(fixture.statuses).toEqual([HELD]);
+        await step(1);
+        expect(fixture.statuses).toEqual([HELD, REBUILDING]);
+        expect(session.isReady()).toBe(false);
+
+        host.attach();
+        await advanceUntil(() => host.connections.length === 2, 10_000);
+        await advanceUntil(() => session.isReady(), 10_000);
+
+        expect(host.resumes).toHaveLength(1);
+        expect(host.handshakes).toBe(2);
+        expect(host.subscribedStreams).toHaveLength(2);
+      });
+
+      it("returns to masked with the original deadline on a detach during a replay begun inside the mask", async () => {
+        const fixture = await readyFixture(LIVE);
+        const { host, session, spies } = fixture;
+        await loseGap(fixture);
+        host.detach();
+        await step(1_000);
+        await attachIntoReplay(fixture);
+        expect(session.isReady()).toBe(true);
+
+        await detachAndExpectReplayStopped(fixture);
+        expect(session.isReady()).toBe(true);
+        await step(RESUME_MASK_MS - 1_000 - 500 - 1);
+        expect(session.isReady()).toBe(true);
+        expect(fixture.statuses).toEqual([]);
+        expect(spies.sessionLost).not.toHaveBeenCalled();
+
+        await step(1);
+        expect(session.isReady()).toBe(false);
+        expect(spies.sessionLost).toHaveBeenCalledTimes(1);
+        expect(fixture.statuses).toEqual([HELD]);
+        await step(1_000);
+        expect(fixture.readinessLost).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it("spends no bulk credit on a resent frame", async () => {
       const writes: Uint8Array[] = [];
       const scheduler = new PriorityScheduler({
@@ -1433,6 +1586,7 @@ describe("RemoteSession host-leg resume", () => {
           writes.push(frame);
           return Promise.resolve();
         },
+        () => undefined,
       );
       await vi.advanceTimersByTimeAsync(0);
 

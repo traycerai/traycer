@@ -55,6 +55,14 @@ export interface PrioritySchedulerOptions {
   readonly now: (() => number) | undefined;
 }
 
+/** A resume gap draining ahead of both queues. */
+interface ResumeResend {
+  readonly frames: readonly Uint8Array[];
+  readonly write: (muxFrame: Uint8Array) => Promise<void>;
+  readonly onDrained: () => void;
+  next: number;
+}
+
 export class PriorityScheduler {
   private readonly interactive: QueuedSource[] = [];
   private readonly bulk: QueuedSource[] = [];
@@ -69,11 +77,7 @@ export class PriorityScheduler {
   private paceResumeTimer: TimerHandle | null = null;
   private paceResumeAtMs: number | null = null;
   /** The resume gap still draining; see {@link resumeAfterResend}. */
-  private resend: {
-    readonly frames: readonly Uint8Array[];
-    readonly write: (muxFrame: Uint8Array) => Promise<void>;
-    next: number;
-  } | null = null;
+  private resend: ResumeResend | null = null;
   /** The one write in flight, for {@link writeSettled}. */
   private inFlightWrite: Promise<void> | null = null;
   /**
@@ -168,7 +172,7 @@ export class PriorityScheduler {
   }
 
   /**
-   * Resends a resume gap, then ends the pause.
+   * Resends a resume gap, then ends the pause and calls `onDrained`.
    *
    * The gap goes ahead of both queues, so a frame queued during the outage
    * cannot overtake it, and `write` is the serialized seal-and-send without
@@ -176,15 +180,21 @@ export class PriorityScheduler {
    * kills a session over its frame rate whatever the frames are, and no bulk
    * credit, because the peer grants credit once per unique frame and the
    * first send of each already spent one.
+   *
+   * `onDrained` runs once the last resent frame's write has settled, before
+   * anything queued goes out, and never for a resend that {@link pause} or
+   * {@link stop} ended. An empty gap drains synchronously unless a pump is
+   * already running.
    */
   resumeAfterResend(
     frames: readonly Uint8Array[],
     write: (muxFrame: Uint8Array) => Promise<void>,
+    onDrained: () => void,
   ): void {
     if (this.stopped) {
       return;
     }
-    this.resend = { frames, write, next: 0 };
+    this.resend = { frames, write, onDrained, next: 0 };
     void this.pump();
   }
 
@@ -354,15 +364,12 @@ export class PriorityScheduler {
    * One step of the resend. Returns whether the pump goes on: `false` means
    * paced out, with the refill armed.
    */
-  private async pumpResend(resend: {
-    readonly frames: readonly Uint8Array[];
-    readonly write: (muxFrame: Uint8Array) => Promise<void>;
-    next: number;
-  }): Promise<boolean> {
+  private async pumpResend(resend: ResumeResend): Promise<boolean> {
     const frame = resend.frames[resend.next];
     if (frame === undefined) {
       this.resend = null;
       this.paused = false;
+      resend.onDrained();
       return true;
     }
     this.paceResumeAtMs = null;

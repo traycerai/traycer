@@ -912,6 +912,8 @@ interface ResumeExchange {
    * one's replay is counted, from the `received` that round stated.
    */
   readonly id: number;
+  /** The host's answer landed, so the client's gap replay is running. */
+  answered: boolean;
 }
 
 interface ActiveConnection {
@@ -4732,6 +4734,7 @@ export class RemoteSession<
     connection.startedExchanges += 1;
     const exchange: ResumeExchange = {
       id: connection.startedExchanges,
+      answered: false,
     };
     connection.resumeExchange = exchange;
     void Promise.all([
@@ -4785,6 +4788,8 @@ export class RemoteSession<
     }
     connection.resumeExchange = null;
     this.clearResumeAckTimer();
+    // Ends the gap replay if the answer had already landed.
+    connection.scheduler.pause();
     if (connection.masked && Date.now() >= connection.maskDeadlineAt) {
       this.expireMask(connection);
     }
@@ -4796,6 +4801,10 @@ export class RemoteSession<
   /**
    * The host's RESUME. An answer to any other attempt is ignored: a restart or
    * a cancel stranded it, and whatever follows it is still discarded.
+   *
+   * The answer opens inbound and starts the gap replay, and nothing else: the
+   * outage lasts until {@link completeResume}, so a detach during the replay
+   * lands where a detach during the wait does.
    */
   private onHostResume(
     generation: number,
@@ -4815,7 +4824,7 @@ export class RemoteSession<
       );
       return;
     }
-    if (resume.attempt !== exchange.id) {
+    if (resume.attempt !== exchange.id || exchange.answered) {
       return;
     }
     const { received } = resume;
@@ -4829,23 +4838,33 @@ export class RemoteSession<
       return;
     }
     connection.ledger.trimReceived(received);
-    const resumedFromDown = !connection.hostAttached && !connection.masked;
     this.clearResumeAckTimer();
+    exchange.answered = true;
+    connection.admittedExchanges = exchange.id;
+    connection.scheduler.resumeAfterResend(
+      gap.frames,
+      (muxFrame) => this.writeResentFrame(generation, muxFrame),
+      () => this.completeResume(connection, gap.frames.length),
+    );
+  }
+
+  /** The gap is resent and the pause is over: the outage ends here. */
+  private completeResume(
+    connection: ActiveConnection,
+    resentFrames: number,
+  ): void {
+    const resumedFromDown = !connection.hostAttached && !connection.masked;
     this.clearMaskTimer();
     this.clearHoldTimer();
     connection.resumeExchange = null;
-    connection.admittedExchanges = exchange.id;
     connection.masked = false;
     connection.detachedAt = null;
     connection.hostAttached = true;
-    // The RESUME itself was stamped while the host still read as away.
+    // Every host frame so far was stamped while the host still read as away.
     this.armStandingTimer();
-    connection.scheduler.resumeAfterResend(gap.frames, (muxFrame) =>
-      this.writeResentFrame(generation, muxFrame),
-    );
     console.info(
       `[remote-session] remote session (host ${this.options.hostId}) resumed ` +
-        `(${gap.frames.length} frame(s) to resend${resumedFromDown ? ", from down" : ""})`,
+        `(${resentFrames} frame(s) resent${resumedFromDown ? ", from down" : ""})`,
     );
     if (resumedFromDown) {
       this.takeResumedEdge();
