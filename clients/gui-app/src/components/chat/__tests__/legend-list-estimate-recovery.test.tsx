@@ -1050,4 +1050,183 @@ describe("LegendList estimate recovery", () => {
       expect(settled).toBe(true);
     });
   });
+
+  /**
+   * An end-aligned command keeps its landing correct as its target row grows:
+   * the growth reaches the scroller as an adjust, which is how the transcript
+   * stays pinned to a streaming reply. A loaded machine still holds that
+   * command behind its layout when the reader presses Home, and the command
+   * then no longer owns the view - the growth is far below where the reader
+   * put themselves, and carrying them by it takes them off the top they asked
+   * for. The two cases differ only in whether the reader moved.
+   */
+  describe("an end command whose target row grows", () => {
+    /** The list at the end, with a `scrollToEnd` still held for its layout,
+     *  as the transcript's follow correction issues on every growth. Its own
+     *  write is mocked away; the returned `land` lets later writes through,
+     *  which is how a scroll adjust reaches the scroller. */
+    async function heldEndCommandAtTheEnd(): Promise<{
+      readonly scrollNode: HTMLElement;
+      readonly endBefore: number;
+      readonly land: () => void;
+      readonly resize: (index: number, delta: number) => number;
+      readonly clampLikeBrowser: () => number;
+    }> {
+      const listRef = createRef<LegendListRef | null>();
+      render(
+        createTranscriptList(rows(70), listRef, { data: false, size: true }),
+      );
+      act(() => {
+        fireAllResizeObservers();
+      });
+      await settleLegendList();
+      const list = listRef.current;
+      if (list === null) throw new Error("LegendList ref did not mount");
+
+      act(() => {
+        void list.scrollToEnd({ animated: false });
+      });
+      await settleLegendList();
+      const scrollNode = list.getScrollableNode();
+      const endBefore = scrollNode.scrollTop;
+      expect(endBefore).toBeGreaterThan(0);
+
+      const held = vi
+        .spyOn(scrollNode, "scrollTo")
+        .mockImplementation(() => undefined);
+      act(() => {
+        void list.scrollToEnd({ animated: false });
+      });
+      await advanceLegendListFrames(1);
+
+      return {
+        clampLikeBrowser: () => {
+          const furthest = Math.max(
+            0,
+            list.getState().contentLength - scrollNode.clientHeight,
+          );
+          if (scrollNode.scrollTop > furthest) {
+            scrollNode.scrollTop = furthest;
+            act(() => {
+              scrollNode.dispatchEvent(new Event("scroll"));
+            });
+          }
+          return scrollNode.scrollTop;
+        },
+        endBefore,
+        resize: (index: number, delta: number) => {
+          const before = list.getState().sizeAtIndex(index);
+          act(() => {
+            list.setItemSize(`row-${String(index)}`, {
+              height: before + delta,
+              width: 800,
+            });
+          });
+          return list.getState().sizeAtIndex(index) - before;
+        },
+        land: () => {
+          held.mockImplementation(
+            (options: ScrollToOptions | number | undefined) => {
+              if (typeof options === "object" && options.top !== undefined) {
+                scrollNode.scrollTop = options.top;
+              }
+            },
+          );
+        },
+        scrollNode,
+      };
+    }
+
+    /** The reader presses Home: an absolute write to the scroller, reported. */
+    function pressHome(scrollNode: HTMLElement): void {
+      scrollNode.scrollTop = 0;
+      act(() => {
+        scrollNode.dispatchEvent(new Event("scroll"));
+      });
+    }
+
+    it("leaves the reader at the top they wrote, which the command did not", async () => {
+      const { scrollNode, land, resize } = await heldEndCommandAtTheEnd();
+      pressHome(scrollNode);
+      land();
+
+      expect(resize(69, 28)).toBeGreaterThan(0);
+      await advanceLegendListFrames(3);
+
+      expect(scrollNode.scrollTop).toBe(0);
+    });
+
+    // The command anchors on its own target row, so a row ABOVE that row is the
+    // other route to the same symptom: the reader is nowhere near the growth,
+    // and the target's own shift would carry them off the top just the same.
+    it("leaves the reader at the top when a row above the target grows", async () => {
+      const { scrollNode, land, resize } = await heldEndCommandAtTheEnd();
+      pressHome(scrollNode);
+      land();
+
+      expect(resize(68, 28)).toBeGreaterThan(0);
+      await advanceLegendListFrames(3);
+
+      expect(scrollNode.scrollTop).toBe(0);
+    });
+
+    it("pins the view to the new end while that command still holds it", async () => {
+      const { scrollNode, endBefore, land, resize } =
+        await heldEndCommandAtTheEnd();
+      land();
+
+      // Nobody else moved the view, so the command still owns it: every growth
+      // of its target row carries the view to the end that growth made. The
+      // second one needs the command's own record of where it put the view to
+      // have come along with the first, or it reads the view as somebody
+      // else's.
+      const first = resize(69, 28);
+      await advanceLegendListFrames(3);
+      expect(scrollNode.scrollTop).toBe(endBefore + first);
+
+      const second = resize(69, 28);
+      await advanceLegendListFrames(3);
+      expect(scrollNode.scrollTop).toBe(endBefore + first + second);
+    });
+
+    // A row above the target can also take the content below the view. The list
+    // then moves the view to the clamped end by writing its own offset, with no
+    // adjust to carry the command's record along, and a browser clamps its
+    // scroller to the same place and reports it (jsdom has no layout, so the
+    // test does what the browser would). The reader is following a streaming
+    // reply throughout, and the row that shrank grows back: they have to be at
+    // the end it ends up at.
+    it("keeps pinning after a row above the target shrank the content", async () => {
+      const { scrollNode, endBefore, land, resize, clampLikeBrowser } =
+        await heldEndCommandAtTheEnd();
+      land();
+
+      const shrunk = resize(68, -28);
+      expect(shrunk).toBeLessThan(0);
+      await advanceLegendListFrames(3);
+      expect(clampLikeBrowser()).toBe(endBefore + shrunk);
+
+      expect(resize(69, 28)).toBeGreaterThan(0);
+      await advanceLegendListFrames(3);
+      expect(scrollNode.scrollTop).toBe(endBefore);
+    });
+
+    // A row above the target moves the target itself, so the view travels by
+    // that shift as well. That shift has to come along too, or the command
+    // reads every later growth as somebody else's and the pin to a streaming
+    // reply dies after the first row above it settles its estimate.
+    it("keeps pinning after a row above the target has moved the view", async () => {
+      const { scrollNode, endBefore, land, resize } =
+        await heldEndCommandAtTheEnd();
+      land();
+
+      const above = resize(68, 28);
+      await advanceLegendListFrames(3);
+      expect(scrollNode.scrollTop).toBe(endBefore + above);
+
+      const tail = resize(69, 28);
+      await advanceLegendListFrames(3);
+      expect(scrollNode.scrollTop).toBe(endBefore + above + tail);
+    });
+  });
 });

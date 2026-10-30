@@ -34,6 +34,7 @@ import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-sto
 import { makeMessage, makeMessages } from "./chat-message-fixtures";
 import {
   installLegendListViewportMetrics,
+  setLegendListMessageRowHeightOverrides,
   setLegendListScrollContainerScrollHeightOverride,
   settleLegendList,
 } from "./legend-list-test-environment";
@@ -64,6 +65,19 @@ function requireScrollNode(
     throw new Error("LegendList scrollable node is not mounted");
   }
   return node;
+}
+
+/** The latch's announced move, read back from its own event. */
+function scrollerMoveFrom(
+  event: Event,
+): { readonly from: number; readonly to: number } | null {
+  if (!(event instanceof CustomEvent)) return null;
+  const detail: unknown = event.detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  if (!("from" in detail) || !("to" in detail)) return null;
+  const { from, to } = detail;
+  if (typeof from !== "number" || typeof to !== "number") return null;
+  return { from, to };
 }
 
 /** Real native `scroll` dispatch - matches the latch's direct passive listener. */
@@ -618,6 +632,92 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     expectAtTrueEnd(node);
     expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
     scrollToEnd.mockRestore();
+  });
+
+  // The list patch stops compensating for an end command's target row once a
+  // write that command did not make has moved the view - the write that
+  // otherwise leaves a reader at the top they pressed Home for. A row above the
+  // target collapsing is such a write, made by the list itself when it clamps
+  // its offset to the shortened content, and the reply then streams the height
+  // back. Nothing stands in for `scrollToEnd` here: this is the real latch over
+  // the real patched list, and a reader who never touched the scroller ends the
+  // turn at the end.
+  it("holds a following reader at the end when a row collapses under them and the reply grows back", async () => {
+    const rowCount = 36;
+    const shrinkPx = 28;
+    const messages = makeMessages(rowCount);
+    const collapsingRowId = messages[rowCount - 2]?.id ?? "";
+    const streamingRowId = messages[rowCount - 1]?.id ?? "";
+    const fullHeight = contentHeightForRowCount(rowCount);
+    setLegendListScrollContainerScrollHeightOverride(fullHeight);
+    const onFollowIntentChange = vi.fn();
+    const { listRef } = renderTimeline({ messages, onFollowIntentChange });
+    await settleLegendList();
+
+    const node = requireScrollNode(listRef);
+    // Latch and list both announce the writes they make, so the landing is
+    // observable without standing in for `scrollToEnd`. Which of the two
+    // lands it is deliberately not asserted: either is a correct repair, and
+    // removing one leaves the other to do it.
+    const landings: { readonly from: number; readonly to: number }[] = [];
+    node.addEventListener(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, (event) => {
+      const move = scrollerMoveFrom(event);
+      if (move) landings.push(move);
+    });
+    parkAtStrictBottom(node);
+    await settleLegendList();
+    expectAtTrueEnd(node);
+
+    const remeasureEveryRow = (): void => {
+      act(() => {
+        fireAllResizeObservers((target) =>
+          target instanceof HTMLElement
+            ? makeResizeEntry(
+                target,
+                VIEWPORT_WIDTH_PX,
+                target.getBoundingClientRect().height,
+              )
+            : null,
+        );
+      });
+    };
+
+    // The row above the streaming reply collapses. The content now ends above
+    // the reader, so the list clamps its own offset to the shortened content
+    // and the browser clamps its scroller to the same place and reports it.
+    setLegendListMessageRowHeightOverrides(
+      new Map([[collapsingRowId, ITEM_HEIGHT_PX - shrinkPx]]),
+    );
+    setLegendListScrollContainerScrollHeightOverride(fullHeight - shrinkPx);
+    remeasureEveryRow();
+    node.scrollTop = maxScrollTop(node);
+    fireNativeScroll(node);
+    await settleLegendList();
+    expectAtTrueEnd(node);
+
+    // The reply streams the height back, and this is the turn's last content
+    // change: nothing follows it to correct a view left short of the end.
+    setLegendListMessageRowHeightOverrides(
+      new Map([
+        [collapsingRowId, ITEM_HEIGHT_PX - shrinkPx],
+        [streamingRowId, ITEM_HEIGHT_PX + shrinkPx],
+      ]),
+    );
+    setLegendListScrollContainerScrollHeightOverride(fullHeight);
+    remeasureEveryRow();
+    await settleLegendList();
+    await settleOneFrame();
+
+    expectAtTrueEnd(node);
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    // And an announced correction took them there, from the offset the
+    // collapse left them at - the reader was never yanked silently.
+    expect(
+      landings.filter(
+        (move) =>
+          move.from < maxScrollTop(node) && move.to === maxScrollTop(node),
+      ),
+    ).not.toHaveLength(0);
   });
 
   // -----------------------------------------------------------------------

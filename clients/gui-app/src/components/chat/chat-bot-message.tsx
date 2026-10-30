@@ -104,8 +104,8 @@ import { TextSegment } from "./segments/text-segment";
  * Under a reply of the bot, the receipt of the turn that wrote it (Tracy
  * Bots T86): what the turn did and how long it took, shown while the row is
  * hovered or the receipt has keyboard focus, and always while the turn
- * runs. It opens the turn beside the channel. A touch screen has no hover:
- * a long press on the reply offers it in a sheet instead.
+ * runs. It opens the turn's session, landed on the turn. A touch screen
+ * has no hover: a long press on the reply offers it in a sheet instead.
  *
  * Without `hoverActions` the row is drawn as the post a thread opens on, at
  * the top of the thread panel: the same row, with nothing on hover.

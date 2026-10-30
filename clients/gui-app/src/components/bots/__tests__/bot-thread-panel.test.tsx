@@ -430,6 +430,7 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
               onOpenActivity={vi.fn()}
               onEditPost={onEditPost}
               onOpenTurn={vi.fn()}
+              onOpenSession={vi.fn()}
             />
           </ChatExpansionTestProviders>
         </TooltipProvider>

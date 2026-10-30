@@ -519,6 +519,7 @@ describe("body overflow inside a frame", () => {
   function pageWithBody(
     frame: Frame,
     htmlStyle: Record<string, string>,
+    bodyStyle: Record<string, string>,
   ): { html: HTMLElement; body: HTMLElement; target: HTMLElement } {
     const doc = frame.window.document;
     const target = doc.createElement("button");
@@ -530,7 +531,7 @@ describe("body overflow inside a frame", () => {
     frame.place(doc.documentElement, { ...page, style: htmlStyle });
     frame.place(doc.body, {
       ...page,
-      style: { overflowX: "hidden", overflowY: "visible" },
+      style: { overflowX: "hidden", overflowY: "visible", ...bodyStyle },
     });
     frame.place(target, {
       rect: { top: 300, bottom: 340, left: 20, right: 60 },
@@ -538,9 +539,45 @@ describe("body overflow inside a frame", () => {
     return { html: doc.documentElement, body: doc.body, target };
   }
 
+  // The walk reads an element as contained by one of these, and by none of
+  // the next ones. `contain` names the containment; `container-type` and
+  // `content-visibility` apply it with `contain` itself left `none`.
+  // `content-visibility: hidden` is in neither list: it contains, and the
+  // walk reads it as the viewport's anyway, which the last test here covers.
+  const CONTAINS: Record<string, string>[] = [
+    { contain: "paint" },
+    { contain: "layout" },
+    { contain: "style" },
+    { contain: "size" },
+    { contain: "inline-size" },
+    { contain: "content" },
+    { contain: "strict" },
+    { contentVisibility: "auto" },
+    { containerType: "inline-size" },
+    { containerType: "size" },
+    // `container-type` keeps growing, and every value it grows contains
+    // unless it is one of the two below. These are the serialisations the
+    // engine answers with, not the order a page writes: one per containing
+    // keyword, and each paired with a keyword that contains nothing, so no
+    // combination can be mistaken for one of the two.
+    { containerType: "anchored" },
+    { containerType: "inline-size scroll-state" },
+    { containerType: "scroll-state anchored" },
+    { containerType: "size scroll-state" },
+    { containerType: "inline-size anchored" },
+  ];
+  const CONTAINS_NOT: Record<string, string>[] = [
+    { contain: "none" },
+    { contentVisibility: "visible" },
+    { containerType: "normal" },
+    { containerType: "scroll-state" },
+  ];
+
+  // The page an engine that knows none of these properties describes: every
+  // one of them reads back empty, and the body's overflow is the viewport's.
   it("moves the viewport, not body, when html's overflow is visible", () => {
     const frame = startFrame(false);
-    const { html, target } = pageWithBody(frame, VISIBLE);
+    const { html, target } = pageWithBody(frame, VISIBLE, {});
 
     scrollIntoView(target, { block: "start" });
 
@@ -551,10 +588,11 @@ describe("body overflow inside a frame", () => {
 
   it("treats body as a scroller when html's overflow is not visible", () => {
     const frame = startFrame(false);
-    const { body, target } = pageWithBody(frame, {
-      overflowX: "visible",
-      overflowY: "auto",
-    });
+    const { body, target } = pageWithBody(
+      frame,
+      { overflowX: "visible", overflowY: "auto" },
+      {},
+    );
 
     scrollIntoView(target, { block: "start" });
 
@@ -562,6 +600,96 @@ describe("body overflow inside a frame", () => {
       { scroller: body, top: 300, left: 0, behavior: "auto" },
     ]);
   });
+
+  // Containment on either element keeps the body's overflow its own, whatever
+  // the root's overflow says.
+  it.each(CONTAINS)("keeps body a scroller when html has %o", (style) => {
+    const frame = startFrame(false);
+    const { body, target } = pageWithBody(frame, { ...VISIBLE, ...style }, {});
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([
+      { scroller: body, top: 300, left: 0, behavior: "auto" },
+    ]);
+  });
+
+  it.each(CONTAINS)("keeps body a scroller when body has %o", (style) => {
+    const frame = startFrame(false);
+    const { body, target } = pageWithBody(frame, VISIBLE, style);
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([
+      { scroller: body, top: 300, left: 0, behavior: "auto" },
+    ]);
+  });
+
+  // None of these contains anything, so the body's overflow stays the
+  // viewport's and the viewport is what moves.
+  it.each(CONTAINS_NOT)("moves the viewport when html has %o", (style) => {
+    const frame = startFrame(false);
+    const { html, target } = pageWithBody(frame, { ...VISIBLE, ...style }, {});
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([
+      { scroller: html, top: 300, left: 0, behavior: "auto" },
+    ]);
+  });
+
+  it.each(CONTAINS_NOT)("moves the viewport when body has %o", (style) => {
+    const frame = startFrame(false);
+    const { html, target } = pageWithBody(frame, VISIBLE, style);
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([
+      { scroller: html, top: 300, left: 0, behavior: "auto" },
+    ]);
+  });
+
+  // `content-visibility: hidden` skips the page's contents, and the engine
+  // reveals nothing inside them. Such a page lays out no taller than its
+  // view, so the viewport it is left to has no room and the walk scrolls
+  // nothing, which is what the engine does. Were it read as the containment
+  // it is, the body would be a scroller and the walk would move it to an
+  // element the engine never moves to.
+  it.each(["html", "body"])(
+    "scrolls nothing into view when %s is skipped",
+    (skipped) => {
+      const frame = startFrame(false);
+      const doc = frame.window.document;
+      const target = doc.createElement("button");
+      doc.body.append(target);
+      const view = { height: 100, width: 100 };
+      frame.place(doc.documentElement, {
+        client: view,
+        // Skipped contents leave the root no taller than its view.
+        scroll: { height: 100, width: 100, top: 0, left: 0 },
+        style:
+          skipped === "html"
+            ? { ...VISIBLE, contentVisibility: "hidden" }
+            : VISIBLE,
+      });
+      frame.place(doc.body, {
+        client: view,
+        scroll: { height: 1000, width: 1000, top: 0, left: 0 },
+        style: {
+          overflowX: "hidden",
+          overflowY: "visible",
+          ...(skipped === "body" ? { contentVisibility: "hidden" } : {}),
+        },
+      });
+      frame.place(target, {
+        rect: { top: 300, bottom: 340, left: 20, right: 60 },
+      });
+
+      scrollIntoView(target, { block: "start" });
+
+      expect(frame.scrolls).toEqual([]);
+    },
+  );
 });
 
 describe("scrollIntoViewIfNeeded inside a frame", () => {
@@ -656,6 +784,29 @@ describe("focus inside a frame", () => {
     target.focus();
 
     expect(frame.scrolls).toEqual([]);
+  });
+
+  it("reveals an element focused inside a closed shadow root", () => {
+    const frame = startFrame(false);
+    const { scroller } = singleScroller(frame, { top: 300, left: 20 });
+    const host = frame.window.document.createElement("div");
+    const input = frame.window.document.createElement("input");
+    scroller.append(host);
+    host.attachShadow({ mode: "closed" }).append(input);
+    frame.place(host, { rect: { top: 300, bottom: 340, left: 20, right: 60 } });
+    frame.place(input, {
+      rect: { top: 300, bottom: 340, left: 20, right: 60 },
+    });
+
+    input.focus();
+
+    expect(frame.nativeFocusArgs).toEqual([[{ preventScroll: true }]]);
+    expect(only(frame)).toEqual({
+      scroller,
+      top: 270,
+      left: 0,
+      behavior: "auto",
+    });
   });
 
   it("covers SVG elements too", () => {

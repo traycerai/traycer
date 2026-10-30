@@ -59,7 +59,7 @@ export interface ChatBotTurnReceipt {
   readonly startedAt: number;
   /** When the turn ended; `null` while it runs. */
   readonly endedAt: number | null;
-  /** Opens the turn beside the channel, "How Tracy answered". */
+  /** Opens the turn's session, read-only and landed on the turn. */
   readonly open: () => void;
 }
 

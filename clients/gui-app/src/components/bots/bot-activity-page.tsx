@@ -57,7 +57,7 @@ import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type {
   BotOpenThread,
-  BotOpenTurn,
+  BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 
@@ -95,8 +95,8 @@ export function BotActivityPage(props: {
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
   /** Opens a post's thread beside the channel, in Messages. */
   readonly onOpenPost: (open: BotOpenThread) => void;
-  /** Opens a check-in's turn beside the channel, in Messages. */
-  readonly onOpenTurn: (open: BotOpenTurn) => void;
+  /** Opens a check-in's turn: its session, in place of the channel. */
+  readonly onOpenTurn: BotTurnOpen;
 }): ReactNode {
   const {
     botId,

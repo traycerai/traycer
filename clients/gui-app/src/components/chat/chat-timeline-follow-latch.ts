@@ -195,6 +195,10 @@ interface ActiveEndCorrection {
 interface ListRowTop {
   readonly key: string;
   readonly top: number;
+  /** How many rows the list held. A row the list no longer names is still
+   *  the row standing last when the count has not changed - a turn re-keyed
+   *  in place - and is a row the list has replaced when it has. */
+  readonly rowCount: number;
 }
 
 interface ReaderEndCandidate {
@@ -218,6 +222,11 @@ interface ReaderMomentumEnd {
   /** As `ReaderEndCandidate.lastRow`: rows above that the list remeasures
    *  move the reader with them, and this end by as much. */
   readonly lastRow: ListRowTop | null;
+  /** Where the view was when the finger lifted, carried by every row move
+   *  the list has made since, so it stays an offset this view can be read
+   *  against. Momentum travels from the lift toward the end; a view still
+   *  standing at the lift has not travelled, however the end moved. */
+  readonly liftScrollTop: number;
 }
 
 type ArmedReaderDeparture =
@@ -530,7 +539,9 @@ function lastListRowTop(list: LegendListRef | null): ListRowTop | null {
   const last = state.data.length - 1;
   if (last < 0) return null;
   const top = state.positionAtIndex(last);
-  return typeof top === "number" ? { key: state.keyAtIndex(last), top } : null;
+  return typeof top === "number"
+    ? { key: state.keyAtIndex(last), top, rowCount: state.data.length }
+    : null;
 }
 
 function readerMomentumEndFor(
@@ -540,18 +551,60 @@ function readerMomentumEndFor(
   return {
     targetScrollTop: Math.max(0, geometry.scrollHeight - geometry.clientHeight),
     lastRow: lastListRowTop(list),
+    liftScrollTop: geometry.scrollTop,
   };
 }
 
-/** How far the list has moved a row since its recorded top; zero once the
- *  row is gone. */
+/** The same momentum, read in the frame this observation sees: the end moves
+ *  on to the one it measures, and the lift moves by what the list moved the
+ *  rows since the last observation, which is `shift`. Both are recorded
+ *  against the row this observation sees last, so the next observation reads
+ *  an interval it can net again.
+ *
+ *  An interval whose `shift` is unknown leaves the lift where the view
+ *  stands now. Carrying it would hold the movement that interval hid for
+ *  the life of the momentum, and every later observation would read that as
+ *  the reader having travelled; starting again from the view credits them
+ *  with none of it. */
+function readerMomentumEndMovedOn(
+  momentum: ReaderMomentumEnd,
+  geometry: ChatTimelineScrollGeometry,
+  list: LegendListRef | null,
+  shift: number | null,
+): ReaderMomentumEnd {
+  return {
+    targetScrollTop: Math.max(0, geometry.scrollHeight - geometry.clientHeight),
+    lastRow: lastListRowTop(list),
+    liftScrollTop:
+      shift === null ? geometry.scrollTop : momentum.liftScrollTop + shift,
+  };
+}
+
+/** How far the list has moved a row since its recorded top, and null when
+ *  the list has moved it by an amount nothing left can tell. Read as zero,
+ *  a move the list made is the reader's own movement, which is what
+ *  follows them.
+ *
+ *  A row the list no longer names is still read when the list holds the
+ *  same rows: a turn re-keyed in place - an optimistic row taking the
+ *  server's id - leaves the row standing last where the recorded one was,
+ *  and what moved the view is still there to read. Only a list that has
+ *  gained or lost rows under the view moved its end for reasons of its own
+ *  that no row left can account for.
+ *
+ *  With no row recorded at all there is nothing the list can have moved
+ *  since, and the answer is zero, as it is for a row that has not moved. */
 function listRowShift(
   list: LegendListRef | null,
   row: ListRowTop | null,
-): number {
+): number | null {
   if (list === null || row === null) return 0;
   const top = list.getState().positionByKey(row.key);
-  return top === undefined ? 0 : top - row.top;
+  if (top !== undefined) return top - row.top;
+  const standingLast = lastListRowTop(list);
+  return standingLast !== null && standingLast.rowCount === row.rowCount
+    ? standingLast.top - row.top
+    : null;
 }
 
 /** The first row whose top is below the viewport's top edge; the last row
@@ -571,7 +624,11 @@ function touchReferenceRow(
   ) {
     const top = state.positionAtIndex(index);
     if (top > geometry.scrollTop) {
-      return { key: state.keyAtIndex(index), top };
+      return {
+        key: state.keyAtIndex(index),
+        top,
+        rowCount: state.data.length,
+      };
     }
   }
   return lastListRowTop(list);
@@ -1268,13 +1325,20 @@ export function useChatTimelineFollowLatch(
   const tryReattachReader = useCallback(
     (node: HTMLElement, geometry: ChatTimelineScrollGeometry): boolean => {
       const readerCandidate = readerEndCandidateRef.current;
+      // As the momentum's arrival reads it: an end the list may have moved
+      // by an unknown amount is not an end this view can be said to reach.
+      const shift =
+        readerCandidate === null
+          ? null
+          : listRowShift(listRef.current, readerCandidate.lastRow);
       const reachedGestureStartEnd =
         readerCandidate !== null &&
+        shift !== null &&
         readerCandidate.readerGestureGeneration ===
           readerGestureGenerationRef.current &&
         geometry.scrollTop >=
           readerCandidate.targetScrollTop +
-            listRowShift(listRef.current, readerCandidate.lastRow) -
+            shift -
             CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX;
       if (!reachedGestureStartEnd || isCorrectionSuppressed?.() === true) {
         return false;
@@ -1488,12 +1552,32 @@ export function useChatTimelineFollowLatch(
         return false;
       }
       const list = listRef.current;
-      readerMomentumEndRef.current = readerMomentumEndFor(geometry, list);
+      const shift = listRowShift(list, momentum.lastRow);
+      readerMomentumEndRef.current = readerMomentumEndMovedOn(
+        momentum,
+        geometry,
+        list,
+        shift,
+      );
+      // What the list moved this interval has to be known before any of it
+      // can be told from what the reader did: unknown, the view sitting at
+      // the end reads as a reader who reached it.
+      if (shift === null) return false;
+      // The view must also have travelled toward the end since the lift,
+      // which the list moving rows carries along with it: an end clamped up
+      // to a reader who has not moved, then grown back, is not their
+      // momentum arriving. Travel is read from the lift and not from the
+      // last observation, so a fling whose closing step is a pixel is still
+      // a view that travelled.
       return (
+        geometry.scrollTop >
+          momentum.liftScrollTop +
+            shift +
+            CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX &&
         geometry.scrollTop >=
-        momentum.targetScrollTop +
-          listRowShift(list, momentum.lastRow) -
-          CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
+          momentum.targetScrollTop +
+            shift -
+            CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
       );
     },
     [isCorrectionSuppressed, isReattachSuppressed, listRef],

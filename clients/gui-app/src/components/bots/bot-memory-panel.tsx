@@ -12,7 +12,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
-import { ThreadCrumb } from "@/components/bots/bot-turn-panel";
 import {
   useBotMemory,
   type BotMemoryReading,
@@ -107,7 +106,6 @@ export function BotMemoryPanel(props: BotMemoryPanelProps): ReactNode {
                 channelId={props.channelId}
                 anchorMessageId={props.back.anchorMessageId}
                 onBack={props.onBack}
-                testId="bot-memory-crumb"
               />
             </span>
           )}
@@ -125,6 +123,40 @@ export function BotMemoryPanel(props: BotMemoryPanelProps): ReactNode {
       </header>
       <MemoryBody {...props} reading={reading} />
     </section>
+  );
+}
+
+/** The displaced thread, named by its post's first line; it brings the thread back. */
+function ThreadCrumb(props: {
+  readonly botId: string;
+  readonly hostId: string;
+  readonly channelId: string;
+  readonly anchorMessageId: string;
+  readonly onBack: () => void;
+}): ReactNode {
+  const { botId, hostId, channelId, anchorMessageId, onBack } = props;
+  return (
+    <ChannelPost
+      botId={botId}
+      hostId={hostId}
+      conversationId={channelId}
+      messageId={anchorMessageId}
+      fetchCold
+    >
+      {(post) => {
+        const line = firstLineOf(postTextOf(post));
+        return (
+          <button
+            type="button"
+            data-testid="bot-memory-crumb"
+            onClick={onBack}
+            className="min-w-0 truncate rounded-sm hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            {line === null ? "Thread" : `Thread · ${line}`}
+          </button>
+        );
+      }}
+    </ChannelPost>
   );
 }
 

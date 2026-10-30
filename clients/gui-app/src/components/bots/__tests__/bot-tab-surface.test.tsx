@@ -7,8 +7,9 @@
  * team's main bot still to be set up (T67): a tab on its id shows the channel
  * where the team is set up, with nothing opened, subscribed or closed (the
  * real hook, over a scripted `bot.onboarding.read`).
- * The three views are replaced by stubs that expose their props, so what the
- * surface PASSES them is what is asserted. The tab strip's Activity label
+ * The three views and the bot's session view (T93) are replaced by stubs
+ * that expose their props, so what the surface PASSES them is what is
+ * asserted. The tab strip's Activity label
  * reads the real summary hook over the real agent-activity store.
  */
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -25,8 +26,15 @@ import type {
 import type { BotOnboardingSetup } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
 import type {
+  BotThreadSummary,
+  BotTurnRef,
+} from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotTranscriptLanding } from "@/components/bots/bot-chat-transcript";
+import type { BotOpenSession } from "@/components/bots/bot-session-view";
+import type {
   BotOpenThread,
-  BotOpenTurn,
+  BotSessionOpen,
+  BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
 import {
   __resetAgentActivityStoreForTests,
@@ -111,6 +119,7 @@ const mocks = vi.hoisted(() => ({
     },
     membersSupport: null as boolean | null,
     openResult: null as OpenResult | null,
+    threads: [] as BotThreadSummary[],
     environments: [] as Array<{
       environmentId: string;
       label: string;
@@ -307,9 +316,11 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     botTitle: string;
     appConversationChatId: string | null;
     openThread: BotOpenThread | null;
-    openTurn: BotOpenTurn | null;
+    landOn: BotTranscriptLanding | null;
     trunkChatId: string;
     onOpenActivity: () => void;
+    onOpenTurn: BotTurnOpen;
+    onOpenSession: BotSessionOpen;
     resolveMember: (
       userId: string,
     ) => { displayName: string | null; avatarUrl: string | null } | null;
@@ -321,8 +332,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
       data-bot-title={props.botTitle}
       data-app-conversation-chat-id={props.appConversationChatId ?? "none"}
       data-open-thread={props.openThread?.anchorMessageId ?? "none"}
-      data-open-turn={props.openTurn?.ref.turnIds[0] ?? "none"}
-      data-open-turn-back={props.openTurn?.back?.anchorMessageId ?? "none"}
+      data-land-on={props.landOn?.messageId ?? "none"}
       data-trunk-chat-id={props.trunkChatId}
       data-teammate-name={
         props.resolveMember("user-teammate")?.displayName ?? "unresolved"
@@ -333,6 +343,61 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
         data-testid="stub-channel-open-activity"
         onClick={props.onOpenActivity}
       />
+      <button
+        type="button"
+        data-testid="stub-channel-open-turn"
+        onClick={() => props.onOpenTurn(REPLY_TURN)}
+      />
+      <button
+        type="button"
+        data-testid="stub-channel-open-thread-session"
+        onClick={() =>
+          props.onOpenSession({
+            chatId: "session-thread-1",
+            threadId: "thread-1",
+            messageId: null,
+          })
+        }
+      />
+    </div>
+  ),
+}));
+// The session view is driven in `bot-session-view.test.tsx`; here, what the
+// tab hands it and what its links do to the tab.
+vi.mock("@/components/bots/bot-session-view", () => ({
+  BotSessionView: (props: {
+    session: BotOpenSession;
+    onClose: () => void;
+    onOpenChannel: (messageId: string | null) => void;
+    onOpenThread: (threadId: string) => void;
+  }) => (
+    <div
+      data-testid="stub-session"
+      data-chat-id={props.session.chatId}
+      data-thread-id={props.session.threadId ?? "none"}
+      data-land-on={props.session.landOn?.messageId ?? "none"}
+      data-visit={String(props.session.landOn?.visit ?? "none")}
+    >
+      <button
+        type="button"
+        data-testid="stub-session-back"
+        onClick={props.onClose}
+      />
+      <button
+        type="button"
+        data-testid="stub-session-channel"
+        onClick={() => props.onOpenChannel(null)}
+      />
+      <button
+        type="button"
+        data-testid="stub-session-post"
+        onClick={() => props.onOpenChannel("post-1")}
+      />
+      <button
+        type="button"
+        data-testid="stub-session-thread"
+        onClick={() => props.onOpenThread("thread-1")}
+      />
     </div>
   ),
 }));
@@ -342,7 +407,7 @@ vi.mock("@/components/bots/bot-activity-page", () => ({
   BotActivityPage: (props: {
     boundHost: { hostId: string | null; isThisHost: boolean };
     onOpenPost: (open: BotOpenThread) => void;
-    onOpenTurn: (open: BotOpenTurn) => void;
+    onOpenTurn: BotTurnOpen;
   }) => (
     <div
       data-testid="stub-activity"
@@ -366,19 +431,15 @@ vi.mock("@/components/bots/bot-activity-page", () => ({
         data-testid="stub-activity-open-turn"
         onClick={() =>
           props.onOpenTurn({
-            ref: {
-              chatId: "trunk-1",
-              turnIds: ["turn-checkin"],
-              userMessageId: "prompt-checkin",
-              threadId: null,
-              startedAt: 1_000,
-              endedAt: 2_000,
-              summary: null,
-              messageIds: [],
-              requestIds: [],
-            },
-            question: null,
-            back: null,
+            chatId: "trunk-1",
+            turnIds: ["turn-checkin"],
+            userMessageId: "prompt-checkin",
+            threadId: null,
+            startedAt: 1_000,
+            endedAt: 2_000,
+            summary: null,
+            messageIds: [],
+            requestIds: [],
           })
         }
       />
@@ -395,7 +456,7 @@ vi.mock("@/components/bots/bot-threads-page", () => ({
   ),
 }));
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
-  useBotThreadListQuery: () => ({ data: { threads: [] } }),
+  useBotThreadListQuery: () => ({ data: { threads: mocks.state.threads } }),
 }));
 // The panel takes the bot, whether it is main, whether its environment is a
 // person's own, its channel, its environment's bots and how to close, and
@@ -430,6 +491,20 @@ import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+/** The trunk's turn behind a reply in the channel. */
+const REPLY_TURN: BotTurnRef = {
+  chatId: "trunk-1",
+  turnIds: ["turn-reply"],
+  userMessageId: "prompt-reply",
+  threadId: null,
+  startedAt: 1_000,
+  endedAt: 2_000,
+  summary: null,
+  messageIds: ["reply-1"],
+  requestIds: [],
+};
+
 const OTHER_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
 /** The id a new team's main bot will be created under. */
 const SETUP_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAX";
@@ -555,6 +630,7 @@ beforeEach(() => {
   mocks.state.environments = [
     { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
   ];
+  mocks.state.threads = [];
   mocks.subscribed.length = 0;
   for (const key of Object.keys(mocks.reads)) delete mocks.reads[key];
   useBotTabsStore.setState({ tabs: {} });
@@ -1680,28 +1756,134 @@ describe("<BotTabSurface /> views", () => {
   });
 });
 
-describe("<BotTabSurface /> a check-in's turn from Activity", () => {
-  it("returns to Messages with the turn open in the rail, in place of the thread that was open, and nothing to go back to", async () => {
+describe("<BotTabSurface /> a bot's session in place of its channel", () => {
+  function sessionShown(): HTMLElement {
+    return screen.getByTestId("stub-session");
+  }
+
+  it("opens a check-in's turn from Activity as the trunk session landed on it, in place of the views, and back returns to Activity", async () => {
     const user = userEvent.setup();
-    useBotOpenThreadStore.getState().setRail(BOT_ID, {
-      kind: "thread",
-      anchorMessageId: "post-1",
-      announcement: false,
-      answer: false,
-      sent: null,
-    });
     render(surface());
     await user.click(screen.getByTestId("bot-tab-view-activity"));
 
     await user.click(screen.getByTestId("stub-activity-open-turn"));
 
+    expect(sessionShown().dataset.chatId).toBe("trunk-1");
+    expect(sessionShown().dataset.threadId).toBe("none");
+    expect(sessionShown().dataset.landOn).toBe("prompt-checkin");
+    expect(screen.queryByRole("tablist")).toBeNull();
+    expect(screen.queryByTestId("stub-activity")).toBeNull();
+
+    await user.click(screen.getByTestId("stub-session-back"));
+
+    expect(screen.queryByTestId("stub-session")).toBeNull();
+    expect(
+      screen.getByTestId("bot-tab-view-activity").getAttribute("aria-selected"),
+    ).toBe("true");
+  });
+
+  it("opens a reply's turn from the channel, each open a new visit, and its channel link brings Messages back where the channel was", async () => {
+    const user = userEvent.setup();
+    render(surface());
+
+    await user.click(screen.getByTestId("stub-channel-open-turn"));
+    expect(sessionShown().dataset.landOn).toBe("prompt-reply");
+    const firstVisit = sessionShown().dataset.visit;
+    await user.click(screen.getByTestId("stub-session-back"));
+    await user.click(screen.getByTestId("stub-channel-open-turn"));
+    expect(sessionShown().dataset.visit).not.toBe(firstVisit);
+
+    await user.click(screen.getByTestId("stub-session-channel"));
+
+    expect(screen.queryByTestId("stub-session")).toBeNull();
+    expect(
+      screen.getByTestId("stub-channel").getAttribute("data-land-on"),
+    ).toBe("none");
+  });
+
+  it("shows the channel on the post a send followed, from Activity too, and the next session's back leaves it where it was", async () => {
+    const user = userEvent.setup();
+    render(surface());
+    await user.click(screen.getByTestId("bot-tab-view-activity"));
+    await user.click(screen.getByTestId("stub-activity-open-turn"));
+
+    await user.click(screen.getByTestId("stub-session-post"));
+
     expect(
       screen.getByTestId("bot-tab-view-messages").getAttribute("aria-selected"),
     ).toBe("true");
-    const channel = screen.getByTestId("stub-channel");
-    expect(channel.getAttribute("data-open-turn")).toBe("turn-checkin");
-    expect(channel.getAttribute("data-open-turn-back")).toBe("none");
-    expect(channel.getAttribute("data-open-thread")).toBe("none");
+    expect(
+      screen.getByTestId("stub-channel").getAttribute("data-land-on"),
+    ).toBe("post-1");
+
+    await user.click(screen.getByTestId("stub-channel-open-turn"));
+    await user.click(screen.getByTestId("stub-session-back"));
+
+    expect(
+      screen.getByTestId("stub-channel").getAttribute("data-land-on"),
+    ).toBe("none");
+  });
+
+  it.each([
+    { leaveBy: "the Activity tab", leave: "bot-tab-view-activity" },
+    {
+      leaveBy: "the channel's Activity link",
+      leave: "stub-channel-open-activity",
+    },
+  ])(
+    "lands the channel on a send's post once: leaving Messages by $leaveBy and coming back does not land again",
+    async ({ leave }) => {
+      const user = userEvent.setup();
+      render(surface());
+      await user.click(screen.getByTestId("stub-channel-open-turn"));
+      await user.click(screen.getByTestId("stub-session-post"));
+      expect(
+        screen.getByTestId("stub-channel").getAttribute("data-land-on"),
+      ).toBe("post-1");
+
+      await user.click(screen.getByTestId(leave));
+      expect(screen.queryByTestId("stub-channel")).toBeNull();
+      await user.click(screen.getByTestId("bot-tab-view-messages"));
+
+      expect(
+        screen.getByTestId("stub-channel").getAttribute("data-land-on"),
+      ).toBe("none");
+    },
+  );
+
+  it("opens a thread's session from its panel, and shows that thread beside the channel by its post from the session", async () => {
+    const user = userEvent.setup();
+    mocks.state.threads = [
+      {
+        threadId: "thread-1",
+        conversationId: "conversation-app",
+        sessionChatId: "session-thread-1",
+        anchor: {
+          messageId: "post-7",
+          requestId: "req-7",
+          senderUserId: "user-1",
+          sentAt: 1_000,
+          resolvedAt: 1_001,
+        },
+        replyCount: 1,
+        lastReplyAt: 2_000,
+        openRequestCount: 0,
+        costUsd: null,
+      },
+    ];
+    render(surface());
+
+    await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+    expect(sessionShown().dataset.chatId).toBe("session-thread-1");
+    expect(sessionShown().dataset.threadId).toBe("thread-1");
+    expect(sessionShown().dataset.landOn).toBe("none");
+
+    await user.click(screen.getByTestId("stub-session-thread"));
+
+    expect(screen.queryByTestId("stub-session")).toBeNull();
+    expect(
+      screen.getByTestId("stub-channel").getAttribute("data-open-thread"),
+    ).toBe("post-7");
   });
 
   it("gives the channel the bot's trunk session", () => {

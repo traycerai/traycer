@@ -42,6 +42,7 @@ import {
   hostClientLocating,
   memberPost,
   turnRef,
+  openedSessions,
   turnsAskedFor,
   type Scene,
 } from "@/components/bots/__tests__/bot-turn-test-support";
@@ -312,6 +313,7 @@ beforeEach(() => {
   mocks.rungs = [];
   activityStore.setState({ activity: null });
   useBotOpenThreadStore.setState({ byBotId: {} });
+  openedSessions.length = 0;
   scene = buildScene();
   scene.knownTurns = [failedTurn(TRUNK_ID, null)];
   mocks.sessions = scene.sessions;
@@ -426,7 +428,7 @@ describe("a post the trunk failed to answer", () => {
     expect(screen.queryByTestId("failed-turn-actions")).toBeNull();
   });
 
-  it("shows the failed turn's receipt under the line at all times, and it opens the turn beside the channel", async () => {
+  it("shows the failed turn's receipt under the line at all times, and it opens the trunk's session landed on the turn", async () => {
     const user = userEvent.setup();
     failPostOnTrunk();
     mountChannel(null);
@@ -441,9 +443,9 @@ describe("a post the trunk failed to answer", () => {
         .compareDocumentPosition(receipt) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     await user.click(receipt);
-    expect(
-      screen.getByRole("region", { name: "How Release Bot answered" }),
-    ).toBeTruthy();
+    expect(openedSessions).toEqual([
+      { chatId: TRUNK_ID, threadId: null, messageId: FAILED_PROMPT_ID },
+    ]);
   });
 });
 
