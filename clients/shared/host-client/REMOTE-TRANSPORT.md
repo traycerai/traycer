@@ -4,7 +4,9 @@ The client remote transport (`clients/shared/host-transport/remote/`) speaks a
 persistent, end-to-end-encrypted, multiplexed session to the host through the
 relay. **This document is the source of truth the T11 host responder builds to**
 — it mirrors how `workers/relay-do/README.md` documents the relay leg. The
-machine-checkable form of everything here lives in `remote/protocol.ts`.
+machine-checkable form of everything here lives in
+`@traycer/protocol/host-transport/mux`, and the session core that speaks it in
+`protocol/src/host-transport/remote/`.
 
 Governs Architecture **§3** (mux/transport), **§9** (client rows). Carries
 **R4-E3** (full attach as the fallback recovery path), **R4-A2** (bridging-never-identity), **R4-D1**
@@ -304,8 +306,10 @@ sequenceDiagram
   re-subscribe and reserves `seq` for the watermark.
 
 Every relay attach carries `grant`, `park=1` and, once a leg has been replaced,
-`prev=<code>:<reason>` (at most 64 characters, telemetry only). A relay that
-predates a field ignores it.
+`prev=<code>:<reason>` (telemetry only). The relay's Worker copies a field only
+when it is well formed, so `prev` must be at most 64 characters with a reason of
+lowercase letters, digits and `-`. A malformed field is dropped, never refused,
+and a relay that predates a field ignores it.
 
 ### Session continuity: the `RESUME` exchange
 
@@ -341,10 +345,25 @@ rebuilds if the answer does not come within `RESUME_ACK_MS` (5 s), if it is
 malformed, if the gap is no longer in the ring, or if a session `FATAL` arrives
 during the wait.
 
-A host that holds no session for the `sid` builds a fresh responder, so the
-client's sealed `RESUME` fails as stale and the host resets the session. A
-`RESUME` arriving on a live session is answered in place: the relay can supersede
-a client leg the host never saw die.
+The host's side of this:
+
+- It holds a negotiated session when its uplink drops or on `session_parked{sid}`,
+  for `RESUME_HOLD_MS` from that first drop, and discards inbound uncounted until
+  a `RESUME`. A session that did not negotiate is torn down at once. The clock
+  stops at `RESUME`, the original deadline stands through the replay, and only a
+  completed replay earns a later drop a fresh hold.
+- An expired hold closes the session and sends `reset_session`, which the client
+  reads as a relay kill and rebuilds on.
+- A malformed `RESUME` or a gap past its ring gets a retryable `FATAL`
+  (`SESSION_RESUME_UNRECOVERABLE`), which rebuilds the client.
+- A `RESUME` arriving on a live session is answered in place: the relay can move a
+  `sid` off a client leg the host never saw die.
+- `session_opened{sid}` for a sid it holds changes nothing. For one it does not, it
+  builds a fresh responder, the client's sealed `RESUME` fails that handshake as
+  `stale-session`, and the host sends `reset_session`.
+- On its own re-attach the ack's `sessions` and `parked` lists are the truth: a
+  held session in neither is closed, and a listed sid it does not hold gets a fresh
+  responder, which it does not reset until a first frame proves it stale.
 
 | State       | `isReady()`                  | Meaning                                                                 |
 | ----------- | ---------------------------- | ----------------------------------------------------------------------- |
@@ -380,13 +399,24 @@ which can still prove the session alive.
 ### Own-leg loss: the relink
 
 The relay can **park** a client's session: when a socket that declared `park=1`
-closes with 1005, 1006 or a code from 4000 to 4007 while the host leg declared it
-too, the relay keeps the `sid` for 60 s rather than closing it. 1000 and 1001 are
-a person's action or a deliberate teardown, and close as ever.
+closes with 1005, 1006, a socket error or a code from 4000 to 4007 while the host
+leg declared it too, the relay keeps the `sid` for 60 s and tells the host
+`session_parked{sid}` rather than `session_closed{sid}`. 1000 and 1001 are a
+person's action or a deliberate teardown, and close as ever. A killed leg never
+parks, a kill of the host leg drops every park because the host tears its held
+sessions down with it, and `reset_session` ends the park it names.
 
-`attach_ack{sid, resumeKey}` carries a key for the session's life, and it is what
-claims the `sid` back. A secret: never log it. It is not an identity (§4). A relay
-that sends no key cannot park, so an own-leg loss there is an ordinary full attach.
+`attach_ack{sid, resumeKey}` carries a key for the session's life, 128 random bits
+as 22 characters of unpadded base64url, and it is what claims the `sid` back. A
+claim's ack repeats the same key. A secret: never log it. It is not an identity
+(§4). A relay that sends no key cannot park, so an own-leg loss there is an
+ordinary full attach.
+
+A claim matches an unexpired park row, or the leg that still owns the `sid`
+because the relay has not seen it die. That leg is superseded: it owns nothing
+from then on, and the relay closes it with 1012 when its next frame arrives. A
+claim that matches nothing is a fresh attach with a new `sid`, with no error frame
+and no close.
 
 With a key in hand and a ready, resume-negotiated session, every loss of the
 client's own leg enters `relinking`: a socket close or error, a failed send, a
