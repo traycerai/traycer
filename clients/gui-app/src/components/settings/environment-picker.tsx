@@ -86,7 +86,7 @@ export function EnvironmentPicker(props: {
   readonly activeSection: SettingsSectionId | null;
 }): ReactNode {
   const model = useEnvironmentPickerModel(props.scope);
-  const running = useHostsRunningPersonal();
+  const running = useHostsRunningPersonal(true);
   const pick = useSettingsEnvironmentPickStore(
     (state) => state.pick ?? state.defaultPick,
   );

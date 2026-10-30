@@ -5,6 +5,7 @@ import { providerIdToGuiHarnessId } from "@/lib/provider-ordering";
 import { PROVIDER_DISPLAY_NAMES } from "@traycer/protocol/host/provider-schemas";
 import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
 import { useProvidersSetEnvOverride } from "@/hooks/providers/use-providers-set-env-override-mutation";
 import { useProvidersDeleteEnvOverride } from "@/hooks/providers/use-providers-delete-env-override-mutation";
 import { CredentialRefusalNote } from "@/components/providers/credential-refusal-note";
@@ -20,14 +21,19 @@ import { useSecretClaimedNames } from "@/components/settings/personal/use-secret
 import { useHostScopedMutationForClient } from "@/hooks/host/use-host-scoped-mutation";
 import { environmentMutationKeys, queryKeys } from "@/lib/query-keys";
 import { useHostBinding } from "@/lib/host";
+import { navigateToSettingsSection } from "@/lib/settings-navigation";
 import {
   EnvOverrideEditor,
   type KeyRefusal,
   type KeyRefusalFor,
 } from "./env-override-editor";
 import { envNamePlaceholder } from "./provider-env-name-placeholder";
-import { providerEnvSubtitle } from "./provider-env-subtitle";
+import {
+  providerEnvSubtitle,
+  providerNativeConfigOnlyEnvSubtitle,
+} from "./provider-env-subtitle";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { useHostsRunningPersonal } from "@/components/settings/environment/use-hosts-running-configuration";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useConfigurationKey } from "@/components/settings/environment/use-configuration-key";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
@@ -160,6 +166,27 @@ export function ProviderEnvOverridesSection({
     keyPrefix: `${providerIdToGuiHarnessId(providerId)}:`,
   });
   const claimedBy = useSecretClaimedNames({ kind: "provider", providerId });
+  // Every name a Personal secret is set under in Variables & shells, which
+  // every provider's env inherits regardless of its own bindings: a plain
+  // override of the same name - one this provider's OWN binding (claimedBy)
+  // does not claim - shadows that secret rather than reading from it, and
+  // the row says so.
+  const globalClaims = useSecretClaimedNames({ kind: "variable" });
+  // The hosts this save propagates to, for the pending row's own label; a
+  // Local row's save reaches only this computer, so it keeps the plain
+  // Adding/Saving/Removing text instead. Only once the list has actually
+  // answered with at least one host - `loading`/`failed` is not a count, and
+  // `ready` with zero is not either: the list goes `ready` as soon as the
+  // cloud read answers, while this computer's own status can still be
+  // unresolved and held out of `hosts` a moment longer - presenting any of
+  // that as an exact "on N hosts" would misstate the reach the save has.
+  const hostsRunningPersonal = useHostsRunningPersonal(!local);
+  const applyingHostsCount =
+    !local &&
+    hostsRunningPersonal.state === "ready" &&
+    hostsRunningPersonal.hosts.length > 0
+      ? hostsRunningPersonal.hosts.length
+      : null;
   const rowNotes = new Map<string, ReactNode>();
   for (const [key, note] of notes) {
     rowNotes.set(
@@ -172,6 +199,13 @@ export function ProviderEnvOverridesSection({
       />,
     );
   }
+  addShadowedSecretNotes({
+    rowNotes,
+    overrides,
+    claimedBy,
+    globalClaims,
+    providerName,
+  });
 
   // A rename is set-new → delete-old so a failed delete leaves a harmless
   // duplicate rather than a lost value.
@@ -229,6 +263,7 @@ export function ProviderEnvOverridesSection({
         namePlaceholder={envNamePlaceholder(providerId)}
         emptyLabel={`No variables for ${providerName}.`}
         staleRefusal={null}
+        applyingHostsCount={applyingHostsCount}
         renderDetails={(key) => (
           <AppliedProviderItemDetails
             kind="env_override"
@@ -263,16 +298,81 @@ function ProviderEnvSubtitleLine(props: {
       </p>
     );
   }
+  const configuration = props.local
+    ? { kind: "local" as const }
+    : { kind: "personal" as const };
   return props.nativeConfigOnly ? (
     <p className="text-ui-xs text-muted-foreground">
-      Used when Traycer sets {providerName} up, not when {providerName} runs.
+      {providerNativeConfigOnlyEnvSubtitle(providerName, configuration)}
     </p>
   ) : (
     <p className="text-ui-xs text-muted-foreground">
-      {providerEnvSubtitle(
-        providerName,
-        props.local ? { kind: "local" } : { kind: "personal" },
-      )}
+      {providerEnvSubtitle(providerName, configuration)}
     </p>
+  );
+}
+
+/**
+ * Adds a {@link ShadowedSecretNote} for every SET override whose key is a
+ * name some Personal secret is set under in Variables & shells - which every
+ * provider's env inherits - without this provider's own binding claiming it,
+ * skipping a key that already carries a note (a host's own value, say), that
+ * this provider's own binding does claim (`EnvClaimedRow` already says so),
+ * or an explicit Unset (`value === null`): it receives no value from
+ * anything, so there is nothing to say the provider gets "instead of the
+ * secret".
+ */
+function addShadowedSecretNotes(props: {
+  readonly rowNotes: Map<string, ReactNode>;
+  readonly overrides: readonly {
+    readonly key: string;
+    readonly value: string | null;
+  }[];
+  readonly claimedBy: ReadonlyMap<string, string>;
+  readonly globalClaims: ReadonlyMap<string, string>;
+  readonly providerName: string;
+}): void {
+  const { rowNotes, claimedBy, globalClaims, providerName } = props;
+  for (const entry of props.overrides) {
+    if (entry.value === null) continue;
+    if (rowNotes.has(entry.key)) continue;
+    if (claimedBy.has(entry.key)) continue;
+    const secretName = globalClaims.get(entry.key);
+    if (secretName === undefined) continue;
+    rowNotes.set(
+      entry.key,
+      <ShadowedSecretNote
+        providerName={providerName}
+        secretName={secretName}
+      />,
+    );
+  }
+}
+
+/**
+ * A row note for a plain override whose key is a name some Personal secret
+ * is set under in Variables & shells, which every provider's env inherits,
+ * without this provider's own binding claiming it: accepted as an ordinary
+ * variable, but worth saying so, since the person may expect the secret's
+ * value here instead.
+ */
+function ShadowedSecretNote(props: {
+  readonly providerName: string;
+  readonly secretName: string;
+}): ReactNode {
+  return (
+    <>
+      {props.providerName} gets this value instead of the secret{" "}
+      <span className="font-mono">{props.secretName}</span>
+      {" · "}
+      <Button
+        type="button"
+        variant="link"
+        size="inline-xs"
+        onClick={() => navigateToSettingsSection("secrets")}
+      >
+        Secrets
+      </Button>
+    </>
   );
 }

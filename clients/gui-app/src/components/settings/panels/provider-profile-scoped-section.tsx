@@ -39,6 +39,11 @@ import { ProfileEditDialog } from "./provider-profile-edit-dialog";
 import { ProfileSyncEntryButton } from "./profile-sync/profile-sync-entry-button";
 import { profileSyncWireProvider } from "@/lib/profile-sync/profile-sync-presentation";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
+import {
+  isProviderAmbientAuthenticated,
+  isProviderAmbientSignedOut,
+} from "@/lib/providers/provider-ambient-auth";
+import { ambientLoginConfigured } from "./provider-rail-state-word";
 import { usePersonalHostName } from "@/components/settings/personal/personal-page-context";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
@@ -416,7 +421,8 @@ export function ProviderProfileScopedSection(
           />
         ) : null}
         <SelectedProfileRow
-          providerId={state.providerId}
+          state={state}
+          hostName={hostName}
           profile={selectedProfile}
           addProfileDisabled={addProfileDisabled}
           addProfileDisabledReason={addProfileDisabledReason}
@@ -487,7 +493,8 @@ export function ProviderProfileScopedSection(
  * signed out, and `Manage profile`.
  */
 function SelectedProfileRow(props: {
-  readonly providerId: ProviderCliState["providerId"];
+  readonly state: ProviderCliState;
+  readonly hostName: string | null;
   readonly profile: ProviderProfile;
   readonly addProfileDisabled: boolean;
   readonly addProfileDisabledReason: string | null;
@@ -502,7 +509,8 @@ function SelectedProfileRow(props: {
   if (profile.kind === "ambient" && UNRELEASED_FEATURES_ENABLED) {
     return (
       <OwnLoginSummary
-        profile={profile}
+        state={props.state}
+        hostName={props.hostName}
         addProfileDisabled={props.addProfileDisabled}
         addProfileDisabledReason={props.addProfileDisabledReason}
         onAddProfile={props.onAddProfile}
@@ -522,7 +530,7 @@ function SelectedProfileRow(props: {
       {UNRELEASED_FEATURES_ENABLED ? (
         <AppliedProviderItemDetails
           kind="managed_profile"
-          itemKey={`${providerIdToGuiHarnessId(props.providerId)}:${profile.profileId}`}
+          itemKey={`${providerIdToGuiHarnessId(props.state.providerId)}:${profile.profileId}`}
           title={profile.label}
         />
       ) : null}
@@ -596,6 +604,10 @@ function EmptyProviderProfiles(props: {
     <section className="flex flex-col gap-3 rounded-lg border border-border/60 p-3">
       <div className="flex items-center justify-between gap-2">
         <div className="text-ui-sm font-medium text-foreground">Profiles</div>
+        {/* No gate needed: the caller above only reaches this component when
+            UNRELEASED_FEATURES_ENABLED is already false, so a second check
+            of that same build constant here could never take its other
+            branch. */}
         <ProfileSyncEntryButton
           hostId={props.hostId}
           providerId={props.state.providerId}
@@ -609,30 +621,37 @@ function EmptyProviderProfiles(props: {
 }
 
 /**
- * What the terminal login's row says of its sign-in: `Signed in`, `Signed
- * out`, or `null` when the host could not read it (`couldn't be checked`,
- * with a Retry that probes again).
+ * The terminal login's reconciled read, the same two sources the rail word
+ * reads (`provider-rail-state-word.ts`) rather than the ambient profile
+ * row's own status alone: that row can lag a probe-less `unauthenticated`
+ * stamped at the top level, and reading only the row showed "couldn't be
+ * checked" for a login that was definitively absent.
  */
-function ownLoginStateText(profile: ProviderProfile): string | null {
-  switch (profile.auth.status) {
-    case "authenticated":
-    case "configured":
-      return "Signed in";
-    case "unauthenticated":
-      return "Signed out";
-    default:
-      return null;
+type AmbientLoginReadState = "signed-in" | "signed-out" | "unchecked";
+
+function ambientLoginReadState(state: ProviderCliState): AmbientLoginReadState {
+  if (isProviderAmbientSignedOut(state)) return "signed-out";
+  if (isProviderAmbientAuthenticated(state) || ambientLoginConfigured(state)) {
+    return "signed-in";
   }
+  return "unchecked";
 }
 
 /**
  * The terminal login's row under the dropdown that names it: where it works
- * and whether it is signed in, with one verb. `Sign in to use everywhere` opens the same
- * sign-in `Add a profile` does, so the tool's own login is never touched from
- * here.
+ * and whether it is signed in, with one verb. `Sign in to use everywhere`
+ * opens the same sign-in `Add a profile` does, so the tool's own login is
+ * never touched from here.
+ *
+ * No login found and a failed check read differently: the first names no
+ * login to manage at all (`isn't signed in`, with a plain `Sign in`), the
+ * second names the read itself as the problem (`Couldn't check …`, with the
+ * refresh probe as its own Retry) - conflating them is what let a
+ * definitively signed-out login read as merely unchecked.
  */
 function OwnLoginSummary(props: {
-  readonly profile: ProviderProfile;
+  readonly state: ProviderCliState;
+  readonly hostName: string | null;
   readonly addProfileDisabled: boolean;
   readonly addProfileDisabledReason: string | null;
   readonly onAddProfile: () => void;
@@ -640,7 +659,72 @@ function OwnLoginSummary(props: {
   const refreshProviders = useRefreshProviders();
   const refreshing =
     useIsMutatingOf({ mutationKey: providersMutationKeys.refresh() }) > 0;
-  const stateText = ownLoginStateText(props.profile);
+  const providerLabel = PROVIDER_DISPLAY_NAMES[props.state.providerId];
+  const hostName = props.hostName ?? "this computer";
+  const readState = ambientLoginReadState(props.state);
+
+  if (readState === "signed-out") {
+    return (
+      <div
+        data-slot="profile-summary-actions"
+        className="flex min-w-0 flex-wrap items-center justify-between gap-2"
+      >
+        <span className="min-w-0 text-ui-xs text-muted-foreground">
+          {providerLabel} isn&apos;t signed in on {hostName}
+        </span>
+        <TooltipWrapper
+          label={props.addProfileDisabledReason}
+          side="top"
+          sideOffset={6}
+          align="start"
+        >
+          <span className="inline-flex">
+            <Button
+              type="button"
+              size="xs"
+              variant="secondary"
+              className="shrink-0"
+              disabled={props.addProfileDisabled}
+              onClick={props.onAddProfile}
+            >
+              <LogIn data-icon="inline-start" />
+              Sign in
+            </Button>
+          </span>
+        </TooltipWrapper>
+      </div>
+    );
+  }
+
+  if (readState === "unchecked") {
+    return (
+      <div
+        data-slot="profile-summary-actions"
+        className="flex min-w-0 flex-wrap items-center gap-1 text-ui-xs text-muted-foreground"
+      >
+        <span className="min-w-0">
+          Couldn&apos;t check {providerLabel}&apos;s login on {hostName}.
+        </span>
+        <Button
+          type="button"
+          variant="link"
+          size="inline-xs"
+          disabled={refreshing}
+          onClick={() => void refreshProviders()}
+        >
+          Retry
+          {refreshing ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div
       data-slot="profile-summary-actions"
@@ -648,31 +732,9 @@ function OwnLoginSummary(props: {
     >
       <div className="flex min-w-0 flex-auto flex-wrap items-center gap-x-2 gap-y-1 text-ui-xs text-muted-foreground">
         <span className="min-w-0">works on this computer only</span>
-        {stateText === null ? (
-          <span className="inline-flex shrink-0 items-center gap-1">
-            couldn&apos;t be checked
-            <Button
-              type="button"
-              variant="link"
-              size="inline-xs"
-              disabled={refreshing}
-              onClick={() => void refreshProviders()}
-            >
-              Retry
-              {refreshing ? (
-                <AgentSpinningDots
-                  className={undefined}
-                  testId={undefined}
-                  variant={undefined}
-                />
-              ) : null}
-            </Button>
-          </span>
-        ) : (
-          <Badge variant="outline" className="h-5 shrink-0" size="xs">
-            {stateText}
-          </Badge>
-        )}
+        <Badge variant="outline" className="h-5 shrink-0" size="xs">
+          Signed in
+        </Badge>
       </div>
       <TooltipWrapper
         label={props.addProfileDisabledReason}
