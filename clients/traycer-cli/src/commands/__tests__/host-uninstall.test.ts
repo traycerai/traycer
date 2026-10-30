@@ -407,7 +407,8 @@ describe("runHostUninstall", () => {
   describe("a host still exiting after a stop that resolved at once", () => {
     function exitingHostDeps(args: {
       readonly receivedOptions: UninstallHostOptions[];
-      readonly livePolls: number;
+      // What each poll answers, in order; the host is gone after the last.
+      readonly polls: readonly PublishedProcessIdentityVerdict[];
     }): { readonly deps: RunHostUninstallDeps; readonly probes: () => number } {
       const base = commandDeps({
         stop: async () => undefined,
@@ -423,7 +424,7 @@ describe("runHostUninstall", () => {
           ...base,
           probeProcessExited: async () => {
             probes += 1;
-            return probes <= args.livePolls ? "current" : "dead";
+            return args.polls[probes - 1] ?? "dead";
           },
         },
         probes: () => probes,
@@ -435,7 +436,7 @@ describe("runHostUninstall", () => {
       // Entry probe plus a few seconds of polls, then the host is gone.
       const { deps, probes } = exitingHostDeps({
         receivedOptions,
-        livePolls: 30,
+        polls: Array.from({ length: 30 }, () => "current" as const),
       });
 
       await runHostUninstall(
@@ -446,6 +447,26 @@ describe("runHostUninstall", () => {
       );
 
       expect(probes()).toBeGreaterThan(30);
+      expect(receivedOptions).toHaveLength(1);
+    });
+
+    // The identity probe reads liveness, then the start identity: an exit
+    // between the two reads answers `indeterminate` for a dead process.
+    it("keeps waiting through an indeterminate poll and removes the install once the host is gone", async () => {
+      const receivedOptions: UninstallHostOptions[] = [];
+      const { deps, probes } = exitingHostDeps({
+        receivedOptions,
+        polls: ["current", "current", "indeterminate", "dead"],
+      });
+
+      await runHostUninstall(
+        { all: true, force: false },
+        COMMAND_CONTEXT,
+        deps,
+        testActuators(deps),
+      );
+
+      expect(probes()).toBe(4);
       expect(receivedOptions).toHaveLength(1);
     });
   });

@@ -818,8 +818,13 @@ async function observeLiveness(
 }
 
 /**
- * `observeLiveness` that gives a still-live process until it exits, bounded by
- * the host's own shutdown budget.
+ * `observeLiveness` that gives a process not yet proven gone until it exits,
+ * bounded by the host's own shutdown budget.
+ *
+ * Only `gone` ends the wait early. `unknown` keeps polling too: the identity
+ * probe reads liveness and then the start identity, so a normal exit between the
+ * two reads answers `indeterminate` for a process that is dead. Persistent
+ * `unknown` still ends at the deadline as `unknown`, which keeps the install.
  *
  * The stop above cannot be trusted to have waited. On macOS `--all` deregisters
  * the job first, and `launchctl bootout --wait` returns after launchd's 5 s
@@ -838,7 +843,7 @@ async function observeLivenessUntilExit(
   let waiting = false;
   for (;;) {
     const verdict = await observeLiveness(deps, ctx, published);
-    if (verdict !== "live" || Date.now() >= deadline) return verdict;
+    if (verdict === "gone" || Date.now() >= deadline) return verdict;
     if (!waiting) {
       waiting = true;
       ctx.progress({
