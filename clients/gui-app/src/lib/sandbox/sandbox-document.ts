@@ -297,6 +297,10 @@ function bootstrapMain(config: BootstrapConfig): void {
     Element.prototype,
     "scrollTo",
   )?.value;
+  const shadowMode: unknown = Reflect.get(
+    Object.getOwnPropertyDescriptor(ShadowRoot.prototype, "mode") ?? {},
+    "get",
+  );
   const pixels = (value: string): number =>
     value.endsWith("px") ? Number.parseFloat(value) || 0 : 0;
   // Spans are `[near, far]` along one axis.
@@ -542,22 +546,31 @@ function bootstrapMain(config: BootstrapConfig): void {
     // gets the engine's own root back and `shadowRoot` stays null for it,
     // so nothing it can read about its own roots changes.
     //
-    // The mode is read off the root the engine made, never off the
-    // dictionary again: the engine reads that once, as it converts it, and
-    // a second read here lands after the root is attached, where the page's
-    // own accessor could answer differently or throw where nothing threw.
+    // Nothing the capture does may reach the page. The root is attached by
+    // the time it runs, so anything of the page's it called could answer
+    // differently or throw, and a throw there would fail an `attachShadow`
+    // that had already succeeded. So the mode comes from the getter taken
+    // above, before the page ran, and never from the dictionary the engine
+    // has already converted or from an accessor the page can replace; and
+    // whatever else goes wrong, the page still gets its root.
     replace(
       Element.prototype,
       "attachShadow",
       (native) =>
         function (this: unknown, ...args: unknown[]): unknown {
           const root: unknown = native.apply(this, args);
-          if (
-            this instanceof Element &&
-            root instanceof ShadowRoot &&
-            root.mode === "closed"
-          ) {
-            closedRoots.set(this, root);
+          try {
+            if (
+              this instanceof Element &&
+              root instanceof ShadowRoot &&
+              isNative(shadowMode) &&
+              shadowMode.call(root) === "closed"
+            ) {
+              closedRoots.set(this, root);
+            }
+          } catch {
+            // Not kept, so the walk reaches this root's slots no better
+            // than it did before any of this. The page is none the wiser.
           }
           return root;
         },

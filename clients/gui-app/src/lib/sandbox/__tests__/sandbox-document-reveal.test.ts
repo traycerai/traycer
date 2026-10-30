@@ -998,6 +998,45 @@ describe("content slotted into a shadow root", () => {
     },
   );
 
+  // The mode comes from the getter taken before the page ran, so an
+  // accessor the page puts in its place answers nobody: reading it would
+  // land after the root is attached, where it could lie or throw.
+  it("keeps a closed root whose mode the page's own accessor denies", () => {
+    const frame = startFrame(false);
+    Object.defineProperty(frame.window.ShadowRoot.prototype, "mode", {
+      configurable: true,
+      get: (): string => "open",
+    });
+    const { outer, inner, target } = slottedIntoScroller(frame, {
+      mode: "closed",
+    });
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([
+      { scroller: inner, top: 300, left: 0, behavior: "auto" },
+      { scroller: outer, top: 200, left: 0, behavior: "auto" },
+    ]);
+  });
+
+  // Whatever the page has done to the globals the capture reads, its own
+  // `attachShadow` still returns the root the engine made it.
+  it("hands back the root even where the capture cannot run", () => {
+    const frame = startFrame(false);
+    const host = frame.window.document.createElement("div");
+    Object.defineProperty(frame.window.Element, Symbol.hasInstance, {
+      configurable: true,
+      value: (): boolean => {
+        throw new Error("the page's own hasInstance");
+      },
+    });
+
+    const root = host.attachShadow({ mode: "closed" });
+
+    expect(root).toBeInstanceOf(frame.window.ShadowRoot);
+    expect(root.host).toBe(host);
+  });
+
   // The engine reads the dictionary once, converting it as it is called.
   // Reading it again after the root is attached is a second chance for the
   // page's own accessor to answer differently, or to throw where nothing
