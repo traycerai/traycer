@@ -114,6 +114,7 @@ vi.mock("@/hooks/host/use-host-query", async () => {
   return {
     useHostQuery: (input: {
       readonly params: { readonly want: { readonly kind: string } };
+      readonly cacheKeyIdentity: ReadonlyArray<unknown> | undefined;
       readonly options: {
         readonly enabled: boolean | undefined;
         readonly staleTime: number | undefined;
@@ -124,7 +125,12 @@ vi.mock("@/hooks/host/use-host-query", async () => {
       const isProbe = input.params.want.kind === "range";
       if (!isProbe) mocks.hostQueryParams.push(input.params);
       const real = useQuery({
-        queryKey: [isProbe ? "media-probe" : "media-url", input.params],
+        // Keyed as the real hook keys it, identity included.
+        queryKey: [
+          isProbe ? "media-probe" : "media-url",
+          input.params,
+          ...(input.cacheKeyIdentity ?? []),
+        ],
         queryFn: () => {
           if (isProbe) {
             mocks.probeRequests.push(input.params);
@@ -809,19 +815,26 @@ describe("<FileArtifactViewer /> media in the native shell", () => {
     first.unmount();
 
     mocks.probeAnswer = () => Promise.reject(new Error("socket"));
-    const second = renderViewerWith(
-      queryClient,
-      "clip.mp4",
-      mediaObject("published", "video/mp4"),
-      readSpan,
-    );
+    // Held clocks keep the one-second deadline from choosing the cloud, so
+    // only the failed probe can.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const second = renderViewerWith(
+        queryClient,
+        "clip.mp4",
+        mediaObject("published", "video/mp4"),
+        readSpan,
+      );
+      await act(() => vi.advanceTimersByTimeAsync(100));
 
-    await waitFor(() =>
+      expect(mocks.probeRequests).toHaveLength(2);
       expect(second.container.querySelector("video")?.getAttribute("src")).toBe(
         signed,
-      ),
-    );
-    expect(bridge.registered).toHaveLength(1);
+      );
+      expect(bridge.registered).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("plays a second viewing from this machine's host once it holds the file, not from the first viewing's cached `downloading`", async () => {

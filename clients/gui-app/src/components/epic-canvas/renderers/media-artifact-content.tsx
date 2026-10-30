@@ -82,6 +82,9 @@ function useMediaSource(
     return localHostId !== null && !isLocalHost ? "cloud" : null;
   });
   const client = useHostClientForHostId(props.hostId);
+  // Each viewing asks afresh: an earlier viewing's cached answer, or its probe
+  // still in flight, says nothing about whether the file is on disk now.
+  const [probeViewing] = useState(() => crypto.randomUUID());
   const probe = useHostQuery({
     client,
     method: "epic.readArtifactObject",
@@ -90,7 +93,7 @@ function useMediaSource(
       sha256: props.object.sha256,
       want: { kind: "range", offset: 0, length: 1 },
     },
-    cacheKeyIdentity: undefined,
+    cacheKeyIdentity: [probeViewing],
     options: { enabled: source === null && isLocalHost, staleTime: 0 },
   });
   useEffect(() => {
@@ -98,22 +101,15 @@ function useMediaSource(
     const timer = setTimeout(() => setSource("cloud"), PROBE_DEADLINE_MS);
     return () => clearTimeout(timer);
   }, [source]);
-  // Latched during render from the first answer fetched for THIS mount: the
-  // method's policy keeps polling a `downloading` answer, and a later "bytes"
-  // must not move a playing element off the cloud; and an earlier viewing's
-  // cached `downloading` must not send this one to the cloud once the host
-  // has the file.
+  // Latched during render from the first answer: the method's policy keeps
+  // polling a `downloading` answer, and a later "bytes" must not move a
+  // playing element off the cloud.
   const answer = probe.data?.kind;
   if (source === null) {
     if (localHostId !== null && !isLocalHost) {
       setSource("cloud");
-    } else if (
-      isLocalHost &&
-      probe.isFetchedAfterMount &&
-      (answer !== undefined || probe.isError)
-    ) {
-      // A failed probe keeps an earlier viewing's `data`; the error decides.
-      setSource(!probe.isError && answer === "bytes" ? "host" : "cloud");
+    } else if (isLocalHost && (answer !== undefined || probe.isError)) {
+      setSource(answer === "bytes" ? "host" : "cloud");
     }
   }
   return source;
