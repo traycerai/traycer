@@ -5442,6 +5442,234 @@ describe("useChatTimelineFollowLatch", () => {
     fireTouch(node, "touchend", 400);
   });
 
+  // N5 - a clamp the pad reset's announcement must not hide. The remembered
+  // ("last observed") geometry is not where the view IS, it is where the
+  // view would be from everything the latch knows about - so a clamp that
+  // landed unobserved before the announcement is still there to be found as
+  // the difference once the announcement moves that remembered geometry by
+  // its own delta, rather than snapping it onto the announcement's own `to`
+  // (which would assert the view's whole offset as already accounted for
+  // and swallow the earlier unobserved clamp).
+  //
+  // 1. Last read: {scrollTop: 70, scrollHeight: 90, clientHeight: 20} - end
+  //    70, a following reader at the end, touch step armed at 70.
+  // 2. The viewport grows to clientHeight: 30, unobserved - new end 60, so
+  //    the browser clamps the view 70 -> 60. Nothing has seen this yet.
+  // 3. The pad reset announces a range move {from: 60, fromEnd: 60, to: 40,
+  //    cause: "range"}; delta -20.
+  // 4. The tail regrows to scrollHeight: 80 before the first read.
+  // 5. The read: live is {scrollTop: 40, scrollHeight: 80, clientHeight: 30}.
+  it("absorbs an unobserved viewport clamp that an announced range move's delta carries past it, observed by a native scroll report", () => {
+    const node = shim.makeNode({
+      scrollTop: 70,
+      scrollHeight: 90,
+      clientHeight: 20,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    // 1. Primes the last-observed geometry at the strict bottom.
+    fireNativeScroll(node);
+    fireTouch(node, "touchstart", 400);
+
+    // 2. The viewport grows and the browser clamps, unobserved.
+    shim.setGeometry(node, { clientHeight: 30, scrollTop: 60 });
+
+    // 3. The pad reset's range move, announced.
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: { from: 60, fromEnd: 60, to: 40, intended: 40, cause: "range" },
+      }),
+    );
+    shim.setGeometry(node, { scrollTop: 40 });
+
+    // 4. The tail regrows before anything is read.
+    shim.setGeometry(node, { scrollHeight: 80 });
+
+    // 5. The read.
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    fireTouch(node, "touchend", 400);
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("absorbs an unobserved viewport clamp that an announced range move's delta carries past it, observed by a maintenance read", () => {
+    const node = shim.makeNode({
+      scrollTop: 70,
+      scrollHeight: 90,
+      clientHeight: 20,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+    fireTouch(node, "touchstart", 400);
+
+    shim.setGeometry(node, { clientHeight: 30, scrollTop: 60 });
+
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: { from: 60, fromEnd: 60, to: 40, intended: 40, cause: "range" },
+      }),
+    );
+    shim.setGeometry(node, { scrollTop: 40 });
+
+    shim.setGeometry(node, { scrollHeight: 80 });
+
+    result.current.followEndIfPermitted();
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    fireTouch(node, "touchend", 400);
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+  });
+
+  // N4 - an iOS bounce settle is not this path's clamp: `viewportGrowthClamp`
+  // must refuse to treat a mid-bounce overscrolled reference as evidence of
+  // a viewport that grew. `clientHeight` never changes here - nothing about
+  // the viewport does - so the growth guard is the only thing standing
+  // between a pure elastic rubber-band settle and a false absorption.
+  //
+  // Armless: a mid-bounce read {scrollTop: 1100, scrollHeight: 1500,
+  // clientHeight: 500} (end 1000, 100px into the rubber band) is itself
+  // `restingScrollTop`-clamped to 1000 for the ledger, same as the settle's
+  // own resting value, so this shape cannot tell the guarded code from the
+  // unguarded code apart through the ledger alone - verified: mutating the
+  // guard away produces the identical `[]` here. It is still worth keeping
+  // as the "nothing happens" sanity case the resting-finger version below
+  // is contrasted against.
+  it("is unmoved by an armless iOS bounce settling with no viewport change, observed by a native scroll report", () => {
+    const node = shim.makeNode({
+      scrollTop: 1100,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    // Primes the reference at the mid-bounce read.
+    fireNativeScroll(node);
+
+    // The bounce settles with no viewport change, and the tail regrows over
+    // the settle before anything is read.
+    shim.setGeometry(node, { scrollTop: 1000, scrollHeight: 1600 });
+
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("is unmoved by an armless iOS bounce settling with no viewport change, observed by a maintenance read", () => {
+    const node = shim.makeNode({
+      scrollTop: 1100,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+    shim.setGeometry(node, { scrollTop: 1000, scrollHeight: 1600 });
+    result.current.followEndIfPermitted();
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+  });
+
+  // Resting finger: a touch arm's `scrollTopAtStep` is captured RAW (not
+  // `restingScrollTop`-clamped), so a 15px mid-bounce overscroll survives
+  // into it untouched. With the guard present, nothing absorbs the bounce,
+  // and a clean settle at the true end (1000) sits 15px from that raw step -
+  // read, correctly or not, as the finger having moved. That reading is an
+  // existing property of resting-finger handling through a bounce with no
+  // absorber at all, so it is what main does too, and this PR must not
+  // change it. Without the guard, the same arithmetic that would predict a
+  // viewport-growth clamp also predicts this settle's offset exactly (both
+  // reduce to `min(rawOverscrolledStep, trueEnd)` when `clientHeight` is
+  // unchanged), so the absorber wrongly fires and carries the step to
+  // exactly where the settle landed - erasing the 15px and reading the
+  // bounce as weightless. Main and the fix must agree (both depart); only
+  // the mutant disagrees (no departure, and the correction it then runs).
+  it("departs a resting finger through an iOS bounce settling with no viewport change, observed by a native scroll report", () => {
+    const node = shim.makeNode({
+      scrollTop: 1015,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+    fireTouch(node, "touchstart", 400);
+
+    shim.setGeometry(node, { scrollTop: 1000, scrollHeight: 1600 });
+
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).toHaveBeenCalledWith(false);
+    fireTouch(node, "touchend", 400);
+  });
+
+  // The maintenance read defers to the finger (`armBlocksAutomaticCorrection`)
+  // and never calls `touchStep` itself, but it still runs
+  // `noteViewportGrowthClamp` first - so the absorption (or its refusal)
+  // happens here, before the touch arm is ever read; the departure (or its
+  // absence) only surfaces at the lift, through `clearTouch`'s own catch-up.
+  it("departs a resting finger through an iOS bounce settling with no viewport change, observed by a maintenance read", () => {
+    const node = shim.makeNode({
+      scrollTop: 1015,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+    fireTouch(node, "touchstart", 400);
+
+    shim.setGeometry(node, { scrollTop: 1000, scrollHeight: 1600 });
+
+    result.current.followEndIfPermitted();
+    fireTouch(node, "touchend", 400);
+
+    expect(onFollowIntentChange).toHaveBeenCalledWith(false);
+  });
+
   it("departs a following reader whose press stepped to an end only a maintain read saw", () => {
     const node = shim.makeNode({
       scrollTop: 1000,

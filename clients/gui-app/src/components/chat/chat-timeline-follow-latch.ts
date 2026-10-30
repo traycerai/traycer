@@ -531,6 +531,34 @@ function geometryMovedBy(
 }
 
 /**
+ * The geometry a later clamp is recognised against, moved by an announced
+ * write. Not where the view IS - where the view would be from everything this
+ * latch knows about, so that a movement it does not know about is still there
+ * to be found as the difference between the two.
+ *
+ * The content height has to come out exactly, because it is what the clamp is
+ * predicted from. An OFFSET write moved the content with the view, by as much.
+ * A RANGE move took content away, and `fromEnd` and `to` are both ends measured
+ * in the same viewport, so their difference is exactly how much - which is more
+ * than the view moved whenever the view sat below the old end. Taking the
+ * view's own delta for the content's there would overstate the height left, and
+ * an overstated height predicts the clamp at the reference offset itself, which
+ * reads as no clamp at all and charges the drop to the reader.
+ */
+function geometryAfterAnnouncedMove(
+  geometry: ChatTimelineScrollGeometry,
+  move: ChatTimelineScrollerMove,
+): ChatTimelineScrollGeometry {
+  const delta = move.to - move.from;
+  if (move.cause === "offset") return geometryMovedBy(geometry, delta);
+  return {
+    ...geometry,
+    scrollTop: geometry.scrollTop + delta,
+    scrollHeight: geometry.scrollHeight - (move.fromEnd - move.to),
+  };
+}
+
+/**
  * Whether an indeterminate gesture arm still holds its reader's follow: a
  * press (the scrollbar's) that has not scrolled yet. It arms before anything
  * moves, and the press itself says nothing about which way it will go, so
@@ -1830,14 +1858,14 @@ export function useChatTimelineFollowLatch(
     // assert the whole of the view's offset as accounted for, and an unobserved
     // viewport clamp before this write - whose growth this remembered
     // `clientHeight` has not even seen - would be swallowed by that assertion
-    // and charged to the reader at the next read. The same reasoning the other
-    // way for an offset write: a compensation that landed since the last
-    // observation moved the view and the content it grew for, and measured from
-    // where they stood before it, the clamp a later growth forces reads as an
-    // offset no clamp explains.
+    // and charged to the reader at the next read. The content height each kind
+    // of write leaves behind is in `geometryAfterAnnouncedMove`.
     const lastObserved = lastObservedGeometryRef.current;
     if (lastObserved !== null) {
-      lastObservedGeometryRef.current = geometryMovedBy(lastObserved, delta);
+      lastObservedGeometryRef.current = geometryAfterAnnouncedMove(
+        lastObserved,
+        move,
+      );
     }
     const expected = expectedScrollTopRef.current;
     if (expected === null) return;
