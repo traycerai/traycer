@@ -69,9 +69,13 @@ import { CLI_CLIENT_IDENTITY } from "../cli-version";
 // client, so a withheld mint also ends the laps - re-dialing cannot change
 // the answer.
 //
-// Every outcome here is advisory: `host install` already succeeded, and an
-// unprovisioned host self-heals when any minting client connects later - so
-// callers render failures as warnings, never as a failed install.
+// Every outcome here is advisory: the calling command (`host install`,
+// `host service install`, `host ensure`, `login`) already did its own work,
+// so callers render failures as warnings, never as a failed command. An
+// unprovisioned host is credentialed by the next client that connects with a
+// mint flow (Desktop, `monitor`) or by a later `traycer login` - but on a
+// machine without Desktop nothing connects on its own, so the warnings point
+// at `traycer host doctor` rather than promising a self-heal.
 
 export type HostCredentialProvisionOutcome =
   // Verified: an `openAck` reported `active`. `minted` says whether this run
@@ -100,10 +104,8 @@ export type HostCredentialProvisionOutcome =
   | { readonly kind: "not-adopted" }
   // The stored sign-in is dead: the host rejected the bearer and refreshing
   // it was terminally rejected too (revoked or expired refresh family).
-  // Distinct from every kind above because it is the one outcome that does
-  // NOT self-heal - no later client can mint on a dead credential either, so
-  // the human line has to say `traycer login` rather than "a client will
-  // sort this out". Also produced by the CALLER when the stored sign-in
+  // Distinct from every kind above because no later client can mint on a
+  // dead credential either, so the human line has to say `traycer login`. Also produced by the CALLER when the stored sign-in
   // disappeared between its pre-flight and this probe (a concurrent sign-out
   // or an unreadable credentials file) - same remedy, same line.
   | { readonly kind: "unauthorized" }
@@ -298,7 +300,7 @@ export async function provisionInstalledHostCredential(
       signal: probeAbort.signal,
       // The install's consequence, not the connection-lease one: this probe
       // closes its connection on purpose, and the install already succeeded.
-      unavailableNote: "continuing - the host stays unprovisioned for now.",
+      unavailableNote: "continuing - the host is not authorized yet.",
       onUnauthorized: () => {
         mintUnauthorized = true;
       },
@@ -453,10 +455,10 @@ export async function provisionInstalledHostCredential(
       // not complete (authn unreachable), where the host answers
       // UNAUTHORIZED, the revalidation returns a transient failure, and the
       // stream just reconnects until the budget runs out. `unreachable`
-      // would say "the host did not come up in time" about a host that
+      // would say "the host did not respond in time" about a host that
       // answered every single dial; what actually failed is the handoff, and
-      // that is `mint-unavailable`'s line - self-heal included, since a
-      // later client with a live token mints for it normally.
+      // that is `mint-unavailable`'s line - a later client with a live token
+      // mints for it normally.
       if (hostAnswered) {
         return { kind: "mint-unavailable" };
       }
@@ -559,8 +561,8 @@ export async function provisionInstalledHostCredential(
           // stream's own revalidator never fires in that shape (the host
           // keeps saying yes), so confirm here with one rotation: a terminal
           // rejection means the sign-in is dead and every client's mint
-          // would 401 the same way - report `unauthorized`, because the
-          // self-heal promise would be false - while a successful rotation
+          // would 401 the same way - report `unauthorized`, because only a
+          // fresh sign-in helps - while a successful rotation
           // means a later client CAN mint, and `mint-unavailable` stands.
           if (
             mintUnauthorized &&
@@ -617,7 +619,7 @@ export async function provisionInstalledHostCredential(
           // unreachable host - we reached it, and it may well advertise the
           // credential capability. Retrying cannot help (the mismatch is a
           // property of this CLI build against this host), so report it as
-          // the capability gap it is and let the self-heal cover it. (This
+          // the capability gap it is. (This
           // arm only fires for an ack that carried NO state - a state-carrying
           // incompatible ack settles the lap as `state` first, and lands in
           // `unsupported` through the withheld-mint path instead.)
