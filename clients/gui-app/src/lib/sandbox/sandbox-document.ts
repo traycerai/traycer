@@ -339,6 +339,37 @@ function bootstrapMain(config: BootstrapConfig): void {
     const root = element.getRootNode();
     return root instanceof ShadowRoot ? root.host : null;
   };
+  // Nothing inside skipped contents is scrolled to: an ancestor's
+  // `content-visibility: hidden` skips what is inside it, and the engine
+  // reveals nothing in there however much room the page leaves around it.
+  // A target in there still has a client rect, so the rect above cannot
+  // tell.
+  //
+  // `checkVisibility` is the engine's own answer to that, and the only one
+  // worth asking. The direction relied on is one way: wherever it is false
+  // the engine reveals nothing. It is true for some the engine declines to
+  // scroll to anyway, a `position: fixed` target among them, which this
+  // leaves exactly as it found them. Reading the ancestors' computed style
+  // cannot replace it:
+  // `content-visibility` applies only where layout containment can, and the
+  // computed `display` does not say where that is — `<svg>` and a plain
+  // `<label>` are both `inline`, and the engine skips the first and ignores
+  // the second. It is also computed over the real flat tree, so it sees a
+  // closed shadow root, `<details>` included, which no walk from here can
+  // reach: `assignedSlot` is null for a closed root.
+  //
+  // Default options are the question being asked. They answer false for a
+  // box that is not generated and for skipped contents, and leave out
+  // `visibility`, `opacity` and the off-screen skipping of a
+  // `content-visibility: auto` ancestor, each of which the engine reveals
+  // into. An element's own `hidden` skips only what is inside it, so the
+  // element itself still answers true.
+  //
+  // An engine without the method is left alone, which is how the reveal
+  // behaved before this rule: a page it would have skipped is scrolled to
+  // as any other.
+  const isSkipped = (target: Element): boolean =>
+    "checkVisibility" in target && !target.checkVisibility();
   // Containment of any kind, on the root or on the body. `contain` names it;
   // `container-type` and `content-visibility` apply it without naming it, and
   // leave `contain` itself `none`.
@@ -349,19 +380,14 @@ function bootstrapMain(config: BootstrapConfig): void {
   // twice already, so it is read the other way round: the values that contain
   // nothing are named, and everything else contains.
   //
-  // `content-visibility: hidden` contains, and is deliberately read here as
-  // though it did not. Its contents are skipped and the engine reveals
-  // nothing inside them, while a target in there still has a client rect, so
-  // the walk cannot tell from the target alone that there is nothing to
-  // reveal. Read as containment, the body becomes a scroller and the walk
-  // moves it to that target; read as the viewport's, a page that sizes
-  // itself to its skipped contents leaves the viewport no room and the walk
-  // moves nothing, as the engine does. A page that gives itself an explicit
-  // height is the shape this does not cover: the viewport has room, and the
-  // walk scrolls it where the engine scrolls nothing. Reading `hidden` as
-  // containment does not cover it either, so it is left as it is rather than
-  // taken as a reason to call the page contained. `auto` is containment the
-  // engine does reveal into, and counts.
+  // `content-visibility: hidden` contains too, and is left out because it
+  // cannot change the answer. This is asked only of the root and the body,
+  // and only to decide whether the walk treats the body as a scroller of
+  // its own — which matters only when the body is an ancestor of the
+  // target, and a target under a `hidden` root or body is skipped contents,
+  // which `isSkipped` has already turned the reveal back for. So whenever a
+  // `hidden` here would matter, the reveal is over. `auto` is containment
+  // the engine does reveal into, and counts.
   const contains = (element: Element | null): boolean => {
     if (element === null) return false;
     const style = window.getComputedStyle(element);
@@ -401,7 +427,10 @@ function bootstrapMain(config: BootstrapConfig): void {
     inline: Align,
     behavior: ScrollBehavior,
   ): void => {
-    if (target.getClientRects().length === 0) return;
+    // `isSkipped` first: it is a read of what the engine already knows,
+    // while `getClientRects` lays out the subtree to answer, which for
+    // skipped contents is the very work the page asked not to do.
+    if (isSkipped(target) || target.getClientRects().length === 0) return;
     const margin = window.getComputedStyle(target);
     const rect = target.getBoundingClientRect();
     let top = rect.top - pixels(margin.scrollMarginTop);
