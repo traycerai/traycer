@@ -361,6 +361,20 @@ const CHAT_TIMELINE_NAVIGATION_LANDING_EPSILON_PX = 1;
  *  automatically in one operation. */
 const CHAT_TIMELINE_NAVIGATION_MAX_RETRIES = 3;
 
+// TEMPORARY DIAGNOSTIC - probe branch only, never for `main`. Records which
+// terminal path the mount-time measured restore takes, so a real CI failure of
+// `chat-scroll-restore-first-paint.spec.ts:568` can say whether the restore
+// validated, aborted, or exhausted its retries.
+function probeRestorePath(path: string): void {
+  const log: unknown = Reflect.get(globalThis, "__restorePath");
+  const entry = `${path}@${String(Math.round(performance.now()))}ms`;
+  if (Array.isArray(log)) {
+    log.push(entry);
+    return;
+  }
+  Reflect.set(globalThis, "__restorePath", [entry]);
+}
+
 /** The controller's own follow-vs-free scroll state - a pure mirror of
  *  LegendList's strict `isAtEnd`, never an independent source of truth. */
 type ChatTimelineScrollMode = "following-end" | "free-scrolling";
@@ -485,6 +499,19 @@ function isTranscriptWindowRecovering(
  * runtime boundary explicit for mount-time restoration reads. */
 function getScrollableNodeOrNull(list: LegendListRef): HTMLElement | null {
   return list.getScrollableNode();
+}
+
+/** What the list has MEASURED for a row, or null when it has not measured it.
+ * `sizeAtIndex` reads `sizesKnown` with no fallback to the estimate, so it
+ * returns undefined for an unmeasured row - but the cross-platform public type
+ * declares a plain `number`. Keep that runtime boundary explicit here, as
+ * `getScrollableNodeOrNull` does for the scroll element. */
+function measuredSizeAtIndex(
+  list: LegendListRef,
+  index: number,
+): number | null {
+  const size: number | undefined = list.getState().sizeAtIndex(index);
+  return typeof size === "number" && Number.isFinite(size) ? size : null;
 }
 
 function measureFreeRestoreGeometry(
@@ -3496,6 +3523,38 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const landedAtSavedLocation = (): boolean => {
         const index = targetIndex();
         if (index === null) return false;
+        // A position the list has only ESTIMATED cannot say the reader has
+        // arrived. `initialScrollIndex`'s bootstrap resolves the saved row
+        // from the same estimates, so while the row is unmeasured both sides
+        // of the check below read one number and agree with each other
+        // wherever that number happens to point - the restore then accepts
+        // the bootstrap's own clamp and stands down for good, and nothing
+        // re-checks once measurement moves the row. Observed on CI, where the
+        // reader was left at `scrollTop` 4546 of 11319 content with the saved
+        // row never mounted, after the restore issued once and reported
+        // VALIDATED: every write after the bootstrap was scroll-anchoring
+        // compensation, not a landing.
+        //
+        // `sizeAtIndex` is measured-only (`sizesKnown`), with no fallback to
+        // the estimate, so an unmeasured row reads as not landed and the
+        // settle loop re-issues - which is what it already does, correctly,
+        // on the runs where measurement arrives before the first settle. The
+        // rows ABOVE the saved one stay estimated, and that is fine: it is the
+        // normal state of a virtualized list, and once the saved row has
+        // rendered the list's own anchoring holds it where the DOM put it.
+        // TEMPORARY DIAGNOSTIC - probe branch only. Records what the list had
+        // MEASURED for the saved row every time the restore asks whether the
+        // reader has arrived, so each `validated` and each refusal in the log
+        // is preceded by the size the decision was made on. A failure whose
+        // `validated` follows a measured row would mean this gate is not the
+        // whole defect.
+        const probeMeasured = measuredSizeAtIndex(list, index);
+        probeRestorePath(
+          `land?row=${String(index)},measured=${
+            probeMeasured === null ? "none" : String(Math.round(probeMeasured))
+          }`,
+        );
+        if (measuredSizeAtIndex(list, index) === null) return false;
         return chatTimelineNavigationLandedAtLocation(
           {
             positionAtIndex: (positionIndex) =>
@@ -3816,8 +3875,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   useLayoutEffect(() => {
     const pending = pendingMeasuredFreeRestoreRef.current;
-    if (pending === null) return;
-    if (timelineScrollModeRef.current !== "free-scrolling") return;
+    if (pending === null) {
+      probeRestorePath("skip:no-pending");
+      return;
+    }
+    if (timelineScrollModeRef.current !== "free-scrolling") {
+      probeRestorePath(`skip:mode=${String(timelineScrollModeRef.current)}`);
+      return;
+    }
+    probeRestorePath("enter");
 
     // Fixup (atomic-reader-supersession): freeze the target and the content/
     // geometry fingerprint actually issued below - `isAborted` must compare
@@ -3910,13 +3976,16 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           }
           resolvePendingRestoreEndLandingRef.current = null;
           pendingMeasuredFreeRestoreRef.current = null;
+          probeRestorePath("aborted");
           return true;
         },
         onValidated: () => {
           resolvePendingRestoreEndLandingRef.current = null;
+          probeRestorePath("validated");
         },
         onExhausted: () => {
           resolvePendingRestoreEndLandingRef.current = null;
+          probeRestorePath("exhausted");
           // A bounded whole-row restore accepts its clamped fallback. A part's
           // provisional owner position still cannot replace the exact saved
           // coordinate while its hydration is pending.
@@ -3932,6 +4001,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // hydration catch-up, a visibility replay, a navigation) is not judged
     // against it: a strict bottom resolved against this target would cancel
     // that loop instead.
+    probeRestorePath(issued ? "issued" : "not-issued");
     const settleCleanup = activeNavigationSettleCleanupRef.current;
     if (issued && settleCleanup !== null) {
       activeNavigationSettleCleanupRef.current = (): void => {
@@ -4082,6 +4152,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       pendingMeasuredFreeRestoreRef.current = null;
       reconcileInvalidTimelineLanding();
     };
+    probeRestorePath("site:visibility-replay");
     const issued = restorePersistedTimelineLocation(
       replay.anchorMessageId,
       replay.offset,
@@ -4281,6 +4352,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       return;
     }
     const rawOffset = rawSavedTabState?.offset ?? 0;
+    probeRestorePath("site:hydration-catchup");
     restorePersistedTimelineLocation(anchorId, rawOffset, {
       isAborted: () => false,
       onValidated: () => {

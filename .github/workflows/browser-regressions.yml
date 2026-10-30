@@ -141,7 +141,9 @@ jobs:
     # A shard runs a few minutes. Playwright bounds each test on its own
     # (`timeout` in playwright.config.ts); this bounds the job, so a hung
     # server or browser cannot hold the runner until GitHub's six-hour default.
-    timeout-minutes: 20
+    # Raised on this probe branch: the one test it runs retries internally for
+    # up to four window hits, four times over.
+    timeout-minutes: 35
     strategy:
       # One red shard must not cancel the others: each proves different claims.
       fail-fast: false
@@ -167,11 +169,19 @@ jobs:
           restore-keys: |
             bun-${{ runner.os }}-
       - run: bun install --frozen-lockfile
-      - name: Browser regressions
+      # TEMPORARY DIAGNOSTIC - probe branch only, never for `main`. Every
+      # matrix job runs the SAME one test instead of a shard of the suite, so
+      # one dispatch gives 8 x 4 independent attempts at the restore flake
+      # (~1 in 3 on CI) rather than one. Sharding is deliberately not passed.
+      - name: Browser regressions (568 probe)
         working-directory: clients/gui-app
         env:
-          SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
-        run: bun run test:browser --shard="$SHARD"
+          JOB: ${{ matrix.shard }}
+        run: |
+          echo "::group::probe job $JOB"
+          bun run test:browser browser-tests/chat-scroll-restore-first-paint.spec.ts \
+            --grep "before the restore" --repeat-each=4 --workers=1
+          echo "::endgroup::"
       # The HTML report carries a trace of every failed attempt: open it with
       # `bunx playwright show-report <dir>` after downloading.
       - name: Upload the Playwright report

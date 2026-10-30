@@ -508,12 +508,31 @@ async function attempt(
     );
   }
   if (problems.length > 0) {
-    const near = (await windowFacts(page)).writes.filter(
-      (write) => Math.abs(write.t - gestureAt) <= 200,
-    );
+    const all = (await windowFacts(page)).writes;
+    const near = all.filter((write) => Math.abs(write.t - gestureAt) <= 200);
     problems.push(
       `writes within 200ms of the gesture (first-paint writes carry dispatchInitialScroll in their stack):\n    ${describeWrites(near, gestureAt)}`,
     );
+    // TEMPORARY DIAGNOSTIC - probe branch only. The 200ms window above stops
+    // before the late convergence this failure is about, and the restore's own
+    // terminal path is what says which fix it needs.
+    problems.push(
+      `EVERY write (${String(all.length)}):\n    ${describeWrites(all, gestureAt)}`,
+    );
+    const restorePath = await page.evaluate(() => {
+      const log: unknown = Reflect.get(window, "__restorePath");
+      return Array.isArray(log) ? log.map((entry) => String(entry)) : [];
+    });
+    problems.push(`RESTORE PATH: ${restorePath.join(" | ")}`);
+    const resting = await page.evaluate(() => {
+      const node = document.querySelector<HTMLElement>(
+        '[data-testid="chat-messages-scroll"]',
+      );
+      return node === null
+        ? "no node"
+        : `scrollTop=${String(node.scrollTop)} of ${String(node.scrollHeight)} mode=${String(node.dataset.scrollMode)}`;
+    });
+    problems.push(`RESTING: ${resting}`);
   }
   return { hit: true, problems, note: noteOf(facts) };
 }
