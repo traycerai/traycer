@@ -1,6 +1,10 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { guiHarnessIdSchema } from "@traycer/protocol/host/agent/shared";
+import type {
+  BotActivityAction,
+  BotActivityReason,
+} from "@traycer/protocol/host/bot/schemas";
 import { sandboxRefusalCopyFor } from "@/components/chat/segments/sandbox-refusal-copy";
 import type { BotComposerEdit } from "@/components/bots/bot-message-composer";
 import type { ChatBotFailedRequest } from "@/components/chat/chat-bot-presentation-context";
@@ -12,7 +16,9 @@ import {
 import type { BotSessionActivity } from "@/hooks/bots/use-bot-activity";
 import type { BotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { useHostMethodSchemaVersion } from "@/hooks/host/use-host-supports-method";
-import type { HostRpcRegistry } from "@/lib/host";
+import { useProviderUpdateForClient } from "@/hooks/providers/use-provider-update";
+import { useHostBinding, type HostRpcRegistry } from "@/lib/host";
+import { resolveNamedHostClient } from "@/lib/host/binding-host-client";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useProvidersFocusStore } from "@/stores/settings/providers-focus-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
@@ -29,8 +35,9 @@ import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
  * offered by a host that cannot do them (`bot.conversation.send` below 1.1)
  * or before the channel is known; the reason and Sign in are said whatever
  * the host can send. Sign in opens the providers of the host that runs the
- * bot (`boundHostId`), which may not be the one serving the tab; with no
- * such host there is nothing to sign in to.
+ * bot (`boundHostId`), which may not be the one serving the tab, and Update
+ * updates the provider's command-line tool there; with no such host there is
+ * nothing to sign in to or update.
  */
 export function useBotFailedRequest(args: {
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -69,6 +76,20 @@ export function useBotFailedRequest(args: {
   const supported = botSendTakes(sendVersion, BOT_CONVERSATION_RETRY_VERSION);
   const viewerUserId = useAuthStore((s) => s.profile?.userId ?? null);
   const signIn = useProviderSignIn(boundHostId);
+  // Named rather than `useHostClientForHostId`, which throws where no host
+  // runtime is mounted: the channel draws its posts without one.
+  const binding = useHostBinding();
+  const boundClient = useMemo(
+    () =>
+      boundHostId === null
+        ? null
+        : resolveNamedHostClient(binding, boundHostId),
+    [binding, boundHostId],
+  );
+  const { update, pending: updating } = useProviderUpdateForClient(
+    boundClient,
+    boundHostId,
+  );
   const { mutate, isPending, variables } =
     useBotConversationSendMutation(client);
   const retryingId = isPending
@@ -97,10 +118,9 @@ export function useBotFailedRequest(args: {
             ? null
             : (sandboxRefusalCopyFor(reason.code, reason.summary)
                 ?.description ?? reason.summary),
-        signIn:
-          reason?.action === "sign-in" && signIn !== null
-            ? () => signIn(reason.harnessId)
-            : null,
+        signIn: reasonAction(reason, "sign-in", signIn),
+        update: reasonAction(reason, "update-provider", update),
+        updating,
         retry:
           channelId === null
             ? null
@@ -141,9 +161,24 @@ export function useBotFailedRequest(args: {
       signIn,
       supported,
       threadId,
+      update,
+      updating,
       viewerUserId,
     ],
   );
+}
+
+/**
+ * The reason's own action, run for its harness, where the reason asks for
+ * `action` and this client can take it; else `null`.
+ */
+function reasonAction(
+  reason: BotActivityReason | null,
+  action: Exclude<BotActivityAction, "none">,
+  run: ((harnessId: string) => void) | null,
+): (() => void) | null {
+  if (reason === null || reason.action !== action || run === null) return null;
+  return () => run(reason.harnessId);
 }
 
 /**

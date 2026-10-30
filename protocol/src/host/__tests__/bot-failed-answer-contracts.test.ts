@@ -48,7 +48,7 @@ describe("bot.subscribe@1.1 activity reason", () => {
     expect(
       botSessionActivitySchema.safeParse({
         ...FAILED,
-        reason: { ...REASON, action: "update-provider" },
+        reason: { ...REASON, action: "open-settings" },
       }).success,
     ).toBe(false);
   });
@@ -65,6 +65,39 @@ describe("bot.subscribe@1.1 activity reason", () => {
       entry: FAILED,
     });
     expect(latestSubscribe.serverFrameSchema.parse(frame)).toEqual(frame);
+  });
+});
+
+describe("bot.subscribe@1.6 update-provider action", () => {
+  const subscribeLine = hostStreamRpcRegistry["bot.subscribe"][1];
+  const outdated = {
+    ...REASON,
+    summary: "Grok's command-line tool is out of date.",
+    code: "provider_outdated",
+    action: "update-provider",
+  } as const;
+  const frame = (action: "update-provider" | "none") => ({
+    kind: "activity",
+    target: { kind: "trunk" },
+    entry: { ...FAILED, reason: { ...outdated, action } },
+    hasBinaryPayload: false,
+  });
+
+  it("carries update-provider to a 1.6 subscriber", () => {
+    expect(subscribeLine.latestMinor).toBe(6);
+    expect(
+      subscribeLine.versions[6].contract.serverFrameSchema.parse(
+        frame("update-provider"),
+      ),
+    ).toEqual(frame("update-provider"));
+  });
+
+  it("refuses update-provider on every line from 1.1 to 1.5, which read the host's none", () => {
+    for (const minor of [1, 2, 3, 4, 5] as const) {
+      const schema = subscribeLine.versions[minor].contract.serverFrameSchema;
+      expect(schema.safeParse(frame("update-provider")).success).toBe(false);
+      expect(schema.parse(frame("none"))).toEqual(frame("none"));
+    }
   });
 });
 

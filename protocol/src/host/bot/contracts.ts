@@ -31,6 +31,7 @@ import {
   botSubscribeServerFrameSchemaV12,
   botSubscribeServerFrameSchemaV13,
   botSubscribeServerFrameSchemaV14,
+  botSubscribeServerFrameSchemaV15,
   botUpdateResponseSchema,
   botUpdateRunSettingsRequestSchema,
   botUpdateDirectiveRequestSchema,
@@ -475,6 +476,19 @@ export const botSubscribeV14 = defineStreamRpcContract({
 export const botSubscribeV15 = defineStreamRpcContract({
   method: "bot.subscribe",
   schemaVersion: { major: 1, minor: 5 } as const,
+  openRequestSchema: botSubscribeOpenRequestSchema,
+  serverFrameSchema: botSubscribeServerFrameSchemaV15,
+  clientFrameSchema: botSubscribeClientFrameSchema,
+});
+
+/**
+ * `bot.subscribe@1.6` (T71): a failed turn's reason may offer
+ * `update-provider`, which updates the provider's command-line tool on the
+ * bot's host. A 1.5 subscriber's frames carry `none` in its place.
+ */
+export const botSubscribeV16 = defineStreamRpcContract({
+  method: "bot.subscribe",
+  schemaVersion: { major: 1, minor: 6 } as const,
   openRequestSchema: botSubscribeOpenRequestSchema,
   serverFrameSchema: botSubscribeServerFrameSchema,
   clientFrameSchema: botSubscribeClientFrameSchema,

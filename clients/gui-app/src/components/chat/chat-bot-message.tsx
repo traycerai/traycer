@@ -271,6 +271,8 @@ function failedActionsOf(
       state: failed.state,
       summary: recovery.label,
       onSignIn: null,
+      onUpdate: null,
+      updating: false,
       onRetry: null,
       retrying: false,
       onEdit: edit === null ? null : () => edit(message.content),
@@ -280,6 +282,8 @@ function failedActionsOf(
     state: failed.state,
     summary: failed.summary,
     onSignIn: parked ? null : failed.signIn,
+    onUpdate: parked ? null : failed.update,
+    updating: failed.updating,
     onRetry: retry === null ? null : () => retry(message.content),
     retrying: failed.retrying,
     onEdit: parked || edit === null ? null : () => edit(message.content),
@@ -693,6 +697,8 @@ type FailedMessageActions = {
   readonly state: ChatBotFailedRequest["state"];
   readonly summary: string | null;
   readonly onSignIn: (() => void) | null;
+  readonly onUpdate: (() => void) | null;
+  readonly updating: boolean;
   readonly onRetry: (() => void) | null;
   readonly retrying: boolean;
   readonly onEdit: (() => void) | null;
@@ -745,6 +751,16 @@ function UnansweredLine(props: {
             testId: "bot-message-unanswered-sign-in",
             disabled: false,
             onClick: failed.onSignIn,
+          },
+        ]),
+    ...(failed.onUpdate === null
+      ? []
+      : [
+          {
+            label: "Update",
+            testId: "bot-message-unanswered-update",
+            disabled: failed.updating,
+            onClick: failed.onUpdate,
           },
         ]),
   ];

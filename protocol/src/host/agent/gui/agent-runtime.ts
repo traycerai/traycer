@@ -1985,6 +1985,30 @@ export const AUTH_ERROR_CODE = "auth";
 export const ENV_CREDENTIAL_AUTH_ERROR_CODE = "auth_env_credential";
 
 /**
+ * Stable `ErrorEvent.code` for a turn the provider refused because its
+ * command-line tool is too old for the provider's service, on a host that can
+ * update it: the renderer keys on it to offer Update beside the row, which
+ * runs the host's provider update for the turn's harness. The host builds the
+ * message; it names a version only when the provider named one.
+ *
+ * A code rather than an `AgentFailureReason`, as
+ * {@link ENV_CREDENTIAL_AUTH_ERROR_CODE} is: `code` is an open string on every
+ * released line and on disk, and the reason list is a closed enum. It leaves
+ * the turn without a typed `failure`, so no automatic switch runs - the same
+ * outdated tool fails on every account and model.
+ */
+export const PROVIDER_OUTDATED_ERROR_CODE = "provider_outdated";
+
+/**
+ * {@link PROVIDER_OUTDATED_ERROR_CODE} on a host that cannot update the
+ * provider (a sandbox, a pinned version, the person's own copy of the tool):
+ * no Update is offered, and the host's message says who or what updates it.
+ * The renderer never branches on which of those it is.
+ */
+export const PROVIDER_OUTDATED_HOST_OWNER_ERROR_CODE =
+  "provider_outdated_host_owner";
+
+/**
  * `code` on the error block the host appends beside a queue pause, when the
  * pause was caused by the turn above it ending in an error.
  *
