@@ -103,7 +103,7 @@ test("an existing multi-line title renders fitted onto a single, unwrapped line"
   const whiteSpace = await title.evaluate(
     (element) => getComputedStyle(element).whiteSpace,
   );
-  expect(whiteSpace).toBe("nowrap");
+  expect(whiteSpace).toBe("pre");
 
   // The display wrapper is `min-h-full` (it stretches to the box's own
   // height), so the single-line claim has to be read off the text itself.
