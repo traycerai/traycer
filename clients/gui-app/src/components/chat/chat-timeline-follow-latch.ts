@@ -203,12 +203,27 @@ interface ListRowTop {
   readonly rowCount: number;
 }
 
+/** What a gesture's end is tracked by: the block of the content it was
+ *  thrown at, or the row that content sits in. Shared by the momentum a
+ *  lift records and the candidate a toward-end gesture arms, which read it
+ *  the same way (`readerEndShift`). */
+interface ReaderEndTracking {
+  readonly tailBlock: TailBlock | null;
+  readonly lastRow: ListRowTop | null;
+  /** How tall the list held `lastRow` when there was no tail block to
+   *  capture, and null when there was one. A row that is no longer this
+   *  tall has moved the end by an amount nothing can read back. */
+  readonly unreadRowSize: number | null;
+}
+
 interface ReaderEndCandidate {
   readonly readerGestureGeneration: number;
   /** As `ReaderMomentumEnd.targetContentEnd`, for the gesture's end. */
   readonly targetContentEnd: number;
   /** As `ReaderMomentumEnd.tailBlock`, for the gesture's end. */
   readonly tailBlock: TailBlock | null;
+  /** As `ReaderMomentumEnd.unreadRowSize`, for the gesture's end. */
+  readonly unreadRowSize: number | null;
   /** The list's last row when the gesture began, read only when the tail
    *  block cannot be (`tailBlockShift`). Rows above the reader that the list
    *  remeasures since move it, and the list moves the reader with them, so
@@ -236,6 +251,9 @@ interface ReaderMomentumEnd {
   readonly tailBlock: TailBlock | null;
   /** The list's last row at the lift, as `ReaderEndCandidate.lastRow`. */
   readonly lastRow: ListRowTop | null;
+  /** How tall the list held that row at the lift, when it had rendered no
+   *  tail block to capture; null when it had. See `readerEndShift`. */
+  readonly unreadRowSize: number | null;
   /** Where the view stood at the lift, carried with every announced write
    *  since (`noteScrollerMoved`), so it stays an offset this view can be
    *  read against. Momentum travels from the lift toward the end: a view
@@ -617,11 +635,15 @@ function readerEndCandidateFor(input: {
   ) {
     return null;
   }
+  const tailBlock = tailBlockOf(input.list);
+  const lastRow = lastListRowTop(input.list);
   return {
     readerGestureGeneration: input.readerGestureGeneration,
     targetContentEnd: geometry.scrollHeight,
-    tailBlock: tailBlockOf(input.list),
-    lastRow: lastListRowTop(input.list),
+    tailBlock,
+    unreadRowSize:
+      tailBlock === null ? lastRowSizeOf(input.list, lastRow) : null,
+    lastRow,
     reached: false,
   };
 }
@@ -763,6 +785,65 @@ function tailBlockShift(
   );
 }
 
+/** How tall the list holds the transcript's last row, when that is still
+ *  the row given. Read only for a lift that captured no tail block, so a
+ *  row the list has not rendered is sized by the list's own estimate of it,
+ *  which is exactly the number that changes when the row is measured. */
+function lastRowSizeOf(
+  list: LegendListRef | null,
+  row: ListRowTop | null,
+): number | null {
+  if (list === null || row === null) return null;
+  const state = list.getState();
+  const last = state.data.length - 1;
+  if (last < 0) return null;
+  // The row the lift recorded, named as `listRowShift` names it: by its
+  // key, or as the row still standing last when the list has re-keyed a
+  // turn in place. A row appended since ends the transcript with content
+  // this gesture was never thrown at, and its size says nothing about the
+  // end that was.
+  if (
+    state.keyAtIndex(last) !== row.key &&
+    state.data.length !== row.rowCount
+  ) {
+    return null;
+  }
+  return state.sizeAtIndex(last);
+}
+
+/** How far the end a gesture was thrown at has moved, and null when that
+ *  cannot be told - which declines arrival, as an unreadable shift does
+ *  everywhere else.
+ *
+ *  A lift whose last row the list had not rendered captures no tail block,
+ *  and the row's top alone is blind to the reply growing *inside* the row:
+ *  content above its final paragraph pushes the end down while the row's
+ *  top stands still. The list reports one size for that row and cannot say
+ *  whether growth fell above the final paragraph, moving the end, or into
+ *  it, which leaves the end's content where it was. So a row that is no
+ *  longer the size it was is an end that moved by an unknown amount, and
+ *  this stops guessing that it moved by nothing.
+ *
+ *  The cost is a reader far enough up that the list had not rendered the
+ *  last row, flinging to an end that then moves: they are left to the pill
+ *  rather than carried to content they never reached. A reader near the
+ *  tail has that row rendered at the lift, so their end is tracked by its
+ *  own block and none of this runs. */
+function readerEndShift(
+  list: LegendListRef | null,
+  tracking: ReaderEndTracking,
+): number | null {
+  const moved = tailBlockShift(list, tracking.tailBlock);
+  if (moved !== null) return moved;
+  if (
+    tracking.tailBlock === null &&
+    lastRowSizeOf(list, tracking.lastRow) !== tracking.unreadRowSize
+  ) {
+    return null;
+  }
+  return listRowShift(list, tracking.lastRow);
+}
+
 function lastListRowTop(list: LegendListRef | null): ListRowTop | null {
   if (list === null) return null;
   const state = list.getState();
@@ -778,10 +859,13 @@ function readerMomentumEndFor(
   geometry: ChatTimelineScrollGeometry,
   list: LegendListRef | null,
 ): ReaderMomentumEnd {
+  const tailBlock = tailBlockOf(list);
+  const lastRow = lastListRowTop(list);
   return {
     targetContentEnd: geometry.scrollHeight,
-    tailBlock: tailBlockOf(list),
-    lastRow: lastListRowTop(list),
+    tailBlock,
+    lastRow,
+    unreadRowSize: tailBlock === null ? lastRowSizeOf(list, lastRow) : null,
     liftScrollTop: geometry.scrollTop,
   };
 }
@@ -1536,8 +1620,7 @@ export function useChatTimelineFollowLatch(
       const shift =
         readerCandidate === null
           ? null
-          : (tailBlockShift(listRef.current, readerCandidate.tailBlock) ??
-            listRowShift(listRef.current, readerCandidate.lastRow));
+          : readerEndShift(listRef.current, readerCandidate);
       const reachedGestureStartEnd =
         readerCandidate !== null &&
         shift !== null &&
@@ -1828,9 +1911,7 @@ export function useChatTimelineFollowLatch(
       // re-bases the lift (`noteReportAfterLiftLanding`), so the guard has
       // to be here rather than at either caller.
       if (liftAwaitsLandingRef.current) return false;
-      const shift =
-        tailBlockShift(listRef.current, momentum.tailBlock) ??
-        listRowShift(listRef.current, momentum.lastRow);
+      const shift = readerEndShift(listRef.current, momentum);
       if (shift === null) return false;
       return (
         geometry.scrollTop >=

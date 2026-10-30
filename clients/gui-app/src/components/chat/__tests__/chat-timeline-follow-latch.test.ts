@@ -230,6 +230,9 @@ interface FakeListRef {
   readonly setRowElement: (key: string, element: HTMLElement) => void;
   /** The last row the list has rendered, when it lags the data's end. */
   readonly setRenderedEnd: (index: number) => void;
+  /** How tall the list holds a row: its estimate while the row is
+   *  unrendered, its measurement once it is. */
+  readonly setRowSize: (key: string, size: number) => void;
   readonly cancelPendingScroll: Mock<() => boolean>;
   readonly scrollToEnd: Mock<() => Promise<void>>;
   readonly scrollToOffset: Mock<
@@ -245,12 +248,14 @@ const FAKE_LAST_ROW_TOP_PX = 1000;
 
 /** The slice of the list's state the latch reads - its rows and where they
  *  sit - over a state otherwise at rest. */
-function makeFakeListState(
-  rowTops: ReadonlyMap<string, number>,
-  contentLength: number,
-  rowElements: ReadonlyMap<string, HTMLElement>,
-  renderedEnd: number | null,
-) {
+function makeFakeListState(list: {
+  readonly rowTops: ReadonlyMap<string, number>;
+  readonly contentLength: number;
+  readonly rowElements: ReadonlyMap<string, HTMLElement>;
+  readonly renderedEnd: number | null;
+  readonly rowSizes: ReadonlyMap<string, number>;
+}) {
+  const { rowTops, contentLength, rowElements, renderedEnd, rowSizes } = list;
   const keys = [...rowTops.keys()];
   const state: LegendListState = {
     activeStickyIndex: -1,
@@ -276,7 +281,7 @@ function makeFakeListState(
     scroll: 0,
     scrollLength: 0,
     scrollVelocity: 0,
-    sizeAtIndex: () => 0,
+    sizeAtIndex: (index) => rowSizes.get(keys[index]) ?? 0,
     sizes: new Map(),
     start: 0,
     startBuffered: 0,
@@ -289,6 +294,7 @@ function makeFakeListRef(node: HTMLDivElement): FakeListRef {
     [FAKE_LAST_ROW_KEY, FAKE_LAST_ROW_TOP_PX],
   ]);
   const rowElements = new Map<string, HTMLElement>();
+  const rowSizes = new Map<string, number>();
   let renderedEnd: number | null = null;
   let contentLength = 0;
   const cancelPendingScroll = vi.fn((): boolean => false);
@@ -303,7 +309,13 @@ function makeFakeListRef(node: HTMLDivElement): FakeListRef {
     getScrollableNode: () => node,
     getScrollResponder: () => null,
     getState: () =>
-      makeFakeListState(rowTops, contentLength, rowElements, renderedEnd),
+      makeFakeListState({
+        rowTops,
+        contentLength,
+        rowElements,
+        renderedEnd,
+        rowSizes,
+      }),
     reportContentInset: notImplemented,
     scrollIndexIntoView: notImplemented,
     scrollItemIntoView: notImplemented,
@@ -322,6 +334,9 @@ function makeFakeListRef(node: HTMLDivElement): FakeListRef {
     removeRow: (key) => rowTops.delete(key),
     setContentLength: (length) => {
       contentLength = length;
+    },
+    setRowSize: (key, size) => {
+      rowSizes.set(key, size);
     },
     setRowElement: (key, element) => {
       rowElements.set(key, element);
@@ -3143,8 +3158,10 @@ describe("useChatTimelineFollowLatch", () => {
       const listRef = makeFakeListRef(node);
       const layout = installTailBlockLayout(node, listRef);
       if (withUnrenderedTail) {
-        // A row past the one laid out, which the list has not rendered.
+        // A row past the one laid out, which the list has not rendered:
+        // the list holds only its own estimate of how tall it is.
         listRef.setRowTop("unrendered-last-row", 1600);
+        listRef.setRowSize("unrendered-last-row", 300);
         listRef.setRenderedEnd(0);
       }
       const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
@@ -3294,17 +3311,62 @@ describe("useChatTimelineFollowLatch", () => {
       expect(listRef.scrollToEnd).toHaveBeenCalled();
     });
 
-    it("tracks no tail block while the list has not rendered the transcript's last row", () => {
-      // The row laid out is then one in the middle of the transcript, and
-      // its blocks are not the end's. The list names no container for the
-      // row it has not rendered, so the row's shift answers instead - and
-      // it says the rows have not moved.
-      const { node, listRef, layout, onFollowIntentChange } =
-        liftedBelowTheEnd(true);
+    it("follows a fling to an end whose unrendered row is the size the lift read", () => {
+      // The list named no container for the row it had not rendered, so no
+      // tail block was captured. The row is still the size the lift read,
+      // so nothing grew inside it, and the row's own shift answers as it
+      // always has.
+      const { node, listRef, onFollowIntentChange } = liftedBelowTheEnd(true);
 
-      layout.growImage(60);
-      shim.setGeometry(node, { scrollHeight: 1660 });
+      shim.setGeometry(node, { scrollTop: 1100, scrollHeight: 1700 });
       fireResizeObservers();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalled();
+    });
+
+    it("does not follow a fling whose unrendered last row changed size after the lift", () => {
+      // The model's 19-state order: the row becomes renderable mid-fling
+      // and grows, and the row's top does not move. Whether that growth
+      // fell above the reply's final paragraph, moving the end, or into
+      // that paragraph, which leaves the end where it was, the list reports
+      // only the one size - so the end moved by an amount nothing can read
+      // back, and the fling is not carried to it.
+      const { node, listRef, onFollowIntentChange } = liftedBelowTheEnd(true);
+
+      listRef.setRenderedEnd(1);
+      listRef.setRowSize("unrendered-last-row", 360);
+      shim.setGeometry(node, { scrollTop: 1100, scrollHeight: 1760 });
+      fireResizeObservers();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("does not follow it when that row grew before any observation read it", () => {
+      // The neighbouring order, which capturing the block at the first
+      // observation would not have caught: the growth lands before any
+      // read, so the first look already sees the grown row.
+      const { node, listRef, onFollowIntentChange } = liftedBelowTheEnd(true);
+
+      listRef.setRowSize("unrendered-last-row", 360);
+      listRef.setRenderedEnd(1);
+      shim.setGeometry(node, { scrollTop: 1100, scrollHeight: 1760 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("control: a reader whose last row the lift did render is not held by its size", () => {
+      // The near reader. Their end is tracked by its own block, so a row
+      // growing below the tail - the reply streaming on - never reaches
+      // the size check at all.
+      const { node, listRef, onFollowIntentChange } = liftedBelowTheEnd(false);
+
+      listRef.setRowSize(FAKE_LAST_ROW_KEY, 980);
       shim.setGeometry(node, { scrollTop: 1100, scrollHeight: 1700 });
       fireResizeObservers();
       fireNativeScroll(node);
