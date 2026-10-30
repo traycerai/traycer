@@ -193,7 +193,8 @@ export interface TerminalSessionState {
    * `terminal.subscribe`, which is how a host of any version hears it. No-op
    * when the value is unchanged or the store is disposed. A dead session
    * (`lost` / `exited` / `reaped`) updates the field but does not attach a
-   * new stream — the PTY is no longer addressable.
+   * new stream — the PTY is no longer addressable. A held stream retains its
+   * subscriber until continuation or the hold ends, coalescing intent changes.
    */
   setViewer: (viewer: TerminalSubscribeViewer) => void;
   /**
@@ -425,6 +426,8 @@ export function createTerminalSessionStore(
   let writer: TerminalDataWriter | null = null;
   let streamClient: TerminalStreamClientHandle | null = null;
   let viewer: TerminalSubscribeViewer = options.viewer;
+  let subscriberViewer: TerminalSubscribeViewer = options.viewer;
+  let streamHeld = false;
   // Bumped before tearing down a subscriber so its close-driven status
   // callback cannot map a deliberate viewer-intent reopen to "lost".
   const streamGuard = createGenerationGuard();
@@ -781,11 +784,16 @@ export function createTerminalSessionStore(
         continuity: StreamContinuity,
       ) => {
         if (disposed) return;
+        const generation = streamGuard.current();
+        streamHeld = status === "reconnecting" && continuity === "held";
         if (ignoreTransientStatus) {
           ignoreTransientStatus = false;
           // Drop only the replacement stream's initial connecting/reconnecting
           // so a keep-warm reattach does not flash the reconnect overlay.
-          if (status === "connecting" || status === "reconnecting") {
+          if (
+            !streamHeld &&
+            (status === "connecting" || status === "reconnecting")
+          ) {
             return;
           }
         }
@@ -811,6 +819,10 @@ export function createTerminalSessionStore(
             reason,
           ),
         }));
+        // Status observers may replace or dispose the stream synchronously.
+        // No old-cycle credit may drain into a replacement.
+        if (generation !== streamGuard.current()) return;
+        if (status !== "closed" && replaceViewerSubscription()) return;
         if (status !== "open") return;
         // Replay stale pending actions from BEFORE this reconnect first, so the
         // fresh resize `flushRequestedResize` is about to dispatch isn't
@@ -826,14 +838,40 @@ export function createTerminalSessionStore(
 
     const attachStream = (cols: number, rows: number): void => {
       const generation = streamGuard.current();
-      streamClient = options.streamClientFactory({
+      streamHeld = false;
+      subscriberViewer = viewer;
+      const client = options.streamClientFactory({
         sessionId: options.sessionId,
         cols,
         rows,
         callbacks: bindStreamCallbacks(callbacks, streamGuard, generation),
         viewer,
       });
+      // A synchronous status replay may replace this subscriber before its
+      // factory returns. Keep the newer client and release the superseded one.
+      if (generation !== streamGuard.current()) {
+        client.close();
+        return;
+      }
+      streamClient = client;
     };
+
+    function replaceViewerSubscription(): boolean {
+      if (disposed || streamHeld || viewer === subscriberViewer) return false;
+      const state = get();
+      if (isTerminalOrDead(state.status)) return false;
+      const wasOpen = state.connectionStatus === "open";
+      // Clear the deferred intent before close/attach can invoke callbacks.
+      subscriberViewer = viewer;
+      resetAckAccounting();
+      // Invalidate before close() so the outgoing client's closed status
+      // cannot mark this still-alive session lost.
+      streamGuard.next();
+      closeStreamClient();
+      ignoreTransientStatus = wasOpen;
+      attachStream(state.requestedCols, state.requestedRows);
+      return true;
+    }
 
     streamGuard.next();
     attachStream(options.cols, options.rows);
@@ -843,24 +881,21 @@ export function createTerminalSessionStore(
       if (nextViewer === viewer) return;
       viewer = nextViewer;
       set({ viewer: nextViewer });
-      const state = get();
-      if (isTerminalOrDead(state.status)) return;
-      const wasOpen = state.connectionStatus === "open";
-      resetAckAccounting();
-      // Invalidate before close() so the outgoing client's closed status
-      // cannot mark this still-alive session lost.
-      streamGuard.next();
-      closeStreamClient();
-      ignoreTransientStatus = wasOpen;
-      attachStream(state.requestedCols, state.requestedRows);
+      replaceViewerSubscription();
     };
 
     const restateViewer = (nextViewer: TerminalSubscribeViewer): void => {
       if (disposed) return;
       if (nextViewer === viewer) return;
+      const generation = streamGuard.current();
       viewer = nextViewer;
       set({ viewer: nextViewer });
+      // Publishing intent may replace or dispose this subscriber.
+      if (generation !== streamGuard.current() || viewer !== nextViewer) {
+        return;
+      }
       if (isTerminalOrDead(get().status)) return;
+      subscriberViewer = nextViewer;
       // Straight to the client, not through `dispatchClientFrame`: that drops
       // a frame while the stream is not open, and the client must still learn
       // the intent so its next subscribe declares it.
@@ -981,6 +1016,7 @@ export function createTerminalSessionStore(
       dispose: () => {
         if (disposed) return;
         disposed = true;
+        streamGuard.next();
         writer = null;
         resetAckAccounting();
         closeStreamClient();

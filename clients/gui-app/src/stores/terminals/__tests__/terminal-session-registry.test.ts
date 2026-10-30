@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TerminalStreamCallbacks } from "@traycer-clients/shared/host-transport/terminal-stream-client";
-import type { TerminalSubscribeViewer } from "@traycer/protocol/host/terminal/subscribe";
+import type {
+  TerminalSubscribeClientFrameV17,
+  TerminalSubscribeViewer,
+} from "@traycer/protocol/host/terminal/subscribe";
 import type { TerminalSessionKind } from "@traycer/protocol/host/terminal/unary-schemas";
 import {
   createTerminalSessionStore,
   type TerminalSessionStoreHandle,
+  type TerminalWrite,
 } from "@/stores/terminals/terminal-session-store";
 import {
   MAX_LINGERING_PLAIN_TERMINALS,
@@ -30,6 +34,7 @@ interface CreatedHandle {
   readonly closeCount: () => number;
   readonly callbacks: () => TerminalStreamCallbacks;
   readonly viewers: () => readonly TerminalSubscribeViewer[];
+  readonly frames: () => readonly TerminalSubscribeClientFrameV17[];
 }
 
 function createHandle(kind: TerminalSessionKind): CreatedHandle {
@@ -44,6 +49,7 @@ function createHandleWithViewer(
   let closeCount = 0;
   let callbacks: TerminalStreamCallbacks | null = null;
   const viewers: TerminalSubscribeViewer[] = [];
+  const frames: TerminalSubscribeClientFrameV17[] = [];
   const handle = createTerminalSessionStore({
     scope: { kind: "epic", epicId: "epic-1" },
     sessionId: "terminal-1",
@@ -56,7 +62,9 @@ function createHandleWithViewer(
       callbacks = streamArgs.callbacks;
       viewers.push(streamArgs.viewer);
       return {
-        sendAction: () => undefined,
+        sendAction: (frame) => {
+          frames.push(frame);
+        },
         close: () => {
           closeCount += 1;
         },
@@ -71,6 +79,7 @@ function createHandleWithViewer(
       return callbacks;
     },
     viewers: () => viewers,
+    frames: () => frames,
   };
 }
 
@@ -130,6 +139,94 @@ describe("TerminalSessionRegistry", () => {
     vi.advanceTimersByTime(PLAIN_TERMINAL_RELEASE_LINGER_MS * 2);
     expect(owned.closeCount()).toBe(2);
     expect(registry.get("terminal-1")).toBe(owned.handle);
+  });
+
+  it("parks and revives a lease while held without replacing the subscriber, and replaces once after a continued open when left parked", () => {
+    const registry = new TerminalSessionRegistry();
+    const revived = createHandle("terminal");
+    registry.acquire(
+      "terminal-1",
+      () => revived.handle,
+      HOST_ID,
+      "presentation",
+    );
+    revived.callbacks().onConnectionStatus("open", null, null, null);
+    revived.callbacks().onSnapshot(
+      {
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        sessionId: "terminal-1",
+        session: {
+          sessionId: "terminal-1",
+          epicId: "epic-1",
+          sessionKind: "terminal",
+          cwd: "/repo",
+          shellCommand: "zsh",
+          shellArgs: [],
+          cols: 80,
+          rows: 24,
+          status: "running",
+          exitCode: null,
+          createdAt: 1,
+          title: null,
+        },
+        scrollback: "",
+        ackCreditSupported: true,
+      },
+      "",
+    );
+    const writes: TerminalWrite[] = [];
+    revived.handle.store.getState().setWriter((write) => {
+      writes.push(write);
+    });
+    revived.callbacks().onData(
+      {
+        kind: "data",
+        hasBinaryPayload: false,
+        sessionId: "terminal-1",
+        chunk: "parsed during hold",
+      },
+      "parsed during hold",
+    );
+    revived.callbacks().onConnectionStatus("reconnecting", null, null, "held");
+    // The write is parsed by xterm while the lease is parked: its credit
+    // belongs to the subscriber the host still holds.
+    writes.filter((write) => write.kind === "live")[0].onAckable();
+
+    registry.release("terminal-1", revived.handle, true);
+    registry.acquire(
+      "terminal-1",
+      () => {
+        throw new Error("must reuse the lingering handle");
+      },
+      HOST_ID,
+      "presentation",
+    );
+    revived.callbacks().onConnectionStatus("open", null, null, "continued");
+    // park -> revive coalesced: the host never saw an intent change.
+    expect(revived.viewers()).toEqual(["presentation"]);
+    expect(revived.closeCount()).toBe(0);
+    vi.advanceTimersByTime(100);
+    expect(revived.frames().filter((frame) => frame.kind === "ack")).toEqual([
+      expect.objectContaining({ bytes: "parsed during hold".length }),
+    ]);
+
+    const parked = createHandle("terminal");
+    registry.acquire(
+      "terminal-2",
+      () => parked.handle,
+      HOST_ID,
+      "presentation",
+    );
+    parked.callbacks().onConnectionStatus("open", null, null, null);
+    parked.callbacks().onConnectionStatus("reconnecting", null, null, "held");
+    registry.release("terminal-2", parked.handle, true);
+    expect(parked.viewers()).toEqual(["presentation"]);
+    expect(parked.closeCount()).toBe(0);
+
+    parked.callbacks().onConnectionStatus("open", null, null, "continued");
+    expect(parked.viewers()).toEqual(["presentation", "cache"]);
+    expect(parked.closeCount()).toBe(1);
   });
 
   it("disposes a lingering plain terminal immediately when the session exits", () => {

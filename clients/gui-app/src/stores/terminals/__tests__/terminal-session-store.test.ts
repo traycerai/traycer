@@ -1434,3 +1434,299 @@ describe("createTerminalSessionStore", () => {
     });
   });
 });
+
+describe("viewer intent while the stream is held", () => {
+  interface HeldSubscriber {
+    readonly viewer: TerminalSubscribeViewer;
+    readonly callbacks: TerminalStreamCallbacks;
+    readonly frames: TerminalSubscribeClientFrameV17[];
+  }
+
+  function createHeldHarness() {
+    const subscribers: HeldSubscriber[] = [];
+    const close = vi.fn();
+    const writes: TerminalWrite[] = [];
+    const handle = createTerminalSessionStore({
+      scope: { kind: "epic", epicId: "epic-1" },
+      sessionId: "terminal-1",
+      cols: 80,
+      rows: 24,
+      reattachMode: "fresh",
+      kind: "terminal-agent",
+      viewer: "presentation",
+      streamClientFactory: (streamArgs) => {
+        const frames: TerminalSubscribeClientFrameV17[] = [];
+        subscribers.push({
+          viewer: streamArgs.viewer,
+          callbacks: streamArgs.callbacks,
+          frames,
+        });
+        return {
+          sendAction: (frame) => {
+            frames.push(frame);
+          },
+          close: () => {
+            close();
+            streamArgs.callbacks.onConnectionStatus(
+              "closed",
+              { kind: "caller" },
+              null,
+              null,
+            );
+          },
+        };
+      },
+    });
+    const current = (): HeldSubscriber => {
+      const subscriber = subscribers.at(-1);
+      if (subscriber === undefined) throw new Error("Expected a subscriber");
+      return subscriber;
+    };
+    handle.store.getState().setWriter((write) => {
+      writes.push(write);
+    });
+    current().callbacks.onConnectionStatus("open", null, null, null);
+    emitSnapshot(current().callbacks, snapshotWithAckCredit(""));
+    // What the newest subscriber will declare to the host: its open-frame
+    // intent, overridden by any later viewer frame.
+    const declaredViewer = (): TerminalSubscribeViewer => {
+      const subscriber = current();
+      const restated = subscriber.frames.findLast(
+        (frame) => frame.kind === "viewer",
+      );
+      return restated?.kind === "viewer" ? restated.viewer : subscriber.viewer;
+    };
+    const ackBytes = (subscriber: HeldSubscriber): number[] =>
+      subscriber.frames.flatMap((frame) =>
+        frame.kind === "ack" ? [frame.bytes] : [],
+      );
+    return {
+      handle,
+      subscribers,
+      close,
+      writes,
+      current,
+      declaredViewer,
+      ackBytes,
+    };
+  }
+
+  it("records a viewer change made while held without touching the subscriber, then replaces it once after the continued open and drops the old ack debt", () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHeldHarness();
+      const held = h.current();
+      emitData(held.callbacks, data("parsed during hold"));
+      h.current().callbacks.onConnectionStatus(
+        "reconnecting",
+        null,
+        null,
+        "held",
+      );
+      h.writes.filter((write) => write.kind === "live")[0].onAckable();
+
+      h.handle.store.getState().setViewer("cache");
+      expect(h.handle.store.getState()).toMatchObject({
+        viewer: "cache",
+        connectionStatus: "reconnecting",
+      });
+      expect(h.subscribers).toHaveLength(1);
+      expect(h.close).not.toHaveBeenCalled();
+
+      held.callbacks.onConnectionStatus("open", null, null, "continued");
+      expect(h.subscribers.map((subscriber) => subscriber.viewer)).toEqual([
+        "presentation",
+        "cache",
+      ]);
+      expect(h.close).toHaveBeenCalledTimes(1);
+
+      // Nothing the retired subscriber owed reaches the new one, and its
+      // late callbacks are fenced out.
+      const writesBefore = h.writes.length;
+      held.callbacks.onData(data("late"), "late");
+      vi.advanceTimersByTime(1000);
+      expect(h.writes).toHaveLength(writesBefore);
+      expect(h.ackBytes(h.current())).toEqual([]);
+      expect(h.handle.store.getState().status).toBe("running");
+      h.handle.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("coalesces presentation -> cache -> presentation made while held into no replacement and keeps the ack debt on the same subscriber", () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHeldHarness();
+      const held = h.current();
+      emitData(held.callbacks, data("parsed during hold"));
+      held.callbacks.onConnectionStatus("reconnecting", null, null, "held");
+      h.writes.filter((write) => write.kind === "live")[0].onAckable();
+
+      h.handle.store.getState().setViewer("cache");
+      h.handle.store.getState().setViewer("presentation");
+      held.callbacks.onConnectionStatus("open", null, null, "continued");
+      vi.advanceTimersByTime(1000);
+
+      expect(h.subscribers).toHaveLength(1);
+      expect(h.close).not.toHaveBeenCalled();
+      expect(h.ackBytes(held)).toEqual(["parsed during hold".length]);
+      h.handle.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("carries the latest intent into the rebuild when the hold ends in a null reconnect", () => {
+    const h = createHeldHarness();
+    const held = h.current();
+    held.callbacks.onConnectionStatus("reconnecting", null, null, "held");
+    h.handle.store.getState().setViewer("cache");
+    expect(h.subscribers).toHaveLength(1);
+
+    held.callbacks.onConnectionStatus("reconnecting", null, null, null);
+    h.current().callbacks.onConnectionStatus("open", null, null, null);
+
+    expect(h.handle.store.getState().viewer).toBe("cache");
+    expect(h.declaredViewer()).toBe("cache");
+    h.handle.dispose();
+  });
+
+  it("latches the hold before publishing it, so a status observer's setViewer does not reopen the held stream", () => {
+    const h = createHeldHarness();
+    const held = h.current();
+    h.handle.store.subscribe((state, previous) => {
+      if (
+        state.connectionStatus === "reconnecting" &&
+        previous.connectionStatus !== "reconnecting"
+      ) {
+        state.setViewer("cache");
+      }
+    });
+
+    held.callbacks.onConnectionStatus("reconnecting", null, null, "held");
+    expect(h.subscribers).toHaveLength(1);
+    expect(h.close).not.toHaveBeenCalled();
+
+    held.callbacks.onConnectionStatus("open", null, null, "continued");
+    expect(h.subscribers.map((subscriber) => subscriber.viewer)).toEqual([
+      "presentation",
+      "cache",
+    ]);
+    h.handle.dispose();
+  });
+
+  it("stays coherent when a status observer restates the viewer while the continued open publishes", () => {
+    const h = createHeldHarness();
+    const held = h.current();
+    held.callbacks.onConnectionStatus("reconnecting", null, null, "held");
+    h.handle.store.getState().setViewer("cache");
+    h.handle.store.subscribe((state, previous) => {
+      if (
+        state.connectionStatus === "open" &&
+        previous.connectionStatus !== "open"
+      ) {
+        state.restateViewer("presentation");
+      }
+    });
+
+    held.callbacks.onConnectionStatus("open", null, null, "continued");
+
+    expect(h.handle.store.getState().viewer).toBe("presentation");
+    expect(h.declaredViewer()).toBe("presentation");
+    expect(h.handle.store.getState().status).toBe("running");
+    h.handle.dispose();
+  });
+
+  it("publishes a replacement stream's first held status instead of swallowing it as keep-warm noise", () => {
+    const h = createHeldHarness();
+    h.handle.store.getState().setViewer("cache");
+    expect(h.subscribers).toHaveLength(2);
+
+    h.current().callbacks.onConnectionStatus(
+      "reconnecting",
+      null,
+      null,
+      "held",
+    );
+
+    expect(h.handle.store.getState().connectionStatus).toBe("reconnecting");
+    h.handle.dispose();
+  });
+
+  it("keeps the newest subscriber when a replacement's factory opens synchronously and an observer changes the intent again", () => {
+    interface RacingClient {
+      readonly viewer: TerminalSubscribeViewer;
+      readonly callbacks: TerminalStreamCallbacks;
+      readonly frames: TerminalSubscribeClientFrameV17[];
+      closeCount: number;
+    }
+    const clients: RacingClient[] = [];
+    let observerArmed = false;
+    const handle = createTerminalSessionStore({
+      scope: { kind: "epic", epicId: "epic-1" },
+      sessionId: "terminal-1",
+      cols: 80,
+      rows: 24,
+      reattachMode: "fresh",
+      kind: "terminal-agent",
+      viewer: "presentation",
+      streamClientFactory: (streamArgs) => {
+        const client: RacingClient = {
+          viewer: streamArgs.viewer,
+          callbacks: streamArgs.callbacks,
+          frames: [],
+          closeCount: 0,
+        };
+        clients.push(client);
+        // A replacement stream that is already open when the factory
+        // returns: its status publishes before the store holds the client.
+        if (clients.length > 1) {
+          streamArgs.callbacks.onConnectionStatus("open", null, null, null);
+        }
+        return {
+          sendAction: (frame) => {
+            client.frames.push(frame);
+          },
+          close: () => {
+            client.closeCount += 1;
+          },
+        };
+      },
+    });
+    handle.store.subscribe((state) => {
+      if (observerArmed && clients.length === 2) {
+        observerArmed = false;
+        // Re-enters the store from inside the first replacement's factory.
+        state.setViewer("presentation");
+      }
+    });
+    clients[0].callbacks.onConnectionStatus("open", null, null, null);
+    emitSnapshot(clients[0].callbacks, snapshot(""));
+    clients[0].callbacks.onConnectionStatus("reconnecting", null, null, "held");
+    handle.store.getState().setViewer("cache");
+    expect(clients).toHaveLength(1);
+
+    observerArmed = true;
+    clients[0].callbacks.onConnectionStatus("open", null, null, "continued");
+
+    // The nested replacement is the newest; the outer one it overtook is
+    // closed rather than leaked, and the first was closed exactly once.
+    expect(clients.map((client) => client.viewer)).toEqual([
+      "presentation",
+      "cache",
+      "presentation",
+    ]);
+    expect(clients.map((client) => client.closeCount)).toEqual([1, 1, 0]);
+
+    // Work after the race reaches the newest subscriber only.
+    handle.store.getState().requestResize(100, 30);
+    const resizes = (client: RacingClient): number =>
+      client.frames.filter((frame) => frame.kind === "resize").length;
+    expect(resizes(clients[1])).toBe(0);
+    expect(resizes(clients[2])).toBe(1);
+
+    handle.dispose();
+    expect(clients.map((client) => client.closeCount)).toEqual([1, 1, 1]);
+  });
+});
