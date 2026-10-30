@@ -6432,9 +6432,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
           agentStartRequested: true,
         });
 
-        expect(calls.filter((call) => call.args[0] === "kickstart")).toHaveLength(
-          1,
-        );
+        expect(
+          calls.filter((call) => call.args[0] === "kickstart"),
+        ).toHaveLength(1);
       });
 
       it("does not start Desktop's agent when the host outlives the wait", async () => {
