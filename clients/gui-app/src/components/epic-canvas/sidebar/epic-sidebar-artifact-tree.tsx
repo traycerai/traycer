@@ -13,6 +13,7 @@ import {
 import {
   DEFAULT_EPIC_NODE_NAMES,
   EPIC_NODE_ICONS,
+  FILE_ARTIFACT_VIEWER_ICONS,
   isCreatableArtifactKind,
   isEpicArtifactKind,
   isMarkdownArtifactKind,
@@ -89,6 +90,7 @@ import {
   useAncestorIds,
   useEpicArtifactStatus,
   useEpicConnectionStatus,
+  useEpicFileArtifactViewer,
   useEpicPermissionRole,
   useEpicTreeIndex,
 } from "@/lib/epic-selectors";
@@ -918,7 +920,11 @@ const ArtifactNode = memo(function ArtifactNode(props: ArtifactNodeProps) {
     expanded,
   });
 
-  const Icon = EPIC_NODE_ICONS[artifactType];
+  const fileViewer = useEpicFileArtifactViewer(nodeId);
+  const Icon =
+    fileViewer === null
+      ? EPIC_NODE_ICONS[artifactType]
+      : FILE_ARTIFACT_VIEWER_ICONS[fileViewer];
   const artifactIconColorMode = useSettingsStore(
     (state) => state.artifactIconColorMode,
   );

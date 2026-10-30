@@ -129,6 +129,7 @@ vi.mock("@/lib/epic-selectors", () => {
     useEpicTabDisplayTitle: (node: EpicCanvasTileRef) => node.name,
     useEpicLiveArtifactTitleGenerating: () => false,
     useRegisteredEpicNodeArchived: () => false,
+    useRegisteredEpicFileArtifactViewer: () => null,
   };
 });
 

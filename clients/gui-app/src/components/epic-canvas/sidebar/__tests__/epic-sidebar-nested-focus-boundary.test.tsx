@@ -621,6 +621,7 @@ vi.mock("@/lib/epic-selectors", () => ({
     };
   },
   useEpicArtifactRecords: () => testState.records,
+  useEpicFileArtifactViewer: () => null,
   useEpicArtifactStatus: (artifactId: string) =>
     testState.tree.nodeById[artifactId]?.status ?? null,
   useEpicConnectionStatus: () => "open",

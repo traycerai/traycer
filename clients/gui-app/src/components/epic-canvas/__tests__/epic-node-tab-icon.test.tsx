@@ -10,6 +10,7 @@ import { __getOpenEpicRegistryForTests } from "@/lib/registries/epic-session-reg
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import { openStoreForTest } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import type { OpenEpicStoreHandle } from "@/stores/epics/open-epic/store";
+import type { ArtifactProjection } from "@/stores/epics/open-epic/types";
 import {
   __resetAppLocalNotificationsStoreForTests,
   emitTerminalCrashedNotification,
@@ -238,6 +239,97 @@ describe("<EpicNodeTabIcon /> terminal-agent activity", () => {
     });
 
     expect(screen.getByRole("status", { name: SPINNER_LABEL })).toBeTruthy();
+  });
+});
+
+function fileNode(id: string, name: string): EpicArtifactRef {
+  return {
+    id,
+    instanceId: `${id}-instance`,
+    type: "file",
+    name,
+    hostId: "host-1",
+  };
+}
+
+function fileArtifact(
+  id: string,
+  folderName: string,
+  mediaType: string,
+): ArtifactProjection {
+  return {
+    layout: "file",
+    object: {
+      sha256: "a".repeat(64),
+      byteLength: 1024,
+      mediaType,
+      status: "published",
+    },
+    id,
+    kind: "file",
+    title: folderName,
+    folderName,
+    parentId: null,
+    artifactRoomId: null,
+    createdAt: 0,
+    updatedAt: 0,
+    status: null,
+    createdManually: false,
+  };
+}
+
+function renderFileTabIcon(node: EpicArtifactRef): HTMLElement {
+  const { container } = render(
+    <EpicNodeTabIcon
+      node={node}
+      epicId="epic-1"
+      variant="static"
+      className="size-3.5 shrink-0"
+      defaultIcon={undefined}
+    />,
+  );
+  return container;
+}
+
+describe("<EpicNodeTabIcon /> file artifacts", () => {
+  afterEach(() => {
+    cleanup();
+    __getOpenEpicRegistryForTests().disposeAll();
+  });
+
+  it("draws the glyph of the viewer the file opens in", () => {
+    const handle = registerEpicSession("epic-1");
+    handle.store.setState({
+      artifacts: {
+        allIds: ["video-1", "audio-1"],
+        byId: {
+          "video-1": fileArtifact("video-1", "walkthrough.mp4", "video/mp4"),
+          // Audio is recognised by media type alone, so the name has no
+          // extension the viewer would know.
+          "audio-1": fileArtifact("audio-1", "voice-note", "audio/mp4"),
+        },
+      },
+    });
+
+    const video = renderFileTabIcon(fileNode("video-1", "walkthrough.mp4"));
+    const audio = renderFileTabIcon(fileNode("audio-1", "voice-note"));
+
+    expect(video.querySelector("svg")?.getAttribute("class")).toContain(
+      "lucide-file-play",
+    );
+    expect(audio.querySelector("svg")?.getAttribute("class")).toContain(
+      "lucide-file-headphone",
+    );
+  });
+
+  // Drag previews render outside an open-epic session: no file to read, so
+  // the tab keeps the plain file glyph instead of throwing.
+  it("keeps the plain file glyph with no registered Epic session", () => {
+    const icon = renderFileTabIcon(fileNode("video-1", "walkthrough.mp4"));
+
+    const glyphClass = icon.querySelector("svg")?.getAttribute("class");
+    expect(glyphClass).toContain("lucide-file");
+    expect(glyphClass).not.toContain("lucide-file-play");
   });
 });
 

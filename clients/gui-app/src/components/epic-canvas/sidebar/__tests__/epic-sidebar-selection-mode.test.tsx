@@ -1150,6 +1150,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   // to add - which, with no host client bound here, it never does.
   useEpicChatIds: () => [],
   useEpicChatIdsNamedByCloudRows: () => [],
+  useEpicFileArtifactViewer: () => null,
   useEpicArtifactStatus: (artifactId: string) =>
     testState.tree.nodeById[artifactId]?.status ?? null,
   useEpicChatHarnessId: (nodeId: string) =>
