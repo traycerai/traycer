@@ -1475,6 +1475,55 @@ export function useChatTimelineFollowLatch(
     return correction;
   }, [cancelActiveCorrection]);
 
+  /**
+   * The browser clamping the view because the viewport grew, absorbed as the
+   * announced writes above are: every reference that judges the reader against
+   * a stored offset moves by what the clamp moved the view, and this
+   * observation charges the reader with none of it.
+   *
+   * It runs before the ledger is read on every path that reads it - a scroll
+   * report, a maintenance read, and a correction's validation frame - because a
+   * lower offset is what the ledger turns into the reader having moved away.
+   *
+   * The ends a reader is headed for are left, here as at an announced write:
+   * they name content, and the clamp moved none.
+   */
+  const noteViewportGrowthClamp = useCallback(
+    (geometry: ChatTimelineScrollGeometry): void => {
+      const reference = lastObservedGeometryRef.current;
+      lastObservedGeometryRef.current = geometry;
+      if (reference === null) return;
+      const delta = viewportGrowthClamp(reference, geometry);
+      if (delta === null) return;
+      const departure = readerDepartureScrollTopRef.current;
+      if (departure !== null) {
+        readerDepartureScrollTopRef.current = departure + delta;
+      }
+      armedReaderDepartureRef.current = armCarriedBy(
+        armedReaderDepartureRef.current,
+        delta,
+        "range",
+      );
+      // The lift a momentum travels from, as at an announced write: the clamp
+      // moved the view it is read against, so travel across the clamp is the
+      // same travel it was. Left behind, the clamp's own pixels would come off
+      // a lifted finger's momentum and a tail regrowing over the clamp - the
+      // frame this absorbs - is where that would be read.
+      const momentum = readerMomentumEndRef.current;
+      if (momentum !== null) {
+        readerMomentumEndRef.current = {
+          ...momentum,
+          liftScrollTop: momentum.liftScrollTop + delta,
+        };
+      }
+      const expected = expectedScrollTopRef.current;
+      if (expected !== null) {
+        expectedScrollTopRef.current = expected + delta;
+      }
+    },
+    [],
+  );
+
   const startEndCorrection = useCallback(
     (list: LegendListRef, node: HTMLElement): void => {
       const correction = createActiveCorrection();
@@ -1493,6 +1542,11 @@ export function useChatTimelineFollowLatch(
           cancelActiveCorrection();
           return;
         }
+        // This frame reads the view and can publish a departure from it, so it
+        // is a third observation of the geometry and owes the same absorption
+        // the other two do - and it is the one most likely to see a viewport
+        // change, running two frames after a write while the layout settles.
+        noteViewportGrowthClamp(liveGeometry);
         const movedAway = noteViewRead(liveGeometry);
         if (isChatTimelineAtStrictBottom(liveGeometry)) {
           cancelActiveCorrection();
@@ -1556,6 +1610,7 @@ export function useChatTimelineFollowLatch(
       cancelActiveCorrection,
       createActiveCorrection,
       noteViewRead,
+      noteViewportGrowthClamp,
       publishUnannouncedDeparture,
     ],
   );
@@ -1875,54 +1930,6 @@ export function useChatTimelineFollowLatch(
         : expected;
     expectedScrollTopRef.current = base + delta;
   }, []);
-
-  /**
-   * The browser clamping the view because the viewport grew, absorbed as the
-   * announced writes above are: every reference that judges the reader against
-   * a stored offset moves by what the clamp moved the view, and this
-   * observation charges the reader with none of it.
-   *
-   * It runs before the ledger is read on either path, because a lower offset
-   * is what the ledger turns into the reader having moved away.
-   *
-   * The ends a reader is headed for are left, here as at an announced write:
-   * they name content, and the clamp moved none.
-   */
-  const noteViewportGrowthClamp = useCallback(
-    (geometry: ChatTimelineScrollGeometry): void => {
-      const reference = lastObservedGeometryRef.current;
-      lastObservedGeometryRef.current = geometry;
-      if (reference === null) return;
-      const delta = viewportGrowthClamp(reference, geometry);
-      if (delta === null) return;
-      const departure = readerDepartureScrollTopRef.current;
-      if (departure !== null) {
-        readerDepartureScrollTopRef.current = departure + delta;
-      }
-      armedReaderDepartureRef.current = armCarriedBy(
-        armedReaderDepartureRef.current,
-        delta,
-        "range",
-      );
-      // The lift a momentum travels from, as at an announced write: the clamp
-      // moved the view it is read against, so travel across the clamp is the
-      // same travel it was. Left behind, the clamp's own pixels would come off
-      // a lifted finger's momentum and a tail regrowing over the clamp - the
-      // frame this absorbs - is where that would be read.
-      const momentum = readerMomentumEndRef.current;
-      if (momentum !== null) {
-        readerMomentumEndRef.current = {
-          ...momentum,
-          liftScrollTop: momentum.liftScrollTop + delta,
-        };
-      }
-      const expected = expectedScrollTopRef.current;
-      if (expected !== null) {
-        expectedScrollTopRef.current = expected + delta;
-      }
-    },
-    [],
-  );
 
   // The first report after a lift that a held-back write may land after: a
   // published departure stands where the view now is. The ledger, left null
