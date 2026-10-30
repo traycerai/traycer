@@ -10,6 +10,7 @@ import {
 } from "@/components/chat/chat-timeline";
 import {
   type ChatTimelineFollowLatch,
+  type ChatTimelineReaderGesture,
   type ChatTimelineReaderGestureIntent,
   chatTimelineEndScrollTop,
   isChatTimelineAtStrictBottom,
@@ -2559,7 +2560,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     ({
       freezeInFlightScroll,
       publishesReaderPosition,
-    }: ChatTimelineReaderGestureIntent): void => {
+      viewportCanAnswer,
+    }: ChatTimelineReaderGesture): void => {
       clearNavigationHighlight();
       const hadActiveAnimatedImperativeScroll =
         activeAnimatedImperativeScrollGenerationRef.current !== null;
@@ -2574,14 +2576,30 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // atomically. Explicit navigation retires that target when its own loop
       // replaces the restore's.
       if (publishesReaderPosition) {
-        readerPositionGenerationRef.current += 1;
-        pendingMeasuredFreeRestoreRef.current = null;
-        pendingHydrationRestoreAnchorIdRef.current = null;
-        forgetPendingHydrationRestore(identity);
-        restorePersistencePendingRef.current = false;
+        // Only a gesture the viewport could answer moved the reader. One it
+        // could not - a wheel up while a fresh mount still sits at offset 0 -
+        // left them exactly where they already were, which is nowhere they
+        // chose: a restore that has not placed them yet still owns the
+        // landing they asked for by reopening, and its measured loop is the
+        // only thing that converges on it, `initialScrollIndex` being an
+        // estimate-driven bootstrap that clamps to an estimated end.
+        if (viewportCanAnswer) {
+          readerPositionGenerationRef.current += 1;
+          pendingMeasuredFreeRestoreRef.current = null;
+          pendingHydrationRestoreAnchorIdRef.current = null;
+          forgetPendingHydrationRestore(identity);
+          restorePersistencePendingRef.current = false;
+        }
         // The restore or navigation this ends may have a command the list
         // still holds until its layout settles; it would land after the
-        // reader's own scroll and undo it.
+        // reader's own scroll and undo it. A gesture the viewport could not
+        // answer ends one too: a command held past a loop that has given up
+        // is re-issued by nothing and lands whenever the layout settles,
+        // while a loop still converging issues its own next command and
+        // loses nothing to this. It stays after the retirement above, whose
+        // generation bump must land before the cancel settles the command's
+        // promise - reversed, that settle would re-issue into a loop the bump
+        // is about to abort.
         if (inFlightNavigationSettleRef.current !== null) {
           chatTimelineRef.current?.cancelPendingScroll();
         }
@@ -2613,7 +2631,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       if (followLatch) {
         followLatch.noteReaderGesture(intent);
       } else {
-        handleTimelineReaderGesture(intent);
+        // No latch, so nothing has read the geometry: the gesture is taken to
+        // have moved the reader, as it was before the latch said otherwise.
+        handleTimelineReaderGesture({ ...intent, viewportCanAnswer: true });
       }
     },
     [handleTimelineReaderGesture],

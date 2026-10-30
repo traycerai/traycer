@@ -51,7 +51,7 @@ import type { TranscriptRowPart } from "@/stores/chats/assistant-turn-parts";
 import {
   useChatTimelineFollowLatch,
   type ChatTimelineFollowLatch,
-  type ChatTimelineReaderGestureIntent,
+  type ChatTimelineReaderGesture,
 } from "./chat-timeline-follow-latch";
 
 /**
@@ -182,7 +182,7 @@ export interface ChatTimelineProps {
   /** Composer + queued-surface overlay height, reserved as bottom content inset. */
   readonly contentInsetEndAdjustment?: number;
   readonly onFollowIntentChange?: (isFollowing: boolean) => void;
-  readonly onReaderGesture?: (intent: ChatTimelineReaderGestureIntent) => void;
+  readonly onReaderGesture?: (gesture: ChatTimelineReaderGesture) => void;
   /** Controller bridge for explicit reader/navigation ownership changes. */
   readonly followLatchRef?: RefObject<ChatTimelineFollowLatch | null>;
   /** Explicit bootstrap/restoration ownership gate for automatic correction. */

@@ -187,6 +187,23 @@ export interface ChatTimelineReaderGestureIntent {
   readonly publishesReaderPosition: boolean;
 }
 
+/**
+ * A gesture as the latch reports it onward: the intent it was given, and what
+ * only the latch can say about it - whether the viewport could answer it. The
+ * intent cannot carry that, because the callers that raise one (a wheel, a
+ * key, a pointer) know what the reader asked for and not where the view
+ * stands.
+ */
+export interface ChatTimelineReaderGesture extends ChatTimelineReaderGestureIntent {
+  /**
+   * False when the view could not move the way the gesture asked - a wheel up
+   * at the top, one toward the end at the strict bottom - so it left the
+   * reader exactly where they already were. True when the geometry could not
+   * be measured: it cannot prove a no-op.
+   */
+  readonly viewportCanAnswer: boolean;
+}
+
 interface ActiveEndCorrection {
   readonly generation: number;
   readonly readerGestureGeneration: number;
@@ -306,7 +323,7 @@ export const CHAT_TIMELINE_FOLLOW_CORRECTION_MAX_ATTEMPTS = 5;
 interface ChatTimelineFollowLatchOptions {
   readonly onFollowIntentChange: ((isFollowing: boolean) => void) | undefined;
   readonly onReaderGesture:
-    | ((intent: ChatTimelineReaderGestureIntent) => void)
+    | ((gesture: ChatTimelineReaderGesture) => void)
     | undefined;
   readonly isCorrectionSuppressed: (() => boolean) | undefined;
   readonly resolveSuppressedEndLanding: (() => boolean) | undefined;
@@ -1274,7 +1291,10 @@ export function useChatTimelineFollowLatch(
       ) {
         supersedePendingEndCorrection();
       }
-      onReaderGestureRef.current?.(intent);
+      onReaderGestureRef.current?.({
+        ...intent,
+        viewportCanAnswer: blocksAutomaticCorrection,
+      });
     },
     [cancelActiveCorrection, listRef, supersedePendingEndCorrection],
   );
@@ -1317,6 +1337,8 @@ export function useChatTimelineFollowLatch(
         direction: "away-from-end",
         freezeInFlightScroll: true,
         publishesReaderPosition: true,
+        // The view is already off the end, unannounced: it moved.
+        viewportCanAnswer: true,
       });
       setFollowIntent(false);
       return true;
@@ -1655,6 +1677,8 @@ export function useChatTimelineFollowLatch(
           direction: "indeterminate",
           freezeInFlightScroll: true,
           publishesReaderPosition: true,
+          // The finger moved the view, which is why this reports at all.
+          viewportCanAnswer: true,
         });
       } else if (armedDeparture.source === "gesture") {
         // A press that has not scrolled is not a departure: the view sits off

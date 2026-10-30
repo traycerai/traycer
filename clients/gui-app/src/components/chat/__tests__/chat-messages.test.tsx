@@ -4055,6 +4055,48 @@ describe("ChatMessages scroll policy", () => {
       view.unmount();
     });
 
+    it("keeps a mount-time free restore running through a wheel the top edge cannot answer", async () => {
+      const messages = makeCompletedTranscript(20);
+      const targetIndex = 8;
+      const targetId = messages[targetIndex].id;
+      const instanceId = `t5-wheel-top-restore-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(instanceId);
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: targetId,
+        anchorIndex: targetIndex,
+        offset: -12,
+      });
+
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages,
+        scrollStateKey: instanceId,
+        instanceId,
+      });
+      const list = legendListRefHolder.current;
+      expect(list).not.toBeNull();
+      if (list === null) throw new Error("LegendList ref did not mount");
+      // The bootstrap leaves the list at the top after the restore's first
+      // command. A wheel up here cannot move the view any further: the
+      // viewport cannot answer it, so it must not retire the restore that
+      // has not placed the reader yet.
+      const scrollNode = getScrollNode();
+      scrollNode.scrollTop = 0;
+      act(() => {
+        scrollNode.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+      });
+
+      await settleLegendList();
+      await settleLegendList();
+
+      const expectedScrollTop = LEGEND_LIST_HEADER_PX + targetIndex * 90 + 12;
+      expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      view.unmount();
+    });
+
     it("keeps a mount-time free restore running through a bare row pointerdown and saves the reader's next position", async () => {
       const messages = makeCompletedTranscript(20);
       const targetIndex = 8;
