@@ -360,7 +360,7 @@ describe("Ticket 02 final-review OSS enforcement", () => {
     const bootout = sliceFrom(
       loginItem,
       "async function bootoutStaleAgent(",
-      "export function runLaunchctlBootout(",
+      "export async function runLaunchctlBootout(",
     );
     expect(bootout).toMatch(/await mutationAllowed\(revalidateBeforeBootout\)/);
 
