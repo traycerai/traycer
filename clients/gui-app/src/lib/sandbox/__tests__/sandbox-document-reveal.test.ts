@@ -949,7 +949,7 @@ describe("content slotted into a shadow root", () => {
    */
   function slottedIntoScroller(
     frame: Frame,
-    mode: "open" | "closed",
+    init: ShadowRootInit,
   ): { outer: HTMLElement; inner: HTMLElement; target: HTMLElement } {
     const doc = frame.window.document;
     const outer = doc.createElement("div");
@@ -960,7 +960,7 @@ describe("content slotted into a shadow root", () => {
     host.append(target);
     const inner = doc.createElement("div");
     inner.append(doc.createElement("slot"));
-    host.attachShadow({ mode }).append(inner);
+    host.attachShadow(init).append(inner);
     frame.place(outer, {
       rect: { top: 0, bottom: 100, left: 0, right: 100 },
       client: { height: 100, width: 100 },
@@ -983,11 +983,11 @@ describe("content slotted into a shadow root", () => {
   // parent is the host, and going straight there walks past the scroller
   // the content is actually rendered in. The outer scroller then moves by
   // the whole distance instead of what is left of it.
-  it.each(["closed", "open"] as const)(
-    "scrolls the scrollers around the slot, %s root",
-    (mode) => {
+  it.each([{ mode: "closed" }, { mode: "open" }] as const)(
+    "scrolls the scrollers around the slot, $mode root",
+    (init) => {
       const frame = startFrame(false);
-      const { outer, inner, target } = slottedIntoScroller(frame, mode);
+      const { outer, inner, target } = slottedIntoScroller(frame, init);
 
       scrollIntoView(target, { block: "start" });
 
@@ -997,6 +997,31 @@ describe("content slotted into a shadow root", () => {
       ]);
     },
   );
+
+  // The engine reads the dictionary once, converting it as it is called.
+  // Reading it again after the root is attached is a second chance for the
+  // page's own accessor to answer differently, or to throw where nothing
+  // threw before — and by then the root exists.
+  it("takes the mode from the root, not from the page's dictionary again", () => {
+    const frame = startFrame(false);
+    let reads = 0;
+    const init: ShadowRootInit = {
+      get mode(): ShadowRootMode {
+        reads += 1;
+        if (reads > 1) throw new Error("the mode was read again");
+        return "closed";
+      },
+    };
+    const { outer, inner, target } = slottedIntoScroller(frame, init);
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(reads).toBe(1);
+    expect(frame.scrolls).toEqual([
+      { scroller: inner, top: 300, left: 0, behavior: "auto" },
+      { scroller: outer, top: 200, left: 0, behavior: "auto" },
+    ]);
+  });
 
   // Which slot, not just some slot: the engine's assignment decides, and
   // the scrollers around the two differ.

@@ -541,18 +541,21 @@ function bootstrapMain(config: BootstrapConfig): void {
     // Kept at creation, the only moment a closed root is in reach. The page
     // gets the engine's own root back and `shadowRoot` stays null for it,
     // so nothing it can read about its own roots changes.
+    //
+    // The mode is read off the root the engine made, never off the
+    // dictionary again: the engine reads that once, as it converts it, and
+    // a second read here lands after the root is attached, where the page's
+    // own accessor could answer differently or throw where nothing threw.
     replace(
       Element.prototype,
       "attachShadow",
       (native) =>
         function (this: unknown, ...args: unknown[]): unknown {
           const root: unknown = native.apply(this, args);
-          const init = args[0];
           if (
             this instanceof Element &&
             root instanceof ShadowRoot &&
-            isObject(init) &&
-            init.mode === "closed"
+            root.mode === "closed"
           ) {
             closedRoots.set(this, root);
           }
