@@ -11,6 +11,12 @@ import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { ChatBotAppPost } from "@/components/chat/chat-bot-message";
 import type { TeamSetup } from "@/hooks/bots/use-team-setups";
+import type { BotOnboardingArrival } from "@traycer/protocol/host/bot/onboarding-schemas";
+import type { TeamSetupHistory } from "@/hooks/bots/use-team-setup-history";
+
+/** What the team's main bot is, the static post's first line. */
+const TEAM_MAIN_BOT_INTRO =
+  "I'm this team's main bot. Tell me here what the team wants done and I'll set up bots for each area: a channel per bot, with the work and its reports in it.";
 
 /**
  * A team's main bot's channel while the bot is still to be set up (Tracy Bots
@@ -72,11 +78,7 @@ export function TeamSetupChannel(props: {
             <div className="mt-auto min-w-0" data-testid="team-setup-post-slot">
               <ChatBotAppPost name={setup.title} testId="team-setup-post">
                 <div className="flex min-w-0 flex-col gap-2 text-ui-sm text-foreground">
-                  <p>
-                    I'm this team's main bot. Tell me here what the team wants
-                    done and I'll set up bots for each area: a channel per bot,
-                    with the work and its reports in it.
-                  </p>
+                  <p>{TEAM_MAIN_BOT_INTRO}</p>
                   <p>
                     Before I can run, the team needs a host: a machine where its
                     bots execute.
@@ -166,3 +168,38 @@ function TeamHostOption(props: {
     </div>
   );
 }
+
+/**
+ * The top of a live team main bot's channel (T67b): the post the channel
+ * showed before the team had a host, kept as history, and a line saying how
+ * the host came. The bot's own posts follow it.
+ */
+export function TeamSetupHistoryRows(props: {
+  readonly botTitle: string;
+  readonly teamName: string;
+  readonly history: TeamSetupHistory;
+}): ReactNode {
+  return (
+    <div
+      className="flex min-w-0 flex-col gap-2 px-2 pt-3"
+      data-testid="team-setup-history"
+    >
+      <ChatBotAppPost name={props.botTitle} testId="team-setup-history-post">
+        <p className="text-ui-sm text-foreground">{TEAM_MAIN_BOT_INTRO}</p>
+      </ChatBotAppPost>
+      <p
+        className="px-3 text-center text-ui-xs text-muted-foreground"
+        data-testid="team-setup-arrival"
+      >
+        {TEAM_SETUP_ARRIVAL_LINES[props.history.arrival.kind](props.teamName)}
+      </p>
+    </div>
+  );
+}
+
+/** How the team's host came, as the channel's system line says it. */
+const TEAM_SETUP_ARRIVAL_LINES: Readonly<
+  Record<BotOnboardingArrival["kind"], (teamName: string) => string>
+> = {
+  cloud: (teamName) => `Cloud enabled for ${teamName} · bots run on sandboxes`,
+};

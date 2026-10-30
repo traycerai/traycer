@@ -520,6 +520,7 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
           .setRail(BOT_ID, open === null ? null : { kind: "thread", ...open })
       }
       onOpenActivity={vi.fn()}
+      setupHistory={null}
     />
   );
 }

@@ -1,4 +1,11 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import {
   createRef,
   useEffect,
@@ -14,6 +21,7 @@ import type {
   ChatMessageUserActions,
 } from "@/components/chat/chat-message";
 import { ChatTimeline } from "@/components/chat/chat-timeline";
+import { ChatTimelineHeaderContext } from "@/components/chat/chat-timeline-header-context";
 import { CHAT_NAVIGATION_HIGHLIGHT_CLASSNAME } from "@/components/chat/chat-navigation-highlight";
 import { PANEL_RESIZE_VISIBLE_ROW_ATTRIBUTE } from "@/components/chat/chat-timeline-panel-resize-snapshot";
 import type { NextStepActionHandler } from "@/components/chat/segments/next-steps-action-group";
@@ -150,6 +158,7 @@ interface RenderTimelineOptions {
   readonly onItemSizeChanged?: () => void;
   readonly navigationHighlightedMessageId?: string | null;
   readonly navigationHighlightedBlockId?: string | null;
+  readonly header?: ReactNode;
 }
 
 function renderTimeline(options: RenderTimelineOptions) {
@@ -165,30 +174,32 @@ function renderTimeline(options: RenderTimelineOptions) {
     navigationHighlightedMessageId: string | null | undefined,
     navigationHighlightedBlockId: string | null | undefined,
   ): ReactNode => (
-    <div
-      style={{
-        height: VIEWPORT_HEIGHT_PX,
-        width: VIEWPORT_WIDTH_PX,
-      }}
-    >
-      <ChatTimeline
-        rows={transcriptListRows({
-          window: null,
-          rendered: messages,
-          splitLongTurns: true,
-        })}
-        taskTitle={options.taskTitle ?? "Test transcript"}
-        backgroundToolBlockIds={backgroundToolBlockIds}
-        getMessageActions={getMessageActions}
-        nextStepActions={nextStepActions}
-        listRef={listRef}
-        className={options.className ?? "h-full"}
-        data-testid={options["data-testid"]}
-        onItemSizeChanged={options.onItemSizeChanged}
-        navigationHighlightedMessageId={navigationHighlightedMessageId}
-        navigationHighlightedBlockId={navigationHighlightedBlockId}
-      />
-    </div>
+    <ChatTimelineHeaderContext value={options.header ?? null}>
+      <div
+        style={{
+          height: VIEWPORT_HEIGHT_PX,
+          width: VIEWPORT_WIDTH_PX,
+        }}
+      >
+        <ChatTimeline
+          rows={transcriptListRows({
+            window: null,
+            rendered: messages,
+            splitLongTurns: true,
+          })}
+          taskTitle={options.taskTitle ?? "Test transcript"}
+          backgroundToolBlockIds={backgroundToolBlockIds}
+          getMessageActions={getMessageActions}
+          nextStepActions={nextStepActions}
+          listRef={listRef}
+          className={options.className ?? "h-full"}
+          data-testid={options["data-testid"]}
+          onItemSizeChanged={options.onItemSizeChanged}
+          navigationHighlightedMessageId={navigationHighlightedMessageId}
+          navigationHighlightedBlockId={navigationHighlightedBlockId}
+        />
+      </div>
+    </ChatTimelineHeaderContext>
   );
 
   const result = render(
@@ -530,6 +541,30 @@ describe("ChatTimeline", () => {
 
     const { container } = renderTimeline({ messages });
     expect(spacerClasses(container)).toEqual(["h-3 sm:h-4", "h-3 sm:h-4"]);
+  });
+
+  it("draws the header it is given inside the list, after the top spacer and before the first row", async () => {
+    const messages = makeMessages(3);
+    const { container } = renderTimeline({
+      messages,
+      "data-testid": "timeline",
+      header: <div data-testid="timeline-header-probe" />,
+    });
+
+    await settleLegendList();
+    await waitFor(() => {
+      expect(rowIds(container)).toContain("message-0");
+    });
+    const list = within(container).getByTestId("timeline");
+    const header = within(list).getByTestId("timeline-header-probe");
+    const spacer = list.querySelector('div[aria-hidden="true"]');
+    const firstRow = list.querySelector('[data-message-id="message-0"]');
+    expect(spacer?.compareDocumentPosition(header)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(firstRow?.compareDocumentPosition(header)).toBe(
+      Node.DOCUMENT_POSITION_PRECEDING,
+    );
   });
 
   // Ticket 24 (painted-chat lifecycle audit, finding 5): the shared row

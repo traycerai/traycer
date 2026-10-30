@@ -3,6 +3,7 @@ import { hostRpcRegistry } from "@traycer/protocol/host/index";
 import {
   botOnboardingReadV10,
   botOnboardingReadV11,
+  botOnboardingReadV12,
 } from "@traycer/protocol/host/bot/contracts";
 
 const BOT_A = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -22,8 +23,9 @@ const V10_RESPONSE = {
 const entry = hostRpcRegistry["bot.onboarding.read"][1];
 
 describe("bot.onboarding.read@1.1 setup", () => {
-  it("is the registry head, above the frozen 1.0", () => {
-    expect(entry.latestMinor).toBe(1);
+  it("is frozen between 1.0 and the 1.2 head", () => {
+    expect(entry.latestMinor).toBe(2);
+    expect(entry.versions[2].contract).toBe(botOnboardingReadV12);
     expect(entry.versions[1].contract).toBe(botOnboardingReadV11);
     expect(entry.versions[0].contract).toBe(botOnboardingReadV10);
   });
@@ -78,5 +80,58 @@ describe("bot.onboarding.read@1.1 setup", () => {
         }).success,
       ).toBe(false);
     }
+  });
+});
+
+describe("bot.onboarding.read@1.2 setup state", () => {
+  const NEEDS_HOST = {
+    botId: BOT_A,
+    title: "Tracy",
+    state: "needs_host",
+    arrival: null,
+  } as const;
+
+  it("upgrades a 1.1 setup to one still to be set up, and no setup to none", () => {
+    const upgrade = entry.versions[2].upgradeFromPreviousVersion;
+    if (upgrade === null) throw new Error("expected a 1.1 to 1.2 upgrade path");
+
+    expect(
+      upgrade.upgradeResponse(
+        botOnboardingReadV11.responseSchema.parse({
+          ...V10_RESPONSE,
+          setup: { botId: BOT_A, title: "Tracy" },
+        }),
+      ).setup,
+    ).toEqual(NEEDS_HOST);
+    expect(
+      upgrade.upgradeResponse(
+        botOnboardingReadV11.responseSchema.parse({
+          ...V10_RESPONSE,
+          setup: null,
+        }),
+      ).setup,
+    ).toBeNull();
+  });
+
+  it("freezes 1.1 at a setup's bot and title, dropping its state", () => {
+    expect(
+      botOnboardingReadV11.responseSchema.parse({
+        ...V10_RESPONSE,
+        setup: { ...NEEDS_HOST, state: "live", arrival: { kind: "cloud" } },
+      }).setup,
+    ).toEqual({ botId: BOT_A, title: "Tracy" });
+  });
+
+  it("requires a setup's state and arrival, and accepts only the states and arrivals it names", () => {
+    const parse = (setup: object) =>
+      botOnboardingReadV12.responseSchema.safeParse({ ...V10_RESPONSE, setup })
+        .success;
+    expect(parse(NEEDS_HOST)).toBe(true);
+    expect(
+      parse({ ...NEEDS_HOST, state: "live", arrival: { kind: "cloud" } }),
+    ).toBe(true);
+    expect(parse({ botId: BOT_A, title: "Tracy" })).toBe(false);
+    expect(parse({ ...NEEDS_HOST, state: "ready" })).toBe(false);
+    expect(parse({ ...NEEDS_HOST, arrival: { kind: "machine" } })).toBe(false);
   });
 });

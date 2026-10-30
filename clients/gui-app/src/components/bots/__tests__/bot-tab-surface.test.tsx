@@ -324,6 +324,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     resolveMember: (
       userId: string,
     ) => { displayName: string | null; avatarUrl: string | null } | null;
+    setupHistory: ReactNode;
   }) => (
     <div
       data-testid="stub-channel"
@@ -361,6 +362,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
           })
         }
       />
+      {props.setupHistory}
     </div>
   ),
 }));
@@ -518,6 +520,13 @@ const REPLY_TURN: BotTurnRef = {
 const OTHER_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
 /** The id a new team's main bot will be created under. */
 const SETUP_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAX";
+/** The team's main bot, still to be set up, as the onboarding read names it. */
+const NEEDS_HOST_SETUP: BotOnboardingSetup = {
+  botId: SETUP_BOT_ID,
+  title: "Tracy",
+  state: "needs_host",
+  arrival: null,
+};
 const TAB_HOST = "host-tab";
 const BOUND_HOST = "host-bound";
 
@@ -711,7 +720,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
   beforeEach(() => {
     setUpNewTeam();
     mocks.reads["env-new"] = {
-      setup: { botId: SETUP_BOT_ID, title: "Tracy" },
+      setup: NEEDS_HOST_SETUP,
     };
   });
 
@@ -809,7 +818,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     ).not.toBeNull();
 
     mocks.reads["env-new"] = {
-      setup: { botId: SETUP_BOT_ID, title: "Tracy" },
+      setup: NEEDS_HOST_SETUP,
     };
     view.rerender(surfaceFor(SETUP_BOT_ID));
 
@@ -821,7 +830,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     ["the read answers no setup", { setup: null }],
     [
       "the setup names another bot",
-      { setup: { botId: OTHER_BOT_ID, title: "Tracy" } },
+      { setup: { ...NEEDS_HOST_SETUP, botId: OTHER_BOT_ID } },
     ],
   ])(
     "opens the tab as any unlisted bot's, which closes itself, when every read has answered, the list was read since the tab mounted, and %s",
@@ -861,7 +870,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
 
     mocks.readRefetch.mockImplementation(() => {
       mocks.reads["env-new"] = {
-        setup: { botId: SETUP_BOT_ID, title: "Tracy" },
+        setup: NEEDS_HOST_SETUP,
       };
     });
     await user.click(within(notice).getByRole("button", { name: "Retry" }));
@@ -998,7 +1007,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     "shows the channel could not be loaded, opening, subscribing to and closing nothing and refetching nothing on its own, when %s; Retry reads only the failed list",
     async (_name, script, expectFailedRefetched, expectOtherNotRefetched) => {
       mocks.reads["env-new"] = {
-        setup: { botId: SETUP_BOT_ID, title: "Tracy" },
+        setup: NEEDS_HOST_SETUP,
       };
       script();
       const user = userEvent.setup();
@@ -1074,6 +1083,31 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       ).not.toBeNull();
     },
   );
+
+  it("draws no setup channel for a bot the read names live before the list carries it: it reads the list again and opens the bot once listed", () => {
+    mocks.reads["env-new"] = {
+      setup: { ...NEEDS_HOST_SETUP, state: "live", arrival: { kind: "cloud" } },
+    };
+    mocks.state.list.isFetchedAfterMount = false;
+    mocks.listRefetch.mockImplementation(() => {
+      mocks.state.listedBotIds = [BOT_ID, SETUP_BOT_ID];
+      mocks.state.list = {
+        dataUpdatedAt: 2_000,
+        errorUpdatedAt: 0,
+        isFetchedAfterMount: true,
+        isFetching: false,
+      };
+    });
+    const view = render(surfaceFor(SETUP_BOT_ID));
+
+    expect(screen.queryByTestId("team-setup-channel")).toBeNull();
+    expect(mocks.listRefetch).toHaveBeenCalled();
+
+    view.rerender(surfaceFor(SETUP_BOT_ID));
+
+    expect(mocks.open).toHaveBeenCalledWith({ botId: SETUP_BOT_ID });
+    expect(screen.getByTestId("stub-channel")).toBeTruthy();
+  });
 
   /**
    * The team's read answers `setup: null` (the bot has been created), but the
@@ -1227,6 +1261,72 @@ describe("<BotTabSurface /> bot.open", () => {
     const { container } = render(surface());
 
     expectNoMachineWording(container);
+  });
+});
+
+/** The team's main bot, live: the onboarding read names it with how its host came. */
+const LIVE_SETUP: BotOnboardingSetup = {
+  botId: BOT_ID,
+  title: "Release Bot",
+  state: "live",
+  arrival: { kind: "cloud" },
+};
+
+describe("<BotTabSurface /> a team's main bot once it is live", () => {
+  beforeEach(() => {
+    mocks.state.mainBotIds = { "env-team": BOT_ID };
+    mocks.reads["env-team"] = { setup: LIVE_SETUP };
+  });
+
+  it("opens the bot's own channel, with the setup post kept at its top and a line saying how the team's host came", () => {
+    render(surface());
+
+    expect(mocks.open).toHaveBeenCalledWith({ botId: BOT_ID });
+    expect(screen.queryByTestId("team-setup-channel")).toBeNull();
+    const channel = screen.getByTestId("stub-channel");
+    const post = within(channel).getByTestId("team-setup-history-post");
+    expect(within(post).getByText("Release Bot")).toBeTruthy();
+    expect(within(channel).getByTestId("team-setup-arrival").textContent).toBe(
+      "Cloud enabled for Acme · bots run on sandboxes",
+    );
+    expect(within(channel).queryByTestId("team-host-options")).toBeNull();
+  });
+
+  it.each<readonly [string, () => void]>([
+    [
+      "the bot is not its team's main bot",
+      () => {
+        mocks.state.mainBotIds = { "env-team": OTHER_BOT_ID };
+      },
+    ],
+    [
+      "the read names the team's main bot still to be set up",
+      () => {
+        // With an arrival, so the state alone decides.
+        mocks.reads["env-team"] = {
+          setup: { ...LIVE_SETUP, state: "needs_host" },
+        };
+      },
+    ],
+    [
+      "the team's bots pre-date onboarding",
+      () => {
+        mocks.reads["env-team"] = { setup: null };
+      },
+    ],
+    [
+      "the read failed",
+      () => {
+        mocks.reads["env-team"] = "fails";
+      },
+    ],
+  ])("shows the channel with no setup history when %s", (_name, script) => {
+    script();
+    render(surface());
+
+    const channel = screen.getByTestId("stub-channel");
+    expect(within(channel).queryByTestId("team-setup-history-post")).toBeNull();
+    expect(within(channel).queryByTestId("team-setup-arrival")).toBeNull();
   });
 });
 
