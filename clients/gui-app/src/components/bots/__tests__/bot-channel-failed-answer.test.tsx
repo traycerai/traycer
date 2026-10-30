@@ -435,9 +435,11 @@ function mountChannelWith(
   mocks.channelHandle = {
     store: createChannelStore(posts),
   } as ChatSessionStoreHandle;
+  // One client for the mount, as the app has: a rerender keeps its cache.
+  const queryClient = new QueryClient();
   const tree = (): ReactElement => (
     <StrictMode>
-      <QueryClientProvider client={new QueryClient()}>
+      <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <ChatExpansionTestProviders tileInstanceId="tile-1">
             <BotChannelView
