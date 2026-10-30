@@ -79,13 +79,14 @@ export const botConversationSendRequestSchema = lazySchema(() =>
     /**
      * A reply under a row of `conversationId` that roots a thread: a
      * `question` or `proposal` announcement (decision 55), a member's post
-     * its bot answered at the top level (a `direct` post), or the bot's
+     * its bot answered at the top level (a `direct` post), the bot's
      * direct answer to such a post (decision 114), whose thread is its own
-     * and not the post's. The message opens, or joins, the thread hung off
+     * and not the post's, or any other row of the bot. The message opens, or joins, the thread hung off
      * that row, as its first request when it opens it. Only a bound host
      * whose `bot.thread.list` names `"answer"` in `threadAnchors.kinds` takes a
-     * reply under a direct answer. `null` (or absent) otherwise; never set
-     * with `threadId`.
+     * reply under a direct answer, and only one that names `"message"` a
+     * reply under any other row of the bot. `null` (or absent) otherwise;
+     * never set with `threadId`.
      */
     announcementId: z.string().min(1).max(255).nullable().default(null),
     /**
@@ -263,6 +264,13 @@ export const botThreadListResponseSchemaV10 = lazySchema(() =>
 export const BOT_THREAD_ANCHOR_ANSWER = "answer";
 
 /**
+ * The `threadAnchors` value naming every other row the bot wrote in the
+ * channel - an announcement of any kind, a reply that answers no post: a
+ * member's reply under one opens that row's own thread.
+ */
+export const BOT_THREAD_ANCHOR_MESSAGE = "message";
+
+/**
  * The channel rows, beyond a member's post, a question, a proposal and a
  * direct post, under which one binding of the bot opens a thread when a
  * member replies. They hold for that binding only: a client compares
@@ -277,7 +285,8 @@ export const botThreadAnchorsSchema = lazySchema(() =>
     epoch: z.number().int().nonnegative(),
     /**
      * `"answer"` ({@link BOT_THREAD_ANCHOR_ANSWER}) is the bot's direct
-     * answer. A value a client does not know is ignored.
+     * answer; `"message"` ({@link BOT_THREAD_ANCHOR_MESSAGE}) any other row
+     * of the bot. A value a client does not know is ignored.
      */
     kinds: z.array(z.string().min(1).max(64)).max(16),
   }),

@@ -477,7 +477,7 @@ function ApprovalWaitLine(props: { readonly requestedAt: number }) {
       className="m-0 text-ui-xs text-muted-foreground"
       data-testid="approval-wait-line"
     >
-      {waited} {APPROVAL_PAUSED_LINE}
+      {waited}. {APPROVAL_PAUSED_LINE}
     </p>
   );
 }

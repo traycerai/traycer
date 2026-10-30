@@ -1,4 +1,3 @@
-import { withLock } from "@traycer-clients/shared/host-lock/cross-process-lock";
 import {
   hostDoctorResponseSchema,
   type HostDoctorIssue,
@@ -14,6 +13,7 @@ import {
 } from "../internal/host-rpc";
 import { createCliLogger, errorFromUnknown } from "../logger";
 import type { CommandFn, CommandResult } from "../runner/runner";
+import { withCliScopedFileLock } from "../store/cli-lock";
 import { hostDoctorLeasePath } from "../store/paths";
 
 /**
@@ -110,7 +110,7 @@ async function readRunningHostIssues(): Promise<
   const metadata = await readHostPidMetadata(config.environment);
   if (metadata !== null && metadata.pid === process.ppid) return null;
   try {
-    const leased = await withLock(
+    const leased = await withCliScopedFileLock(
       {
         lockPath: hostDoctorLeasePath(config.environment),
         reason: "host-doctor",

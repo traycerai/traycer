@@ -1607,5 +1607,12 @@ export const CHAT_SUBSCRIBE_HTML_ARTIFACTS_MINOR = 30;
 /** Older peers receive the tool row without its inline artifact stamp. */
 export const CHAT_SUBSCRIBE_ARTIFACT_STAMP_MINOR = 31;
 
+/**
+ * Older peers receive a bot's send without the post it wrote
+ * (`tool_call.botSendReceipt`, Tracy Bots T94). It rides the unreleased
+ * `1.40`; the host deletes the key below it.
+ */
+export const CHAT_SUBSCRIBE_BOT_SEND_RECEIPT_MINOR = 40;
+
 /** Older peers receive accumulated changes without new-kind artifact tags. */
 export const CHAT_SUBSCRIBE_CHECKPOINT_ARTIFACT_KINDS_MINOR = 33;

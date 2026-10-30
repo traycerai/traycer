@@ -297,6 +297,10 @@ function bootstrapMain(config: BootstrapConfig): void {
     Element.prototype,
     "scrollTo",
   )?.value;
+  const shadowMode: unknown = Reflect.get(
+    Object.getOwnPropertyDescriptor(ShadowRoot.prototype, "mode") ?? {},
+    "get",
+  );
   const pixels = (value: string): number =>
     value.endsWith("px") ? Number.parseFloat(value) || 0 : 0;
   // Spans are `[near, far]` along one axis.
@@ -331,14 +335,67 @@ function bootstrapMain(config: BootstrapConfig): void {
       return center;
     return nearestDelta(target, port);
   };
+  // Closed roots, kept at creation. A closed root is unreachable from its
+  // host afterwards, and `assignedSlot` is null for the content slotted
+  // into one, so without this the walk below cannot see the slot and misses
+  // every scroller between it and the host.
+  const closedRoots = new WeakMap<Element, ShadowRoot>();
+  // The slot the engine assigned this element to inside its parent's closed
+  // root, read from the slot's side, which a closed root does not hide.
+  const slotInClosedRoot = (
+    element: Element,
+    parent: Element,
+  ): Element | null => {
+    const root = closedRoots.get(parent);
+    if (root === undefined) return null;
+    const slots = root.querySelectorAll<HTMLSlotElement>("slot");
+    for (let i = 0; i < slots.length; i += 1) {
+      if (slots[i].assignedNodes().includes(element)) return slots[i];
+    }
+    return null;
+  };
   // The flat-tree parent, so an element in a shadow root reaches the
-  // scrollers outside it.
+  // scrollers outside it, and one slotted into a shadow root reaches the
+  // scrollers inside it.
   const parentOf = (element: Element): Element | null => {
     if (element.assignedSlot !== null) return element.assignedSlot;
-    if (element.parentElement !== null) return element.parentElement;
+    const parent = element.parentElement;
+    if (parent !== null) return slotInClosedRoot(element, parent) ?? parent;
     const root = element.getRootNode();
     return root instanceof ShadowRoot ? root.host : null;
   };
+  // Nothing inside skipped contents is scrolled to: an ancestor's
+  // `content-visibility: hidden` skips what is inside it, and the engine
+  // reveals nothing in there however much room the page leaves around it.
+  // A target in there still has a client rect, so the rect above cannot
+  // tell.
+  //
+  // `checkVisibility` is the engine's own answer to that, and the only one
+  // worth asking. The direction relied on is one way: wherever it is false
+  // the engine reveals nothing. It is true for some the engine declines to
+  // scroll to anyway, a `position: fixed` target among them, which this
+  // leaves exactly as it found them. Reading the ancestors' computed style
+  // cannot replace it:
+  // `content-visibility` applies only where layout containment can, and the
+  // computed `display` does not say where that is — `<svg>` and a plain
+  // `<label>` are both `inline`, and the engine skips the first and ignores
+  // the second. It is also computed over the real flat tree, so it sees a
+  // root no walk from here can reach, a `<details>` among them: the walk
+  // enters a closed root only where the page created it through
+  // `attachShadow`, and a UA root is never created that way.
+  //
+  // Default options are the question being asked. They answer false for a
+  // box that is not generated and for skipped contents, and leave out
+  // `visibility`, `opacity` and the off-screen skipping of a
+  // `content-visibility: auto` ancestor, each of which the engine reveals
+  // into. An element's own `hidden` skips only what is inside it, so the
+  // element itself still answers true.
+  //
+  // An engine without the method is left alone, which is how the reveal
+  // behaved before this rule: a page it would have skipped is scrolled to
+  // as any other.
+  const isSkipped = (target: Element): boolean =>
+    "checkVisibility" in target && !target.checkVisibility();
   // Containment of any kind, on the root or on the body. `contain` names it;
   // `container-type` and `content-visibility` apply it without naming it, and
   // leave `contain` itself `none`.
@@ -349,19 +406,14 @@ function bootstrapMain(config: BootstrapConfig): void {
   // twice already, so it is read the other way round: the values that contain
   // nothing are named, and everything else contains.
   //
-  // `content-visibility: hidden` contains, and is deliberately read here as
-  // though it did not. Its contents are skipped and the engine reveals
-  // nothing inside them, while a target in there still has a client rect, so
-  // the walk cannot tell from the target alone that there is nothing to
-  // reveal. Read as containment, the body becomes a scroller and the walk
-  // moves it to that target; read as the viewport's, a page that sizes
-  // itself to its skipped contents leaves the viewport no room and the walk
-  // moves nothing, as the engine does. A page that gives itself an explicit
-  // height is the shape this does not cover: the viewport has room, and the
-  // walk scrolls it where the engine scrolls nothing. Reading `hidden` as
-  // containment does not cover it either, so it is left as it is rather than
-  // taken as a reason to call the page contained. `auto` is containment the
-  // engine does reveal into, and counts.
+  // `content-visibility: hidden` contains too, and is left out because it
+  // cannot change the answer. This is asked only of the root and the body,
+  // and only to decide whether the walk treats the body as a scroller of
+  // its own — which matters only when the body is an ancestor of the
+  // target, and a target under a `hidden` root or body is skipped contents,
+  // which `isSkipped` has already turned the reveal back for. So whenever a
+  // `hidden` here would matter, the reveal is over. `auto` is containment
+  // the engine does reveal into, and counts.
   const contains = (element: Element | null): boolean => {
     if (element === null) return false;
     const style = window.getComputedStyle(element);
@@ -401,7 +453,10 @@ function bootstrapMain(config: BootstrapConfig): void {
     inline: Align,
     behavior: ScrollBehavior,
   ): void => {
-    if (target.getClientRects().length === 0) return;
+    // `isSkipped` first: it is a read of what the engine already knows,
+    // while `getClientRects` lays out the subtree to answer, which for
+    // skipped contents is the very work the page asked not to do.
+    if (isSkipped(target) || target.getClientRects().length === 0) return;
     const margin = window.getComputedStyle(target);
     const rect = target.getBoundingClientRect();
     let top = rect.top - pixels(margin.scrollMarginTop);
@@ -487,6 +542,39 @@ function bootstrapMain(config: BootstrapConfig): void {
       ? value
       : fallback;
   if (!config.canvas) {
+    // Kept at creation, the only moment a closed root is in reach. The page
+    // gets the engine's own root back and `shadowRoot` stays null for it,
+    // so nothing it can read about its own roots changes.
+    //
+    // Nothing the capture does may reach the page. The root is attached by
+    // the time it runs, so anything of the page's it called could answer
+    // differently or throw, and a throw there would fail an `attachShadow`
+    // that had already succeeded. So the mode comes from the getter taken
+    // above, before the page ran, and never from the dictionary the engine
+    // has already converted or from an accessor the page can replace; and
+    // whatever else goes wrong, the page still gets its root.
+    replace(
+      Element.prototype,
+      "attachShadow",
+      (native) =>
+        function (this: unknown, ...args: unknown[]): unknown {
+          const root: unknown = native.apply(this, args);
+          try {
+            if (
+              this instanceof Element &&
+              root instanceof ShadowRoot &&
+              isNative(shadowMode) &&
+              shadowMode.call(root) === "closed"
+            ) {
+              closedRoots.set(this, root);
+            }
+          } catch {
+            // Not kept, so the walk reaches this root's slots no better
+            // than it did before any of this. The page is none the wiser.
+          }
+          return root;
+        },
+    );
     replace(
       Element.prototype,
       "scrollIntoView",

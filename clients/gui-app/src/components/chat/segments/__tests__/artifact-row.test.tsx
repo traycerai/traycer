@@ -754,7 +754,7 @@ describe("<ArtifactRow />", () => {
       return intent;
     }
 
-    it("opens the stamped snapshot, bound to the chat's host, without reusing an existing tile", () => {
+    it("opens the stamped snapshot, bound to the chat's host, deduped onto the artifact's tile", () => {
       storeMocks.current = {
         artifacts: {
           byId: { [ARTIFACT_ID]: PROJECTION_WITH_HEAD },
@@ -765,13 +765,10 @@ describe("<ArtifactRow />", () => {
       renderRow(scopeWithClient(makeArtifactReadClient(neverRespond)), STAMP);
 
       fireEvent.click(screen.getByRole("button", { name: "Expand" }));
-      fireEvent.click(screen.getByRole("button", { name: "Expand" }));
 
-      expect(expandMocks.openTile).toHaveBeenCalledTimes(2);
-      const [first, second] = expandMocks.openTile.mock.calls.map(
-        ([intent]) => intent,
-      );
-      expect(first).toMatchObject({
+      // `dedupe: true` is what keeps a second click from opening a second
+      // tile; the executor moves the existing tile onto this `htmlVersion`.
+      expect(lastOpenedIntent()).toMatchObject({
         node: {
           id: ARTIFACT_ID,
           type: "html",
@@ -783,12 +780,9 @@ describe("<ArtifactRow />", () => {
           },
         },
         target: { epicId: "epic-1" },
-        dedupe: false,
+        dedupe: true,
         source: "direct_ui",
       });
-      // Each Expand is its own tile, so a second version never replaces a
-      // tile that is already showing another one.
-      expect(first.node.instanceId).not.toBe(second.node.instanceId);
     });
 
     it("opens the live head with its own capture time after the stamped object is evicted", async () => {

@@ -445,6 +445,7 @@ function ActivityChildRow(props: ActivityChildRowProps) {
           managedCommand={segment.managedCommand}
           agentMessageReceipt={segment.agentMessageReceipt}
           agentMessageDelivery={segment.agentMessageDelivery}
+          botSendReceipt={segment.botSendReceipt}
           isStreaming={segment.isStreaming}
           endState={segment.endState}
           stopped={segment.stopped}

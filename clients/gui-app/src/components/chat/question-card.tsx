@@ -4,8 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useClipboardCopy } from "@/hooks/ui/use-clipboard-copy";
 import {
+  QUESTION_SKIPPED_TEXT,
   draftText,
   questionCardView,
+  questionSettledLine,
   type QuestionCardDraft,
   type QuestionCardSettlement,
 } from "@/components/chat/question-card-view";
@@ -29,9 +31,6 @@ export interface QuestionCardAnswer {
   readonly text: string;
   readonly skipped: boolean;
 }
-
-/** The line a Skip sends as the person's message. */
-export const QUESTION_SKIPPED_TEXT = "Skipped";
 
 /**
  * The card under a question asked without waiting for its answer (Tracy
@@ -122,7 +121,7 @@ function QuestionCardItem(props: {
           data-testid="question-card-settlement"
           className="text-ui-xs break-words whitespace-pre-wrap text-muted-foreground"
         >
-          {settledLine(view.settlement, asker)}
+          {questionSettledLine(view.settlement, asker)}
         </p>
       ) : (
         <>
@@ -297,18 +296,6 @@ function OvertakenActions(props: {
       )}
     </div>
   );
-}
-
-function settledLine(
-  settlement: QuestionCardSettlement,
-  asker: string,
-): string {
-  if (settlement.by.kind === "asker") {
-    return `Settled by ${asker}: ${settlement.answer ?? QUESTION_SKIPPED_TEXT}`;
-  }
-  return settlement.skipped || settlement.answer === null
-    ? QUESTION_SKIPPED_TEXT
-    : `Answered by ${settlement.by.name}: ${settlement.answer}`;
 }
 
 function overtakenLine(

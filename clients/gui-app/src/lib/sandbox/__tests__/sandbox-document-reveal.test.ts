@@ -26,6 +26,18 @@ interface Layout {
     readonly left: number;
   };
   readonly style?: Readonly<Record<string, string>>;
+  /** What `checkVisibility()` answers for it; absent means visible. */
+  readonly visible?: boolean;
+  /**
+   * Inside a `content-visibility: auto` ancestor that is off screen, so
+   * only `checkVisibility({ contentVisibilityAuto: true })` answers false.
+   */
+  readonly autoSkipped?: boolean;
+  /**
+   * Under a `visibility: hidden` or `opacity: 0` ancestor, so only the
+   * options that ask about CSS visibility or opacity answer false.
+   */
+  readonly cssHidden?: boolean;
 }
 
 interface ScrollCall {
@@ -39,12 +51,14 @@ interface Frame {
   readonly window: DOMWindow;
   readonly layouts: WeakMap<Element, Layout>;
   readonly scrolls: ScrollCall[];
+  readonly rectReads: Element[];
   readonly nativeFocusArgs: unknown[][];
   readonly native: {
-    readonly scrollIntoView: unknown;
-    readonly scrollIntoViewIfNeeded: unknown;
-    readonly htmlFocus: unknown;
-    readonly svgFocus: unknown;
+    readonly scrollIntoView: PropertyDescriptor;
+    readonly scrollIntoViewIfNeeded: PropertyDescriptor;
+    readonly attachShadow: PropertyDescriptor;
+    readonly htmlFocus: PropertyDescriptor;
+    readonly svgFocus: PropertyDescriptor;
   };
   place: (element: Element, layout: Layout) => void;
 }
@@ -69,6 +83,12 @@ function invoke(fn: unknown, self: object, args: readonly unknown[]): void {
 
 function valueOf(owner: object, name: string): unknown {
   return Object.getOwnPropertyDescriptor(owner, name)?.value;
+}
+
+function describedBy(owner: object, name: string): PropertyDescriptor {
+  const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+  if (descriptor === undefined) throw new Error(`no ${name}`);
+  return descriptor;
 }
 
 function record(call: unknown): ScrollCall["behavior"] {
@@ -100,6 +120,7 @@ function startFrame(canvas: boolean): Frame {
 
   const layouts = new WeakMap<Element, Layout>();
   const scrolls: ScrollCall[] = [];
+  const rectReads: Element[] = [];
   const nativeFocusArgs: unknown[][] = [];
   const proto = window.Element.prototype;
   const define = (owner: object, name: string, value: unknown): void => {
@@ -133,7 +154,41 @@ function startFrame(canvas: boolean): Frame {
     };
     return { ...rect, x: rect.left, y: rect.top };
   });
-  define(proto, "getClientRects", () => [{}]);
+  // Recorded, not just answered: in the engine this read is the layout the
+  // page asked not to do, so where it happens is part of the contract.
+  define(proto, "getClientRects", function (this: Element) {
+    rectReads.push(this);
+    return [{}];
+  });
+  // jsdom has no `checkVisibility`, so each element declares what the engine
+  // would answer. Default options, which is what the bootstrap asks: false
+  // for a box that is not generated and for contents an ancestor skips.
+  // `browser-tests/sandbox-frame-scroll.spec.ts` is where that answer is
+  // held to a real engine; here it is the input.
+  define(proto, "checkVisibility", function (this: Element, options: unknown) {
+    const layout = layouts.get(this) ?? {};
+    const asked = (name: string): boolean =>
+      typeof options === "object" &&
+      options !== null &&
+      name in options &&
+      Reflect.get(options, name) === true;
+    // Only the default answer is the engine's reveal decision. Every other
+    // option asks a different question, and these are the pages that tell
+    // them apart: each answers false where the engine reveals.
+    if (layout.autoSkipped === true && asked("contentVisibilityAuto")) {
+      return false;
+    }
+    if (
+      layout.cssHidden === true &&
+      (asked("checkVisibilityCSS") ||
+        asked("visibilityProperty") ||
+        asked("checkOpacity") ||
+        asked("opacityProperty"))
+    ) {
+      return false;
+    }
+    return layout.visible ?? true;
+  });
   define(proto, "scrollTo", function (this: Element, options: unknown) {
     const given = options as {
       top: number;
@@ -179,10 +234,11 @@ function startFrame(canvas: boolean): Frame {
   }) as typeof window.getComputedStyle;
 
   const native = {
-    scrollIntoView: valueOf(proto, "scrollIntoView"),
-    scrollIntoViewIfNeeded: valueOf(proto, "scrollIntoViewIfNeeded"),
-    htmlFocus: valueOf(window.HTMLElement.prototype, "focus"),
-    svgFocus: valueOf(window.SVGElement.prototype, "focus"),
+    scrollIntoView: describedBy(proto, "scrollIntoView"),
+    scrollIntoViewIfNeeded: describedBy(proto, "scrollIntoViewIfNeeded"),
+    attachShadow: describedBy(proto, "attachShadow"),
+    htmlFocus: describedBy(window.HTMLElement.prototype, "focus"),
+    svgFocus: describedBy(window.SVGElement.prototype, "focus"),
   };
   Object.defineProperty(window.document, "scrollingElement", {
     configurable: true,
@@ -193,6 +249,7 @@ function startFrame(canvas: boolean): Frame {
     window,
     layouts,
     scrolls,
+    rectReads,
     nativeFocusArgs,
     native,
     place: (element, layout) => layouts.set(element, layout),
@@ -543,7 +600,8 @@ describe("body overflow inside a frame", () => {
   // the next ones. `contain` names the containment; `container-type` and
   // `content-visibility` apply it with `contain` itself left `none`.
   // `content-visibility: hidden` is in neither list: it contains, and the
-  // walk reads it as the viewport's anyway, which the last test here covers.
+  // walk never asks, because a reveal inside skipped contents is over
+  // before it starts. The "skipped" tests below cover that.
   const CONTAINS: Record<string, string>[] = [
     { contain: "paint" },
     { contain: "layout" },
@@ -649,47 +707,102 @@ describe("body overflow inside a frame", () => {
     ]);
   });
 
-  // `content-visibility: hidden` skips the page's contents, and the engine
-  // reveals nothing inside them. Such a page lays out no taller than its
-  // view, so the viewport it is left to has no room and the walk scrolls
-  // nothing, which is what the engine does. Were it read as the containment
-  // it is, the body would be a scroller and the walk would move it to an
-  // element the engine never moves to.
-  it.each(["html", "body"])(
-    "scrolls nothing into view when %s is skipped",
-    (skipped) => {
-      const frame = startFrame(false);
-      const doc = frame.window.document;
-      const target = doc.createElement("button");
-      doc.body.append(target);
-      const view = { height: 100, width: 100 };
-      frame.place(doc.documentElement, {
-        client: view,
-        // Skipped contents leave the root no taller than its view.
-        scroll: { height: 100, width: 100, top: 0, left: 0 },
-        style:
-          skipped === "html"
-            ? { ...VISIBLE, contentVisibility: "hidden" }
-            : VISIBLE,
-      });
-      frame.place(doc.body, {
-        client: view,
-        scroll: { height: 1000, width: 1000, top: 0, left: 0 },
-        style: {
-          overflowX: "hidden",
-          overflowY: "visible",
-          ...(skipped === "body" ? { contentVisibility: "hidden" } : {}),
-        },
-      });
-      frame.place(target, {
-        rect: { top: 300, bottom: 340, left: 20, right: 60 },
-      });
+  // A page with room to scroll in every scroller, so what the walk does is
+  // decided by the answer declared for the target and nothing else. A page
+  // that happened to leave no room would behave the same either way.
+  function pageDeclaring(
+    frame: Frame,
+    answers: { visible: boolean; autoSkipped: boolean; cssHidden: boolean },
+  ): { html: HTMLElement; target: HTMLElement } {
+    const doc = frame.window.document;
+    const target = doc.createElement("button");
+    doc.body.append(target);
+    const roomy = {
+      client: { height: 100, width: 100 },
+      scroll: { height: 1000, width: 1000, top: 0, left: 0 },
+    };
+    frame.place(doc.documentElement, { ...roomy, style: VISIBLE });
+    frame.place(doc.body, { ...roomy, style: VISIBLE });
+    frame.place(target, {
+      rect: { top: 300, bottom: 340, left: 20, right: 60 },
+      ...answers,
+    });
+    return { html: doc.documentElement, target };
+  }
 
-      scrollIntoView(target, { block: "start" });
+  const REVEALS = { visible: true, autoSkipped: false, cssHidden: false };
+  const REVEALED = [
+    { scroller: null, top: 300, left: 0, behavior: "auto" },
+  ] as const;
+  const revealedBy = (html: HTMLElement): unknown[] =>
+    REVEALED.map((call) => ({ ...call, scroller: html }));
 
-      expect(frame.scrolls).toEqual([]);
-    },
-  );
+  // Wherever `checkVisibility()` is false the engine reveals nothing, which
+  // is the one direction the rule relies on. Which pages those are is held
+  // to a real engine in `browser-tests/sandbox-frame-scroll.spec.ts`.
+  it("scrolls nothing into view, and measures nothing, when the engine would reveal nothing", () => {
+    const frame = startFrame(false);
+    const { target } = pageDeclaring(frame, { ...REVEALS, visible: false });
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([]);
+    // Asking the engine comes before measuring: a rect read here lays out
+    // the subtree whose layout the page skipped.
+    expect(frame.rectReads).toEqual([]);
+  });
+
+  it("reveals a target the engine would reveal", () => {
+    const frame = startFrame(false);
+    const { html, target } = pageDeclaring(frame, REVEALS);
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual(revealedBy(html));
+  });
+
+  // `focus` reveals through the same walk, so the rule holds for it too.
+  it("skips the reveal of an unrevealable target through focus", () => {
+    const frame = startFrame(false);
+    const { target } = pageDeclaring(frame, { ...REVEALS, visible: false });
+
+    target.focus();
+
+    expect(frame.nativeFocusArgs).toEqual([[{ preventScroll: true }]]);
+    expect(frame.scrolls).toEqual([]);
+  });
+
+  // The default answer is the question. Each of these pages is one the
+  // engine reveals into while some other option set calls it invisible: an
+  // off-screen `content-visibility: auto` ancestor, and a `visibility:
+  // hidden` or `opacity: 0` one. Asking with those options would swallow
+  // the reveal.
+  it.each([
+    { ...REVEALS, autoSkipped: true },
+    { ...REVEALS, cssHidden: true },
+  ])("reveals a target only another option set hides: %o", (answers) => {
+    const frame = startFrame(false);
+    const { html, target } = pageDeclaring(frame, answers);
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual(revealedBy(html));
+  });
+
+  // An engine with no `checkVisibility` is left alone: the reveal behaves as
+  // it did before the rule rather than skipping every page.
+  it("reveals as before on an engine without checkVisibility", () => {
+    const frame = startFrame(false);
+    const { html, target } = pageDeclaring(frame, {
+      ...REVEALS,
+      visible: false,
+    });
+    Reflect.deleteProperty(frame.window.Element.prototype, "checkVisibility");
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual(revealedBy(html));
+  });
 });
 
 describe("scrollIntoViewIfNeeded inside a frame", () => {
@@ -827,27 +940,219 @@ describe("focus inside a frame", () => {
   });
 });
 
+describe("content slotted into a shadow root", () => {
+  /**
+   * An outer scroller holding a shadow host, with the slot the host's own
+   * content is assigned to inside a scroller of the shadow root's. The
+   * target sits below both ports, so each has work to do and the outer
+   * one's share is what is left after the inner one has moved.
+   */
+  function slottedIntoScroller(
+    frame: Frame,
+    init: ShadowRootInit,
+  ): { outer: HTMLElement; inner: HTMLElement; target: HTMLElement } {
+    const doc = frame.window.document;
+    const outer = doc.createElement("div");
+    const host = doc.createElement("div");
+    const target = doc.createElement("button");
+    doc.body.append(outer);
+    outer.append(host);
+    host.append(target);
+    const inner = doc.createElement("div");
+    inner.append(doc.createElement("slot"));
+    host.attachShadow(init).append(inner);
+    frame.place(outer, {
+      rect: { top: 0, bottom: 100, left: 0, right: 100 },
+      client: { height: 100, width: 100 },
+      scroll: { height: 1000, width: 1000, top: 0, left: 0 },
+      style: SCROLLER_STYLE,
+    });
+    frame.place(inner, {
+      rect: { top: 200, bottom: 300, left: 0, right: 100 },
+      client: { height: 100, width: 100 },
+      scroll: { height: 1000, width: 1000, top: 0, left: 0 },
+      style: SCROLLER_STYLE,
+    });
+    frame.place(target, {
+      rect: { top: 500, bottom: 540, left: 0, right: 40 },
+    });
+    return { outer, inner, target };
+  }
+
+  // The flat tree is where the scrollers are: the target's light-tree
+  // parent is the host, and going straight there walks past the scroller
+  // the content is actually rendered in. The outer scroller then moves by
+  // the whole distance instead of what is left of it.
+  it.each([{ mode: "closed" }, { mode: "open" }] as const)(
+    "scrolls the scrollers around the slot, $mode root",
+    (init) => {
+      const frame = startFrame(false);
+      const { outer, inner, target } = slottedIntoScroller(frame, init);
+
+      scrollIntoView(target, { block: "start" });
+
+      expect(frame.scrolls).toEqual([
+        { scroller: inner, top: 300, left: 0, behavior: "auto" },
+        { scroller: outer, top: 200, left: 0, behavior: "auto" },
+      ]);
+    },
+  );
+
+  // The mode comes from the getter taken before the page ran, so an
+  // accessor the page puts in its place answers nobody: reading it would
+  // land after the root is attached, where it could lie or throw.
+  it("keeps a closed root whose mode the page's own accessor denies", () => {
+    const frame = startFrame(false);
+    Object.defineProperty(frame.window.ShadowRoot.prototype, "mode", {
+      configurable: true,
+      get: (): string => "open",
+    });
+    const { outer, inner, target } = slottedIntoScroller(frame, {
+      mode: "closed",
+    });
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([
+      { scroller: inner, top: 300, left: 0, behavior: "auto" },
+      { scroller: outer, top: 200, left: 0, behavior: "auto" },
+    ]);
+  });
+
+  // Whatever the page has done to the globals the capture reads, its own
+  // `attachShadow` still returns the root the engine made it.
+  it("hands back the root even where the capture cannot run", () => {
+    const frame = startFrame(false);
+    const host = frame.window.document.createElement("div");
+    Object.defineProperty(frame.window.Element, Symbol.hasInstance, {
+      configurable: true,
+      value: (): boolean => {
+        throw new Error("the page's own hasInstance");
+      },
+    });
+
+    const root = host.attachShadow({ mode: "closed" });
+
+    expect(root).toBeInstanceOf(frame.window.ShadowRoot);
+    expect(root.host).toBe(host);
+  });
+
+  // The engine reads the dictionary once, converting it as it is called.
+  // Reading it again after the root is attached is a second chance for the
+  // page's own accessor to answer differently, or to throw where nothing
+  // threw before — and by then the root exists.
+  it("takes the mode from the root, not from the page's dictionary again", () => {
+    const frame = startFrame(false);
+    let reads = 0;
+    const init: ShadowRootInit = {
+      get mode(): ShadowRootMode {
+        reads += 1;
+        if (reads > 1) throw new Error("the mode was read again");
+        return "closed";
+      },
+    };
+    const { outer, inner, target } = slottedIntoScroller(frame, init);
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(reads).toBe(1);
+    expect(frame.scrolls).toEqual([
+      { scroller: inner, top: 300, left: 0, behavior: "auto" },
+      { scroller: outer, top: 200, left: 0, behavior: "auto" },
+    ]);
+  });
+
+  // Which slot, not just some slot: the engine's assignment decides, and
+  // the scrollers around the two differ.
+  it("scrolls the scrollers around the slot the target is assigned to", () => {
+    const frame = startFrame(false);
+    const doc = frame.window.document;
+    const outer = doc.createElement("div");
+    const host = doc.createElement("div");
+    const target = doc.createElement("button");
+    target.setAttribute("slot", "second");
+    doc.body.append(outer);
+    outer.append(host);
+    host.append(target);
+    const root = host.attachShadow({ mode: "closed" });
+    const ports: HTMLElement[] = [];
+    for (const name of ["", "second"]) {
+      const port = doc.createElement("div");
+      const slot = doc.createElement("slot");
+      if (name !== "") slot.setAttribute("name", name);
+      port.append(slot);
+      root.append(port);
+      ports.push(port);
+    }
+    frame.place(outer, {
+      rect: { top: 0, bottom: 100, left: 0, right: 100 },
+      client: { height: 100, width: 100 },
+      scroll: { height: 1000, width: 1000, top: 0, left: 0 },
+      style: SCROLLER_STYLE,
+    });
+    frame.place(ports[0], {
+      rect: { top: 200, bottom: 300, left: 0, right: 100 },
+      client: { height: 100, width: 100 },
+      scroll: { height: 1000, width: 1000, top: 0, left: 0 },
+      style: SCROLLER_STYLE,
+    });
+    frame.place(ports[1], {
+      rect: { top: 600, bottom: 700, left: 0, right: 100 },
+      client: { height: 100, width: 100 },
+      scroll: { height: 1000, width: 1000, top: 0, left: 0 },
+      style: SCROLLER_STYLE,
+    });
+    frame.place(target, {
+      rect: { top: 900, bottom: 940, left: 0, right: 40 },
+    });
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([
+      { scroller: ports[1], top: 300, left: 0, behavior: "auto" },
+      { scroller: outer, top: 600, left: 0, behavior: "auto" },
+    ]);
+  });
+
+  it("leaves a closed root as closed as the page made it", () => {
+    const frame = startFrame(false);
+    const host = frame.window.document.createElement("div");
+
+    const root = host.attachShadow({ mode: "closed" });
+
+    expect(root).toBeInstanceOf(frame.window.ShadowRoot);
+    expect(root.host).toBe(host);
+    expect(host.shadowRoot).toBe(null);
+  });
+});
+
 describe("the replaced functions", () => {
-  it("look native: same name and length, non-enumerable", () => {
+  // Indistinguishable from the function it replaced but for the value:
+  // same name and length, and the property left exactly as declared, which
+  // for an interface operation is enumerable.
+  it("look native: same name and length, same descriptor", () => {
     const frame = startFrame(false);
     const proto = frame.window.Element.prototype;
     const htmlProto = frame.window.HTMLElement.prototype;
 
-    const replaced: [object, string, unknown][] = [
+    const replaced: [object, string, PropertyDescriptor][] = [
       [proto, "scrollIntoView", frame.native.scrollIntoView],
       [proto, "scrollIntoViewIfNeeded", frame.native.scrollIntoViewIfNeeded],
+      [proto, "attachShadow", frame.native.attachShadow],
       [htmlProto, "focus", frame.native.htmlFocus],
     ];
     for (const [owner, name, native] of replaced) {
-      const descriptor = Object.getOwnPropertyDescriptor(owner, name);
-      expect(descriptor?.value).not.toBe(native);
+      const descriptor = describedBy(owner, name);
+      expect(descriptor.value).not.toBe(native.value);
       const identity = (fn: unknown): unknown[] => [
         Reflect.get(Object(fn), "name"),
         Reflect.get(Object(fn), "length"),
       ];
-      expect(identity(descriptor?.value)).toEqual(identity(native));
-      expect(descriptor?.enumerable).toBe(false);
-      expect(Object.keys(owner)).not.toContain(name);
+      expect(identity(descriptor.value)).toEqual(identity(native.value));
+      expect({ ...descriptor, value: null }).toEqual({
+        ...native,
+        value: null,
+      });
     }
   });
 
@@ -855,15 +1160,20 @@ describe("the replaced functions", () => {
     const frame = startFrame(true);
     const proto = frame.window.Element.prototype;
 
-    expect(valueOf(proto, "scrollIntoView")).toBe(frame.native.scrollIntoView);
+    expect(valueOf(proto, "scrollIntoView")).toBe(
+      frame.native.scrollIntoView.value,
+    );
     expect(valueOf(proto, "scrollIntoViewIfNeeded")).toBe(
-      frame.native.scrollIntoViewIfNeeded,
+      frame.native.scrollIntoViewIfNeeded.value,
+    );
+    expect(valueOf(proto, "attachShadow")).toBe(
+      frame.native.attachShadow.value,
     );
     expect(valueOf(frame.window.HTMLElement.prototype, "focus")).toBe(
-      frame.native.htmlFocus,
+      frame.native.htmlFocus.value,
     );
     expect(valueOf(frame.window.SVGElement.prototype, "focus")).toBe(
-      frame.native.svgFocus,
+      frame.native.svgFocus.value,
     );
   });
 });

@@ -3015,6 +3015,50 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                 }
                                               ]
                                             },
+                                            "botSendReceipt": {
+                                              "default": null,
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "conversationId": {
+                                                      "type": "string"
+                                                    },
+                                                    "messageId": {
+                                                      "type": "string"
+                                                    },
+                                                    "requestId": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "reply",
+                                                        "ask",
+                                                        "announce"
+                                                      ]
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "conversationId",
+                                                    "messageId",
+                                                    "requestId",
+                                                    "kind"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
                                             "managedCommand": {
                                               "default": null,
                                               "anyOf": [
@@ -3666,6 +3710,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             "agentMessageSend",
                                             "agentMessageReceipt",
                                             "agentMessageDelivery",
+                                            "botSendReceipt",
                                             "managedCommand",
                                             "progress",
                                             "backgroundOutput",

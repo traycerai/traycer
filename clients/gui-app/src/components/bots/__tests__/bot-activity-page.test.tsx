@@ -87,6 +87,14 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (_hostId: string | null, method: string) =>
     mocks.state.supported.has(method),
 }));
+// A stopped post's Update has its own suite (`bot-channel-failed-answer`).
+vi.mock("@/hooks/providers/use-provider-update", () => ({
+  useProviderUpdateForClient: () => ({
+    update: null,
+    pending: false,
+    failure: null,
+  }),
+}));
 // The member actions' writes: each records the method and what it was sent,
 // and stays pending with those variables while the case's `pending` holds it.
 vi.mock("@/hooks/bots/use-bot-task-action-mutations", () => {
@@ -543,7 +551,7 @@ describe("<BotActivityPage /> running now", () => {
     expect(mocks.openPost).toHaveBeenCalledWith({
       anchorMessageId: messageId,
       announcement: true,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
   });
@@ -699,7 +707,7 @@ describe("<BotActivityPage /> a check-in's turn", () => {
     expect(checkinLink().textContent).toBe("Read 2 files · 1m 20s");
     await user.click(checkinLink());
 
-    expect(mocks.openTurn).toHaveBeenCalledWith(located({}));
+    expect(mocks.openTurn).toHaveBeenCalledWith(located({}), null);
   });
 
   it("reads Open the turn for a turn with no summary yet", () => {

@@ -13,7 +13,14 @@ import {
   type BotSessionAccess,
 } from "@/components/bots/bot-session-context";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
-import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
+import {
+  botMemberName,
+  type BotMemberResolver,
+} from "@/lib/bots/bot-member-names";
+import { sendQuestionStates } from "@/lib/bots/bot-send-tool";
+import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
+import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 /**
@@ -25,6 +32,64 @@ export interface BotOpenSession {
   readonly chatId: string;
   readonly threadId: string | null;
   readonly landOn: BotTranscriptLanding | null;
+}
+
+/**
+ * Calls `onChange` when the messages an open session of one of
+ * `conversationIds` holds change, or a session there opens or closes: the
+ * registry relays only the opening and closing, each session's store the
+ * rest. Returns the unsubscribe.
+ */
+function watchConversationMessages(
+  botId: string,
+  hostId: string,
+  conversationIds: readonly string[],
+  onChange: () => void,
+): () => void {
+  const registry = getChatSessionRegistry();
+  type Watch = {
+    readonly handle: ChatSessionStoreHandle;
+    readonly unsubscribe: () => void;
+  };
+  let watched = new Map<string, Watch>();
+  const bind = (): boolean => {
+    let changed = false;
+    const next = new Map<string, Watch>();
+    for (const conversationId of conversationIds) {
+      const handle = registry.peek(botId, conversationId, hostId);
+      if (handle === null) continue;
+      const kept = watched.get(conversationId);
+      if (kept?.handle === handle) {
+        next.set(conversationId, kept);
+        continue;
+      }
+      changed = true;
+      let seen = handle.store.getState().messages;
+      next.set(conversationId, {
+        handle,
+        unsubscribe: handle.store.subscribe((state) => {
+          if (state.messages === seen) return;
+          seen = state.messages;
+          onChange();
+        }),
+      });
+    }
+    for (const [conversationId, watch] of watched) {
+      if (next.get(conversationId) === watch) continue;
+      watch.unsubscribe();
+      changed = true;
+    }
+    watched = next;
+    return changed;
+  };
+  bind();
+  const stopRegistry = registry.subscribe(() => {
+    if (bind()) onChange();
+  });
+  return () => {
+    stopRegistry();
+    for (const watch of watched.values()) watch.unsubscribe();
+  };
 }
 
 /**
@@ -51,8 +116,8 @@ export function BotSessionView(props: {
   readonly onClose: () => void;
   /** Shows the channel, on `messageId` where one is named. */
   readonly onOpenChannel: (messageId: string | null) => void;
-  /** Shows one of the bot's threads beside its channel, by the thread's id. */
-  readonly onOpenThread: (threadId: string) => void;
+  /** Shows one of the bot's threads beside its channel, landed on `messageId` of it where one is named. */
+  readonly onOpenThread: (threadId: string, messageId: string | null) => void;
 }): ReactNode {
   const { botId, hostId, botTitle, session, threads, resolveMember } = props;
   const { onClose, onOpenChannel, onOpenThread } = props;
@@ -64,8 +129,16 @@ export function BotSessionView(props: {
       : (threads?.find((thread) => thread.threadId === session.threadId) ??
         null);
   const anchor = listed?.anchor ?? null;
-  const access = useMemo(
-    (): BotSessionAccess => ({
+  const profile = useAuthStore((s) => s.profile);
+  const access = useMemo((): BotSessionAccess => {
+    const names = {
+      botTitle,
+      memberName: (userId: string) =>
+        botMemberName(userId, profile, resolveMember),
+      viewerUserId: profile?.userId ?? null,
+    };
+    return {
+      ...names,
       botId,
       hostId,
       thread:
@@ -83,17 +156,31 @@ export function BotSessionView(props: {
             },
       openChannel: onOpenChannel,
       openThread: onOpenThread,
-    }),
-    [
-      anchor,
-      botId,
-      hostId,
-      listed,
-      onOpenChannel,
-      onOpenThread,
-      session.threadId,
-    ],
-  );
+      questionStatesOf: (receipt) =>
+        sendQuestionStates(
+          getChatSessionRegistry()
+            .peek(botId, receipt.conversationId, hostId)
+            ?.store.getState()
+            .messages.find(
+              (message) => message.messageId === receipt.messageId,
+            ) ?? null,
+          names,
+        ),
+      watchQuestionStates: (conversationIds, onChange) =>
+        watchConversationMessages(botId, hostId, conversationIds, onChange),
+    };
+  }, [
+    anchor,
+    botId,
+    botTitle,
+    hostId,
+    listed,
+    onOpenChannel,
+    onOpenThread,
+    profile,
+    resolveMember,
+    session.threadId,
+  ]);
   // Find is scoped to the session as it is to a chat tile.
   const tile = useMemo(
     (): Pick<EpicCanvasTileRef, "instanceId" | "id" | "type"> => ({

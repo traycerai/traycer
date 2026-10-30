@@ -32,6 +32,7 @@ import {
   agentMessageSendSchema,
   artifactOperationActionSchema,
   backgroundTaskOutputSchema,
+  botSendReceiptSchema,
   browserSessionReferenceSchema,
   diffSourceSchema,
   fileEditReasonSchema,
@@ -569,6 +570,9 @@ export const toolCallCompletedEventSchema = lazySchema(() =>
     // cannot erase a stamp the first completion carried. Not on the
     // hand-frozen `toolCallCompletedEventSchemaPreDelivery` below.
     agentMessageDelivery: agentMessageDeliverySchema.nullable().optional(),
+    // The post a bot's send wrote, host-stamped like `artifact` below. See
+    // `botSendReceiptSchema`.
+    botSendReceipt: botSendReceiptSchema.nullable().optional(),
     backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
     // For detached background command/Monitor completion, this is the SDK task's
     // own start time from BackgroundItem, not the short foreground spawn call.
@@ -609,6 +613,28 @@ export const toolCallCompletedEventSchemaPreArtifact = lazySchema(() =>
 export type ToolCallCompletedEvent = z.infer<
   typeof toolCallCompletedEventSchema
 >;
+
+// Wire-freeze copy of `toolCallCompletedEventSchema` as the stream lines
+// bound to `openRuntimeEventSchemaPreNotApplied` (from `chat.subscribe@1.31`)
+// ship it: the live event without the `botSendReceipt` stamp. Hand-frozen,
+// NOT derived from the live shape; keys keep the live order.
+export const toolCallCompletedEventSchemaPreBotSendReceipt = lazySchema(() =>
+  z.object({
+    ...baseRuntimeEventFields,
+    type: z.literal("tool_call.completed"),
+    toolName: z.string(),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    managedCommand: toolCallManagedCommandSchema.nullable().optional(),
+    agentMessageReceipt: agentMessageReceiptSchema.nullable().optional(),
+    agentMessageDelivery: agentMessageDeliverySchema.nullable().optional(),
+    backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
+    backgroundStartedAt: z.number().optional(),
+    backgroundTask: z.boolean().optional(),
+    imageResults: z.array(imageGenerationResultSchema).default([]),
+    artifact: toolCallArtifactStampSchema.nullable().optional(),
+    mcpApp: toolCallMcpAppStampSchema.nullable().optional(),
+  }),
+);
 
 // Wire-freeze copy of `toolCallCompletedEventSchema` as `chat.subscribe@1.23`
 // through `@1.28` ship it: the live event without the `agentMessageDelivery`
@@ -697,6 +723,9 @@ export const toolCallErroredEventSchema = lazySchema(() =>
     // terminal failure rendered as a plain error.
     terminationReason: z.enum(["error", "stopped"]).default("error"),
     agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    // The post a bot's send wrote before the call failed after it, stamped
+    // as on completion. See `botSendReceiptSchema`.
+    botSendReceipt: botSendReceiptSchema.nullable().optional(),
     backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
     // For detached background command/Monitor failure/stop, this is the SDK
     // task's own start time from BackgroundItem when available.
@@ -706,6 +735,24 @@ export const toolCallErroredEventSchema = lazySchema(() =>
   }),
 );
 export type ToolCallErroredEvent = z.infer<typeof toolCallErroredEventSchema>;
+
+// Wire-freeze copy of `toolCallErroredEventSchema` as every `chat.subscribe`
+// line through `@1.36` ships it: the live event without the `botSendReceipt`
+// stamp. Bound by every frozen runtime-event union. Hand-frozen, NOT derived
+// from the live shape.
+export const toolCallErroredEventSchemaPreBotSendReceipt = lazySchema(() =>
+  z.object({
+    ...baseRuntimeEventFields,
+    type: z.literal("tool_call.errored"),
+    toolName: z.string(),
+    error: z.string(),
+    terminationReason: z.enum(["error", "stopped"]).default("error"),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
+    backgroundStartedAt: z.number().optional(),
+    backgroundTask: z.boolean().optional(),
+  }),
+);
 
 /**
  * Intermediate human progress line for an in-flight tool call (e.g. a long MCP
@@ -1985,6 +2032,30 @@ export const AUTH_ERROR_CODE = "auth";
 export const ENV_CREDENTIAL_AUTH_ERROR_CODE = "auth_env_credential";
 
 /**
+ * Stable `ErrorEvent.code` for a turn the provider refused because its
+ * command-line tool is too old for the provider's service, on a host that can
+ * update it: the renderer keys on it to offer Update beside the row, which
+ * runs the host's provider update for the turn's harness. The host builds the
+ * message; it names a version only when the provider named one.
+ *
+ * A code rather than an `AgentFailureReason`, as
+ * {@link ENV_CREDENTIAL_AUTH_ERROR_CODE} is: `code` is an open string on every
+ * released line and on disk, and the reason list is a closed enum. It leaves
+ * the turn without a typed `failure`, so no automatic switch runs - the same
+ * outdated tool fails on every account and model.
+ */
+export const PROVIDER_OUTDATED_ERROR_CODE = "provider_outdated";
+
+/**
+ * {@link PROVIDER_OUTDATED_ERROR_CODE} on a host that cannot update the
+ * provider (a sandbox, a pinned version, the person's own copy of the tool):
+ * no Update is offered, and the host's message says who or what updates it.
+ * The renderer never branches on which of those it is.
+ */
+export const PROVIDER_OUTDATED_HOST_OWNER_ERROR_CODE =
+  "provider_outdated_host_owner";
+
+/**
  * `code` on the error block the host appends beside a queue pause, when the
  * pause was caused by the turn above it ending in an error.
  *
@@ -2113,7 +2184,7 @@ export const runtimeEventSchemaPreDisplayFacts = lazySchema(() =>
     reasoningCompletedEventSchema,
     toolCallStartedEventSchema,
     toolCallCompletedEventSchemaPreMcpApp,
-    toolCallErroredEventSchema,
+    toolCallErroredEventSchemaPreBotSendReceipt,
     toolCallProgressEventSchema,
     approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,
@@ -2167,7 +2238,7 @@ export const runtimeEventSchemaPreMcpApp = lazySchema(() =>
     reasoningCompletedEventSchema,
     toolCallStartedEventSchema,
     toolCallCompletedEventSchemaPreMcpApp,
-    toolCallErroredEventSchema,
+    toolCallErroredEventSchemaPreBotSendReceipt,
     toolCallProgressEventSchema,
     approvalRequestedEventSchema,
     approvalResolvedEventSchema,
@@ -2220,7 +2291,7 @@ export const runtimeEventSchemaPreBrowser = lazySchema(() =>
     reasoningCompletedEventSchema,
     toolCallStartedEventSchema,
     toolCallCompletedEventSchemaPreMcpApp,
-    toolCallErroredEventSchema,
+    toolCallErroredEventSchemaPreBotSendReceipt,
     toolCallProgressEventSchema,
     approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,
@@ -2282,7 +2353,7 @@ export const runtimeEventSchemaPreImage = lazySchema(() =>
     reasoningCompletedEventSchema,
     toolCallStartedEventSchema,
     toolCallCompletedEventSchemaPreImage,
-    toolCallErroredEventSchema,
+    toolCallErroredEventSchemaPreBotSendReceipt,
     toolCallProgressEventSchema,
     approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,
@@ -2335,7 +2406,7 @@ export const runtimeEventSchemaV12PreInReplyTo = lazySchema(() =>
     reasoningCompletedEventSchema,
     toolCallStartedEventSchema,
     toolCallCompletedEventSchemaPreImage,
-    toolCallErroredEventSchema,
+    toolCallErroredEventSchemaPreBotSendReceipt,
     toolCallProgressEventSchema,
     approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,
@@ -2399,7 +2470,7 @@ export const runtimeEventSchemaPreSettlement = lazySchema(() =>
     reasoningCompletedEventSchema,
     toolCallStartedEventSchema,
     toolCallCompletedEventSchemaPreReceipt,
-    toolCallErroredEventSchema,
+    toolCallErroredEventSchemaPreBotSendReceipt,
     toolCallProgressEventSchema,
     approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,
@@ -2457,7 +2528,7 @@ export const runtimeEventSchemaPreFallback = lazySchema(() =>
     reasoningCompletedEventSchema,
     toolCallStartedEventSchema,
     toolCallCompletedEventSchemaPreMcpApp,
-    toolCallErroredEventSchema,
+    toolCallErroredEventSchemaPreBotSendReceipt,
     toolCallProgressEventSchema,
     approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,

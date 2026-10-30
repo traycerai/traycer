@@ -302,6 +302,68 @@ export function BotMessageComposer(props: {
   );
 }
 
+/**
+ * The message box of a channel that cannot take a message yet (Tracy Bots
+ * T67, a team's main bot before the team has a host): drawn as the box is,
+ * with nothing to type into and nothing to send, and `reason` under it. No
+ * message is kept for later.
+ */
+export function BotMessageComposerUnavailable(props: {
+  readonly placeholder: string;
+  /** The accessible name of the box. */
+  readonly label: string;
+  /** Why nothing can be sent, said under the box. */
+  readonly reason: string;
+  readonly testId: string;
+}): ReactNode {
+  const { testId } = props;
+  const inputId = useId();
+  const reasonId = useId();
+  return (
+    <div
+      className="flex shrink-0 flex-col gap-1 px-4 pt-1 pb-3"
+      data-testid={testId}
+    >
+      <div className="flex flex-col rounded-lg border border-border bg-background">
+        <label htmlFor={inputId} className="sr-only">
+          {props.label}
+        </label>
+        <Textarea
+          id={inputId}
+          value=""
+          variant="bare"
+          size="sm"
+          rows={1}
+          placeholder={props.placeholder}
+          disabled
+          readOnly
+          aria-describedby={reasonId}
+          className="max-h-60 min-h-10"
+          data-testid={`${testId}-input`}
+        />
+        <div className="flex items-center justify-end gap-2 px-2 pb-1.5">
+          <Button
+            type="button"
+            size="icon-sm"
+            disabled
+            aria-label="Send"
+            data-testid={`${testId}-send`}
+          >
+            <SendHorizontal aria-hidden="true" />
+          </Button>
+        </div>
+      </div>
+      <p
+        id={reasonId}
+        className="px-1 text-ui-xs text-muted-foreground"
+        data-testid={`${testId}-reason`}
+      >
+        {props.reason}
+      </p>
+    </div>
+  );
+}
+
 function ComposerStatus(props: {
   readonly failed: boolean;
   readonly queued: boolean;

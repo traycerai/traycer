@@ -1,8 +1,7 @@
-export type {
-  SandboxArtifactBridge,
-  SandboxArtifactCancel,
-  SandboxArtifactReply,
-  SandboxArtifactRequest,
+export {
+  ARTIFACT_OBJECT_SPAN_BYTES,
+  type SandboxArtifactBridge,
+  type SandboxArtifactCancel,
+  type SandboxArtifactReply,
+  type SandboxArtifactRequest,
 } from "@traycer-clients/shared/platform/sandbox-artifacts";
-
-export const SANDBOX_ARTIFACT_SPAN_BYTES = 4 * 1024 * 1024;

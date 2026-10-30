@@ -13,8 +13,12 @@ import {
 } from "@tanstack/react-query";
 import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
-import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
-import { replyFollowsPost, replyRowIdFor } from "@/lib/bots/reply-row";
+import { useChatLocateRowAnswer } from "@/hooks/chats/use-chat-locate-row";
+import {
+  replyFollowsPost,
+  replyRowIdFor,
+  sendCardFor,
+} from "@/lib/bots/reply-row";
 import { botTurnIndexOf, turnOfMessages } from "@/lib/bots/bot-turn-receipt";
 import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -65,12 +69,12 @@ export type BotTranscriptSurface =
       readonly threadLine: (postMessageId: string) => ChatBotThreadLine | null;
       /** Opens a post's thread; `null` where threads cannot be opened. */
       readonly openThread: ((postMessageId: string) => void) | null;
-      /** Opens the thread under a question, a proposal, a direct post or, where `answer`, a direct reply; `null` where threads cannot be opened. */
+      /** Opens the thread under a question, a proposal, a direct post or another row of the bot; `null` where threads cannot be opened. */
       readonly openAnnouncementThread:
-        | ((announcementId: string, answer: boolean) => void)
+        | ((announcementId: string, anchorKind: string | null) => void)
         | null;
-      /** Whether a direct reply of the bot opens its own thread. */
-      readonly answerThreads: boolean;
+      /** The rows of the bot its host opens their own thread under. */
+      readonly threadAnchorKinds: readonly string[];
       /** Posts a direct reply's chosen option as a new post; `null` while one is being sent. */
       readonly chooseOption: ((choice: string) => void) | null;
       /** Sends a question card's answer at the channel's top level; `null` where nothing can send it. */
@@ -395,64 +399,93 @@ function BotChatTranscriptBody(props: {
     readonly issued: number;
   }>({ request: null, issued: 0 });
   const scrollRequest = scroll.request;
-  const [pendingReplyId, setPendingReplyId] = useState<string | null>(null);
-  const issueScroll = useCallback((rowId: string) => {
-    setScroll((previous) => ({
-      request: {
-        kind: "message",
-        messageId: rowId,
-        blockId: null,
-        requestId: previous.issued + 1,
-      },
-      issued: previous.issued + 1,
-    }));
-  }, []);
-  const scrollToMessage = useCallback(
-    (messageId: string) => {
-      const rowId = replyRowIdFor(messages, messageId);
-      if (rowId !== null) {
-        setPendingReplyId(null);
-        issueScroll(rowId);
+  const [pendingJump, setPendingJump] = useState<PendingJump | null>(null);
+  const issueScroll = useCallback(
+    (target: { readonly rowId: string; readonly blockId: string | null }) => {
+      setScroll((previous) => ({
+        request: {
+          kind: "message",
+          messageId: target.rowId,
+          blockId: target.blockId,
+          requestId: previous.issued + 1,
+        },
+        issued: previous.issued + 1,
+      }));
+    },
+    [],
+  );
+  const jumpTo = useCallback(
+    (jump: PendingJump) => {
+      const target = jumpTargetIn(messages, jump);
+      if (target !== null) {
+        setPendingJump(null);
+        issueScroll(target);
         return;
       }
-      setPendingReplyId(messageId);
+      setPendingJump(jump);
     },
     [issueScroll, messages],
+  );
+  const scrollToMessage = useCallback(
+    (messageId: string) => jumpTo({ kind: "message", messageId }),
+    [jumpTo],
+  );
+  const land = useCallback(
+    (landing: BotTranscriptLanding) =>
+      jumpTo(
+        landing.sendPostId === null
+          ? { kind: "message", messageId: landing.messageId }
+          : {
+              kind: "send",
+              postId: landing.sendPostId,
+              fallbackMessageId: landing.messageId,
+            },
+      ),
+    [jumpTo],
   );
   // The row a pending jump waited on has rendered: settle it during render
   // (the adjust-state-on-prop-change pattern), so the scroll is issued in the
   // same pass the row appears in and no effect sets state.
-  const pendingRowId =
-    pendingReplyId === null ? null : replyRowIdFor(messages, pendingReplyId);
-  if (pendingRowId !== null) {
-    setPendingReplyId(null);
-    issueScroll(pendingRowId);
+  const pendingTarget =
+    pendingJump === null ? null : jumpTargetIn(messages, pendingJump);
+  if (pendingTarget !== null) {
+    setPendingJump(null);
+    issueScroll(pendingTarget);
   }
-  const pendingTarget = useMemo<TranscriptRowLocator | null>(
-    () =>
-      pendingReplyId === null
-        ? null
-        : { kind: "message", messageId: pendingReplyId },
-    [pendingReplyId],
-  );
-  const locatedOrdinal = useChatLocateRow({
+  // A send's card is located by the post its call wrote; a message by its id.
+  const pendingLocator = useMemo<TranscriptRowLocator | null>(() => {
+    if (pendingJump === null) return null;
+    return pendingJump.kind === "message"
+      ? { kind: "message", messageId: pendingJump.messageId }
+      : { kind: "receipt", messageId: pendingJump.postId };
+  }, [pendingJump]);
+  const located = useChatLocateRowAnswer({
     client: tabClient,
     epicId: botId,
     chatId,
-    target: pendingTarget,
+    target: pendingLocator,
     epoch: state.transcriptWindow.epoch,
   });
+  // A session with no card for the post (a send from before the host stamped
+  // its post, or a host that does not locate one) lands on the turn instead.
+  if (pendingJump?.kind === "send" && located.status === "missing") {
+    setPendingJump({
+      kind: "message",
+      messageId: pendingJump.fallbackMessageId,
+    });
+  }
+  const locatedOrdinal = located.status === "found" ? located.ordinal : null;
   const { requestTranscriptOrdinal } = state;
-  // The store's pending-jump ordinal follows the pending reply: named while
+  // The store's pending-jump ordinal follows the pending jump: named while
   // the host has located it and the row is still missing, cleared the moment
   // the jump settles (or the transcript goes away).
   useEffect(() => {
-    if (pendingReplyId === null || locatedOrdinal === null) {
+    if (pendingJump === null || locatedOrdinal === null) {
       requestTranscriptOrdinal(null);
       return;
     }
     requestTranscriptOrdinal(locatedOrdinal);
-  }, [locatedOrdinal, pendingReplyId, requestTranscriptOrdinal]);
+  }, [locatedOrdinal, pendingJump, requestTranscriptOrdinal]);
   useEffect(
     () => () => {
       requestTranscriptOrdinal(null);
@@ -466,7 +499,7 @@ function BotChatTranscriptBody(props: {
         : current,
     );
   }, []);
-  useLandOnMessage(landOn, state.snapshotLoaded, scrollToMessage);
+  useLandOnMessage(landOn, state.snapshotLoaded, land);
   const getMessageActions = useCallback(() => null, []);
   const turns = useTranscriptTurns({
     client: tabClient,
@@ -495,7 +528,7 @@ function BotChatTranscriptBody(props: {
         threadLine: null,
         openThread: null,
         openAnnouncementThread: null,
-        answerThreads: false,
+        threadAnchorKinds: [],
         chooseOption: surface.chooseOption,
         questions,
         failedRequest: surface.failedRequest,
@@ -511,7 +544,7 @@ function BotChatTranscriptBody(props: {
       threadLine: surface.threadLine,
       openThread: surface.openThread,
       openAnnouncementThread: surface.openAnnouncementThread,
-      answerThreads: surface.answerThreads,
+      threadAnchorKinds: surface.threadAnchorKinds,
       chooseOption: surface.chooseOption,
       questions,
       failedRequest: surface.failedRequest,
@@ -604,10 +637,13 @@ function BotChatTranscriptBody(props: {
 /**
  * A message the list lands on, and the visit that asks it to: a request to
  * land on the message the list last landed on is a new visit, and lands
- * again.
+ * again. `sendPostId` names a post one of the session's sends wrote (Tracy
+ * Bots T94): the list lands on that send's card instead, and on `messageId`
+ * where the session has no such card.
  */
 export interface BotTranscriptLanding {
   readonly messageId: string;
+  readonly sendPostId: string | null;
   readonly visit: number;
 }
 
@@ -619,13 +655,35 @@ export interface BotTranscriptLanding {
 function useLandOnMessage(
   landing: BotTranscriptLanding | null,
   ready: boolean,
-  scrollToMessage: (messageId: string) => void,
+  land: (landing: BotTranscriptLanding) => void,
 ): void {
   const [landed, setLanded] = useState<BotTranscriptLanding | null>(null);
   if (landing !== null && ready && !sameLanding(landed, landing)) {
     setLanded(landing);
-    scrollToMessage(landing.messageId);
+    land(landing);
   }
+}
+
+/**
+ * A jump waiting on its row: to a message, or to the card of the send that
+ * wrote a post, landing on `fallbackMessageId` where the session has none.
+ */
+type PendingJump =
+  | { readonly kind: "message"; readonly messageId: string }
+  | {
+      readonly kind: "send";
+      readonly postId: string;
+      readonly fallbackMessageId: string;
+    };
+
+/** Where a jump lands among the rendered rows; `null` while no row carries it. */
+function jumpTargetIn(
+  messages: ReadonlyArray<ChatMessage>,
+  jump: PendingJump,
+): { readonly rowId: string; readonly blockId: string | null } | null {
+  if (jump.kind === "send") return sendCardFor(messages, jump.postId);
+  const rowId = replyRowIdFor(messages, jump.messageId);
+  return rowId === null ? null : { rowId, blockId: null };
 }
 
 function sameLanding(
@@ -635,6 +693,7 @@ function sameLanding(
   return (
     landed !== null &&
     landed.messageId === landing.messageId &&
+    landed.sendPostId === landing.sendPostId &&
     landed.visit === landing.visit
   );
 }
@@ -703,14 +762,18 @@ function useTranscriptTurns(input: {
           ? null
           : (messageIds) => {
               const ref = turnOfMessages(index, messageIds);
-              return ref === null ? null : receiptOf(ref, openTurn);
+              // The reply's own post leads its ids: the session lands on the
+              // card of the send that wrote it.
+              return ref === null
+                ? null
+                : receiptOf(ref, openTurn, messageIds[0] ?? null);
             },
       requestReceipt:
         openTurn === null
           ? null
           : (requestId) => {
               const ref = index.byRequestId.get(requestId);
-              return ref === undefined ? null : receiptOf(ref, openTurn);
+              return ref === undefined ? null : receiptOf(ref, openTurn, null);
             },
       failedRecovery,
     };
@@ -753,11 +816,15 @@ function turnLocateKeysOf(
   return { messageIds, requestIds };
 }
 
-function receiptOf(ref: BotTurnRef, openTurn: BotTurnOpen): ChatBotTurnReceipt {
+function receiptOf(
+  ref: BotTurnRef,
+  openTurn: BotTurnOpen,
+  sendPostId: string | null,
+): ChatBotTurnReceipt {
   return {
     summary: ref.summary,
     startedAt: ref.startedAt,
     endedAt: ref.endedAt,
-    open: () => openTurn(ref),
+    open: () => openTurn(ref, sendPostId),
   };
 }
