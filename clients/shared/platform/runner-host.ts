@@ -40,6 +40,13 @@ import type {
   SandboxVerbFetchResult,
 } from "../host-client/sandbox-control";
 import type {
+  SlackAppInstallUrlResult,
+  SlackAppManifestResult,
+  SlackAppReadResult,
+  SlackAppWriteResult,
+} from "../host-client/slack-app";
+import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
@@ -435,6 +442,31 @@ export interface IRunnerHost {
     bearerToken: string,
     target: SandboxAutomationOpenTarget | null,
   ): Promise<SandboxAutomationOpenFetchResult>;
+  /**
+   * A bot's Slack app (traycer-server `/api/slack/apps/*`) with the person's
+   * bearer, for its members: the app as they see it, the manifest it is
+   * created from, the credentials' registration, Slack's install URL and the
+   * disconnect. Same placement as the sandbox control plane above: desktop in
+   * Electron main, mobile through the native HTTP layer. See
+   * `host-client/slack-app.ts`. Never throw.
+   */
+  readSlackApp(bearerToken: string, botId: string): Promise<SlackAppReadResult>;
+  getSlackAppManifest(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppManifestResult>;
+  registerSlackApp(
+    bearerToken: string,
+    request: SlackAppRegisterRequest,
+  ): Promise<SlackAppWriteResult>;
+  mintSlackAppInstallUrl(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppInstallUrlResult>;
+  disconnectSlackApp(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppWriteResult>;
   /**
    * The secrets broker (authn), with the user's bearer: the grants one
    * sandbox host holds, and the answer to an agent's grant request. See

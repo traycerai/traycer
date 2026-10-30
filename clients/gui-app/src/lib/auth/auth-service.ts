@@ -51,6 +51,13 @@ import type {
   TraycerModelsFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
+  SlackAppInstallUrlResult,
+  SlackAppManifestResult,
+  SlackAppReadResult,
+  SlackAppWriteResult,
+} from "@traycer-clients/shared/host-client/slack-app";
+import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
@@ -3291,6 +3298,45 @@ export class AuthService {
       throw new Error("Sign in to start Automations.");
     }
     return this.runnerHost.openSandboxAutomation(bearer, target);
+  }
+
+  /**
+   * A bot's Slack app, on traycer-server with the person's bearer (its
+   * members only; the server refuses anyone else). Signed out, each answers
+   * `unauthorized` without a request.
+   */
+  async readSlackApp(botId: string): Promise<SlackAppReadResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.readSlackApp(bearer, botId);
+  }
+
+  async getSlackAppManifest(botId: string): Promise<SlackAppManifestResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.getSlackAppManifest(bearer, botId);
+  }
+
+  async registerSlackApp(
+    request: SlackAppRegisterRequest,
+  ): Promise<SlackAppWriteResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.registerSlackApp(bearer, request);
+  }
+
+  async mintSlackAppInstallUrl(
+    botId: string,
+  ): Promise<SlackAppInstallUrlResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.mintSlackAppInstallUrl(bearer, botId);
+  }
+
+  async disconnectSlackApp(botId: string): Promise<SlackAppWriteResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.disconnectSlackApp(bearer, botId);
   }
 
   /** Explicit invitation access when the serving tier predates the host methods. */

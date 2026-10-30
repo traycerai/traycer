@@ -175,6 +175,26 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    readSlackApp: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    getSlackAppManifest: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    registerSlackApp: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    mintSlackAppInstallUrl: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    disconnectSlackApp: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
     getSandboxGrants: async () => ({
       kind: "network-error" as const,
       detail: "test",

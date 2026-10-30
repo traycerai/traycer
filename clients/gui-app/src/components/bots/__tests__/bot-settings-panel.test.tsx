@@ -10,16 +10,18 @@
  * `canEdit`): every control is live, and a host that refuses a write has the
  * refusal shown in place, under the control that made it.
  */
-import { StrictMode, useState } from "react";
+import { StrictMode, useState, type ReactNode } from "react";
 import {
   act,
   cleanup,
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   afterEach,
   beforeEach,
@@ -30,6 +32,16 @@ import {
   type Mock,
 } from "vitest";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import {
+  SLACK_APP_REFUSAL_BOT_NOT_FOUND,
+  SLACK_APP_REFUSAL_NOT_CONFIGURED,
+  type SlackAppRegisterRequest,
+} from "@traycer/protocol/host/slack-app";
+import type {
+  SlackAppManifestResult,
+  SlackAppReadResult,
+} from "@traycer-clients/shared/host-client/slack-app";
+import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
 import {
   BotIdentityContext,
   type BotIdentity,
@@ -77,6 +89,8 @@ const mocks = vi.hoisted(() => ({
   usageSupported: false,
   // The host each read of that support asked about.
   usageSupportHosts: [] as Array<string | null>,
+  // The binding `useHostBinding` answers: its `auth` is the Slack adapter.
+  binding: null as { readonly auth: object } | null,
   // What each write's mutation reports as its error; `null` = no refusal.
   refusal: {
     title: null as string | null,
@@ -91,6 +105,12 @@ function refusalOf(message: string | null): { message: string } | null {
   return message === null ? null : { message };
 }
 
+// The Slack group reads `binding.auth`; everything else of `@/lib/host` stays real.
+vi.mock("@/lib/host", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/lib/host")>("@/lib/host");
+  return { ...actual, useHostBinding: () => mocks.binding };
+});
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.hostClient,
 }));
@@ -219,6 +239,9 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
 });
 
 import { BotChannelSettingsPanel } from "@/components/bots/bot-settings-panel";
+import { RunnerHostContext } from "@/providers/runner-host-context";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import { useBotSlackPendingInstallStore } from "@/stores/bots/bot-slack-pending-install-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 
 const BOT: BotRecord = {
@@ -240,6 +263,53 @@ const BOT: BotRecord = {
   appConversationChatId: null,
 };
 
+// The Slack group's world: a real in-memory runner host behind the five
+// AuthService calls, an app-wide query client, and a signed-in person.
+let slackHost: MockRunnerHost;
+let queryClient: QueryClient;
+// What the Slack calls answer instead of the mock, for the refusals the mock
+// does not produce (a server without Slack, a bot the caller is not in).
+const slackOverrides: {
+  read: SlackAppReadResult | null;
+  manifest: SlackAppManifestResult | null;
+} = { read: null, manifest: null };
+const SLACK_BEARER = "test-bearer";
+
+function newSlackHost(): MockRunnerHost {
+  return new MockRunnerHost({
+    signInUrl: "https://auth.traycer.invalid/sign-in",
+    authnBaseUrl: "https://authn.traycer.invalid",
+    localHost: null,
+    hosts: [],
+    workspaceFolderPickerPaths: undefined,
+    hasLocalHost: undefined,
+    traycerCli: undefined,
+  });
+}
+
+function newSlackAuth(host: MockRunnerHost): object {
+  return {
+    readSlackApp: async (botId: string) =>
+      slackOverrides.read ?? host.readSlackApp(SLACK_BEARER, botId),
+    getSlackAppManifest: async (botId: string) =>
+      slackOverrides.manifest ?? host.getSlackAppManifest(SLACK_BEARER, botId),
+    registerSlackApp: (request: SlackAppRegisterRequest) =>
+      host.registerSlackApp(SLACK_BEARER, request),
+    mintSlackAppInstallUrl: (botId: string) =>
+      host.mintSlackAppInstallUrl(SLACK_BEARER, botId),
+    disconnectSlackApp: (botId: string) =>
+      host.disconnectSlackApp(SLACK_BEARER, botId),
+  };
+}
+
+function inProviders(children: ReactNode): ReactNode {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <RunnerHostContext value={slackHost}>{children}</RunnerHostContext>
+    </QueryClientProvider>
+  );
+}
+
 /**
  * The channel settings panel (T63), its Advanced group opened: the model and
  * the main bot live there, collapsed until the person opens it.
@@ -250,16 +320,18 @@ function mountPanel(
   personal: boolean,
 ): void {
   render(
-    <StrictMode>
-      <BotChannelSettingsPanel
-        bot={bot}
-        isMain={isMain}
-        personal={personal}
-        channelId={null}
-        environmentBots={null}
-        onClose={vi.fn()}
-      />
-    </StrictMode>,
+    inProviders(
+      <StrictMode>
+        <BotChannelSettingsPanel
+          bot={bot}
+          isMain={isMain}
+          personal={personal}
+          channelId={null}
+          environmentBots={null}
+          onClose={vi.fn()}
+        />
+      </StrictMode>,
+    ),
   );
   fireEvent.click(screen.getByTestId("bot-settings-advanced-toggle"));
 }
@@ -280,6 +352,19 @@ function liveStore(): ComposerToolbarStore {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  slackHost = newSlackHost();
+  slackOverrides.read = null;
+  slackOverrides.manifest = null;
+  mocks.binding = { auth: newSlackAuth(slackHost) };
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  useBotSlackPendingInstallStore.setState({ entries: {} });
+  useAuthStore.setState({
+    status: "signed-in",
+    profile: { userId: "user-1", userName: "user-1", email: "u@example.com" },
+    contextMetadata: { userId: "user-1", username: "user-1" },
+  });
   mocks.seeds.length = 0;
   mocks.stores.length = 0;
   mocks.pickerContexts.length = 0;
@@ -304,6 +389,12 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  queryClient.clear();
+  useAuthStore.setState({
+    status: "signed-out",
+    profile: null,
+    contextMetadata: null,
+  });
 });
 
 describe("<BotChannelSettingsPanel /> model", () => {
@@ -768,16 +859,18 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
       owner: input.owner,
     };
     render(
-      <BotIdentityContext value={identity}>
-        <BotChannelSettingsPanel
-          bot={BOT}
-          isMain={false}
-          personal={input.personal}
-          channelId={CHANNEL}
-          environmentBots={input.environmentBots}
-          onClose={onClose}
-        />
-      </BotIdentityContext>,
+      inProviders(
+        <BotIdentityContext value={identity}>
+          <BotChannelSettingsPanel
+            bot={BOT}
+            isMain={false}
+            personal={input.personal}
+            channelId={CHANNEL}
+            environmentBots={input.environmentBots}
+            onClose={onClose}
+          />
+        </BotIdentityContext>,
+      ),
     );
     return onClose;
   }
@@ -803,6 +896,7 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
       "Details",
       "Notifications",
       "Bots in this channel",
+      "Slack",
     ]);
     const owner = screen.getByTestId("bot-settings-owner");
     expect(owner.textContent).toBe(
@@ -869,7 +963,7 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
       environmentBots: [BOT],
     });
 
-    expect(groupTitles()).toEqual(["Details", "Notifications"]);
+    expect(groupTitles()).toEqual(["Details", "Notifications", "Slack"]);
     expect(screen.getByTestId("bot-settings-owner").textContent).toBe(
       "Managed byOlive OwnerWho can message itOnly you",
     );
@@ -984,4 +1078,227 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
       expect(screen.queryByTestId("bot-settings-notifications")).toBeNull();
     },
   );
+});
+
+describe("<BotChannelSettingsPanel /> Slack", () => {
+  const CREDENTIALS: SlackAppRegisterRequest = {
+    botId: BOT.botId,
+    appId: "A07K2M9QX4T",
+    clientId: "123.456",
+    clientSecret: "client-secret-value",
+    signingSecret: "signing-secret-value",
+  };
+
+  /** The channel panel as a personal bot's owner opens it. */
+  function mountSlackPanel(): void {
+    render(
+      inProviders(
+        <BotChannelSettingsPanel
+          bot={BOT}
+          isMain={false}
+          personal
+          channelId={null}
+          environmentBots={null}
+          onClose={vi.fn()}
+        />,
+      ),
+    );
+  }
+
+  function slackGroup(): HTMLElement {
+    return screen.getByTestId("bot-settings-slack");
+  }
+
+  /** Registers the credentials with the in-memory server, as a past session did. */
+  async function seedRegisteredApp(): Promise<void> {
+    const result = await slackHost.registerSlackApp(SLACK_BEARER, CREDENTIALS);
+    expect(result.kind).toBe("ok");
+  }
+
+  /** Installs that app through the mock's own consent page. */
+  async function seedInstalledApp(): Promise<void> {
+    await seedRegisteredApp();
+    const minted = await slackHost.mintSlackAppInstallUrl(
+      SLACK_BEARER,
+      BOT.botId,
+    );
+    if (minted.kind !== "ok")
+      throw new Error("the mock refused an install URL");
+    await slackHost.openExternalLink(minted.url);
+  }
+
+  it("shows the three steps, the server's manifest and the two helpers for a bot with no app", async () => {
+    mountSlackPanel();
+
+    const setup = await screen.findByTestId("bot-settings-slack-setup");
+    const manifest = await within(setup).findByTestId(
+      "bot-settings-slack-manifest",
+    );
+    const served = await slackHost.getSlackAppManifest(SLACK_BEARER, BOT.botId);
+    if (served.kind !== "ok") throw new Error("the mock refused a manifest");
+    expect(manifest.textContent).toBe(served.manifest);
+    expect(
+      within(setup)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual([
+      "Create a Slack app from this manifest.",
+      "Paste the app's credentials from its Basic Information page.",
+      "Install the app to your workspace.",
+    ]);
+    expect(
+      within(setup).getByRole("button", { name: "Copy manifest" }),
+    ).toBeTruthy();
+    expect(
+      within(setup).getByRole("button", { name: "Open api.slack.com/apps" }),
+    ).toBeTruthy();
+  });
+
+  it("registers the four credentials in place, clears the form and keeps the secrets out of the caches", async () => {
+    const user = userEvent.setup();
+    const secrets = [CREDENTIALS.clientSecret, CREDENTIALS.signingSecret];
+    let sawSecretMutation = false;
+    queryClient.getMutationCache().subscribe((event) => {
+      if (
+        event.type === "updated" &&
+        JSON.stringify(event.mutation.state.variables).includes(secrets[0])
+      ) {
+        sawSecretMutation = true;
+      }
+    });
+    mountSlackPanel();
+    const group = slackGroup();
+    await screen.findByTestId("bot-settings-slack-setup");
+
+    await user.type(screen.getByLabelText("App ID"), CREDENTIALS.appId);
+    await user.type(screen.getByLabelText("Client ID"), CREDENTIALS.clientId);
+    await user.type(
+      screen.getByLabelText("Client Secret"),
+      CREDENTIALS.clientSecret,
+    );
+    await user.type(
+      screen.getByLabelText("Signing Secret"),
+      CREDENTIALS.signingSecret,
+    );
+    await user.click(screen.getByRole("button", { name: "Register" }));
+
+    expect(
+      (await screen.findByTestId("bot-settings-slack-status")).textContent,
+    ).toBe("Registered, not installed.");
+    // The same group element: the panel moved on without a remount.
+    expect(slackGroup()).toBe(group);
+    for (const label of [
+      "App ID",
+      "Client ID",
+      "Client Secret",
+      "Signing Secret",
+    ]) {
+      const field = screen.getByLabelText(label);
+      expect(field instanceof HTMLInputElement && field.value).toBe("");
+    }
+    expect(sawSecretMutation).toBe(true);
+    await waitFor(() => {
+      const mutations = queryClient.getMutationCache().getAll();
+      for (const mutation of mutations) {
+        const variables = JSON.stringify(mutation.state.variables);
+        for (const secret of secrets) expect(variables).not.toContain(secret);
+      }
+    });
+    for (const query of queryClient.getQueryCache().getAll()) {
+      const data = JSON.stringify(query.state.data);
+      for (const secret of secrets) expect(data).not.toContain(secret);
+    }
+  });
+
+  it("opens the install page from Install to workspace, waits for Slack, then shows the connected workspace", async () => {
+    const user = userEvent.setup();
+    await seedRegisteredApp();
+    mountSlackPanel();
+
+    await user.click(
+      await screen.findByRole("button", { name: "Install to workspace" }),
+    );
+
+    // The mock's consent lands as the link opens, but the panel only learns
+    // of it from its next read: the wait shows until the 2 s poll sees it.
+    expect(
+      await screen.findByTestId("bot-settings-slack-waiting"),
+    ).toBeTruthy();
+    expect(slackHost.openedExternalLinks).toHaveLength(1);
+    const connected = await screen.findByTestId(
+      "bot-settings-slack-connected",
+      {},
+      { timeout: 6_000 },
+    );
+    expect(within(connected).getByText("Mock workspace")).toBeTruthy();
+    expect(within(connected).getByText(CREDENTIALS.appId)).toBeTruthy();
+    expect(screen.queryByTestId("bot-settings-slack-waiting")).toBeNull();
+  });
+
+  it("shows the workspace the app left after Disconnect, with Install to workspace to come back", async () => {
+    const user = userEvent.setup();
+    await seedInstalledApp();
+    mountSlackPanel();
+
+    await user.click(await screen.findByRole("button", { name: "Disconnect" }));
+
+    expect(
+      (await screen.findByTestId("bot-settings-slack-status")).textContent,
+    ).toBe("Not installed in Mock workspace.");
+    expect(
+      within(slackGroup()).getByRole("button", {
+        name: "Install to workspace",
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("bot-settings-slack-connected")).toBeNull();
+  });
+
+  it("shows the same line for an app Slack removed, when the settings are opened again", async () => {
+    await seedInstalledApp();
+    mountSlackPanel();
+    await screen.findByTestId("bot-settings-slack-connected");
+    cleanup();
+
+    slackHost.uninstallSlackAppInSlack(BOT.botId);
+    mountSlackPanel();
+
+    expect(
+      (await screen.findByTestId("bot-settings-slack-status")).textContent,
+    ).toBe("Not installed in Mock workspace.");
+    expect(
+      within(slackGroup()).getByRole("button", {
+        name: "Install to workspace",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("says only that Slack is unavailable on a server without it", async () => {
+    slackOverrides.manifest = {
+      kind: "refused",
+      status: 503,
+      code: SLACK_APP_REFUSAL_NOT_CONFIGURED,
+    };
+    mountSlackPanel();
+
+    expect(
+      (await screen.findByTestId("bot-settings-slack-unavailable")).textContent,
+    ).toBe("Slack isn't available on this server.");
+    expect(screen.queryByTestId("bot-settings-slack-manifest")).toBeNull();
+    expect(screen.queryByTestId("bot-settings-slack-setup")).toBeNull();
+  });
+
+  it("tells a non-member in place that the bot's Slack app is not theirs to change", async () => {
+    slackOverrides.read = {
+      kind: "refused",
+      status: 404,
+      code: SLACK_APP_REFUSAL_BOT_NOT_FOUND,
+    };
+    mountSlackPanel();
+
+    const refusal = await within(slackGroup()).findByTestId(
+      "bot-settings-refusal",
+    );
+    expect(refusal.textContent).toBe("You can't change this bot's Slack app.");
+    expect(screen.queryByTestId("bot-settings-slack-setup")).toBeNull();
+  });
 });
