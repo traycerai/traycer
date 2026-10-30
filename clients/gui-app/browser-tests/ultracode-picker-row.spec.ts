@@ -6,7 +6,8 @@ import { fixture, nextFrames } from "./support/fixtures.ts";
  * text whatever the model's name, the switch inside the row, the row directly
  * above the effort footer, nothing wider than the panel or the phone, the
  * picker frame, search, provider rail and effort band unmoved while the row's
- * state or the harness changes, and the request icon inside the model chip.
+ * state or the harness changes, and "Ultracode" written inside the model chip
+ * after the effort, the model name truncating before it at every width.
  */
 
 declare global {
@@ -182,9 +183,24 @@ function effortOf(page: Page): Locator {
     .locator("xpath=ancestor::div[contains(@class,'border-t')][1]");
 }
 
+/**
+ * The chip's text changes its width, which moves the panel's transform origin;
+ * the panel transitions that for a moment before it is back in place. Measure
+ * once its own animations have finished.
+ */
+async function settled(locator: Locator): Promise<void> {
+  await locator.evaluate(async (element) => {
+    await Promise.all(
+      element.getAnimations().map((animation) => animation.finished),
+    );
+  });
+}
+
 async function frameOf(page: Page): Promise<Frame> {
+  const dialog = page.getByRole("dialog", { name: "Select model" });
+  await settled(dialog);
   return {
-    dialog: await box(page.getByRole("dialog", { name: "Select model" })),
+    dialog: await box(dialog),
     search: await box(page.getByRole("textbox", { name: /^Search/ })),
     rail: await box(railOf(page)),
     effort: await box(effortOf(page)),
@@ -250,22 +266,119 @@ test("the frame does not move when the harness changes to another and back", asy
   expectSameFrame(await frameOf(page), baseline);
 });
 
-test("the request icon sits inside the model chip while the model is offered", async ({
+async function inside(inner: Locator, outer: Locator): Promise<boolean> {
+  const innerBox = await box(inner);
+  const outerBox = await box(outer);
+  return (
+    innerBox.left >= outerBox.left &&
+    innerBox.right <= outerBox.right &&
+    innerBox.top >= outerBox.top &&
+    innerBox.bottom <= outerBox.bottom
+  );
+}
+
+/** Whether the element shows all of its text, rather than an ellipsis. */
+async function unclipped(locator: Locator): Promise<boolean> {
+  return locator.evaluate(
+    (element) => element.scrollWidth <= element.clientWidth,
+  );
+}
+
+function requestedChip(page: Page): Locator {
+  return page.getByRole("button", { name: /Ultracode requested/ });
+}
+
+test("the chip writes Ultracode after the model while the model is offered", async ({
   page,
 }) => {
   await open(page, "?offered=true");
-  const chip = page.getByRole("button", { name: /Opus 5\.5/ });
-  const icon = chip.getByTestId("model-ultracode-icon");
-  await expect(icon).toBeVisible();
-
-  const chipBox = await box(chip);
-  const iconBox = await box(icon);
-
-  expect(iconBox.left).toBeGreaterThanOrEqual(chipBox.left);
-  expect(iconBox.right).toBeLessThanOrEqual(chipBox.right);
-  expect(iconBox.top).toBeGreaterThanOrEqual(chipBox.top);
-  expect(iconBox.bottom).toBeLessThanOrEqual(chipBox.bottom);
+  const chip = requestedChip(page);
+  const text = chip.getByText("Ultracode", { exact: true });
+  await expect(text).toBeVisible();
+  expect(await chip.textContent()).toBe("ClaudeOpus 5.5·Ultracode");
+  expect(await inside(text, chip)).toBe(true);
 
   await setOffered(page, "false");
-  await expect(page.getByTestId("model-ultracode-icon")).toHaveCount(0);
+  await expect(requestedChip(page)).toHaveCount(0);
+  expect(
+    await page.getByRole("button", { name: /^Opus 5\.5/ }).textContent(),
+  ).toBe("ClaudeOpus 5.5");
 });
+
+for (const display of ["", "&display=responsive"]) {
+  test(`a long model name truncates before Ultracode on a phone (${display || "model-only"})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    await open(page, `?offered=true&label=long${display}`);
+    const chip = requestedChip(page);
+    const text = chip.getByText("Ultracode", { exact: true });
+    await expect(text).toBeVisible();
+
+    expect(await unclipped(text)).toBe(true);
+    expect(await inside(text, chip)).toBe(true);
+    expect((await box(chip)).right).toBeLessThanOrEqual(320);
+  });
+}
+
+test("the desktop chip reads model, effort, then Ultracode, and the name truncates first", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await open(page, "?offered=true&display=responsive");
+  const chip = requestedChip(page);
+  expect(await chip.textContent()).toBe("ClaudeOpus 5.5·High·Ultracode");
+
+  await open(page, "?offered=true&display=responsive&label=long");
+  const longChip = requestedChip(page);
+  const text = longChip.getByText("Ultracode", { exact: true });
+  const name = longChip.getByText(/^Claude Opus 5\.5/);
+  await expect(text).toBeVisible();
+  expect(await unclipped(text)).toBe(true);
+  expect(await unclipped(longChip.getByText("High", { exact: true }))).toBe(
+    true,
+  );
+  expect(await unclipped(name)).toBe(false);
+  expect(await inside(text, longChip)).toBe(true);
+});
+
+test("a narrow desktop composer keeps Ultracode beside the harness glyph", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 400, height: 720 });
+  await open(page, "?offered=true&display=responsive");
+  const chip = requestedChip(page);
+  const text = chip.getByText("Ultracode", { exact: true });
+
+  await expect(text).toBeVisible();
+  await expect(chip.getByText("Opus 5.5", { exact: true })).toBeHidden();
+  await expect(chip.getByText("High", { exact: true })).toBeHidden();
+  expect(await unclipped(text)).toBe(true);
+  expect(await inside(text, chip)).toBe(true);
+});
+
+for (const [style, display, width] of [
+  ["icon-text", "", 320],
+  ["icon-text", "&display=responsive", 400],
+  ["icon", "&display=responsive", 400],
+] as const) {
+  test(`the ${style} Ultracode style keeps its mark inside the chip at ${String(width)}px (${display || "model-only"})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 720 });
+    await open(page, `?offered=true&label=long&ultracode=${style}${display}`);
+    const chip = requestedChip(page);
+    const icon = chip.getByTestId("model-ultracode-icon");
+
+    await expect(icon).toBeVisible();
+    expect(await inside(icon, chip)).toBe(true);
+    expect((await box(chip)).right).toBeLessThanOrEqual(width);
+    const text = chip.getByText("Ultracode", { exact: true });
+    if (style === "icon") {
+      await expect(text).toHaveCount(0);
+      return;
+    }
+    expect(await unclipped(text)).toBe(true);
+    expect(await inside(text, chip)).toBe(true);
+  });
+}

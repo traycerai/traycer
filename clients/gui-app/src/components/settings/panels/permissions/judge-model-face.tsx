@@ -85,7 +85,7 @@ export function JudgeModelFace(props: JudgeModelFaceProps): ReactNode {
         </Button>
       ) : (
         <HarnessModelTrigger
-          ultracodeRequested={false}
+          ultracode={null}
           ref={ref}
           {...trigger}
           {...inertProps}

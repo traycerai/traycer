@@ -107,7 +107,7 @@ import { useRegisterActiveModelPicker } from "@/hooks/command-palette/use-regist
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
 import { useRegionValue } from "@/lib/layout-overrides";
-import type { ModelStyle } from "@/lib/layout/layout-values";
+import type { ModelStyle, UltracodeStyle } from "@/lib/layout/layout-values";
 import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
 import { useProviderProfileEnablementPending } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -398,7 +398,10 @@ function useUltracodePickerControls(
 ): {
   readonly footer: UltracodeFooterConfig | null;
   readonly requested: boolean;
+  /** How the chip draws the request (Layout ▸ Model ▸ Ultracode), or `null`. */
+  readonly chip: UltracodeStyle | null;
 } {
+  const ultracodeStyle = useRegionValue("model", "ultracodeStyle");
   const ultracode = useStore(store, (state) => state.ultracode);
   const carried = useStore(store, (state) => state.catalog.ultracodeCarried);
   const offered = useStore(store, (state) =>
@@ -409,8 +412,10 @@ function useUltracodePickerControls(
       : undefined,
   );
   const onChange = useStore(store, (state) => state.setUltracode);
+  const requested = withUltracode && ultracode && offered === true;
   return {
-    requested: withUltracode && ultracode && offered === true,
+    requested,
+    chip: requested ? ultracodeStyle : null,
     footer:
       withUltracode && selection.harnessId === "claude"
         ? {
@@ -1375,7 +1380,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         reasoningIndicator={reasoningIndicator}
         serviceTierLabel={presentation.activeServiceTierLabel}
         serviceTierActive={presentation.serviceTierActive}
-        ultracodeRequested={ultracodeControls.requested}
+        ultracode={ultracodeControls.chip}
         maxModeRequired={presentation.maxModeRequired}
         profileLabel={presentation.profileLabel}
         profileAccentDot={presentation.profileAccentDot}
@@ -1651,7 +1656,7 @@ function PresentationHarnessModelPicker(props: HarnessModelPickerProps) {
   const reasoningIndicator = useRegionValue("model", "style");
   return (
     <HarnessModelTrigger
-      ultracodeRequested={false}
+      ultracode={null}
       ref={ref}
       selection={selection}
       label="Sample model"
