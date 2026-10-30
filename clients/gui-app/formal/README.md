@@ -140,7 +140,7 @@ the rows the list has mounted (a blank frame) cannot be seen.
 
 `Fixes` switches the client's fixes on. `gen-configs.py` writes every config
 twice: `<name>` is the code before them (`Fixes = {}`), `<name>_fixed` the set
-the client ships (`{"nav", "toward", "restore", "pill", "cancel", "paint", "supersede", "reach", "arrive", "live", "hold-init", "fling", "evidence", "nested", "fallen", "depart", "keep", "padend", "turnguard", "ledger", "ledgermaint", "translate", "followguard", "liftledger", "obsarm", "momstill", "freeland", "freelanddep", "armcarry", "restspend", "deprebase", "heldgap", "pressland", "pressstep", "padannounce", "idlehold", "momhybrid", "tailblock"}`).
+the client ships, defined by `SHIPPED` in [gen-configs.py](gen-configs.py).
 Some configs also run with one of them taken out (`<name>_fixed_no<fix>`;
 `_fixed_nohold` takes out the estimate hold), with a rejected rule added
 (`<name>_fixed_with<rule>`), and the estimate configs with `"hold-init"`
