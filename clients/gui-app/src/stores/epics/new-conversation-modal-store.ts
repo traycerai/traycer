@@ -12,6 +12,7 @@ import {
 import { isJsonContent } from "@/lib/editor/prosemirror-json";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import { mintDraftId } from "@/lib/drafts/draft-ids";
+import { runSettingsFromDraftEcho } from "@/lib/drafts/draft-write-codec";
 import { containsPendingInlineImageNode } from "@/lib/composer/image-atoms";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
 import {
@@ -680,10 +681,10 @@ export function applyNewChatHostDocument(document: DraftDocument): boolean {
           ...dropReturnedSandboxOnNewLine(current, document.draftId),
           content: document.portable.content,
           selection: document.portable.selection,
-          settings:
-            document.portable.runSettings === null
-              ? null
-              : { ...document.portable.runSettings, ultracode: false },
+          settings: runSettingsFromDraftEcho(
+            document.portable.runSettings,
+            current.draftId === document.draftId ? current.settings : null,
+          ),
           composerMode: document.portable.composerMode,
           workspace: document.workspace,
           draftId: document.draftId,

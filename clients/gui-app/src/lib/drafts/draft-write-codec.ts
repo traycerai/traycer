@@ -77,6 +77,21 @@ export function strictRunSettingsOrNull(
   return parsed.success ? parsed.data : null;
 }
 
+/** The frozen draft carries no request; only its same-line local value can. */
+export function runSettingsFromDraftEcho(
+  settings: DraftComposerPortable["runSettings"],
+  localSettings: ChatRunSettings | null,
+): ChatRunSettings | null {
+  if (settings === null) return null;
+  return {
+    ...settings,
+    ultracode:
+      settings.harnessId === "claude" &&
+      localSettings?.harnessId === "claude" &&
+      localSettings.ultracode,
+  };
+}
+
 export function workspaceSnapshotOrNull(
   workspace: LandingDraftWorkspaceSnapshot | null,
 ): DraftWorkspaceSnapshot | null {

@@ -52,6 +52,22 @@ const line = hostStreamRpcRegistry["chat.subscribe"][1];
 const V140: SchemaVersion = { major: 1, minor: 40 };
 const V141: SchemaVersion = { major: 1, minor: 41 };
 
+type DiscriminatedFrameSchema = {
+  readonly options: readonly {
+    readonly shape: {
+      readonly kind: { readonly values: Iterable<string> };
+    };
+  }[];
+};
+
+function frameKinds(schema: DiscriminatedFrameSchema): string[] {
+  return [
+    ...new Set(
+      schema.options.flatMap((option) => [...option.shape.kind.values]),
+    ),
+  ].sort();
+}
+
 const OWNER = {
   hasBinaryPayload: false as const,
   epicId: "epic-1",
@@ -169,6 +185,18 @@ describe("chat.subscribe 1.41 registration", () => {
     expect(line.versions[41].contract).toBe(chatSubscribeV141);
     expect(line.versions[40].contract).toBe(chatSubscribeV140);
     expect(chatSubscribeV141.schemaVersion).toEqual(V141);
+  });
+
+  it("keeps both frame directions on the same discriminants as frozen 1.40", () => {
+    const frozen = chatSubscribeV140;
+    const live = chatSubscribeV141;
+
+    expect(frameKinds(live.serverFrameSchema)).toEqual(
+      frameKinds(frozen.serverFrameSchema),
+    );
+    expect(frameKinds(live.clientFrameSchema)).toEqual(
+      frameKinds(frozen.clientFrameSchema),
+    );
   });
 
   it("reports the request on 1.41 and not on 1.40 or an unnegotiated peer", () => {

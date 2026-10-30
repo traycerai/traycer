@@ -18,6 +18,7 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import type { DraftDocument, DraftPublication } from "@traycer/protocol/host";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { chatRunSettingsSchema } from "@traycer/protocol/persistence/epic/schemas";
+import type { DraftComposerPortable } from "@traycer/protocol/persistence/draft/schemas";
 import {
   adoptDraftImageHandoff,
   draftImageHashes,
@@ -83,6 +84,7 @@ import {
 } from "@/lib/drafts/draft-local-edits";
 import { collectImageAtoms } from "@/lib/composer/image-atoms";
 import { isEmptyLandingDraftContent } from "@/lib/composer/landing-draft-empty";
+import { runSettingsFromDraftEcho } from "@/lib/drafts/draft-write-codec";
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
@@ -2027,6 +2029,17 @@ function keptReturnedSandbox(
 }
 
 /**
+ * A host document's frozen settings carry no Ultracode request; the row's own
+ * same-draft Claude request survives the echo.
+ */
+function echoedRunSettings(
+  runSettings: DraftComposerPortable["runSettings"],
+  existing: LandingDraftTab | undefined,
+): ChatRunSettings | null {
+  return runSettingsFromDraftEcho(runSettings, existing?.settings ?? null);
+}
+
+/**
  * Applies a landing document to the store. Returns whether the row was
  * mutated by it: a retired id, or an older document from the row's current
  * owner, is rejected without touching the row.
@@ -2072,7 +2085,7 @@ export function applyLandingHostDocument(
     content,
     selection: document.portable.selection,
     lastTouchedAt: document.lastTouchedAt,
-    settings: copyChatRunSettings(document.portable.runSettings),
+    settings: echoedRunSettings(document.portable.runSettings, existing),
     composerMode: document.portable.composerMode,
     workspace:
       document.workspace === null
