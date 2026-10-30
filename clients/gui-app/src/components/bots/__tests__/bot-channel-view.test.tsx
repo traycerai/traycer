@@ -844,6 +844,40 @@ describe("<BotChannelView /> channel", () => {
     expect(sendable()).toBe("false");
   });
 
+  it("takes no send in a listed thread whose anchor no member wrote, opened by its anchor alone, until the channel's row says which row it is", () => {
+    const sendable = (): string | null =>
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-bot-thread-composer")
+        .getAttribute("data-sendable");
+    mocks.state.binding = { hostId: "host-capable", epoch: 3 };
+    mocks.state.threadAnchors = saidBy("host-capable", 3, [
+      "answer",
+      "message",
+    ]);
+    mocks.state.threads = [
+      thread("thread-notice", "notice-1", {
+        anchor: {
+          messageId: "notice-1",
+          requestId: "req-thread-notice",
+          senderUserId: null,
+          sentAt: 1_000,
+          resolvedAt: null,
+        },
+        replyCount: 1,
+        lastReplyAt: 8_000,
+      }),
+    ];
+    const { reopen } = mount({ openThreadPostId: null });
+    reopen({
+      anchorMessageId: "notice-1",
+      announcement: false,
+      anchorKind: null,
+      sent: null,
+    });
+
+    expect(sendable()).toBe("false");
+  });
+
   it("keeps the box under a direct reply mounted, beside Retry, through a failed read of the list after a claim, and sending once the read recovers", async () => {
     const user = userEvent.setup();
     const ANSWER_THREAD: BotOpenThread = {

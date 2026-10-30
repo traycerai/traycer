@@ -20,7 +20,10 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
-import type { BotThreadAnchors } from "@traycer/protocol/host/bot/conversation-schemas";
+import type {
+  BotThreadAnchors,
+  BotThreadSummary,
+} from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   BotSurfaceReference,
   Message,
@@ -46,6 +49,7 @@ const mocks = vi.hoisted(() => ({
   client: null as HostRequester<HostRpcRegistry> | null,
   sessions: {} as Record<string, ChatSessionStoreHandle>,
   threadAnchors: null as BotThreadAnchors | null,
+  threads: [] as BotThreadSummary[],
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
@@ -84,7 +88,7 @@ vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
   useBotThreadListQuery: () => ({
-    data: { threads: [], threadAnchors: mocks.threadAnchors },
+    data: { threads: mocks.threads, threadAnchors: mocks.threadAnchors },
     isError: false,
     refetch: vi.fn(),
   }),
@@ -215,6 +219,7 @@ afterEach(() => {
   mocks.sessions = {};
   mocks.client = null;
   mocks.threadAnchors = null;
+  mocks.threads = [];
 });
 
 function rowOf(messageId: string): HTMLElement {
@@ -303,4 +308,73 @@ describe("Reply in thread on every row of a bot's channel", () => {
       });
     },
   );
+});
+
+describe("the box of a listed thread under a row of the bot, opened by its anchor alone", () => {
+  /** The rail as a memory's link and a thread session's "Open thread" write it. */
+  const BY_ANCHOR = {
+    kind: "thread",
+    anchorMessageId: NOTICE_ID,
+    announcement: false,
+    anchorKind: null,
+    sent: null,
+  } as const;
+
+  const NOTICE_THREAD: BotThreadSummary = {
+    threadId: "thread-notice",
+    conversationId: CHANNEL_ID,
+    sessionChatId: "session-notice",
+    anchor: {
+      messageId: NOTICE_ID,
+      requestId: "req-under-notice",
+      senderUserId: null,
+      sentAt: 3_000,
+      resolvedAt: null,
+    },
+    replyCount: 1,
+    lastReplyAt: 5_000,
+    openRequestCount: 1,
+    costUsd: null,
+  };
+
+  async function sendEnabledAfterTyping(): Promise<boolean> {
+    const user = userEvent.setup();
+    const panel = screen.getByTestId("bot-thread-panel");
+    await user.type(
+      within(panel).getByTestId("bot-thread-composer-input"),
+      "Since when?",
+    );
+    return !within(panel)
+      .getByTestId("bot-thread-composer-send")
+      .hasAttribute("disabled");
+  }
+
+  it.each([
+    [
+      "a binding that names only the rows an older host roots threads on",
+      BOUND_EPOCH,
+      ["answer"],
+    ],
+    [
+      "anchors said under another epoch of the binding",
+      BOUND_EPOCH - 1,
+      ["answer", "message"],
+    ],
+  ])("takes no send under %s", async (_label, epoch, kinds) => {
+    mocks.threads = [NOTICE_THREAD];
+    mocks.threadAnchors = { hostId: BOUND_HOST_ID, epoch, kinds: [...kinds] };
+    useBotOpenThreadStore.getState().setRail(BOT_ID, BY_ANCHOR);
+    render(<MountedChannel />);
+
+    expect(await sendEnabledAfterTyping()).toBe(false);
+  });
+
+  it("takes a send while the binding names the row among the rows a thread roots on", async () => {
+    mocks.threads = [NOTICE_THREAD];
+    mocks.threadAnchors = anchorsNaming(["answer", "message"]);
+    useBotOpenThreadStore.getState().setRail(BOT_ID, BY_ANCHOR);
+    render(<MountedChannel />);
+
+    expect(await sendEnabledAfterTyping()).toBe(true);
+  });
 });

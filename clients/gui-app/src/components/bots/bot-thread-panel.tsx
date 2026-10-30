@@ -71,9 +71,9 @@ import { cn } from "@/lib/utils";
  * failed.
  *
  * `sendable` says whether a thread with a box takes a send - a reply, a
- * picked option, a retry or an edit: `false` while its post is the bot's
- * direct reply and the bot's binding does not open a thread under one. The
- * box and its draft stay.
+ * picked option, a retry or an edit: `false` while its post is a row of the
+ * bot the bot's binding does not open a thread under, or one not read yet.
+ * The box and its draft stay.
  */
 export type BotThreadPanelThread =
   | {
