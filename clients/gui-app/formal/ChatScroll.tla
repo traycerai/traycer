@@ -78,6 +78,7 @@ CONSTANTS
     Minimaps, PhonePicks, Pills, Hides, Remounts, Jumps,
     NestedWheels,       \* wheels over a nested scroller that takes them
     UnscrolledWheels,   \* wheels noted as the transcript's that never scroll it
+    Cycles,             \* atomic pad reset/clamp/reopen task
     Pads,               \* the list's one-frame end pad
     TurnEnds,           \* the streaming turn finishing
     Relayouts,          \* a viewport width or height change
@@ -1160,7 +1161,7 @@ Init ==
                  fling |-> Flings, minimap |-> Minimaps, pick |-> PhonePicks,
                  pill |-> Pills, hide |-> Hides, remount |-> Remounts, jump |-> Jumps,
                  nested |-> NestedWheels, unscrolled |-> UnscrolledWheels, pad |-> Pads,
-                 turnEnd |-> TurnEnds, relayout |-> Relayouts, idleShrink |-> IdleShrinks]
+                 turnEnd |-> TurnEnds, relayout |-> Relayouts, idleShrink |-> IdleShrinks, cycle |-> Cycles]
     /\ last = "Init"
 
 Spend(k) == budget' = [budget EXCEPT ![k] = @ - 1]
@@ -1341,13 +1342,31 @@ PadOpen ==
     /\ Spend("pad") /\ last' = "PadOpen"
     /\ UNCHANGED flags
 
+\* The producer may restore and reopen its end pad before any observer.
+\* #3081 announces the forced-layout clamp before that regrowth; the
+\* before-fix branch preserves the ledger and carried references.
+PadCycle ==
+    /\ w.mounted /\ w.turn /\ Measurable(w) /\ w.pad = 2 /\ Can("cycle")
+    /\ IF Drags > 0
+       THEN w.dragging /\ w.armed.src = "gesture" /\ w.armed.dir = "indeterminate"
+       ELSE ~w.dragging
+    /\ LET down == [w EXCEPT !.pad = 0]
+           t == Clamp(down, w.s)
+       IN /\ t # w.s
+          /\ w' = [w EXCEPT !.s = t, !.dirty = TRUE, !.ro = TRUE,
+                            !.smooth = -1, !.send = HasScrollEnd,
+                            !.depAt = IF "padannounce" \in Fixes THEN Tr(w, t) ELSE @,
+                            !.armed = IF "padannounce" \in Fixes THEN Carry(w, t) ELSE @]
+    /\ Spend("cycle") /\ last' = "PadCycle"
+    /\ UNCHANGED <<intent, flags>>
+
 PadReset ==
     /\ w.pad # 0
     /\ LET x1 == [w EXCEPT !.pad = 0, !.ro = TRUE]
            t == Clamp(x1, w.s)
            x2 == IF t = w.s THEN x1
                  ELSE [x1 EXCEPT !.s = t, !.dirty = TRUE, !.smooth = -1, !.send = HasScrollEnd,
-                                 !.depAt = Tr(x1, t), !.armed = Carry(x1, t)]
+                                 !.depAt = Tr(IF "padannounce" \in Fixes THEN w ELSE x1, t), !.armed = Carry(IF "padannounce" \in Fixes THEN w ELSE x1, t)]
        IN /\ w' = x2
           \* A reader inside the pad has nowhere to stay once it goes: the
           \* clamp's end is where they are now, whatever the latch has heard.
@@ -1676,7 +1695,7 @@ DragStart ==
     /\ UNCHANGED flags
 
 DragMove(dir) ==
-    /\ w.dragging /\ Reading(w)
+    /\ Cycles = 0 /\ w.dragging /\ Reading(w)
     \* A drag reports every frame, and the browser applies the frame's net
     \* movement: no reversal with the last move still unreported (T2).
     /\ w.dirty /\ w.panDir # 0 => w.panDir = IF dir = "toward-end" THEN 1 ELSE -1
@@ -1925,7 +1944,8 @@ ReaderMoved(l) ==
 \* the ahead-of-report publication read that null until their report.
 \* A remount restarts it on the remounted view.
 LedgerNext ==
-    led' = IF \/ "ledger" \notin Fixes \/ ~w'.mounted \/ ~w'.visible
+    led' = IF last' = "PadCycle" /\ "padannounce" \notin Fixes THEN led
+           ELSE IF \/ "ledger" \notin Fixes \/ ~w'.mounted \/ ~w'.visible
               \/ last' \in {"DeliverScroll", "Show", "Remount", "Remount(close)"}
            THEN w'.s
            \* Fixed ("liftledger"): everything up to an announced contact's
@@ -1939,7 +1959,7 @@ LedgerNext ==
 Steps ==
     \/ Grow \/ IdleTailShrink \/ AppendRow \/ PrependRow \/ \E i \in Rows : Measure(i) \/ AverageJump
     \/ SettleFrames \/ StructSettle \/ HydrationEffect \/ ResizeObserved
-    \/ PadOpen \/ PadReset \/ TurnEnd \/ BootSettle \/ Relayout
+    \/ PadOpen \/ PadReset \/ PadCycle \/ TurnEnd \/ BootSettle \/ Relayout
     \/ LibReady \/ LibReadyTimeout \/ LibFinish \/ SmoothStep
     \/ DeliverScroll \/ DeliverScrollEnd \/ NestedScrollEnd \/ NavFallback \/ RestoreFrame \/ CorrFrame
     \/ \E d \in Dirs2 : Wheel(d) \/ NestedWheel(d) \/ UnscrolledWheel(d)

@@ -13,7 +13,7 @@ BASE = dict(
     Fixes="{}", REST=4, DataAnchored="TRUE", InitialEnd="FALSE", DeferAdjust="FALSE",
     Grows=0, Appends=0, Prepends=0, Wheels=0, Drags=0, Clicks=0, Touches=0,
     Flings=0, Minimaps=0, PhonePicks=0, Pills=0, Hides=0, Remounts=0, Jumps=0, NestedWheels=0,
-    UnscrolledWheels=0, Pads=0, TurnEnds=0, Relayouts=0, IdleShrinks=0,
+    UnscrolledWheels=0, Pads=0, TurnEnds=0, Relayouts=0, IdleShrinks=0, Cycles=0,
     WheelDirs='{"toward-end", "away-from-end"}', WheelsApart="FALSE", ReportBeforeGrowth="FALSE",
 )
 
@@ -144,6 +144,10 @@ CONFIGS = {
     # coming to them after it.
     "drag_idle": ("A scrollbar drag up off the end, the turn ends mid-transcript, then a row below measures smaller.",
                   dict(R=4, Appends=1, Drags=1, TurnEnds=1)),
+    "pad_cycle_follow": ("An announced end-pad clamp and reopen before any observer, while following.",
+                         dict(Grows=1, Pads=1, TurnEnds=1, Cycles=1)),
+    "pad_cycle_press": ("The same coalesced clamp and reopen while a stationary scrollbar press is held.",
+                        dict(Grows=1, Pads=1, TurnEnds=1, Cycles=1, Drags=1)),
     "idle_gap": ("An idle departed reader whom a last-row shrink meets exactly, with no scroll event.",
                  dict(Drags=1, TurnEnds=1, IdleShrinks=1)),
     "idle_absorbed": ("An absorbed wheel report, growth publishes a departure, then an idle shrink meets the reader without another report.",
@@ -165,7 +169,7 @@ SHIPPED = ["nav", "toward", "restore", "pill", "cancel", "paint", "supersede", "
            "arrive", "live", "hold-init", "fling", "evidence", "nested", "fallen", "depart",
            "keep", "padend", "turnguard", "ledger", "ledgermaint", "translate", "followguard",
            "liftledger", "obsarm", "momstill", "freeland", "freelanddep", "armcarry", "restspend",
-           "deprebase", "heldgap", "pressland", "pressstep"]
+           "deprebase", "heldgap", "pressland", "pressstep", "padannounce"]
 FIXED = "{" + ", ".join(f'"{f}"' for f in SHIPPED) + "}"
 
 # Configs also run with one shipped fix taken out (`_fixed_no<fix>`;
@@ -199,7 +203,7 @@ VARIANTS = {
     "turn_spent": ["noledger", "noledgermaint", "nofreeland", "noheldgap"],
     "pad_land": ["nofreeland", "nofreelanddep", "noarmcarry", "norestspend", "nodeprebase",
                  "nodeprebase_nopressland", "noheldgap"],
-    "drag_pad": ["nodeprebase", "nopressland", "nopressstep", "noarmcarry", "noheldgap"],
+    "drag_pad": ["nopadannounce", "nodeprebase", "nopressland", "nopressstep", "noarmcarry", "noheldgap"],
     "drag_idle": ["nodeprebase", "nopressland", "nopressstep", "noarmcarry", "noheldgap"],
     "idle_gap": ["noheldgap"],
     "idle_absorbed": ["withalwaysawait"],

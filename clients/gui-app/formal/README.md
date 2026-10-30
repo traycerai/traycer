@@ -8,19 +8,21 @@ within small budgets and checks what a reader would notice.
 
 ## Current scope and CI status
 
-`SHIPPED` in `gen-configs.py` models OSS main at `575a4525e`.
-The generated set contains 160 exploration configs. The initial CI run selects
-15 bounded configs explicitly in `expected.py`; it does not claim the final
-160-config matrix has completed. It includes passing shipped configurations
+`SHIPPED` in `gen-configs.py` models OSS main at `861c57419` (#3081), retaining #3053 row-shift momentum.
+The generated set contains 165 exploration configs. The initial CI run selects
+19 bounded configs explicitly in `expected.py`; it does not claim the final
+full generated matrix has completed. It includes passing shipped configurations
 and failing controls whose invariant sets must remain reproducible.
 
 Pending production changes are deliberately separate: #3079's stay-detached
-idle rule, #3081's announced end-pad clamp, and #3071's tail-block momentum.
+idle rule and #3071's tail-block momentum.
 The idle clamp+regrow scenario stays out of CI until #3079 lands. Its accepted
 `EndCameIdle` residue is pending (13-state exact-meet and 17-state clamp
-witnesses), rather than an exception already applied to main. The currently
-unannounced pad clamp can also detach an unmoved press after regrowth
-(`drag_pad_fixed`, 13 states); #3081 addresses that producer defect.
+witnesses), rather than an exception already applied to main. The now-announced pad clamp carries the ledger, departure and press reference
+by its actual delta before any observer can see regrowth. `PadCycle` represents
+a reset, browser clamp and pad reopen before observation. Stationary-press and
+following controls hold; `drag_pad_fixed_nopadannounce` preserves the prior
+13-state unmoved-press witness.
 
 ## What is modelled
 
@@ -82,7 +84,7 @@ the rows the list has mounted (a blank frame) cannot be seen.
 
 `Fixes` switches the client's fixes on. `gen-configs.py` writes every config
 twice: `<name>` is the code before them (`Fixes = {}`), `<name>_fixed` the set
-the client ships (`{"nav", "toward", "restore", "pill", "cancel", "paint", "supersede", "reach", "arrive", "live", "hold-init", "fling", "evidence", "nested", "fallen", "depart", "keep", "padend", "turnguard", "ledger", "ledgermaint", "translate", "followguard", "liftledger", "obsarm", "momstill", "freeland", "freelanddep", "armcarry", "restspend", "deprebase", "heldgap", "pressland", "pressstep"}`).
+the client ships (`{"nav", "toward", "restore", "pill", "cancel", "paint", "supersede", "reach", "arrive", "live", "hold-init", "fling", "evidence", "nested", "fallen", "depart", "keep", "padend", "turnguard", "ledger", "ledgermaint", "translate", "followguard", "liftledger", "obsarm", "momstill", "freeland", "freelanddep", "armcarry", "restspend", "deprebase", "heldgap", "pressland", "pressstep", "padannounce"}`).
 Some configs also run with one of them taken out (`<name>_fixed_no<fix>`;
 `_fixed_nohold` takes out the estimate hold), with a rejected rule added
 (`<name>_fixed_with<rule>`), and the estimate configs with `"hold-init"`
@@ -200,6 +202,14 @@ Four more fixes came from the browser tests. The first is now in the model
 | `publishArmedDeparture` records the reader's departure; maintenance keeps one whose own scroll report is still owed                                                                                                                                                             | the Chrome pill test (wheels up while a paragraph streams) | A wheel up while following is pulled back to the tail: its first report comes from the latch's own write, which the list clamps short of a temporary end pad, so the reader detaches; the pad then drops, and maintenance re-follows them at the new end before the wheel's own scroll reports                               |
 | The list patch: `startImperativeScroll` commits the scroll adjust that the command it replaces deferred while animating                                                                                                                                                         | the Chrome navigation matrix                               | The pill pressed right after a new turn lands short of the end, with the pill still showing                                                                                                                                                                                                                                  |
 | The list patch: `cancelPendingScroll` also finishes the list's first-paint scroll if it is in flight when the reader takes over, at the reader's position. One not yet issued is left to place the saved row                                                                    | an iOS 27 Simulator                                        | Without it, `"cancel"` ended that scroll unfinished: the list issued it again over the reader and held back its scroll reports, so a pan during a reopen was never saved and hide/show went back to the restored row                                                                                                         |
+
+`"padannounce"` (#3081) makes the pad restore's browser clamp an announced
+list move. `PadReset` carries departure and press reference from pre-reset
+geometry. `PadCycle` does the same before its atomic reopen; without the fix,
+it preserves the unannounced ledger and references for the before witness.
+`Cycles` budgets these atomic tasks. When paired with `Drags`, the dedicated
+cycle scenario restricts input to a stationary press so it isolates that
+producer regression from independent drag movement.
 
 ## Platform switches
 

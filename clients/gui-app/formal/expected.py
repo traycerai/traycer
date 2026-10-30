@@ -1,4 +1,4 @@
-"""Measured initial CI subset for main 575a4525e.
+"""Measured CI subset: main 575a4525e plus #3081 at 861c57419.
 
 The remaining generated configs are exploration inputs, pending the full
 matrix after the open latch PRs land. Depth counts states including Init.
@@ -6,6 +6,10 @@ A reason records each expected failing invariant; passing entries omit it.
 """
 
 DEPTH = {
+    "ChatScroll_pad_cycle_follow_fixed": 18,
+    "ChatScroll_pad_cycle_press_fixed": 18,
+    "ChatScroll_drag_pad_fixed": 18,
+    "ChatScroll_drag_pad_fixed_nopadannounce": 18,
     "ChatScroll_nav_follow": 14,
     "ChatScroll_nav_follow_fixed": 18,
     "ChatScroll_send": 14,
@@ -24,6 +28,9 @@ DEPTH = {
 }
 
 VIOLATIONS = {
+    "ChatScroll_drag_pad_fixed_nopadannounce": {
+        "I_IntentHeld": "Without #3081's announcement, a coalesced pad clamp and regrowth departs an unmoved press (13-state witness).",
+    },
     "ChatScroll_nav_follow": {
         "I_IntentHeld": "Without navigation fixes, a minimap landing near the tail loses the requested follow (13-state measured witness).",
         "I_ModeMatchesGeometry": "The completed minimap leaves free mode at the strict bottom (10-state witness).",
