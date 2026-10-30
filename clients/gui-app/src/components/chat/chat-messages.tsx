@@ -463,7 +463,10 @@ interface FreeRestoreGeometry {
   readonly scrollTop: number | null;
   readonly scrollHeight: number | null;
   readonly clientHeight: number | null;
-  readonly rowPosition: number | null;
+  /** Null when there is no list or no target row to read. Undefined when
+   *  the list has one but the layout pass has not laid it out, which
+   *  `positionAtIndex` answers with no position rather than a number. */
+  readonly rowPosition: number | null | undefined;
 }
 
 /**

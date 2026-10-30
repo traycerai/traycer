@@ -272,21 +272,22 @@ function makeFakeListState(list: {
     isStartReached: false,
     isWithinMaintainScrollAtEndThreshold: false,
     getAverageItemSizes: () => ({}),
-    indexByKey: (key) => keys.indexOf(key),
+    indexByKey: (key) => {
+      const index = keys.indexOf(key);
+      return index === -1 ? undefined : index;
+    },
     keyAtIndex: (index) => keys[index],
     listen: () => () => undefined,
     listenToPosition: () => () => undefined,
-    positionAtIndex: (index) => rowTops.get(keys[index]) ?? 0,
+    positionAtIndex: (index) => rowTops.get(keys[index]),
     positionByKey: (key) => rowTops.get(key),
     scroll: 0,
     scrollLength: 0,
     scrollVelocity: 0,
     // The list answers `sizesKnown.get(...)`, so a row it has never
     // measured has no size - it does not fall back to the estimate it lays
-    // the row out with. Its type says `number`, so a row never measured is
-    // spelled 0 here; no fixture measures a row at 0, so the two cannot be
-    // confused.
-    sizeAtIndex: (index) => rowSizes.get(keys[index]) ?? 0,
+    // the row out with, and it answers `undefined` rather than a number.
+    sizeAtIndex: (index) => rowSizes.get(keys[index]),
     sizes: new Map(),
     start: 0,
     startBuffered: 0,
