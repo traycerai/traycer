@@ -1,4 +1,8 @@
-import { useId, useMemo, type ReactNode } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
+import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
+import { useHostQueries } from "@/hooks/host/use-host-queries";
 import { Button } from "@/components/ui/button";
 import { BotAvatar } from "@/components/bots/bot-avatars";
 import {
@@ -24,9 +28,33 @@ import type { TeamSetupHistory } from "@/hooks/bots/use-team-setup-history";
  */
 export function TeamSetupChannel(props: {
   readonly setup: TeamSetup;
+  readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string;
 }): ReactNode {
   const { setup, hostId } = props;
+  // Re-read on the shared on-screen cadence while the person can see the
+  // setup and it still needs a host: the team's host creating the bot rings
+  // no other host's bot list, so this is how the channel learns it went live.
+  const paneVisible = usePaneVisible();
+  const [settled, setSettled] = useState(false);
+  const [read] = useHostQueries<HostRpcRegistry, "bot.onboarding.read">({
+    client: props.client,
+    requests: [
+      {
+        method: "bot.onboarding.read",
+        params: { environmentId: setup.environmentId },
+      },
+    ],
+    cacheKeyIdentity: undefined,
+    options: { poll: paneVisible && !settled },
+  });
+  if (
+    !settled &&
+    read.data !== undefined &&
+    read.data.setup?.state !== "needs_host"
+  ) {
+    setSettled(true);
+  }
   const identity = useMemo(
     (): BotIdentity => ({
       botId: setup.botId,

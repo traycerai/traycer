@@ -228,7 +228,9 @@ function BotTabRoute(props: {
   });
   if (route.kind === "connecting") return <BotTabConnecting />;
   if (route.kind === "setup") {
-    return <TeamSetupChannel setup={route.setup} hostId={hostId} />;
+    return (
+      <TeamSetupChannel setup={route.setup} client={client} hostId={hostId} />
+    );
   }
   if (route.kind === "unresolved") {
     return (
