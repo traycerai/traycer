@@ -794,6 +794,61 @@ describe("service install lifecycle re-registration", () => {
     expect(harness.retireCompetingRegistration).toHaveBeenCalledWith(label);
   });
 
+  // Starting the agent beside a host that is still shutting down would only
+  // have that host decline and stay down.
+  it("does not start the host when the retired CLI host is still shutting down, and says so", async () => {
+    const harness = makeController("externally-managed");
+    harness.retireCompetingRegistration.mockResolvedValue({
+      kind: "removed-host-still-exiting",
+      manifestRemoved: true,
+    });
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+
+    await withPlatformAsync("darwin", async () => {
+      await handle.lifecycle.beforeSwap();
+      await handle.lifecycle.afterSwap();
+    });
+
+    expect(handle.state.postSwapError).toBe(
+      "the previous CLI-registered host was still shutting down, so the host was not started",
+    );
+    expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
+    expect(harness.start).not.toHaveBeenCalled();
+  });
+
+  it("starts the host as before when the competing registration was retired", async () => {
+    const harness = makeController("externally-managed");
+    harness.retireCompetingRegistration.mockResolvedValue({
+      kind: "retired",
+      bootedOut: true,
+      manifestRemoved: true,
+      agentStartRequested: true,
+    });
+    mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+    const handle = createServiceInstallLifecycle({
+      environment: "production",
+      bootstrap,
+      force: false,
+      onWillStopHost: null,
+      hooks: NO_INSTALL_PHASE_HOOKS,
+    });
+
+    await withPlatformAsync("darwin", async () => {
+      await handle.lifecycle.beforeSwap();
+      await handle.lifecycle.afterSwap();
+    });
+
+    expect(handle.state.postSwapError).toBeNull();
+    expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
+  });
+
   // The repair is contractually non-throwing, but the lifecycle must not rely
   // on that politely holding: an install whose bytes are already swapped in
   // must never be failed by its own opportunistic cleanup.

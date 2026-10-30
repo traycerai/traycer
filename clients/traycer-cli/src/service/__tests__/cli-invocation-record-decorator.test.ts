@@ -252,7 +252,7 @@ describe("withCliInvocationRecord retireCompetingRegistration wiring", () => {
     // halves both did nothing (a failed bootout on an already-absent
     // manifest) and every other outcome touched nothing on the OS side and
     // must leave the record alone. This drives the captured `removed`
-    // predicate directly against all five `CompetingRegistrationRetirement`
+    // predicate directly against every `CompetingRegistrationRetirement`
     // kinds, rather than relying on whichever one kind a single call
     // happens to produce - the case ablation D targets specifically
     // (`removed: () => false` would flip only the first two).
@@ -275,6 +275,11 @@ describe("withCliInvocationRecord retireCompetingRegistration wiring", () => {
         manifestRemoved: true,
         agentStartRequested: false,
       }),
+    ).toBe(true);
+    // Booted out, but the host it ran was still exiting: the registration is
+    // gone all the same.
+    expect(
+      removed({ kind: "removed-host-still-exiting", manifestRemoved: false }),
     ).toBe(true);
     // Half-retired: the bootout failed but the manifest went.
     expect(
