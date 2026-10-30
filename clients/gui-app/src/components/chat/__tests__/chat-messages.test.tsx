@@ -4473,6 +4473,19 @@ describe("ChatMessages scroll policy", () => {
           fireEvent.wheel(getScrollNode(), { deltaY: -40 });
           expect(cancel).toHaveBeenCalledTimes(1);
 
+          // A wheel that can move delivers its scroll. The restore has placed
+          // the reader on the saved row, so this wheel has somewhere to go and
+          // a browser both applies the delta and reports it; jsdom does
+          // neither. The arm such a wheel leaves waits for that report before
+          // a strict bottom may resume follow, so without it the landing below
+          // is read as a free reader's scroll that may yet land. Deliver it
+          // here rather than relax the arm.
+          const wheeledNode = getScrollNode();
+          act(() => {
+            wheeledNode.scrollTop = Math.max(0, wheeledNode.scrollTop - 40);
+            fireEvent.scroll(wheeledNode);
+          });
+
           held.settleAll();
           const scrollNode = getScrollNode();
           act(() => {
