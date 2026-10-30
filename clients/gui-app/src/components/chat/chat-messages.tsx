@@ -1058,10 +1058,8 @@ function settleChatTimelineNavigation(input: {
  *  `landScrollRequestRow` returns before it registers anything - so a restore
  *  stays the owner, and a hide that read pending-ness would leave it running.
  *
- *  Only `"request"` is tested anywhere. `"restore"` and `"navigation"` are kept
- *  apart so each registration states what it is rather than what it is not;
- *  nothing distinguishes them, and a reader should not go looking for a
- *  consumer that does. */
+ *  Only `"request"` is tested; `"restore"` and `"navigation"` are kept apart so
+ *  each registration states what it is, not what it is not. */
 interface ActiveNavigationSettleCleanup {
   readonly owner: "restore" | "request" | "navigation";
   readonly cancel: () => void;
@@ -4134,16 +4132,22 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // loop had reached - which is also what gives a row destroyed while hidden
   // its clamp-to-neighbour fallback.
   //
-  // Skips a loop a cross-tile scroll request owns: cancelling that one reports
-  // the request `cancelled` (`landScrollRequestRow` registers it so), and the
-  // request is the newer intent the show branch re-issues instead of replaying.
-  // The test is the registered OWNER, not whether a request is pending - a
-  // request whose row is not in the rendered index yet is pending with no loop
-  // of its own, and a hide that read pending-ness would leave the restore
-  // running, which is the bug this helper exists to prevent.
+  // Skips a loop a cross-tile scroll request owns, because cancelling that one
+  // reports the request `cancelled` (`landScrollRequestRow` registers it so)
+  // while it is still live. What that loop then does while concealed is a
+  // separate, pre-existing defect: it keeps placing, and can reach a terminal
+  // outcome, against a viewport that cannot answer. Suspending it without
+  // cancelling the request is its own change.
   //
-  // The show branch does not share this helper, because a pending request there
-  // is not a no-op: it re-issues it against the now-measurable geometry first.
+  // The test is the registered OWNER, never whether a request is pending: a
+  // request whose row is not in the rendered index yet is pending with no loop
+  // of its own, so a hide reading pending-ness would leave the restore running,
+  // which is the bug this helper exists to prevent.
+  //
+  // A named callback rather than the guard inline, because inlining it puts the
+  // effect below at `eslint(complexity)` 17 against a cap of 16. The show branch
+  // does not share it: a pending request there is not a no-op, it re-issues
+  // against the now-measurable geometry first.
   const endNavigationSettleForConcealment = useCallback((): void => {
     const active = activeNavigationSettleCleanupRef.current;
     if (active === null || active.owner === "request") return;

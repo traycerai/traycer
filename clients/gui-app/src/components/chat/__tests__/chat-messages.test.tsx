@@ -8598,23 +8598,31 @@ describe("ChatMessages scroll policy", () => {
 
       // Show again - the show branch's own replay re-arms the persistence
       // gate and issues a NEW restore (`restorePersistencePendingRef.current
-      // = true` right before issuing, same as mount). Hold its command so it
-      // is still the registered owner, converging, when the second hide
-      // below cancels it.
-      const held = holdListCommands();
+      // = true` right before issuing, same as mount). The mock lands every
+      // command at a position far from the saved anchor's own (wrong on
+      // purpose, like the P3 settle-position mock above): replaying the SAME
+      // semantic target would otherwise always land at the SAME scrollTop
+      // the frozen pre-restore snapshot already names, so a released gate's
+      // live capture and an armed gate's re-commit would read identically by
+      // construction and the assertion below would prove nothing either way.
+      // Resolving immediately (not held) lets a cancel-less loop actually
+      // exhaust its retry budget against repeated `validate()` failures.
+      const wrongLandingScrollTop = 120;
       const list = requireList();
-      const placeRow = list.scrollToIndex.bind(list);
-      vi.spyOn(list, "scrollToIndex").mockImplementation((params) => {
-        void placeRow(params);
-        return held.hold();
+      let scrollToIndexCallCount = 0;
+      vi.spyOn(list, "scrollToIndex").mockImplementation(() => {
+        scrollToIndexCallCount += 1;
+        getScrollNode().scrollTop = wrongLandingScrollTop;
+        return Promise.resolve();
       });
       rerenderWith({ visible: true });
 
       // A cross-tile scroll request for a row missing from the middle of
       // this transcript, issued while the replay restore above is still
-      // held. `landScrollRequestRow` returns before registering any loop of
-      // its own for a row absent from the rendered index, so this request
-      // is pending but unissued: the restore remains the registered owner.
+      // converging. `landScrollRequestRow` returns before registering any
+      // loop of its own for a row absent from the rendered index, so this
+      // request is pending but unissued: the restore remains the registered
+      // owner.
       expect(
         initialMessages.some((message) => message.id === missingMessageId),
       ).toBe(false);
@@ -8628,17 +8636,36 @@ describe("ChatMessages scroll policy", () => {
       });
 
       // Hide while the request is pending-but-unissued and the replay
-      // restore - still held, still the registered owner - is cancelled. A
-      // cancel runs neither `onValidated` nor `onExhausted`, so
+      // restore - still converging, still the registered owner - is
+      // cancelled. A cancel runs neither `onValidated` nor `onExhausted`, so
       // `restorePersistencePendingRef` is left armed by this hide, not
-      // released by it.
+      // released by it. Without the cancel, this hide's own internal settle
+      // already lets the (resolve-immediately) mock's command complete and
+      // write the wrong landing before this check runs, so this is where a
+      // deleted cancel actually goes red - not merely a sanity check.
       await hideWithCollapsedScrollBox(rerenderWith);
       expect(getScrollNode().scrollTop).toBe(0);
 
-      // Close right here, before anything else can touch the gate, and read
-      // what actually got persisted: armed means this re-commits
-      // `rawSavedTabState` - the exact pre-restore snapshot saved at the top
-      // of this test - rather than any live-captured position.
+      // Drive the replay's settle loop toward its own terminal outcome: with
+      // the cancel above, there is nothing left to drive (the loop is
+      // already torn down) and these settles are no-ops; without it, every
+      // wait resolves immediately at the wrong position, `validate()` keeps
+      // failing against the saved anchor's real geometry, and the loop
+      // consumes its bounded retries until `onSettledInvalid` fires.
+      for (let settleAttempt = 0; settleAttempt < 4; settleAttempt += 1) {
+        await settleLegendList();
+      }
+      // The cancelled loop issued once and never again. A cancel-less one
+      // would have spent its whole budget by now - the initial issue plus
+      // `CHAT_TIMELINE_NAVIGATION_MAX_RETRIES` reissues - so the exact count
+      // is what separates them; an upper bound of 4 would hold either way.
+      expect(scrollToIndexCallCount).toBe(1);
+
+      // Close right here and read what actually got persisted: armed means
+      // this re-commits `rawSavedTabState` - the exact pre-restore snapshot
+      // saved at the top of this test - rather than any live-captured
+      // position (which, released, would read the wrong landing above
+      // instead).
       evictChatTabState([instanceId]);
       tileLiveness.live = false;
       unmount();
@@ -8777,8 +8804,8 @@ describe("ChatMessages scroll policy", () => {
       expect(persisted?.mode).toBe("free-scrolling");
       // Released, not re-committing the pre-restore snapshot from the top
       // of this test (the armed sibling above confirms that snapshot is
-      // `anchorId` / anchorIndex 20 / offset 24).
-      expect(persisted?.anchorMessageId).not.toBe(anchorId);
+      // `anchorId` / anchorIndex 20 / offset 24) - the exact match below
+      // already implies this.
       expect(persisted?.offset).not.toBe(savedViewOffset);
       // The persisted anchor is exactly the row the request landed - not
       // merely "somewhere else" from the pre-restore snapshot.
