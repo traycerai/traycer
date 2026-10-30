@@ -393,6 +393,15 @@ type ArmedReaderDeparture =
        *  moved a following reader toward the end: the finger's next step is
        *  measured from here. A report that did not move past it is a tap. */
       readonly scrollTopAtStep: number;
+      /** The same step, carried by every announced write since of either kind
+       *  (`armCarriedBy`): where the view would stand had the finger not moved.
+       *  It is held apart from `scrollTopAtStep`, which a range move carries
+       *  and an offset write leaves alone, because that one is read net of the
+       *  reference row's movement and this one is read as a bare offset. A
+       *  reader at the strict bottom has no other evidence of their own step
+       *  (`liftLeavesReaderAwayFromEnd`), and an offset write's compensation
+       *  moves no reader, so it must be carried here too. */
+      readonly carriedScrollTopAtStep: number;
       /** A row that started below the viewport's top edge at that step, or
        *  the last row: the list moves it with any growth above it that it
        *  compensates, so the finger's movement is the view's net of it. */
@@ -1153,30 +1162,80 @@ function touchArmAt(
   return {
     source: "touch",
     scrollTopAtStep: geometry.scrollTop,
+    // At its resting offset, where the raw step is deliberately raw: iOS
+    // WebKit's rubber-band reads past the maximum during a bottom bounce, and
+    // this one is subtracted from a resting offset, so a bounce captured here
+    // would come back out as the finger having moved.
+    carriedScrollTopAtStep: restingScrollTop(geometry),
     rowAtStep: touchReferenceRow(list, geometry),
     edgeAtStep: node ? edgeMarkOf(node) : null,
   };
 }
 
+/** A standing contact's arm re-seeded at this view: the netted references
+ *  begin again here, and the carried step does not.
+ *
+ *  Only `touchstart` begins the carried step, because it measures the whole
+ *  of the finger's travel since the contact and a re-seed is not the finger
+ *  arriving somewhere new - it is the latch deciding to measure the *next*
+ *  step from here. Forgetting it would discard the travel a reader has
+ *  already made whenever anything read the view mid-contact, which is the
+ *  one thing `liftLeavesReaderAwayFromEnd` has left to read at the strict
+ *  bottom. Nothing else reads the carried step, so keeping it changes no
+ *  decision the netted references make. */
+function touchArmReseeded(
+  arm: ArmedReaderDeparture,
+  geometry: ChatTimelineScrollGeometry,
+  list: LegendListRef | null,
+): ReaderTouchArm {
+  const fresh = touchArmAt(geometry, list);
+  return arm?.source === "touch"
+    ? { ...fresh, carriedScrollTopAtStep: arm.carriedScrollTopAtStep }
+    : fresh;
+}
+
+/** Whether a lift owes a report of the finger's own movement: the view stands
+ *  off the end, at an offset its last decided step does not account for, and
+ *  no report of it has arrived - or one arrived too late for the lift to read.
+ *  Off the end the view's own offset is the evidence, so the raw step answers
+ *  and the direction does not matter: a drag toward the end is caught up by
+ *  the same observation that publishes a departure away from it. */
+function liftOwesCatchUpReport(
+  arm: ReaderTouchArm,
+  geometry: ChatTimelineScrollGeometry,
+): boolean {
+  return (
+    !isChatTimelineAtStrictBottom(geometry) &&
+    Math.abs(geometry.scrollTop - arm.scrollTopAtStep) >
+      CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
+  );
+}
+
 /** Whether a lift leaves the reader away from an end that came down onto
- *  them. The step is carried by every announced write since
- *  (`noteScrollerMoved`), so it stands where the view would be had the finger
- *  not moved: a step above the view the lift sees is the finger's own
- *  movement away from the end, whatever offset the view now reads.
+ *  them. The step the arm carries stands where the view would be had the
+ *  finger not moved, so a carried step above the view the lift sees is the
+ *  finger's own movement away from the end - the movement that may never be
+ *  reported, because iOS WebKit stops delivering `touchmove` once its native
+ *  pan owns the touch.
  *
  *  It is asked at the strict bottom because that is the one place nothing
  *  else can answer. Off the end, a view short of the end is itself the
  *  evidence and the catch-up report decides it. On the end, a range that
  *  shrank onto the reader - an end pad resetting - leaves them at the strict
  *  bottom without their having returned to it, so their position proves
- *  nothing and only the carried step still holds what they did. */
+ *  nothing and only the carried step still holds what they did.
+ *
+ *  It reads `carriedScrollTopAtStep` and not `scrollTopAtStep`, which a range
+ *  move carries and an offset write leaves alone: a bare subtraction of the
+ *  uncarried step charges the reader with an offset write's compensation, and
+ *  a row above shrinking under a resting finger moves no reader at all. */
 function liftLeavesReaderAwayFromEnd(
   arm: ReaderTouchArm,
   geometry: ChatTimelineScrollGeometry,
 ): boolean {
   return (
     isChatTimelineAtStrictBottom(geometry) &&
-    arm.scrollTopAtStep - geometry.scrollTop >
+    arm.carriedScrollTopAtStep - restingScrollTop(geometry) >
       CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
   );
 }
@@ -1246,12 +1305,26 @@ function armCarriedBy(
           geometryAtGesture: geometryMovedBy(arm.geometryAtGesture, delta),
         };
   }
-  return cause === "range" ? touchArmCarriedBy(arm, delta) : arm;
+  return touchArmCarriedBy(arm, delta, cause);
 }
 
-function touchArmCarriedBy(arm: ReaderTouchArm, delta: number): ReaderTouchArm {
-  return {
+/** Every announced write moves the bare step it leaves behind, because the
+ *  write moved the view and the finger did not. Only a range move carries the
+ *  netted references: an offset write moves the reference row and the edge
+ *  element with the view, so their comparisons already come out net of it and
+ *  carrying them would count it twice. */
+function touchArmCarriedBy(
+  arm: ReaderTouchArm,
+  delta: number,
+  cause: ChatTimelineScrollerMoveCause,
+): ReaderTouchArm {
+  const carried: ReaderTouchArm = {
     ...arm,
+    carriedScrollTopAtStep: arm.carriedScrollTopAtStep + delta,
+  };
+  if (cause !== "range") return carried;
+  return {
+    ...carried,
     scrollTopAtStep: arm.scrollTopAtStep + delta,
     edgeAtStep:
       arm.edgeAtStep === null
@@ -1867,7 +1940,11 @@ export function useChatTimelineFollowLatch(
         // to the original offset would read as a tap, and the lift would
         // correct the reader to the tail; and the clamp's report, with the
         // end moved again, would read as the finger leaving.
-        armedReaderDepartureRef.current = touchArmAt(geometry, listRef.current);
+        armedReaderDepartureRef.current = touchArmReseeded(
+          armedDeparture,
+          geometry,
+          listRef.current,
+        );
       }
       // A finger reaching the tail is the reader's (a read under a finger
       // never gets here while a recovery holds a detached reader: the
@@ -2003,7 +2080,8 @@ export function useChatTimelineFollowLatch(
         if (permissionRef.current) {
           const step = touchStep(armedDeparture, geometry, listRef.current);
           if (step === "toward-end") {
-            armedReaderDepartureRef.current = touchArmAt(
+            armedReaderDepartureRef.current = touchArmReseeded(
+              armedDeparture,
               geometry,
               listRef.current,
             );
@@ -2816,6 +2894,12 @@ export function useChatTimelineFollowLatch(
         liveGeometry !== null && isChatTimelineGeometryMeasurable(liveGeometry)
           ? liveGeometry
           : null;
+      // The lift reads live geometry and can publish a departure from it, so
+      // it absorbs an unobserved viewport clamp first, as every other path
+      // that does both already does. A keyboard closing lowers the view onto
+      // a grown end with nothing announced, and the carried step read against
+      // that view would charge the browser's clamp to the finger.
+      if (measured !== null) noteViewportGrowthClamp(measured);
       // Everything up to the lift was the reader's movement, so the ledger
       // resumes from the view as it stands rather than waiting on a report
       // the contact may never have produced.
@@ -2827,9 +2911,7 @@ export function useChatTimelineFollowLatch(
       if (
         permissionRef.current &&
         measured !== null &&
-        !isChatTimelineAtStrictBottom(measured) &&
-        Math.abs(measured.scrollTop - armedDeparture.scrollTopAtStep) >
-          CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
+        liftOwesCatchUpReport(armedDeparture, measured)
       ) {
         // The finger moved the view since its last decided step, and that
         // scroll report has not arrived (or arrived before the lift could be
@@ -2992,6 +3074,7 @@ export function useChatTimelineFollowLatch(
     noteReaderGesture,
     noteReaderLift,
     noteScrollerMoved,
+    noteViewportGrowthClamp,
     observeLiveGeometry,
     publishUnannouncedDeparture,
     supersedePendingEndCorrection,

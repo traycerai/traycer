@@ -5834,6 +5834,13 @@ describe("useChatTimelineFollowLatch", () => {
     expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
   });
 
+  interface RangeCameDownOntoReader {
+    readonly node: HTMLDivElement;
+    readonly listRef: FakeListRef;
+    readonly onFollowIntentChange: Mock<(follow: boolean) => void>;
+    readonly result: { readonly current: { followEndIfPermitted: () => void } };
+  }
+
   // A lift at the strict bottom that the range came down onto. iOS WebKit
   // stops delivering `touchmove` once its native pan owns the touch, so the
   // finger's movement away from the end is never reported; the carried step
@@ -5847,7 +5854,24 @@ describe("useChatTimelineFollowLatch", () => {
   // 4. `touchend`: the view reads 50 of max 50 - the strict bottom, because
   //    the range came down onto the reader, not because they returned.
   // 5. The tail grows 10px and a correction would move the view 50 -> 60.
-  function fingerAwayThenRangeCameDownOnto() {
+  //
+  // The first move is delivered as a `touchmove` before iOS hands the touch to
+  // its native pan, or not at all (`withTouchmove`): a touchmove bumps the
+  // gesture generation and retires the ledger but does not replace the arm,
+  // so both must end the same way.
+  //
+  // Something may read the view between the silent move and the lift: a native
+  // scroll report, a maintenance read, or a resize observation. `readAtGap`
+  // reads before the announced write (the view is 60 of max 70), `readAfter`
+  // after it (50 of max 50, the strict bottom). A programmatic write fires its
+  // own scroll event in a browser, so a report after the write is likely.
+  type ViewRead = "none" | "scroll" | "maintain" | "resize";
+  function fingerAwayThenRangeCameDownOnto(options: {
+    readonly withTouchmove: boolean;
+    readonly readAtGap: ViewRead;
+    readonly readAfter: ViewRead;
+    readonly lift: "touchend" | "touchcancel";
+  }): RangeCameDownOntoReader {
     const node = shim.makeNode({
       scrollTop: 70,
       scrollHeight: 570,
@@ -5864,20 +5888,35 @@ describe("useChatTimelineFollowLatch", () => {
 
     fireNativeScroll(node);
     fireTouch(node, "touchstart", 400);
+    if (options.withTouchmove) fireTouch(node, "touchmove", 410);
     shim.setGeometry(node, { scrollTop: 60 });
+    readView(node, result.current.followEndIfPermitted, options.readAtGap);
     node.dispatchEvent(
       new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
         detail: { from: 60, fromEnd: 70, to: 50, intended: 50, cause: "range" },
       }),
     );
     shim.setGeometry(node, { scrollTop: 50, scrollHeight: 550 });
-    fireTouch(node, "touchend", 400);
+    readView(node, result.current.followEndIfPermitted, options.readAfter);
+    if (options.lift === "touchend") fireTouch(node, "touchend", 400);
+    else node.dispatchEvent(new Event("touchcancel"));
     return { node, listRef, onFollowIntentChange, result };
   }
 
-  it("leaves a reader who moved away from the end where they hold the content when a range came down onto them and the tail then grows", () => {
-    const { node, listRef, onFollowIntentChange, result } =
-      fingerAwayThenRangeCameDownOnto();
+  function readView(
+    node: HTMLDivElement,
+    maintain: () => void,
+    read: ViewRead,
+  ): void {
+    if (read === "scroll") fireNativeScroll(node);
+    if (read === "maintain") maintain();
+    if (read === "resize") fireResizeObservers();
+  }
+
+  function expectHeldAtFiftyThroughTailGrowth(
+    mounted: RangeCameDownOntoReader,
+  ): void {
+    const { node, listRef, onFollowIntentChange, result } = mounted;
 
     shim.setGeometry(node, { scrollHeight: 560 });
     result.current.followEndIfPermitted();
@@ -5885,6 +5924,148 @@ describe("useChatTimelineFollowLatch", () => {
     expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
     expect(listRef.scrollToEnd).not.toHaveBeenCalled();
     expect(node.scrollTop).toBe(50);
+  }
+
+  it("leaves a reader who moved away from the end where they hold the content when a range came down onto them and the tail then grows", () => {
+    expectHeldAtFiftyThroughTailGrowth(
+      fingerAwayThenRangeCameDownOnto({
+        withTouchmove: true,
+        readAtGap: "none",
+        readAfter: "none",
+        lift: "touchend",
+      }),
+    );
+  });
+
+  it("holds that reader the same when iOS delivered no touchmove for the movement", () => {
+    expectHeldAtFiftyThroughTailGrowth(
+      fingerAwayThenRangeCameDownOnto({
+        withTouchmove: false,
+        readAtGap: "none",
+        readAfter: "none",
+        lift: "touchend",
+      }),
+    );
+  });
+
+  it("holds that reader the same when a native scroll report lands after the announced range write and before the lift", () => {
+    expectHeldAtFiftyThroughTailGrowth(
+      fingerAwayThenRangeCameDownOnto({
+        withTouchmove: true,
+        readAtGap: "none",
+        readAfter: "scroll",
+        lift: "touchend",
+      }),
+    );
+  });
+
+  it("holds that reader the same when iOS cancels the touch instead of ending it, with a scroll report after the announced range write", () => {
+    expectHeldAtFiftyThroughTailGrowth(
+      fingerAwayThenRangeCameDownOnto({
+        withTouchmove: true,
+        readAtGap: "none",
+        readAfter: "scroll",
+        lift: "touchcancel",
+      }),
+    );
+  });
+
+  it("holds that reader the same when iOS cancels the touch instead of ending it, with no read after the announced range write", () => {
+    expectHeldAtFiftyThroughTailGrowth(
+      fingerAwayThenRangeCameDownOnto({
+        withTouchmove: true,
+        readAtGap: "none",
+        readAfter: "none",
+        lift: "touchcancel",
+      }),
+    );
+  });
+
+  it("holds that reader through a second announced range write that comes down after a read re-seeded the arm mid-contact", () => {
+    const node = shim.makeNode({
+      scrollTop: 70,
+      scrollHeight: 570,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+    fireTouch(node, "touchstart", 400);
+    fireTouch(node, "touchmove", 410);
+    shim.setGeometry(node, { scrollTop: 60 });
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: { from: 60, fromEnd: 70, to: 50, intended: 50, cause: "range" },
+      }),
+    );
+    shim.setGeometry(node, { scrollTop: 50, scrollHeight: 550 });
+    // The read at the strict bottom re-seeds the arm mid-contact.
+    fireNativeScroll(node);
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: { from: 50, fromEnd: 50, to: 40, intended: 40, cause: "range" },
+      }),
+    );
+    shim.setGeometry(node, { scrollTop: 40, scrollHeight: 540 });
+    fireTouch(node, "touchend", 400);
+
+    shim.setGeometry(node, { scrollHeight: 550 });
+    result.current.followEndIfPermitted();
+
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    expect(node.scrollTop).toBe(40);
+  });
+
+  it("holds that reader the same when a maintenance read lands between the silent move and the announced range write", () => {
+    expectHeldAtFiftyThroughTailGrowth(
+      fingerAwayThenRangeCameDownOnto({
+        withTouchmove: true,
+        readAtGap: "maintain",
+        readAfter: "none",
+        lift: "touchend",
+      }),
+    );
+  });
+
+  it("holds that reader the same when a maintenance read lands after the announced range write and before the lift", () => {
+    expectHeldAtFiftyThroughTailGrowth(
+      fingerAwayThenRangeCameDownOnto({
+        withTouchmove: true,
+        readAtGap: "none",
+        readAfter: "maintain",
+        lift: "touchend",
+      }),
+    );
+  });
+
+  it("holds that reader the same when a resize observation lands between the silent move and the announced range write", () => {
+    expectHeldAtFiftyThroughTailGrowth(
+      fingerAwayThenRangeCameDownOnto({
+        withTouchmove: true,
+        readAtGap: "resize",
+        readAfter: "none",
+        lift: "touchend",
+      }),
+    );
+  });
+
+  it("holds that reader the same when a resize observation lands after the announced range write and before the lift", () => {
+    expectHeldAtFiftyThroughTailGrowth(
+      fingerAwayThenRangeCameDownOnto({
+        withTouchmove: true,
+        readAtGap: "none",
+        readAfter: "resize",
+        lift: "touchend",
+      }),
+    );
   });
 
   it("re-grants follow to a reader whose finger moved toward the end and reached the strict bottom", () => {
@@ -5904,6 +6085,7 @@ describe("useChatTimelineFollowLatch", () => {
 
     fireNativeScroll(node);
     fireTouch(node, "touchstart", 400);
+    fireTouch(node, "touchmove", 390);
     // The tail grows under the held finger and the pan carries the view down
     // to the new end, with no report in between: the carried step (70) sits
     // above nothing - it is short of the live offset.
@@ -5933,6 +6115,133 @@ describe("useChatTimelineFollowLatch", () => {
 
     fireNativeScroll(node);
     fireTouch(node, "touchstart", 400);
+    fireTouch(node, "touchmove", 400);
+    fireTouch(node, "touchend", 400);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    shim.setGeometry(node, { scrollHeight: 580 });
+    result.current.followEndIfPermitted();
+    expect(node.scrollTop).toBe(80);
+  });
+
+  // The announced write that moves the view without the finger: a row above
+  // shrinks and the list holds the content still, lowering the view 70 -> 60
+  // as an `offset` write (the arm's step is NOT carried across these, only
+  // across `range` moves). The range shrinks so 60 is the new max - still the
+  // strict bottom - and the finger never moved.
+  it("keeps follow for a resting finger at the strict bottom through an announced offset write that lowers the view with the range", () => {
+    const node = shim.makeNode({
+      scrollTop: 70,
+      scrollHeight: 570,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+    fireTouch(node, "touchstart", 400);
+    fireTouch(node, "touchmove", 400);
+    moveChatTimelineScroller(node, 60, () =>
+      shim.setGeometry(node, { scrollTop: 60, scrollHeight: 560 }),
+    );
+    fireTouch(node, "touchend", 400);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    shim.setGeometry(node, { scrollHeight: 570 });
+    result.current.followEndIfPermitted();
+    expect(node.scrollTop).toBe(70);
+  });
+
+  // The finger moves away from the end and back to it on its own, with a read
+  // at the tail re-seeding the arm mid-contact: the carried step must stand
+  // where the view does, so the lift publishes nothing.
+  it("keeps follow for a finger that moved away from the end and back to it, read at the strict bottom before the lift", () => {
+    const node = shim.makeNode({
+      scrollTop: 70,
+      scrollHeight: 570,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+    fireTouch(node, "touchstart", 400);
+    fireTouch(node, "touchmove", 410);
+    shim.setGeometry(node, { scrollTop: 60 });
+    fireTouch(node, "touchmove", 400);
+    shim.setGeometry(node, { scrollTop: 70 });
+    fireNativeScroll(node);
+    fireTouch(node, "touchend", 400);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    shim.setGeometry(node, { scrollHeight: 580 });
+    result.current.followEndIfPermitted();
+    expect(node.scrollTop).toBe(80);
+  });
+
+  // The keyboard closes: the viewport grows and the browser clamps the view
+  // onto the grown end, with nothing announced and nothing observed. The
+  // finger had not moved, so the lift at that strict bottom publishes nothing.
+  it("keeps follow for a resting finger lifted after an unobserved viewport-grow clamp", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+    fireTouch(node, "touchstart", 400);
+    shim.setGeometry(node, { clientHeight: 600, scrollTop: 900 });
+    fireTouch(node, "touchend", 400);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    shim.setGeometry(node, { scrollHeight: 1510 });
+    result.current.followEndIfPermitted();
+    expect(node.scrollTop).toBe(910);
+  });
+
+  // iOS reports an elastic overscroll past the end (max 70, here 85). The arm
+  // takes that raw offset as its step, but the carried step is where the view
+  // rests, so the bounce settling back to 70 under a resting finger is not
+  // travel away from the end.
+  it("keeps follow for a resting finger whose touch began in a bottom bounce that then settled", () => {
+    const node = shim.makeNode({
+      scrollTop: 85,
+      scrollHeight: 570,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+    fireTouch(node, "touchstart", 400);
+    shim.setGeometry(node, { scrollTop: 70 });
     fireTouch(node, "touchend", 400);
 
     expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
