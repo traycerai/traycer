@@ -842,6 +842,36 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       expect(calls).not.toContain("bootstrap");
     });
 
+    // The drain poll can run for the whole stop bound, so a lost authority
+    // there must surface as itself, not as a failed wait.
+    it("lets a mutation authority lost during the drain poll propagate as itself", async () => {
+      const authorityError = new Error("mutation authority was lost");
+      let bootedOut = false;
+      let bootstrapped = false;
+      // Lost exactly once, at the first call after the bootout: the poll's
+      // own probe, with nothing later to surface it by another route.
+      let thrown = false;
+      const verify = async (): Promise<void> => {
+        if (bootedOut && !thrown) {
+          thrown = true;
+          throw authorityError;
+        }
+      };
+      const runner: ProcessRunner = async (_command, args) => {
+        if (args[0] === "bootout") bootedOut = true;
+        if (args[0] === "bootstrap") bootstrapped = true;
+        return buildSuccessResult();
+      };
+
+      const rejection: unknown = await withServiceMutationAuthority(
+        verify,
+        () => install(runner),
+      ).catch((cause: unknown) => cause);
+
+      expect(rejection).toBe(authorityError);
+      expect(bootstrapped).toBe(false);
+    });
+
     // Node treats a timeout of 0 as no timeout, so a probe must never be given
     // the remainder when the clock can tick to the deadline between the check
     // that admits it and the read that sizes it.

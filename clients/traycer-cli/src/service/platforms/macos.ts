@@ -2328,14 +2328,19 @@ async function verifyAgentBootedOut(
       spawnFailed: false,
       signal: null,
     }),
-    (): ProbeCommandResult => ({
-      exitCode: -1,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-      spawnFailed: true,
-      signal: null,
-    }),
+    (cause: unknown): ProbeCommandResult => {
+      // A lost mutation authority keeps its identity: the drain poll can run
+      // for the whole stop bound, so it is a realistic place to lose it.
+      if (isServiceMutationAuthorityError(cause)) throw cause;
+      return {
+        exitCode: -1,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        spawnFailed: true,
+        signal: null,
+      };
+    },
   );
   const probe = classifyLaunchctlPrintResult(result, null, null);
   switch (probe.kind) {
