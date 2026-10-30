@@ -206,6 +206,7 @@ function catalogScope(tuiOnly: boolean): ComposerToolbarCatalogScope {
     hostId: TEST_HOST_ID,
     tuiOnly,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     stagedSurfaceKey: null,
     sendsToRestingSandbox: false,
   };
@@ -221,6 +222,7 @@ function seedDefault(
 
 function runSettings(harnessId: ProviderId, model: string): ChatRunSettings {
   return {
+    ultracode: false,
     harnessId,
     model,
     permissionMode: "supervised",
@@ -1438,6 +1440,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     expect(result.current.getState().selection.harnessId).toBe("codex");
 
     seeds.current = {
+      ultracode: false,
       harnessId: "claude",
       model: "haiku",
       permissionMode: "full_access",
@@ -1476,6 +1479,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     // effect/paint ordering guarantee, not on this test.
     const seeds: { current: ChatRunSettings } = {
       current: {
+        ultracode: false,
         harnessId: "claude",
         model: "opus",
         permissionMode: "supervised",
@@ -1713,6 +1717,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         hostId: "host-b",
         tuiOnly: false,
         chatLineCarriesAutoMode: null,
+        ultracodeCarried: false,
         stagedSurfaceKey: null,
         sendsToRestingSandbox: false,
       }),
@@ -1736,6 +1741,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
         hostId: null,
         tuiOnly: false,
         chatLineCarriesAutoMode: null,
+        ultracodeCarried: false,
         stagedSurfaceKey: null,
         sendsToRestingSandbox: false,
       }),
@@ -1767,6 +1773,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
           hostId: props.hostId,
           tuiOnly: false,
           chatLineCarriesAutoMode: null,
+          ultracodeCarried: false,
           stagedSurfaceKey: null,
           sendsToRestingSandbox: false,
         }),
@@ -1796,6 +1803,7 @@ describe("useComposerToolbarStore on a sandbox host", () => {
       hostId,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       stagedSurfaceKey: null,
       sendsToRestingSandbox: false,
     };

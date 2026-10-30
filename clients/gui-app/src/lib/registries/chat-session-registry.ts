@@ -505,6 +505,8 @@ function useChatSessionHandleInContainer(input: {
           result.client.interviewSettlementActionsProtocolSupported(),
         autoPermissionModeProtocolSupported: () =>
           result.client.autoPermissionModeProtocolSupported(),
+        ultracodeProtocolSupported: () =>
+          result.client.ultracodeProtocolSupported(),
         queuePauseReasonProtocolSupported: () =>
           result.client.queuePauseReasonProtocolSupported(),
         queuedSteerRestartConfirmationSupported: () =>

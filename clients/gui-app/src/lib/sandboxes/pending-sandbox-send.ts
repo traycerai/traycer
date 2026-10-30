@@ -917,7 +917,12 @@ function restorePendingMessage(
 export function pickedRunSettings(
   toolbar: Pick<
     ComposerToolbarState,
-    "values" | "selection" | "permission" | "reasoning" | "serviceTier"
+    | "values"
+    | "selection"
+    | "permission"
+    | "reasoning"
+    | "serviceTier"
+    | "ultracode"
   >,
 ): ChatRunSettings {
   const picked = toolbar.values.selection;
@@ -929,5 +934,6 @@ export function pickedRunSettings(
     permission: shown ? toolbar.permission : toolbar.values.permission,
     reasoning: shown ? toolbar.reasoning : toolbar.values.reasoning,
     serviceTier: shown ? toolbar.serviceTier : toolbar.values.serviceTier,
+    ultracode: shown ? toolbar.ultracode : toolbar.values.ultracode,
   });
 }

@@ -43,6 +43,7 @@ const HANDOFF_CONTENT = {
   ],
 } satisfies JsonContent;
 const HANDOFF_SETTINGS = {
+  ultracode: false,
   harnessId: "codex",
   model: "codex-test",
   permissionMode: "supervised",

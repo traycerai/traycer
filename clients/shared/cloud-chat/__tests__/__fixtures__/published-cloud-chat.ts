@@ -289,6 +289,7 @@ export type FutureFieldLevel = keyof typeof FUTURE_FIELDS;
 
 /** Settings that parse, so `core.settings` is non-null and can carry a bag. */
 const RUN_SETTINGS: JsonObject = {
+  ultracode: false,
   harnessId: "starfleet-cli",
   model: "warp-9",
   permissionMode: "supervised",

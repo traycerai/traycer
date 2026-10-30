@@ -507,6 +507,7 @@ const OLD_HOST_CLIENT = buildHostClient(OLD_HOST_ID);
 const ABSENT_HOST_CLIENT = buildHostClient(ABSENT_HOST_ID);
 
 const SETTINGS_SEED: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-opus-4-7",
   permissionMode: "supervised",
@@ -1055,6 +1056,21 @@ describe("ChatForkDialog cross-host routing", () => {
     expect(input.hostId).toBe(OTHER_HOST_ID);
     expect(input.settings.model).toBe("claude-sonnet-5");
   });
+
+  it.each([true, false])(
+    "the fork carries the source chat's saved Ultracode request (%s) into the created chat's settings",
+    async (saved) => {
+      renderDialog(
+        forkTarget({ settingsSeed: { ...SETTINGS_SEED, ultracode: saved } }),
+        ignoreOpenChange,
+      );
+
+      const input = await submitFork();
+
+      expect(input.settings.model).toBe(SETTINGS_SEED.model);
+      expect(input.settings.ultracode).toBe(saved);
+    },
+  );
 
   it("a catalog that loads EMPTY still blocks a CROSS-HOST fork", () => {
     // No first row to present: the slug resolves to "", which the store also

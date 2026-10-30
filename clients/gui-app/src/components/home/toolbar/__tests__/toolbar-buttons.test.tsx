@@ -29,6 +29,7 @@ function classesOf(element: Element): ReadonlyArray<string> {
 function renderModelTrigger(reasoningIndicator: ModelStyle): HTMLElement {
   render(
     <HarnessModelTrigger
+      ultracodeRequested={false}
       selection={SELECTION}
       label="GPT-5.5"
       reasoningLabel="High"

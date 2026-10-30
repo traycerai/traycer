@@ -154,6 +154,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
           reasoningFallback: "model-default",
           seedKey: "create-bot-form-test",
           values: {
+            ultracode: false,
             permission: "supervised",
             selection: mocks.seedFromSettings
               ? useSettingsStore.getState().defaultSelection
@@ -168,6 +169,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
           onSettingsChange: null,
           tuiOnly: false,
           chatLineCarriesAutoMode: null,
+          ultracodeCarried: false,
           hostId: "host-1",
         }),
       );
@@ -1185,6 +1187,7 @@ describe("<CreateBotForm /> Max Mode label", () => {
         store.getState().setCatalog({
           hostId: LOCAL,
           chatLineCarriesAutoMode: null,
+          ultracodeCarried: false,
           keepsUnavailablePick: false,
           harnesses: undefined,
           modelsHarnessId: "cursor",

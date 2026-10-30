@@ -149,6 +149,7 @@ async function imageHash(): Promise<string> {
 }
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",

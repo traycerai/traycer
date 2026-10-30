@@ -278,6 +278,7 @@ export const SAMPLE_QUEUE: OpenChatQueueState = {
       sender: { type: "user", userId: "sample-user" },
       sentFromHostId: null,
       settings: {
+        ultracode: false,
         harnessId: "claude",
         model: "sample-model",
         permissionMode: "supervised",
@@ -328,6 +329,7 @@ export const SAMPLE_TOOLBAR_VALUES: ComposerToolbarValues = {
   },
   reasoning: "medium",
   serviceTier: "",
+  ultracode: false,
 };
 export const SAMPLE_TILE_ID = "sample-workspace";
 /** Context left in the sample chat: room to spare, so nothing reads as a warning. */

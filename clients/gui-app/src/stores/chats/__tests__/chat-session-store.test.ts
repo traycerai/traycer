@@ -266,6 +266,7 @@ const IMAGE_CONTENT: JsonContent = {
 };
 
 const SETTINGS = {
+  ultracode: false,
   harnessId: "codex" as const,
   model: "gpt-5-codex",
   permissionMode: "supervised" as const,
@@ -276,6 +277,7 @@ const SETTINGS = {
 };
 
 const UPDATED_SETTINGS = {
+  ultracode: false,
   harnessId: "claude" as const,
   model: "claude-sonnet",
   permissionMode: "supervised" as const,

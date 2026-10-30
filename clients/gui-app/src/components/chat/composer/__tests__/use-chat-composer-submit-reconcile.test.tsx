@@ -130,6 +130,7 @@ function mountSubmit(
     reasoningFallback: "model-default",
     seedKey: "reconcile-submit",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: { harnessId: "codex", modelSlug: "gpt-5", profileId: null },
       reasoning: "medium",
@@ -138,6 +139,7 @@ function mountSubmit(
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
   return renderHook(() =>

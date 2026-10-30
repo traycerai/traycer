@@ -66,6 +66,7 @@ const CHAT_ID = "chat-1";
 const OWNER_ID = "owner-1";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",

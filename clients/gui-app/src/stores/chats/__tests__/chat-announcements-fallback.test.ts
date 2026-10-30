@@ -65,6 +65,7 @@ const DAY_MS = 24 * 60 * 60_000;
 // model-family prefix or a bare label string, instead of the full tuple,
 // fails loudly.
 const FAILED_TUPLE: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-6-astra",
   permissionMode: "supervised",
@@ -74,6 +75,7 @@ const FAILED_TUPLE: ChatRunSettings = {
   profileId: "acct-north",
 };
 const TARGET_TUPLE: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-6-astra-mini",
   permissionMode: "supervised",
@@ -85,6 +87,7 @@ const TARGET_TUPLE: ChatRunSettings = {
 // Duplicate account LABEL ("acct-north") as `FAILED_TUPLE`, but a different
 // provider (claude, not codex) and a different model family entirely.
 const PREFERRED_TUPLE: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-opus-5",
   permissionMode: "supervised",

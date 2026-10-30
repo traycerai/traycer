@@ -226,6 +226,7 @@ const ONE_QUEUED_MESSAGE: ChatSessionState["queue"] = {
       },
       sender: { type: "user", userId: "user-1" },
       settings: {
+        ultracode: false,
         harnessId: "claude",
         model: "model",
         permissionMode: "supervised",
@@ -262,6 +263,7 @@ const ONE_QUEUED_MESSAGE: ChatSessionState["queue"] = {
         inReplyTo: null,
       },
       settings: {
+        ultracode: false,
         harnessId: "claude",
         model: "model",
         permissionMode: "supervised",

@@ -644,6 +644,7 @@ const PENDING_DRAFT_CONTENT: JsonContent = {
   ],
 };
 const QUEUED_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "queued-model",
   permissionMode: "supervised",
@@ -653,6 +654,7 @@ const QUEUED_SETTINGS: ChatRunSettings = {
   profileId: null,
 };
 const UPDATED_QUEUE_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-live",
   permissionMode: "full_access",
@@ -671,6 +673,7 @@ const INITIAL_HANDOFF_CONTENT: JsonContent = {
   ],
 };
 const INITIAL_HANDOFF_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "codex-handoff",
   permissionMode: "supervised",
@@ -680,6 +683,7 @@ const INITIAL_HANDOFF_SETTINGS: ChatRunSettings = {
   profileId: null,
 };
 const SESSION_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-live",
   permissionMode: "full_access",

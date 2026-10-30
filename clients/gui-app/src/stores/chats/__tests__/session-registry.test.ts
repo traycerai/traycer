@@ -575,6 +575,7 @@ describe("ChatSessionRegistry", () => {
 
   describe("a docked send that the host queues, through real frames", () => {
     const DOCKED_SETTINGS = {
+      ultracode: false,
       harnessId: "claude" as const,
       model: "claude-sonnet-4-5",
       permissionMode: "supervised" as const,

@@ -22,6 +22,7 @@ import type {
 import { resolveClonedChatSettings } from "../resolve-cloned-chat-settings";
 
 const BASE_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "sonnet-4.5",
   permissionMode: "supervised",

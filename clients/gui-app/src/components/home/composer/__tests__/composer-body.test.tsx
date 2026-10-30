@@ -139,6 +139,7 @@ function renderComposerBody(options: RenderComposerBodyOptions) {
     reasoningFallback: "model-default",
     seedKey: "test",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: { harnessId: "claude", modelSlug: "", profileId: null },
       reasoning: "",
@@ -147,6 +148,7 @@ function renderComposerBody(options: RenderComposerBodyOptions) {
     onSettingsChange: null,
     tuiOnly: composerMode === "terminal",
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     // Same host the body renders with: production never splits these two, and
     // a split fixture would hide a broken host hand-off to the toolbar.
     hostId,

@@ -352,6 +352,7 @@ function capturedLegacySnapshotEnvelope(): StreamFrameEnvelope {
         updatedAt: 1787993069475,
         isTitleEditedByUser: false,
         settings: {
+          ultracode: false,
           harnessId: "claude",
           model: "test-model",
           permissionMode: "full_access",

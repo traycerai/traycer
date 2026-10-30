@@ -135,6 +135,7 @@ function dockHeightFor(lines: number): number {
 }
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-sonnet-4-5",
   permissionMode: "supervised",

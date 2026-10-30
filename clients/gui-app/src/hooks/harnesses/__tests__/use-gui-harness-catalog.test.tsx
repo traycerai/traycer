@@ -2297,6 +2297,7 @@ describe("agent.gui.listCommands is keyed by the selected profile (real hook -> 
       reasoningFallback: "model-default",
       seedKey: "profile-seam-test",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: {
           harnessId: "claude",
@@ -2309,6 +2310,7 @@ describe("agent.gui.listCommands is keyed by the selected profile (real hook -> 
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: null,
     });
 

@@ -60,6 +60,7 @@ vi.mock("sonner", () => ({ toast: { info: toastInfo } }));
 
 const NOOP_CANVAS: EpicCanvasState = createEmptyCanvas();
 const TEST_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",

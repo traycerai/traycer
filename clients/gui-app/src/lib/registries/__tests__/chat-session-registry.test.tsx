@@ -917,6 +917,7 @@ const PROBE_NAMES = [
   "draftBlobBridgeSupported",
   "interviewSettlementActionsProtocolSupported",
   "autoPermissionModeProtocolSupported",
+  "ultracodeProtocolSupported",
   "queuePauseReasonProtocolSupported",
   "queuedSteerRestartConfirmationSupported",
 ] as const satisfies readonly HandleProbe[];
@@ -941,6 +942,7 @@ const STORE_READS: Record<
     s.interviewDeliveryRetryProtocolSupported,
   autoPermissionModeProtocolSupported: (s) =>
     s.autoPermissionModeProtocolSupported,
+  ultracodeProtocolSupported: (s) => s.ultracodeProtocolSupported,
   queuePauseReasonProtocolSupported: (s) => s.queuePauseReasonProtocolSupported,
   queuedSteerRestartConfirmationSupported: (s) =>
     s.queuedSteerRestartConfirmationSupported(),

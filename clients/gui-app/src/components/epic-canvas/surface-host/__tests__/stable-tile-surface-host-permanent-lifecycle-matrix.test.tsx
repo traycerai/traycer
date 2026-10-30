@@ -338,6 +338,7 @@ const ALL_CHATS: ReadonlyArray<EpicCanvasTileRef> = [
 ];
 
 const CHAT_RUN_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-sonnet",
   permissionMode: "supervised",

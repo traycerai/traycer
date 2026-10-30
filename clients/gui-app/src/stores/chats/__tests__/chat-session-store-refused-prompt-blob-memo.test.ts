@@ -63,6 +63,7 @@ const SHA256 =
 const IMAGE_BYTES = new Uint8Array([1, 2, 3, 4]);
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",

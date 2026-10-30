@@ -270,6 +270,7 @@ function pendingChatActionFixture(clientActionId: string): PendingChatAction {
     },
     sender: { type: "user", userId: "user-1" },
     settings: {
+      ultracode: false,
       harnessId: "codex",
       model: "gpt-5-codex",
       permissionMode: "supervised",
@@ -329,6 +330,7 @@ const SEND_CONTENT: JsonContent = {
 const SEND_SENDER: UserMessageSender = { type: "user", userId: "user-1" };
 
 const SEND_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",

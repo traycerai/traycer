@@ -3,7 +3,7 @@ import {
   chatFallbackRunManualRungRequestSchema,
   type ChatFallbackRunManualRungRequest,
 } from "@traycer/protocol/host/chat-fallback";
-import type { ChatRunSettings } from "@traycer/protocol/persistence/epic/foundation";
+import type { ChatRunSettingsPreUltracode as ChatRunSettings } from "@traycer/protocol/persistence/epic/foundation";
 
 /**
  * The `rung`/`target` coupling on `chat.fallback.runManualRung`.

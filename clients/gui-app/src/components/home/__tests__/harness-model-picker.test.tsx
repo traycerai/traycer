@@ -1080,7 +1080,27 @@ interface PickerHarness {
   ) => ReactNode;
 }
 
+/** What the surface says about the per-chat Ultracode request. */
+interface UltracodeSurface {
+  readonly withUltracode: boolean;
+  readonly ultracode: boolean;
+  readonly carried: boolean;
+}
+
+const NO_ULTRACODE_SURFACE: UltracodeSurface = {
+  withUltracode: false,
+  ultracode: false,
+  carried: false,
+};
+
 function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
+  return pickerHarnessWith(input, NO_ULTRACODE_SURFACE);
+}
+
+function pickerHarnessWith(
+  input: RenderPickerInput | undefined,
+  surface: UltracodeSurface,
+): PickerHarness {
   const resolvedInput = input ?? {};
   const selection = resolvedInput.selection ?? defaultSelection();
   const hostId =
@@ -1091,6 +1111,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     reasoningFallback: "model-default",
     seedKey: "picker-test",
     values: {
+      ultracode: surface.ultracode,
       permission: "supervised",
       selection,
       reasoning: resolvedInput.reasoning ?? "",
@@ -1099,6 +1120,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     onSettingsChange: null,
     tuiOnly: resolvedInput.tuiOnly ?? false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: surface.carried,
     hostId,
   });
   if (resolvedInput.storeModels !== undefined) {
@@ -1110,6 +1132,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
       modelsLoaded: true,
       tuiOnly: resolvedInput.tuiOnly ?? false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: surface.carried,
       keepsUnavailablePick: false,
     });
   }
@@ -1136,6 +1159,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     >
       <TooltipProvider delayDuration={0}>
         <HarnessModelPicker
+          withUltracode={surface.withUltracode}
           openForHarnessRef={resolvedInput.openForHarnessRef}
           labelDisplay="responsive"
           store={store}
@@ -1185,6 +1209,15 @@ function ColdInactivePanePicker(props: { readonly harness: PickerHarness }) {
 
 function renderPicker(input: RenderPickerInput | undefined): PickerHarness {
   const harness = pickerHarness(input);
+  render(harness.element(input?.disabled ?? false, undefined));
+  return harness;
+}
+
+function renderPickerWith(
+  input: RenderPickerInput | undefined,
+  surface: UltracodeSurface,
+): PickerHarness {
+  const harness = pickerHarnessWith(input, surface);
   render(harness.element(input?.disabled ?? false, undefined));
   return harness;
 }
@@ -1528,6 +1561,7 @@ describe("<HarnessModelPicker />", () => {
     readonly serviceTier: string | null;
   }): void {
     useComposerHarnessMemoryStore.getState().record(TEST_HOST_ID, {
+      ultracode: false,
       harnessId: input.harnessId,
       model: input.model,
       permissionMode: "supervised",
@@ -1554,6 +1588,7 @@ describe("<HarnessModelPicker />", () => {
         modelsLoaded: true,
         tuiOnly: false,
         chatLineCarriesAutoMode: null,
+        ultracodeCarried: false,
         keepsUnavailablePick: false,
       });
     });
@@ -2905,6 +2940,7 @@ describe("<HarnessModelPicker />", () => {
       },
     ];
     useComposerHarnessMemoryStore.getState().record(TEST_HOST_ID, {
+      ultracode: false,
       harnessId: "claude",
       model: "claude-opus-4-7",
       permissionMode: "supervised",
@@ -3109,6 +3145,7 @@ describe("<HarnessModelPicker />", () => {
       }),
     ];
     useComposerHarnessMemoryStore.getState().record(TEST_HOST_ID, {
+      ultracode: false,
       harnessId: "claude",
       model: "claude-opus-4-7",
       permissionMode: "supervised",
@@ -3860,6 +3897,7 @@ describe("<HarnessModelPicker />", () => {
     // The provider memory contains a different model and effort. A profile-only
     // switch must preserve the current composer configuration.
     useComposerHarnessMemoryStore.getState().record(TEST_HOST_ID, {
+      ultracode: false,
       harnessId: "claude",
       model: "claude-opus-4-7",
       permissionMode: "supervised",
@@ -5075,6 +5113,7 @@ describe("<HarnessModelPicker />", () => {
 
     function seedProviderMemory(): void {
       useComposerHarnessMemoryStore.getState().record(TEST_HOST_ID, {
+        ultracode: false,
         harnessId: "claude",
         model: CLAUDE_MEMORY_SLUG,
         permissionMode: "supervised",
@@ -5084,6 +5123,7 @@ describe("<HarnessModelPicker />", () => {
         profileId: null,
       });
       useComposerHarnessMemoryStore.getState().record(TEST_HOST_ID, {
+        ultracode: false,
         harnessId: "codex",
         model: CODEX_MEMORY_SLUG,
         permissionMode: "supervised",
@@ -5674,6 +5714,243 @@ describe("<HarnessModelPicker />", () => {
       await openPickerByTriggerName("Plain");
 
       expect(screen.queryByText("Max Mode")).toBeNull();
+    });
+  });
+
+  describe("Ultracode row", () => {
+    const OFFERING = model({
+      harnessId: "claude",
+      slug: "claude-offering",
+      label: "Offering Model",
+      metadata: { ultracodeOffered: true },
+    });
+    const EXCLUDING = model({
+      harnessId: "claude",
+      slug: "claude-excluding",
+      label: "Excluding Model",
+      metadata: { ultracodeOffered: false },
+    });
+    const UNKNOWN = model({
+      harnessId: "claude",
+      slug: "claude-unknown",
+      label: "Unknown Model",
+      metadata: {},
+    });
+    const CLAUDE_MODELS = [OFFERING, EXCLUDING, UNKNOWN];
+    const NORMAL_HINT = "Multi-agent · uses more of your limits";
+
+    function claudeSelection(modelSlug: string): HarnessModelSelection {
+      return { harnessId: "claude", modelSlug, profileId: null };
+    }
+
+    async function openClaudePicker(
+      selected: ModelOption,
+      surface: UltracodeSurface,
+    ): Promise<PickerHarness> {
+      installClaudeCatalog(CLAUDE_MODELS);
+      const harness = renderPickerWith(
+        {
+          selection: claudeSelection(selected.slug),
+          storeModels: CLAUDE_MODELS,
+        },
+        surface,
+      );
+      await openPickerByTriggerName(new RegExp(`^${selected.label}`));
+      return harness;
+    }
+
+    it("a carried offering model toggles the request on, and the trigger shows the icon", async () => {
+      const harness = await openClaudePicker(OFFERING, {
+        withUltracode: true,
+        ultracode: false,
+        carried: true,
+      });
+
+      const toggle = screen.getByRole("switch", { name: "Ultracode" });
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+      expect(screen.queryByTestId("model-ultracode-icon")).toBeNull();
+
+      fireEvent.click(toggle);
+
+      expect(harness.store.getState().values.ultracode).toBe(true);
+      expect(screen.getByTestId("model-ultracode-icon")).toBeDefined();
+    });
+
+    interface DisplayHealCase {
+      readonly name: string;
+      readonly rawSelection: HarnessModelSelection;
+      readonly catalogHarnesses: ReadonlyArray<HarnessOption> | undefined;
+      readonly selectionHealed: boolean;
+      readonly ultracode: boolean;
+    }
+
+    it.each<DisplayHealCase>([
+      {
+        name: "display-healed Claude slug",
+        rawSelection: claudeSelection("claude-delisted"),
+        catalogHarnesses: undefined,
+        selectionHealed: true,
+        ultracode: true,
+      },
+      {
+        name: "raw Codex selection rerouted into Claude",
+        rawSelection: {
+          harnessId: "codex",
+          modelSlug: "gpt-5.5",
+          profileId: null,
+        },
+        catalogHarnesses: [CLAUDE_HARNESS],
+        selectionHealed: false,
+        ultracode: false,
+      },
+    ])(
+      "$name keeps the Ultracode request read-only",
+      async ({
+        rawSelection,
+        catalogHarnesses,
+        selectionHealed,
+        ultracode,
+      }) => {
+        installClaudeCatalog(CLAUDE_MODELS);
+        const harness = renderPickerWith(
+          { selection: rawSelection },
+          {
+            withUltracode: true,
+            ultracode,
+            carried: true,
+          },
+        );
+        const onSettingsChange = vi.fn();
+        act(() =>
+          harness.store.getState().setOnSettingsChange(onSettingsChange),
+        );
+        act(() => {
+          harness.store.getState().setCatalog({
+            hostId: TEST_HOST_ID,
+            harnesses: catalogHarnesses,
+            modelsHarnessId: "claude",
+            models: CLAUDE_MODELS,
+            modelsLoaded: true,
+            tuiOnly: false,
+            chatLineCarriesAutoMode: null,
+            ultracodeCarried: true,
+            keepsUnavailablePick: false,
+          });
+        });
+        await openPickerByTriggerName(/^Offering Model/);
+
+        expect(harness.store.getState().selectionHealedForDisplay).toBe(
+          selectionHealed,
+        );
+        expect(harness.store.getState().selection.harnessId).toBe("claude");
+        expect(harness.store.getState().selection.modelSlug).toBe(
+          OFFERING.slug,
+        );
+        const toggle = screen.getByRole("switch", { name: "Ultracode" });
+        expect(toggle.hasAttribute("disabled")).toBe(true);
+        expect(toggle.getAttribute("aria-checked")).toBe(String(ultracode));
+        expect(screen.getByText(NORMAL_HINT)).toBeDefined();
+        expect(screen.queryByTestId("model-ultracode-icon")).toBeNull();
+
+        fireEvent.click(toggle);
+
+        expect(harness.store.getState().values.selection.harnessId).toBe(
+          rawSelection.harnessId,
+        );
+        expect(harness.store.getState().values.selection.modelSlug).toBe(
+          rawSelection.modelSlug,
+        );
+        expect(harness.store.getState().values.ultracode).toBe(ultracode);
+        expect(onSettingsChange.mock.calls.length).toBe(0);
+      },
+    );
+
+    it("a surface that cannot carry the request keeps the row, checked and disabled, with the normal hint", async () => {
+      const harness = await openClaudePicker(OFFERING, {
+        withUltracode: true,
+        ultracode: true,
+        carried: false,
+      });
+
+      const toggle = screen.getByRole("switch", { name: "Ultracode" });
+      expect(toggle.hasAttribute("disabled")).toBe(true);
+      expect(toggle.getAttribute("aria-checked")).toBe("true");
+      expect(screen.getByText(NORMAL_HINT)).toBeDefined();
+      expect(harness.store.getState().values.ultracode).toBe(true);
+    });
+
+    it("a surface that is not a chat shows no row and no icon even with the intent saved", async () => {
+      await openClaudePicker(OFFERING, {
+        withUltracode: false,
+        ultracode: true,
+        carried: true,
+      });
+
+      expect(screen.queryByRole("switch", { name: "Ultracode" })).toBeNull();
+      expect(screen.queryByTestId("model-ultracode-icon")).toBeNull();
+    });
+
+    it("an excluded model says why, stays checked and disabled, and shows no trigger icon", async () => {
+      await openClaudePicker(EXCLUDING, {
+        withUltracode: true,
+        ultracode: true,
+        carried: true,
+      });
+
+      const toggle = screen.getByRole("switch", { name: "Ultracode" });
+      expect(toggle.hasAttribute("disabled")).toBe(true);
+      expect(toggle.getAttribute("aria-checked")).toBe("true");
+      expect(screen.getByText("Not offered for Excluding Model")).toBeDefined();
+      expect(screen.queryByTestId("model-ultracode-icon")).toBeNull();
+    });
+
+    it("a model with unknown metadata is disabled with the normal hint and keeps the request", async () => {
+      const harness = await openClaudePicker(UNKNOWN, {
+        withUltracode: true,
+        ultracode: true,
+        carried: true,
+      });
+
+      const toggle = screen.getByRole("switch", { name: "Ultracode" });
+      expect(toggle.hasAttribute("disabled")).toBe(true);
+      expect(screen.getByText(NORMAL_HINT)).toBeDefined();
+      expect(harness.store.getState().values.ultracode).toBe(true);
+    });
+
+    it("moving offering to excluded and back keeps the request and re-enables the switch", async () => {
+      const harness = await openClaudePicker(OFFERING, {
+        withUltracode: true,
+        ultracode: true,
+        carried: true,
+      });
+
+      act(() =>
+        harness.store.getState().setSelection(claudeSelection(EXCLUDING.slug)),
+      );
+      expect(
+        screen
+          .getByRole("switch", { name: "Ultracode" })
+          .hasAttribute("disabled"),
+      ).toBe(true);
+      expect(harness.store.getState().values.ultracode).toBe(true);
+
+      act(() =>
+        harness.store.getState().setSelection(claudeSelection(OFFERING.slug)),
+      );
+      const toggle = screen.getByRole("switch", { name: "Ultracode" });
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+      expect(toggle.getAttribute("aria-checked")).toBe("true");
+    });
+
+    it("a Codex selection has no row", async () => {
+      renderPickerWith(undefined, {
+        withUltracode: true,
+        ultracode: false,
+        carried: true,
+      });
+      await openPicker();
+
+      expect(screen.queryByRole("switch", { name: "Ultracode" })).toBeNull();
     });
   });
 });

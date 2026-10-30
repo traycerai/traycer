@@ -16,6 +16,7 @@ import {
   normalizeV16BrowserPayloadsInFrame,
   normalizeV16InterviewFieldsInFrame,
   projectChatClientFrameForVersion,
+  chatLineCarriesUltracode,
   supportsAutoPermissionMode,
   supportsInterviewSettlementActions,
   type ProjectedChatSubscribeClientFrame,
@@ -420,6 +421,10 @@ export class ChatStreamClient {
     return supportsAutoPermissionMode(
       this.session.getNegotiatedSchemaVersion(),
     );
+  }
+
+  ultracodeProtocolSupported(): boolean {
+    return chatLineCarriesUltracode(this.session.getNegotiatedSchemaVersion());
   }
 
   /**

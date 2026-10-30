@@ -960,6 +960,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     reasoningFallback: "model-default",
     seedKey: "picker-test",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection,
       reasoning: resolvedInput.reasoning ?? "",
@@ -968,6 +969,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     onSettingsChange: null,
     tuiOnly: resolvedInput.tuiOnly ?? false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId,
   });
   if (resolvedInput.storeModels !== undefined) {
@@ -979,6 +981,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
       modelsLoaded: true,
       tuiOnly: resolvedInput.tuiOnly ?? false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       keepsUnavailablePick: false,
     });
   }
@@ -1005,6 +1008,7 @@ function pickerHarness(input: RenderPickerInput | undefined): PickerHarness {
     >
       <TooltipProvider delayDuration={0}>
         <HarnessModelPicker
+          withUltracode={false}
           openForHarnessRef={resolvedInput.openForHarnessRef}
           labelDisplay="responsive"
           store={store}

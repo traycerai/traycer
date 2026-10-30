@@ -154,6 +154,7 @@ const VIEWPORT_HEIGHT_PX = 700;
 const VIEWPORT_WIDTH_PX = 800;
 
 const FAILED_TUPLE: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-6-astra",
   permissionMode: "supervised",
@@ -163,6 +164,7 @@ const FAILED_TUPLE: ChatRunSettings = {
   profileId: "acct-north",
 };
 const TARGET_TUPLE: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-6-astra-mini",
   permissionMode: "supervised",
@@ -172,6 +174,7 @@ const TARGET_TUPLE: ChatRunSettings = {
   profileId: "acct-south",
 };
 const PREFERRED_TUPLE: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-opus-5",
   permissionMode: "supervised",
@@ -3316,6 +3319,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
    */
   describe("F8: a deferred frame's harness is asked about until the frame is spoken", () => {
     const B_TUPLE: ChatRunSettings = {
+      ultracode: false,
       harnessId: "claude",
       model: "claude-opus-5",
       permissionMode: "supervised",
@@ -3325,6 +3329,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       profileId: "acct-south",
     };
     const C_TUPLE: ChatRunSettings = {
+      ultracode: false,
       harnessId: "opencode",
       model: "grok-code-fast",
       permissionMode: "supervised",

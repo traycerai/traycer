@@ -29,6 +29,7 @@ const IMAGE_HASH = "a".repeat(64);
 const CROP_HASH = "annotation-crop-hash-draining";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
