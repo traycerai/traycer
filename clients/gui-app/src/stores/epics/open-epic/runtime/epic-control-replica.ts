@@ -513,56 +513,58 @@ export function createEpicControlReplica(
         : status;
   }
 
-  function applyTransportStatus(
+  /** Only a new control subscription can invalidate the cycle's durability proof. */
+  function startSubscriptionCycle(
     event: Extract<EpicControlEvent, { kind: "transport-status" }>,
-  ): void {
-    const {
-      status,
-      reason,
-      ownsControlCycle,
-      carriesRecords,
-      durabilityStatusNegotiated: peerSpeaksDurabilityStatus,
-    } = event;
-    const previousTransportStatus = transportStatus;
-    recordLegTransportStatus(status, ownsControlCycle, carriesRecords);
-    const startedSubscriptionCycle =
-      ownsControlCycle &&
-      previousTransportStatus !== "open" &&
-      status === "open";
-    if (hasConnectedOnce && startedSubscriptionCycle) {
-      // Wake-recovery sub-marker: the renderer<->host stream re-subscribed, so
-      // the host has the live request context again. The gap from here to
-      // `[epic-stream] cloud sync connected` isolates the host<->cloud recovery
-      // latency. Gated on `hasConnectedOnce` so it marks only RE-connections
-      // (wake), not the initial connect or a fresh-snapshot re-open.
+    previousTransportStatus: StreamConnectionStatus,
+  ): Partial<EpicControlProjection> | null {
+    if (
+      !event.ownsControlCycle ||
+      event.continuity === "continued" ||
+      previousTransportStatus === "open" ||
+      event.status !== "open"
+    )
+      return null;
+    if (hasConnectedOnce) {
       environment.logger.debug("[epic-stream] transport open", {
         epicId,
         contextRegistered: true,
       });
     }
-    const cycleDurabilityState = startedSubscriptionCycle
-      ? resetDurabilityProofForOpenCycle()
-      : null;
-    if (startedSubscriptionCycle) {
-      durabilityStatus = null;
-      durabilityPauseReason = null;
-      durabilityPromotionState = null;
-      localProtection = null;
-      // Cleared with the rest of the cycle's durability proof. A `current`
-      // retained across a re-subscribe would be this window claiming the new
-      // cycle's document is up to date on the strength of the previous one's
-      // reconciliation.
-      cloudFreshness = null;
-      // A re-subscribe can renegotiate onto a different host incarnation, so
-      // the previous cycle's answer is not evidence about this one's peer.
-      durabilityLegsNegotiated = false;
-      // Unlike the @1.6 legs, this capability controls the pre-status branch:
-      // a peer that negotiated @1.4 or @1.5 can still report durability and
-      // its initial silence is therefore not legacy reassurance.
-      durabilityStatusNegotiated = peerSpeaksDurabilityStatus;
-    }
+    durabilityStatus = null;
+    durabilityPauseReason = null;
+    durabilityPromotionState = null;
+    localProtection = null;
+    // Cleared with the rest of the cycle's durability proof. A `current`
+    // retained across a re-subscribe would be this window claiming the new
+    // cycle's document is up to date on the strength of the previous one's
+    // reconciliation.
+    cloudFreshness = null;
+    // A re-subscribe can renegotiate onto a different host incarnation, so
+    // the previous cycle's answer is not evidence about this one's peer.
+    durabilityLegsNegotiated = false;
+    // Unlike the @1.6 legs, this capability controls the pre-status branch:
+    // a peer that negotiated @1.4 or @1.5 can still report durability and
+    // its initial silence is therefore not legacy reassurance.
+    durabilityStatusNegotiated = event.durabilityStatusNegotiated;
+    return resetDurabilityProofForOpenCycle();
+  }
+
+  function applyTransportStatus(
+    event: Extract<EpicControlEvent, { kind: "transport-status" }>,
+  ): void {
+    const { status, reason, ownsControlCycle, carriesRecords, continuity } =
+      event;
+    const previousTransportStatus = transportStatus;
+    recordLegTransportStatus(status, ownsControlCycle, carriesRecords);
+    const cycleDurabilityState = startSubscriptionCycle(
+      event,
+      previousTransportStatus,
+    );
     const nextStatus = syncCurrentConnectionStatus();
-    if (ownsControlCycle) hasFreshRootSnapshotForOpenCycle = false;
+    if (ownsControlCycle && continuity === null) {
+      hasFreshRootSnapshotForOpenCycle = false;
+    }
     publish(
       cycleDurabilityState === null
         ? connectionStateSlice()
@@ -606,7 +608,12 @@ export function createEpicControlReplica(
       publish({ snapshotFetchError: snapshotFetchErrorFrom(details) });
       return;
     }
-    if (nextStatus !== "open") return;
+    // Continuation owes no snapshot or cloud-status frame to drain writes
+    // queued during the hold. The existing cycle's role proof still applies.
+    if (status === "open" && continuity === "continued") {
+      effects.drainWritePathsAfterReconnect();
+    }
+    if (nextStatus !== "open" || continuity === "continued") return;
     effects.emitRootAwareness();
   }
 

@@ -18,6 +18,7 @@ import type {
   StreamWebSocketMessageEvent,
 } from "../ws-stream-factory";
 import { WsStreamClient } from "../ws-stream-client";
+import { FakeStreamClient } from "../__testing__/fake-stream-client";
 import {
   ResourcesStreamClient,
   type ResourcesProjectionPayload,
@@ -829,6 +830,51 @@ describe("ResourcesStreamClient scope support", () => {
 
     expect(verdicts).toEqual(["unsupported", "unknown"]);
 
+    client.close();
+  });
+});
+
+describe("ResourcesStreamClient held continuity", () => {
+  function startInteractive(): {
+    readonly client: ResourcesStreamClient;
+    readonly session: FakeStreamClient["sessions"][number];
+  } {
+    const fake = new FakeStreamClient(true);
+    const client = new ResourcesStreamClient({
+      wsStreamClient: fake,
+      scope: { kind: "global" },
+      callbacks: trackScopeSupport().callbacks,
+    });
+    const session = fake.sessions[0];
+    if (session === undefined) throw new Error("no session was subscribed");
+    session.negotiatedSchemaVersion = { major: 1, minor: 5 };
+    client.setDemand("interactive");
+    expect(session.framesOfKind("setDemand")).toHaveLength(1);
+    return { client, session };
+  }
+
+  it("keeps the sent demand across a held reconnect and a continued open", () => {
+    const { client, session } = startInteractive();
+
+    session.emitContinuityStatus("reconnecting", "held");
+    session.emitContinuityStatus("open", "continued");
+
+    expect(session.framesOfKind("setDemand")).toHaveLength(1);
+    client.close();
+  });
+
+  it("publishes the demand again after a plain reconnect", () => {
+    const { client, session } = startInteractive();
+
+    session.emitContinuityStatus("reconnecting", null);
+    session.emitContinuityStatus("open", null);
+
+    expect(session.framesOfKind("setDemand")).toHaveLength(2);
+    expect(session.sentFrames.at(-1)).toEqual({
+      kind: "setDemand",
+      demand: "interactive",
+      hasBinaryPayload: false,
+    });
     client.close();
   });
 });

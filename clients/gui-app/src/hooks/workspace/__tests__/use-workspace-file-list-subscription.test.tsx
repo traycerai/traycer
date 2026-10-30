@@ -8,6 +8,7 @@ import type {
   ServerFrameHandler,
   StatusChangeHandler,
   StreamCloseReason,
+  StreamContinuity,
   StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import {
@@ -78,6 +79,13 @@ class MockStreamSession implements IStreamSession {
     reason: StreamCloseReason | null,
   ): void {
     this.statusChangeHandler?.(status, reason, null, null);
+  }
+
+  emitContinuityStatus(
+    status: "reconnecting" | "open",
+    continuity: StreamContinuity,
+  ): void {
+    this.statusChangeHandler?.(status, null, null, continuity);
   }
 
   takeFrames(kind: "watch" | "unwatch"): ReadonlyArray<ReadonlyArray<string>> {
@@ -271,6 +279,39 @@ describe("useWorkspaceFileListSubscription", () => {
 
     // A resubscribe covers only the root, so the whole restored set goes back
     // up as ONE frame - not one frame per directory.
+    expect(session.takeFrames("watch")).toEqual([
+      ["src/", "src/lib/"],
+      ["src/", "src/lib/"],
+    ]);
+  });
+
+  it("sends no watch frame on a continued open: the host still holds the applied coverage", () => {
+    const client = new MockWsStreamClient();
+    renderSubscription(client, new QueryClient());
+    setExpanded(["src/", "src/lib/"]);
+    const session = client.onlySession;
+    expect(session.takeFrames("watch")).toEqual([["src/", "src/lib/"]]);
+
+    act(() => {
+      session.emitContinuityStatus("reconnecting", "held");
+      session.emitContinuityStatus("open", "continued");
+    });
+
+    expect(session.takeFrames("watch")).toEqual([["src/", "src/lib/"]]);
+  });
+
+  it("restores the whole coverage when the hold ends and the stream reopens", () => {
+    const client = new MockWsStreamClient();
+    renderSubscription(client, new QueryClient());
+    setExpanded(["src/", "src/lib/"]);
+    const session = client.onlySession;
+
+    act(() => {
+      session.emitContinuityStatus("reconnecting", "held");
+      session.emitContinuityStatus("reconnecting", null);
+      session.emitContinuityStatus("open", null);
+    });
+
     expect(session.takeFrames("watch")).toEqual([
       ["src/", "src/lib/"],
       ["src/", "src/lib/"],

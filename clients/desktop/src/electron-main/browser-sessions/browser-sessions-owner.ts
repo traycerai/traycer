@@ -16,6 +16,7 @@ import { BrowserSessionsStreamClient } from "@traycer-clients/shared/host-transp
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import {
   BROWSER_SESSIONS_WINDOW_CAP_MESSAGE,
@@ -318,6 +319,7 @@ export class BrowserSessionsRegistry {
         key,
         event: {
           kind: "status",
+          continuity: null,
           lifecycle: "failed",
           errorMessage: BROWSER_SESSIONS_WINDOW_CAP_MESSAGE,
         },
@@ -674,6 +676,7 @@ class BrowserSessionsStream {
     this.emitStatus(
       browserSessionsLifecycle(this.connectionStatus, null),
       null,
+      null,
     );
     if (!this.snapshotReady) return;
     // A main-owned preparation can predate the renderer coordinator. Ask the
@@ -709,7 +712,7 @@ class BrowserSessionsStream {
   start(): void {
     if (this.disposed) return;
     this.preparationUnavailable = false;
-    this.emitStatus("connecting", null);
+    this.emitStatus("connecting", null, null);
     const userId = this.deps.userId();
     if (userId === null) {
       // Signed out: there is no identity to open a stream for. A sign-in
@@ -762,7 +765,7 @@ class BrowserSessionsStream {
    * socket already had.
    */
   private failToOpen(errorMessage: string): void {
-    this.emitStatus("failed", errorMessage);
+    this.emitStatus("failed", errorMessage, null);
     this.onReleaseRequested();
   }
 
@@ -799,8 +802,8 @@ class BrowserSessionsStream {
           onServerFrame: (frame) => {
             this.handleServerFrame(frame);
           },
-          onConnectionStatus: (status, reason) => {
-            this.handleConnectionStatus(status, reason);
+          onConnectionStatus: (status, reason, _retryCause, continuity) => {
+            this.handleConnectionStatus(status, reason, continuity);
           },
         },
       });
@@ -1112,13 +1115,15 @@ class BrowserSessionsStream {
   private emitStatus(
     lifecycle: BrowserSessionsLifecycle,
     errorMessage: string | null,
+    continuity: StreamContinuity,
   ): void {
-    this.emit({ kind: "status", lifecycle, errorMessage });
+    this.emit({ kind: "status", lifecycle, errorMessage, continuity });
   }
 
   private handleConnectionStatus(
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
+    continuity: StreamContinuity,
   ): void {
     if (this.disposed) return;
     this.connectionStatus = status;
@@ -1131,7 +1136,7 @@ class BrowserSessionsStream {
       // into the transport, so the restart has to re-read it.
       this.deps.directory.invalidate(this.hostId);
     }
-    if (status === "open") {
+    if (status === "open" && continuity !== "continued") {
       this.preparationUnavailable = false;
       this.connectionId = randomUUID();
       // A new incarnation has been told nothing yet, so it can ack nothing
@@ -1139,7 +1144,15 @@ class BrowserSessionsStream {
       this.sentForgetLedgerRevision = 0;
       this.electronTabs?.connect();
       this.sendLifecycleReadyIfReady();
-    } else {
+    } else if (status === "open") {
+      this.sendLifecycleReadyIfReady();
+      if (
+        this.deps.jar.readForgetLedger(this.hostId).revision >
+        this.sentForgetLedgerRevision
+      ) {
+        this.pushForgetLedger("forget");
+      }
+    } else if (continuity !== "held") {
       this.retireConnection();
       this.resolveCaptureAckWaiters();
       this.electronTabs?.disconnect();
@@ -1149,6 +1162,7 @@ class BrowserSessionsStream {
     this.emitStatus(
       browserSessionsLifecycle(status, reason),
       browserSessionsError(status, reason),
+      continuity,
     );
   }
 

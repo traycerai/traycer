@@ -162,7 +162,7 @@ function emitOwnerSnapshot(
   chatId: string,
   ownerId: string,
 ): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   const chat: Chat = {
     id: chatId,
     parentId: null,

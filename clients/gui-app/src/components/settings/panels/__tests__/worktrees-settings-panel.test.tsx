@@ -298,7 +298,7 @@ vi.mock(
               settleTarget(path, false);
             },
             onConnectionStatus: (status, reason) =>
-              options.callbacks.onConnectionStatus(status, reason),
+              options.callbacks.onConnectionStatus(status, reason, null, null),
           };
           streamMock.callbacksByPath.set(path, perTarget);
           streamMock.callbacks = perTarget;

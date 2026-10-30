@@ -24,6 +24,7 @@ import type {
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { markTerminalLoad } from "@/lib/perf/terminal-load-perf";
 
@@ -518,6 +519,9 @@ export function createTerminalSessionStore(
 
     const flushAck = (): void => {
       clearAckFlushTimer();
+      // A held subscriber still owns these bytes. Keep its credit until it
+      // continues; dispatchClientFrame cannot send while the status is down.
+      if (get().connectionStatus !== "open" || streamClient === null) return;
       if (unackedLocalBytes === 0) return;
       const bytes = unackedLocalBytes;
       unackedLocalBytes = 0;
@@ -771,8 +775,10 @@ export function createTerminalSessionStore(
         });
       },
       onConnectionStatus: (
-        status: StreamConnectionStatus,
-        reason: StreamCloseReason | null,
+        status,
+        reason,
+        _retryCause,
+        continuity: StreamContinuity,
       ) => {
         if (disposed) return;
         if (ignoreTransientStatus) {
@@ -783,7 +789,7 @@ export function createTerminalSessionStore(
             return;
           }
         }
-        if (status !== "open") {
+        if (status !== "open" && continuity !== "held") {
           // A reconnect re-subscribes and the host mints a fresh subscriber
           // with unackedBytes = 0, so any credit accumulated for the old
           // connection is moot - drop it rather than send a stale ack (or
@@ -809,7 +815,11 @@ export function createTerminalSessionStore(
         // Replay stale pending actions from BEFORE this reconnect first, so the
         // fresh resize `flushRequestedResize` is about to dispatch isn't
         // immediately swept up and removed as one of those stale entries.
-        replayPendingActionsAfterReconnect();
+        if (continuity === "continued") {
+          flushAck();
+        } else {
+          replayPendingActionsAfterReconnect();
+        }
         flushRequestedResize();
       },
     };

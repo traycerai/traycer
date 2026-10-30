@@ -175,8 +175,9 @@ export class ResourcesStreamClient {
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
-    this.session.onStatusChange((status, reason) => {
-      if (status !== "open") this.sentDemand = "background";
+    this.session.onStatusChange((status, reason, _retryCause, continuity) => {
+      if (status !== "open" && continuity !== "held")
+        this.sentDemand = "background";
       // Before the status itself, so a consumer reacting to the `closed`
       // transition already sees why rather than reading last round's verdict.
       this.updateScopeSupport(status, reason);

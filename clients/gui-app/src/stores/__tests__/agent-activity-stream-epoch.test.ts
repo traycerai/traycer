@@ -65,8 +65,9 @@ class StubSession implements IStreamSession {
   emitStatus(
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
+    continuity: "held" | "continued" | null,
   ): void {
-    this.statusChangeHandler(status, reason, null, null);
+    this.statusChangeHandler(status, reason, null, continuity);
   }
 }
 
@@ -237,7 +238,7 @@ function hostSlice(hostId: string): {
 }
 
 function driveToOpenAndConnected(session: StubSession): void {
-  session.emitStatus("open", null);
+  session.emitStatus("open", null, null);
   session.emitFrame({
     kind: "state",
     servedBy: "cloud",
@@ -356,7 +357,7 @@ describe("agent activity stream epoch handoff", () => {
     // here - and the epic cap, which fails closed on a plane that cannot
     // vouch, would prune against a working set nobody has re-attested,
     // evicting an Epic whose agent started during the gap.
-    secondSession.emitStatus("open", null);
+    secondSession.emitStatus("open", null, null);
     expect(hostSlice("host-a").connectionStatus).toBe("open");
     expect(hostSlice("host-a").servedBy).toBe("cloud");
     expect(agentActivityPlaneAnswers()).toBe(false);
@@ -392,14 +393,70 @@ describe("agent activity stream epoch handoff", () => {
     // boundary runs and the union stays on record. What must NOT stay is the
     // claim that it describes now - an agent can start on the other side of
     // that gap, and the cap would evict its Epic on the old map's silence.
-    session.emitStatus("reconnecting", null);
+    session.emitStatus("reconnecting", null, null);
     expect(agentActivityPlaneAnswers()).toBe(false);
     expect(hostSlice("host-a").byEpic.get(EPIC_ID)?.working).toEqual(
       new Set([AGENT_ID]),
     );
 
     // Back on the wire, still unattested: the socket is not the answer.
-    session.emitStatus("open", null);
+    session.emitStatus("open", null, null);
+    expect(hostSlice("host-a").connectionStatus).toBe("open");
+    expect(agentActivityPlaneAnswers()).toBe(false);
+
+    session.emitFrame({
+      kind: "state",
+      servedBy: "cloud",
+      byEpic: { [EPIC_ID]: { working: [AGENT_ID], turn: [AGENT_ID] } },
+      cloudSyncStatus: "connected",
+      hasBinaryPayload: false,
+    });
+    expect(agentActivityPlaneAnswers()).toBe(true);
+  });
+
+  it("a held stream stops vouching but keeps its attestation, and a continued open vouches again without a new state frame", () => {
+    const session = new StubSession();
+    const client = new StubHostStreamClient(session, "host-stream-1");
+    openAgentActivityStream({
+      hostId: "host-a",
+      reconnectEngine: createStubReconnectEngine(),
+      wsStreamClient: client,
+      onAuthError: null,
+      plane: null,
+    });
+    driveToOpenAndConnected(session);
+    expect(agentActivityPlaneAnswers()).toBe(true);
+
+    // Held: not live, so nothing vouches, but the host still owns the
+    // subscription and the union it attested is the one that continues.
+    session.emitStatus("reconnecting", null, "held");
+    expect(hostSlice("host-a").connectionStatus).toBe("reconnecting");
+    expect(agentActivityPlaneAnswers()).toBe(false);
+    expect(hostSlice("host-a").byEpic.get(EPIC_ID)?.working).toEqual(
+      new Set([AGENT_ID]),
+    );
+
+    // No state frame follows a continued open; the open itself vouches.
+    session.emitStatus("open", null, "continued");
+    expect(hostSlice("host-a").connectionStatus).toBe("open");
+    expect(agentActivityPlaneAnswers()).toBe(true);
+  });
+
+  it("a hold that ends in a null reconnect withdraws the attestation until a new state frame", () => {
+    const session = new StubSession();
+    const client = new StubHostStreamClient(session, "host-stream-1");
+    openAgentActivityStream({
+      hostId: "host-a",
+      reconnectEngine: createStubReconnectEngine(),
+      wsStreamClient: client,
+      onAuthError: null,
+      plane: null,
+    });
+    driveToOpenAndConnected(session);
+
+    session.emitStatus("reconnecting", null, "held");
+    session.emitStatus("reconnecting", null, null);
+    session.emitStatus("open", null, null);
     expect(hostSlice("host-a").connectionStatus).toBe("open");
     expect(agentActivityPlaneAnswers()).toBe(false);
 
@@ -419,7 +476,7 @@ describe("agent activity stream epoch handoff", () => {
     // would cover every host and this test would prove nothing about which
     // one was actually recorded.
     function driveOpenWithNarrowFrame(session: StubSession): void {
-      session.emitStatus("open", null);
+      session.emitStatus("open", null, null);
       session.emitFrame({
         kind: "state",
         servedBy: "local",
@@ -477,7 +534,7 @@ describe("agent activity stream epoch handoff", () => {
     // union spans the fleet, which would prove nothing about `servingHostId`
     // specifically.
     function driveOpenWithNarrowFrame(session: StubSession): void {
-      session.emitStatus("open", null);
+      session.emitStatus("open", null, null);
       session.emitFrame({
         kind: "state",
         servedBy: "local",
@@ -505,7 +562,7 @@ describe("agent activity stream epoch handoff", () => {
     // A terminal close retires the whole reading through
     // `noteAgentActivityConnectionStatus("closed")` - `servingHostId`
     // included, same as every other field.
-    session.emitStatus("closed", reopenableFatalClose());
+    session.emitStatus("closed", reopenableFatalClose(), null);
     expect(hostSlice("host-a").connectionStatus).toBe("closed");
     expect(agentActivityPlaneCoversHost("host-a")).toBe(false);
 

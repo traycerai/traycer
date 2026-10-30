@@ -127,7 +127,7 @@ function createCountingStatusFactory(): CountingStatusFactory {
     },
     deliverClosed(reason: StreamCloseReason): void {
       if (live === null) throw new Error("no status client was constructed");
-      live.onConnectionStatus("closed", reason);
+      live.onConnectionStatus("closed", reason, null, null);
     },
   };
 }

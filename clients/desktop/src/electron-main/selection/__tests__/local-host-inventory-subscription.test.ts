@@ -13,6 +13,7 @@ import type {
   StatusChangeHandler,
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
   StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
@@ -73,6 +74,14 @@ class FakeInventorySession implements IStreamSession {
     reason: StreamCloseReason | null,
   ): void {
     this.statusHandler?.(status, reason, null, null);
+  }
+
+  /** Drives the handler with the fourth argument a resumable stream sends. */
+  emitContinuityStatus(
+    status: StreamConnectionStatus,
+    continuity: StreamContinuity,
+  ): void {
+    this.statusHandler?.(status, null, null, continuity);
   }
 
   /** Drives `IStreamSession.onServerFrame`'s handler with one snapshot frame. */
@@ -474,6 +483,58 @@ describe("startLocalHostInventorySubscription", () => {
       expect(harness.pushActiveCalls).toEqual([true, false]);
       subscription.dispose();
     }
+  });
+
+  it("A5b: a held drop withdraws coverage and a continued open re-arms it from the retained snapshot, with no new snapshot", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const session = harness.clients[0]?.sessions[0];
+    if (session === undefined) throw new Error("no session opened");
+
+    session.emitSnapshot([buildRow("host-1")], false, 1_000);
+    session.emitContinuityStatus("reconnecting", "held");
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+
+    session.emitContinuityStatus("open", "continued");
+
+    expect(harness.pushActiveCalls).toEqual([true, false, true]);
+    expect(harness.rowsCalls).toHaveLength(1);
+    subscription.dispose();
+  });
+
+  it("A5c: a continued open does not arm coverage when the retained snapshot was stale", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const session = harness.clients[0]?.sessions[0];
+    if (session === undefined) throw new Error("no session opened");
+
+    session.emitSnapshot([buildRow("host-1")], true, 1_000);
+    session.emitContinuityStatus("reconnecting", "held");
+    session.emitContinuityStatus("open", "continued");
+
+    expect(harness.pushActiveCalls).toEqual([]);
+    subscription.dispose();
+  });
+
+  it("A5d: once the hold ends, an open waits for a new snapshot before it arms coverage", () => {
+    const harness = buildHarness();
+    harness.setLocalHost(HOST_1);
+    const subscription = startLocalHostInventorySubscription(harness.deps);
+    const session = harness.clients[0]?.sessions[0];
+    if (session === undefined) throw new Error("no session opened");
+
+    session.emitSnapshot([buildRow("host-1")], false, 1_000);
+    session.emitContinuityStatus("reconnecting", "held");
+    session.emitContinuityStatus("reconnecting", null);
+    session.emitContinuityStatus("open", null);
+
+    expect(harness.pushActiveCalls).toEqual([true, false]);
+
+    session.emitSnapshot([buildRow("host-1")], false, 2_000);
+    expect(harness.pushActiveCalls).toEqual([true, false, true]);
+    subscription.dispose();
   });
 
   it("A6: onPushActiveChanged fires only on TRANSITIONS, not on every frame", () => {

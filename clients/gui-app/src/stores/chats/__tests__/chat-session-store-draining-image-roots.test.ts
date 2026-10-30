@@ -100,7 +100,7 @@ function createHarness(): Harness {
 
 /** A minimal open, owned, idle snapshot - just enough for `sendMessage` to accept. */
 function emitOwnerSnapshot(callbacks: ChatStreamCallbacks): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   const chat: Chat = {
     id: CHAT_ID,
     parentId: null,

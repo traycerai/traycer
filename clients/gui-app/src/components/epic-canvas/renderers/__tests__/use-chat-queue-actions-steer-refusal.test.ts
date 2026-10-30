@@ -345,7 +345,7 @@ function openRunningChatOn(
 
 /** Open the stream and seat the running turn with its one queued row. */
 function openRunningStream(callbacks: ChatStreamCallbacks): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -878,7 +878,7 @@ describe("answering a held steer refusal", () => {
       sent.filter((frame) => frame.kind === "queueSettingsUpdate");
 
     act(() => {
-      callbacks.onConnectionStatus("reconnecting", null, null);
+      callbacks.onConnectionStatus("reconnecting", null, null, null);
     });
     act(() => {
       tile.result.current.steerRestart.onOpenChange(false);

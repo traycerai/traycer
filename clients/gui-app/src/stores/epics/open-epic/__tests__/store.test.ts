@@ -337,7 +337,7 @@ describe("createOpenEpicStore", () => {
       writeCommand: null,
     });
     const hostDoc = new Y.Doc();
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", hostDoc),
       emptySnapshot(),
@@ -369,7 +369,7 @@ describe("createOpenEpicStore", () => {
       writeCommand: null,
     });
 
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
     opened.doc.getMap("epic").set("title", "Locally renamed");
 
@@ -386,7 +386,7 @@ describe("createOpenEpicStore", () => {
     expect(handles().length).toBe(2);
 
     const rebound = handles()[1];
-    rebound.callbacks.onConnectionStatus("open", null, true);
+    rebound.callbacks.onConnectionStatus("open", null, true, null);
     rebound.callbacks.onSnapshot(buildMeta("viewer", null), emptySnapshot());
 
     // A local write while viewer should be dropped after the refresh.
@@ -431,7 +431,7 @@ describe("createOpenEpicStore", () => {
       emptySnapshot(),
     );
     // Immediately drop the connection.
-    handle().callbacks.onConnectionStatus("reconnecting", null, true);
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
 
     opened.doc.getMap("epic").set("title", "Offline title");
     opened.doc.getMap("epic").set("body", "Offline body");
@@ -445,13 +445,111 @@ describe("createOpenEpicStore", () => {
     );
 
     // Reconnect → fresh snapshot clears the queue and ships one reconcile update.
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", hostDoc),
       emptySnapshot(),
     );
     expect(handle().applied.length).toBe(1);
     expectBytesEqual(handle().applied[0], expectedReconcile);
+    expect(opened.store.getState().unsyncedQueueSize).toBe(0);
+
+    opened.dispose();
+  });
+
+  const CURRENT_FRESHNESS = {
+    kind: "lastCloudSyncAt",
+    reconciledAtEpochMs: 1_000,
+    state: "current",
+  } as const;
+
+  it("keeps the cycle's durability and root snapshot through a held reconnect, and flushes writes made while held once on the continued open", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    const hostDoc = new Y.Doc();
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      emptySnapshot(),
+    );
+    handle().callbacks.onCloudSyncStatus("connected", {
+      durability: "paused",
+      pauseReason: undefined,
+      promotionState: undefined,
+      localProtection: undefined,
+      freshness: CURRENT_FRESHNESS,
+      peerSpeaksDurabilityLegs: true,
+    });
+
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, "held");
+    expect(opened.store.getState().connectionStatus).toBe("reconnecting");
+    expect(opened.store.getState().durabilityStatus).toBe("paused");
+    expect(opened.store.getState().cloudFreshness).toEqual(CURRENT_FRESHNESS);
+
+    opened.doc.getMap("epic").set("title", "Written while held");
+    expect(handle().applied.length).toBe(0);
+    expect(opened.store.getState().unsyncedQueueSize).toBe(1);
+
+    // No snapshot follows a continued open: the open itself drains the queue.
+    handle().callbacks.onConnectionStatus("open", null, true, "continued");
+    expect(opened.store.getState().connectionStatus).toBe("open");
+    expect(opened.store.getState().durabilityStatus).toBe("paused");
+    expect(opened.store.getState().cloudFreshness).toEqual(CURRENT_FRESHNESS);
+    expect(opened.store.getState().unsyncedQueueSize).toBe(0);
+    expect(handle().applied.length).toBe(1);
+
+    opened.dispose();
+  });
+
+  it("resets the cycle when a hold ends in a null reconnect: durability cleared, queued writes wait for the new snapshot", () => {
+    const { factory, handle } = fakeFactory();
+    const opened = openStoreForTest({
+      epicId: "epic-a",
+      userId: null,
+      factories: {
+        streamClientFactory: factory,
+        laneSelection: null,
+      },
+      writeCommand: null,
+    });
+    const hostDoc = new Y.Doc();
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      emptySnapshot(),
+    );
+    handle().callbacks.onCloudSyncStatus("connected", {
+      durability: "paused",
+      pauseReason: undefined,
+      promotionState: undefined,
+      localProtection: undefined,
+      freshness: CURRENT_FRESHNESS,
+      peerSpeaksDurabilityLegs: true,
+    });
+
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, "held");
+    opened.doc.getMap("epic").set("title", "Written while held");
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
+
+    expect(opened.store.getState().durabilityStatus).toBeNull();
+    expect(opened.store.getState().cloudFreshness).toBeNull();
+    expect(handle().applied.length).toBe(0);
+    expect(opened.store.getState().unsyncedQueueSize).toBe(1);
+
+    handle().callbacks.onSnapshot(
+      buildMeta("editor", hostDoc),
+      emptySnapshot(),
+    );
+    expect(handle().applied.length).toBe(1);
     expect(opened.store.getState().unsyncedQueueSize).toBe(0);
 
     opened.dispose();
@@ -473,7 +571,7 @@ describe("createOpenEpicStore", () => {
       buildMeta("editor", hostDoc),
       emptySnapshot(),
     );
-    handle().callbacks.onConnectionStatus("reconnecting", null, true);
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
 
     // Past the 32-entry collapse threshold, so the buffer is merged at least
     // once while the edits are still only in memory.
@@ -488,7 +586,7 @@ describe("createOpenEpicStore", () => {
 
     // Recovery runs through the snapshot reconcile, which is derived from the
     // live doc - so collapsing the buffer cannot cost an edit.
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", hostDoc),
       emptySnapshot(),
@@ -517,7 +615,7 @@ describe("createOpenEpicStore", () => {
       writeCommand: null,
     });
     const hostDoc = new Y.Doc();
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     // Establish a genuine first connect (transport open + cloud caught up) so
     // the later drop reads as a reconnect, not the bootstrap "connecting".
     handle().callbacks.onCloudSyncStatus("connected", NO_CLOUD_SYNC_DURABILITY);
@@ -597,7 +695,7 @@ describe("createOpenEpicStore", () => {
       },
       writeCommand: null,
     });
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onCloudSyncStatus("connected", {
       durability: "promoting",
       pauseReason: undefined,
@@ -649,7 +747,7 @@ describe("createOpenEpicStore", () => {
       },
       writeCommand: null,
     });
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onCloudSyncStatus("connected", {
       durability: "promoting",
       pauseReason: undefined,
@@ -697,7 +795,7 @@ describe("createOpenEpicStore", () => {
       },
       writeCommand: null,
     });
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onCloudSyncStatus("connected", {
       durability: "promoting",
       pauseReason: undefined,
@@ -711,8 +809,8 @@ describe("createOpenEpicStore", () => {
     // Down and back up. The transition INTO `open` is what runs
     // `startedSubscriptionCycle`; no status frame has arrived on the new cycle
     // yet, so this is the silence the fallback is for.
-    handle().callbacks.onConnectionStatus("connecting", null, true);
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("connecting", null, true, null);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     expect(opened.store.getState()).toMatchObject({
       durabilityStatus: null,
       retainedDurabilityStatus: "promoting",
@@ -775,7 +873,7 @@ describe("createOpenEpicStore", () => {
       writeCommand: null,
     });
     const initialHostDoc = new Y.Doc();
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", initialHostDoc),
       emptySnapshot(),
@@ -812,7 +910,7 @@ describe("createOpenEpicStore", () => {
       writeCommand: null,
     });
     const hostDoc = new Y.Doc();
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", hostDoc),
       emptySnapshot(),
@@ -855,7 +953,7 @@ describe("createOpenEpicStore", () => {
     hostDoc.getMap("epic").set("title", "Server truth");
     const snapshotBytes = Y.encodeStateAsUpdate(hostDoc);
 
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(buildMeta("editor", hostDoc), snapshotBytes);
     handle().applied.length = 0;
 
@@ -878,7 +976,7 @@ describe("createOpenEpicStore", () => {
       },
       writeCommand: null,
     });
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
 
     opened.doc.getMap("epic").set("title", "Locally edited");
@@ -908,7 +1006,7 @@ describe("createOpenEpicStore", () => {
       },
       writeCommand: null,
     });
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
 
     opened.doc.getMap("epic").set("title", "Locally edited");
@@ -1021,7 +1119,7 @@ describe("createOpenEpicStore", () => {
       },
       writeCommand: null,
     });
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
 
     // Build a peer Awareness and encode its update for this doc.
@@ -1060,7 +1158,7 @@ describe("createOpenEpicStore", () => {
       },
       writeCommand: null,
     });
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
 
     opened.awareness.setLocalState({ cursor: 7 });
@@ -1080,7 +1178,7 @@ describe("createOpenEpicStore", () => {
       },
       writeCommand: null,
     });
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
 
     const { Awareness, encodeAwarenessUpdate } =
@@ -1129,7 +1227,7 @@ describe("createOpenEpicStore", () => {
       writeCommand: null,
     });
 
-    handles()[0].callbacks.onConnectionStatus("open", null, true);
+    handles()[0].callbacks.onConnectionStatus("open", null, true, null);
     handles()[0].callbacks.onSnapshot(
       buildMeta("editor", null),
       emptySnapshot(),
@@ -1150,7 +1248,7 @@ describe("createOpenEpicStore", () => {
     const donor = new Y.Doc();
     donor.getMap("epic").set("title", "Server truth");
     const snapshot = Y.encodeStateAsUpdate(donor);
-    handles()[1].callbacks.onConnectionStatus("open", null, true);
+    handles()[1].callbacks.onConnectionStatus("open", null, true, null);
     handles()[1].callbacks.onSnapshot(buildMeta("editor", null), snapshot);
 
     expect(opened.doc.getMap("epic").get("title")).toBe("Server truth");
@@ -1169,7 +1267,7 @@ describe("createOpenEpicStore", () => {
       },
       writeCommand: null,
     });
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(buildMeta("editor", null), emptySnapshot());
 
     opened.awareness.setLocalState({ cursor: 1 });
@@ -1204,6 +1302,7 @@ describe("createOpenEpicStore", () => {
         },
       },
       true,
+      null,
     );
 
     expect(opened.store.getState().snapshotFetchError?.code).toBe(
@@ -1231,7 +1330,12 @@ describe("createOpenEpicStore", () => {
       writeCommand: null,
     });
 
-    handle().callbacks.onConnectionStatus("closed", { kind: "caller" }, true);
+    handle().callbacks.onConnectionStatus(
+      "closed",
+      { kind: "caller" },
+      true,
+      null,
+    );
     handle().callbacks.onConnectionStatus(
       "closed",
       {
@@ -1244,6 +1348,7 @@ describe("createOpenEpicStore", () => {
         },
       },
       true,
+      null,
     );
 
     expect(opened.store.getState().snapshotFetchError?.code).not.toBe(
@@ -1281,6 +1386,7 @@ describe("createOpenEpicStore", () => {
         },
       },
       true,
+      null,
     );
 
     const error = opened.store.getState().snapshotFetchError;
@@ -1322,6 +1428,7 @@ describe("createOpenEpicStore", () => {
         },
       },
       true,
+      null,
     );
 
     expect(opened.store.getState().snapshotFetchError).toEqual({
@@ -1434,7 +1541,7 @@ describe("createOpenEpicStore", () => {
       },
       writeCommand: null,
     });
-    handle().callbacks.onConnectionStatus("open", null, false);
+    handle().callbacks.onConnectionStatus("open", null, false, null);
 
     // ROOM FIRST. Nothing names it yet, so nothing is publishable.
     handle().callbacks.onArtifactRoomState("artifact-room-0", "ready");
@@ -1481,7 +1588,7 @@ describe("createOpenEpicStore", () => {
     // Build a donor with one artifact pointing at artifact-room-0.
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", null),
       Y.encodeStateAsUpdate(donor),
@@ -1535,7 +1642,7 @@ describe("createOpenEpicStore", () => {
     const donor = new Y.Doc();
     donor.getMap("epic").set("title", "Stays");
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", null),
       Y.encodeStateAsUpdate(donor),
@@ -1569,7 +1676,7 @@ describe("createOpenEpicStore", () => {
       writeCommand: null,
     });
 
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onDirtySnapshot(false, [
       { artifactRoomId: "artifact-room-0", dirty: true },
     ]);
@@ -1581,8 +1688,8 @@ describe("createOpenEpicStore", () => {
 
     // A reconnect must not carry the previous cycle's dirty state forward,
     // but its empty map is unknown until the new atomic snapshot arrives.
-    handle().callbacks.onConnectionStatus("reconnecting", null, true);
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
 
     expect(opened.store.getState().artifactRoomDirtyByArtifactRoomId).toEqual(
       {},
@@ -1611,7 +1718,7 @@ describe("createOpenEpicStore", () => {
       writeCommand: null,
     });
 
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onRootDirty(false);
 
     expect(opened.store.getState().rootDirty).toBe(false);
@@ -1634,7 +1741,7 @@ describe("createOpenEpicStore", () => {
 
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", null),
       Y.encodeStateAsUpdate(donor),
@@ -1692,7 +1799,7 @@ describe("createOpenEpicStore", () => {
 
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", null),
       Y.encodeStateAsUpdate(donor),
@@ -1758,7 +1865,7 @@ describe("createOpenEpicStore", () => {
 
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", null),
       Y.encodeStateAsUpdate(donor),
@@ -1807,7 +1914,7 @@ describe("createOpenEpicStore", () => {
 
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", null),
       Y.encodeStateAsUpdate(donor),
@@ -1825,7 +1932,7 @@ describe("createOpenEpicStore", () => {
 
     // Drop into a non-open state and edit locally - the update must be
     // queued, not silently lost.
-    handle().callbacks.onConnectionStatus("connecting", null, true);
+    handle().callbacks.onConnectionStatus("connecting", null, true, null);
     handle().artifactRoomApplied.length = 0;
     fragmentDoc.transact(() => {
       fragmentDoc.getMap("offline").set("k", "v");
@@ -1834,7 +1941,7 @@ describe("createOpenEpicStore", () => {
 
     // Raw reconnect open is only transport readiness; it must not replay
     // artifactRoom writes until the fresh root snapshot confirms write permission.
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     expect(handle().artifactRoomApplied.length).toBe(0);
 
     handle().callbacks.onSnapshot(
@@ -1863,7 +1970,7 @@ describe("createOpenEpicStore", () => {
 
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", null),
       Y.encodeStateAsUpdate(donor),
@@ -1879,13 +1986,13 @@ describe("createOpenEpicStore", () => {
     const fragmentDoc = fragment.doc;
     if (fragmentDoc === null) throw new Error("missing fragment doc");
 
-    handle().callbacks.onConnectionStatus("reconnecting", null, true);
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
     fragmentDoc.transact(() => {
       fragmentDoc.getMap("offline").set("k", "v");
     });
 
     handle().artifactRoomApplied.length = 0;
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     expect(handle().artifactRoomApplied.length).toBe(0);
 
     handle().callbacks.onSnapshot(
@@ -1931,7 +2038,7 @@ describe("createOpenEpicStore", () => {
 
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", null),
       Y.encodeStateAsUpdate(donor),
@@ -1947,7 +2054,7 @@ describe("createOpenEpicStore", () => {
     const fragmentDoc = fragment.doc;
     if (fragmentDoc === null) throw new Error("missing fragment doc");
 
-    handle().callbacks.onConnectionStatus("connecting", null, true);
+    handle().callbacks.onConnectionStatus("connecting", null, true, null);
     fragmentDoc.transact(() => {
       fragmentDoc.getMap("offline").set("k", "v");
     });
@@ -1977,7 +2084,7 @@ describe("createOpenEpicStore", () => {
 
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", null),
       Y.encodeStateAsUpdate(donor),
@@ -1999,7 +2106,7 @@ describe("createOpenEpicStore", () => {
 
     // Drop into reconnecting and apply a local body edit - this becomes
     // the dirty divergence the merge path must preserve.
-    handle().callbacks.onConnectionStatus("reconnecting", null, true);
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
     const fragmentDoc = fragment.doc;
     if (fragmentDoc === null) throw new Error("missing fragment doc");
     fragmentDoc.transact(() => {
@@ -2008,7 +2115,7 @@ describe("createOpenEpicStore", () => {
 
     // Host now ships a fresh `artifactRoomSnapshot` for the SAME artifactRoom.
     handle().artifactRoomApplied.length = 0;
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", donor),
       Y.encodeStateAsUpdate(donor),
@@ -2061,7 +2168,7 @@ describe("createOpenEpicStore", () => {
 
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     // Cloud catch-up completes the first connect (connectionStatus → "open") so
     // the drop below reads as a reconnect, not the bootstrap "connecting".
     handle().callbacks.onCloudSyncStatus("connected", NO_CLOUD_SYNC_DURABILITY);
@@ -2127,7 +2234,7 @@ describe("createOpenEpicStore", () => {
 
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", null),
       Y.encodeStateAsUpdate(donor),
@@ -2146,7 +2253,7 @@ describe("createOpenEpicStore", () => {
     expect(docBefore).not.toBeNull();
 
     // ── 1. Stream transitions away from `open` and a local edit lands.
-    handle().callbacks.onConnectionStatus("reconnecting", null, true);
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
     handle().artifactRoomApplied.length = 0;
     const fragmentDoc = fragment.doc;
     if (fragmentDoc === null) throw new Error("missing fragment doc");
@@ -2192,7 +2299,7 @@ describe("createOpenEpicStore", () => {
     // reconcile; it must subsume any locally-buffered edits captured during
     // the reconnect window so the queue is not double-shipped alongside the
     // reconcile.
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     expect(handle().artifactRoomApplied).toHaveLength(0);
 
     handle().callbacks.onSnapshot(
@@ -2233,7 +2340,7 @@ describe("createOpenEpicStore", () => {
 
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", null),
       Y.encodeStateAsUpdate(donor),
@@ -2253,7 +2360,7 @@ describe("createOpenEpicStore", () => {
 
     // Reconnecting → local edit → snapshot-while-not-open stashes a
     // deferred reconcile.
-    handle().callbacks.onConnectionStatus("reconnecting", null, true);
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
     fragmentDoc.transact(() => {
       fragmentDoc.getMap("offline").set("k", "v");
     });
@@ -2279,7 +2386,7 @@ describe("createOpenEpicStore", () => {
     // Even after a follow-up open + artifactRoom snapshot, no stale reconcile
     // bytes should ship on the original handle.
     const originalApplied = handle().artifactRoomApplied.length;
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     expect(handle().artifactRoomApplied.length).toBe(originalApplied);
 
     opened.dispose();
@@ -2306,7 +2413,7 @@ describe("createOpenEpicStore", () => {
 
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", null),
       Y.encodeStateAsUpdate(donor),
@@ -2326,7 +2433,7 @@ describe("createOpenEpicStore", () => {
 
     // Reconnecting → local edit → snapshot-while-not-open stashes a
     // deferred reconcile.
-    handle().callbacks.onConnectionStatus("reconnecting", null, true);
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
     fragmentDoc.transact(() => {
       fragmentDoc.getMap("offline").set("k", "v");
     });
@@ -2351,7 +2458,7 @@ describe("createOpenEpicStore", () => {
 
     // Reopening on the same handle (e.g. transport recovers before
     // a permission re-grant) must not emit any artifactRoomApplyUpdate.
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     expect(handle().artifactRoomApplied).toHaveLength(0);
 
     opened.dispose();
@@ -2371,7 +2478,7 @@ describe("createOpenEpicStore", () => {
 
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", null),
       Y.encodeStateAsUpdate(donor),
@@ -2454,7 +2561,7 @@ describe("createOpenEpicStore", () => {
 
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", null),
       Y.encodeStateAsUpdate(donor),
@@ -2514,7 +2621,7 @@ describe("createOpenEpicStore", () => {
 
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", null),
       Y.encodeStateAsUpdate(donor),
@@ -2612,7 +2719,7 @@ describe("createOpenEpicStore", () => {
 
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", null),
       Y.encodeStateAsUpdate(donor),
@@ -2658,7 +2765,7 @@ describe("createOpenEpicStore", () => {
 
     const donor = new Y.Doc();
     seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", null),
       Y.encodeStateAsUpdate(donor),
@@ -2678,7 +2785,7 @@ describe("createOpenEpicStore", () => {
 
     // Disconnect + edit so the dirty watermark is set without an
     // outbound applyArtifactRoomUpdate landing.
-    handle().callbacks.onConnectionStatus("reconnecting", null, true);
+    handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
     fragmentDoc.transact(() => {
       fragmentDoc.getMap("dirty").set("k", "v");
     });
@@ -2694,7 +2801,7 @@ describe("createOpenEpicStore", () => {
     // must not ship a stale local update - the store dropped the
     // watermark on the downgrade.
     const refreshed = handle().callbacks;
-    refreshed.onConnectionStatus("open", null, true);
+    refreshed.onConnectionStatus("open", null, true, null);
     refreshed.onSnapshot(buildMeta("viewer", null), emptySnapshot());
     refreshed.onArtifactRoomSnapshot(
       "artifact-room-0",
@@ -2720,7 +2827,7 @@ describe("createOpenEpicStore", () => {
 
     const donor = new Y.Doc();
     donor.getMap("epic").set("title", "Title from snapshot");
-    handle().callbacks.onConnectionStatus("open", null, true);
+    handle().callbacks.onConnectionStatus("open", null, true, null);
     handle().callbacks.onSnapshot(
       buildMeta("editor", null),
       Y.encodeStateAsUpdate(donor),
@@ -2820,7 +2927,7 @@ describe("createOpenEpicStore", () => {
       // renderer's `currentStatus` is still "open". The retryMigration
       // action must route through the existing stream client, not fall
       // back to a session reopen. Simulate the open status explicitly.
-      handle().callbacks.onConnectionStatus("open", null, true);
+      handle().callbacks.onConnectionStatus("open", null, true, null);
       handle().callbacks.onMigrationStarted();
       handle().callbacks.onMigrationFailed("publishArtifactRoom timeout");
 
@@ -2850,7 +2957,7 @@ describe("createOpenEpicStore", () => {
         writeCommand: null,
       });
 
-      handle().callbacks.onConnectionStatus("open", null, true);
+      handle().callbacks.onConnectionStatus("open", null, true, null);
       handle().callbacks.onMigrationNotAllowed();
 
       expect(opened.store.getState().migration).toEqual({
@@ -2894,6 +3001,7 @@ describe("createOpenEpicStore", () => {
           },
         },
         true,
+        null,
       );
 
       expect(opened.store.getState().migration).toEqual({
@@ -2935,6 +3043,7 @@ describe("createOpenEpicStore", () => {
           },
         },
         true,
+        null,
       );
 
       expect(opened.store.getState().snapshotFetchError?.code).toBe(
@@ -2972,6 +3081,7 @@ describe("createOpenEpicStore", () => {
           },
         },
         true,
+        null,
       );
 
       expect(opened.store.getState().migration.status).toBe("idle");
@@ -3009,6 +3119,7 @@ describe("createOpenEpicStore", () => {
           },
         },
         true,
+        null,
       );
       expect(opened.store.getState().migration.status).toBe("error");
 
@@ -3164,7 +3275,7 @@ describe("createOpenEpicStore", () => {
       // Transport opens before a current-cycle cloud status arrives. Preserve
       // the historical functional `open` blend, but freshness remains false
       // so the pill cannot treat this as cloud-ack proof.
-      handle().callbacks.onConnectionStatus("open", null, true);
+      handle().callbacks.onConnectionStatus("open", null, true, null);
       let state = opened.store.getState();
       expect(state.hostTransportStatus).toBe("open");
       expect(state.cloudSyncStatus).toBe("connected");
@@ -3186,14 +3297,14 @@ describe("createOpenEpicStore", () => {
 
       // A transport re-open preserves the established functional connection
       // state while invalidating its cloud proof for the new cycle.
-      handle().callbacks.onConnectionStatus("reconnecting", null, true);
+      handle().callbacks.onConnectionStatus("reconnecting", null, true, null);
       state = opened.store.getState();
       expect(state.hostTransportStatus).toBe("reconnecting");
       expect(state.hasFreshCloudSyncStatus).toBe(true);
       expect(state.hasConnectedOnce).toBe(true);
       expect(state.connectionStatus).toBe("reconnecting");
 
-      handle().callbacks.onConnectionStatus("open", null, true);
+      handle().callbacks.onConnectionStatus("open", null, true, null);
       state = opened.store.getState();
       expect(state.hostTransportStatus).toBe("open");
       expect(state.cloudSyncStatus).toBe("connected");
@@ -3228,7 +3339,7 @@ describe("createOpenEpicStore", () => {
         writeCommand: null,
       });
 
-      handle().callbacks.onConnectionStatus("open", null, true);
+      handle().callbacks.onConnectionStatus("open", null, true, null);
       handle().callbacks.onCloudSyncStatus(
         "connected",
         NO_CLOUD_SYNC_DURABILITY,
@@ -3277,7 +3388,7 @@ describe("createOpenEpicStore", () => {
       });
       const donor = new Y.Doc();
       seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-      handle().callbacks.onConnectionStatus("open", null, true);
+      handle().callbacks.onConnectionStatus("open", null, true, null);
       handle().callbacks.onSnapshot(
         buildMeta("editor", null),
         Y.encodeStateAsUpdate(donor),
@@ -3464,7 +3575,7 @@ describe("createOpenEpicStore", () => {
 
         // Drop the transport, then edit: the update has nowhere to go and is
         // queued on the replica.
-        handle().callbacks.onConnectionStatus("closed", null, true);
+        handle().callbacks.onConnectionStatus("closed", null, true, null);
         const edited = new Y.XmlElement("paragraph");
         edited.insert(0, [new Y.XmlText("offline edit")]);
         fragment.insert(fragment.length, [edited]);
@@ -3545,7 +3656,7 @@ describe("createOpenEpicStore", () => {
       });
       const donor = new Y.Doc();
       seedRootArtifactWithArtifactRoom(donor, "art-1", "artifact-room-0");
-      handle().callbacks.onConnectionStatus("open", null, true);
+      handle().callbacks.onConnectionStatus("open", null, true, null);
       handle().callbacks.onSnapshot(
         buildMeta("editor", null),
         Y.encodeStateAsUpdate(donor),
@@ -3583,7 +3694,7 @@ describe("createOpenEpicStore", () => {
         const fragment = opened.store.getState().getArtifactFragment("art-1");
         if (fragment === null) throw new Error("missing fragment");
 
-        handle().callbacks.onConnectionStatus("closed", null, true);
+        handle().callbacks.onConnectionStatus("closed", null, true, null);
         const edited = new Y.XmlElement("paragraph");
         edited.insert(0, [new Y.XmlText("offline edit")]);
         fragment.insert(fragment.length, [edited]);
@@ -3724,7 +3835,7 @@ describe("createOpenEpicStore", () => {
           `artifact-room-${index}`,
         );
       }
-      handle().callbacks.onConnectionStatus("open", null, true);
+      handle().callbacks.onConnectionStatus("open", null, true, null);
       handle().callbacks.onSnapshot(
         buildMeta("editor", null),
         Y.encodeStateAsUpdate(donor),

@@ -459,7 +459,7 @@ function session(chatId: string): SessionHarness {
 function emitSnapshot(chatId: string, state: SessionState): void {
   const callbacks = session(chatId).callbacks();
   act(() => {
-    callbacks.onConnectionStatus("open", null, null);
+    callbacks.onConnectionStatus("open", null, null, null);
     callbacks.onSnapshot({
       kind: "snapshot",
       hasBinaryPayload: false,

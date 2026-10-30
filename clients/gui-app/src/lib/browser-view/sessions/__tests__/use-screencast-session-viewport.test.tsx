@@ -8,6 +8,7 @@ import type {
   IStreamSession,
   StatusChangeHandler,
   StreamConnectionStatus,
+  StreamContinuity,
   StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { useScreencastSession } from "@/lib/browser-view/sessions/use-screencast-session";
@@ -39,6 +40,10 @@ function createScreencastClientHarness(id: string): {
   readonly client: IHostStreamClient<HostStreamRpcRegistry>;
   readonly sentClientFrames: StreamFrameEnvelope[];
   readonly setStatus: (status: StreamConnectionStatus) => void;
+  readonly setContinuityStatus: (
+    status: StreamConnectionStatus,
+    continuity: StreamContinuity,
+  ) => void;
 } {
   const sentClientFrames: StreamFrameEnvelope[] = [];
   let status: StreamConnectionStatus = "connecting";
@@ -94,6 +99,10 @@ function createScreencastClientHarness(id: string): {
       status = next;
       statusHandler?.(next, null, null, null);
     },
+    setContinuityStatus: (next, continuity) => {
+      status = next;
+      statusHandler?.(next, null, null, continuity);
+    },
   };
 }
 
@@ -141,6 +150,7 @@ function Harness(props: {
   } = session.refs;
   return (
     <div ref={tileRef}>
+      <span data-testid="lifecycle">{session.lifecycle}</span>
       <div
         ref={(el) => {
           viewportRef.current = el;
@@ -270,5 +280,58 @@ describe("useScreencastSession viewport bridge", () => {
     expect(viewportFrames(harnessB.sentClientFrames)).toEqual([
       { ...MEASURED_VIEWPORT_FRAME },
     ]);
+  });
+
+  describe("while the host holds the stream", () => {
+    function mountOpen() {
+      vi.useFakeTimers();
+      const harnessA = createScreencastClientHarness("a");
+      const view = render(<Harness client={harnessA.client} />);
+      act(() => {
+        harnessA.setStatus("open");
+      });
+      const lifecycle = (): string | null =>
+        view.container.querySelector("[data-testid=lifecycle]")?.textContent ??
+        null;
+      return { harnessA, lifecycle };
+    }
+
+    it("reads stale while held, restores the prior lifecycle on a continued open without a frame, and restates no geometry", () => {
+      const { harnessA, lifecycle } = mountOpen();
+      const live = lifecycle();
+      expect(live).not.toBe("stale");
+      expect(viewportFrames(harnessA.sentClientFrames)).toHaveLength(1);
+
+      act(() => {
+        harnessA.setContinuityStatus("reconnecting", "held");
+      });
+      expect(lifecycle()).toBe("stale");
+
+      act(() => {
+        harnessA.setContinuityStatus("open", "continued");
+      });
+      expect(lifecycle()).toBe(live);
+      expect(viewportFrames(harnessA.sentClientFrames)).toHaveLength(1);
+    });
+
+    it("starts a new cycle once the hold ends: stale until the next open, which restates the geometry", () => {
+      const { harnessA, lifecycle } = mountOpen();
+
+      act(() => {
+        harnessA.setContinuityStatus("reconnecting", "held");
+      });
+      act(() => {
+        harnessA.setContinuityStatus("reconnecting", null);
+      });
+      act(() => {
+        harnessA.setContinuityStatus("open", null);
+      });
+
+      expect(viewportFrames(harnessA.sentClientFrames)).toEqual([
+        { ...MEASURED_VIEWPORT_FRAME },
+        { ...MEASURED_VIEWPORT_FRAME },
+      ]);
+      expect(lifecycle()).not.toBe("stale");
+    });
   });
 });

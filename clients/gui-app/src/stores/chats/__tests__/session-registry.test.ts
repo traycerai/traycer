@@ -630,7 +630,7 @@ describe("ChatSessionRegistry", () => {
         pinnedUserProviderHandle: null,
         lastDeliveredRolesDigest: null,
       };
-      stream.onConnectionStatus("open", null, null);
+      stream.onConnectionStatus("open", null, null, null);
       stream.onSnapshot({
         kind: "snapshot",
         hasBinaryPayload: false,

@@ -170,7 +170,7 @@ function emitSnapshotWithQueue(
     readonly queuedMessageIds: ReadonlyArray<string>;
   },
 ): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -774,7 +774,7 @@ describe("pendingTurn lifecycle", () => {
     const opened = openHarness(IDLE_HOST);
     const sent = sendPrompt(opened);
     stateOf(opened).stopTurn();
-    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+    opened.callbacks().onConnectionStatus("reconnecting", null, null, null);
 
     emitSnapshotWith(opened.callbacks(), IDLE_HOST, [sent.messageId], null);
 
@@ -786,7 +786,7 @@ describe("pendingTurn lifecycle", () => {
   it("ends on a reconnect snapshot that carries the saved row and another turn running", () => {
     const opened = openHarness(IDLE_HOST);
     const sent = sendPrompt(opened);
-    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+    opened.callbacks().onConnectionStatus("reconnecting", null, null, null);
 
     emitSnapshotWith(
       opened.callbacks(),
@@ -801,7 +801,7 @@ describe("pendingTurn lifecycle", () => {
   it("ends on the same snapshot on an older host only when no turn is in progress", () => {
     const opened = openHarness(OLDER_HOST_IDLE);
     const sent = sendPrompt(opened);
-    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+    opened.callbacks().onConnectionStatus("reconnecting", null, null, null);
 
     emitSnapshotWith(
       opened.callbacks(),
@@ -823,7 +823,7 @@ describe("pendingTurn lifecycle", () => {
   it("does not settle on a reconnect snapshot that has the saved row but still names the send in the queue", () => {
     const opened = openHarness(IDLE_HOST);
     const sent = sendPrompt(opened);
-    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+    opened.callbacks().onConnectionStatus("reconnecting", null, null, null);
 
     emitSnapshotWithQueue(
       opened.callbacks(),
@@ -842,7 +842,7 @@ describe("pendingTurn lifecycle", () => {
   it("does not settle an older host's snapshot while its activation reads as in progress (turnInProgress absent, run still running), and settles once it reads idle", () => {
     const opened = openHarness(OLDER_HOST_IDLE);
     const sent = sendPrompt(opened);
-    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+    opened.callbacks().onConnectionStatus("reconnecting", null, null, null);
 
     emitSnapshotWith(
       opened.callbacks(),
@@ -864,7 +864,7 @@ describe("pendingTurn lifecycle", () => {
   it("keeps the pendingTurn across a reconnect snapshot that still shows the turn naming the send", () => {
     const opened = openHarness(IDLE_HOST);
     const sent = sendPrompt(opened);
-    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+    opened.callbacks().onConnectionStatus("reconnecting", null, null, null);
 
     emitSnapshotWith(
       opened.callbacks(),
@@ -1191,7 +1191,7 @@ describe("a held Stop whose send the host queues and then starts before the canc
     const opened = openHarness(IDLE_HOST);
     const sent = sendPrompt(opened);
     stateOf(opened).stopTurn();
-    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+    opened.callbacks().onConnectionStatus("reconnecting", null, null, null);
 
     emitQueueChanged(opened.callbacks(), [queuedPromptItem(sent.messageId)]);
 
@@ -1229,7 +1229,7 @@ describe("a held Stop whose send the host queues and then starts before the canc
   it("releases an un-acked intent without a stop once a newer epoch's fresh empty idle baseline arrives", () => {
     const { opened, sent } = cancelOutstanding();
 
-    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+    opened.callbacks().onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotWithQueue(opened.callbacks(), IDLE_HOST, {
       savedMessageIds: [],
       activeTurn: null,
@@ -1246,7 +1246,7 @@ describe("a held Stop whose send the host queues and then starts before the canc
 
   it("does not let the stale ack of a prior cancel attempt clear a newer attempt's intent", () => {
     const { opened, sent, cancelActionId } = cancelOutstanding();
-    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+    opened.callbacks().onConnectionStatus("reconnecting", null, null, null);
     emitSnapshotWithQueue(opened.callbacks(), IDLE_HOST, {
       savedMessageIds: [],
       activeTurn: null,
@@ -1271,7 +1271,7 @@ describe("a held Stop whose send the host queues and then starts before the canc
   it("drops the intent on a fatal close", () => {
     const { opened, sent, cancelActionId } = cancelOutstanding();
 
-    opened.callbacks().onConnectionStatus("closed", FATAL, null);
+    opened.callbacks().onConnectionStatus("closed", FATAL, null, null);
     emitAck(opened, cancelActionId, "rejected");
     startTurn(opened, sent.messageId, "turn-b");
 
@@ -1499,7 +1499,7 @@ describe("a starting turn's block-less live row", () => {
     const sent = sendPrompt(opened);
     startingTurnFrame(opened, sent.messageId);
 
-    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+    opened.callbacks().onConnectionStatus("reconnecting", null, null, null);
 
     expect(stateOf(opened).liveAssistantMessage).not.toBeNull();
   });
@@ -1813,7 +1813,7 @@ describe("a fatal stream close with a send still in custody", () => {
     expect(stateOf(opened).heldStop).not.toBeNull();
     expect(statusOf(opened)).toBe("stopping");
 
-    opened.callbacks().onConnectionStatus("closed", FATAL, null);
+    opened.callbacks().onConnectionStatus("closed", FATAL, null, null);
 
     const state = stateOf(opened);
     expect(state.fatalClose).not.toBeNull();
@@ -1835,7 +1835,7 @@ describe("a fatal stream close with a send still in custody", () => {
     sendPrompt(opened);
     expect(statusOf(opened)).toBe("running");
 
-    opened.callbacks().onConnectionStatus("closed", FATAL, null);
+    opened.callbacks().onConnectionStatus("closed", FATAL, null, null);
 
     expect(statusOf(opened)).toBeNull();
   });
@@ -1845,7 +1845,7 @@ describe("a fatal stream close with a send still in custody", () => {
     const sent = sendPrompt(opened);
     stateOf(opened).stopTurn();
 
-    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+    opened.callbacks().onConnectionStatus("reconnecting", null, null, null);
 
     expect(stateOf(opened).fatalClose).toBeNull();
     expect(stateOf(opened).pendingTurn?.messageId).toBe(sent.messageId);
@@ -1857,7 +1857,7 @@ describe("a fatal stream close with a send still in custody", () => {
     const opened = openHarness(IDLE_HOST);
     sendPrompt(opened);
 
-    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+    opened.callbacks().onConnectionStatus("reconnecting", null, null, null);
 
     expect(stateOf(opened).pendingTurn).not.toBeNull();
     expect(statusOf(opened)).toBe("running");
@@ -1878,7 +1878,7 @@ describe("a fatal stream close with a send still in custody", () => {
     const { opened, messageId } = carriedSend();
     expect(chatActivityIndicator(stateOf(opened))).toBe("turn");
 
-    opened.callbacks().onConnectionStatus("closed", FATAL, null);
+    opened.callbacks().onConnectionStatus("closed", FATAL, null, null);
 
     const state = stateOf(opened);
     expect(state.fatalClose).not.toBeNull();
@@ -1894,7 +1894,7 @@ describe("a fatal stream close with a send still in custody", () => {
   it("a non-fatal reconnect keeps a carried prompt busy", () => {
     const { opened } = carriedSend();
 
-    opened.callbacks().onConnectionStatus("reconnecting", null, null);
+    opened.callbacks().onConnectionStatus("reconnecting", null, null, null);
 
     expect(stateOf(opened).fatalClose).toBeNull();
     expect(stateOf(opened).drainingQueueItems).toHaveLength(1);
@@ -1905,8 +1905,8 @@ describe("a fatal stream close with a send still in custody", () => {
 describe("sends buffered across a reconnect, before the first host frame places them", () => {
   it("admits the first buffered prompt on an idle baseline and queues the second", () => {
     const opened = openHarness(IDLE_HOST);
-    opened.callbacks().onConnectionStatus("reconnecting", null, null);
-    opened.callbacks().onConnectionStatus("open", null, null);
+    opened.callbacks().onConnectionStatus("reconnecting", null, null, null);
+    opened.callbacks().onConnectionStatus("open", null, null, null);
     const first = sendPrompt(opened);
     const second = sendPrompt(opened);
     expect(stateOf(opened).unplacedSendIds?.size ?? 0).toBeGreaterThan(0);
@@ -2162,7 +2162,7 @@ describe("no frame order draws one prompt in the transcript and the dock at once
           acceptedMessage(sent.messageId, 10),
         );
       } else {
-        opened.callbacks().onConnectionStatus("reconnecting", null, null);
+        opened.callbacks().onConnectionStatus("reconnecting", null, null, null);
         emitSnapshotWithQueue(opened.callbacks(), host, {
           savedMessageIds: saved ? [sent.messageId] : [],
           activeTurn: null,

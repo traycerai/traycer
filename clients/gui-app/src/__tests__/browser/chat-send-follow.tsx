@@ -333,7 +333,7 @@ function open(kind: ScenarioKind): void {
   if (kind === "activating") activeTurn = earlierTurn("starting");
   if (kind === "running") activeTurn = earlierTurn("running");
   const cb = liveCallbacks();
-  cb.onConnectionStatus("open", null, null);
+  cb.onConnectionStatus("open", null, null, null);
   cb.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,

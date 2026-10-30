@@ -153,7 +153,7 @@ function emitSnapshot(harness: Harness): void {
 
 function openHarness(): Harness {
   const next = createHarness();
-  next.callbacks().onConnectionStatus("open", null, null);
+  next.callbacks().onConnectionStatus("open", null, null, null);
   emitSnapshot(next);
   return next;
 }
@@ -219,8 +219,8 @@ describe("the deadline of a send that outlived its connection", () => {
     const info = vi.spyOn(appLogger, "info");
     harness = openHarness();
     dispatchSend(harness);
-    harness.callbacks().onConnectionStatus("closed", null, null);
-    harness.callbacks().onConnectionStatus("open", null, null);
+    harness.callbacks().onConnectionStatus("closed", null, null, null);
+    harness.callbacks().onConnectionStatus("open", null, null, null);
 
     vi.advanceTimersByTime(UNCONFIRMED_SEND_DISPLAY_DEADLINE_MS);
 
@@ -324,8 +324,8 @@ describe("a send unanswered at the display deadline", () => {
     harness = openHarness();
     const send = dispatchSend(harness);
     const epochAtSend = harness.handle.store.getState().connectionEpoch;
-    harness.callbacks().onConnectionStatus("closed", null, null);
-    harness.callbacks().onConnectionStatus("open", null, null);
+    harness.callbacks().onConnectionStatus("closed", null, null, null);
+    harness.callbacks().onConnectionStatus("open", null, null, null);
     // The epoch really moved, so the timer's guard is what is being tested.
     expect(harness.handle.store.getState().connectionEpoch).toBeGreaterThan(
       epochAtSend,

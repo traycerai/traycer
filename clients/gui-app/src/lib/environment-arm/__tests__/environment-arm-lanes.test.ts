@@ -158,6 +158,32 @@ describe("createEnvironmentArmLanes", () => {
     expect(lanes.read("k", [])).toEqual(["a", "b"]);
   });
 
+  it("keeps discarding an older generation after a held drop and a continued open", () => {
+    lanes.acquire(spec("k"));
+    const session = sessions[0];
+    session.emit(frameEnvelope(2, "a"), null);
+
+    session.emitContinuityStatus("reconnecting", "held");
+    session.emitContinuityStatus("open", "continued");
+    session.emit(frameEnvelope(0, "stale"), null);
+    session.emit(frameEnvelope(2, "b"), null);
+
+    expect(lanes.read("k", [])).toEqual(["a", "b"]);
+  });
+
+  it("applies generation 0 again once the hold ends and the stream reopens", () => {
+    lanes.acquire(spec("k"));
+    const session = sessions[0];
+    session.emit(frameEnvelope(2, "a"), null);
+
+    session.emitContinuityStatus("reconnecting", "held");
+    session.emitContinuityStatus("reconnecting", null);
+    session.emitContinuityStatus("open", null);
+    session.emit(frameEnvelope(0, "b"), null);
+
+    expect(lanes.read("k", [])).toEqual(["a", "b"]);
+  });
+
   it("applies generation 0 again on a reopened session", async () => {
     lanes.acquire(spec("k"));
     sessions[0]?.emit(frameEnvelope(2, "a"), null);

@@ -354,7 +354,7 @@ function emitOwnerSnapshot(
   callbacks: ChatStreamCallbacks,
   queueItems: ReadonlyArray<ChatQueuedManagedCommandItem>,
 ): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   const chat: Chat = {
     id: CHAT_ID,
     parentId: null,
@@ -917,7 +917,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
 
     // The connection drops WHILE the byte resolution is in flight, so by the
     // time the retry's `sendAction` runs, `canSendAction` refuses it.
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
 
     await vi.waitFor(() => {
       expect(
@@ -1545,7 +1545,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
     // A's own dispatch now gets refused - the connection drops while the
     // byte resolution is still outstanding, so `sendAction` refuses A's retry
     // when it finally tries to go out.
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
 
     await vi.waitFor(() => {
       expect(
@@ -1869,7 +1869,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
     expect(
       Object.keys(harness.handle.store.getState().hashOnlyRecoveries),
     ).toHaveLength(1);
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
     await vi.waitFor(() => {
       expect(
         Object.keys(harness?.handle.store.getState().hashOnlyRecoveries ?? {}),
@@ -2552,7 +2552,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
     // A's own dispatch now gets refused - the connection drops while the
     // byte resolution is still outstanding, so `sendAction` refuses A's
     // retry when it finally tries to go out.
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
 
     await vi.waitFor(() => {
       expect(
@@ -2682,7 +2682,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
     expect(readStagedWorktreeIntent(stagingKey)).toEqual(intentC);
 
     // A's own dispatch now gets refused.
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
     await vi.waitFor(() => {
       expect(
         Object.keys(harness?.handle.store.getState().hashOnlyRecoveries ?? {}),
@@ -3180,7 +3180,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
 
     // The connection drops while the retry's byte resolution is still
     // outstanding, so `sendAction` refuses it - onto a FREE restoration slot.
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
     await vi.waitFor(() => {
       expect(
         Object.keys(harness?.handle.store.getState().hashOnlyRecoveries ?? {}),
@@ -3350,7 +3350,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
       chatA.handle.store.getState().failedSendRestoration?.clientActionId,
     ).toBe(b.clientActionId);
 
-    chatA.callbacks().onConnectionStatus("reconnecting", null, null);
+    chatA.callbacks().onConnectionStatus("reconnecting", null, null, null);
     await vi.waitFor(() => {
       expect(
         Object.keys(chatA.handle.store.getState().hashOnlyRecoveries),
@@ -3463,7 +3463,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
       token: null,
     });
 
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
     await vi.waitFor(() => {
       expect(
         Object.keys(harness?.handle.store.getState().hashOnlyRecoveries ?? {}),

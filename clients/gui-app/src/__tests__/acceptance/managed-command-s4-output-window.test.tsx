@@ -680,13 +680,18 @@ describe("S4 · output window", () => {
     renderTile();
 
     act(() => {
-      connectedWire().callbacks.onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: fatalErrorDetails(
-          "MANAGED_COMMAND_NOT_FOUND",
-          "MANAGED_COMMAND_NOT_FOUND: no such managed command in this epic",
-        ),
-      });
+      connectedWire().callbacks.onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: fatalErrorDetails(
+            "MANAGED_COMMAND_NOT_FOUND",
+            "MANAGED_COMMAND_NOT_FOUND: no such managed command in this epic",
+          ),
+        },
+        null,
+        null,
+      );
     });
 
     const panel = screen.getByTestId("managed-command-output-availability");
@@ -708,13 +713,18 @@ describe("S4 · output window", () => {
     });
 
     act(() => {
-      connectedWire().callbacks.onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: fatalErrorDetails(
-          "UNAUTHORIZED",
-          "UNAUTHORIZED: role revoked",
-        ),
-      });
+      connectedWire().callbacks.onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: fatalErrorDetails(
+            "UNAUTHORIZED",
+            "UNAUTHORIZED: role revoked",
+          ),
+        },
+        null,
+        null,
+      );
     });
 
     expect(
@@ -738,13 +748,18 @@ describe("S4 · output window", () => {
     const callsBeforeRetry = outputWireFactoryCalls;
 
     act(() => {
-      firstWire.callbacks.onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: fatalErrorDetails(
-          "MANAGED_COMMAND_OUTPUT_FAILED",
-          "MANAGED_COMMAND_OUTPUT_FAILED: log reader crashed",
-        ),
-      });
+      firstWire.callbacks.onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: fatalErrorDetails(
+            "MANAGED_COMMAND_OUTPUT_FAILED",
+            "MANAGED_COMMAND_OUTPUT_FAILED: log reader crashed",
+          ),
+        },
+        null,
+        null,
+      );
     });
 
     const banner = screen.getByTestId("managed-command-output-availability");
@@ -785,7 +800,7 @@ describe("S4 · output window", () => {
 
     // The socket declaring itself open is not the snapshot landing.
     act(() => {
-      connectedWire().callbacks.onConnectionStatus("open", null);
+      connectedWire().callbacks.onConnectionStatus("open", null, null, null);
     });
     expect(screen.getByText("Connecting…")).toBeTruthy();
 
@@ -824,13 +839,18 @@ describe("S4 · output window", () => {
     ).toBeTruthy();
 
     act(() => {
-      connectedWire().callbacks.onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: fatalErrorDetails(
-          "MANAGED_COMMAND_OUTPUT_FAILED",
-          "MANAGED_COMMAND_OUTPUT_FAILED: log reader crashed",
-        ),
-      });
+      connectedWire().callbacks.onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: fatalErrorDetails(
+            "MANAGED_COMMAND_OUTPUT_FAILED",
+            "MANAGED_COMMAND_OUTPUT_FAILED: log reader crashed",
+          ),
+        },
+        null,
+        null,
+      );
     });
 
     expect(

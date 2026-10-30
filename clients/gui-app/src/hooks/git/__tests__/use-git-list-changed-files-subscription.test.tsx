@@ -16,6 +16,7 @@ import type {
   IStreamSession,
   ServerFrameHandler,
   StatusChangeHandler,
+  StreamContinuity,
   StreamFrameEnvelope,
   StreamCloseReason,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
@@ -104,6 +105,14 @@ class MockStreamSession implements IStreamSession {
     if (this.statusChangeHandler !== null) {
       this.statusChangeHandler(status, reason, null, null);
     }
+  }
+
+  /** The transition a resumable stream reports while its host holds the subscription. */
+  emitContinuityStatus(
+    status: "open" | "reconnecting",
+    continuity: StreamContinuity,
+  ): void {
+    this.statusChangeHandler?.(status, null, null, continuity);
   }
 }
 
@@ -1939,6 +1948,43 @@ describe("useGitListChangedFilesSubscription", () => {
       // Not terminal: the stream is still expected to recover, so this must
       // not masquerade as a fatal error.
       expect(result.current.error).toBeNull();
+    });
+
+    it("withholds watcher health while the host holds the stream and restores it on a continued open with no new frame", async () => {
+      const { result, session } = await renderAtMinor(3);
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-error", detail: "boom" }),
+        null,
+      );
+      await waitFor(() => expect(result.current.watcherStatus).not.toBeNull());
+      const before = result.current.watcherStatus;
+
+      act(() => {
+        session.emitContinuityStatus("reconnecting", "held");
+      });
+      expect(result.current.watcherStatus).toBeNull();
+      expect(result.current.error).toBeNull();
+
+      act(() => {
+        session.emitContinuityStatus("open", "continued");
+      });
+      expect(result.current.watcherStatus).toEqual(before);
+    });
+
+    it("does not restore watcher health once the hold ends in a plain reconnect", async () => {
+      const { result, session } = await renderAtMinor(3);
+      session.emitFrame(
+        v13Snapshot({ state: "degraded-error", detail: "boom" }),
+        null,
+      );
+      await waitFor(() => expect(result.current.watcherStatus).not.toBeNull());
+
+      act(() => {
+        session.emitContinuityStatus("reconnecting", "held");
+        session.emitContinuityStatus("reconnecting", null);
+        session.emitContinuityStatus("open", null);
+      });
+      expect(result.current.watcherStatus).toBeNull();
     });
 
     it("drops watcher health when the session is REPLACED, not only when it terminates", async () => {

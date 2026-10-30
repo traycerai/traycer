@@ -103,7 +103,7 @@ function capabilityFlags(
 describe("chat session store - dispose clears every per-stream capability flag", () => {
   it("leaves no capability advertised after dispose", () => {
     const harness = createHarness();
-    harness.callbacks().onConnectionStatus("open", null, null);
+    harness.callbacks().onConnectionStatus("open", null, null, null);
 
     // Precondition: every capability is advertised, so a survivor below can
     // only be staleness and not a flag that was never set.
@@ -129,11 +129,11 @@ describe("chat session store - dispose clears every per-stream capability flag",
     // guards is a new capability joining one path and not the other - which has
     // happened twice now, once in each direction.
     const harness = createHarness();
-    harness.callbacks().onConnectionStatus("open", null, null);
+    harness.callbacks().onConnectionStatus("open", null, null, null);
     harness.handle.store.getState().retry();
     const afterRetry = capabilityFlags(harness.handle.store.getState());
 
-    harness.callbacks().onConnectionStatus("open", null, null);
+    harness.callbacks().onConnectionStatus("open", null, null, null);
     harness.handle.dispose();
 
     expect(capabilityFlags(harness.handle.store.getState())).toEqual(

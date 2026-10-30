@@ -5,6 +5,7 @@ import type {
   IStreamSession,
   ServerFrameHandler,
   StatusChangeHandler,
+  StreamContinuity,
   StreamFrameEnvelope,
 } from "../i-stream-session";
 
@@ -70,6 +71,15 @@ export class FakeStreamSession implements IStreamSession {
   emitStatus(status: StreamStatus): void {
     this.status = status;
     this.statusHandler?.(status, null, null, null);
+  }
+
+  /** The transition a resumable stream reports while its host holds the subscription. */
+  emitContinuityStatus(
+    status: StreamStatus,
+    continuity: StreamContinuity,
+  ): void {
+    this.status = status;
+    this.statusHandler?.(status, null, null, continuity);
   }
 
   /** The terminal close a host's bearer-expiry disconnect produces. */

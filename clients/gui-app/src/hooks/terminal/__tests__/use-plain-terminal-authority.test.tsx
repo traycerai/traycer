@@ -183,6 +183,13 @@ class ControlledSession implements IStreamSession {
     this.statusHandler?.(status, reason, null, null);
   }
 
+  emitContinuity(
+    status: StreamConnectionStatus,
+    continuity: "held" | "continued" | null,
+  ): void {
+    this.statusHandler?.(status, null, null, continuity);
+  }
+
   emitFrame(
     frame:
       | TerminalPlainSubscribeListServerFrame
@@ -1227,6 +1234,74 @@ describe("usePlainTerminalAuthority integration", () => {
       expect(rendered.result.current.terminals).toHaveLength(0);
     });
     expect(rendered.result.current.canMutate).toBe(true);
+  });
+
+  it("reads a held stream as reconnecting and a continued open as live without a new snapshot, but a null reconnect needs one", async () => {
+    recordCapableManifest();
+    const test = fixture([terminal(1, null)]);
+    const stream = new ControlledStreamClient("supported");
+    const rendered = renderHook(
+      () =>
+        usePlainTerminalAuthority({
+          hostId: HOST_ID,
+          scope: SCOPE,
+          client: test.client,
+          streamClient: stream,
+          capabilityIncarnation: "1.0.0",
+        }),
+      { wrapper: test.Wrapper },
+    );
+    const streamStatus = ():
+      | PlainTerminalCollection["streamStatus"]
+      | undefined =>
+      test.queryClient.getQueryData<PlainTerminalCollection>(
+        hostQueryKeys.plainTerminals(HOST_ID, SCOPE),
+      )?.streamStatus;
+    await waitFor(() => {
+      expect(rendered.result.current.terminals).toHaveLength(1);
+    });
+    act(() => {
+      stream.session.emitStatus("open", null);
+      stream.session.emitFrame(stateFrame([terminal(1, null)]));
+      stream.session.emitInitialized();
+    });
+    await waitFor(() => {
+      expect(rendered.result.current.canMutate).toBe(true);
+    });
+
+    act(() => {
+      stream.session.emitContinuity("reconnecting", "held");
+    });
+    expect(streamStatus()).toBe("reconnecting");
+    await waitFor(() => {
+      expect(rendered.result.current.canMutate).toBe(false);
+    });
+    expect(rendered.result.current.terminals).toHaveLength(1);
+
+    act(() => {
+      stream.session.emitContinuity("open", "continued");
+    });
+    expect(streamStatus()).toBe("open");
+    await waitFor(() => {
+      expect(rendered.result.current.canMutate).toBe(true);
+    });
+
+    // The hold ending is an ordinary reconnect: a fresh snapshot is owed.
+    act(() => {
+      stream.session.emitContinuity("reconnecting", "held");
+      stream.session.emitContinuity("reconnecting", null);
+      stream.session.emitContinuity("open", null);
+    });
+    await waitFor(() => {
+      expect(rendered.result.current.canMutate).toBe(false);
+    });
+    act(() => {
+      stream.session.emitFrame(stateFrame([]));
+      stream.session.emitInitialized();
+    });
+    await waitFor(() => {
+      expect(rendered.result.current.canMutate).toBe(true);
+    });
   });
 
   it("keeps a fresh snapshot mutable across an availability-triggered list refetch", async () => {

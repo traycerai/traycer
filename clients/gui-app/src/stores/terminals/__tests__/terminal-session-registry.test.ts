@@ -187,7 +187,9 @@ describe("TerminalSessionRegistry", () => {
     const owned = createHandle("terminal");
 
     registry.acquire("terminal-1", () => owned.handle, HOST_ID, "presentation");
-    owned.callbacks().onConnectionStatus("closed", { kind: "caller" });
+    owned
+      .callbacks()
+      .onConnectionStatus("closed", { kind: "caller" }, null, null);
     expect(owned.handle.store.getState().status).toBe("lost");
     registry.release("terminal-1", owned.handle, true);
 
@@ -205,7 +207,9 @@ describe("TerminalSessionRegistry", () => {
     registry.release("terminal-1", owned.handle, true);
     expect(registry.get("terminal-1")).toBe(owned.handle);
 
-    owned.callbacks().onConnectionStatus("closed", { kind: "caller" });
+    owned
+      .callbacks()
+      .onConnectionStatus("closed", { kind: "caller" }, null, null);
 
     expect(owned.closeCount()).toBe(2);
     expect(registry.get("terminal-1")).toBeNull();
@@ -377,7 +381,9 @@ describe("TerminalSessionRegistry", () => {
       },
       "",
     );
-    owned.callbacks().onConnectionStatus("closed", { kind: "caller" });
+    owned
+      .callbacks()
+      .onConnectionStatus("closed", { kind: "caller" }, null, null);
     registry.release("terminal-1", owned.handle, true);
 
     expect(owned.handle.store.getState().status).toBe("lost");
@@ -504,15 +510,20 @@ describe("TerminalSessionRegistry", () => {
     registry.release("terminal-1", owned.handle, true);
     expect(registry.get("terminal-1")).toBe(owned.handle);
 
-    owned.callbacks().onConnectionStatus("closed", {
-      kind: "fatalError",
-      details: {
-        code: "TERMINAL_NOT_FOUND",
-        reason: "TERMINAL_NOT_FOUND: gone",
-        incompatibleMethods: null,
-        upgradeGuidance: null,
+    owned.callbacks().onConnectionStatus(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "TERMINAL_NOT_FOUND",
+          reason: "TERMINAL_NOT_FOUND: gone",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
       },
-    });
+      null,
+      null,
+    );
 
     expect(owned.handle.store.getState().status).toBe("reaped");
     expect(owned.closeCount()).toBe(2);
@@ -531,15 +542,20 @@ describe("TerminalSessionRegistry", () => {
     registry.release("terminal-1", owned.handle, true);
     expect(registry.get("terminal-1")).toBe(owned.handle);
 
-    owned.callbacks().onConnectionStatus("closed", {
-      kind: "fatalError",
-      details: {
-        code: "TERMINAL_NOT_FOUND",
-        reason: "TERMINAL_NOT_FOUND: gone",
-        incompatibleMethods: null,
-        upgradeGuidance: null,
+    owned.callbacks().onConnectionStatus(
+      "closed",
+      {
+        kind: "fatalError",
+        details: {
+          code: "TERMINAL_NOT_FOUND",
+          reason: "TERMINAL_NOT_FOUND: gone",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
       },
-    });
+      null,
+      null,
+    );
 
     expect(owned.handle.store.getState().status).toBe("reaped");
     // Unlike a merely "lost" terminal-agent (kept warm - see the sibling test

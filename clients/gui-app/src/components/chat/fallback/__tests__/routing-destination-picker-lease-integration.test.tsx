@@ -222,7 +222,7 @@ function emitSnapshot(
   callbacks: ChatStreamCallbacks,
   pending: PendingFallback | undefined,
 ): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -546,7 +546,7 @@ describe("B1: the routing chooser over the real lease, five ticket cases", () =>
     // DOWN - `emitTurnState`, not `emitSnapshot`, so nothing silently repairs
     // `connectionStatus` before the reacquire effect's own `hold()` attempt.
     act(() => {
-      callbacks.onConnectionStatus("reconnecting", null, null);
+      callbacks.onConnectionStatus("reconnecting", null, null, null);
     });
     act(() => {
       emitTurnState(callbacks, fallbackDto({ state: "hold", revision: 3 }));
@@ -558,7 +558,7 @@ describe("B1: the routing chooser over the real lease, five ticket cases", () =>
 
     // The stream comes back and the host resends the timed hold.
     act(() => {
-      callbacks.onConnectionStatus("open", null, null);
+      callbacks.onConnectionStatus("open", null, null, null);
     });
     act(() => {
       emitTurnState(callbacks, fallbackDto({ state: "hold", revision: 4 }));
@@ -681,7 +681,7 @@ describe("B-RECONNECT: the reacquire effect re-asks per frame, not per lease-nul
     });
 
     act(() => {
-      callbacks.onConnectionStatus("reconnecting", null, null);
+      callbacks.onConnectionStatus("reconnecting", null, null, null);
     });
     act(() => {
       emitSnapshot(callbacks, fallbackDto({ state: "hold", revision: 3 }));
@@ -721,7 +721,7 @@ describe("B-RECONNECT: the reacquire effect re-asks per frame, not per lease-nul
     // and FAILS to send (`canSendAction` reads `connectionStatus === "open"`)
     // - the lease slot stays `null`.
     act(() => {
-      callbacks.onConnectionStatus("reconnecting", null, null);
+      callbacks.onConnectionStatus("reconnecting", null, null, null);
     });
     act(() => {
       emitTurnState(callbacks, fallbackDto({ state: "hold", revision: 3 }));
@@ -739,7 +739,7 @@ describe("B-RECONNECT: the reacquire effect re-asks per frame, not per lease-nul
 
     // Now the connection genuinely recovers and the retry succeeds.
     act(() => {
-      callbacks.onConnectionStatus("open", null, null);
+      callbacks.onConnectionStatus("open", null, null, null);
     });
     act(() => {
       emitTurnState(callbacks, fallbackDto({ state: "hold", revision: 5 }));
@@ -763,7 +763,7 @@ describe("B-RECONNECT: the reacquire effect re-asks per frame, not per lease-nul
     expect(spy.calls()).toBe(1);
 
     act(() => {
-      callbacks.onConnectionStatus("reconnecting", null, null);
+      callbacks.onConnectionStatus("reconnecting", null, null, null);
     });
     act(() => {
       emitSnapshot(callbacks, fallbackDto({ state: "choosing", revision: 3 }));

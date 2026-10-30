@@ -1,3 +1,4 @@
+import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
 import {
   useCallback,
   useEffect,
@@ -18,6 +19,7 @@ import { BrowserScreencastStreamClient } from "@traycer-clients/shared/host-tran
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -186,6 +188,10 @@ interface ScreencastRenderState {
   readonly image: ScreencastImage | null;
   readonly lifecycle: ScreencastLifecycle;
   readonly details: string | null;
+  readonly heldPresentation: {
+    readonly lifecycle: ScreencastLifecycle;
+    readonly details: string | null;
+  } | null;
   readonly frameSize: ScreencastFrameSize | null;
   readonly navState: BrowserNavState;
 }
@@ -436,6 +442,7 @@ export function useScreencastSession(
     client,
     image: null,
     lifecycle: "connecting",
+    heldPresentation: null,
     details: null,
     frameSize: null,
     logicalViewport: null,
@@ -636,16 +643,18 @@ export function useScreencastSession(
     const onConnectionStatus = (
       status: StreamConnectionStatus,
       reason: StreamCloseReason | null,
+      _retryCause: FatalErrorDetails | null,
+      continuity: StreamContinuity,
     ): void => {
       if (stream !== null && !isCurrent()) return;
-      if (status !== "open") {
+      if (status !== "open" && continuity !== "held") {
         controller.notePresentedSequence(null);
         // Plane state cannot outlive the transport that established it: the
         // next subscription starts on JPEG until the host says otherwise.
         controller.noteViewportEpoch(null);
         controller.setCaptureMode("jpeg");
         controller.clearLocalArm(false);
-      } else {
+      } else if (status === "open" && continuity !== "continued") {
         // Restate the measured geometry for THIS round - see `lastViewportRef`.
         // On `open`, because that is the first moment the transport stops
         // dropping what it is handed; every earlier attempt (the bridge's own
@@ -664,7 +673,24 @@ export function useScreencastSession(
           });
         }
       }
-      handleStreamStatus(status, reason, patchStreamState);
+      if (continuity === "continued") {
+        patchStreamState((base) => ({
+          ...base.heldPresentation,
+          heldPresentation: null,
+        }));
+      } else if (continuity === "held") {
+        patchStreamState((base) => ({
+          lifecycle: "stale",
+          details: "Reconnecting to the screencast stream.",
+          heldPresentation: base.heldPresentation ?? {
+            lifecycle: base.lifecycle,
+            details: base.details,
+          },
+        }));
+      } else {
+        patchStreamState({ heldPresentation: null });
+        handleStreamStatus(status, reason, patchStreamState);
+      }
     };
 
     const onServerFrame = (
@@ -1197,6 +1223,7 @@ function resetScreencastStateForClient(
     client,
     image: null,
     lifecycle: "connecting",
+    heldPresentation: null,
     details: clientlessDetails(client === null),
     frameSize: null,
     logicalViewport: null,
