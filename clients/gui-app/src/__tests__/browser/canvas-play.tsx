@@ -57,7 +57,7 @@ import "@/lib/theme-applier";
 import "@/index.css";
 
 /**
- * Two boards, both run live at once (`LIVE_BOARD_LIMIT` easily covers two),
+ * Two boards, both run live at once (the live budget easily covers two),
  * so the browser spec can prove the claims jsdom cannot: the same iframe
  * (same running document) survives entering/leaving fullscreen and switching
  * the fullscreen board back and forth, a board's own Play makes just that
