@@ -45,22 +45,30 @@ export interface BotSentPost {
   readonly delivery: BotConversationSendDelivery;
 }
 
-/** A message of one of the bot's chats (its channel or a thread), by the chat and the message. */
-export interface BotChatMessageRef {
+/**
+ * One of the bot's own sessions to open as a read-only chat in place of its
+ * channel (Tracy Bots T93): the trunk's (`threadId` `null`) or a thread's,
+ * and the message of it the view lands on (`null`: where it opens).
+ */
+export interface BotSessionTarget {
   readonly chatId: string;
-  readonly messageId: string;
+  readonly threadId: string | null;
+  readonly messageId: string | null;
 }
 
-/**
- * One turn of the bot open in the rail, "How Tracy answered" (Tracy Bots
- * T86): the turn, the member's message it answered (`null` for a turn that
- * answered none, a check-in's), and the thread it displaced, which its back
- * button restores (`null` when it displaced none).
- */
-export interface BotOpenTurn {
-  readonly ref: BotTurnRef;
-  readonly question: BotChatMessageRef | null;
-  readonly back: BotOpenThread | null;
+/** Opens one of the bot's sessions, read-only, in place of its channel. */
+export type BotSessionOpen = (target: BotSessionTarget) => void;
+
+/** Opens a turn of the bot: its session, landed on the message that started the turn. */
+export type BotTurnOpen = (ref: BotTurnRef) => void;
+
+/** Where a turn of the bot is in its session. */
+export function sessionTargetOfTurn(ref: BotTurnRef): BotSessionTarget {
+  return {
+    chatId: ref.chatId,
+    threadId: ref.threadId,
+    messageId: ref.userMessageId,
+  };
 }
 
 /**
@@ -73,18 +81,17 @@ export interface BotOpenMemory {
 }
 
 /**
- * What the rail beside a bot's channel holds: one slot, a thread, one turn
- * or the bot's memory, the newer replacing the older.
+ * What the rail beside a bot's channel holds: one slot, a thread or the
+ * bot's memory, the newer replacing the older.
  */
 export type BotRail =
   | ({ readonly kind: "thread" } & BotOpenThread)
-  | ({ readonly kind: "turn" } & BotOpenTurn)
   | ({ readonly kind: "memory" } & BotOpenMemory);
 
 /**
  * The memory opened over what the rail holds (the bot's profile card): it
  * takes the one slot and keeps for its back button the thread it displaces,
- * or the one a turn or the memory already open there displaced.
+ * or the one the memory already open there displaced.
  */
 export function memoryRailOver(rail: BotRail | null): BotRail {
   if (rail === null) return { kind: "memory", back: null };

@@ -104,8 +104,8 @@ import { TextSegment } from "./segments/text-segment";
  * Under a reply of the bot, the receipt of the turn that wrote it (Tracy
  * Bots T86): what the turn did and how long it took, shown while the row is
  * hovered or the receipt has keyboard focus, and always while the turn
- * runs. It opens the turn beside the channel. A touch screen has no hover:
- * a long press on the reply offers it in a sheet instead.
+ * runs. It opens the turn's session, landed on the turn. A touch screen
+ * has no hover: a long press on the reply offers it in a sheet instead.
  *
  * Without `hoverActions` the row is drawn as the post a thread opens on, at
  * the top of the thread panel: the same row, with nothing on hover.
@@ -182,6 +182,35 @@ export function ChatBotMessage(props: {
           onOpen={replyInThread}
         />
       )}
+    </BotMessageFrame>
+  );
+}
+
+/**
+ * A post the app draws in the bot's voice where the bot has written none (Tracy
+ * Bots T67, a team's channel before the team has a host): the bot's picture
+ * and name, with no time and no actions, over `children`. It is not a message
+ * of the channel: no member wrote it and nothing stores it.
+ */
+export function ChatBotAppPost(props: {
+  readonly name: string;
+  readonly testId: string;
+  readonly children: ReactNode;
+}): ReactElement {
+  return (
+    <BotMessageFrame
+      avatar={<BotAvatar size="lg" />}
+      name={props.name}
+      bot={false}
+      sentAt={null}
+      instanceId={props.testId}
+      testId={props.testId}
+      hoverActions={false}
+      replyInThread={null}
+      failed={null}
+      longPress={null}
+    >
+      {props.children}
     </BotMessageFrame>
   );
 }
@@ -565,7 +594,8 @@ function BotMessageFrame(props: {
   readonly name: string;
   /** A bot's row: its picture and name open its card. */
   readonly bot: boolean;
-  readonly sentAt: number;
+  /** When the message was sent; `null` for a post the app draws, which has no time. */
+  readonly sentAt: number | null;
   /** Names the time stamp for the layout editor; a message id. */
   readonly instanceId: string;
   readonly testId: string;
@@ -632,11 +662,13 @@ function BotMessageFrame(props: {
           ) : (
             <span className={nameClassName}>{props.name}</span>
           )}
-          <ChatMessageTimestamp
-            timestamp={props.sentAt}
-            separated={false}
-            instanceId={props.instanceId}
-          />
+          {props.sentAt === null ? null : (
+            <ChatMessageTimestamp
+              timestamp={props.sentAt}
+              separated={false}
+              instanceId={props.instanceId}
+            />
+          )}
         </div>
         {props.children}
       </div>

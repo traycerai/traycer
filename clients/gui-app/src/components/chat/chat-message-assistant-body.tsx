@@ -1492,7 +1492,7 @@ function ApprovalSegmentCard({
  * other surfaces that draw a turn's timeline, so the card reads the same
  * wherever the turn is shown.
  */
-export function PromotedSubagentItem(props: {
+function PromotedSubagentItem(props: {
   readonly id: string;
   readonly segment: Extract<MessageSegment, { kind: "subagent" }>;
 }) {

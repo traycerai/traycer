@@ -662,6 +662,8 @@ import {
   botOnboardingChooseV10,
   botOnboardingCompleteV10,
   botOnboardingReadV10,
+  botOnboardingReadV11,
+  botOnboardingReadUpgradeV10ToV11,
   botCreateV10,
   botDeleteV10,
   botListChangedV10,
@@ -9460,11 +9462,17 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.onboarding.read": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: botOnboardingReadV10,
           upgradeFromPreviousVersion: null,
+        },
+        // @1.1 names the team's main bot while it is still to be set up
+        // (`setup`, T67).
+        1: {
+          contract: botOnboardingReadV11,
+          upgradeFromPreviousVersion: botOnboardingReadUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

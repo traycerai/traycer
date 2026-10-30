@@ -160,7 +160,6 @@ function mountRow(input: Mount): void {
         environmentOwnerKind={input.environmentOwnerKind}
         createdBy={input.createdBy}
         isMain={input.isMain}
-        entryLocked={false}
       />
     </StrictMode>,
   );

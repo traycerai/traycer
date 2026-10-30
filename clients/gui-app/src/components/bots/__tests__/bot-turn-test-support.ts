@@ -19,7 +19,10 @@ import type {
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
-import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
+import type {
+  BotOpenThread,
+  BotSessionTarget,
+} from "@/stores/bots/bot-open-thread-store";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import {
   createChatSessionStore,
@@ -487,6 +490,13 @@ export const THREAD_REPLY_TURN: BotTurnRef = turnRef({
   messageIds: [THREAD_REPLY_ID],
   requestIds: [],
 });
+
+/**
+ * The sessions the channel harness asked the tab to open in the channel's
+ * place, oldest first: a receipt's turn, or a thread's session from its
+ * panel. A suite empties it before each case.
+ */
+export const openedSessions: BotSessionTarget[] = [];
 
 /** The rail's thread: the one the member's post opened. */
 export const THREAD_OPEN: BotOpenThread = {

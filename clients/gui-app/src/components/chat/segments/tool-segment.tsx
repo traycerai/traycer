@@ -65,6 +65,8 @@ import { isTraycerBrowserReplToolName } from "@traycer/protocol/host/agent/gui/b
 import { McpAppRow } from "./mcp-app-row";
 import { ArtifactRow } from "./artifact-row";
 import { ToolImageGallery } from "./tool-image-gallery";
+import { BotSendCard } from "@/components/bots/bot-send-card";
+import { paintedBotSendOf } from "@/lib/bots/bot-send-tool";
 
 interface ToolSegmentProps {
   id: string;
@@ -282,6 +284,16 @@ export function ToolSegment(props: ToolSegmentProps) {
   }
   if (props.agentMessageSend !== null) {
     return <A2ASendToolSegment {...props} send={props.agentMessageSend} />;
+  }
+  const botSend = props.variant === "card" ? paintedBotSendOf(props) : null;
+  if (botSend !== null) {
+    return (
+      <BotSendCard
+        id={props.id}
+        send={botSend}
+        findUnitId={props.headerFindUnitId}
+      />
+    );
   }
   // `isMcpAppToolCall`, spelled out so the stamp narrows.
   if (props.mcpApp !== null) {
