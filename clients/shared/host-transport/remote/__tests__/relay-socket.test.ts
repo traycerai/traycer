@@ -1102,15 +1102,15 @@ describe("RelaySocket attach URL", () => {
     return new URL(urls[0] ?? "").searchParams.get("prev");
   }
 
-  it("keeps the reason of a previous leg whose reason is a known one", () => {
+  it("sends the previous leg's code and reason", () => {
     expect(prevOf({ code: 4007, reason: "relay-relink" })).toBe(
       "4007:relay-relink",
     );
   });
 
-  it("sends the code with an empty reason for a reason outside the known set", () => {
+  it("slugs any reason and leaves filtering to the relay Worker", () => {
     expect(prevOf({ code: 1000, reason: "forced-reconnect:wake" })).toBe(
-      "1000:",
+      "1000:forced-reconnect-wake",
     );
   });
 });
