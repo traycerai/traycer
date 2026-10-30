@@ -205,7 +205,8 @@ interface ListRowTop {
 
 interface ReaderEndCandidate {
   readonly readerGestureGeneration: number;
-  readonly targetScrollTop: number;
+  /** As `ReaderMomentumEnd.targetContentEnd`, for the gesture's end. */
+  readonly targetContentEnd: number;
   /** The list's last row when the gesture began. Rows above the reader that
    *  the list remeasures since move it, and the list moves the reader with
    *  them, so the end the gesture headed for has moved by the same amount. */
@@ -219,13 +220,14 @@ interface ReaderEndCandidate {
  *  from. The two are read in different ways because the list moves them in
  *  different ways. */
 interface ReaderMomentumEnd {
-  /** Where the content that ended the transcript at the lift then stood.
-   *  It is the content the finger was thrown at, so it moves only as that
-   *  content moves - with `lastRow`, and never with a tail that grows below
-   *  it. A row growing in view pushes it down without moving the view at
-   *  all, which is why this end cannot be read from the writes the list
-   *  announces. */
-  readonly targetScrollTop: number;
+  /** Where the content that ended the transcript at the lift then stood,
+   *  measured down the content and not as an offset of the view
+   *  (`endScrollTopOf`). It is the content the finger was thrown at, so it
+   *  moves only as that content moves - with `lastRow`, and never with a
+   *  tail that grows below it. A row growing in view pushes it down without
+   *  moving the view at all, which is why this end cannot be read from the
+   *  writes the list announces. */
+  readonly targetContentEnd: number;
   /** The list's last row at the lift, as `ReaderEndCandidate.lastRow`. */
   readonly lastRow: ListRowTop | null;
   /** Where the view stood at the lift, carried with every announced write
@@ -234,6 +236,19 @@ interface ReaderMomentumEnd {
    *  standing where it was lifted has not travelled, however the end moved
    *  to meet it. */
   readonly liftScrollTop: number;
+}
+
+/** The offset that reaches content standing `contentEnd` down the transcript,
+ *  for a view of this height. Held apart from the content because a view can
+ *  change height under a reader on its way there - a keyboard opening, a
+ *  phone browser's chrome collapsing as the finger flings - which moves every
+ *  offset without moving a row. */
+function endScrollTopOf(
+  contentEnd: number,
+  geometry: ChatTimelineScrollGeometry,
+  shift: number,
+): number {
+  return Math.max(0, contentEnd + shift - geometry.clientHeight);
 }
 
 type ArmedReaderDeparture =
@@ -606,7 +621,7 @@ function readerEndCandidateFor(input: {
   }
   return {
     readerGestureGeneration: input.readerGestureGeneration,
-    targetScrollTop: Math.max(0, geometry.scrollHeight - geometry.clientHeight),
+    targetContentEnd: geometry.scrollHeight,
     lastRow: lastListRowTop(input.list),
     reached: false,
   };
@@ -640,7 +655,7 @@ function readerMomentumEndFor(
   list: LegendListRef | null,
 ): ReaderMomentumEnd {
   return {
-    targetScrollTop: Math.max(0, geometry.scrollHeight - geometry.clientHeight),
+    targetContentEnd: geometry.scrollHeight,
     lastRow: lastListRowTop(list),
     liftScrollTop: geometry.scrollTop,
   };
@@ -1404,8 +1419,7 @@ export function useChatTimelineFollowLatch(
         readerCandidate.readerGestureGeneration ===
           readerGestureGenerationRef.current &&
         geometry.scrollTop >=
-          readerCandidate.targetScrollTop +
-            shift -
+          endScrollTopOf(readerCandidate.targetContentEnd, geometry, shift) -
             CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX;
       if (!reachedGestureStartEnd || isCorrectionSuppressed?.() === true) {
         return false;
@@ -1695,8 +1709,7 @@ export function useChatTimelineFollowLatch(
       if (shift === null) return false;
       return (
         geometry.scrollTop >=
-          momentum.targetScrollTop +
-            shift -
+          endScrollTopOf(momentum.targetContentEnd, geometry, shift) -
             CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX &&
         geometry.scrollTop >
           momentum.liftScrollTop + CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX

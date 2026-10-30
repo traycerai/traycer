@@ -779,6 +779,38 @@ describe("useChatTimelineFollowLatch", () => {
     expect(listRef.scrollToEnd).toHaveBeenCalled();
   });
 
+  it("does not follow a fling that stops where the end stood before the view grew shorter", () => {
+    const { node, listRef, onFollowIntentChange } = flingTowardEnd();
+
+    // A keyboard opens under the fling: the view is 100 shorter, so the
+    // content that ended the transcript is 100 further down the offsets.
+    shim.setGeometry(node, { clientHeight: 400 });
+    fireResizeObservers();
+    shim.setGeometry(node, { scrollTop: 1000 });
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+  });
+
+  it("control: a fling arrives at the end a view grown taller brought nearer", () => {
+    const { node, listRef, onFollowIntentChange } = flingTowardEnd();
+
+    // A phone browser's chrome collapses as the finger flings: the view is
+    // 100 taller, and the same content now ends 100 earlier.
+    shim.setGeometry(node, { clientHeight: 600 });
+    fireResizeObservers();
+    // The fling reaches it, and the reply's chunk grows the tail past it
+    // before the report, so only the momentum can follow.
+    shim.setGeometry(node, { scrollTop: 900 });
+    shim.setGeometry(node, { scrollHeight: 1700 });
+    fireResizeObservers();
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    expect(listRef.scrollToEnd).toHaveBeenCalled();
+  });
+
   it("does not follow a reader a write the contact held back moves after the lift", () => {
     const node = shim.makeNode({
       scrollTop: 1000,
