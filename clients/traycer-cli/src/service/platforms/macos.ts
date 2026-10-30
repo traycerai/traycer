@@ -231,7 +231,8 @@ export function createMacosController(
 //                                                 only) -> busy refuses;
 //                                                 else unload the agent
 //
-// Every "unload"/"bootout" is `bootout --wait`, a positive label re-probe,
+// Every "unload"/"bootout" is `bootoutAndWait` (bootout, then the label polled
+// until it is gone), a positive label re-probe,
 // and `processMayLiveOn` against the process's creation stamp; any of the
 // three failing refuses, naming the retired agent when there is one. After
 // the agent is gone the CLI label is read again and takes the CLI-label
@@ -416,7 +417,7 @@ async function takeoverDesktopRegistration(
     );
   }
   const agentTarget = `${guiTarget}/${desktopAgent.agentLabelId}`;
-  // `--wait` is load-bearing here for the same reason it is in
+  // The wait (`bootoutAndWait`) is load-bearing here for the same reason it is in
   // `retireCompetingRegistration` (see the note there): a bare bootout
   // returns when launchd ACCEPTS the request, not when the process is gone.
   //
@@ -438,12 +439,7 @@ async function takeoverDesktopRegistration(
   // `tolerateNonZeroExit` stays `true`, unlike the retirement path, because
   // that positive probe is the gate here - a benign "no such process" exit
   // must reach it rather than abort a takeover that in fact succeeded.
-  const agentBootout = await bootoutAndWait(
-    agentTarget,
-    label.environment,
-    run,
-    true,
-  );
+  const agentBootout = await bootoutAndWait(agentTarget, run, true);
   // Verification must be POSITIVE. `inspectLaunchdOwnership` collapses every
   // non-zero exit - and its caller every thrown error - into `not-loaded`,
   // so an EPERM, a timeout, or a launchctl that could not spawn would all
@@ -454,7 +450,11 @@ async function takeoverDesktopRegistration(
   // So: proceed only when the probe positively says the label is gone. A
   // still-loaded agent and an unreadable probe both abort, with the same
   // actionable routing - the user is never left holding a half-takeover.
-  const postBootout = await verifyAgentBootedOut(agentTarget, run);
+  const postBootout = await verifyAgentBootedOut(
+    agentTarget,
+    run,
+    LAUNCHCTL_CALL_TIMEOUT_MS,
+  );
   if (postBootout !== "absent") {
     throw cliError({
       code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
@@ -470,8 +470,8 @@ async function takeoverDesktopRegistration(
       exitCode: 1,
     });
   }
-  // The label is gone; the PROCESS may not be. `bootout --wait` returns at
-  // the runner's timeout as well as at exit (`tolerateNonZeroExit` resolves
+  // The label is gone; the PROCESS may not be. `bootoutAndWait` returns at
+  // its budget as well as at exit (`tolerateNonZeroExit` resolves
   // the timeout as exit -1), and a `hung` host is by definition still alive
   // at that point, still publishing `pid.json`. Registering the CLI label on
   // the label evidence alone is the hostless bootstrap-beside-a-corpse this
@@ -799,7 +799,7 @@ type TakeoverJobProcess = Pick<
   "pid" | "running" | "startIdentity"
 >;
 
-// After a `bootout --wait`: may the job's process live on? The evidence is
+// After a `bootoutAndWait`: may the job's process live on? The evidence is
 // what launchd reported at probe time and is never cleared by a cooperative
 // answer - the claim goes through `pid.json`, which need not name THIS
 // label's process (Codex, traycer#1761, round 6) - so the question is
@@ -910,7 +910,7 @@ function takeoverProbeIndeterminate(
 // Desktop SMAppService load of this label is the pre-split refusal the
 // install re-checks - and the install's own probe then reads it as
 // `not-loaded` and skips its bootout. What remains is the gap between
-// launchd answering the probe and the `bootout --wait` reaching it,
+// launchd answering the probe and the bootout reaching it,
 // normally microseconds; a process launchd starts inside it is terminated
 // by that bootout without a claim, at an age where it has no client and no
 // work to lose.
@@ -1029,7 +1029,7 @@ function unaskableHost(
 }
 
 // Unload the CLI label under the takeover's lock, and prove it: the same
-// `bootout --wait` barrier and positive re-probe the Desktop-agent arm uses,
+// `bootoutAndWait` barrier and positive re-probe the Desktop-agent arm uses,
 // plus a liveness check of the process launchd reported. A cooperative stop
 // waits for the host child, not the supervisor launchd runs, and an
 // unreachable host was never asked at all; `installService`'s own bootout
@@ -1038,7 +1038,7 @@ function unaskableHost(
 // - the replacement's `findLiveIncumbentHost` then reads the corpse as live,
 // declines, exits 0, and `KeepAlive{SuccessfulExit: false}` leaves the
 // machine hostless (CodeRabbit, traycer#1761). The label probe alone cannot
-// close that: `bootout --wait` also returns at the runner's timeout
+// close that: `bootoutAndWait` also returns at its budget
 // (`tolerateNonZeroExit` resolves it as exit -1), which under `hung` is the
 // expected exit, and launchd can have dropped the label while the process
 // it is still killing lives on. So the process launchd reported is checked
@@ -1055,13 +1055,12 @@ async function unloadCliLabelJob(
 ): Promise<void> {
   const { pid } = job;
   const serviceTarget = `${guiDomain()}/${label.id}`;
-  const bootout = await bootoutAndWait(
+  const bootout = await bootoutAndWait(serviceTarget, run, true);
+  const postBootout = await verifyAgentBootedOut(
     serviceTarget,
-    label.environment,
     run,
-    true,
+    LAUNCHCTL_CALL_TIMEOUT_MS,
   );
-  const postBootout = await verifyAgentBootedOut(serviceTarget, run);
   const verification =
     postBootout === "absent" && (await processMayLiveOn(job, bootout.exitCode))
       ? pid !== null
@@ -1209,16 +1208,12 @@ async function installService(
   // race where another process re-bootstraps between our probe and our
   // bootstrap call.
   if (ownership.kind !== "not-loaded") {
-    // `--wait`: a bare bootout returns when launchd ACCEPTS the request, and
-    // a job still draining its shutdown makes the bootstrap below fail with
+    // Wait for the job to leave: a bare bootout returns when launchd ACCEPTS
+    // the request, and a job still draining its shutdown makes the bootstrap
+    // below fail with
     // `Bootstrap failed: 5: Input/output error`. The wait is bounded by the
     // job's `ExitTimeOut`.
-    await bootoutAndWait(
-      serviceTarget,
-      options.label.environment,
-      run,
-      false,
-    ).catch((cause: unknown) => {
+    await bootoutAndWait(serviceTarget, run, false).catch((cause: unknown) => {
       // An authority loss - a stop's confirmed host replaced included - is
       // not a bootout failure, and keeps its identity and code.
       if (isServiceMutationAuthorityError(cause)) throw cause;
@@ -1278,7 +1273,6 @@ async function installService(
     // retry a full reload against the on-disk plist instead.
     await reloadRegisteredService({
       labelId: options.label.id,
-      environment: options.label.environment,
       guiTarget,
       serviceTarget,
       manifestPath,
@@ -1322,7 +1316,6 @@ async function installService(
 
 interface ReloadRegisteredServiceOptions {
   readonly labelId: string;
-  readonly environment: ServiceLabel["environment"];
   readonly guiTarget: string;
   readonly serviceTarget: string;
   readonly manifestPath: string;
@@ -1353,13 +1346,8 @@ async function reloadRegisteredService(
     });
   }
   try {
-    // `--wait` for the reason the install's own bootout carries it.
-    await bootoutAndWait(
-      options.serviceTarget,
-      options.environment,
-      options.run,
-      false,
-    );
+    // The wait carries the install's own reason.
+    await bootoutAndWait(options.serviceTarget, options.run, false);
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
     // Race may have cleared the job between the failed bootstrap and
@@ -1650,83 +1638,71 @@ function lastExitWasClean(fields: ReadonlyMap<string, string>): boolean {
   return fields.get("last exit code") === "0";
 }
 
-// `launchctl bootout --wait` is a usage error (exit 64, "Unrecognized target
-// specifier") on macOS 15, so the flag is not something every supported macOS
-// accepts. The failure leaves the job loaded, and the bootstrap that follows
-// fails with EIO.
-function isBootoutWaitUnsupported(result: {
-  readonly exitCode: number;
-  readonly stderr: string;
-  readonly stdout: string;
-}): boolean {
-  return (
-    result.exitCode === 64 ||
-    `${result.stderr}\n${result.stdout}`
-      .toLowerCase()
-      .includes("unrecognized target specifier")
-  );
-}
-
 const BOOTOUT_JOB_POLL_MS = 250;
 
 /**
- * `launchctl bootout --wait <target>`: returns once the job has exited, at
- * worst after its whole `ExitTimeOut`. Where the flag is not accepted it
- * falls back to a bare `bootout` and polls `launchctl print` until the label
- * is gone, bounded by the same budget. Every place that must not act on a job
- * still draining its shutdown goes through here.
+ * Boot the job out and return only once it has left launchd's domain: a bare
+ * `bootout`, then `launchctl print` until the label is positively gone, under
+ * one budget (`LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS`) with every call and sleep
+ * capped to what is left of it.
  *
- * `tolerateNonZeroExit` has `run`'s meaning: a failed bootout resolves with its
- * exit code instead of throwing.
+ * Not `bootout --wait`: that flag is a usage error on macOS 15 (exit 64,
+ * "Unrecognized target specifier"; pingdotgg/t3code#11995), which leaves the
+ * job loaded. A bootout only accepts the request, and the label stays in the
+ * domain (state `SIGTERMed`) until the job's process has exited, so the label
+ * going away is the same barrier on every macOS version. Probed on macOS 27
+ * with a job that ignores SIGTERM for 8 s: `print` kept finding the label
+ * until the process exited, 8.1 s after the bootout returned.
+ *
+ * Fails closed: a job still loaded when the budget ends, or a probe that
+ * cannot tell, is reported the way the native wait reports a timeout (a
+ * `ProcessTimeoutError`, or exit code -1 when `tolerateNonZeroExit`), never as
+ * a drain. A bootout that itself fails is returned or thrown as `run` does, for
+ * the caller's own verification.
  */
 async function bootoutAndWait(
   target: string,
-  environment: ServiceLabel["environment"],
   run: ProcessRunner,
   tolerateNonZeroExit: boolean,
 ): Promise<RunResult> {
-  // The usage error arrives as a rejection when the caller does not tolerate a
-  // non-zero exit and as a result when it does; both read the same way.
-  const waited = await run("launchctl", ["bootout", "--wait", target], {
-    env: undefined,
-    cwd: undefined,
-    timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
-    tolerateNonZeroExit,
-  }).catch((cause: unknown): RunResult => {
-    if (cause instanceof ProcessRunError && isBootoutWaitUnsupported(cause)) {
-      return {
-        exitCode: cause.exitCode,
-        stdout: cause.stdout,
-        stderr: cause.stderr,
-      };
-    }
-    throw cause;
-  });
-  if (!isBootoutWaitUnsupported(waited)) return waited;
-  createCliLogger(environment).info(
-    "launchctl bootout --wait is not accepted here; booting out and polling until the job is gone",
-    { target, exitCode: waited.exitCode },
-  );
-  const bare = await run("launchctl", ["bootout", target], {
-    env: undefined,
-    cwd: undefined,
-    timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
-    tolerateNonZeroExit,
-  });
   const deadline = Date.now() + LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const loaded = await run("launchctl", ["print", target], {
-      env: undefined,
-      cwd: undefined,
-      timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
-      tolerateNonZeroExit: true,
-    });
-    if (loaded.exitCode !== 0) return bare;
+  const remainingMs = (): number => Math.max(0, deadline - Date.now());
+  const notDrained = (reason: string): RunResult => {
+    if (tolerateNonZeroExit) {
+      return { exitCode: -1, stdout: "", stderr: reason };
+    }
+    throw new ProcessTimeoutError(
+      `launchctl bootout ${target}: ${reason}`,
+      "launchctl",
+      ["bootout", target],
+      -1,
+      "",
+      reason,
+      LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
+    );
+  };
+  const bootout = await run("launchctl", ["bootout", target], {
+    env: undefined,
+    cwd: undefined,
+    timeoutMs: Math.min(LAUNCHCTL_CALL_TIMEOUT_MS, remainingMs()),
+    tolerateNonZeroExit,
+  });
+  if (bootout.exitCode !== 0) return bootout;
+  while (remainingMs() > 0) {
+    const loaded = await verifyAgentBootedOut(
+      target,
+      run,
+      Math.min(LAUNCHCTL_CALL_TIMEOUT_MS, remainingMs()),
+    );
+    if (loaded === "absent") return bootout;
+    if (loaded === "indeterminate") {
+      return notDrained("could not tell whether the job is gone");
+    }
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, BOOTOUT_JOB_POLL_MS);
+      setTimeout(resolve, Math.min(BOOTOUT_JOB_POLL_MS, remainingMs()));
     });
   }
-  return bare;
+  return notDrained("the job was still loaded when the wait ran out");
 }
 
 // launchctl returns "Service is already loaded" / "Bootstrap failed:
@@ -1817,7 +1793,7 @@ async function uninstallService(
       // The wait returns once the job has exited, at worst after its whole
       // `ExitTimeOut`: a host that takes its full forced shutdown watchdog is
       // waited on, not abandoned.
-      await bootoutAndWait(target, options.label.environment, run, false);
+      await bootoutAndWait(target, run, false);
     } catch (cause) {
       if (isServiceMutationAuthorityError(cause)) throw cause;
       if (!isBenignBootoutFailure(cause)) {
@@ -2330,11 +2306,12 @@ type ManifestProbe =
 async function verifyAgentBootedOut(
   agentTarget: string,
   run: ProcessRunner,
+  timeoutMs: number,
 ): Promise<"absent" | "still-loaded" | "indeterminate"> {
   const result = await run("launchctl", ["print", agentTarget], {
     env: undefined,
     cwd: undefined,
-    timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
+    timeoutMs,
     tolerateNonZeroExit: true,
   }).then(
     (value): ProbeCommandResult => ({
@@ -2519,7 +2496,7 @@ async function retireCompetingRegistration(
     );
   } else if (ownership.kind !== "not-loaded") {
     try {
-      // `--wait` is load-bearing, not tidiness: a bare bootout returns when
+      // The wait is load-bearing, not tidiness: a bare bootout returns when
       // launchd ACCEPTS the request, not when the process is gone, and the
       // agent we start below runs `findLiveIncumbentHost` as its very first
       // act. The evicted host publishes `pid.json` until the very end of its
@@ -2530,7 +2507,7 @@ async function retireCompetingRegistration(
       // false}` leaves DOWN until the next login. That is the exact outcome
       // this whole repair exists to prevent. Same barrier, same timeout as
       // `uninstallService`'s bootout.
-      await bootoutAndWait(serviceTarget, label.environment, run, false);
+      await bootoutAndWait(serviceTarget, run, false);
       bootedOut = true;
     } catch (cause) {
       if (isServiceMutationAuthorityError(cause)) throw cause;
@@ -2545,7 +2522,7 @@ async function retireCompetingRegistration(
         // must not invalidate for it.
         bootoutIndeterminate = !(cause instanceof ProcessSpawnError);
         // Deliberately does NOT claim the competing host is still running.
-        // With `--wait` the likeliest way here is the timeout, and the
+        // With the wait the likeliest way here is the timeout, and the
         // timeout kills `launchctl` - the waiter - not the job: launchd
         // already accepted the bootout, so the host is probably gone or
         // going. A hard failure (EPERM, wedged launchd) genuinely does leave

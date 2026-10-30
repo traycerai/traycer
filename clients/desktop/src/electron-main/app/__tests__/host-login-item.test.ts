@@ -192,9 +192,18 @@ interface FakeChildHandle {
   fireError(err: Error): void;
 }
 
+// A bootout that exits 0 leaves the job draining; the production code then
+// polls `launchctl print` until launchd reports it gone. The suite's default
+// print runner (see the global `beforeEach`) answers "not found" to the print
+// that follows such a bootout, then goes back to "loaded".
+let bootoutDrainPending = false;
+
 function makeFakeChild(): FakeChildHandle {
   const killCalls: string[] = [];
   const emitter = new EventEmitter();
+  emitter.on("exit", (code: number | null) => {
+    if (code === 0) bootoutDrainPending = true;
+  });
   const child = Object.assign(emitter, {
     kill: (signal: string): boolean => {
       killCalls.push(signal);
@@ -367,6 +376,18 @@ function writePendingRevisionMarker(): void {
   );
 }
 
+function agentJobNotFoundPrintResult(): ProbeCommandResult {
+  return {
+    exitCode: 113,
+    stdout: "",
+    stderr:
+      'Could not find service "ai.traycer.host.agent" in domain for user gui: 501\n',
+    timedOut: false,
+    spawnFailed: false,
+    signal: null,
+  };
+}
+
 // What `launchctl print gui/<uid>/<agent-label>` answers when launchd holds
 // the agent's job: any exit-0 print is a job launchd found, which the shared
 // classifier reads as `observed`. This is the healthy-machine default every
@@ -410,7 +431,12 @@ beforeEach(() => {
   // every test starts from a healthy, loaded agent; suites that exercise the
   // probe install their own runner in a nested `beforeEach`, which runs
   // after this one and wins.
-  overrideAgentPrintRunnerForTests(async () => agentJobLoadedPrintResult());
+  bootoutDrainPending = false;
+  overrideAgentPrintRunnerForTests(async () => {
+    if (!bootoutDrainPending) return agentJobLoadedPrintResult();
+    bootoutDrainPending = false;
+    return agentJobNotFoundPrintResult();
+  });
   workHome = mkdtempSync(join(tmpdir(), "traycer-host-login-item-"));
   // Throwing backstop, re-armed for every test: reaching the bootout spawn
   // without an explicit stub is a test bug, and the ONLY acceptable failure
@@ -1290,7 +1316,7 @@ describe("runLaunchctlBootout", () => {
   // the register cycle treats the latter as best-effort and proceeds, while
   // the uninstall teardown treats it as a failed deregistration.
 
-  it("invokes `/bin/launchctl bootout --wait <target>` with `stdio: ignore` so output never leaks into the Electron main process", async () => {
+  it("invokes `/bin/launchctl bootout <target>` (never `--wait`, a usage error on macOS 15) with `stdio: ignore` so output never leaks into the Electron main process", async () => {
     const fake = makeFakeChild();
     const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
     queueMicrotask(() => {
@@ -1303,26 +1329,39 @@ describe("runLaunchctlBootout", () => {
     expect(spawnFn.mock.calls[0]?.[0]).toBe("/bin/launchctl");
     expect(spawnFn.mock.calls[0]?.[1]).toEqual([
       "bootout",
-      "--wait",
       "gui/501/ai.traycer.host.staging",
     ]);
     expect(spawnFn.mock.calls[0]?.[2]).toEqual({ stdio: "ignore" });
   });
 
-  it("resolves true when launchctl exits 0 — agent was loaded and is now gone", async () => {
+  it("resolves true once launchd reports the job gone, polling while it is still draining", async () => {
     const fake = makeFakeChild();
     const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
     queueMicrotask(() => {
       fake.fireExit();
     });
+    let prints = 0;
+    overrideAgentPrintRunnerForTests(async () => {
+      prints += 1;
+      // Still draining on the first two polls, gone on the third.
+      return prints >= 3
+        ? agentJobNotFoundPrintResult()
+        : agentJobLoadedPrintResult();
+    });
 
     await expect(
       runLaunchctlBootout("gui/501/test.label", spawnFn),
     ).resolves.toBe(true);
+    expect(prints).toBe(3);
     expect(fake.killCalls).toHaveLength(0);
   });
 
-  it("treats exit codes 3 / 5 / 113 as 'not loaded' no-ops and resolves true — clean-machine bootout has nothing to clear and that's success", async () => {
+  it("treats exit codes 3 / 5 / 113 as 'not loaded' no-ops and resolves true without polling — clean-machine bootout has nothing to clear and that's success", async () => {
+    let prints = 0;
+    overrideAgentPrintRunnerForTests(async () => {
+      prints += 1;
+      return agentJobLoadedPrintResult();
+    });
     for (const code of [3, 5, 113]) {
       const fake = makeFakeChild();
       const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
@@ -1334,55 +1373,144 @@ describe("runLaunchctlBootout", () => {
         runLaunchctlBootout("gui/501/test.label", spawnFn),
       ).resolves.toBe(true);
     }
+    expect(prints).toBe(0);
   });
 
-  // New regression coverage (production change A): any OTHER exit code is a
-  // real launchctl failure - the BTM entry may still be present - and must
-  // resolve `false` so `bootoutStaleAgent` reports "bootout-failed" rather
-  // than silently claiming the clear succeeded.
-  // `launchctl bootout --wait` is a usage error on macOS 15 (exit 64,
-  // pingdotgg/t3code#11995). Only that exit falls back; the registration that
-  // follows must still not run beside a draining job.
-  it("falls back to a bare bootout and waits for the job to leave when `--wait` is a usage error (exit 64)", async () => {
-    const calls: Array<readonly string[]> = [];
-    const spawnFn = vi.fn((_command: string, args: readonly string[]) => {
-      calls.push(args);
-      const fake = makeFakeChild();
-      queueMicrotask(() => {
-        fake.child.emit("exit", calls.length === 1 ? 64 : 0, null);
-      });
-      return fake.child;
+  // The job is only provably gone when launchd says so: a probe that cannot
+  // tell (spawn failure, timeout, unrecognised output) is not an answer, and
+  // a register or teardown must not proceed over it.
+  it("fails closed when the probe cannot tell whether the job is gone", async () => {
+    const fake = makeFakeChild();
+    const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
+    queueMicrotask(() => {
+      fake.fireExit();
     });
-    let prints = 0;
-    overrideAgentPrintRunnerForTests(async () => {
-      prints += 1;
-      // Still draining on the first poll, gone on the second.
-      return prints >= 2
-        ? { ...agentJobLoadedPrintResult(), exitCode: 113 }
-        : agentJobLoadedPrintResult();
-    });
+    overrideAgentPrintRunnerForTests(async () => ({
+      exitCode: -1,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      spawnFailed: true,
+      signal: null,
+    }));
 
     await expect(
       runLaunchctlBootout("gui/501/test.label", spawnFn),
-    ).resolves.toBe(true);
-
-    expect(calls).toEqual([
-      ["bootout", "--wait", "gui/501/test.label"],
-      ["bootout", "gui/501/test.label"],
-    ]);
-    expect(prints).toBe(2);
+    ).resolves.toBe(false);
   });
 
-  it("does not fall back on any other failing exit code", async () => {
-    const spawnFn = vi.fn(() => {
-      const fake = makeFakeChild();
-      queueMicrotask(() => fake.child.emit("exit", 1, null));
-      return fake.child;
+  it("fails closed when the probe itself throws", async () => {
+    const fake = makeFakeChild();
+    const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
+    queueMicrotask(() => {
+      fake.fireExit();
+    });
+    overrideAgentPrintRunnerForTests(async () => {
+      throw new Error("launchctl gone");
     });
 
     await expect(
       runLaunchctlBootout("gui/501/test.label", spawnFn),
     ).resolves.toBe(false);
+  });
+
+  it("resolves false when the job is still loaded at the deadline, never later than the one budget", async () => {
+    vi.useFakeTimers();
+    const fake = makeFakeChild();
+    const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
+    queueMicrotask(() => {
+      fake.fireExit();
+    });
+    overrideAgentPrintRunnerForTests(async () => agentJobLoadedPrintResult());
+    const started = Date.now();
+
+    const promise = runLaunchctlBootout("gui/501/test.label", spawnFn);
+    let settled = false;
+    void promise.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(promise).resolves.toBe(false);
+    expect(Date.now() - started).toBe(LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS);
+  });
+
+  it("holds the one budget under slow calls: each probe is capped to what is left", async () => {
+    vi.useFakeTimers();
+    const fake = makeFakeChild();
+    const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
+    queueMicrotask(() => {
+      fake.fireExit();
+    });
+    const caps: number[] = [];
+    overrideAgentPrintRunnerForTests(async (_target, timeoutMs) => {
+      caps.push(timeoutMs);
+      // Each probe takes its whole cap, as a wedged launchctl would.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, timeoutMs);
+      });
+      return {
+        exitCode: -1,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        spawnFailed: false,
+        signal: "SIGTERM",
+      };
+    });
+    const started = Date.now();
+
+    const promise = runLaunchctlBootout("gui/501/test.label", spawnFn);
+    await vi.advanceTimersByTimeAsync(LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS);
+
+    await expect(promise).resolves.toBe(false);
+    expect(Date.now() - started).toBeLessThanOrEqual(
+      LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
+    );
+    expect(caps.length).toBeGreaterThan(0);
+    for (const cap of caps) {
+      expect(cap).toBeLessThanOrEqual(LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS);
+    }
+  });
+
+  it("caps a probe to the budget left after a slow bootout", async () => {
+    vi.useFakeTimers();
+    const fake = makeFakeChild();
+    const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
+    const caps: number[] = [];
+    overrideAgentPrintRunnerForTests(async (_target, timeoutMs) => {
+      caps.push(timeoutMs);
+      return agentJobNotFoundPrintResult();
+    });
+
+    const promise = runLaunchctlBootout("gui/501/test.label", spawnFn);
+    await vi.advanceTimersByTimeAsync(
+      LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS - 1_000,
+    );
+    fake.fireExit();
+
+    await expect(promise).resolves.toBe(true);
+    expect(caps).toEqual([1_000]);
+  });
+
+  // The bootout is the only launchd mutation. The wait after it only reads, so
+  // an authority lost during the wait has nothing further to stop, and no
+  // second bootout edge exists to run without a fresh authority check.
+  it("issues exactly one bootout, even when the wait outlasts the caller's authority", async () => {
+    vi.useFakeTimers();
+    const fake = makeFakeChild();
+    const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
+    queueMicrotask(() => {
+      fake.fireExit();
+    });
+    overrideAgentPrintRunnerForTests(async () => agentJobLoadedPrintResult());
+
+    const promise = runLaunchctlBootout("gui/501/test.label", spawnFn);
+    await vi.advanceTimersByTimeAsync(LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS);
+
+    await expect(promise).resolves.toBe(false);
     expect(spawnFn).toHaveBeenCalledOnce();
   });
 
@@ -2172,8 +2300,16 @@ describe("registerHostLoginItem - launchd job check after an enabled register", 
 
     // Exactly two prints: the poll stops at the first loaded answer.
     expect(printRunner).toHaveBeenCalledTimes(2);
-    expect(printRunner).toHaveBeenNthCalledWith(1, agentTarget);
-    expect(printRunner).toHaveBeenNthCalledWith(2, agentTarget);
+    expect(printRunner).toHaveBeenNthCalledWith(
+      1,
+      agentTarget,
+      expect.any(Number),
+    );
+    expect(printRunner).toHaveBeenNthCalledWith(
+      2,
+      agentTarget,
+      expect.any(Number),
+    );
     expect(existsSync(pendingRevisionMarkerPath())).toBe(false);
     expect(electronLog.warn).not.toHaveBeenCalledWith(
       expect.stringContaining("launchd holds no job under its label"),
@@ -2190,7 +2326,7 @@ describe("registerHostLoginItem - launchd job check after an enabled register", 
     );
 
     expect(printRunner).toHaveBeenCalledTimes(1);
-    expect(printRunner).toHaveBeenCalledWith(agentTarget);
+    expect(printRunner).toHaveBeenCalledWith(agentTarget, expect.any(Number));
     expect(existsSync(pendingRevisionMarkerPath())).toBe(false);
   });
 
@@ -2762,20 +2898,25 @@ describe("registerHostLoginItem / unregisterHostLoginItemGuarded - launchctl boo
   // The old job's drain is what the bootout must wait for: registering over a
   // job still draining its shutdown can fail, or start a replacement that sees
   // the still-serving incumbent and exits 0 (KeepAlive does not revive it).
-  it("register cycle: the agent registration does not start until the old job's bootout has returned", async () => {
-    let releaseAgentBootout: () => void = () => undefined;
-    let calls = 0;
+  it("register cycle: the agent registration does not start until the old job has left launchd", async () => {
+    let released = false;
+    let agentGoneAnswered = false;
+    let agentPrintsWhileDraining = 0;
+    overrideAgentPrintRunnerForTests(async (target) => {
+      if (!target.endsWith(".agent")) return agentJobNotFoundPrintResult();
+      if (!released) {
+        agentPrintsWhileDraining += 1;
+        return agentJobLoadedPrintResult();
+      }
+      if (agentGoneAnswered) return agentJobLoadedPrintResult();
+      agentGoneAnswered = true;
+      return agentJobNotFoundPrintResult();
+    });
     const bootoutArgs: Array<readonly string[]> = [];
     const spawnStub = vi.fn((_command: string, args: readonly string[]) => {
-      calls += 1;
       bootoutArgs.push(args);
       const fake = makeFakeChild();
-      if (calls === 1) {
-        queueMicrotask(() => fake.child.emit("exit", 0, null));
-      } else {
-        // The agent label's bootout: the old job is still draining.
-        releaseAgentBootout = () => fake.child.emit("exit", 0, null);
-      }
+      queueMicrotask(() => fake.child.emit("exit", 0, null));
       return fake.child;
     });
     setBootoutSpawnFnForTests(spawnStub);
@@ -2786,16 +2927,48 @@ describe("registerHostLoginItem / unregisterHostLoginItemGuarded - launchctl boo
       .mockReturnValueOnce({ status: "enabled" }); // post-register (BTM committed)
 
     const cycle = registerHostLoginItem(undefined, null);
-    await vi.waitFor(() => expect(spawnStub).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(agentPrintsWhileDraining).toBeGreaterThan(1));
     const mutationsWhileDraining = setLoginItemSettings.mock.calls.length;
-    releaseAgentBootout();
+    released = true;
     await expect(cycle).resolves.toBe("enabled");
 
-    expect(bootoutArgs.map((args) => args[1])).toEqual(["--wait", "--wait"]);
-    // Only the legacy retirement's clear may have run before the agent bootout
-    // returned; the agent's clear and register came after it.
+    expect(bootoutArgs.map((args) => args[0])).toEqual(["bootout", "bootout"]);
+    // Only the legacy retirement's clear may have run while the agent's job
+    // was still draining; the agent's clear and register came after it.
     expect(mutationsWhileDraining).toBeLessThan(3);
     expect(setLoginItemSettings).toHaveBeenCalledTimes(3);
+  });
+
+  it("register cycle: authority lost while the old job drains parks the cycle before any registration", async () => {
+    let drainPolls = 0;
+    overrideAgentPrintRunnerForTests(async (target) => {
+      if (!target.endsWith(".agent")) return agentJobNotFoundPrintResult();
+      drainPolls += 1;
+      return drainPolls > 2
+        ? agentJobNotFoundPrintResult()
+        : agentJobLoadedPrintResult();
+    });
+    setBootoutSpawnFnForTests(() => {
+      const fake = makeFakeChild();
+      queueMicrotask(() => fake.child.emit("exit", 0, null));
+      return fake.child;
+    });
+    getLoginItemSettings
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: primary
+      .mockReturnValueOnce({ status: "not-registered" }) // snapshot: legacy
+      .mockReturnValueOnce({ status: "not-registered" }); // post-clear read
+    // Authority holds for the bootout and goes while the job drains.
+    const revalidate = vi.fn(async () => drainPolls === 0);
+
+    await expect(registerHostLoginItem(revalidate, null)).resolves.toBe(
+      "deferred-busy",
+    );
+
+    expect(
+      setLoginItemSettings.mock.calls.filter(
+        ([settings]) => settings.openAtLogin,
+      ),
+    ).toHaveLength(0);
   });
 
   // The confirmed-target callback is the second half of the same guard the

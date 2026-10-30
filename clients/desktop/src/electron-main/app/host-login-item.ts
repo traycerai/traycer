@@ -300,7 +300,10 @@ async function probeLaunchdJobProcess(
   if (typeof process.getuid !== "function") return "job-indeterminate";
   let result: ProbeCommandResult;
   try {
-    result = await runAgentPrint(`gui/${process.getuid()}/${labelId}`);
+    result = await runAgentPrint(
+      `gui/${process.getuid()}/${labelId}`,
+      PRINT_TIMEOUT_MS,
+    );
   } catch {
     return "job-indeterminate";
   }
@@ -365,7 +368,10 @@ async function probeLaunchdJobLoaded(
   if (typeof process.getuid !== "function") return "indeterminate";
   let result: ProbeCommandResult;
   try {
-    result = await runAgentPrint(`gui/${process.getuid()}/${labelId}`);
+    result = await runAgentPrint(
+      `gui/${process.getuid()}/${labelId}`,
+      PRINT_TIMEOUT_MS,
+    );
   } catch {
     return "indeterminate";
   }
@@ -936,7 +942,10 @@ export type LaunchCompetingRegistrationRepair =
 // (`loginItemEnabled: null`).
 export type AgentWedgeProbeResult = "wedged" | "not-wedged" | "unknown";
 
-type AgentPrintRunner = (target: string) => Promise<ProbeCommandResult>;
+type AgentPrintRunner = (
+  target: string,
+  timeoutMs: number,
+) => Promise<ProbeCommandResult>;
 
 // Test seam, mirroring `runLaunchctlBootout`'s injected spawn: the suite
 // must never read the developer's real launchd domain. Production always
@@ -957,15 +966,18 @@ type ExecFileProbeFailure = {
   readonly signal: NodeJS.Signals | undefined;
 };
 
-function runAgentPrint(target: string): Promise<ProbeCommandResult> {
+function runAgentPrint(
+  target: string,
+  timeoutMs: number,
+): Promise<ProbeCommandResult> {
   if (agentPrintRunnerOverride !== null) {
-    return agentPrintRunnerOverride(target);
+    return agentPrintRunnerOverride(target, timeoutMs);
   }
   return new Promise((resolve) => {
     execFile(
       "/bin/launchctl",
       ["print", target],
-      { timeout: PRINT_TIMEOUT_MS, encoding: "utf8" },
+      { timeout: timeoutMs, encoding: "utf8" },
       (error, stdout, stderr) => {
         if (error === null) {
           resolve({
@@ -1008,7 +1020,7 @@ async function probeAgentWedgeForRetirement(): Promise<AgentWedgeProbeResult> {
   const target = `gui/${process.getuid()}/${HOST_AGENT_LABEL}`;
   let result: ProbeCommandResult;
   try {
-    result = await runAgentPrint(target);
+    result = await runAgentPrint(target, PRINT_TIMEOUT_MS);
   } catch {
     return "unknown";
   }
@@ -1661,13 +1673,14 @@ export type BootoutSpawnFn = (
 ) => BootoutChildProcess;
 
 /**
- * Spawn `launchctl bootout <target>` and wait for it to exit, or kill
- * it once `LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS` has elapsed. Resolves either way — the
- * BTM-clearing side effect is durable: a process that hangs after
- * issuing the bootout RPC still leaves BTM cleared.
+ * Spawn `launchctl bootout <target>`, then wait for launchd to report the
+ * job gone, all inside `LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS`. Resolves
+ * `false` (never throws) when the clear cannot be shown: a bootout that
+ * failed or hung, a probe that cannot tell, or a job still loaded at the
+ * deadline.
  *
  * Exit-code classification:
- *   - 0 — bootout succeeded, agent was loaded and is now gone
+ *   - 0 — bootout accepted; the job is then waited on until it is gone
  *   - 3 / 5 / 113 — agent was not loaded; nothing to clear (no-op
  *     success on a clean machine). Codes are macOS-version-dependent:
  *     observed 3 (ENOSRCH) on 14+, 5 ("Could not find service"), and
@@ -1685,36 +1698,54 @@ export async function runLaunchctlBootout(
   target: string,
   spawnFn: BootoutSpawnFn,
 ): Promise<boolean> {
-  // `--wait`: a bare bootout returns when launchd ACCEPTS the request, and
-  // the registration that follows would run while the old job is still
-  // draining its shutdown (a failed register, or a replacement that sees
-  // the still-serving incumbent and exits 0, which KeepAlive does not
-  // revive). The bundled plist's `ExitTimeOut` bounds the drain, and
-  // `LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS` is derived from it.
-  const waited = await spawnBootout(["bootout", "--wait", target], spawnFn);
-  // `--wait` is a usage error on macOS 15 (exit 64, "Unrecognized target
-  // specifier"): boot out bare, then wait for the job to leave the domain.
-  if (waited !== 64) return classifyBootoutExit(waited, target);
-  log.info(
-    "[host-login-item] launchctl bootout --wait is not accepted here; booting out and polling until the job is gone",
-    { target },
-  );
-  const bare = await spawnBootout(["bootout", target], spawnFn);
-  const cleared = classifyBootoutExit(bare, target);
-  await waitUntilJobGone(target);
-  return cleared;
-}
-
-/** Poll `launchctl print` until the job is gone or the bootout bound passes. */
-async function waitUntilJobGone(target: string): Promise<void> {
+  // One deadline covers the bootout and every probe after it.
   const deadline = Date.now() + LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const loaded = await runAgentPrint(target);
-    if (loaded.exitCode !== 0) return;
+  const remainingMs = (): number => Math.max(0, deadline - Date.now());
+  const code = await spawnBootout(target, spawnFn, remainingMs());
+  if (!classifyBootoutExit(code, target)) return false;
+  // Not loaded: nothing is draining.
+  if (code !== 0) return true;
+  // A bare bootout returns when launchd ACCEPTS the request; the job stays
+  // loaded until its process exits. The registration that follows must not
+  // run beside a draining incumbent (a failed register, or a replacement
+  // that sees the still-serving incumbent and exits 0, which KeepAlive does
+  // not revive), so wait for launchd to report the job gone. `bootout
+  // --wait` is a usage error on macOS 15, so it is not used. The bundled
+  // plist's `ExitTimeOut` bounds the drain, and the deadline is derived
+  // from it.
+  const label = target.slice(target.lastIndexOf("/") + 1);
+  while (remainingMs() > 0) {
+    let result: ProbeCommandResult;
+    try {
+      result = await runAgentPrint(
+        target,
+        Math.min(PRINT_TIMEOUT_MS, remainingMs()),
+      );
+    } catch (err) {
+      log.warn("[host-login-item] launchctl print threw after bootout", {
+        target,
+        err,
+      });
+      return false;
+    }
+    const probe = classifyLaunchctlPrintResult(result, null, label);
+    if (probe.kind === "absent") return true;
+    if (probe.kind === "indeterminate") {
+      log.warn(
+        "[host-login-item] could not tell whether the job left launchd after bootout",
+        { target },
+      );
+      return false;
+    }
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, BOOTOUT_JOB_POLL_MS);
+      setTimeout(resolve, Math.min(BOOTOUT_JOB_POLL_MS, remainingMs()));
     });
   }
+  log.warn("[host-login-item] job still loaded when the bootout wait ran out", {
+    target,
+    timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
+  });
+  return false;
 }
 
 /**
@@ -1722,12 +1753,14 @@ async function waitUntilJobGone(target: string): Promise<void> {
  * or outlived the bound (already logged).
  */
 function spawnBootout(
-  args: readonly string[],
+  target: string,
   spawnFn: BootoutSpawnFn,
+  timeoutMs: number,
 ): Promise<number | null> {
-  const target = args[args.length - 1];
   return new Promise((resolve) => {
-    const child = spawnFn("/bin/launchctl", args, { stdio: "ignore" });
+    const child = spawnFn("/bin/launchctl", ["bootout", target], {
+      stdio: "ignore",
+    });
     let settled = false;
     const settle = (code: number | null): void => {
       if (settled) return;
@@ -1739,10 +1772,10 @@ function spawnBootout(
       child.kill("SIGTERM");
       log.warn("[host-login-item] launchctl bootout exceeded timeout, killed", {
         target,
-        timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
+        timeoutMs,
       });
       settle(null);
-    }, LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS);
+    }, timeoutMs);
     child.once("error", (err) => {
       log.warn("[host-login-item] launchctl bootout errored", {
         target,

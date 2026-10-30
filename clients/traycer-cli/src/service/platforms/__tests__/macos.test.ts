@@ -23,6 +23,7 @@ import {
 } from "../macos";
 import {
   LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
+  LAUNCHCTL_CALL_TIMEOUT_MS,
   LAUNCHCTL_RECYCLE_TIMEOUT_MS,
   LAUNCHD_EXIT_TIMEOUT_SECONDS,
   LAUNCHD_THROTTLE_INTERVAL_SECONDS,
@@ -256,6 +257,37 @@ function buildLaunchctlError(args: {
   );
 }
 
+// A bootout only asks launchd to stop the job: the label stays in the domain
+// until the job has exited, and the install waits for it to go by polling
+// `launchctl print`. Models a job that has drained by the first poll: the
+// `print` that directly follows a bootout of a target answers launchd's
+// not-found without reaching the wrapped runner, so the runner's own script
+// (its probes before and its verification after) sees the same calls it did.
+function drainingBootouts(runner: ProcessRunner): ProcessRunner {
+  let polled: string | null = null;
+  return async (command, args, options) => {
+    if (
+      command === "launchctl" &&
+      args[0] === "print" &&
+      args[1] !== undefined &&
+      args[1] === polled
+    ) {
+      polled = null;
+      return {
+        exitCode: 113,
+        stdout: "",
+        stderr: `Could not find service "${args[1]}" in domain for user gui: 501\n`,
+      };
+    }
+    polled = null;
+    const result = await runner(command, args, options);
+    if (command === "launchctl" && args[0] === "bootout") {
+      polled = args[args.length - 1] ?? null;
+    }
+    return result;
+  };
+}
+
 describe("macOS service lifecycle", () => {
   const label = serviceLabelFor("production");
   const tempPlistDir = TEST_LAUNCH_AGENTS_DIR;
@@ -311,7 +343,7 @@ describe("macOS service lifecycle", () => {
       return { stdout: "", stderr: "not loaded", exitCode: 1 };
     };
 
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     await expect(controller.hostStartAdoptionLabel(label)).resolves.toBe(
       agentLabelId,
     );
@@ -343,7 +375,7 @@ describe("macOS service lifecycle", () => {
       return { stdout: "", stderr: "not loaded", exitCode: 1 };
     };
 
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     await expect(controller.hostStartAdoptionLabel(label)).rejects.toBe(
       authorityError,
     );
@@ -593,7 +625,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       calls.push({ command, args });
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
     await controller.install({
       label,
@@ -631,7 +663,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         calls.push({ command, args });
         return buildSuccessResult();
       };
-      const controller = createMacosController(runner);
+      const controller = createMacosController(drainingBootouts(runner));
       createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
       await controller.install({
         label,
@@ -684,7 +716,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
     await expect(
       controller.install({
@@ -716,7 +748,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
     await expect(
       controller.install({
@@ -733,109 +765,149 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     expect(calls.map((c) => c.args[0])).toEqual(["print", "print", "bootout"]);
   });
 
-  // `bootstrap` over a job still draining its shutdown fails with
-  // `Bootstrap failed: 5: Input/output error`, and a bare `bootout` returns
-  // when launchd accepts the request, not when the job has exited.
-  it("waits for the old job to exit before it bootstraps over it, on the install and on the reload race", async () => {
-    const calls: Array<{
-      readonly args: readonly string[];
-      readonly timeoutMs: number | undefined;
-    }> = [];
-    let bootstrapAttempts = 0;
-    const runner: ProcessRunner = async (command, args, options) => {
-      calls.push({ args, timeoutMs: options.timeoutMs });
-      if (args[0] === "bootstrap") {
-        bootstrapAttempts += 1;
-        if (bootstrapAttempts === 1) {
-          throw buildLaunchctlError({
-            command,
-            cmdArgs: args,
-            stderr: "Bootstrap failed: 37: Service is already loaded\n",
-            stdout: "",
-            exitCode: 37,
-          });
-        }
-      }
-      return buildSuccessResult();
-    };
-    const controller = createMacosController(runner);
-    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
-
-    await controller.install({
-      label,
-      cli: { command: "/usr/local/bin/traycer", args: [] },
-      enableLinger: false,
+  // A bootout only asks launchd to stop the job; the label stays in the domain
+  // until the job has exited (state `SIGTERMed`), and a `bootstrap` over a job
+  // still draining fails with `Bootstrap failed: 5: Input/output error`. So the
+  // install boots out, then polls `launchctl print` until the label is
+  // positively gone. (`bootout --wait` is not used: it is a usage error on
+  // macOS 15, exit 64, pingdotgg/t3code#11995.)
+  describe("install waits for the old job to leave the domain", () => {
+    const target = () => `gui/${process.getuid?.() ?? 0}/${label.id}`;
+    const notFound = (): RunResult => ({
+      exitCode: 113,
+      stdout: "",
+      stderr: `Could not find service "${label.id}" in domain for user gui: 501\n`,
     });
-
-    const bootouts = calls.filter((c) => c.args[0] === "bootout");
-    expect(bootouts).toHaveLength(2);
-    for (const bootout of bootouts) {
-      expect(bootout.args[1]).toBe("--wait");
-      expect(bootout.timeoutMs).toBe(LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS);
-    }
-  });
-
-  // `launchctl bootout --wait` is a usage error on macOS 15 (exit 64,
-  // "Unrecognized target specifier"; pingdotgg/t3code#11995). Only that error
-  // may fall back to a bare bootout; any other failure must still fail.
-  describe("bootout --wait where the flag is not accepted", () => {
-    function usageError(command: string, args: readonly string[]): Error {
-      return buildLaunchctlError({
-        command,
-        cmdArgs: args,
-        stderr:
-          "Unrecognized target specifier.\nUsage: launchctl bootout <domain-target> [service-path1, service-path2, ...] | <service-target>\n",
-        stdout: "",
-        exitCode: 64,
-      });
-    }
-
-    it("installs over a loaded job by booting out bare and polling until the job is gone, then bootstraps", async () => {
-      const calls: string[][] = [];
-      let bareBootouts = 0;
-      let printsAfterBootout = 0;
-      const runner: ProcessRunner = async (command, args) => {
-        calls.push([...args]);
-        if (args[0] === "bootout" && args[1] === "--wait") {
-          throw usageError(command, args);
-        }
-        if (args[0] === "bootout") bareBootouts += 1;
-        if (args[0] === "print" && bareBootouts > 0) {
-          printsAfterBootout += 1;
-          // Still draining on the first poll, gone on the second.
-          if (printsAfterBootout >= 2) {
-            return { stdout: "", stderr: "", exitCode: 113 };
-          }
-        }
-        return buildSuccessResult();
-      };
-      const controller = createMacosController(runner);
+    const install = (runner: ProcessRunner) => {
       createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
-
-      await controller.install({
+      return createMacosController(runner).install({
         label,
         cli: { command: "/usr/local/bin/traycer", args: [] },
         enableLinger: false,
       });
+    };
 
-      const verbs = calls.map((args) =>
-        args[0] === "bootout" ? args.slice(0, 2).join(" ") : args[0],
-      );
-      const bootoutAt = verbs.indexOf("bootout --wait");
-      expect(verbs.slice(bootoutAt, bootoutAt + 2)).toEqual([
-        "bootout --wait",
-        "bootout " + `gui/${process.getuid?.() ?? 0}/${label.id}`,
+    it("bootstraps only after print has found the label gone, polling while it drains", async () => {
+      const calls: string[] = [];
+      let bootedOut = false;
+      let printsAfterBootout = 0;
+      const runner: ProcessRunner = async (_command, args) => {
+        calls.push(args[0] ?? "");
+        if (args[0] === "bootout") {
+          bootedOut = true;
+          return buildSuccessResult();
+        }
+        if (args[0] === "print" && bootedOut) {
+          printsAfterBootout += 1;
+          // Draining for two polls, gone on the third.
+          return printsAfterBootout >= 3 ? notFound() : buildSuccessResult();
+        }
+        return buildSuccessResult();
+      };
+
+      await install(runner);
+
+      expect(printsAfterBootout).toBe(3);
+      expect(calls.slice(calls.indexOf("bootout"))).toEqual([
+        "bootout",
+        "print",
+        "print",
+        "print",
+        "bootstrap",
+        "kickstart",
       ]);
-      expect(printsAfterBootout).toBe(2);
-      // The bootstrap came after the job was seen gone, never beside it.
-      const lastPoll = verbs.lastIndexOf("print");
-      expect(verbs.indexOf("bootstrap")).toBeGreaterThan(lastPoll);
     });
 
-    it("still fails the install on any other bootout failure, without falling back", async () => {
-      const calls: string[][] = [];
+    it("fails closed, without bootstrapping, when print cannot tell whether the job is gone", async () => {
+      const calls: string[] = [];
+      let bootedOut = false;
       const runner: ProcessRunner = async (command, args) => {
-        calls.push([...args]);
+        calls.push(args[0] ?? "");
+        if (args[0] === "bootout") bootedOut = true;
+        if (args[0] === "print" && bootedOut) {
+          throw buildLaunchctlError({
+            command,
+            cmdArgs: args,
+            stderr: "Operation not permitted\n",
+            stdout: "",
+            exitCode: 1,
+          });
+        }
+        return buildSuccessResult();
+      };
+
+      await expect(install(runner)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      });
+      expect(calls).not.toContain("bootstrap");
+    });
+
+    it("fails the install, without bootstrapping, when the job is still loaded after the whole budget, and never spends more than the budget on slow calls", async () => {
+      // Only the clock: the install's file writes run on real I/O.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      try {
+        let started = 0;
+        const timeouts: number[] = [];
+        let bootedOut = false;
+        let bootstrapped = false;
+        const runner: ProcessRunner = async (_command, args, options) => {
+          if (args[0] === "bootstrap") bootstrapped = true;
+          if (args[0] === "bootout") {
+            bootedOut = true;
+            started = Date.now();
+            return buildSuccessResult();
+          }
+          if (args[0] === "print" && bootedOut) {
+            timeouts.push(options.timeoutMs);
+            // Each probe is slow, and the job never goes.
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 9_000);
+            });
+          }
+          return buildSuccessResult();
+        };
+
+        let settled = false;
+        const outcome = install(runner).then(
+          () => "installed",
+          (error: unknown) => error,
+        );
+        void outcome.then(() => {
+          settled = true;
+        });
+        // Let real I/O progress between slices of the fake clock.
+        while (!settled) {
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          await vi.advanceTimersByTimeAsync(500);
+        }
+
+        await expect(outcome).resolves.toMatchObject({
+          code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        });
+        expect(bootstrapped).toBe(false);
+        // The aggregate time of the wait is bounded by the one budget, to
+        // within the single probe in flight when it ran out.
+        expect(Date.now() - started).toBeLessThanOrEqual(
+          LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS + 9_000,
+        );
+        // No probe is allowed to run longer than the budget has left.
+        expect(Math.max(...timeouts)).toBeLessThanOrEqual(
+          LAUNCHCTL_CALL_TIMEOUT_MS,
+        );
+        expect(timeouts[timeouts.length - 1]).toBeLessThan(
+          LAUNCHCTL_CALL_TIMEOUT_MS,
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("still fails the install on a real bootout failure, without polling", async () => {
+      const calls: string[] = [];
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push(args[0] ?? "");
         if (args[0] === "bootout") {
           throw buildLaunchctlError({
             command,
@@ -847,19 +919,12 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         }
         return buildSuccessResult();
       };
-      const controller = createMacosController(runner);
-      createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
 
-      await expect(
-        controller.install({
-          label,
-          cli: { command: "/usr/local/bin/traycer", args: [] },
-          enableLinger: false,
-        }),
-      ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED });
-      expect(calls.filter((args) => args[0] === "bootout")).toEqual([
-        ["bootout", "--wait", `gui/${process.getuid?.() ?? 0}/${label.id}`],
-      ]);
+      await expect(install(runner)).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      });
+      expect(calls.filter((c) => c === "print")).toHaveLength(2);
+      expect(calls).not.toContain("bootstrap");
     });
   });
 
@@ -886,7 +951,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
     await expect(
       controller.install({
@@ -938,7 +1003,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
 
     await expect(
@@ -977,7 +1042,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
 
     await expect(
@@ -1039,7 +1104,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
 
     await expect(
@@ -1102,7 +1167,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
 
     await expect(
@@ -1148,7 +1213,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
     await expect(
       controller.install({
@@ -1184,7 +1249,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
     await expect(
       controller.install({
@@ -1223,7 +1288,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
     let caught: unknown = null;
     try {
@@ -1259,7 +1324,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
     let caught: unknown = null;
     try {
@@ -1291,7 +1356,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       });
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     await controller.uninstall({ label, leaveForegroundRun: null });
 
@@ -1311,21 +1376,13 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       {
         // Agent label first - it is the live job on post-label-split
         // Desktop machines.
-        args: [
-          "bootout",
-          "--wait",
-          `gui/${process.getuid?.() ?? 0}/${label.id}.agent`,
-        ],
-        timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
+        args: ["bootout", `gui/${process.getuid?.() ?? 0}/${label.id}.agent`],
+        timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
         tolerateNonZeroExit: false,
       },
       {
-        args: [
-          "bootout",
-          "--wait",
-          `gui/${process.getuid?.() ?? 0}/${label.id}`,
-        ],
-        timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
+        args: ["bootout", `gui/${process.getuid?.() ?? 0}/${label.id}`],
+        timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
         tolerateNonZeroExit: false,
       },
     ]);
@@ -1343,7 +1400,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         exitCode: 3,
       });
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     await expect(
       controller.uninstall({ label, leaveForegroundRun: null }),
@@ -1362,7 +1419,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         exitCode: 1,
       });
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     await expect(
       controller.uninstall({ label, leaveForegroundRun: null }),
@@ -1386,7 +1443,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         "",
       );
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     await expect(
       controller.uninstall({ label, leaveForegroundRun: null }),
@@ -1412,7 +1469,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       .mockReturnValueOnce(true)
       .mockReturnValue(false);
     const runner: ProcessRunner = async () => buildSuccessResult();
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     const stopping = controller.stop(label, { force: false });
     await vi.advanceTimersByTimeAsync(300);
@@ -1430,7 +1487,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     });
     MOCKS.isProcessAlive.mockReturnValue(true);
     const runner: ProcessRunner = async () => buildSuccessResult();
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     const stopping = controller.stop(label, { force: false });
     const result = expect(stopping).rejects.toMatchObject({
@@ -1470,7 +1527,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       cause: "not valid JSON",
     });
     const runner: ProcessRunner = async () => buildSuccessResult();
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     const stopping = controller.stop(label, { force: false });
     const result = expect(stopping).rejects.toMatchObject({
@@ -1505,7 +1562,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       .mockResolvedValueOnce({ kind: "unreadable", cause: "not valid JSON" })
       .mockResolvedValue({ kind: "absent" });
     const runner: ProcessRunner = async () => buildSuccessResult();
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     const stopping = controller.stop(label, { force: false });
     await vi.advanceTimersByTimeAsync(0);
@@ -1527,7 +1584,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       .mockResolvedValueOnce({ kind: "unreadable", cause: "not valid JSON" })
       .mockResolvedValue({ kind: "read", metadata: HOST_PID_METADATA });
     const runner: ProcessRunner = async () => buildSuccessResult();
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     const stopping = controller.stop(label, { force: false });
     const result = expect(stopping).rejects.toMatchObject({
@@ -1569,7 +1626,10 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         calls.push({ command, args });
         return buildSuccessResult();
       };
-      return { calls, controller: createMacosController(runner) };
+      return {
+        calls,
+        controller: createMacosController(drainingBootouts(runner)),
+      };
     }
 
     it("goes straight to forceStopHostProcess with operation 'stop' - no TERM, no KILL, no wait on pid.json at all", async () => {
@@ -1699,7 +1759,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     MOCKS.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
     MOCKS.isProcessAlive.mockReturnValue(false);
     const runner: ProcessRunner = async () => buildSuccessResult();
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     await expect(
       controller.stopForRestart(label, { force: false }),
@@ -1718,7 +1778,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       calls.push({ command, args });
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     await expect(
       controller.relaunchAfterRestart(label, { forcedRecycle: true }),
@@ -2068,7 +2128,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     MOCKS.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
     MOCKS.isProcessAlive.mockReturnValue(true);
 
@@ -2098,7 +2158,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     await expect(
       controller.uninstall({ label, leaveForegroundRun: null }),
@@ -2137,7 +2197,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     await expect(
       controller.uninstall({ label, leaveForegroundRun: null }),
@@ -2182,7 +2242,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
 
     const rejection: unknown = await controller
@@ -2234,7 +2294,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
 
     const rejection: unknown = await controller
@@ -2287,7 +2347,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     MOCKS.readHostPidMetadata.mockResolvedValue(HOST_PID_METADATA);
     MOCKS.isProcessAlive.mockReturnValue(true);
 
@@ -2324,7 +2384,10 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         }
         return buildSuccessResult();
       };
-      return { calls, controller: createMacosController(runner) };
+      return {
+        calls,
+        controller: createMacosController(drainingBootouts(runner)),
+      };
     }
 
     it("stop asks the host to stand down and touches no launchd job", async () => {
@@ -2745,7 +2808,10 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         if (isRecycleCall(command, args)) return recycleBehavior(args, options);
         return buildSuccessResult();
       };
-      return { calls, controller: createMacosController(runner) };
+      return {
+        calls,
+        controller: createMacosController(drainingBootouts(runner)),
+      };
     }
 
     // Desktop-managed: the `.agent` label reads as Desktop's SMAppService
@@ -2768,7 +2834,10 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         if (isRecycleCall(command, args)) return recycleBehavior(args, options);
         return buildSuccessResult();
       };
-      return { calls, controller: createMacosController(runner) };
+      return {
+        calls,
+        controller: createMacosController(drainingBootouts(runner)),
+      };
     }
 
     async function resolveSuccess(): Promise<RunResult> {
@@ -3118,7 +3187,10 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         }
         return buildSuccessResult();
       };
-      return { calls, controller: createMacosController(runner) };
+      return {
+        calls,
+        controller: createMacosController(drainingBootouts(runner)),
+      };
     }
 
     it("cooperatively stops, boots out the agent, and verifies the bootout took effect", async () => {
@@ -3150,7 +3222,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         "print",
         "print",
       ]);
-      expect(calls[2]?.args).toEqual(["bootout", "--wait", agentTarget]);
+      expect(calls[2]?.args).toEqual(["bootout", agentTarget]);
       // The takeover is an ownership change; the audit line is the only
       // record of it a support thread can recover.
       expect(MOCKS.cliLoggerInfo).toHaveBeenCalledWith(
@@ -3249,7 +3321,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
 
       await expect(
-        createMacosController(runner).takeoverDesktopRegistration(label),
+        createMacosController(
+          drainingBootouts(runner),
+        ).takeoverDesktopRegistration(label),
       ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
         message: expect.stringContaining("could not confirm"),
@@ -3307,7 +3381,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       };
 
       await expect(
-        createMacosController(runner).takeoverDesktopRegistration(label),
+        createMacosController(
+          drainingBootouts(runner),
+        ).takeoverDesktopRegistration(label),
       ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
         message: expect.stringContaining(
@@ -3647,7 +3723,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         ).resolves.toMatchObject({ kind: "took-over" });
 
         const bootout = calls.find((c) => c.args[0] === "bootout");
-        expect(bootout?.args).toEqual(["bootout", "--wait", agentTarget]);
+        expect(bootout?.args).toEqual(["bootout", agentTarget]);
       },
     );
 
@@ -3715,7 +3791,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         cooperativeStop: "no-host",
       });
       const bootout = calls.find((c) => c.args[0] === "bootout");
-      expect(bootout?.args).toEqual(["bootout", "--wait", agentTarget]);
+      expect(bootout?.args).toEqual(["bootout", agentTarget]);
       expect(MOCKS.cliLoggerWarn).not.toHaveBeenCalled();
     });
 
@@ -3756,7 +3832,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         "bootout",
         "print",
       ]);
-      expect(calls[5]?.args).toEqual(["bootout", "--wait", cliTarget]);
+      expect(calls[5]?.args).toEqual(["bootout", cliTarget]);
       expect(calls[6]?.args[1]).toEqual(cliTarget);
       // The CLI label was idle (no pid) both times it was read, so its
       // stand-down never itself asks for a claim - only the agent's claim
@@ -3819,7 +3895,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       });
       expect(MOCKS.requestCooperativeShutdown).toHaveBeenCalledTimes(1);
       const bootout = calls.find((c) => c.args[0] === "bootout");
-      expect(bootout?.args).toEqual(["bootout", "--wait", agentTarget]);
+      expect(bootout?.args).toEqual(["bootout", agentTarget]);
     });
 
     // The other half of rule 2: an idle agent beside a CLI label that DOES
@@ -3867,7 +3943,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
 
       await expect(
-        createMacosController(runner).takeoverDesktopRegistration(label),
+        createMacosController(
+          drainingBootouts(runner),
+        ).takeoverDesktopRegistration(label),
       ).resolves.toEqual({
         kind: "took-over",
         agentLabelId: `${label.id}.agent`,
@@ -3883,8 +3961,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         "bootout",
         "print",
       ]);
-      expect(calls[2]?.args).toEqual(["bootout", "--wait", agentTarget]);
-      expect(calls[5]?.args).toEqual(["bootout", "--wait", cliTarget]);
+      expect(calls[2]?.args).toEqual(["bootout", agentTarget]);
+      expect(calls[5]?.args).toEqual(["bootout", cliTarget]);
     });
 
     // Replaces an older "pre-check" pin: with the dual-live refusal below
@@ -3914,7 +3992,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       };
 
       await expect(
-        createMacosController(runner).takeoverDesktopRegistration(label),
+        createMacosController(
+          drainingBootouts(runner),
+        ).takeoverDesktopRegistration(label),
       ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
         message: expect.stringContaining("two hosts on one machine"),
@@ -3957,7 +4037,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       };
 
       await expect(
-        createMacosController(runner).takeoverDesktopRegistration(label),
+        createMacosController(
+          drainingBootouts(runner),
+        ).takeoverDesktopRegistration(label),
       ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
         message: expect.stringContaining("two hosts on one machine"),
@@ -4022,7 +4104,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       MOCKS.isProcessAlive.mockImplementation((pid: number) => pid === 777);
 
       await expect(
-        createMacosController(runner).takeoverDesktopRegistration(label),
+        createMacosController(
+          drainingBootouts(runner),
+        ).takeoverDesktopRegistration(label),
       ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
         message: expect.stringContaining("is still running after the wait"),
@@ -4043,7 +4127,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       MOCKS.isProcessAlive.mockImplementation((pid: number) => pid === 777);
 
       await expect(
-        createMacosController(runner).takeoverDesktopRegistration(label),
+        createMacosController(
+          drainingBootouts(runner),
+        ).takeoverDesktopRegistration(label),
       ).resolves.toMatchObject({ kind: "took-over" });
     });
 
@@ -4087,7 +4173,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       });
 
       await expect(
-        createMacosController(runner).takeoverDesktopRegistration(label),
+        createMacosController(
+          drainingBootouts(runner),
+        ).takeoverDesktopRegistration(label),
       ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
         message: expect.stringContaining("the wait did not end with its exit"),
@@ -4150,7 +4238,10 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         }
         return buildSuccessResult();
       };
-      return { calls, controller: createMacosController(runner) };
+      return {
+        calls,
+        controller: createMacosController(drainingBootouts(runner)),
+      };
     }
 
     it("rejects when the CLI label appears with a live pid after the agent is retired and the fresh claim finds no endpoint", async () => {
@@ -4380,7 +4471,10 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         }
         return buildSuccessResult();
       };
-      return { calls, controller: createMacosController(runner) };
+      return {
+        calls,
+        controller: createMacosController(drainingBootouts(runner)),
+      };
     }
 
     it("rejects with HOST_BUSY and never boots out when the live CLI-label host denies the shutdown claim", async () => {
@@ -4452,7 +4546,6 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       const bootout = calls.find((c) => c.args[0] === "bootout");
       expect(bootout?.args).toEqual([
         "bootout",
-        "--wait",
         `gui/${process.getuid?.() ?? 0}/${label.id}`,
       ]);
       const prints = calls.filter(
@@ -4503,7 +4596,6 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       const bootout = calls.find((c) => c.args[0] === "bootout");
       expect(bootout?.args).toEqual([
         "bootout",
-        "--wait",
         `gui/${process.getuid?.() ?? 0}/${label.id}`,
       ]);
       const prints = calls.filter(
@@ -4656,7 +4748,6 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       const bootout = calls.find((c) => c.args[0] === "bootout");
       expect(bootout?.args).toEqual([
         "bootout",
-        "--wait",
         `gui/${process.getuid?.() ?? 0}/${label.id}`,
       ]);
       const prints = calls.filter(
@@ -4711,7 +4802,6 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       const bootout = calls.find((c) => c.args[0] === "bootout");
       expect(bootout?.args).toEqual([
         "bootout",
-        "--wait",
         `gui/${process.getuid?.() ?? 0}/${label.id}`,
       ]);
     });
@@ -4821,7 +4911,6 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       const bootout = calls.find((c) => c.args[0] === "bootout");
       expect(bootout?.args).toEqual([
         "bootout",
-        "--wait",
         `gui/${process.getuid?.() ?? 0}/${label.id}`,
       ]);
     });
@@ -4862,7 +4951,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         }
         return buildSuccessResult();
       };
-      const controller = createMacosController(runner);
+      const controller = createMacosController(drainingBootouts(runner));
 
       await expect(
         controller.takeoverDesktopRegistration(label),
@@ -4903,7 +4992,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         }
         return buildSuccessResult();
       };
-      const controller = createMacosController(runner);
+      const controller = createMacosController(drainingBootouts(runner));
 
       await expect(
         controller.takeoverDesktopRegistration(label),
@@ -4940,7 +5029,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         }
         return buildSuccessResult();
       };
-      const controller = createMacosController(runner);
+      const controller = createMacosController(drainingBootouts(runner));
 
       await expect(
         controller.takeoverDesktopRegistration(label),
@@ -4991,8 +5080,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       };
       MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
 
-      const takeover =
-        createMacosController(runner).takeoverDesktopRegistration(label);
+      const takeover = createMacosController(
+        drainingBootouts(runner),
+      ).takeoverDesktopRegistration(label);
       await expect(takeover).rejects.toMatchObject({
         code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
         message: expect.stringContaining(
@@ -5040,7 +5130,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     // `readHostPidMetadata` resolves null throughout - stop's own
     // wait-for-exit path is exercised separately below; here it's enough
     // that `before === null` lets stop return right after the kill call.
@@ -5140,7 +5230,10 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
             );
         }
       };
-      return { calls, controller: createMacosController(runner) };
+      return {
+        calls,
+        controller: createMacosController(drainingBootouts(runner)),
+      };
     }
 
     function printTargets(calls: readonly RecordedCall[]): readonly string[] {
@@ -5409,7 +5502,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     await expect(controller.status(label)).resolves.toEqual({
       state: "stopped",
@@ -5480,7 +5573,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       await writeFile(createdPlistPath, "<plist/>", "utf8");
 
       await expect(
-        createMacosController(runner).retireCompetingRegistration(label),
+        createMacosController(
+          drainingBootouts(runner),
+        ).retireCompetingRegistration(label),
       ).resolves.toEqual({
         kind: "retired",
         bootedOut: true,
@@ -5528,7 +5623,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       await writeFile(createdPlistPath, "<plist/>", "utf8");
 
       await expect(
-        createMacosController(runner).retireCompetingRegistration(label),
+        createMacosController(
+          drainingBootouts(runner),
+        ).retireCompetingRegistration(label),
       ).resolves.toEqual({
         kind: "kept-agent-possibly-wedged",
         probe: "wedged",
@@ -5569,7 +5666,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       await writeFile(createdPlistPath, "<plist/>", "utf8");
 
       await expect(
-        createMacosController(runner).retireCompetingRegistration(label),
+        createMacosController(
+          drainingBootouts(runner),
+        ).retireCompetingRegistration(label),
       ).resolves.toEqual({
         kind: "kept-agent-possibly-wedged",
         probe: "unknown",
@@ -5594,7 +5693,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         calls,
       );
 
-      await createMacosController(runner).retireCompetingRegistration(label);
+      await createMacosController(
+        drainingBootouts(runner),
+      ).retireCompetingRegistration(label);
 
       const kickstarts = calls.filter((call) => call.args[0] === "kickstart");
       expect(kickstarts).toHaveLength(1);
@@ -5602,12 +5703,13 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       // Never `-k`: the plist sets ThrottleInterval 10, so force-killing a
       // healthy agent would make launchd block its respawn.
       expect(kickstarts[0]?.args).not.toContain("-k");
-      // `--wait` on the eviction is what makes the kickstart meaningful: a
-      // bare bootout returns before the process is gone, and the agent we
-      // just started would then see the corpse as a live incumbent, decline,
-      // and exit 0 - leaving the machine with no host at all.
+      // The wait on the eviction (the label polled until it is gone) is what
+      // makes the kickstart meaningful: a bare bootout returns before the
+      // process is gone, and the agent we just started would then see the
+      // corpse as a live incumbent, decline, and exit 0 - leaving the machine
+      // with no host at all.
       const booted = calls.find((call) => call.args[0] === "bootout");
-      expect(booted?.args).toContain("--wait");
+      expect(booted?.args).not.toContain("--wait");
     });
     // The eviction log is the CONTRACT, not decoration: this function's
     // outcome is deliberately not threaded through the install lifecycle, so
@@ -5639,7 +5741,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         return buildSuccessResult();
       };
 
-      await createMacosController(runner).retireCompetingRegistration(label);
+      await createMacosController(
+        drainingBootouts(runner),
+      ).retireCompetingRegistration(label);
 
       const evictionLogged = MOCKS.cliLoggerInfo.mock.calls.some(
         ([message]) =>
@@ -5672,7 +5776,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         return buildSuccessResult();
       };
 
-      await createMacosController(runner).retireCompetingRegistration(label);
+      await createMacosController(
+        drainingBootouts(runner),
+      ).retireCompetingRegistration(label);
 
       expect(manifestPresentAtKickstart).toBe(false);
     });
@@ -5708,7 +5814,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       expect(existsSync(join(tempPlistDir, `${label.id}.plist`))).toBe(false);
 
       await expect(
-        createMacosController(runner).retireCompetingRegistration(label),
+        createMacosController(
+          drainingBootouts(runner),
+        ).retireCompetingRegistration(label),
       ).resolves.toEqual({
         kind: "retire-failed",
         bootoutFailed: true,
@@ -5752,7 +5860,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       expect(existsSync(join(tempPlistDir, `${label.id}.plist`))).toBe(false);
 
       await expect(
-        createMacosController(runner).retireCompetingRegistration(label),
+        createMacosController(
+          drainingBootouts(runner),
+        ).retireCompetingRegistration(label),
       ).resolves.toEqual({
         kind: "retire-failed",
         bootoutFailed: true,
@@ -5773,7 +5883,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       await writeFile(createdPlistPath, "<plist/>", "utf8");
 
       await expect(
-        createMacosController(runner).retireCompetingRegistration(label),
+        createMacosController(
+          drainingBootouts(runner),
+        ).retireCompetingRegistration(label),
       ).resolves.toEqual({ kind: "not-applicable" });
 
       expect(bootoutTargets(calls)).toEqual([]);
@@ -5799,7 +5911,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       await writeFile(createdPlistPath, "<plist/>", "utf8");
 
       await expect(
-        createMacosController(runner).retireCompetingRegistration(label),
+        createMacosController(
+          drainingBootouts(runner),
+        ).retireCompetingRegistration(label),
       ).resolves.toEqual({ kind: "not-applicable" });
 
       expect(bootoutTargets(calls)).toEqual([]);
@@ -5837,7 +5951,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       await writeFile(createdPlistPath, "<plist/>", "utf8");
 
       await expect(
-        createMacosController(runner).retireCompetingRegistration(label),
+        createMacosController(
+          drainingBootouts(runner),
+        ).retireCompetingRegistration(label),
       ).resolves.toEqual({
         kind: "retire-failed",
         bootoutFailed: true,
@@ -5932,7 +6048,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
         await withUnreadableLaunchAgentsDir(async () => {
           await expect(
-            createMacosController(runner).retireCompetingRegistration(label),
+            createMacosController(
+              drainingBootouts(runner),
+            ).retireCompetingRegistration(label),
           ).resolves.toEqual({
             kind: "retire-failed",
             bootoutFailed: false,
@@ -5961,7 +6079,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
         await withUnreadableLaunchAgentsDir(async () => {
           await expect(
-            createMacosController(runner).retireCompetingRegistration(label),
+            createMacosController(
+              drainingBootouts(runner),
+            ).retireCompetingRegistration(label),
           ).resolves.toEqual({
             kind: "retire-failed",
             bootoutFailed: false,
@@ -6093,7 +6213,7 @@ describe("Q13 convergence: the post-swap relaunch against a waiting supervisor",
     // and the executor's verify leg sees it. Exactly one host, and the wait
     // that was about to be admitted is not thrown away.
     const { runner, calls } = recordingRunner();
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     await controller.relaunchAfterRestart(cliOwnedLabel, {
       forcedRecycle: false,
@@ -6116,7 +6236,7 @@ describe("Q13 convergence: the post-swap relaunch against a waiting supervisor",
     // `ThrottleInterval` before the replacement appears, which is why this
     // branch is reserved for the case that needs it.
     const { runner, calls } = recordingRunner();
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     await controller.relaunchAfterRestart(cliOwnedLabel, {
       forcedRecycle: true,
@@ -6178,7 +6298,9 @@ describe("macOS controller — spawn-edge placement", () => {
   // bootout, and bootstrap follows it.
   it("install (normal): both ownership prints precede publish; bootout then bootstrap follow it, in order", async () => {
     const { log, publish } = makeSharedLog();
-    const controller = createMacosController(loggingRunner(log));
+    const controller = createMacosController(
+      drainingBootouts(loggingRunner(log)),
+    );
 
     await runWithLeaseAtServiceSpawnEdge(publish, () =>
       controller.install({
@@ -6226,7 +6348,7 @@ describe("macOS controller — spawn-edge placement", () => {
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     await runWithLeaseAtServiceSpawnEdge(publish, () =>
       controller.install({
@@ -6269,7 +6391,7 @@ describe("macOS controller — spawn-edge placement", () => {
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     const publish = vi.fn(async (): Promise<null> => null);
     let error: unknown = null;
 
@@ -6303,7 +6425,7 @@ describe("macOS controller — spawn-edge placement", () => {
       calls.push(args[0] ?? "");
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     const manifestPath = serviceManifestPath(label);
     const launcherPath = serviceLauncherScriptPath(label);
     // A prior test in this describe block may have left a successful
@@ -6375,7 +6497,7 @@ describe("macOS controller — spawn-edge placement", () => {
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     const publishError = new Error("proof write failed");
     const publish = vi.fn(async (): Promise<null> => {
       throw publishError;
@@ -6435,7 +6557,7 @@ describe("macOS controller — spawn-edge placement", () => {
       },
       () =>
         runWithLeaseAtServiceSpawnEdge(dryRunPublish, () =>
-          createMacosController(successRunner).install({
+          createMacosController(drainingBootouts(successRunner)).install({
             label,
             cli: { command: "/usr/local/bin/traycer", args: [] },
             enableLinger: false,
@@ -6451,7 +6573,7 @@ describe("macOS controller — spawn-edge placement", () => {
       calls.push(args[0] ?? "");
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     const manifestPath = serviceManifestPath(label);
     const launcherPath = serviceLauncherScriptPath(label);
     // Same reason as the plain-error test above: start from a clean slate
@@ -6488,7 +6610,9 @@ describe("macOS controller — spawn-edge placement", () => {
 
   it("start: the ownership print precedes publish, and the plain kickstart is the entry right after it", async () => {
     const { log, publish } = makeSharedLog();
-    const controller = createMacosController(loggingRunner(log));
+    const controller = createMacosController(
+      drainingBootouts(loggingRunner(log)),
+    );
 
     await runWithLeaseAtServiceSpawnEdge(publish, () =>
       controller.start(label),
@@ -6505,7 +6629,9 @@ describe("macOS controller — spawn-edge placement", () => {
 
   it("restart (CLI-owned): the ownership print precedes publish, and kickstart -k is the entry right after it", async () => {
     const { log, publish } = makeSharedLog();
-    const controller = createMacosController(loggingRunner(log));
+    const controller = createMacosController(
+      drainingBootouts(loggingRunner(log)),
+    );
 
     await runWithLeaseAtServiceSpawnEdge(publish, () =>
       controller.restart(label),
@@ -6537,7 +6663,7 @@ describe("macOS controller — spawn-edge placement", () => {
       log.push("stand-down");
       return { kind: "stopped" };
     });
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     const publish = vi.fn(async (): Promise<null> => {
       log.push("publish");
       return null;
@@ -6560,7 +6686,9 @@ describe("macOS controller — spawn-edge placement", () => {
 
   it("relaunchAfterRestart forced (recycle): the ownership print precedes publish, and kickstart -k is the entry right after it", async () => {
     const { log, publish } = makeSharedLog();
-    const controller = createMacosController(loggingRunner(log));
+    const controller = createMacosController(
+      drainingBootouts(loggingRunner(log)),
+    );
 
     await runWithLeaseAtServiceSpawnEdge(publish, () =>
       controller.relaunchAfterRestart(label, { forcedRecycle: true }),
@@ -6574,7 +6702,9 @@ describe("macOS controller — spawn-edge placement", () => {
 
   it("relaunchAfterRestart not forced (plain kickstart): the ownership print precedes publish, and the plain kickstart is the entry right after it", async () => {
     const { log, publish } = makeSharedLog();
-    const controller = createMacosController(loggingRunner(log));
+    const controller = createMacosController(
+      drainingBootouts(loggingRunner(log)),
+    );
 
     await runWithLeaseAtServiceSpawnEdge(publish, () =>
       controller.relaunchAfterRestart(label, { forcedRecycle: false }),
@@ -6588,7 +6718,7 @@ describe("macOS controller — spawn-edge placement", () => {
 
   it("relaunchAfterRestart: a refused publication propagates raw, by identity - a restart intent means the manager owes the comeback", async () => {
     const runner: ProcessRunner = async () => buildSuccessResult();
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     const publishError = new Error("proof write failed");
     const publish = vi.fn(async (): Promise<null> => {
       throw publishError;
@@ -6612,7 +6742,7 @@ describe("macOS controller — spawn-edge placement", () => {
       return buildSuccessResult();
     };
     MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "busy" });
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
     const publish = vi.fn(async (): Promise<null> => null);
     let error: unknown = null;
 
@@ -6638,7 +6768,7 @@ describe("macOS controller — spawn-edge placement", () => {
       calls.push({ command, args });
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     await controller.relaunchAfterRestart(label, { forcedRecycle: true });
 
@@ -6656,7 +6786,7 @@ describe("macOS controller — spawn-edge placement", () => {
       calls.push({ command, args });
       return buildSuccessResult();
     };
-    const controller = createMacosController(runner);
+    const controller = createMacosController(drainingBootouts(runner));
 
     await controller.relaunchAfterRestart(label, { forcedRecycle: false });
 
