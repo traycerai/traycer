@@ -4509,6 +4509,211 @@ describe("useChatTimelineFollowLatch", () => {
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
   });
 
+  // TLA+ `phone_viewport_tail` (8 states): a resting finger never moves, the
+  // keyboard closing grows the viewport and the browser clamps onto it in
+  // one step, and a row above regrows the end before anything is observed.
+  // jsdom never clamps `scrollTop` itself, so the clamp and the regrowth are
+  // modelled directly on the shim, with no observation between them.
+  it("keeps a resting finger's follow through a viewport-grow clamp observed by its native scroll report", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 400);
+    // The keyboard closes and the browser clamps the view onto the taller
+    // viewport's end in the same step - no observation in between.
+    shim.setGeometry(node, { clientHeight: 600, scrollTop: 900 });
+    // A row above the reading edge regrows the end past the clamp, with
+    // nothing observed or announced yet.
+    shim.setGeometry(node, { scrollHeight: 1600 });
+
+    fireNativeScroll(node);
+    fireTouch(node, "touchend", 400);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalled();
+  });
+
+  it("keeps a resting finger's follow through a viewport-grow clamp observed by a maintenance read", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 400);
+    shim.setGeometry(node, { clientHeight: 600, scrollTop: 900 });
+    shim.setGeometry(node, { scrollHeight: 1600 });
+
+    result.current.followEndIfPermitted();
+    fireTouch(node, "touchend", 400);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalled();
+  });
+
+  // TLA+ `phone_pad_tail` (12 states): same family, but the clamp is
+  // announced - the list's own pad reset (#3081) - and the hole is that the
+  // announcement carries the gesture reference, the ledger and the
+  // departure offset but not the touch rest reference.
+  it("keeps a resting finger's follow through an announced pad-restore clamp observed by its native scroll report", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 400);
+    // The pad reset clamps the view, announced exactly as the patched list
+    // announces it: `cause: "range"`, because dropping the pad moves the view
+    // only by taking away the end it was resting on. No content moved.
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: {
+          from: 1000,
+          fromEnd: 1000,
+          to: 800,
+          intended: 800,
+          cause: "range",
+        },
+      }),
+    );
+    shim.setGeometry(node, { scrollTop: 800, scrollHeight: 1300 });
+    // The tail regrows before the first read.
+    shim.setGeometry(node, { scrollHeight: 1400 });
+
+    fireNativeScroll(node);
+    fireTouch(node, "touchend", 400);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalled();
+  });
+
+  it("keeps a resting finger's follow through an announced pad-restore clamp observed by a maintenance read", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 400);
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: {
+          from: 1000,
+          fromEnd: 1000,
+          to: 800,
+          intended: 800,
+          cause: "range",
+        },
+      }),
+    );
+    shim.setGeometry(node, { scrollTop: 800, scrollHeight: 1300 });
+    shim.setGeometry(node, { scrollHeight: 1400 });
+
+    result.current.followEndIfPermitted();
+    fireTouch(node, "touchend", 400);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalled();
+  });
+
+  // TLA+ `ChatScroll_armless_viewport` (10 states, `I_IntentHeld`): same
+  // viewport-grow clamp, but armless - no touchstart, wheel or press - so the
+  // departure can only come from the ledger (`expectedScrollTopRef`) alone,
+  // through `publishUnannouncedDeparture`.
+  it("keeps an armless following reader through a viewport-grow clamp observed by its native scroll report", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    // A real scroll report primes the ledger at the strict bottom - the
+    // reader's last known position before the clamp. Nothing is armed.
+    fireNativeScroll(node);
+
+    // The viewport grows and the browser clamps in the same step, with no
+    // observation in between.
+    shim.setGeometry(node, { clientHeight: 600, scrollTop: 900 });
+    // A row above the reading edge regrows the end past the clamp, still
+    // unobserved.
+    shim.setGeometry(node, { scrollHeight: 1600 });
+
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalled();
+  });
+
+  it("keeps an armless following reader through a viewport-grow clamp observed by a maintenance read", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+
+    shim.setGeometry(node, { clientHeight: 600, scrollTop: 900 });
+    shim.setGeometry(node, { scrollHeight: 1600 });
+
+    result.current.followEndIfPermitted();
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
   it("departs a following reader whose press stepped to an end only a maintain read saw", () => {
     const node = shim.makeNode({
       scrollTop: 1000,

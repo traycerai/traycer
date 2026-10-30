@@ -77,6 +77,12 @@ interface AnnouncedMove {
   readonly fromEnd: number;
   readonly to: number;
   readonly intended: number;
+  // What moved the view: "offset" for a write of the offset itself, which
+  // carried the content with it, and "range" for one that moved the view only
+  // by taking away the end it rested on, which moved no content at all. A
+  // consumer needs it to know whether its content-relative references have
+  // already netted the move out.
+  readonly cause: "offset" | "range";
 }
 
 interface ClampingScroller {
@@ -357,8 +363,10 @@ describe("@legendapp/list web patch", () => {
       moveScrollerByRangeAnnounced(shrinks.scroller, () => {
         shrinks.scroller.scrollHeight = 1400;
       });
+      // `cause: "range"`: the view moved only because the end it rested on
+      // went away. No row moved, so nothing nets this out for a consumer.
       expect(shrinks.announcements).toEqual([
-        { from: 1000, fromEnd: 1000, to: 900, intended: 900 },
+        { from: 1000, fromEnd: 1000, to: 900, intended: 900, cause: "range" },
       ]);
 
       // The frame the defect lives in: a commit regrows the end right after
@@ -381,6 +389,25 @@ describe("@legendapp/list web patch", () => {
         staysReachable.scroller.scrollHeight = 1400;
       });
       expect(staysReachable.announcements).toEqual([]);
+    });
+
+    // The behavioural case above proves the range helper declares its cause.
+    // The offset helper's cannot be read off a slice of it - it writes
+    // `target.scrollTop` and reports what landed - and it is the half that
+    // must NOT move a consumer's content-relative references, so the call
+    // site is pinned here. A regenerated patch that dropped it would make the
+    // chat latch carry a finger's reference through every compensation of the
+    // list's, and on iOS, where the list compensates all through a fling
+    // while the finger's own scroll arrives only by report, the finger would
+    // never be detected at all.
+    it(`${file} declares a write of the offset itself as one`, () => {
+      const source = readFileSync(join(packageDir, file), "utf8");
+      expect(source).toContain(
+        'announceScrollerMove(target, from, fromEnd, target.scrollTop, intendedTop, "offset");',
+      );
+      expect(source).not.toContain(
+        "announceScrollerMove(target, from, fromEnd, target.scrollTop, intendedTop);",
+      );
     });
 
     // The restore cannot be sliced out of the build on its own (it closes
