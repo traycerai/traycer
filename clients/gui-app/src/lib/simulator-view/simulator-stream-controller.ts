@@ -550,7 +550,17 @@ export function createSimulatorStreamController(
         return;
       case "open":
         streamOpen = true;
-        if (continuity === "continued") restoreHeldStream();
+        if (continuity === "continued") {
+          restoreHeldStream();
+        } else if (heldState !== null) {
+          // A subscribe held before its first frame opens a fresh cycle.
+          // Its first frame must not remain masked by the ended hold.
+          heldState = null;
+          mjpegRequested = false;
+          decoder?.reset();
+          publish({ lifecycle: "connecting", detail: null });
+          armWatchdog();
+        }
         if (wantMjpeg) requestMjpeg();
         return;
       case "reconnecting":

@@ -361,4 +361,72 @@ describe("terminal viewer intent through the registry lease, over the real strea
       rig.registry.forceRelease(INSTANCE_ID);
     });
   });
+
+  // A lease parked while the stream is held before its first frame, whose hold
+  // then ends in a fresh open. Invariants on both sides of the capability line.
+  describe("a hold before the first frame that ends in a plain open", () => {
+    it("applies a parked cache intent exactly once on a 1.7 host, with no extra attach", () => {
+      const rig = createRig(V17);
+      rig.acquire("presentation");
+      const original = rig.session();
+      // The capability is unknown while held: nothing may be emitted early.
+      original.negotiatedSchemaVersion = null;
+
+      original.emitContinuityStatus("reconnecting", "held");
+      rig.release();
+      expect(original.framesOfKind("viewer")).toEqual([]);
+
+      // The host negotiates 1.7 only as the stream opens; the intent is
+      // applied from the capability read live at that point.
+      original.negotiatedSchemaVersion = V17;
+      original.emitStatus("open");
+
+      expect(rig.fake.subscribes).toHaveLength(1);
+      expect(original.closed).toBe(false);
+      expect(original.framesOfKind("viewer")).toEqual([viewerFrame("cache")]);
+      rig.registry.forceRelease(INSTANCE_ID);
+    });
+
+    it("falls back to one replacement on an unknown version and sends no viewer frame", () => {
+      const rig = createRig(null);
+      rig.acquire("presentation");
+      const original = rig.session();
+
+      original.emitContinuityStatus("reconnecting", "held");
+      rig.release();
+      original.emitStatus("open");
+
+      expect(rig.declaredViewers()).toEqual(["presentation", "cache"]);
+      expect(rig.fake.sessions.map((session) => session.closed)).toEqual([
+        true,
+        false,
+      ]);
+      for (const session of rig.fake.sessions) {
+        expect(session.framesOfKind("viewer")).toEqual([]);
+      }
+      rig.registry.forceRelease(INSTANCE_ID);
+    });
+
+    it.each([
+      { label: "a 1.7 host", negotiated: V17 },
+      { label: "an unknown version", negotiated: null },
+    ])(
+      "coalesces a held park and revive into no frame and no replacement on $label",
+      ({ negotiated }) => {
+        const rig = createRig(negotiated);
+        rig.acquire("presentation");
+        const original = rig.session();
+
+        original.emitContinuityStatus("reconnecting", "held");
+        rig.release();
+        rig.acquire("presentation");
+        original.emitStatus("open");
+
+        expect(rig.fake.subscribes).toHaveLength(1);
+        expect(original.closed).toBe(false);
+        expect(original.framesOfKind("viewer")).toEqual([]);
+        rig.registry.forceRelease(INSTANCE_ID);
+      },
+    );
+  });
 });

@@ -378,16 +378,25 @@ Streams tell the truth about all of this through `StreamContinuity`, the fourth
 argument of a status change:
 
 - Inside the mask nothing is announced.
-- At the mask's end an open stream goes `reconnecting` with `"held"`. Its
-  negotiated version stays, and the subscription is not lost: a consumer must not
-  reset for a snapshot that will not come. Frames it sends are queued (§6).
-- On the resumed edge it goes `open` with `"continued"`, and no `SUBSCRIBE` is
-  sent. The edge reports dial success and announces a session under ids of their
-  own, because the authority de-duplicates by both.
+- At the mask's end every stream goes `reconnecting` with `"held"`, including a
+  stream still waiting for its first frame. An already-open stream retains its
+  negotiated version and subscription; its consumer keeps the current cycle's
+  state while publishing `reconnecting`. Frames it sends are queued (§6).
+- On the resumed edge a previously open stream goes `open` with `"continued"`,
+  and no `SUBSCRIBE` is sent. This continues the same cycle and owes no new
+  snapshot. The edge reports dial success and announces a session under ids of
+  their own, because the authority de-duplicates by both.
 - When `RESUME_HOLD_MS` (60 s) passes, or on a rebuild, it goes `reconnecting`
   with `null`, the plain contract: expect a reset and a re-subscribe.
-- A stream whose subscribe was never answered is not held. It stays `reconnecting`
-  and opens with `null` on its first frame.
+- A stream whose subscribe was never answered receives the `"held"` status but
+  cannot continue an open cycle; it still drops client frames until it opens.
+  Its first frame instead opens it with `null`, before that frame is delivered,
+  without an intervening plain `reconnecting`.
+  Any `open` that is not `"continued"` starts a fresh cycle: consumers discard
+  retained held state as on a plain `reconnecting`, reset cycle-scoped proof,
+  decoder or request state, and start that cycle's watchdogs and epochs. The
+  other exits from `"held"` are plain `reconnecting` or `closed`, which also
+  release retained cycle state.
 
 The local transport never emits `"held"` or `"continued"`.
 

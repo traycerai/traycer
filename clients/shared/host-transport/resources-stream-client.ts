@@ -148,8 +148,8 @@ export interface ResourcesStreamClientOptions {
  *
  * Opens exactly one session on construction (bound to an epic or global scope),
  * binds the callback surface, and exposes `close`. Zod-parses each inbound
- * envelope and dispatches to the typed callback for its `kind`. There are no
- * upstream application frames; closing the session detaches the host-side
+ * envelope and dispatches to the typed callback for its `kind`. Visibility
+ * demand travels client to host; closing the session detaches the host-side
  * tracker listener via the connection-scoped teardown.
  */
 export class ResourcesStreamClient {
@@ -159,6 +159,9 @@ export class ResourcesStreamClient {
   private closed: boolean;
   private scopeSupport: ResourcesScopeSupport = "unknown";
   private demand: ResourcesSubscribeDemand = "background";
+  // Only an already-open subscription queues sends while held. A method
+  // version can be known before the first frame without making sends writable.
+  private canSendDemand = false;
   // Seeded (and re-seeded on every drop) with the cadence the host starts a
   // subscription at, so a background holder never spends a frame restating it.
   private sentDemand: ResourcesSubscribeDemand = "background";
@@ -176,8 +179,9 @@ export class ResourcesStreamClient {
       this.handleServerFrame(envelope, binaryPayload);
     });
     this.session.onStatusChange((status, reason, _retryCause, continuity) => {
-      if (status !== "open" && continuity !== "held")
-        this.sentDemand = "background";
+      this.canSendDemand =
+        status === "open" || (continuity === "held" && this.canSendDemand);
+      if (continuity === null) this.sentDemand = "background";
       // Before the status itself, so a consumer reacting to the `closed`
       // transition already sees why rather than reading last round's verdict.
       this.updateScopeSupport(status, reason);
@@ -198,7 +202,8 @@ export class ResourcesStreamClient {
   }
 
   private publishDemandIfSupported(): void {
-    if (this.closed || this.sentDemand === this.demand) return;
+    if (this.closed || !this.canSendDemand || this.sentDemand === this.demand)
+      return;
     const version = this.session.getNegotiatedSchemaVersion();
     if (version === null || version.major !== 1 || version.minor < 5) return;
     this.session.sendClientFrame(

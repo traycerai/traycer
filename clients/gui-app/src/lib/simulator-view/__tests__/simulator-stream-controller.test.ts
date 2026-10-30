@@ -104,12 +104,35 @@ interface Harness {
   readonly session: () => CodedStreamSession;
 }
 
+/** Like {@link CodedStreamClient}, but its sessions have not opened yet. */
+class UnopenedStreamClient extends CodedStreamClient {
+  override subscribe(method: string, params: unknown): CodedStreamSession {
+    const session = new CodedStreamSession();
+    this.sessions.push(session);
+    this.subscribes.push({ method, params });
+    return session;
+  }
+}
+
 function harness(
   platform: "ios" | "android",
   supported: boolean,
   preferMjpeg: boolean,
 ): Harness {
-  const client = new CodedStreamClient(true);
+  return harnessOn(
+    new CodedStreamClient(true),
+    platform,
+    supported,
+    preferMjpeg,
+  );
+}
+
+function harnessOn(
+  client: CodedStreamClient,
+  platform: "ios" | "android",
+  supported: boolean,
+  preferMjpeg: boolean,
+): Harness {
   const codec = fakeCodecRuntime(supported);
   const sink = recordingSink();
   const states: SimulatorStreamState[] = [];
@@ -594,6 +617,72 @@ describe("simulator stream controller", () => {
       expect(h.controller.getState()).toMatchObject({
         lifecycle: "streaming",
         plane: "image",
+      });
+    });
+
+    describe("held on the initial subscribe, before the transport's first frame", () => {
+      function unopened(): Harness {
+        return harnessOn(new UnopenedStreamClient(true), "ios", true, false);
+      }
+
+      it("reads streaming on the first frame once the stream opens", async () => {
+        const h = unopened();
+        h.controller.start();
+
+        h.session().emitContinuityStatus("reconnecting", "held");
+        h.session().emitContinuityStatus("open", null);
+        emitConfig(h.session(), IOS_CONFIG);
+        emitVideo(h.session(), "description", AVCC_DESCRIPTION);
+        await flushAsync();
+        emitVideo(h.session(), "keyframe", ANNEX_B_KEYFRAME);
+        h.codec.decoders.at(-1)?.emitFrame(1179, 2556);
+
+        expect(h.controller.getState().lifecycle).toBe("streaming");
+      });
+
+      it("keeps the first-frame window running once the stream opens", () => {
+        const h = unopened();
+        h.controller.start();
+
+        h.session().emitContinuityStatus("reconnecting", "held");
+        h.session().emitContinuityStatus("open", null);
+        vi.advanceTimersByTime(SIMULATOR_FIRST_FRAME_TIMEOUT_MS);
+
+        expect(h.controller.getState()).toMatchObject({
+          lifecycle: "error",
+          detail: SIMULATOR_NO_VIDEO_MESSAGE,
+        });
+      });
+    });
+
+    describe("held after a plain reconnect, before the new cycle's first frame", () => {
+      it("reads streaming on the new cycle's first frame instead of staying masked as reconnecting", async () => {
+        const h = await streamingH264();
+
+        h.session().emitStatus("reconnecting");
+        h.session().emitContinuityStatus("reconnecting", "held");
+        h.session().emitContinuityStatus("open", null);
+        emitConfig(h.session(), IOS_CONFIG);
+        emitVideo(h.session(), "description", AVCC_DESCRIPTION);
+        await flushAsync();
+        emitVideo(h.session(), "keyframe", ANNEX_B_KEYFRAME);
+        h.codec.decoders.at(-1)?.emitFrame(1179, 2556);
+
+        expect(h.controller.getState().lifecycle).toBe("streaming");
+      });
+
+      it("rearms the first-frame window for the new cycle", async () => {
+        const h = await streamingH264();
+
+        h.session().emitStatus("reconnecting");
+        h.session().emitContinuityStatus("reconnecting", "held");
+        h.session().emitContinuityStatus("open", null);
+        vi.advanceTimersByTime(SIMULATOR_FIRST_FRAME_TIMEOUT_MS);
+
+        expect(h.controller.getState()).toMatchObject({
+          lifecycle: "error",
+          detail: SIMULATOR_NO_VIDEO_MESSAGE,
+        });
       });
     });
 
