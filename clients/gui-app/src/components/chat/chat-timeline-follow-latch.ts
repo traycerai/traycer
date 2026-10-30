@@ -205,30 +205,56 @@ interface ListRowTop {
 
 interface ReaderEndCandidate {
   readonly readerGestureGeneration: number;
-  readonly targetScrollTop: number;
-  /** The list's last row when the gesture began. Rows above the reader that
-   *  the list remeasures since move it, and the list moves the reader with
-   *  them, so the end the gesture headed for has moved by the same amount. */
+  /** As `ReaderMomentumEnd.targetContentEnd`, for the gesture's end. */
+  readonly targetContentEnd: number;
+  /** As `ReaderMomentumEnd.tailBlock`, for the gesture's end. */
+  readonly tailBlock: TailBlock | null;
+  /** The list's last row when the gesture began, read only when the tail
+   *  block cannot be (`tailBlockShift`). Rows above the reader that the list
+   *  remeasures since move it, and the list moves the reader with them, so
+   *  the end the gesture headed for has moved by the same amount. */
   readonly lastRow: ListRowTop | null;
   /** The reader reached the strict bottom while a recovering transcript held
    *  reattachment off; the settle that lifts the hold lets them follow. */
   readonly reached: boolean;
 }
 
-/** The end a lifted finger's momentum can reach, as the latest observation
- *  saw it. Every move of the end passes a maintain trigger or a scroll
- *  report, which records the end it sees, so the next observation can tell
- *  the momentum reached this one even after a chunk has moved it on. */
+/** The end a lifted finger's momentum can reach, and the lift it travels
+ *  from. The two are read in different ways because the list moves them in
+ *  different ways. */
 interface ReaderMomentumEnd {
-  readonly targetScrollTop: number;
-  /** As `ReaderEndCandidate.lastRow`: rows above that the list remeasures
-   *  move the reader with them, and this end by as much. */
+  /** Where the content that ended the transcript at the lift then stood,
+   *  measured down the content and not as an offset of the view
+   *  (`endScrollTopOf`). It is the content the finger was thrown at, so it
+   *  moves only as that content moves - with `lastRow`, and never with a
+   *  tail that grows below it. A row growing in view pushes it down without
+   *  moving the view at all, which is why this end cannot be read from the
+   *  writes the list announces. */
+  readonly targetContentEnd: number;
+  /** The last block of that content, which is what the end moves with
+   *  (`tailBlockOf`). Read first; the row is the fallback. */
+  readonly tailBlock: TailBlock | null;
+  /** The list's last row at the lift, as `ReaderEndCandidate.lastRow`. */
   readonly lastRow: ListRowTop | null;
-  /** Where the view was when the finger lifted, carried by every row move
-   *  the list has made since, so it stays an offset this view can be read
-   *  against. Momentum travels from the lift toward the end; a view still
-   *  standing at the lift has not travelled, however the end moved. */
+  /** Where the view stood at the lift, carried with every announced write
+   *  since (`noteScrollerMoved`), so it stays an offset this view can be
+   *  read against. Momentum travels from the lift toward the end: a view
+   *  standing where it was lifted has not travelled, however the end moved
+   *  to meet it. */
   readonly liftScrollTop: number;
+}
+
+/** The offset that reaches content standing `contentEnd` down the transcript,
+ *  for a view of this height. Held apart from the content because a view can
+ *  change height under a reader on its way there - a keyboard opening, a
+ *  phone browser's chrome collapsing as the finger flings - which moves every
+ *  offset without moving a row. */
+function endScrollTopOf(
+  contentEnd: number,
+  geometry: ChatTimelineScrollGeometry,
+  shift: number,
+): number {
+  return Math.max(0, contentEnd + shift - geometry.clientHeight);
 }
 
 type ArmedReaderDeparture =
@@ -593,7 +619,8 @@ function readerEndCandidateFor(input: {
   }
   return {
     readerGestureGeneration: input.readerGestureGeneration,
-    targetScrollTop: Math.max(0, geometry.scrollHeight - geometry.clientHeight),
+    targetContentEnd: geometry.scrollHeight,
+    tailBlock: tailBlockOf(input.list),
     lastRow: lastListRowTop(input.list),
     reached: false,
   };
@@ -609,6 +636,131 @@ function reachedReaderEnd(
     return null;
   }
   return { ...candidate, reached: true };
+}
+
+/** The last block of the content that ended the transcript, and where it
+ *  stood. The end a reader is thrown at is the end of that content, and only
+ *  this block moves with it: the row's top does not, because the row can grow
+ *  from the inside - an image in it resolving taller above a trailing
+ *  paragraph moves the paragraph and leaves the row where it was. */
+interface TailBlock {
+  readonly element: Element;
+  /** Its top in the list's content container's coordinates. Measured there
+   *  rather than against the row, so rows above remeasuring move it too and
+   *  the row's own shift needs no separate reading. */
+  readonly contentTop: number;
+  /** The first 64 characters of its text, in tree order, as the list's own
+   *  edge anchor reads them (`edgeAnchorHead`). The list reuses row
+   *  containers, and a reused one says nothing about the content this was
+   *  thrown at (`tailBlockHolds`). */
+  readonly head: string;
+}
+
+const TAIL_BLOCK_HEAD_LENGTH = 64;
+
+function tailBlockHead(node: Element): string {
+  // 4 | 8 is NodeFilter.SHOW_TEXT | NodeFilter.SHOW_CDATA_SECTION, spelled as
+  // values so no global is needed, as the list spells it.
+  const walker = node.ownerDocument.createTreeWalker(node, 4 | 8);
+  let head = "";
+  for (
+    let part = walker.nextNode();
+    part !== null && head.length < TAIL_BLOCK_HEAD_LENGTH;
+    part = walker.nextNode()
+  ) {
+    head += part.nodeValue ?? "";
+  }
+  return head.slice(0, TAIL_BLOCK_HEAD_LENGTH);
+}
+
+/** The block still holds the content it was recorded with: the head it reads
+ *  now begins with the head it read then. A paragraph the reply is still
+ *  writing starts shorter than the head's 64 characters, and the tokens that
+ *  follow are the same content, so they extend that head rather than replace
+ *  it. A recycled element's text does not begin with another message's, and
+ *  one with no text at all (an image, a rule) has an empty head, which only
+ *  an empty head matches - a recycled element cannot pass by having none. */
+function tailBlockHolds(current: string, captured: string): boolean {
+  return (
+    current === captured ||
+    (captured.length > 0 && current.startsWith(captured))
+  );
+}
+
+function contentContainerOf(node: HTMLElement): Element | null {
+  return node.querySelector(`:scope > .${LEGEND_LIST_CONTENT_CONTAINER_CLASS}`);
+}
+
+/** The last child with a box of its own; one with no box (`display: contents`,
+ *  as markdown and component wrappers use) lays its children out in its place,
+ *  so it is searched in its stead. */
+function lastBoxedChild(parent: Element): Element | null {
+  for (
+    let child = parent.lastElementChild;
+    child !== null;
+    child = child.previousElementSibling
+  ) {
+    if (child.getBoundingClientRect().height > 0) return child;
+    const inner = lastBoxedChild(child);
+    if (inner !== null) return inner;
+  }
+  return null;
+}
+
+/** The tail block of the transcript's last row, as it stands now. None when
+ *  the list has not rendered that row: the lowest thing laid out is then a
+ *  row in the middle of the transcript, whose movement is not the end's, and
+ *  the list names no container for a row it has not rendered. */
+function tailBlockOf(list: LegendListRef | null): TailBlock | null {
+  if (list === null) return null;
+  const content = contentContainerOf(list.getScrollableNode());
+  if (content === null) return null;
+  const state = list.getState();
+  const last = state.data.length - 1;
+  if (last < 0) return null;
+  // The list's own container-to-key mapping, so a spacer the app's end inset
+  // renders, or a footer, is never mistaken for the last row: their tops move
+  // with a tail that grows, and the end a reader was thrown at does not. It
+  // answers for a rendered row only, which is the whole of that guard.
+  const row: unknown = state.elementAtIndex(last);
+  if (!(row instanceof HTMLElement) || !content.contains(row)) return null;
+  let element: Element = row;
+  for (;;) {
+    const next = lastBoxedChild(element);
+    if (next === null) break;
+    element = next;
+  }
+  if (element === row && row.getBoundingClientRect().height === 0) return null;
+  return {
+    element,
+    contentTop:
+      element.getBoundingClientRect().top - content.getBoundingClientRect().top,
+    head: tailBlockHead(element),
+  };
+}
+
+/** How far the tail block has moved since it was recorded, and null when it
+ *  cannot be told: the block is gone, or the list has reused its element for
+ *  other content. The caller then falls back to the row's own shift. */
+function tailBlockShift(
+  list: LegendListRef | null,
+  tail: TailBlock | null,
+): number | null {
+  if (tail === null || list === null) return null;
+  const content = contentContainerOf(list.getScrollableNode());
+  if (
+    content === null ||
+    !tail.element.isConnected ||
+    !content.contains(tail.element) ||
+    !tailBlockHolds(tailBlockHead(tail.element), tail.head)
+  ) {
+    return null;
+  }
+  return (
+    tail.element.getBoundingClientRect().top -
+    content.getBoundingClientRect().top -
+    tail.contentTop
+  );
 }
 
 function lastListRowTop(list: LegendListRef | null): ListRowTop | null {
@@ -627,34 +779,10 @@ function readerMomentumEndFor(
   list: LegendListRef | null,
 ): ReaderMomentumEnd {
   return {
-    targetScrollTop: Math.max(0, geometry.scrollHeight - geometry.clientHeight),
+    targetContentEnd: geometry.scrollHeight,
+    tailBlock: tailBlockOf(list),
     lastRow: lastListRowTop(list),
     liftScrollTop: geometry.scrollTop,
-  };
-}
-
-/** The same momentum, read in the frame this observation sees: the end moves
- *  on to the one it measures, and the lift moves by what the list moved the
- *  rows since the last observation, which is `shift`. Both are recorded
- *  against the row this observation sees last, so the next observation reads
- *  an interval it can net again.
- *
- *  An interval whose `shift` is unknown leaves the lift where the view
- *  stands now. Carrying it would hold the movement that interval hid for
- *  the life of the momentum, and every later observation would read that as
- *  the reader having travelled; starting again from the view credits them
- *  with none of it. */
-function readerMomentumEndMovedOn(
-  momentum: ReaderMomentumEnd,
-  geometry: ChatTimelineScrollGeometry,
-  list: LegendListRef | null,
-  shift: number | null,
-): ReaderMomentumEnd {
-  return {
-    targetScrollTop: Math.max(0, geometry.scrollHeight - geometry.clientHeight),
-    lastRow: lastListRowTop(list),
-    liftScrollTop:
-      shift === null ? geometry.scrollTop : momentum.liftScrollTop + shift,
   };
 }
 
@@ -1408,15 +1536,15 @@ export function useChatTimelineFollowLatch(
       const shift =
         readerCandidate === null
           ? null
-          : listRowShift(listRef.current, readerCandidate.lastRow);
+          : (tailBlockShift(listRef.current, readerCandidate.tailBlock) ??
+            listRowShift(listRef.current, readerCandidate.lastRow));
       const reachedGestureStartEnd =
         readerCandidate !== null &&
         shift !== null &&
         readerCandidate.readerGestureGeneration ===
           readerGestureGenerationRef.current &&
         geometry.scrollTop >=
-          readerCandidate.targetScrollTop +
-            shift -
+          endScrollTopOf(readerCandidate.targetContentEnd, geometry, shift) -
             CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX;
       if (!reachedGestureStartEnd || isCorrectionSuppressed?.() === true) {
         return false;
@@ -1507,8 +1635,13 @@ export function useChatTimelineFollowLatch(
   // gesture's offset by what it moved the view: none of it is the reader's,
   // so a gesture whose scroll has not landed still awaits it. A view on the
   // end before it may have been clamped there since: that was the browser's.
-  // The touch, end and momentum offsets are left: they measure the reader net
-  // of the list's own movement already (a row's shift, an element's rise on
+  // A lifted finger's lift moves with it for the same reason: it is the
+  // offset the view's travel is read from, so a write that moved the view
+  // moved what that travel is measured against. The ends a reader is headed
+  // for are left: they move with the content they name, which the list can
+  // push down by growing a row in view without writing anything
+  // (`listRowShift`). The touch offsets are left too: they measure the
+  // reader net of the list's own movement already (an element's rise on
   // screen), and would count it twice.
   const noteScrollerMoved = useCallback((event: Event): void => {
     const move = scrollerMoveOf(event);
@@ -1538,6 +1671,13 @@ export function useChatTimelineFollowLatch(
         ),
       };
     }
+    const momentum = readerMomentumEndRef.current;
+    if (momentum !== null) {
+      readerMomentumEndRef.current = {
+        ...momentum,
+        liftScrollTop: momentum.liftScrollTop + move.to - move.from,
+      };
+    }
     const expected = expectedScrollTopRef.current;
     if (expected === null) return;
     const base =
@@ -1549,13 +1689,26 @@ export function useChatTimelineFollowLatch(
 
   // The first report after a lift that a held-back write may land after: a
   // published departure stands where the view now is. The ledger, left null
-  // at the lift, re-bases at this report too (`noteReportMovement`).
+  // at the lift, re-bases at this report too (`noteReportMovement`), and so
+  // does the lift a momentum travels from: that write moved the view and is
+  // the one write `noteScrollerMoved` cannot carry it by, because it was
+  // announced as moving nothing and lands after the lift reads the view.
+  // Credited as travel it would arrive a reader the app moved. Momentum the
+  // finger did leave is not lost, only uncredited for this interval: it
+  // travels from where this report leaves them.
   const noteReportAfterLiftLanding = useCallback(
     (geometry: ChatTimelineScrollGeometry): void => {
       if (!liftAwaitsLandingRef.current) return;
       liftAwaitsLandingRef.current = false;
       if (readerDepartureScrollTopRef.current !== null) {
         readerDepartureScrollTopRef.current = geometry.scrollTop;
+      }
+      const momentum = readerMomentumEndRef.current;
+      if (momentum !== null) {
+        readerMomentumEndRef.current = {
+          ...momentum,
+          liftScrollTop: geometry.scrollTop,
+        };
       }
     },
     [],
@@ -1637,15 +1790,28 @@ export function useChatTimelineFollowLatch(
     [cancelActiveCorrection, endMetDepartedReader],
   );
 
-  // Whether a lifted finger's momentum has reached the end the latest
-  // observation saw, net of the list moving the last row since; records the
-  // end this observation sees for the next. A chunk can grow the last row
-  // after the momentum reaches the end and before its scroll report, so no
-  // report reads the strict bottom: this is the reader arriving all the same.
-  // A recovering or restoring transcript's geometry is the list's, not where
-  // the momentum is headed: while it holds reattachment or correction off, an
-  // observation neither arrives nor records its end, so a temporary end it
-  // clamps to cannot become a target its restored content later meets.
+  // Whether a lifted finger's momentum has reached the end it was heading
+  // for, by travelling there itself. The two halves are read apart because
+  // the list moves them apart:
+  // - the lift is where the view stood, and every write the list or the app
+  //   has made since has moved it with the view (`noteScrollerMoved`), so
+  //   what is left between it and this view is the reader's own travel. An
+  //   end that came to a standing view is no write at all, and moves it not
+  //   at all;
+  // - the end is where the content the finger was thrown at then stood, and
+  //   it moves with that content's row. A row growing in view pushes that
+  //   content down without moving the view, so the view reaching the offset
+  //   the lift recorded would be the reader stopping short of it.
+  // A chunk can grow the tail after the momentum reaches the end and before
+  // its scroll report, so no report reads the strict bottom: that growth is
+  // below the content the reader headed for, leaves its row where it stood,
+  // and this is the reader arriving all the same.
+  //
+  // An observation only reads them, and reads nothing when what the list
+  // moved the row by is unknown: the view sitting at the end would read as a
+  // reader who travelled there. A recovering or restoring transcript's
+  // geometry is the list's, not where the momentum is headed: while it holds
+  // reattachment or correction off, no observation arrives.
   const noteReaderMomentum = useCallback(
     (geometry: ChatTimelineScrollGeometry): boolean => {
       const momentum = readerMomentumEndRef.current;
@@ -1656,33 +1822,22 @@ export function useChatTimelineFollowLatch(
       ) {
         return false;
       }
-      const list = listRef.current;
-      const shift = listRowShift(list, momentum.lastRow);
-      readerMomentumEndRef.current = readerMomentumEndMovedOn(
-        momentum,
-        geometry,
-        list,
-        shift,
-      );
-      // What the list moved this interval has to be known before any of it
-      // can be told from what the reader did: unknown, the view sitting at
-      // the end reads as a reader who reached it.
+      // A write the contact held back has not landed yet: the view the lift
+      // read is not where it will rest, so nothing here is travel. Both the
+      // maintain read and the report reach this, and only the report
+      // re-bases the lift (`noteReportAfterLiftLanding`), so the guard has
+      // to be here rather than at either caller.
+      if (liftAwaitsLandingRef.current) return false;
+      const shift =
+        tailBlockShift(listRef.current, momentum.tailBlock) ??
+        listRowShift(listRef.current, momentum.lastRow);
       if (shift === null) return false;
-      // The view must also have travelled toward the end since the lift,
-      // which the list moving rows carries along with it: an end clamped up
-      // to a reader who has not moved, then grown back, is not their
-      // momentum arriving. Travel is read from the lift and not from the
-      // last observation, so a fling whose closing step is a pixel is still
-      // a view that travelled.
       return (
-        geometry.scrollTop >
-          momentum.liftScrollTop +
-            shift +
-            CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX &&
         geometry.scrollTop >=
-          momentum.targetScrollTop +
-            shift -
-            CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
+          endScrollTopOf(momentum.targetContentEnd, geometry, shift) -
+            CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX &&
+        geometry.scrollTop >
+          momentum.liftScrollTop + CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
       );
     },
     [isCorrectionSuppressed, isReattachSuppressed, listRef],
