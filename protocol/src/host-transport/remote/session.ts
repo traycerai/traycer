@@ -908,7 +908,9 @@ interface PendingUnary {
   timer: TimerHandle | null;
   /**
    * Whether any frame of this request has been sealed. While false the request
-   * is still in the queue and a drop can prove the host never saw it.
+   * is still in the queue, so whatever ends the wait can prove the host never
+   * saw it. Set in the tick the scheduler pulls the frame: a frame on its way
+   * to the wire already reads true.
    */
   sealed: boolean;
 }
@@ -2044,7 +2046,7 @@ export class RemoteSession<
       ? new HostTransportFailureError(notReady)
       : new RetryableTransportError({
           ...notReady,
-          // "Not ready" is decided before anything is enqueued, so this
+          // "Not ready" is decided before anything is sealed, so this
           // retryability is the no-dispatch guarantee, not a key.
           replaySafetyFromKey: false,
         });
@@ -2146,7 +2148,9 @@ export class RemoteSession<
           // `connection` is this dispatch's own, and every drop rejects its
           // pending unaries with their timers cleared - so a timer that fires
           // always belongs to a generation that was current when it was armed,
-          // and `raiseSilenceCandidate` re-checks that it still is.
+          // and `raiseSilenceCandidate` re-checks that it still is. A call that
+          // never left raises it too: a hold is not silence and `isSilentFor`
+          // says so, and anything else that stranded it is a real candidate.
           this.raiseSilenceCandidate(connection.generation, `unary:${method}`);
         }, responseTimeoutMs ?? this.options.unaryResponseMs);
         this.pendingUnary.set(streamId, {
@@ -2463,13 +2467,14 @@ export class RemoteSession<
     }
     this.subscriptions.clear();
     this.rejectAllPendingUnary(
-      new HostRpcError({
-        code: "RPC_ERROR",
-        message: "Remote session closed",
-        requestId: "session-close",
-        method: "",
-        fatalDetails: null,
-      }),
+      () =>
+        new HostRpcError({
+          code: "RPC_ERROR",
+          message: "Remote session closed",
+          requestId: "session-close",
+          method: "",
+          fatalDetails: null,
+        }),
     );
     this.settleReadyWaiters(false);
     this.emitClosed();
@@ -5538,7 +5543,6 @@ export class RemoteSession<
     this.noteConnectionLost();
     this.phase = "reconnecting";
     this.restoredStreamIds.clear();
-    const resumeNegotiated = this.connection?.resumeNegotiated === true;
     this.teardownConnection(cause, keepLeg);
     // A pending per-stream reopen's job transfers to the next handshake: the
     // openAck replay re-subscribes every stream in `subscriptions`, so a timer
@@ -5548,8 +5552,9 @@ export class RemoteSession<
     // backoff across session drops, not restart it.
     this.clearAllStreamReopens();
     // Only requests carrying a key this connection negotiated are replayable.
-    // Unkeyed calls retain the old ambiguous-outcome failure on first drop.
-    this.rejectPendingOnConnectionDrop(resumeNegotiated);
+    // Unkeyed calls that were sealed retain the old ambiguous-outcome failure
+    // on first drop.
+    this.rejectPendingOnConnectionDrop();
     // Callers parked awaiting THIS attach are still pre-send, so they keep
     // their retry license - but they must be released rather than left to
     // ride an unbounded number of further attempts inside one call.
@@ -5977,13 +5982,14 @@ export class RemoteSession<
     }
     this.subscriptions.clear();
     this.rejectAllPendingUnary(
-      new HostRpcError({
-        code: isRpcErrorCode(details.code) ? details.code : "RPC_ERROR",
-        message: details.reason,
-        requestId: "session-fatal",
-        method: "",
-        fatalDetails: details,
-      }),
+      () =>
+        new HostRpcError({
+          code: isRpcErrorCode(details.code) ? details.code : "RPC_ERROR",
+          message: details.reason,
+          requestId: "session-fatal",
+          method: "",
+          fatalDetails: details,
+        }),
     );
     // Phase is already "closed", so parked callers settle as NON-retryable
     // and carry this verdict - waiting cannot help a terminal session.
@@ -6660,17 +6666,20 @@ export class RemoteSession<
   }
 
   /**
-   * Every pending entry was enqueued for the wire, so the host may have run
-   * it whatever ended the wait - a timeout, a corrupt inbound frame, or the
-   * host's per-stream FATAL, which carries no attestation that the request was
-   * never dispatched - and the rejection is marked for `mayHaveReachedHost`.
+   * A sealed entry may have been run by the host whatever ended the wait - a
+   * timeout, a corrupt inbound frame, or the host's per-stream FATAL, which
+   * carries no attestation that the request was never dispatched - and `error`
+   * is marked for `mayHaveReachedHost`.
+   *
+   * An entry never sealed went nowhere, whatever `error` says: a hold can
+   * outlast its response budget with the request still queued. It takes the
+   * pre-send rejection instead, and no CLOSE, since the host never saw the id.
    */
   private rejectUnary(streamId: number, error: HostRpcError): void {
     const entry = this.pendingUnary.get(streamId);
     if (entry === undefined) {
       return;
     }
-    markMayHaveReachedHost(error);
     this.clearPendingUnary(streamId);
     this.traffic?.end(streamId, true);
     const nextSeq = this.retireOutboundSeq(streamId);
@@ -6685,6 +6694,11 @@ export class RemoteSession<
       connection.reassembler.forget(streamId);
     }
     this.markStreamTerminal(streamId);
+    if (!entry.sealed) {
+      entry.reject(this.notReadyRejection(entry.requestId, entry.method));
+      return;
+    }
+    markMayHaveReachedHost(error);
     if (this.phase === "ready" && connection !== null) {
       this.enqueueMessageWithSeq(
         connection,
@@ -6724,12 +6738,13 @@ export class RemoteSession<
   }
 
   /**
-   * Every pending entry was enqueued for the wire, so the host may have run
-   * it: the rejection is marked so callers can tell it from a host refusal,
-   * which arrives as the same class.
+   * A sealed entry may have been run by the host: its rejection is marked so
+   * callers can tell it from a host refusal, which arrives as the same class.
+   * The mark lives on the error, so `failure` mints one per call. A closed
+   * session has no retry to offer, so a call never sealed keeps the terminal
+   * verdict and goes unmarked.
    */
-  private rejectAllPendingUnary(error: HostRpcError): void {
-    markMayHaveReachedHost(error);
+  private rejectAllPendingUnary(failure: () => HostRpcError): void {
     for (const [streamId, entry] of Array.from(this.pendingUnary)) {
       this.traffic?.end(streamId, true);
       if (entry.timer !== null) {
@@ -6737,16 +6752,19 @@ export class RemoteSession<
       }
       this.pendingUnary.delete(streamId);
       this.outboundSeq.delete(streamId);
+      const error = failure();
+      if (entry.sealed) {
+        markMayHaveReachedHost(error);
+      }
       entry.reject(error);
     }
   }
 
   /**
-   * `resumeNegotiated` is what makes a queued call common enough to name: a
-   * mask queues calls behind a paused scheduler, and one that was never sealed
-   * provably never reached the host, so it keeps its pre-send retry license.
+   * A call that was never sealed provably never reached the host, so it keeps
+   * its pre-send retry license.
    */
-  private rejectPendingOnConnectionDrop(resumeNegotiated: boolean): void {
+  private rejectPendingOnConnectionDrop(): void {
     for (const [streamId, entry] of Array.from(this.pendingUnary)) {
       this.traffic?.end(streamId, true);
       if (entry.timer !== null) {
@@ -6754,7 +6772,7 @@ export class RemoteSession<
       }
       this.pendingUnary.delete(streamId);
       this.outboundSeq.delete(streamId);
-      if (resumeNegotiated && !entry.sealed) {
+      if (!entry.sealed) {
         entry.reject(this.notReadyRejection(entry.requestId, entry.method));
         continue;
       }

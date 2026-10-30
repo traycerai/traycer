@@ -198,15 +198,16 @@ method either side lacks never fatals the session.
 - One `REQUEST` per call on a fresh streamId; the matching `RESPONSE` (correlated
   by `requestId`) resolves it. `idempotencyKey` is **always null in v1** (reserved
   for later per-method opt-in dedup — no host dedup machinery yet).
-- The client rejects with a **retryable** transport error only when the session
-  is not yet ready (provably pre-send); once the `REQUEST` is enqueued, any drop
-  surfaces as a plain non-retryable error. Exact local parity — the host needs no
-  retry/dedup handling.
+- The client rejects with a **retryable** transport error only when the
+  `REQUEST` provably went nowhere: the session is not yet ready, or the frame
+  was still queued when the wait ended, by a drop or by the response timeout.
+  Once the frame is sealed, any drop or timeout surfaces as a plain
+  non-retryable error. Exact local parity — the host needs no retry/dedup
+  handling.
 - With session continuity (§9) a call survives a resume: its `REQUEST` is
   resent if the host missed it and its `RESPONSE` arrives as usual. Readiness
-  holds through the mask, so a call made then is queued rather than refused. If
-  the session rebuilds, a call whose frame was never sealed is rejected as
-  retryable, because it provably went nowhere, and a sealed one fails as above.
+  holds through the mask, so a call made then is queued rather than refused,
+  and it fails as above if the wait ends before its frame is sealed.
 
 ## 6. Streams
 

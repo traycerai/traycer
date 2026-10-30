@@ -19,6 +19,7 @@ import {
   CURRENT_CLIENT_COMPATIBILITY_EPOCH,
   defineFloorAwareVersionedRpcRegistry,
   defineRpcContract,
+  UNARY_CAPABILITY_IDEMPOTENCY_KEY,
   type VersionedRpcRegistry,
 } from "../../../framework/index";
 import { SERVES_EVERY_INSTALLED_MAJOR } from "../../../framework/capability-manifest";
@@ -63,7 +64,13 @@ import type {
   WebSocketOpenEvent,
 } from "../../websocket";
 import type { RemoteSessionAuth } from "../auth";
-import { RESUME_ACK_MS, RESUME_HOLD_MS, RESUME_MASK_MS } from "../config";
+import {
+  RESUME_ACK_MS,
+  RESUME_HOLD_MS,
+  RESUME_MASK_MS,
+  SESSION_LIVENESS_PROBE_TIMEOUT_MS,
+  SESSION_SILENCE_TIMEOUT_MS,
+} from "../config";
 import type { AttachGrantProvider } from "../grant";
 import {
   encodeResumeFrame,
@@ -75,6 +82,7 @@ import {
   mayHaveReachedHost,
   RetryableTransportError,
 } from "../rpc-types";
+import { NoiseChannel } from "../noise-channel";
 import { PriorityScheduler } from "../scheduler";
 import {
   RemoteSession,
@@ -262,6 +270,8 @@ class FakeHost {
   handshakes = 0;
   opens = 0;
   advertiseResume = true;
+  /** The host deduplicates unary idempotency keys. */
+  advertiseIdempotencyKey = false;
   resumeReply: ResumeReply = "answer";
   /** Answer the first frame of each SUBSCRIBE with a snapshot tick (n = 0). */
   autoTick = true;
@@ -343,6 +353,24 @@ class FakeHost {
     });
   }
 
+  /** A host-sent terminal session FATAL on stream 0. */
+  async sendSessionFatal(code: string): Promise<void> {
+    await this.sendMux(this.live(), {
+      type: MuxFrameType.FATAL,
+      streamId: SESSION_CONTROL_STREAM_ID,
+      qos: QosClass.INTERACTIVE,
+      json: {
+        details: {
+          code,
+          reason: "the host refused this session",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+        },
+      },
+      binary: null,
+    });
+  }
+
   /** The relay socket drops from the server side. */
   dropSocket(code: number, reason: string): void {
     this.live().socket.onclose?.({ code, reason, wasClean: false });
@@ -400,6 +428,16 @@ class FakeHost {
     }
     for (const plaintext of gap.frames) {
       await this.sealAndDeliver(connection, plaintext);
+    }
+  }
+
+  /** Delivers everything held, in order. */
+  releaseHeld(): void {
+    for (const frame of this.held.splice(0)) {
+      frame.connection.socket.onmessage?.({
+        type: "binary",
+        data: frame.bytes,
+      });
     }
   }
 
@@ -549,7 +587,12 @@ class FakeHost {
               SERVES_EVERY_INSTALLED_MAJOR,
             ),
           },
-          capabilities: this.advertiseResume ? [SESSION_CAPABILITY_RESUME] : [],
+          capabilities: [
+            ...(this.advertiseResume ? [SESSION_CAPABILITY_RESUME] : []),
+            ...(this.advertiseIdempotencyKey
+              ? [UNARY_CAPABILITY_IDEMPOTENCY_KEY]
+              : []),
+          ],
         },
         binary: null,
       });
@@ -673,12 +716,14 @@ function hostAuth(): RemoteSessionAuth {
 
 interface FixtureConfig {
   readonly advertiseResume: boolean;
+  readonly advertiseIdempotencyKey: boolean;
   readonly autoTick: boolean;
   readonly livenessProbe: SessionLivenessProbe | null;
 }
 
 const LIVE: FixtureConfig = {
   advertiseResume: true,
+  advertiseIdempotencyKey: false,
   autoTick: true,
   livenessProbe: null,
 };
@@ -744,6 +789,7 @@ async function advanceUntil(
 async function readyFixture(config: FixtureConfig): Promise<Fixture> {
   const host = new FakeHost();
   host.advertiseResume = config.advertiseResume;
+  host.advertiseIdempotencyKey = config.advertiseIdempotencyKey;
   host.autoTick = config.autoTick;
   const spies = buildEvidence();
   const grants = vi.fn<AttachGrantProvider>(() =>
@@ -807,9 +853,35 @@ async function readyFixture(config: FixtureConfig): Promise<Fixture> {
 }
 
 function callStatus(session: Session): Promise<unknown> {
+  return callWithKey(session, null);
+}
+
+function callWithKey(
+  session: Session,
+  idempotencyKey: string | null,
+): Promise<unknown> {
   return session.sendUnary(
     STATUS_METHOD,
     {},
+    idempotencyKey,
+    null,
+    null,
+    undefined,
+    false,
+    null,
+  );
+}
+
+/**
+ * A status call carrying `bytes` of padding. The registry does not project a
+ * request whose version both sides share, so the padding goes on the wire and
+ * chunks into 64 KiB frames; the fake host reads only the method.
+ */
+function callPadded(session: Session, bytes: number): Promise<unknown> {
+  const padded = { padding: "x".repeat(bytes) };
+  return session.sendUnary(
+    STATUS_METHOD,
+    padded,
     null,
     null,
     null,
@@ -1257,6 +1329,312 @@ describe("RemoteSession host-leg resume", () => {
     });
   });
 
+  describe("calls that never left", () => {
+    const UNARY_RESPONSE_MS = 30_000;
+
+    /** Waits until the resumed edge has reached the subscription. */
+    async function untilContinued(fixture: Fixture): Promise<void> {
+      const { statuses } = fixture;
+      await until(
+        () => statuses[statuses.length - 1]?.continuity === "continued",
+      );
+      await fixture.host.settle();
+    }
+
+    function closesFor(host: FakeHost, streamId: number): number {
+      return host.clientFrames.filter(
+        (frame) =>
+          frame.type === MuxFrameType.CLOSE && frame.streamId === streamId,
+      ).length;
+    }
+
+    it.each([
+      { name: "an unkeyed", key: null, advertiseIdempotencyKey: false },
+      { name: "a keyed", key: "idem-1", advertiseIdempotencyKey: true },
+    ])(
+      "rejects $name call queued in the mask pre-send at its budget, holds the session, and the host never reads it",
+      async ({ key, advertiseIdempotencyKey }) => {
+        const fixture = await readyFixture({
+          ...LIVE,
+          advertiseIdempotencyKey,
+        });
+        const { host, session, statuses } = fixture;
+
+        host.detach();
+        const call = track(callWithKey(session, key));
+        await step(0);
+        await step(UNARY_RESPONSE_MS - 1);
+        expect(call.settled).toBe(false);
+        await step(1);
+        await until(() => call.settled);
+
+        expect(call.error).toBeInstanceOf(RetryableTransportError);
+        expect(call.error).toMatchObject({ replaySafetyFromKey: false });
+        expect(mayHaveReachedHost(call.error)).toBe(false);
+        // Still held on the same connection: nothing rebuilt.
+        expect(host.connections).toHaveLength(1);
+        expect(statuses[statuses.length - 1]).toEqual(HELD);
+
+        host.attach();
+        await until(() => host.resumes.length === 1);
+        await untilContinued(fixture);
+
+        expect(host.handshakes).toBe(1);
+        expect(host.requestMethods).toEqual([]);
+        expect(
+          host.clientFrames.filter(
+            (frame) => frame.type === MuxFrameType.CLOSE,
+          ),
+        ).toEqual([]);
+      },
+    );
+
+    it("keeps a sealed call's budget expiry ambiguous inside the hold, and its CLOSE reaches the host after the resume", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { host, session } = fixture;
+      host.holdUnary = true;
+      const sealed = track(callStatus(session));
+      await until(() => host.pendingRequests.length === 1);
+      const sealedStream = host.requestStreamIds[0] ?? -1;
+
+      host.detach();
+      await step(UNARY_RESPONSE_MS);
+      await until(() => sealed.settled);
+
+      expect(sealed.error).toBeInstanceOf(HostTransportFailureError);
+      expect(sealed.error).not.toBeInstanceOf(RetryableTransportError);
+      expect(mayHaveReachedHost(sealed.error)).toBe(true);
+      expect(host.connections).toHaveLength(1);
+
+      host.attach();
+      await until(() => host.resumes.length === 1);
+      await untilContinued(fixture);
+      await until(() => closesFor(host, sealedStream) > 0);
+
+      expect(closesFor(host, sealedStream)).toBe(1);
+    });
+
+    it("sends no liveness probe and rebuilds nothing when that budget expires inside the hold", async () => {
+      const fixture = await readyFixture({
+        ...LIVE,
+        livenessProbe: { method: STATUS_METHOD, params: {} },
+      });
+      const { host, session } = fixture;
+
+      host.detach();
+      const call = track(callStatus(session));
+      await step(UNARY_RESPONSE_MS);
+      await until(() => call.settled);
+      // Past the verdict a probe would have asked for.
+      await step(SESSION_LIVENESS_PROBE_TIMEOUT_MS + 1_000);
+      expect(host.connections).toHaveLength(1);
+
+      host.attach();
+      await until(() => host.resumes.length === 1);
+      await untilContinued(fixture);
+
+      // A probe would have queued behind the hold and gone out with the resume.
+      expect(host.requestMethods).toEqual([]);
+      expect(host.connections).toHaveLength(1);
+    });
+
+    it("sends no liveness probe when that budget expires inside a resume exchange, where the host is ready but its RESUME is still out", async () => {
+      const fixture = await readyFixture({
+        ...LIVE,
+        livenessProbe: { method: STATUS_METHOD, params: {} },
+      });
+      const { host, session } = fixture;
+      // The window of in-channel silence a probe needs has passed.
+      await step(SESSION_SILENCE_TIMEOUT_MS + 1_000);
+      host.holdOutbound = true;
+      host.attach();
+      await until(() => host.resumes.length === 1);
+
+      const budgetMs = 2_000;
+      const call = track(
+        session.sendUnary(
+          STATUS_METHOD,
+          {},
+          null,
+          null,
+          null,
+          budgetMs,
+          false,
+          null,
+        ),
+      );
+      await step(budgetMs);
+      await until(() => call.settled);
+      expect(call.error).toBeInstanceOf(RetryableTransportError);
+
+      // A call made now queues behind the exchange, and its answer says the
+      // exchange is over and the queue has drained.
+      const marker = track(callStatus(session));
+      host.holdOutbound = false;
+      host.releaseHeld();
+      await until(() => marker.settled);
+
+      // A probe would have queued ahead of the marker and gone out with it.
+      expect(marker.value).toEqual({ ready: true });
+      expect(host.requestMethods).toEqual([STATUS_METHOD]);
+      expect(host.connections).toHaveLength(1);
+    });
+
+    it("tells a sealed and a never-sealed call apart when the session closes", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { host, session } = fixture;
+      host.holdUnary = true;
+      const sealed = track(callStatus(session));
+      await until(() => host.pendingRequests.length === 1);
+      host.detach();
+      const queued = track(callStatus(session));
+      await step(0);
+
+      session.close();
+      await until(() => sealed.settled && queued.settled);
+
+      for (const outcome of [sealed, queued]) {
+        expect(outcome.error).toMatchObject({
+          message: "Remote session closed",
+        });
+        expect(outcome.error).not.toBeInstanceOf(RetryableTransportError);
+      }
+      expect(mayHaveReachedHost(sealed.error)).toBe(true);
+      expect(mayHaveReachedHost(queued.error)).toBe(false);
+    });
+
+    /** Holds the next seal open until `release`, through the real cipher. */
+    function holdNextSeal(): { reached: () => boolean; release: () => void } {
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const encryptSpy = vi
+        .spyOn(NoiseChannel.prototype, "encrypt")
+        .mockImplementationOnce(async function (
+          this: NoiseChannel,
+          frame: Uint8Array,
+        ) {
+          await gate;
+          return this.encrypt(frame);
+        });
+      return {
+        reached: () => encryptSpy.mock.calls.length === 1,
+        release: () => release(),
+      };
+    }
+
+    /**
+     * Holds the next seal, so the scheduler (one write at a time) has pulled
+     * and is still sealing the first call's frame while the rest of the calls
+     * wait in its queue unsealed. Resolves the held seal on the returned
+     * `release`, which the caller reaches only after its assertions.
+     */
+    async function strandBehindSeal(
+      fixture: Fixture,
+      count: number,
+    ): Promise<{ calls: CallOutcome[]; release: () => void }> {
+      const { host, session } = fixture;
+      host.holdUnary = true;
+      const seal = holdNextSeal();
+      const calls: CallOutcome[] = [];
+      for (let index = 0; index < count; index += 1) {
+        calls.push(track(callStatus(session)));
+      }
+      await until(() => seal.reached());
+      await step(0);
+      expect(host.requestStreamIds).toEqual([]);
+      return { calls, release: seal.release };
+    }
+
+    it("rejects the calls queued behind a seal pre-send on a connection without resume, and the call being sealed as ever, when it drops", async () => {
+      const fixture = await readyFixture({ ...LIVE, advertiseResume: false });
+      const { host } = fixture;
+      const { calls, release } = await strandBehindSeal(fixture, 4);
+
+      host.dropSocket(1006, "server-drop");
+      await until(() => calls.every((call) => call.settled));
+      release();
+
+      const [sealing, ...queued] = calls;
+      expect(sealing?.error).toBeInstanceOf(HostTransportFailureError);
+      expect(sealing?.error).not.toBeInstanceOf(RetryableTransportError);
+      expect(mayHaveReachedHost(sealing?.error)).toBe(true);
+      for (const call of queued) {
+        expect(call.error).toBeInstanceOf(RetryableTransportError);
+        expect(call.error).toMatchObject({ replaySafetyFromKey: false });
+        expect(mayHaveReachedHost(call.error)).toBe(false);
+      }
+    });
+
+    it("keeps a terminal fatal's verdict on a call that never left, unmarked and not retryable", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { host } = fixture;
+      const { calls, release } = await strandBehindSeal(fixture, 3);
+
+      await host.sendSessionFatal("HOST_REFUSED");
+      await until(() => calls.every((call) => call.settled));
+      release();
+
+      const [sealing, queued] = calls;
+      for (const call of [sealing, queued]) {
+        expect(call?.error).toMatchObject({
+          fatalDetails: { code: "HOST_REFUSED" },
+        });
+        expect(call?.error).not.toBeInstanceOf(RetryableTransportError);
+      }
+      expect(mayHaveReachedHost(sealing?.error)).toBe(true);
+      expect(mayHaveReachedHost(queued?.error)).toBe(false);
+    });
+
+    it("reads a half-sent upload as sealed when its budget expires inside the hold: ambiguous, and it gets a CLOSE", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { host, session } = fixture;
+      const socket = host.live().socket;
+      const before = socket.binarySends;
+      // 1.5 MiB rides bulk frames; the pacer's 1 MiB burst seals the first
+      // dozen or so of 24 and, with time frozen, holds the rest back.
+      const upload = track(callPadded(session, 1.5 * 1024 * 1024));
+      await until(() => socket.binarySends - before >= 10);
+      await step(0);
+      host.detach();
+      await step(UNARY_RESPONSE_MS);
+      await until(() => upload.settled);
+
+      expect(upload.error).toBeInstanceOf(HostTransportFailureError);
+      expect(upload.error).not.toBeInstanceOf(RetryableTransportError);
+      expect(mayHaveReachedHost(upload.error)).toBe(true);
+
+      const streamId =
+        host.clientFrames.find((frame) => frame.type === MuxFrameType.REQUEST)
+          ?.streamId ?? -1;
+      host.attach();
+      await until(() => host.resumes.length === 1);
+      await untilContinued(fixture);
+      await until(() => closesFor(host, streamId) > 0);
+
+      expect(closesFor(host, streamId)).toBe(1);
+      // The host never read the whole request.
+      expect(host.requestMethods).toEqual([]);
+    });
+
+    it("reads a frame that is still being sealed as sealed when the budget expires", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { session } = fixture;
+      const seal = holdNextSeal();
+      const call = track(callStatus(session));
+      await until(() => seal.reached());
+
+      await step(UNARY_RESPONSE_MS);
+      await until(() => call.settled);
+      seal.release();
+
+      expect(call.error).toBeInstanceOf(HostTransportFailureError);
+      expect(call.error).not.toBeInstanceOf(RetryableTransportError);
+      expect(mayHaveReachedHost(call.error)).toBe(true);
+    });
+  });
+
   describe("failure rebuilds", () => {
     it("rebuilds when the host does not answer in 5 000 ms, not before", async () => {
       const fixture = await readyFixture(LIVE);
@@ -1619,6 +1997,7 @@ describe("RemoteSession host-leg resume", () => {
     const probe: SessionLivenessProbe = { method: STATUS_METHOD, params: {} };
     const SILENT: FixtureConfig = {
       advertiseResume: true,
+      advertiseIdempotencyKey: false,
       autoTick: false,
       livenessProbe: probe,
     };
