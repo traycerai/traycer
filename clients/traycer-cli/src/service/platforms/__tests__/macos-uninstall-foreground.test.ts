@@ -53,16 +53,12 @@ describe("macOS service uninstall - foreground-leave field is inert", () => {
       readonly command: string;
       readonly args: readonly string[];
     }> = [];
-    // `uninstallService` now waits for each bootout to drain (polling
-    // `print` until the label is positively gone) before moving on - see
-    // `bootoutAndWait` in `macos.ts`. The two ownership-probe `print` calls
-    // happen before any bootout and still see the job loaded (exit 0); the
-    // drain-poll `print` after each bootout reports that SAME target's label
-    // gone on its first call, so the wait never reaches its real budget.
-    // Tracked per target, not as one shared flag: a shared flag would also
-    // mask a regression that boots out or polls the wrong label, since any
-    // bootout would make every subsequent print on EITHER target report
-    // gone.
+    // The uninstall boots each loaded job out, then polls `launchctl print`
+    // until launchd says it is gone; the print after a bootout answers
+    // not-found. Drain state is tracked PER TARGET, not as one shared flag:
+    // a shared flag would also let a bootout or poll against the wrong
+    // label (agent vs. service) pass, since any bootout would make the
+    // very next print - on either target - read as drained.
     const bootedOutTargets = new Set<string>();
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
@@ -74,7 +70,7 @@ describe("macOS service uninstall - foreground-leave field is inert", () => {
       if (args[0] === "print" && bootedOutTargets.has(target)) {
         return {
           stdout: "",
-          stderr: `Could not find service in domain for user gui: 501\n`,
+          stderr: 'Could not find service "x" in domain for user gui: 501\n',
           exitCode: 113,
         };
       }
