@@ -10,6 +10,7 @@ import {
   EPIC_READ_ARTIFACT_OBJECT_RANGE_MAX_BYTES,
   EPIC_READ_ARTIFACT_OBJECT_TEXT_MAX_BYTES,
 } from "@traycer/protocol/host/epic/artifact-objects";
+import { ARTIFACT_OBJECT_SPAN_BYTES } from "@traycer-clients/shared/platform/sandbox-artifacts";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildArtifactAddress,
@@ -29,7 +30,12 @@ import {
   type ArtifactReadSpanResult,
 } from "../artifact-server";
 
+/** The most one reply carries. */
 const FOUR_MIB = EPIC_READ_ARTIFACT_OBJECT_RANGE_MAX_BYTES;
+/** One host read; a reply spans several. */
+const BLOCK = ARTIFACT_OBJECT_SPAN_BYTES;
+/** How many blocks the server's 64 MiB cache holds before evicting. */
+const CACHE_BUDGET_BLOCKS = (64 * 1024 * 1024) / BLOCK;
 const TWENTY_FIVE_MIB = EPIC_READ_ARTIFACT_OBJECT_TEXT_MAX_BYTES;
 
 const DOCUMENT_OPTIONS: ArtifactDocumentOptions = {
@@ -468,10 +474,13 @@ describe("ArtifactServer.serve — raw bytes", () => {
       signal: signal(),
     });
 
-    expect(readSpan).toHaveBeenCalledWith(
+    // The reply is assembled from block-sized reads, never one 4 MiB read.
+    expect(readSpan).toHaveBeenCalledTimes(FOUR_MIB / BLOCK);
+    expect(readSpan).toHaveBeenCalledWith("sha-1", 0, BLOCK, expect.anything());
+    expect(readSpan).toHaveBeenLastCalledWith(
       "sha-1",
-      0,
-      FOUR_MIB,
+      FOUR_MIB - BLOCK,
+      BLOCK,
       expect.anything(),
     );
     expect(result).toMatchObject({ kind: "bytes", totalBytes: byteLength });
@@ -479,7 +488,7 @@ describe("ArtifactServer.serve — raw bytes", () => {
   });
 
   it("reuses a cached block for growing requests within it, and reads only the new block when crossing into one", async () => {
-    const byteLength = FOUR_MIB * 2;
+    const byteLength = BLOCK * 2;
     const readSpan = vi.fn(
       (
         _sha: string,
@@ -507,12 +516,7 @@ describe("ArtifactServer.serve — raw bytes", () => {
     });
     expect(readSpan).toHaveBeenCalledTimes(1);
     // The port fills the whole first block, not just the 1000 bytes asked for.
-    expect(readSpan).toHaveBeenCalledWith(
-      "sha-1",
-      0,
-      FOUR_MIB,
-      expect.anything(),
-    );
+    expect(readSpan).toHaveBeenCalledWith("sha-1", 0, BLOCK, expect.anything());
 
     const smaller = await server.serve({
       path: "big.bin",
@@ -527,26 +531,26 @@ describe("ArtifactServer.serve — raw bytes", () => {
     const bigger = await server.serve({
       path: "big.bin",
       offset: 0,
-      length: FOUR_MIB,
+      length: BLOCK,
       signal: signal(),
     });
     expect(readSpan).toHaveBeenCalledTimes(1); // still the same cached block
     expect(bigger.kind).toBe("bytes");
-    if (bigger.kind === "bytes") expect(bigger.bytes.length).toBe(FOUR_MIB);
+    if (bigger.kind === "bytes") expect(bigger.bytes.length).toBe(BLOCK);
 
     // Crossing into the second block needs exactly one more read, for that
     // block alone.
     const crossing = await server.serve({
       path: "big.bin",
-      offset: FOUR_MIB - 10,
+      offset: BLOCK - 10,
       length: 20,
       signal: signal(),
     });
     expect(readSpan).toHaveBeenCalledTimes(2);
     expect(readSpan).toHaveBeenLastCalledWith(
       "sha-1",
-      FOUR_MIB,
-      FOUR_MIB,
+      BLOCK,
+      BLOCK,
       expect.anything(),
     );
     expect(crossing.kind).toBe("bytes");
@@ -555,7 +559,7 @@ describe("ArtifactServer.serve — raw bytes", () => {
     // The second block is cached too now; revisiting it needs no more reads.
     await server.serve({
       path: "big.bin",
-      offset: FOUR_MIB,
+      offset: BLOCK,
       length: 1000,
       signal: signal(),
     });
@@ -586,30 +590,30 @@ describe("ArtifactServer.serve — raw bytes", () => {
       server.serve({
         path: "big.bin",
         offset,
-        length: FOUR_MIB,
+        length: BLOCK,
         signal: signal(),
       });
 
-    // Fill the cache to exactly its budget: 16 spans of 4 MiB each.
-    for (let index = 0; index < 16; index += 1) {
-      await at(index * FOUR_MIB);
+    // Fill the cache to exactly its budget, one block per read.
+    for (let index = 0; index < CACHE_BUDGET_BLOCKS; index += 1) {
+      await at(index * BLOCK);
     }
-    expect(readSpan).toHaveBeenCalledTimes(16);
+    expect(readSpan).toHaveBeenCalledTimes(CACHE_BUDGET_BLOCKS);
 
     // Touching offset 0 again is a cache hit, and makes it the newest entry.
     await at(0);
-    expect(readSpan).toHaveBeenCalledTimes(16);
+    expect(readSpan).toHaveBeenCalledTimes(CACHE_BUDGET_BLOCKS);
 
-    // A 17th distinct span pushes the cache over its 64 MiB budget: the
-    // oldest UNTOUCHED entry (offset 4 MiB, not offset 0) is evicted.
-    await at(16 * FOUR_MIB);
-    expect(readSpan).toHaveBeenCalledTimes(17);
+    // One more distinct block pushes the cache over its budget: the oldest
+    // UNTOUCHED entry (the second block, not offset 0) is evicted.
+    await at(CACHE_BUDGET_BLOCKS * BLOCK);
+    expect(readSpan).toHaveBeenCalledTimes(CACHE_BUDGET_BLOCKS + 1);
 
-    await at(FOUR_MIB); // evicted: must read again
-    expect(readSpan).toHaveBeenCalledTimes(18);
+    await at(BLOCK); // evicted: must read again
+    expect(readSpan).toHaveBeenCalledTimes(CACHE_BUDGET_BLOCKS + 2);
 
     await at(0); // still cached: no new read
-    expect(readSpan).toHaveBeenCalledTimes(18);
+    expect(readSpan).toHaveBeenCalledTimes(CACHE_BUDGET_BLOCKS + 2);
   });
 
   it("probes an empty file with a single 1-byte read and caches the resulting empty span", async () => {
@@ -866,7 +870,8 @@ describe("ArtifactServer.serve — HTML documents", () => {
 
     // A single serve() call is capped at 4 MiB of RESPONSE bytes even for a
     // composed document, so requesting the "whole" document still only
-    // returns its first chunk.
+    // returns its first chunk - while the source was read one block at a
+    // time, every block, since composing needs all of it.
     const firstChunk = await server.serve({
       path: "index.html",
       offset: 0,
@@ -874,23 +879,23 @@ describe("ArtifactServer.serve — HTML documents", () => {
       signal: signal(),
     });
 
-    expect(readSpan).toHaveBeenCalledTimes(3);
+    const fullBlocks = (FOUR_MIB * 2) / BLOCK;
+    expect(readSpan).toHaveBeenCalledTimes(fullBlocks + 1);
     expect(readSpan).toHaveBeenNthCalledWith(
       1,
       "sha-html",
       0,
-      FOUR_MIB,
+      BLOCK,
       expect.anything(),
     );
     expect(readSpan).toHaveBeenNthCalledWith(
       2,
       "sha-html",
-      FOUR_MIB,
-      FOUR_MIB,
+      BLOCK,
+      BLOCK,
       expect.anything(),
     );
-    expect(readSpan).toHaveBeenNthCalledWith(
-      3,
+    expect(readSpan).toHaveBeenLastCalledWith(
       "sha-html",
       FOUR_MIB * 2,
       123,
@@ -923,7 +928,7 @@ describe("ArtifactServer.serve — HTML documents", () => {
       length: totalLength - FOUR_MIB * 2,
       signal: signal(),
     });
-    expect(readSpan).toHaveBeenCalledTimes(3); // no extra source reads
+    expect(readSpan).toHaveBeenCalledTimes(fullBlocks + 1); // no extra source reads
 
     if (
       acrossBoundary.kind !== "bytes" ||
@@ -1288,7 +1293,7 @@ describe("ArtifactServer.serve — shared cache concurrency", () => {
 
   it("charges a concurrently loaded block once within the byte budget", async () => {
     const gate = deferred<ArtifactReadSpanResult>();
-    const totalBytes = 16 * FOUR_MIB;
+    const totalBytes = CACHE_BUDGET_BLOCKS * BLOCK;
     const readSpan = vi.fn(
       (
         _sha: string,
@@ -1314,16 +1319,18 @@ describe("ArtifactServer.serve — shared cache concurrency", () => {
     const first = at(0);
     const second = at(1);
     gate.resolve({
-      bytes: new Uint8Array(FOUR_MIB),
+      bytes: new Uint8Array(BLOCK),
       totalBytes,
       mediaType: "application/octet-stream",
     });
     await Promise.all([first, second]);
-    for (let index = 1; index < 16; index += 1) await at(index * FOUR_MIB);
-    expect(readSpan).toHaveBeenCalledTimes(16);
-    // Sixteen blocks fit exactly. Double-charging the first would evict it.
+    for (let index = 1; index < CACHE_BUDGET_BLOCKS; index += 1)
+      await at(index * BLOCK);
+    expect(readSpan).toHaveBeenCalledTimes(CACHE_BUDGET_BLOCKS);
+    // The budget's worth of blocks fits exactly. Double-charging the first
+    // would evict it.
     await at(0);
-    expect(readSpan).toHaveBeenCalledTimes(16);
+    expect(readSpan).toHaveBeenCalledTimes(CACHE_BUDGET_BLOCKS);
   });
 
   it("evicts composed documents under the shared byte budget, below the entry-count limit", async () => {
@@ -1361,15 +1368,17 @@ describe("ArtifactServer.serve — shared cache concurrency", () => {
         length: 1,
         signal: signal(),
       });
+    const readsPerDocument = byteLength / BLOCK;
     for (let index = 0; index < 5; index += 1) {
       expect((await at(index)).kind).toBe("bytes");
     }
-    expect(readSpan).toHaveBeenCalledTimes(10);
+    expect(readSpan).toHaveBeenCalledTimes(5 * readsPerDocument);
     await at(4);
-    expect(readSpan).toHaveBeenCalledTimes(10);
-    // Only fifteen entries were inserted. Eviction must be due to bytes.
+    expect(readSpan).toHaveBeenCalledTimes(5 * readsPerDocument);
+    // Far fewer entries than the entry limit were inserted. Eviction must be
+    // due to bytes.
     await at(0);
-    expect(readSpan).toHaveBeenCalledTimes(12);
+    expect(readSpan).toHaveBeenCalledTimes(6 * readsPerDocument);
   });
 
   it("lets one waiter's abort fail just that request, without aborting the shared port read or any other waiter", async () => {
@@ -1450,8 +1459,8 @@ describe("ArtifactServer.serve — shared cache concurrency", () => {
   });
 
   it("keeps cache accounting correct when a pending block resolves after other blocks have already filled and evicted within the shared budget", async () => {
-    const pendingByteLength = FOUR_MIB;
-    const otherByteLength = FOUR_MIB * 17;
+    const pendingByteLength = BLOCK;
+    const otherByteLength = BLOCK * (CACHE_BUDGET_BLOCKS + 1);
     const gate = deferred<ArtifactReadSpanResult>();
     const readSpan = vi.fn(
       (
@@ -1490,57 +1499,60 @@ describe("ArtifactServer.serve — shared cache concurrency", () => {
     const pending = server.serve({
       path: "pending.bin",
       offset: 0,
-      length: FOUR_MIB,
+      length: BLOCK,
       signal: signal(),
     });
     expect(readSpan).toHaveBeenCalledTimes(1);
 
-    // 17 already-settled blocks of another file fill the cache past its 64
-    // MiB budget on their own, evicting the oldest of themselves (block 0).
-    for (let index = 0; index < 17; index += 1) {
+    // One block more than the budget, all already settled, of another file
+    // fill the cache past its budget on their own, evicting the oldest of
+    // themselves (block 0).
+    const settledBlocks = CACHE_BUDGET_BLOCKS + 1;
+    for (let index = 0; index < settledBlocks; index += 1) {
       await server.serve({
         path: "other.bin",
-        offset: index * FOUR_MIB,
-        length: FOUR_MIB,
+        offset: index * BLOCK,
+        length: BLOCK,
         signal: signal(),
       });
     }
-    expect(readSpan).toHaveBeenCalledTimes(18); // 1 pending + 17 settled
+    expect(readSpan).toHaveBeenCalledTimes(1 + settledBlocks);
 
     // Now let the pending block resolve: inserting it evicts the next
     // oldest survivor rather than corrupting the running byte total.
     gate.resolve({
-      bytes: new Uint8Array(FOUR_MIB),
+      bytes: new Uint8Array(BLOCK),
       totalBytes: pendingByteLength,
       mediaType: "application/octet-stream",
     });
     const pendingResult = await pending;
     expect(pendingResult.kind).toBe("bytes");
-    expect(readSpan).toHaveBeenCalledTimes(18); // the pending port call itself was already counted
+    // The pending port call itself was already counted.
+    expect(readSpan).toHaveBeenCalledTimes(1 + settledBlocks);
 
     // The oldest surviving block (other.bin's block 1) was evicted to make
     // room for the pending block; re-requesting it reads again.
     await server.serve({
       path: "other.bin",
-      offset: FOUR_MIB,
-      length: FOUR_MIB,
+      offset: BLOCK,
+      length: BLOCK,
       signal: signal(),
     });
-    expect(readSpan).toHaveBeenCalledTimes(19);
+    expect(readSpan).toHaveBeenCalledTimes(2 + settledBlocks);
 
     // The most recently inserted "other" block, and the pending block
     // itself, are both still cached.
-    const callsBeforeFinalChecks = 19;
+    const callsBeforeFinalChecks = 2 + settledBlocks;
     await server.serve({
       path: "other.bin",
-      offset: 16 * FOUR_MIB,
-      length: FOUR_MIB,
+      offset: CACHE_BUDGET_BLOCKS * BLOCK,
+      length: BLOCK,
       signal: signal(),
     });
     await server.serve({
       path: "pending.bin",
       offset: 0,
-      length: FOUR_MIB,
+      length: BLOCK,
       signal: signal(),
     });
     expect(readSpan).toHaveBeenCalledTimes(callsBeforeFinalChecks);
