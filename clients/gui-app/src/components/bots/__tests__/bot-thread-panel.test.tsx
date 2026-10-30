@@ -405,11 +405,14 @@ function stageSessions(messages: ReadonlyArray<Message>): void {
   } as ChatSessionStoreHandle;
 }
 
+/** The case's query cache: one per case, so a re-render keeps its queries. */
+let panelQueryClient: QueryClient;
+
 /** The panel on `thread`, over the sessions the last mount made. */
 function panelTree(thread: BotThreadPanelThread): ReactNode {
   return (
     <StrictMode>
-      <QueryClientProvider client={new QueryClient()}>
+      <QueryClientProvider client={panelQueryClient}>
         <TooltipProvider>
           <ChatExpansionTestProviders tileInstanceId="tile-1">
             <BotThreadPanel
@@ -449,6 +452,7 @@ function listed(anchorSenderUserId: string | null): BotThreadPanelThread {
 }
 
 beforeEach(() => {
+  panelQueryClient = new QueryClient();
   sent = [];
   panelSent = null;
   panelTasks = [];

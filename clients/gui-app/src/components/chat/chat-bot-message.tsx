@@ -273,6 +273,7 @@ function failedActionsOf(
       onSignIn: null,
       onUpdate: null,
       updating: false,
+      updateFailure: null,
       onRetry: null,
       retrying: false,
       onEdit: edit === null ? null : () => edit(message.content),
@@ -284,6 +285,7 @@ function failedActionsOf(
     onSignIn: parked ? null : failed.signIn,
     onUpdate: parked ? null : failed.update,
     updating: failed.updating,
+    updateFailure: parked ? null : failed.updateFailure,
     onRetry: retry === null ? null : () => retry(message.content),
     retrying: failed.retrying,
     onEdit: parked || edit === null ? null : () => edit(message.content),
@@ -699,6 +701,7 @@ type FailedMessageActions = {
   readonly onSignIn: (() => void) | null;
   readonly onUpdate: (() => void) | null;
   readonly updating: boolean;
+  readonly updateFailure: string | null;
   readonly onRetry: (() => void) | null;
   readonly retrying: boolean;
   readonly onEdit: (() => void) | null;
@@ -792,11 +795,21 @@ function UnansweredLine(props: {
       ))}
     </p>
   );
-  if (recovery === null) return line;
+  const updateFailure =
+    failed.updateFailure === null ? null : (
+      <p
+        data-testid="bot-message-update-failure"
+        className="text-ui-xs break-words whitespace-pre-wrap text-destructive"
+      >
+        {failed.updateFailure}
+      </p>
+    );
+  if (recovery === null && updateFailure === null) return line;
   return (
     <div data-testid="bot-message-recovery" className="flex flex-col">
       {line}
-      {recovery.actions}
+      {updateFailure}
+      {recovery?.actions}
     </div>
   );
 }

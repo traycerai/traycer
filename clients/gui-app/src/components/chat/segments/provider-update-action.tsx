@@ -11,7 +11,8 @@ import { useProviderUpdateForClient } from "@/hooks/providers/use-provider-updat
  * command-line tool is out of date, on the host that ran the turn. The host
  * gives the row this code only where it can update the provider; any other
  * code, a row with no harness, or a host with no update method gets nothing.
- * Retry stays the row's own.
+ * The update stays pending until the host's install settles, and a refusal or
+ * a failed install is said under the button. Retry stays the row's own.
  *
  * Split in two for the reason `FallbackManualRungActions` is: the error row
  * renders without a transcript in some surfaces, and the host hooks below
@@ -45,10 +46,13 @@ function ProviderUpdateButton({
   readonly hostId: string;
 }) {
   const client = useHostClientForHostId(hostId);
-  const { update, pending } = useProviderUpdateForClient(client, hostId);
+  const { update, pending, failure } = useProviderUpdateForClient(
+    client,
+    hostId,
+  );
   if (update === null) return null;
   return (
-    <div className="mt-1 flex">
+    <div className="mt-1 flex flex-col items-start gap-1">
       <Button
         size="sm"
         variant="secondary"
@@ -64,6 +68,14 @@ function ProviderUpdateButton({
           />
         ) : null}
       </Button>
+      {failure === null ? null : (
+        <span
+          data-testid="provider-update-failure"
+          className="whitespace-pre-wrap break-words text-destructive"
+        >
+          {failure}
+        </span>
+      )}
     </div>
   );
 }

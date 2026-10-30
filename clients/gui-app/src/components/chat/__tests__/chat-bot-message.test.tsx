@@ -514,6 +514,7 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
       signIn: null,
       update: null,
       updating: false,
+      updateFailure: null,
       retry,
       retrying,
       edit,
@@ -566,6 +567,7 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
         signIn,
         update: null,
         updating: false,
+        updateFailure: null,
         retry: vi.fn(),
         retrying: false,
         edit: null,
@@ -583,6 +585,7 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
   function outdated(
     update: () => void,
     updating: boolean,
+    updateFailure: string | null,
   ): ChatBotPresentation {
     return failingWith({
       state: "failed",
@@ -590,6 +593,7 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
       signIn: null,
       update,
       updating,
+      updateFailure,
       retry: vi.fn(),
       retrying: false,
       edit: null,
@@ -599,7 +603,7 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
   it("adds Update to the line when an out-of-date command-line tool is the fix", async () => {
     const user = userEvent.setup();
     const update = vi.fn<() => void>();
-    renderRow(memberPost(OPEN_REQUEST), outdated(update, false));
+    renderRow(memberPost(OPEN_REQUEST), outdated(update, false, null));
 
     const line = screen.getByTestId("bot-message-unanswered");
     expect(line.textContent).toBe(
@@ -610,13 +614,29 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
   });
 
   it("holds the line's Update while the update runs", () => {
-    renderRow(memberPost(OPEN_REQUEST), outdated(vi.fn(), true));
+    renderRow(memberPost(OPEN_REQUEST), outdated(vi.fn(), true, null));
 
     expect(
       within(screen.getByTestId("bot-message-unanswered"))
         .getByRole("button", { name: "Update" })
         .hasAttribute("disabled"),
     ).toBe(true);
+  });
+
+  it("says under the line why the update did not take, and keeps Update to try again", () => {
+    renderRow(
+      memberPost(OPEN_REQUEST),
+      outdated(vi.fn(), false, "Grok is disabled on this host."),
+    );
+
+    expect(screen.getByTestId("bot-message-update-failure").textContent).toBe(
+      "Grok is disabled on this host.",
+    );
+    expect(
+      within(screen.getByTestId("bot-message-unanswered"))
+        .getByRole("button", { name: "Update" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
   });
 
   it("says why with no Retry or Edit, on the line or on hover, where the message cannot be sent again", () => {
@@ -628,6 +648,7 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
         signIn: vi.fn(),
         update: null,
         updating: false,
+        updateFailure: null,
         retry: null,
         retrying: false,
         edit: null,
@@ -654,6 +675,7 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
         signIn: vi.fn(),
         update: null,
         updating: false,
+        updateFailure: null,
         retry: vi.fn(),
         retrying: false,
         edit: vi.fn(),
@@ -682,6 +704,7 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
         signIn: null,
         update: null,
         updating: false,
+        updateFailure: null,
         retry: vi.fn(),
         retrying: true,
         edit: null,

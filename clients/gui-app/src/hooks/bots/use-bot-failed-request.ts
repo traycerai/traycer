@@ -86,10 +86,11 @@ export function useBotFailedRequest(args: {
         : resolveNamedHostClient(binding, boundHostId),
     [binding, boundHostId],
   );
-  const { update, pending: updating } = useProviderUpdateForClient(
-    boundClient,
-    boundHostId,
-  );
+  const {
+    update,
+    pending: updating,
+    failure: updateFailure,
+  } = useProviderUpdateForClient(boundClient, boundHostId);
   const { mutate, isPending, variables } =
     useBotConversationSendMutation(client);
   const retryingId = isPending
@@ -121,6 +122,8 @@ export function useBotFailedRequest(args: {
         signIn: reasonAction(reason, "sign-in", signIn),
         update: reasonAction(reason, "update-provider", update),
         updating,
+        updateFailure:
+          reason?.action === "update-provider" ? updateFailure : null,
         retry:
           channelId === null
             ? null
@@ -162,6 +165,7 @@ export function useBotFailedRequest(args: {
       supported,
       threadId,
       update,
+      updateFailure,
       updating,
       viewerUserId,
     ],

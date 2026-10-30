@@ -37,8 +37,10 @@ export interface ChatBotFailedRequest {
    * unless an out-of-date tool is the fix and that host can update it.
    */
   readonly update: (() => void) | null;
-  /** `true` while that update runs. */
+  /** `true` from the press until the host's install of the update settles. */
   readonly updating: boolean;
+  /** Why the last update did not take; `null` otherwise. */
+  readonly updateFailure: string | null;
   /**
    * Sends it again; `text` is the message's own. `null` where it cannot be
    * sent again: a host that cannot re-deliver, or a message whose text is not

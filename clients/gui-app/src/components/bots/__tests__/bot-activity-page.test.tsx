@@ -89,7 +89,11 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
 }));
 // A stopped post's Update has its own suite (`bot-channel-failed-answer`).
 vi.mock("@/hooks/providers/use-provider-update", () => ({
-  useProviderUpdateForClient: () => ({ update: null, pending: false }),
+  useProviderUpdateForClient: () => ({
+    update: null,
+    pending: false,
+    failure: null,
+  }),
 }));
 // The member actions' writes: each records the method and what it was sent,
 // and stays pending with those variables while the case's `pending` holds it.
