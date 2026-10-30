@@ -174,6 +174,15 @@ function listReads(): number {
 }
 
 function renderRow(code: string, message: string): QueryClient {
+  return renderRows(code, message, ["turn-1"]);
+}
+
+/** One error row per turn, each with its own Update, in one transcript. */
+function renderRows(
+  code: string,
+  message: string,
+  turnIds: ReadonlyArray<string>,
+): QueryClient {
   const queryClient = createAppQueryClient();
   mocks.client = hostClientPlaying(queryClient);
   render(
@@ -181,17 +190,20 @@ function renderRow(code: string, message: string): QueryClient {
       <TooltipProvider>
         <TabHostProvider hostId={HOST_ID}>
           <ChatTranscriptProvider value={{ chatId: "chat-1", hostId: HOST_ID }}>
-            <ErrorSegment
-              turnId="turn-1"
-              message={message}
-              code={code}
-              recoverable
-              findUnitId={null}
-              harnessId="grok"
-              failure={null}
-              settledNotice={null}
-              settledNoticeFindUnitId={null}
-            />
+            {turnIds.map((turnId) => (
+              <ErrorSegment
+                key={turnId}
+                turnId={turnId}
+                message={message}
+                code={code}
+                recoverable
+                findUnitId={null}
+                harnessId="grok"
+                failure={null}
+                settledNotice={null}
+                settledNoticeFindUnitId={null}
+              />
+            ))}
           </ChatTranscriptProvider>
         </TabHostProvider>
       </TooltipProvider>
@@ -331,6 +343,43 @@ describe("<ErrorSegment /> a provider whose command-line tool is out of date", (
       ).toBe("downloading"),
     );
     expect(updateButton().disabled).toBe(true);
+  });
+
+  it("keeps two Update rows on the host pending until the host answers a list read after both took effect, though each press cancels the other's read", async () => {
+    const user = userEvent.setup();
+    host.ensure = "finishes-at-once";
+    const release = holdList();
+    const queryClient = renderRows("provider_outdated", OUTDATED, [
+      "turn-1",
+      "turn-2",
+    ]);
+    // The cached list says the old copy is installed, which reads as settled.
+    queryClient.setQueryData(LIST_KEY, {
+      providers: [grokRow()],
+      native: null,
+    });
+    const [first, second] = screen.getAllByRole<HTMLButtonElement>("button", {
+      name: "Update",
+    });
+
+    await user.click(first);
+    await user.click(second);
+
+    await waitFor(() =>
+      expect(
+        host.asked.filter((asked) => asked === "update grok"),
+      ).toHaveLength(2),
+    );
+    await waitFor(() => expect(queryClient.isMutating()).toBe(0));
+    expect(listReads()).toBe(1);
+    expect(first.disabled).toBe(true);
+    expect(second.disabled).toBe(true);
+
+    release();
+
+    await waitFor(() => expect(first.disabled).toBe(false));
+    expect(second.disabled).toBe(false);
+    expect(screen.queryByTestId("provider-update-failure")).toBeNull();
   });
 
   it("stays pending across list reads while the host downloads, and is ready again once its slot reads installed", async () => {
