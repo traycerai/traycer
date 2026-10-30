@@ -159,7 +159,11 @@ import {
   type RelayResumeClaim,
   type RelaySocketHandlers,
 } from "./relay-socket";
-import type { AttachGrant, AttachGrantProvider } from "./grant";
+import type {
+  AttachGrant,
+  AttachGrantProvider,
+  AttachGrantProvision,
+} from "./grant";
 import { LogicalStream, type LogicalStreamPort } from "./logical-stream";
 import {
   RemoteTrafficAccounting,
@@ -1003,6 +1007,8 @@ interface ActiveConnection {
   relinking: boolean;
   /** Claim dials made so far. Keeps each dial's evidence id its own. */
   relinkDials: number;
+  /** The claim dial that owns the relink, or `null` between dials. */
+  activeClaimDial: number | null;
   /** Readiness is being held through a detach; see `RESUME_MASK_MS`. */
   masked: boolean;
   /** When the mask ends; read when a cancelled exchange falls back to it. */
@@ -2605,20 +2611,19 @@ export class RemoteSession<
     // from the recovery edge or from any path that armed a backoff straight
     // through a park. Idempotent.
     this.clearClockPark();
-    const relink = this.connection?.relinking === true ? this.connection : null;
-    const generation =
-      relink === null ? ++this.connectGeneration : relink.generation;
-    const claimDial = relink === null ? 0 : relink.relinkDials + 1;
+    const dial = this.dial;
+    const relinking = this.connection;
+    if (relinking?.relinking === true && dial.kind === "relay") {
+      this.beginClaimDial(relinking, dial.grantProvider, dial.attachBaseUrl);
+      return;
+    }
+    const generation = ++this.connectGeneration;
     // Any intent recorded against an earlier generation is stale by
     // construction: that dial ended (its failure spent the intent, or a path
     // that never consults it retired the attempt), and this fresh dial must
     // not inherit a demand nobody made of it.
     this.pendingForceGeneration = null;
-    if (relink === null) {
-      this.phase = "connecting";
-    } else {
-      relink.relinkDials = claimDial;
-    }
+    this.phase = "connecting";
     this.clearPhaseTimer();
     this.reattachMarks = {
       ...emptyReattachMarks(),
@@ -2626,7 +2631,6 @@ export class RemoteSession<
       startedAt: Date.now(),
     };
 
-    const dial = this.dial;
     if (dial.kind === "pool") {
       this.attachDirect(generation, dial.poolUrl);
       return;
@@ -2635,61 +2639,11 @@ export class RemoteSession<
     if (generation !== this.connectGeneration || this.isClosed()) {
       return;
     }
-    if (provision.kind === "refused") {
-      // Authn's verdict, not a transient: a retry would be refused the same
-      // way, so the loop ends here on the typed fatal. Still INDETERMINATE
-      // evidence - the host was never dialed, so this says nothing about
-      // whether it is alive (see the `unavailable` arm below).
-      this.reportEvidenceOutcome(
-        this.dialAttemptId(generation),
-        "indeterminate",
-      );
-      this.goTerminalFatal(provision.fatal);
-      return;
-    }
-    if (provision.kind === "unavailable") {
-      // No grant (signed out / revoked / transient CS failure): stay in backoff.
-      // This attach attempt is over before it dialed, so parked `sendUnary`
-      // callers settle here rather than riding an unbounded number of further
-      // mint attempts inside one call.
-      this.settleReadyWaiters(false);
-      // INDETERMINATE, never a refusal. Every arm folded into `unavailable` -
-      // signed out, a rejected bearer, a revoked host, an authn 5xx, a
-      // malformed body - is a CREDENTIAL/AUTHN-plane failure: the host was
-      // never dialed, so nothing here is evidence about whether it is alive.
-      // Counting it would let one authn outage reach the confirmed-death
-      // streak on every remote host simultaneously and fail the whole fleet
-      // over to local, which is the false-Offline class invariant 5 exists to
-      // prevent. A host that really is down still produces its refusal at the
-      // `handleConnectionLost` funnel, which observes the host's own plane.
-      this.reportEvidenceOutcome(
-        this.dialAttemptId(generation),
-        "indeterminate",
-      );
-      const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
-      this.dialFailures.recordFailure({
-        cause: `could not mint an attach grant: ${provision.detail}`,
-        // The per-attempt text goes in the CONTEXT, never the cause: a server
-        // body routinely carries a request id or timestamp, and a socket-level
-        // throw carries the address THIS attempt resolved, so a cause built
-        // from either would differ on every attempt and defeat this log's
-        // throttle entirely. It arrives already attributed to its source — see
-        // `AttachGrantFailure` — so it is passed through, not re-worded.
-        context: provision.context,
-        retryInMs,
-      });
+    if (provision.kind !== "ok") {
+      this.onGrantNotIssued(generation, provision);
       return;
     }
     const grant = provision.grant;
-
-    if (relink !== null) {
-      // Generations cannot say this: a claim dial keeps the session's, and one
-      // that failed under this mint has already armed its successor.
-      if (this.connection === relink && relink.relinkDials === claimDial) {
-        this.dialClaim(generation, relink, dial.attachBaseUrl, grant);
-      }
-      return;
-    }
 
     const noise = await NoiseChannel.begin(dial.hostStaticPublicKey);
     if (generation !== this.connectGeneration || this.isClosed()) {
@@ -2707,11 +2661,106 @@ export class RemoteSession<
     this.installConnection(generation, grant, relaySocket, noise);
   }
 
+  /** A mint that produced no grant: authn refused, or none is available now. */
+  private onGrantNotIssued(
+    generation: number,
+    provision: Exclude<AttachGrantProvision, { readonly kind: "ok" }>,
+  ): void {
+    if (provision.kind === "refused") {
+      // Authn's verdict, not a transient: a retry would be refused the same
+      // way, so the loop ends here on the typed fatal. Still INDETERMINATE
+      // evidence - the host was never dialed, so this says nothing about
+      // whether it is alive (see the `unavailable` arm below).
+      this.reportEvidenceOutcome(
+        this.dialAttemptId(generation),
+        "indeterminate",
+      );
+      this.goTerminalFatal(provision.fatal);
+      return;
+    }
+    // No grant (signed out / revoked / transient CS failure): stay in backoff.
+    // This attach attempt is over before it dialed, so parked `sendUnary`
+    // callers settle here rather than riding an unbounded number of further
+    // mint attempts inside one call.
+    this.settleReadyWaiters(false);
+    // INDETERMINATE, never a refusal. Every arm folded into `unavailable` -
+    // signed out, a rejected bearer, a revoked host, an authn 5xx, a
+    // malformed body - is a CREDENTIAL/AUTHN-plane failure: the host was
+    // never dialed, so nothing here is evidence about whether it is alive.
+    // Counting it would let one authn outage reach the confirmed-death
+    // streak on every remote host simultaneously and fail the whole fleet
+    // over to local, which is the false-Offline class invariant 5 exists to
+    // prevent. A host that really is down still produces its refusal at the
+    // `handleConnectionLost` funnel, which observes the host's own plane.
+    this.reportEvidenceOutcome(this.dialAttemptId(generation), "indeterminate");
+    const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
+    this.dialFailures.recordFailure({
+      cause: `could not mint an attach grant: ${provision.detail}`,
+      // The per-attempt text goes in the CONTEXT, never the cause: a server
+      // body routinely carries a request id or timestamp, and a socket-level
+      // throw carries the address THIS attempt resolved, so a cause built
+      // from either would differ on every attempt and defeat this log's
+      // throttle entirely. It arrives already attributed to its source — see
+      // `AttachGrantFailure` — so it is passed through, not re-worded.
+      context: provision.context,
+      retryInMs,
+    });
+  }
+
   /**
-   * The relink's dial: a fresh grant and a new leg under the same session, with
+   * One relink dial: a fresh grant and a new leg under the same session, with
    * no Noise begin. The phase stays `ready`, so the ack lands in
    * {@link onRelinkAck} rather than starting a handshake.
+   *
+   * The generation cannot identify a claim, because every claim of a session
+   * shares it. `activeClaimDial` does, and a mint whose dial has been retired
+   * does nothing, however it completes: its failure was already handled and a
+   * successor may have recovered the session.
    */
+  private beginClaimDial(
+    connection: ActiveConnection,
+    grantProvider: AttachGrantProvider,
+    attachBaseUrl: string,
+  ): void {
+    const { generation } = connection;
+    connection.relinkDials += 1;
+    const claimDial = connection.relinkDials;
+    connection.activeClaimDial = claimDial;
+    const ownsSession = (): boolean =>
+      this.connection === connection &&
+      connection.activeClaimDial === claimDial;
+    this.pendingForceGeneration = null;
+    this.clearPhaseTimer();
+    this.reattachMarks = {
+      ...emptyReattachMarks(),
+      lostAt: this.connectionLostAt,
+      startedAt: Date.now(),
+    };
+    void (async () => {
+      const provision = await grantProvider();
+      if (!ownsSession()) {
+        return;
+      }
+      if (provision.kind === "ok") {
+        this.dialClaim(generation, connection, attachBaseUrl, provision.grant);
+        return;
+      }
+      connection.activeClaimDial = null;
+      this.onGrantNotIssued(generation, provision);
+    })().catch((cause: unknown) => {
+      if (ownsSession()) {
+        this.onClaimDialFailed(
+          generation,
+          connection,
+          `the claim dial threw: ${
+            cause instanceof Error ? cause.message : String(cause)
+          }`,
+          "not-host-evidence",
+        );
+      }
+    });
+  }
+
   private dialClaim(
     generation: number,
     connection: ActiveConnection,
@@ -2824,12 +2873,17 @@ export class RemoteSession<
   ): void {
     const scheduler = new PriorityScheduler({
       write: (frame) => this.writeFrame(generation, frame),
-      onWriteError: () =>
-        this.handleConnectionLost(
-          generation,
-          "write-failed",
-          "host-transport-plane",
-        ),
+      onWriteError: () => {
+        // A write that failed after its leg went says nothing about the claim
+        // under way; the frame is in the ledger.
+        if (this.connection?.relinking !== true) {
+          this.handleConnectionLost(
+            generation,
+            "write-failed",
+            "host-transport-plane",
+          );
+        }
+      },
       initialBulkCredits: INITIAL_BULK_SEND_CREDITS,
       now: undefined,
     });
@@ -2857,6 +2911,7 @@ export class RemoteSession<
       relayClaim: null,
       relinking: false,
       relinkDials: 0,
+      activeClaimDial: null,
       masked: false,
       maskDeadlineAt: 0,
       detachedAt: null,
@@ -4875,13 +4930,15 @@ export class RemoteSession<
       connection.scheduler.writeSettled(),
     ])
       .then(() => this.sendResume(generation, connection, exchange))
-      .catch(() =>
-        this.handleConnectionLost(
-          generation,
-          "resume-send-failed",
-          "host-transport-plane",
-        ),
-      );
+      .catch(() => {
+        if (connection.resumeExchange === exchange) {
+          this.handleConnectionLost(
+            generation,
+            "resume-send-failed",
+            "host-transport-plane",
+          );
+        }
+      });
   }
 
   private async sendResume(
@@ -5347,6 +5404,7 @@ export class RemoteSession<
     cause: string,
     provenance: ConnectionLossProvenance,
   ): void {
+    connection.activeClaimDial = null;
     this.clearPhaseTimer();
     this.leaveLeg(connection);
     this.redialAfterLoss(
@@ -5371,6 +5429,7 @@ export class RemoteSession<
   ): void {
     this.clearPhaseTimer();
     connection.relinking = false;
+    connection.activeClaimDial = null;
     if (sid !== connection.relayClaim?.sid) {
       this.adoptFreshLeg(generation, connection, sid, resumeKey);
       return;
@@ -5428,9 +5487,11 @@ export class RemoteSession<
         }
       },
     );
-    void attempt.catch((cause: unknown) =>
-      this.onConnectPathThrew(nextGeneration, cause),
-    );
+    void attempt.catch((cause: unknown) => {
+      if (this.adoptingLeg === adopted) {
+        this.onConnectPathThrew(nextGeneration, cause);
+      }
+    });
     // Last: the authority's answer can close this session.
     this.reportEvidenceOutcome(lostAttempt, "indeterminate");
   }
@@ -6362,8 +6423,10 @@ export class RemoteSession<
       return;
     }
     const provision = await dial.grantProvider();
+    // A relink restarts this loop at its ack.
     if (
       this.connection !== connection ||
+      connection.relinking ||
       !(this.phase === "ready" || this.isParkedBeforeReady())
     ) {
       return;
