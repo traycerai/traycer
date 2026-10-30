@@ -3664,9 +3664,19 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
             list,
             index,
           ).rowPosition;
+          // `positionAtIndex` is typed `number` and does not always answer one
+          // - `expectedTimelineScrollTop` guards the same call the same way. An
+          // unknown reading says nothing about whether the target moved, and
+          // subtracting it yields `NaN`, which fails the comparison below and
+          // would be read as having HELD STILL: the restore would then accept
+          // an unmeasured row, the very landing this check exists to defer.
+          // Nor is it stored, or it would poison the next comparison too.
+          if (livePosition === null || !Number.isFinite(livePosition)) {
+            return true;
+          }
           const previousPosition = rowPositionAtPreviousSettle;
           rowPositionAtPreviousSettle = livePosition;
-          if (livePosition === null || previousPosition === null) {
+          if (previousPosition === null) {
             // The first settle has nothing to compare against, so it cannot
             // tell a landed restore from one whose target is still moving.
             // Re-issue once and judge the position against this reading.

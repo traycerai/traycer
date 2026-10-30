@@ -4214,6 +4214,116 @@ describe("ChatMessages scroll policy", () => {
       view.unmount();
     });
 
+    it("doesn't accept a mount-time restore while the saved row's position reads as unmeasured", async () => {
+      const messages = makeCompletedTranscript(30);
+      const targetIndex = 20;
+      const targetId = messages[targetIndex].id;
+      const viewOffset = -12;
+      const instanceId = `t5-unmeasured-settling-restore-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(instanceId);
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: targetId,
+        anchorIndex: targetIndex,
+        offset: viewOffset,
+      });
+
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages,
+        scrollStateKey: instanceId,
+        instanceId,
+      });
+      const list = legendListRefHolder.current;
+      expect(list).not.toBeNull();
+      if (list === null) throw new Error("LegendList ref did not mount");
+
+      const expectedScrollTop = LEGEND_LIST_HEADER_PX + targetIndex * 90 + 12;
+      const scrollNode = getScrollNode();
+      expect(scrollNode.scrollTop).toBe(expectedScrollTop);
+
+      // Knock the already-correct landing to a position that agrees with a
+      // WRONG finite reading the second phase below reports for the saved
+      // row - not its real one - so the existing landing check alone would
+      // accept it if reached with nothing else wrong.
+      const wrongScrollTop = 0;
+      scrollNode.scrollTop = wrongScrollTop;
+      const wrongRowTop = wrongScrollTop - LEGEND_LIST_HEADER_PX + viewOffset;
+
+      const originalScrollToIndex = list.scrollToIndex.bind(list);
+      // `positionAtIndex` is typed `number` but - per `expectedTimelineScrollTop`'s
+      // own guard at the top of this file, and CodeRabbit's finding on this
+      // exact predicate - does not always answer one: an unmeasured row can
+      // report `undefined`. "unmeasured" models that row; "wrong" is a
+      // distinct, otherwise-plausible finite reading the row moves to next
+      // (not its real one); "settled" is the real, final position.
+      let measurementPhase: "unmeasured" | "wrong" | "settled" = "unmeasured";
+      const scrollToIndexSpy = vi
+        .spyOn(list, "scrollToIndex")
+        .mockImplementation((options) => {
+          if (measurementPhase === "unmeasured") {
+            // The row has not rendered to be measured yet. The write still
+            // lands - a command can resolve before its target is
+            // measurable - but nowhere near the real target, so an accept
+            // here could never be mistaken for a lucky coincidence.
+            measurementPhase = "wrong";
+            scrollNode.scrollTop = wrongScrollTop;
+            return Promise.resolve();
+          }
+          const result = originalScrollToIndex(options);
+          measurementPhase = "settled";
+          return result;
+        });
+      const originalGetState = list.getState.bind(list);
+      const getStateSpy = vi.spyOn(list, "getState").mockImplementation(() => {
+        const state = originalGetState();
+        return {
+          ...state,
+          positionAtIndex: (index: number) => {
+            if (index !== targetIndex) return state.positionAtIndex(index);
+            if (measurementPhase === "unmeasured") {
+              // `NaN` rather than `undefined`, which the real implementation
+              // can also answer despite this signature's declared `number`
+              // (`expectedTimelineScrollTop` guards the same call for exactly
+              // that). Both reach the predicate's one non-finite branch, and
+              // `NaN` IS a number, so modelling the unmeasured row with it
+              // needs no cast and no suppressed error - the signature stays
+              // honest about what this mock returns.
+              return Number.NaN;
+            }
+            if (measurementPhase === "wrong") return wrongRowTop;
+            return state.positionAtIndex(index);
+          },
+        };
+      });
+
+      try {
+        for (let round = 0; round < 6; round += 1) {
+          await settleLegendList();
+        }
+
+        // On a guard that only checks `=== null` (this predicate's state
+        // before the fix), the "unmeasured" phase's `undefined` reading is
+        // stored as the previous position, and the NEXT settle's
+        // `Math.abs(wrongRowTop - undefined)` is `NaN` - `NaN > 64` is
+        // `false` - so the row reads as held still one placement early, the
+        // one-shot landing check agrees with the write that landed there,
+        // and the restore accepts at `wrongScrollTop` (0) instead of
+        // deferring until a real position arrives. The fix requires the
+        // reading itself to be finite before it may anchor a comparison at
+        // all, so it keeps re-issuing through the unmeasured and wrong
+        // phases above and only then lands at the row's real, settled
+        // position.
+        expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      } finally {
+        scrollToIndexSpy.mockRestore();
+        getStateSpy.mockRestore();
+      }
+      view.unmount();
+    });
+
     it("keeps a mount-time free restore running through a wheel the top edge cannot answer", async () => {
       const messages = makeCompletedTranscript(20);
       const targetIndex = 8;
