@@ -1,12 +1,3 @@
-diff --git a/node_modules/@legendapp/list/.bun-tag-384649413c3d0487 b/.bun-tag-384649413c3d0487
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/node_modules/@legendapp/list/.bun-tag-4b52ac0e691df484 b/.bun-tag-4b52ac0e691df484
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/node_modules/@legendapp/list/.bun-tag-4c2b088007216e56 b/.bun-tag-4c2b088007216e56
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/react-native.web.d.ts b/react-native.web.d.ts
 index b6c7481603f4119495551b3e4c1c071984c144af..cb3af95517da36eab8a357c047fc157c21b24007 100644
 --- a/react-native.web.d.ts
