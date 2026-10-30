@@ -3308,6 +3308,44 @@ describe("useChatTimelineFollowLatch", () => {
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
     });
 
+    // At fractional offsets (125% display scaling here), the list's write
+    // that keeps the view on the end must carry a departure on the end to
+    // exactly where it lands: its own report there is not their arrival.
+    it("a held reader on the end that an announced write carries at fractional offsets stays held mid-turn", () => {
+      const turnRunning = { current: true };
+      const from = 2725.6;
+      const to = 2799.2;
+      const node = shim.makeNode({
+        scrollTop: from + 40,
+        scrollHeight: from + 540,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+          isTurnRunning: () => turnRunning.current,
+        }),
+      );
+      fireNativeScroll(node);
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+      shim.setGeometry(node, { scrollTop: from });
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollHeight: from + 500 });
+      result.current.followEndIfPermitted();
+      expect(onFollowIntentChange.mock.calls).toEqual([[false]]);
+
+      shim.setGeometry(node, { scrollHeight: to + 500 });
+      moveChatTimelineScroller(node, to, () => {
+        shim.setGeometry(node, { scrollTop: to });
+      });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange.mock.calls).toEqual([[false]]);
+    });
+
     // A slow approach's last step into the end can be under a pixel: still
     // past where their departure stood, so still theirs.
     it("a held reader's slow scroll reaching the end mid-turn in sub-pixel steps follows", () => {
@@ -3415,9 +3453,11 @@ describe("useChatTimelineFollowLatch", () => {
       };
     }
 
-    // The nested scroller at its top owned the wheel and never moved the
-    // transcript: its `scrollend` ends the wait for a report, so the turn's
-    // rest follows them, and the tail's next growth with them.
+    // The nested scroller at its top owned the gesture and never moved the
+    // transcript, though its wheels went on past the growth (a trackpad's
+    // momentum): its `scrollend` ends the wait for a report and the arm its
+    // later wheels left, so the turn's rest follows them, and the tail's next
+    // growth with them.
     it("the turn's rest follows them at the strict bottom once the nested scroller's scroll has ended", () => {
       const {
         node,
@@ -3434,6 +3474,9 @@ describe("useChatTimelineFollowLatch", () => {
       shim.setGeometry(node, { scrollHeight: 1600 });
       result.current.followEndIfPermitted();
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      nested.dispatchEvent(
+        new WheelEvent("wheel", { deltaY: -120, bubbles: true }),
+      );
 
       shim.setGeometry(node, { scrollHeight: 1500 });
       result.current.followEndIfPermitted();
@@ -3459,6 +3502,9 @@ describe("useChatTimelineFollowLatch", () => {
       );
       shim.setGeometry(node, { scrollHeight: 1600 });
       result.current.followEndIfPermitted();
+      nested.dispatchEvent(
+        new WheelEvent("wheel", { deltaY: -120, bubbles: true }),
+      );
       nested.dispatchEvent(new Event("scrollend"));
       shim.setGeometry(node, { scrollHeight: 1500 });
       result.current.followEndIfPermitted();

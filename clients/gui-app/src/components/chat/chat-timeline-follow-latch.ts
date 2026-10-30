@@ -1394,7 +1394,9 @@ export function useChatTimelineFollowLatch(
     }
     const departure = readerDepartureScrollTopRef.current;
     if (departure !== null) {
-      readerDepartureScrollTopRef.current = departure + move.to - move.from;
+      // Exactly `to` for a departure at `from`: a reader held on the end
+      // stays at no greater offset than the write's own report.
+      readerDepartureScrollTopRef.current = move.to - (move.from - departure);
     }
     const armedDeparture = armedReaderDepartureRef.current;
     if (
@@ -1932,32 +1934,25 @@ export function useChatTimelineFollowLatch(
     const handleScrollEnd = (event: Event): void => {
       // A wheel whose departure the tail published ahead of its report, and
       // whose nested scroller owned its whole sequence: no report of the
-      // transcript's will come, so the wait for one is over.
+      // transcript's will come, so the wait for one is over. The same
+      // gesture's later wheels may have armed again since; that arm's wait
+      // is over too.
       const awaiting = departureAwaitsReportRef.current;
-      if (
+      const endsWait =
         awaiting !== null &&
-        nestedScrollEndHoldsWheel(event.target, node, awaiting.wheelTarget)
-      ) {
-        departureAwaitsReportRef.current = null;
-        followEndIfPermitted();
-        return;
-      }
-      if (
-        !gestureScrollEndUnblocks(
-          armedReaderDepartureRef.current,
-          event.target,
-          node,
-        )
-      ) {
-        return;
-      }
+        nestedScrollEndHoldsWheel(event.target, node, awaiting.wheelTarget);
+      if (endsWait) departureAwaitsReportRef.current = null;
       const arm = armedReaderDepartureRef.current;
-      if (arm?.source !== "gesture") return;
-      armedReaderDepartureRef.current = {
-        ...arm,
-        blocksAutomaticCorrection: false,
-      };
-      followEndIfPermitted();
+      const unblocksArm =
+        arm?.source === "gesture" &&
+        gestureScrollEndUnblocks(arm, event.target, node);
+      if (unblocksArm) {
+        armedReaderDepartureRef.current = {
+          ...arm,
+          blocksAutomaticCorrection: false,
+        };
+      }
+      if (endsWait || unblocksArm) followEndIfPermitted();
     };
     // A wheel or swipe over an agent page or MCP App happens in the frame's
     // document, so the listeners above never see it, yet it chains to this
