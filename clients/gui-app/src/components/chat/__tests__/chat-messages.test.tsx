@@ -1704,6 +1704,122 @@ describe("ChatMessages scroll policy", () => {
       });
       expect(getScrollNode().scrollTop).toBe(scrollBefore);
     });
+
+    // A reader who departed, then was held at the strict bottom when the end
+    // came to them with no turn running (an end pad dropping clamps them onto
+    // the new end: the list's doing, not their arrival). A wheel down there
+    // asks the latch for the end; a toward-end key that moves nothing does too.
+    describe("a toward-end key meets a reader the idle end held at the strict bottom", () => {
+      const IDLE_END_PAD_PX = 56;
+
+      async function heldAtStrictBottomWhileIdle(scrollStateKey: string) {
+        installLegendListTestClock();
+        const messages = makeCompletedTranscript(20);
+        const baseHeight = LEGEND_LIST_HEADER_PX + messages.length * 90 + 40;
+        setLegendListScrollContainerScrollHeightOverride(
+          baseHeight + IDLE_END_PAD_PX,
+        );
+        const view = renderChatMessages({
+          messages,
+          scrollStateKey,
+        });
+        await settleLegendList();
+        const scrollNode = getScrollNode();
+        const paddedEnd = maxScrollTopFor(scrollNode);
+        act(() => {
+          scrollNode.scrollTop = paddedEnd;
+          fireEvent.scroll(scrollNode);
+        });
+        await advanceLegendListFrames(2);
+        expect(scrollNode.dataset.scrollMode).toBe("following-end");
+
+        fireEvent.wheel(scrollNode, { deltaY: -40 });
+        act(() => {
+          scrollNode.scrollTop = paddedEnd - 40;
+          fireEvent.scroll(scrollNode);
+        });
+        await advanceLegendListFrames(2);
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+
+        // The pad drops with no turn running, and the browser clamps them
+        // onto the new end: held there, not their own arrival.
+        setLegendListScrollContainerScrollHeightOverride(baseHeight);
+        const end = maxScrollTopFor(scrollNode);
+        act(() => {
+          scrollNode.scrollTop = end;
+          fireEvent.scroll(scrollNode);
+        });
+        await advanceLegendListFrames(2);
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+        await waitForPillVisible();
+        return { view, scrollNode };
+      }
+
+      function dispatchCommandArrowDown(scrollNode: HTMLElement): void {
+        act(() => {
+          scrollNode.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: "ArrowDown",
+              metaKey: true,
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        });
+      }
+
+      it.each([
+        { name: "End", dispatch: () => dispatchKeyInScope("End") },
+        { name: "PageDown", dispatch: () => dispatchKeyInScope("PageDown") },
+        { name: "ArrowDown", dispatch: () => dispatchKeyInScope("ArrowDown") },
+        {
+          name: "Cmd+ArrowDown",
+          dispatch: () => dispatchCommandArrowDown(getScrollNode()),
+        },
+      ])(
+        "$name re-attaches a reader the idle end held at the strict bottom",
+        async ({ name, dispatch }) => {
+          const { view } = await heldAtStrictBottomWhileIdle(
+            `kbd-idle-held-${name}`,
+          );
+
+          act(() => {
+            dispatch();
+          });
+          await advanceLegendListFrames(2);
+
+          expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+          expect(isJumpPillVisible()).toBe(false);
+          view.unmount();
+        },
+      );
+
+      // A toward-end key that moves the view is decided by its scroll report,
+      // as on main: one that lands the reader on the strict bottom leaves
+      // them free until that report comes.
+      it("does not re-attach a free reader on the key alone when a toward-end step lands them at the strict bottom", async () => {
+        const messages = makeCompletedTranscript(20);
+        renderChatMessages({
+          messages,
+          scrollStateKey: "kbd-lands-at-bottom-sync",
+        });
+        await settleLegendList();
+        await enterFreeScrollingAwayFromEnd();
+        await waitForPillVisible();
+        const scrollNode = getScrollNode();
+        const max = maxScrollTopFor(scrollNode);
+        await fireScrollTopAndFlush(max - 10);
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+
+        act(() => {
+          dispatchKeyInScope("PageDown");
+        });
+
+        expect(scrollNode.scrollTop).toBe(max);
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+        expect(isJumpPillVisible()).toBe(true);
+      });
+    });
   });
 
   describe("aria-live turn completion", () => {
