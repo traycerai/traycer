@@ -158,7 +158,10 @@ describe("describeServiceDefinitionRefresh", () => {
         appliesAt: "next-login",
       }),
     );
-    expect(line).toContain("now gives the host its full time to shut down");
+    expect(line).toContain(
+      "is updated to give the host its full time to shut down",
+    );
+    expect(line).not.toContain("now gives");
     expect(line).toContain("applies at the next login");
     expect(line).not.toContain("launcher");
   });

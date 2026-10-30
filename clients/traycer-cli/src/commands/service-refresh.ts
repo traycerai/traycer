@@ -111,7 +111,7 @@ export function describeServiceDefinitionRefresh(
     case "refreshed": {
       const change =
         outcome.result.form === "exit-timeout"
-          ? "now gives the host its full time to shut down"
+          ? "is updated to give the host its full time to shut down"
           : "now runs the current launcher";
       return outcome.result.appliesAt === "next-login"
         ? `${service} ${change}. Nothing was started or stopped. It applies at the next login, not to a respawn before then: launchd keeps the definition it loaded until the job is unloaded at logout`
