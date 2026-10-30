@@ -8829,7 +8829,7 @@ export const chatSubscribeServerFrameSchema = lazySchema(() =>
     chatSubscribeHeldUpdatesChangedServerFrameSchema,
     chatSubscribeThinkingTokensServerFrameSchema,
     messageDeliveryChangedServerFrameSchema,
-    ...chatSubscribeCommonServerFrameSchemasOpenHarnessV141,
+    ...chatSubscribeCommonServerFrameSchemasV141,
     blockDeltaServerFrameSchema(runtimeEventSchema),
   ]),
 );
