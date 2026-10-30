@@ -1079,6 +1079,12 @@ export function useChatTimelineFollowLatch(
   // list announces moves it with the view: that write is not the reader
   // moving either.
   const readerDepartureScrollTopRef = useRef<number | null>(null);
+  // A reader detached with no report of theirs (a mount off the end, a
+  // navigation's landing, a restore) owes a departure, so an end that comes
+  // to them is the list's. On the strict bottom none can be taken: a detached
+  // latch there is stale, and maintenance heals it. A gesture toward the end
+  // forgives it, as it ends a departure.
+  const departureOwedRef = useRef(!initialScrollAtEnd);
   // Whether the departure was published ahead of its gesture's report (the
   // tail moving away from a wheel up no report has followed, or a read
   // seeing a pan before its scroll event), until a report arrives. Only then
@@ -1170,7 +1176,10 @@ export function useChatTimelineFollowLatch(
       // (genuinely departing) report reads as layout-owned and the latch
       // yanks the jump straight back to the tail.
       if (permissionRef.current === isFollowing) return;
-      if (isFollowing) readerDepartureScrollTopRef.current = null;
+      if (isFollowing) {
+        readerDepartureScrollTopRef.current = null;
+        departureOwedRef.current = false;
+      }
       // A touch arm outlives intent transitions: a finger that reaches the
       // strict bottom and keeps dragging is still the reader's, and only the
       // lift says the contact is over.
@@ -1183,6 +1192,46 @@ export function useChatTimelineFollowLatch(
     [cancelActiveCorrection],
   );
 
+  // A departure a reader owes stands at the first view off the strict bottom.
+  const takeOwedDeparture = useCallback(
+    (geometry: ChatTimelineScrollGeometry): void => {
+      if (
+        !departureOwedRef.current ||
+        !isChatTimelineGeometryMeasurable(geometry) ||
+        isChatTimelineAtStrictBottom(geometry)
+      ) {
+        return;
+      }
+      departureOwedRef.current = false;
+      readerDepartureScrollTopRef.current = geometry.scrollTop;
+    },
+    [],
+  );
+
+  // A view seen in passing, which a restore still in progress may yet move.
+  const noteOwedDeparture = useCallback(
+    (geometry: ChatTimelineScrollGeometry): void => {
+      if (isCorrectionSuppressed?.() !== true) takeOwedDeparture(geometry);
+    },
+    [isCorrectionSuppressed, takeOwedDeparture],
+  );
+
+  // A transition that leaves the reader detached where the view stands.
+  const oweDepartureAtView = useCallback((): void => {
+    if (permissionRef.current) return;
+    departureOwedRef.current = true;
+    const node = listRef.current?.getScrollableNode();
+    if (node) takeOwedDeparture(readScrollGeometry(node));
+  }, [listRef, takeOwedDeparture]);
+
+  const setExplicitFollowIntent = useCallback(
+    (isFollowing: boolean): void => {
+      setFollowIntent(isFollowing);
+      oweDepartureAtView();
+    },
+    [oweDepartureAtView, setFollowIntent],
+  );
+
   const noteReaderGesture = useCallback(
     (intent: ChatTimelineReaderGestureIntent): void => {
       readerGestureGenerationRef.current += 1;
@@ -1190,6 +1239,7 @@ export function useChatTimelineFollowLatch(
       expectedScrollTopRef.current = null;
       if (intent.direction === "toward-end") {
         readerDepartureScrollTopRef.current = null;
+        departureOwedRef.current = false;
       }
       const readerGestureGeneration = readerGestureGenerationRef.current;
       ownsFreeNavigationRef.current = false;
@@ -1432,8 +1482,9 @@ export function useChatTimelineFollowLatch(
     (didLandAtEnd: boolean): void => {
       cancelActiveCorrection();
       setFollowIntent(didLandAtEnd);
+      oweDepartureAtView();
     },
-    [cancelActiveCorrection, setFollowIntent],
+    [cancelActiveCorrection, oweDepartureAtView, setFollowIntent],
   );
 
   // A correction suppression (a hydration restore's) lets a strict-bottom
@@ -1506,11 +1557,13 @@ export function useChatTimelineFollowLatch(
         return;
       }
       setFollowIntent(suppressionLetsStrictBottomFollow());
+      oweDepartureAtView();
     },
     [
       cancelActiveCorrection,
       isReattachSuppressed,
       listRef,
+      oweDepartureAtView,
       setFollowIntent,
       suppressionLetsStrictBottomFollow,
     ],
@@ -1540,7 +1593,8 @@ export function useChatTimelineFollowLatch(
       return;
     }
     setFollowIntent(false);
-  }, [listRef, reconcileStrictBottom, setFollowIntent]);
+    oweDepartureAtView();
+  }, [listRef, oweDepartureAtView, reconcileStrictBottom, setFollowIntent]);
 
   const cancelOwnedFreeNavigation = useCallback((): void => {
     if (!ownsFreeNavigationRef.current) return;
@@ -1808,10 +1862,12 @@ export function useChatTimelineFollowLatch(
       }
       if (readerDepartureScrollTopRef.current !== null) {
         readerDepartureScrollTopRef.current = geometry.scrollTop;
+      } else {
+        noteOwedDeparture(geometry);
       }
       return false;
     },
-    [cancelActiveCorrection, endMetDepartedReader],
+    [cancelActiveCorrection, endMetDepartedReader, noteOwedDeparture],
   );
 
   // Whether a lifted finger's momentum has reached the end it was heading
@@ -2123,6 +2179,7 @@ export function useChatTimelineFollowLatch(
       departureAwaitsReportRef.current = { wheelTarget: null };
       return;
     }
+    noteOwedDeparture(geometry);
     if (followReachedReaderEnd(list, node)) return;
     if (followReaderMomentumArrival(node, momentumArrived)) return;
     if (!permissionRef.current) return;
@@ -2158,6 +2215,7 @@ export function useChatTimelineFollowLatch(
     followReaderMomentumArrival,
     isCorrectionSuppressed,
     listRef,
+    noteOwedDeparture,
     noteReaderMomentum,
     notePressView,
     noteViewRead,
@@ -2526,7 +2584,7 @@ export function useChatTimelineFollowLatch(
   return useMemo(
     () => ({
       followEndIfPermitted,
-      setFollowIntent,
+      setFollowIntent: setExplicitFollowIntent,
       noteReaderGesture,
       beginOwnedEndNavigation,
       beginOwnedFreeNavigation,
@@ -2550,7 +2608,7 @@ export function useChatTimelineFollowLatch(
       noteReaderGesture,
       observeLiveGeometry,
       reconcileTurnAtRest,
-      setFollowIntent,
+      setExplicitFollowIntent,
     ],
   );
 }
