@@ -360,6 +360,30 @@ const CHAT_TIMELINE_NAVIGATION_LANDING_EPSILON_PX = 1;
  *  multiple manual pill re-clicks to converge and the goal is to absorb that
  *  automatically in one operation. */
 const CHAT_TIMELINE_NAVIGATION_MAX_RETRIES = 3;
+/** How far the saved row's own position may differ between two consecutive
+ *  settles and still count as having HELD STILL, for the restore's
+ *  still-settling check below. A tolerance, never a cap: it is not a budget
+ *  and nothing is refused for exceeding it.
+ *
+ *  A tolerance rather than equality because the rows above the saved row are
+ *  re-measured repeatedly while a transcript settles, and every one of those
+ *  re-measurements nudges the saved row's position. The regression covering
+ *  this drives that directly, stepping a row's padding in 12px increments for
+ *  as long as it runs, with the list's size cache trailing each step by one
+ *  ResizeObserver delivery - so two consecutive settles can read positions a
+ *  few pixels apart with nothing wrong. Strict equality would hold only when
+ *  two settles happened to catch the same step: a coin flip rather than
+ *  convergence, and it would equally accept a premature landing whenever two
+ *  settles matched inside the half-measured window.
+ *
+ *  The error it has to catch is three orders larger: a restore that accepted
+ *  while the transcript was half measured put the saved row at 4430 where a
+ *  settled one puts it at ~10250, a 5,820px miss. So this sits far above a few
+ *  pixels of re-measurement and far below that gap. Acceptance itself still
+ *  uses `CHAT_TIMELINE_NAVIGATION_LANDING_EPSILON_PX`; this only decides
+ *  whether the position is still moving. If the measurement above changes,
+ *  this comment needs updating with the number. */
+const CHAT_TIMELINE_RESTORE_POSITION_HELD_EPSILON_PX = 64;
 
 /** The controller's own follow-vs-free scroll state - a pure mirror of
  *  LegendList's strict `isAtEnd`, never an independent source of truth. */
@@ -950,11 +974,29 @@ function awaitChatTimelineScrollPromiseSettle(
  * once every retry is exhausted and the landing is still off, or
  * `shouldYieldToReader` fires (neither ever called if `isAborted` fires
  * first).
+ *
+ * `isStillSettling` separates "the target is not where it will end up yet"
+ * from "this landing missed". A caller whose target can MOVE under it while
+ * the list measures - the rows above a saved row resolving from estimates to
+ * real heights - would otherwise spend its whole budget on placements aimed at
+ * a coordinate that no longer existed, and then report the last one as the
+ * reader's arrival. When it answers true the same semantic target is re-issued
+ * and the loop re-settles WITHOUT consuming a retry, because those placements
+ * were not aimed badly. The budget still covers real undershoots, and the
+ * reader checks above still end the loop, so a caller that answers true
+ * forever is bounded by the reader rather than by the count: its own predicate
+ * has to be one that goes false once the target stops moving.
+ *
+ * A caller that passes `false` keeps exactly the behavior it had before this
+ * check existed: its landing is judged on the first settle. That says nothing
+ * about whether its own target can move - only that it does not defer
+ * acceptance when it does.
  */
 function settleChatTimelineNavigation(input: {
   readonly awaitSettle: (onSettle: () => void) => () => void;
   readonly isAborted: () => boolean;
   readonly shouldYieldToReader: () => boolean;
+  readonly isStillSettling: () => boolean;
   readonly validate: () => boolean;
   readonly reissue: () => void;
   readonly onSettledValid: () => void;
@@ -975,6 +1017,14 @@ function settleChatTimelineNavigation(input: {
         input.onSettledInvalid();
         return;
       }
+      // Deliberately below `shouldYieldToReader`: a real gesture outranks a
+      // target that is still moving, or a caller waiting for its own geometry
+      // to settle would keep re-issuing over a reader who has taken over.
+      if (input.isStillSettling()) {
+        input.reissue();
+        attempt(retriesLeft);
+        return;
+      }
       if (input.validate()) {
         input.onSettledValid();
         return;
@@ -992,6 +1042,27 @@ function settleChatTimelineNavigation(input: {
     cancelled = true;
     cancelActiveWait();
   };
+}
+
+/** Which operation owns the active navigation settle loop, and how to end it.
+ *
+ *  The owner is carried with the cleanup rather than inferred, because the two
+ *  readers of this ref need different answers. A supersede ends whatever is
+ *  registered and does not care what it was. The hide-time cancellation does:
+ *  a restore has nothing left to converge on once the tile is concealed, while
+ *  a cross-tile scroll request is the newer intent the show branch re-issues
+ *  and must not report cancelled.
+ *
+ *  Whether that request is PENDING answers neither question. A request whose
+ *  row is not in the rendered index yet is pending with no loop of its own -
+ *  `landScrollRequestRow` returns before it registers anything - so a restore
+ *  stays the owner, and a hide that read pending-ness would leave it running.
+ *
+ *  Only `"request"` is tested; `"restore"` and `"navigation"` are kept apart so
+ *  each registration states what it is, not what it is not. */
+interface ActiveNavigationSettleCleanup {
+  readonly owner: "restore" | "request" | "navigation";
+  readonly cancel: () => void;
 }
 
 /**
@@ -2289,7 +2360,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const blockReveal = useChatNavigationBlockReveal({
     getScroller,
   });
-  const activeNavigationSettleCleanupRef = useRef<(() => void) | null>(null);
+  const activeNavigationSettleCleanupRef =
+    useRef<ActiveNavigationSettleCleanup | null>(null);
   // The cleanup above stays installed after its loop finishes, so it cannot
   // say whether a restore or navigation still has a command the list holds.
   // This does. A loop claims it once it has issued its first command. However
@@ -2334,7 +2406,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // Stop that placeholder restore before its valid/exhausted callbacks
     // normalize durable state. The raw hydration coordinate stays armed
     // unless the frozen issued target proves the reader moved past it.
-    activeNavigationSettleCleanupRef.current?.();
+    activeNavigationSettleCleanupRef.current?.cancel();
     activeNavigationSettleCleanupRef.current = null;
     resolvePendingRestoreEndLandingRef.current = null;
     pendingMeasuredFreeRestoreRef.current = null;
@@ -2397,7 +2469,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       if (navigationHighlightTimeoutRef.current !== null) {
         window.clearTimeout(navigationHighlightTimeoutRef.current);
       }
-      activeNavigationSettleCleanupRef.current?.();
+      activeNavigationSettleCleanupRef.current?.cancel();
       activeAnimatedImperativeScrollGenerationRef.current = null;
     },
     [],
@@ -2679,7 +2751,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // hydration id is cleared above and the gate always releases.
   const scrollToEnd = useCallback(
     (animated: boolean): void => {
-      activeNavigationSettleCleanupRef.current?.();
+      activeNavigationSettleCleanupRef.current?.cancel();
       activeNavigationSettleCleanupRef.current = null;
       clearNavigationHighlight();
       pendingHydrationRestoreAnchorIdRef.current = null;
@@ -2707,6 +2779,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         // its own - a real gesture already bumps the generation and is
         // caught by `isAborted` above.
         shouldYieldToReader: () => false,
+        isStillSettling: () => false,
         // While the reader still follows, a landing short of the end is a
         // tail that outgrew it - a streaming reply can grow past every retry
         // before its `scrollend` - and the latch's own corrections chase it.
@@ -2737,9 +2810,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         onAborted: releaseSettle,
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
-      activeNavigationSettleCleanupRef.current = (): void => {
-        cancelSettle();
-        releaseSettle();
+      activeNavigationSettleCleanupRef.current = {
+        owner: "navigation",
+        cancel: (): void => {
+          cancelSettle();
+          releaseSettle();
+        },
       };
     },
     [
@@ -3286,7 +3362,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // ahead of the `visible` early-return below - the minimap's own previous
     // native listener never gated on this component's `visible` prop either,
     // and there is no reason a background/not-yet-selected tile's scroll
-    // (e.g. a still-settling restore) should leave its in-view dots stale.
+    // (e.g. a restore still settling on a tile never selected yet - a tile
+    // hidden AFTER being visible has no settling restore, since the hide ends
+    // it) should leave its in-view dots stale.
     minimapInViewRefreshRef.current();
     if (!visible) return;
     const scrollNode = chatTimelineRef.current?.getScrollableNode();
@@ -3334,7 +3412,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       location: ChatTimelineNavigationLocation,
       afterSettle: (() => void) | null,
     ): void => {
-      activeNavigationSettleCleanupRef.current?.();
+      activeNavigationSettleCleanupRef.current?.cancel();
       const generationAtIssue = anchorUserScrollGenerationRef.current;
       const list = chatTimelineRef.current;
       if (!list) return;
@@ -3368,6 +3446,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         // No reader-departure detection here - a real gesture already bumps
         // the generation and is caught above.
         shouldYieldToReader: () => false,
+        isStillSettling: () => false,
         validate: () =>
           !lastSettleTimedOut &&
           chatTimelineNavigationSettledAtLocation(
@@ -3426,11 +3505,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       });
       // A cancelled navigation has no landing of its own to decide: it only
       // stops owning the view, which whatever cancelled it now decides.
-      activeNavigationSettleCleanupRef.current = (): void => {
-        cancelled = true;
-        cancelSettle();
-        releaseSettle();
-        followLatchRef.current?.cancelOwnedFreeNavigation();
+      activeNavigationSettleCleanupRef.current = {
+        owner: "navigation",
+        cancel: (): void => {
+          cancelled = true;
+          cancelSettle();
+          releaseSettle();
+          followLatchRef.current?.cancelOwnedFreeNavigation();
+        },
       };
     },
     [
@@ -3493,7 +3575,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const initialIndex = rowIndexByKeyRef.current.get(messageId);
       if (!list || initialIndex === undefined) return false;
 
-      activeNavigationSettleCleanupRef.current?.();
+      activeNavigationSettleCleanupRef.current?.cancel();
       const generationAtIssue = readerPositionGenerationRef.current;
       const scrollNode = list.getScrollableNode();
       const targetIndex = (): number | null =>
@@ -3530,6 +3612,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         () => pendingRestoreScrollPromise,
       );
       let lastRestoreSettleTimedOut = false;
+      // The saved row's own position as of the PREVIOUS settle, for the
+      // still-settling check below. A closure local, not a ref: it belongs to
+      // this one restore, and a newer restore or navigation gets a fresh one
+      // after superseding this loop through the cleanup above. `null` means no
+      // settle has read it yet.
+      let rowPositionAtPreviousSettle: number | null = null;
       const cancelSettle = settleChatTimelineNavigation({
         awaitSettle: (onSettle) =>
           awaitChatTimelineScrollPromiseSettle(
@@ -3555,6 +3643,55 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           isAborted() ||
           readerPositionGenerationRef.current !== generationAtIssue,
         shouldYieldToReader: () => false,
+        // The saved row's position is a sum over the rows ABOVE it, which
+        // resolve from estimates to real heights over several commits, so it
+        // keeps moving while the transcript measures - and the landing check
+        // compares it against a `scrollTop` those same estimates produced.
+        // Both sides then read one number and agree with each other wherever
+        // it happens to point: observed on CI accepting the saved row at 4430
+        // on a half-measured transcript that settled with the row at ~10250,
+        // leaving the reader a screenful away with the row never mounted and
+        // the restore reporting a valid landing. Require the position to have
+        // HELD STILL since the previous settle before the landing check is
+        // allowed to speak. Growth below the row - a streaming reply arriving
+        // under the reader - cannot move a row above it, so it never defers
+        // acceptance here.
+        isStillSettling: () => {
+          // A wait that EXPIRED never settled, so the position it would read
+          // says nothing about whether the target is still moving - the
+          // command behind it may not have run at all. An expiry is the
+          // abnormal case the retry budget already exists for: leave it to
+          // `validate`, which fails it, and to the budget, which bounds it.
+          if (lastRestoreSettleTimedOut) return false;
+          const index = targetIndex();
+          if (index === null) return false;
+          const livePosition = measureFreeRestoreGeometry(
+            list,
+            index,
+          ).rowPosition;
+          // `positionAtIndex` is typed `number` and does not always answer one
+          // - `expectedTimelineScrollTop` guards the same call the same way. An
+          // unknown reading says nothing about whether the target moved, and
+          // subtracting it yields `NaN`, which fails the comparison below and
+          // would be read as having HELD STILL: the restore would then accept
+          // an unmeasured row, the very landing this check exists to defer.
+          // Nor is it stored, or it would poison the next comparison too.
+          if (livePosition === null || !Number.isFinite(livePosition)) {
+            return true;
+          }
+          const previousPosition = rowPositionAtPreviousSettle;
+          rowPositionAtPreviousSettle = livePosition;
+          if (previousPosition === null) {
+            // The first settle has nothing to compare against, so it cannot
+            // tell a landed restore from one whose target is still moving.
+            // Re-issue once and judge the position against this reading.
+            return true;
+          }
+          return (
+            Math.abs(livePosition - previousPosition) >
+            CHAT_TIMELINE_RESTORE_POSITION_HELD_EPSILON_PX
+          );
+        },
         validate: () => !lastRestoreSettleTimedOut && landedAtSavedLocation(),
         reissue: () => {
           const index = targetIndex();
@@ -3605,9 +3742,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         onAborted: releaseSettle,
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
-      activeNavigationSettleCleanupRef.current = (): void => {
-        cancelSettle();
-        releaseSettle();
+      activeNavigationSettleCleanupRef.current = {
+        owner: "restore",
+        cancel: (): void => {
+          cancelSettle();
+          releaseSettle();
+        },
       };
       return true;
     },
@@ -3677,7 +3817,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // Superseding an earlier landing of THIS request is a re-issue, not a
       // cancellation; any other active navigation is torn down as cancelled.
       reissuingScrollRequestIdRef.current = requestId;
-      activeNavigationSettleCleanupRef.current?.();
+      activeNavigationSettleCleanupRef.current?.cancel();
       reissuingScrollRequestIdRef.current = null;
       const generationAtIssue = anchorUserScrollGenerationRef.current;
       followLatchRef.current?.beginOwnedFreeNavigation();
@@ -3751,6 +3891,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           return true;
         },
         shouldYieldToReader: () => false,
+        isStillSettling: () => false,
         validate: () => !lastSettleTimedOut && landedOnHydratedRow(),
         reissue: () => {
           const index = targetIndex();
@@ -3799,12 +3940,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // from here instead - otherwise the request stays pending, a later
       // hidden→visible transition re-issues the stale landing over the tail,
       // and the tile keeps the target row's hydration hold until its TTL.
-      activeNavigationSettleCleanupRef.current = (): void => {
-        cancelLandingLoop();
-        finish();
-        if (reissuingScrollRequestIdRef.current !== requestId) {
-          settleScrollRequest(requestId, "cancelled");
-        }
+      activeNavigationSettleCleanupRef.current = {
+        owner: "request",
+        cancel: (): void => {
+          cancelLandingLoop();
+          finish();
+          if (reissuingScrollRequestIdRef.current !== requestId) {
+            settleScrollRequest(requestId, "cancelled");
+          }
+        },
       };
       return true;
     },
@@ -3939,15 +4083,18 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // that loop instead.
     const settleCleanup = activeNavigationSettleCleanupRef.current;
     if (issued && settleCleanup !== null) {
-      activeNavigationSettleCleanupRef.current = (): void => {
-        settleCleanup();
-        if (
-          resolvePendingRestoreEndLandingRef.current ===
-          resolvePendingEndLanding
-        ) {
-          resolvePendingRestoreEndLandingRef.current = null;
-          pendingMeasuredFreeRestoreRef.current = null;
-        }
+      activeNavigationSettleCleanupRef.current = {
+        owner: settleCleanup.owner,
+        cancel: (): void => {
+          settleCleanup.cancel();
+          if (
+            resolvePendingRestoreEndLandingRef.current ===
+            resolvePendingEndLanding
+          ) {
+            resolvePendingRestoreEndLandingRef.current = null;
+            pendingMeasuredFreeRestoreRef.current = null;
+          }
+        },
       };
     }
   }, [
@@ -3989,12 +4136,46 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const concealedScrollGeometryRef = useRef<ConcealedScrollGeometry | null>(
     null,
   );
+  // Ends the navigation settle loop a hide leaves behind. A restore still
+  // converging when the tile hides has nowhere left to converge: the hide
+  // zeroes this tile's measured geometry, so every further settle reads a
+  // viewport that cannot answer, and a re-issue the loop makes from a
+  // continuation resolving after the hide writes the saved position back onto a
+  // concealed node - over the reset a collapsing tab host just performed. The
+  // show branch is then the only placement a hidden tile takes, and it
+  // re-derives the anchor from the state cache rather than from wherever this
+  // loop had reached - which is also what gives a row destroyed while hidden
+  // its clamp-to-neighbour fallback.
+  //
+  // Skips a loop a cross-tile scroll request owns, because cancelling that one
+  // reports the request `cancelled` (`landScrollRequestRow` registers it so)
+  // while it is still live. What that loop then does while concealed is a
+  // separate, pre-existing defect: it keeps placing, and can reach a terminal
+  // outcome, against a viewport that cannot answer. Suspending it without
+  // cancelling the request is its own change.
+  //
+  // The test is the registered OWNER, never whether a request is pending: a
+  // request whose row is not in the rendered index yet is pending with no loop
+  // of its own, so a hide reading pending-ness would leave the restore running,
+  // which is the bug this helper exists to prevent.
+  //
+  // A named callback rather than the guard inline, because inlining it puts the
+  // effect below at `eslint(complexity)` 17 against a cap of 16. The show branch
+  // does not share it: a pending request there is not a no-op, it re-issues
+  // against the now-measurable geometry first.
+  const endNavigationSettleForConcealment = useCallback((): void => {
+    const active = activeNavigationSettleCleanupRef.current;
+    if (active === null || active.owner === "request") return;
+    active.cancel();
+    activeNavigationSettleCleanupRef.current = null;
+  }, []);
   useLayoutEffect(() => {
     const wasVisible = wasSurfaceVisibleRef.current;
     wasSurfaceVisibleRef.current = visible;
     if (visible === wasVisible) return;
 
     if (!visible) {
+      endNavigationSettleForConcealment();
       concealedScrollGeometryRef.current = readIntactConcealedGeometry(
         chatTimelineRef.current?.getScrollableNode(),
         lastVisibleScrollTopRef.current,
@@ -4035,7 +4216,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       }
       return;
     }
-    activeNavigationSettleCleanupRef.current?.();
+    activeNavigationSettleCleanupRef.current?.cancel();
     activeNavigationSettleCleanupRef.current = null;
     queueMicrotask(() => {
       clearNavigationHighlight();
@@ -4045,8 +4226,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       listRowsRef.current.map((row) => row.key),
     );
     // An undisturbed list needs no replay (see `concealedScrollGeometryRef`).
-    // Unless a saved restore is still converging: the cleanup above just
-    // cancelled its settle loop, and that loop was the only thing that would
+    // Unless a saved restore was still converging when the tile hid: the hide
+    // ended its settle loop, and that loop was the only thing that would
     // release the persistence gate - returning here would leave the gate
     // armed with no scroll capture allowed until the next publishing reader
     // gesture. Let the replay below re-issue it and own the release instead.
@@ -4099,6 +4280,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     if (!issued) acceptFailedReplayLanding();
   }, [
     clearNavigationHighlight,
+    endNavigationSettleForConcealment,
     identity,
     isSavedTurnPart,
     landScrollRequestRow,
