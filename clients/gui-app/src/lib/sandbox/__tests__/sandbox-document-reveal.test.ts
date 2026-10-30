@@ -51,6 +51,7 @@ interface Frame {
   readonly window: DOMWindow;
   readonly layouts: WeakMap<Element, Layout>;
   readonly scrolls: ScrollCall[];
+  readonly rectReads: Element[];
   readonly nativeFocusArgs: unknown[][];
   readonly native: {
     readonly scrollIntoView: unknown;
@@ -112,6 +113,7 @@ function startFrame(canvas: boolean): Frame {
 
   const layouts = new WeakMap<Element, Layout>();
   const scrolls: ScrollCall[] = [];
+  const rectReads: Element[] = [];
   const nativeFocusArgs: unknown[][] = [];
   const proto = window.Element.prototype;
   const define = (owner: object, name: string, value: unknown): void => {
@@ -145,7 +147,12 @@ function startFrame(canvas: boolean): Frame {
     };
     return { ...rect, x: rect.left, y: rect.top };
   });
-  define(proto, "getClientRects", () => [{}]);
+  // Recorded, not just answered: in the engine this read is the layout the
+  // page asked not to do, so where it happens is part of the contract.
+  define(proto, "getClientRects", function (this: Element) {
+    rectReads.push(this);
+    return [{}];
+  });
   // jsdom has no `checkVisibility`, so each element declares what the engine
   // would answer. Default options, which is what the bootstrap asks: false
   // for a box that is not generated and for contents an ancestor skips.
@@ -234,6 +241,7 @@ function startFrame(canvas: boolean): Frame {
     window,
     layouts,
     scrolls,
+    rectReads,
     nativeFocusArgs,
     native,
     place: (element, layout) => layouts.set(element, layout),
@@ -724,13 +732,16 @@ describe("body overflow inside a frame", () => {
   // Wherever `checkVisibility()` is false the engine reveals nothing, which
   // is the one direction the rule relies on. Which pages those are is held
   // to a real engine in `browser-tests/sandbox-frame-scroll.spec.ts`.
-  it("scrolls nothing into view when the engine would reveal nothing", () => {
+  it("scrolls nothing into view, and measures nothing, when the engine would reveal nothing", () => {
     const frame = startFrame(false);
     const { target } = pageDeclaring(frame, { ...REVEALS, visible: false });
 
     scrollIntoView(target, { block: "start" });
 
     expect(frame.scrolls).toEqual([]);
+    // Asking the engine comes before measuring: a rect read here lays out
+    // the subtree whose layout the page skipped.
+    expect(frame.rectReads).toEqual([]);
   });
 
   it("reveals a target the engine would reveal", () => {
