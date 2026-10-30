@@ -139,7 +139,7 @@ function createHarness() {
     viewer: "presentation",
     streamClientFactory: (streamArgs) => {
       callbacks = streamArgs.callbacks;
-      return { sendAction, close };
+      return { supportsViewerFrames: () => false, sendAction, close };
     },
   });
   return {
@@ -1019,7 +1019,11 @@ describe("createTerminalSessionStore", () => {
         viewer: "presentation",
         streamClientFactory: (streamArgs) => {
           viewers.push(streamArgs.viewer);
-          return { sendAction: () => undefined, close: () => undefined };
+          return {
+            supportsViewerFrames: () => false,
+            sendAction: () => undefined,
+            close: () => undefined,
+          };
         },
       });
 
@@ -1043,6 +1047,7 @@ describe("createTerminalSessionStore", () => {
           callbacks = streamArgs.callbacks;
           viewers.push(streamArgs.viewer);
           return {
+            supportsViewerFrames: () => false,
             sendAction: () => undefined,
             close: () => {
               // Production TerminalStreamClient.close() reports closed.
@@ -1097,7 +1102,11 @@ describe("createTerminalSessionStore", () => {
         viewer: "presentation",
         streamClientFactory: (streamArgs) => {
           viewers.push(streamArgs.viewer);
-          return { sendAction: () => undefined, close: () => undefined };
+          return {
+            supportsViewerFrames: () => false,
+            sendAction: () => undefined,
+            close: () => undefined,
+          };
         },
       });
 
@@ -1120,6 +1129,7 @@ describe("createTerminalSessionStore", () => {
         streamClientFactory: (streamArgs) => {
           callbacks = streamArgs.callbacks;
           return {
+            supportsViewerFrames: () => false,
             sendAction: () => undefined,
             close: () => {
               streamArgs.callbacks.onConnectionStatus(
@@ -1178,6 +1188,7 @@ describe("createTerminalSessionStore", () => {
         streamClientFactory: (streamArgs) => {
           callbacks = streamArgs.callbacks;
           return {
+            supportsViewerFrames: () => false,
             sendAction: () => undefined,
             close: () => {
               streamArgs.callbacks.onConnectionStatus(
@@ -1236,7 +1247,11 @@ describe("createTerminalSessionStore", () => {
         streamClientFactory: (streamArgs) => {
           callbacks = streamArgs.callbacks;
           viewers.push(streamArgs.viewer);
-          return { sendAction: () => undefined, close: () => undefined };
+          return {
+            supportsViewerFrames: () => false,
+            sendAction: () => undefined,
+            close: () => undefined,
+          };
         },
       });
       const opened = (): TerminalStreamCallbacks => {
@@ -1272,6 +1287,7 @@ describe("createTerminalSessionStore", () => {
           callbacks = streamArgs.callbacks;
           viewers.push(streamArgs.viewer);
           return {
+            supportsViewerFrames: () => false,
             sendAction: (frame) => {
               frames.push(frame);
             },
@@ -1462,6 +1478,7 @@ describe("viewer intent while the stream is held", () => {
           frames,
         });
         return {
+          supportsViewerFrames: () => false,
           sendAction: (frame) => {
             frames.push(frame);
           },
@@ -1685,6 +1702,7 @@ describe("viewer intent while the stream is held", () => {
           streamArgs.callbacks.onConnectionStatus("open", null, null, null);
         }
         return {
+          supportsViewerFrames: () => false,
           sendAction: (frame) => {
             client.frames.push(frame);
           },

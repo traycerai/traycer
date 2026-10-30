@@ -62,6 +62,7 @@ function createHandleWithViewer(
       callbacks = streamArgs.callbacks;
       viewers.push(streamArgs.viewer);
       return {
+        supportsViewerFrames: () => false,
         sendAction: (frame) => {
           frames.push(frame);
         },
@@ -854,7 +855,11 @@ describe("TerminalSessionRegistry", () => {
           throw new Error("No directory entry for host host-1");
         }
         viewers.push(streamArgs.viewer);
-        return { sendAction: () => undefined, close: () => undefined };
+        return {
+          supportsViewerFrames: () => false,
+          sendAction: () => undefined,
+          close: () => undefined,
+        };
       },
     });
 

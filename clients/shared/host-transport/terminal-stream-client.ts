@@ -177,9 +177,13 @@ export class TerminalStreamClient {
     this.sendViewerFrame(frame);
   }
 
-  private sendViewerFrame(frame: TerminalViewerFrame): void {
+  supportsViewerFrames(): boolean {
     const version = this.session.getNegotiatedSchemaVersion();
-    if (version === null || version.major !== 1 || version.minor < 7) return;
+    return version !== null && version.major === 1 && version.minor >= 7;
+  }
+
+  private sendViewerFrame(frame: TerminalViewerFrame): void {
+    if (!this.supportsViewerFrames()) return;
     this.session.sendClientFrame(frame, null);
   }
 

@@ -30,7 +30,7 @@ import { markTerminalLoad } from "@/lib/perf/terminal-load-perf";
 
 type TerminalStreamClientHandle = Pick<
   TerminalStreamClient,
-  "sendAction" | "close"
+  "sendAction" | "supportsViewerFrames" | "close"
 >;
 
 export interface TerminalStreamClientFactoryArgs {
@@ -156,7 +156,8 @@ export interface TerminalSessionState {
    * `terminal.subscribe@1.6` attachment intent this store stands for. A
    * lease-free keep-warm / linger attachment is `cache`; a leased tile is
    * `presentation` unless it is mounted off screen. A lease change goes
-   * through {@link TerminalSessionState.setViewer}, which reopens the stream;
+   * through {@link TerminalSessionState.setViewer}, which replaces a stream
+   * only when it cannot restate intent in place;
    * a tile going on or off screen goes through
    * {@link TerminalSessionState.restateViewer}, which does not.
    */
@@ -189,12 +190,12 @@ export interface TerminalSessionState {
   /** Ask the host to resize; the host may pick a smaller min(cols/rows). */
   requestResize: (cols: number, rows: number) => string | null;
   /**
-   * Retag attachment intent for a lease change. A change reopens
-   * `terminal.subscribe`, which is how a host of any version hears it. No-op
-   * when the value is unchanged or the store is disposed. A dead session
+   * Retag attachment intent for a lease change. An open `@1.7` stream uses a
+   * viewer frame; older or unknown capabilities replace the subscription.
+   * Held streams defer and coalesce changes until the hold ends. No-op when
+   * the value is unchanged or the store is disposed. A dead session
    * (`lost` / `exited` / `reaped`) updates the field but does not attach a
-   * new stream — the PTY is no longer addressable. A held stream retains its
-   * subscriber until continuation or the hold ends, coalescing intent changes.
+   * new stream — the PTY is no longer addressable.
    */
   setViewer: (viewer: TerminalSubscribeViewer) => void;
   /**
@@ -203,8 +204,7 @@ export interface TerminalSessionState {
    * that keeps its lease while it goes on and off screen: a reopen there
    * replays a full snapshot into a cleared view on every tab switch. Against
    * a host older than 1.7 the frame is not sent and the attachment keeps the
-   * intent it opened with, which costs nothing: such a host counts every
-   * attachment toward the grid whatever its intent.
+   * intent it opened with until it re-subscribes.
    */
   restateViewer: (viewer: TerminalSubscribeViewer) => void;
   /** Closes the underlying stream client (does NOT call `terminal.kill`). */
@@ -428,6 +428,9 @@ export function createTerminalSessionStore(
   let viewer: TerminalSubscribeViewer = options.viewer;
   let subscriberViewer: TerminalSubscribeViewer = options.viewer;
   let streamHeld = false;
+  // The store can mask a replacement's initial connecting status. Drains
+  // still require this subscriber's own open, including a synchronous replay.
+  let streamOpen = false;
   // Bumped before tearing down a subscriber so its close-driven status
   // callback cannot map a deliberate viewer-intent reopen to "lost".
   const streamGuard = createGenerationGuard();
@@ -785,6 +788,7 @@ export function createTerminalSessionStore(
       ) => {
         if (disposed) return;
         const generation = streamGuard.current();
+        streamOpen = status === "open";
         streamHeld = status === "reconnecting" && continuity === "held";
         if (ignoreTransientStatus) {
           ignoreTransientStatus = false;
@@ -827,18 +831,18 @@ export function createTerminalSessionStore(
         // Replay stale pending actions from BEFORE this reconnect first, so the
         // fresh resize `flushRequestedResize` is about to dispatch isn't
         // immediately swept up and removed as one of those stale entries.
-        if (continuity === "continued") {
-          flushAck();
-        } else {
+        if (continuity !== "continued") {
           replayPendingActionsAfterReconnect();
         }
-        flushRequestedResize();
+        if (generation !== streamGuard.current()) return;
+        flushOpenStream();
       },
     };
 
     const attachStream = (cols: number, rows: number): void => {
       const generation = streamGuard.current();
       streamHeld = false;
+      streamOpen = false;
       subscriberViewer = viewer;
       const client = options.streamClientFactory({
         sessionId: options.sessionId,
@@ -854,13 +858,25 @@ export function createTerminalSessionStore(
         return;
       }
       streamClient = client;
+      // Open may have replayed before the factory returned. Capability and
+      // any intent published by its observers belong to this installed client.
+      if (!replaceViewerSubscription()) flushOpenStream();
     };
 
     function replaceViewerSubscription(): boolean {
-      if (disposed || streamHeld || viewer === subscriberViewer) return false;
+      const client = streamClient;
+      if (
+        disposed ||
+        streamHeld ||
+        viewer === subscriberViewer ||
+        client === null
+      ) {
+        return false;
+      }
       const state = get();
       if (isTerminalOrDead(state.status)) return false;
       const wasOpen = state.connectionStatus === "open";
+      if (wasOpen && client.supportsViewerFrames()) return false;
       // Clear the deferred intent before close/attach can invoke callbacks.
       subscriberViewer = viewer;
       resetAckAccounting();
@@ -873,15 +889,52 @@ export function createTerminalSessionStore(
       return true;
     }
 
+    function sendViewerIntent(client: TerminalStreamClientHandle): void {
+      // Publish the subscriber's intent before sending: a synchronous callback
+      // must not reconcile the same change a second time.
+      subscriberViewer = viewer;
+      client.sendAction({
+        kind: "viewer",
+        hasBinaryPayload: false,
+        sessionId: options.sessionId,
+        viewer,
+      });
+    }
+
+    function flushOpenStream(): void {
+      const client = streamClient;
+      if (client === null || !streamOpen) return;
+      const generation = streamGuard.current();
+      flushAck();
+      if (generation !== streamGuard.current()) return;
+      // A presentation viewer starts sizing the shared grid immediately on
+      // the host. Send its latest size and earned credit before that intent.
+      flushRequestedResize();
+      if (
+        generation !== streamGuard.current() ||
+        streamClient !== client ||
+        streamHeld ||
+        get().connectionStatus !== "open" ||
+        isTerminalOrDead(get().status) ||
+        viewer === subscriberViewer ||
+        !client.supportsViewerFrames()
+      ) {
+        return;
+      }
+      sendViewerIntent(client);
+    }
+
     streamGuard.next();
     attachStream(options.cols, options.rows);
 
     const setViewer = (nextViewer: TerminalSubscribeViewer): void => {
       if (disposed) return;
       if (nextViewer === viewer) return;
+      const generation = streamGuard.current();
       viewer = nextViewer;
       set({ viewer: nextViewer });
-      replaceViewerSubscription();
+      if (generation !== streamGuard.current() || viewer !== nextViewer) return;
+      if (!replaceViewerSubscription()) flushOpenStream();
     };
 
     const restateViewer = (nextViewer: TerminalSubscribeViewer): void => {
@@ -894,17 +947,15 @@ export function createTerminalSessionStore(
       if (generation !== streamGuard.current() || viewer !== nextViewer) {
         return;
       }
-      if (isTerminalOrDead(get().status)) return;
-      subscriberViewer = nextViewer;
+      if (streamHeld || isTerminalOrDead(get().status)) return;
+      flushOpenStream();
+      if (generation !== streamGuard.current() || viewer !== nextViewer) return;
+      const client = streamClient;
+      if (client === null || viewer === subscriberViewer) return;
       // Straight to the client, not through `dispatchClientFrame`: that drops
       // a frame while the stream is not open, and the client must still learn
       // the intent so its next subscribe declares it.
-      streamClient?.sendAction({
-        kind: "viewer",
-        hasBinaryPayload: false,
-        sessionId: options.sessionId,
-        viewer: nextViewer,
-      });
+      sendViewerIntent(client);
     };
 
     return {
