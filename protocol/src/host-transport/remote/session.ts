@@ -2873,17 +2873,12 @@ export class RemoteSession<
   ): void {
     const scheduler = new PriorityScheduler({
       write: (frame) => this.writeFrame(generation, frame),
-      onWriteError: () => {
-        // A write that failed after its leg went says nothing about the claim
-        // under way; the frame is in the ledger.
-        if (this.connection?.relinking !== true) {
-          this.handleConnectionLost(
-            generation,
-            "write-failed",
-            "host-transport-plane",
-          );
-        }
-      },
+      onWriteError: () =>
+        this.handleConnectionLost(
+          generation,
+          "write-failed",
+          "host-transport-plane",
+        ),
       initialBulkCredits: INITIAL_BULK_SEND_CREDITS,
       now: undefined,
     });
@@ -3035,8 +3030,19 @@ export class RemoteSession<
     // verdict honest about an error envelope or a FATAL - both are frames.
     this.noteInChannelEvidence(connection);
     const arrivalExchange = connection.startedExchanges;
+    const leg = connection.socket;
     connection.inboundTail = (async () => {
-      const muxBytes = await connection.channel.decrypt(bytes);
+      let muxBytes: Uint8Array;
+      try {
+        muxBytes = await connection.channel.decrypt(bytes);
+      } catch (cause) {
+        // A frame whose leg has gone is not counted, so the host resends it. A
+        // channel that really is broken fails again on the leg it reaches.
+        if (!this.isLegCurrent(connection, leg)) {
+          return;
+        }
+        throw cause;
+      }
       if (!this.isCurrent(generation)) {
         return;
       }
@@ -6422,11 +6428,11 @@ export class RemoteSession<
     if (dial.kind !== "relay") {
       return;
     }
+    const leg = connection.socket;
     const provision = await dial.grantProvider();
-    // A relink restarts this loop at its ack.
+    // The grant was for that leg, and a claim's ack restarts this loop.
     if (
-      this.connection !== connection ||
-      connection.relinking ||
+      !this.isLegCurrent(connection, leg) ||
       !(this.phase === "ready" || this.isParkedBeforeReady())
     ) {
       return;
@@ -6597,14 +6603,19 @@ export class RemoteSession<
     muxFrame: Uint8Array,
   ): Promise<void> {
     const leg = connection.socket;
-    const sealed = await connection.channel.encrypt(muxFrame);
-    // A frame whose leg went while it sealed is in the ledger: the next
-    // exchange resends it.
-    if (
-      !this.isCurrent(generation) ||
-      connection.socket !== leg ||
-      connection.relinking
-    ) {
+    // A frame whose leg went while it sealed is in the ledger, sealed or not:
+    // the next exchange resends it, so neither ending here speaks for the leg
+    // that replaced it.
+    let sealed: Uint8Array;
+    try {
+      sealed = await connection.channel.encrypt(muxFrame);
+    } catch (cause) {
+      if (!this.isLegCurrent(connection, leg)) {
+        return;
+      }
+      throw cause;
+    }
+    if (!this.isLegCurrent(connection, leg)) {
       return;
     }
     if (!connection.socket.sendData(sealed)) {
@@ -6959,6 +6970,22 @@ export class RemoteSession<
     if (sessionId === null) return;
     this.announcedSessionId = null;
     this.evidence?.lost(this.options.hostId, sessionId);
+  }
+
+  /**
+   * Whether `leg` still carries `connection`. What a completion that can outlive
+   * its leg has to ask: a relink keeps the generation, and `relinking` reads
+   * false again once a claim's ack lands, so neither can say which leg it was.
+   */
+  private isLegCurrent(
+    connection: ActiveConnection,
+    leg: RelaySocket,
+  ): boolean {
+    return (
+      this.connection === connection &&
+      connection.socket === leg &&
+      !connection.relinking
+    );
   }
 
   private isCurrent(generation: number): boolean {

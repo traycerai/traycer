@@ -6,6 +6,7 @@ import {
   it,
   vi,
   type Mock,
+  type MockInstance,
 } from "vitest";
 import { z } from "zod";
 import {
@@ -407,6 +408,25 @@ class FakeRelay {
         method: STATUS_METHOD,
         result: { ready: true },
         error: null,
+      },
+      binary: null,
+    });
+  }
+
+  /** A host-sent session FATAL on stream 0, sealed in order like any host frame. */
+  async sendSessionFatal(): Promise<void> {
+    await this.sendMux(this.host(), {
+      type: MuxFrameType.FATAL,
+      streamId: SESSION_CONTROL_STREAM_ID,
+      qos: QosClass.INTERACTIVE,
+      json: {
+        details: {
+          code: "INTERNAL_ERROR",
+          reason: "the host hit a transient fault",
+          incompatibleMethods: null,
+          upgradeGuidance: null,
+          retryable: true,
+        },
       },
       binary: null,
     });
@@ -867,6 +887,61 @@ function deferred<T>(): Deferred<T> {
     reject = onReject;
   });
   return { promise, resolve, reject };
+}
+
+/** Moves the fake clock in five-minute strokes; host traffic keeps the standing watchdog fed. */
+async function advanceFeedingHost(
+  relay: FakeRelay,
+  totalMs: number,
+): Promise<void> {
+  const stroke = 5 * 60_000;
+  for (let elapsed = 0; elapsed < totalMs; elapsed += stroke) {
+    await vi.advanceTimersByTimeAsync(Math.min(stroke, totalMs - elapsed));
+    await relay.tick(1_000 + elapsed);
+    await realDelay(20);
+  }
+}
+
+/** Runs the standing re-auth loop to its mint and holds that mint outstanding. */
+async function holdReauthMint(
+  fixture: Fixture,
+): Promise<Deferred<AttachGrantProvision>> {
+  const { relay, grants } = fixture;
+  const mint = deferred<AttachGrantProvision>();
+  grants.mockImplementationOnce(() => mint.promise);
+  await advanceFeedingHost(
+    relay,
+    CLIENT_REAUTH_INTERVAL_MS + CLIENT_REAUTH_JITTER_MS,
+  );
+  expect(grants).toHaveBeenCalledTimes(2);
+  return mint;
+}
+
+interface HeldDecrypt {
+  readonly spy: MockInstance<NoiseChannel["decrypt"]>;
+  /** The held frame decodes as it would have. */
+  release(): void;
+  /** The held frame fails to decode. */
+  fail(error: Error): void;
+}
+
+/** Holds the client's next inbound decrypt until the test lets it go. */
+function holdNextDecrypt(): HeldDecrypt {
+  const gate = deferred<void>();
+  const spy = vi
+    .spyOn(NoiseChannel.prototype, "decrypt")
+    .mockImplementationOnce(async function (
+      this: NoiseChannel,
+      frame: Uint8Array,
+    ) {
+      await gate.promise;
+      return this.decrypt(frame);
+    });
+  return {
+    spy,
+    release: () => gate.resolve(undefined),
+    fail: (error) => gate.reject(error),
+  };
 }
 
 const OK_GRANT: AttachGrantProvision = {
@@ -1422,21 +1497,19 @@ describe("RemoteSession relink on an own-leg loss", () => {
 
   describe("a claim dial's late completions", () => {
     /**
-     * The reviewer's repro. An old inbound decrypt is held; claim mint #1 is
-     * outstanding after `forceReconnect`; the decrypt then rejects, which lands
-     * on the loss funnel while relinking, retires dial #1 and schedules #2 on
-     * the same generation. Returns the controls.
+     * An old inbound decrypt is held with a host-sent retryable session FATAL
+     * in it; claim mint #1 is outstanding after `forceReconnect`; the decrypt
+     * then lets the frame through. It is authentic and in order, so it
+     * dispatches to the loss funnel while relinking, which retires dial #1 and
+     * schedules #2 on the same generation. Returns the controls.
      */
     async function retireFirstClaimMint(fixture: Fixture): Promise<{
       readonly mint1: Deferred<AttachGrantProvision>;
     }> {
       const { relay, session, grants } = fixture;
-      const decrypt = deferred<Uint8Array>();
-      const decryptSpy = vi
-        .spyOn(NoiseChannel.prototype, "decrypt")
-        .mockImplementationOnce(() => decrypt.promise);
-      await relay.tick(5);
-      expect(decryptSpy).toHaveBeenCalledTimes(1);
+      const held = holdNextDecrypt();
+      await relay.sendSessionFatal();
+      await until(() => held.spy.mock.calls.length === 1);
       const mint1 = deferred<AttachGrantProvision>();
       grants.mockImplementationOnce(() => mint1.promise);
 
@@ -1444,7 +1517,7 @@ describe("RemoteSession relink on an own-leg loss", () => {
       await step(0);
       expect(grants).toHaveBeenCalledTimes(2);
 
-      decrypt.reject(new Error("the old leg's frame did not decode"));
+      held.release();
       await step(0);
       // Dial #1 is retired; #2 waits on its backoff.
       expect(grants).toHaveBeenCalledTimes(2);
@@ -1664,17 +1737,8 @@ describe("RemoteSession relink on an own-leg loss", () => {
 
     it("does not re-present a grant on a leg whose ack is still outstanding when a re-auth mint completes", async () => {
       const fixture = await readyFixture(LIVE);
-      const { relay, session, grants } = fixture;
-      const reauthMint = deferred<AttachGrantProvision>();
-      grants.mockImplementationOnce(() => reauthMint.promise);
-      const horizon = CLIENT_REAUTH_INTERVAL_MS + CLIENT_REAUTH_JITTER_MS;
-      // Host traffic keeps the standing watchdog fed across the wait.
-      for (let elapsed = 0; elapsed < horizon; elapsed += 5 * 60_000) {
-        await vi.advanceTimersByTimeAsync(5 * 60_000);
-        await relay.tick(1_000 + elapsed);
-        await realDelay(20);
-      }
-      expect(grants).toHaveBeenCalledTimes(2);
+      const { relay, session } = fixture;
+      const reauthMint = await holdReauthMint(fixture);
 
       relay.swallowAcks = true;
       session.forceReconnect("test");
@@ -1683,6 +1747,200 @@ describe("RemoteSession relink on an own-leg loss", () => {
       await step(1_000);
 
       expect(relay.legs[1]?.textSends).toEqual([]);
+    });
+
+    it("does not restart a claim when an inbound decrypt rejects after the leg went", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { relay, session, grants } = fixture;
+      const held = holdNextDecrypt();
+      await relay.tick(5);
+      await until(() => held.spy.mock.calls.length === 1);
+      const mint1 = deferred<AttachGrantProvision>();
+      grants.mockImplementationOnce(() => mint1.promise);
+      session.forceReconnect("test");
+      await step(0);
+      expect(grants).toHaveBeenCalledTimes(2);
+
+      held.fail(new Error("the old leg's frame did not decode"));
+      await step(5_000);
+
+      // Mint #1 is still the only claim dial: no second mint, no new socket.
+      expect(grants).toHaveBeenCalledTimes(2);
+      expect(relay.legs).toHaveLength(1);
+      mint1.resolve(OK_GRANT);
+      await untilResumed(fixture, 1);
+      expect(relay.legs).toHaveLength(2);
+      expect(relay.handshakes).toBe(1);
+    });
+  });
+
+  describe("completions that land after the new leg's same-session ack", () => {
+    it("lets a write on the old leg fail without rebuilding: the frame goes through the gap, once", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { relay, session, stream } = fixture;
+      relay.holdUnary = true;
+      const call = track(callStatus(session));
+      await until(() => relay.pendingRequests.length === 1);
+      const sealed = deferred<Uint8Array>();
+      const encryptSpy = vi
+        .spyOn(NoiseChannel.prototype, "encrypt")
+        .mockImplementationOnce(() => sealed.promise);
+      stream.sendClientFrame({ kind: "noop", hasBinaryPayload: false }, null);
+      await step(0);
+      expect(encryptSpy).toHaveBeenCalledTimes(1);
+      const framesBefore = relay.clientFrames.length;
+
+      session.forceReconnect("test");
+      await advanceUntil(() => relay.legs.length === 2, 5_000);
+      // The ack is in; the exchange waits for the old leg's write to settle.
+      await step(0);
+      expect(relay.resumes).toHaveLength(0);
+      sealed.reject(new Error("the old leg's seal failed"));
+      await untilResumed(fixture, 1);
+
+      expect(relay.legs).toHaveLength(2);
+      expect(relay.legs[1]?.closes).toEqual([]);
+      expect(relay.handshakes).toBe(1);
+      expect(relay.sessions).toHaveLength(1);
+      expect(session.isReady()).toBe(true);
+      expect(
+        relay.clientFrames
+          .slice(framesBefore)
+          .filter((frame) => frame.type === MuxFrameType.STREAM_FRAME),
+      ).toEqual([{ leg: 1, type: MuxFrameType.STREAM_FRAME }]);
+      const pending = relay.pendingRequests[0];
+      if (pending === undefined) {
+        throw new Error("the host never saw the call");
+      }
+      expect(call.settled).toBe(false);
+      await relay.respondTo(pending);
+      await until(() => call.settled);
+      expect(call.value).toEqual({ ready: true });
+    });
+
+    it.each<{
+      readonly name: string;
+      readonly provision: AttachGrantProvision;
+      readonly sentOnLate: number;
+    }>([
+      { name: "ok", provision: OK_GRANT, sentOnLate: 0 },
+      {
+        name: "unavailable",
+        provision: { kind: "unavailable", detail: "authn down", context: "x" },
+        sentOnLate: 0,
+      },
+    ])(
+      "leaves the loop the ack installed alone when the old leg's re-auth mint completes $name",
+      async ({ provision, sentOnLate }) => {
+        const fixture = await readyFixture(LIVE);
+        const { relay, session, grants } = fixture;
+        const reauthMint = await holdReauthMint(fixture);
+
+        session.forceReconnect("test");
+        await untilResumed(fixture, 1);
+        const resumedAt = Date.now();
+        const claimLeg = relay.legs[1];
+        expect(claimLeg?.textSends).toEqual([]);
+
+        // The ack's loop is 45 minutes out (plus or minus five); this
+        // completion lands twenty minutes into it.
+        await advanceFeedingHost(relay, 20 * 60_000);
+        const timers = vi.getTimerCount();
+        const mints = grants.mock.calls.length;
+        reauthMint.resolve(provision);
+        await step(0);
+
+        expect(claimLeg?.textSends).toHaveLength(sentOnLate);
+        expect(vi.getTimerCount()).toBe(timers);
+        expect(grants).toHaveBeenCalledTimes(mints);
+
+        // The loop fires once, on the schedule the ack gave it.
+        await advanceFeedingHost(
+          relay,
+          resumedAt +
+            CLIENT_REAUTH_INTERVAL_MS +
+            CLIENT_REAUTH_JITTER_MS +
+            60_000 -
+            Date.now(),
+        );
+        expect(grants).toHaveBeenCalledTimes(mints + 1);
+        expect(claimLeg?.textSends).toHaveLength(1);
+        expect(relay.legs).toHaveLength(2);
+      },
+    );
+
+    it("lets an inbound decrypt on the old leg reject without rebuilding: the frame comes through the host's resend, once", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { relay, session, ticks } = fixture;
+      relay.holdUnary = true;
+      const call = track(callStatus(session));
+      await until(() => relay.pendingRequests.length === 1);
+      const held = holdNextDecrypt();
+      await relay.tick(5);
+      await until(() => held.spy.mock.calls.length === 1);
+
+      session.forceReconnect("test");
+      await advanceUntil(() => relay.legs.length === 2, 5_000);
+      await step(0);
+      held.fail(new Error("the old leg's frame did not decode"));
+      await untilResumed(fixture, 1);
+      await until(() => ticks.length === 2);
+
+      expect(relay.legs).toHaveLength(2);
+      expect(relay.legs[1]?.closes).toEqual([]);
+      expect(relay.handshakes).toBe(1);
+      expect(relay.sessions).toHaveLength(1);
+      expect(session.isReady()).toBe(true);
+      expect(ticks).toEqual([0, 5]);
+      expect(call.settled).toBe(false);
+    });
+  });
+
+  describe("a real failure on the current leg", () => {
+    it.each<{
+      readonly name: string;
+      readonly reason: string;
+      readonly fail: (fixture: Fixture) => Promise<void>;
+    }>([
+      {
+        name: "a write on it fails",
+        reason: "write-failed",
+        fail: async ({ relay, stream }) => {
+          const sealed = deferred<Uint8Array>();
+          vi.spyOn(NoiseChannel.prototype, "encrypt").mockImplementationOnce(
+            () => sealed.promise,
+          );
+          stream.sendClientFrame(
+            { kind: "noop", hasBinaryPayload: false },
+            null,
+          );
+          await step(0);
+          expect(relay.legs).toHaveLength(1);
+          sealed.reject(new Error("the channel failed under the write"));
+        },
+      },
+      {
+        name: "an inbound decrypt on it rejects",
+        reason: "inbound-decode-failed",
+        fail: async ({ relay }) => {
+          const held = holdNextDecrypt();
+          await relay.tick(5);
+          await until(() => held.spy.mock.calls.length === 1);
+          held.fail(new Error("the frame did not decode"));
+        },
+      },
+    ])("rebuilds the session when $name", async ({ fail, reason }) => {
+      const fixture = await readyFixture(LIVE);
+      const { relay, session } = fixture;
+
+      await fail(fixture);
+      await advanceUntil(() => relay.handshakes === 2, 30_000);
+      await until(() => session.isReady());
+
+      expect(relay.legs[0]?.closes).toEqual([{ code: 1000, reason }]);
+      expect(relay.legs).toHaveLength(2);
+      expect(relay.legs[1]?.claim).toBeNull();
+      expect(relay.sessions).toHaveLength(2);
     });
   });
 
