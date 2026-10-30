@@ -63,8 +63,9 @@ import "@/index.css";
  * `body[data-app-scroll-y]` (its body's on `body[data-app-body-scroll-top]`).
  * `closed-shadow-focus` focuses a field in a closed shadow root at the
  * bottom. `body-overflow`, `contained-body-overflow`,
- * `container-body-overflow` and `covering-nearest` first shape the page into
- * a case the native reveal is compared on.
+ * `container-body-overflow`, `skipped-block`, `skipped-details` and
+ * `covering-nearest` first shape the page into a case the native reveal is
+ * compared on.
  * `browser-tests/sandbox-frame-scroll.spec.ts` drives it.
  */
 const HOSTILE_APP = `<main style="height:240px;padding:16px">hostile app</main>
@@ -177,6 +178,28 @@ setInterval(async () => {
     mid.id = "mid";
     mid.style.marginTop = "560px";
     document.querySelector("main").append(mid);
+    scrollTo(0, 0);
+    mid.scrollIntoView({ block: "start" });
+  }
+  if (command === "skipped-block" || command === "skipped-details") {
+    // Contents the engine skips, with the page left plenty of room to
+    // scroll: the native reveal moves nothing, so the contained one must
+    // not either. skipped-details carries no author CSS at all — a closed
+    // details hides its contents in a UA shadow root, which no walk over
+    // the page's own ancestors can see.
+    const mid = document.createElement("p");
+    mid.id = "mid";
+    mid.style.marginTop = "560px";
+    let box;
+    if (command === "skipped-block") {
+      box = document.createElement("div");
+      box.style.contentVisibility = "hidden";
+    } else {
+      box = document.createElement("details");
+      box.append(document.createElement("summary"));
+    }
+    box.append(mid);
+    document.querySelector("main").append(box);
     scrollTo(0, 0);
     mid.scrollIntoView({ block: "start" });
   }

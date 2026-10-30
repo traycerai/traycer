@@ -25,7 +25,7 @@ const mocks = vi.hoisted(() => {
   const botRows: Record<
     string,
     {
-      readonly announcement?: { kind: "question"; link: null };
+      readonly announcement?: { kind: "question" | "automation"; link: null };
       readonly repliesTo?: string;
     }
   > = {};
@@ -322,7 +322,7 @@ describe("<BotTaskList /> in the bot's view: where a task came from", () => {
     expect(mocks.openPost).toHaveBeenLastCalledWith({
       anchorMessageId: THREAD_POST,
       announcement: false,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
 
@@ -337,7 +337,7 @@ describe("<BotTaskList /> in the bot's view: where a task came from", () => {
     expect(mocks.openPost).toHaveBeenLastCalledWith({
       anchorMessageId: THREAD_POST,
       announcement: false,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
 
@@ -352,7 +352,7 @@ describe("<BotTaskList /> in the bot's view: where a task came from", () => {
     expect(mocks.openPost).toHaveBeenLastCalledWith({
       anchorMessageId: DIRECT_POST,
       announcement: true,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
   });
@@ -379,7 +379,7 @@ describe("<BotTaskList /> in the bot's view: where a task came from", () => {
     expect(mocks.openPost).toHaveBeenLastCalledWith({
       anchorMessageId: "question-1",
       announcement: true,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
   });
@@ -406,7 +406,34 @@ describe("<BotTaskList /> in the bot's view: where a task came from", () => {
     expect(mocks.openPost).toHaveBeenLastCalledWith({
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
+      sent: null,
+    });
+  });
+
+  it("opens a thread rooted on another row of the bot through that row's own gate", async () => {
+    const user = userEvent.setup();
+    mocks.state.botRows["notice-1"] = {
+      announcement: { kind: "automation", link: null },
+    };
+    loadChannel([["notice-1", "Nightly triage now runs at 02:00"]]);
+    mount(
+      [
+        task("task-watch", {
+          originRequestId: "req-opener",
+          createdByChatId: "thread-notice",
+        }),
+      ],
+      [threadOn("thread-notice", "notice-1", "req-opener", null)],
+    );
+
+    await user.click(
+      within(taskRow("task-watch")).getByTestId("bot-task-thread"),
+    );
+    expect(mocks.openPost).toHaveBeenLastCalledWith({
+      anchorMessageId: "notice-1",
+      announcement: true,
+      anchorKind: "message",
       sent: null,
     });
   });
@@ -439,7 +466,7 @@ describe("<BotTaskList /> in the bot's view: where a task came from", () => {
     expect(mocks.openPost).toHaveBeenLastCalledWith({
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     });
   });

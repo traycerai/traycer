@@ -7,12 +7,11 @@ import {
   type ReactNode,
 } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
-import {
-  BOT_THREAD_ANCHOR_ANSWER,
-  type BotConversationRecord,
-  type BotConversationSendResponse,
-  type BotThreadListResponse,
-  type BotThreadSummary,
+import type {
+  BotConversationRecord,
+  BotConversationSendResponse,
+  BotThreadListResponse,
+  BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   BotSurfaceActionState,
@@ -20,6 +19,7 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-context";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
@@ -30,6 +30,8 @@ import {
   type QuestionAnswerSend,
 } from "@/components/bots/bot-chat-transcript";
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
+import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
+import { threadOpenOf } from "@/lib/bots/bot-trunk-model";
 import {
   BotMemoryPanel,
   type BotMemoryNavigation,
@@ -253,7 +255,7 @@ export function BotChannelView(props: {
     threadsByPost,
     isUnread,
     unreadCountOf,
-    answerThreads,
+    threadAnchorKinds,
   } = useChannelThreads({
     client,
     botId,
@@ -354,15 +356,15 @@ export function BotChannelView(props: {
     [onOpenThread],
   );
 
-  // A question, a proposal, a direct post or a direct reply with no thread
-  // yet shows a box whose first reply opens it, rather than waiting for a
-  // thread nobody has started.
+  // A direct post or a row of the bot with no thread yet shows a box whose
+  // first reply opens it, rather than waiting for a thread nobody has
+  // started.
   const openAnnouncementThread = useCallback(
-    (announcementId: string, answer: boolean) =>
+    (announcementId: string, anchorKind: string | null) =>
       onOpenThread({
         anchorMessageId: announcementId,
         announcement: true,
-        answer,
+        anchorKind,
         sent: null,
       }),
     [onOpenThread],
@@ -377,7 +379,7 @@ export function BotChannelView(props: {
       threadListSupported
         ? (questionMessageId: string, draft: string) => {
             seedThreadBox(botId, questionMessageId, draft);
-            openAnnouncementThread(questionMessageId, false);
+            openAnnouncementThread(questionMessageId, null);
           }
         : null,
     [botId, openAnnouncementThread, seedThreadBox, threadListSupported],
@@ -393,7 +395,7 @@ export function BotChannelView(props: {
       onOpenThread({
         anchorMessageId: response.messageId,
         announcement: false,
-        answer: false,
+        anchorKind: null,
         sent: {
           threadId: response.threadId,
           requestId: response.requestId,
@@ -421,7 +423,7 @@ export function BotChannelView(props: {
         onOpenThread({
           anchorMessageId,
           announcement: false,
-          answer: false,
+          anchorKind: null,
           sent: null,
         }),
       showInChannel: (messageId) => {
@@ -459,14 +461,14 @@ export function BotChannelView(props: {
             onOpenThread({
               anchorMessageId: postMessageId,
               announcement: false,
-              answer: false,
+              anchorKind: null,
               sent: null,
             })
         : null,
       openAnnouncementThread: threadListSupported
         ? openAnnouncementThread
         : null,
-      answerThreads,
+      threadAnchorKinds,
       chooseOption: sending ? null : chooseOption,
       answerQuestion: answersTaken ? answerQuestion : null,
       discussQuestion,
@@ -476,7 +478,6 @@ export function BotChannelView(props: {
       intro: { botTitle, directive },
     }),
     [
-      answerThreads,
       answerQuestion,
       answersTaken,
       botTitle,
@@ -494,6 +495,7 @@ export function BotChannelView(props: {
       resolveMember,
       sending,
       threadListSupported,
+      threadAnchorKinds,
       threadsByPost,
       trunkChatId,
       viewer,
@@ -522,9 +524,22 @@ export function BotChannelView(props: {
       ? null
       : (threadsByPost.get(openThreadPostId) ?? null);
   const { refetch: refetchThreads } = threadList;
-  const panelThread = useMemo<BotThreadPanelThread>(() => {
-    // A direct reply's thread takes a send while the bot's binding opens it.
-    const sendable = open?.answer !== true || answerThreads;
+  // The row the open thread hangs off, as the channel's session has it: the
+  // panel's own read of it fetches it when cold. Read beside the panel, not
+  // around it, so the panel keeps its place while the session comes and goes.
+  const anchorRow = useChannelRow({
+    botId,
+    hostId,
+    conversationId: channel?.conversationId ?? null,
+    messageId: railThreadPostId,
+  });
+  const panelThread = useMemo((): BotThreadPanelThread => {
+    const sendable = anchorSendable({
+      open,
+      listed: openThread,
+      post: anchorRow,
+      threadAnchorKinds,
+    });
     const retry = threadList.isError ? () => void refetchThreads() : null;
     // A listed thread, one its post opened and a box that starts one keep
     // what the list last said, the box and its draft through a failed read.
@@ -539,7 +554,14 @@ export function BotChannelView(props: {
     }
     if (retry !== null) return { kind: "failed", retry };
     return { kind: "pending" };
-  }, [answerThreads, open, openThread, refetchThreads, threadList.isError]);
+  }, [
+    anchorRow,
+    open,
+    openThread,
+    refetchThreads,
+    threadAnchorKinds,
+    threadList.isError,
+  ]);
   useReadThreadWhilePresented({
     client,
     botId,
@@ -860,8 +882,8 @@ function useChannelThreads(args: {
   readonly isUnread: (threadId: string) => boolean;
   /** `null` where the host does not count. */
   readonly unreadCountOf: (threadId: string) => number | null;
-  /** Whether the bot's host opens a thread under its direct reply. */
-  readonly answerThreads: boolean;
+  /** The rows of the bot its host opens their own thread under. */
+  readonly threadAnchorKinds: readonly string[];
 } {
   const { client, botId, hostId, boundHostId, boundHostEpoch } = args;
   const supported = useHostMethodSupport(hostId, "bot.thread.list") === true;
@@ -908,22 +930,85 @@ function useChannelThreads(args: {
   // said it under: a host that predates it says nothing, and a list read
   // under an earlier binding - cached, or answered after the bot moved -
   // says nothing for this one until it is read again. A direct reply then
-  // opens its post's thread.
+  // opens its post's thread, and any other row of the bot none.
   const anchors = threadList.data?.threadAnchors ?? null;
-  const answerThreads =
-    supported &&
-    anchors !== null &&
-    anchors.hostId === boundHostId &&
-    anchors.epoch === boundHostEpoch &&
-    anchors.kinds.includes(BOT_THREAD_ANCHOR_ANSWER);
+  const threadAnchorKinds = useMemo(
+    () =>
+      supported &&
+      anchors !== null &&
+      anchors.hostId === boundHostId &&
+      anchors.epoch === boundHostEpoch
+        ? anchors.kinds
+        : [],
+    [anchors, boundHostEpoch, boundHostId, supported],
+  );
   return {
     supported,
     threadList,
     threadsByPost,
     isUnread,
     unreadCountOf,
-    answerThreads,
+    threadAnchorKinds,
   };
+}
+
+/**
+ * Whether the open thread's box takes a send. The anchor's row says which
+ * row the thread hangs off once the channel has it, whatever opened the
+ * thread (a memory's link and a session's "Open thread" name the anchor
+ * only): a row of the bot takes a send only while the bot's binding names
+ * it among the rows a thread roots on. An open that names its kind, or was
+ * made from its row (a box under a question, a proposal or a direct post),
+ * and a post being sent go by what they say. A thread opened by its anchor
+ * alone takes none until the channel's row or the thread list says a
+ * member wrote the anchor.
+ */
+function anchorSendable(input: {
+  readonly open: BotOpenThread | null;
+  readonly listed: BotThreadSummary | null;
+  readonly post: OpenMessage | null;
+  readonly threadAnchorKinds: readonly string[];
+}): boolean {
+  const { open, post } = input;
+  const kind =
+    post === null ? (open?.anchorKind ?? null) : threadOpenOf(post).anchorKind;
+  if (kind !== null) return input.threadAnchorKinds.includes(kind);
+  if (post !== null) return true;
+  if (open !== null && (open.sent !== null || open.announcement)) return true;
+  const anchor = input.listed?.anchor ?? null;
+  return anchor !== null && anchor.senderUserId !== null;
+}
+
+/**
+ * Channel row `messageId` as the channel's session holds it; `null` while
+ * it holds none, or there is no session or row to read.
+ */
+function useChannelRow(input: {
+  readonly botId: string;
+  readonly hostId: string;
+  readonly conversationId: string | null;
+  readonly messageId: string | null;
+}): OpenMessage | null {
+  const { conversationId, messageId } = input;
+  const handle = useChatSessionHandleForContainer(
+    input.botId,
+    conversationId ?? "",
+    input.hostId,
+    conversationId !== null,
+  );
+  const store = handle?.store ?? null;
+  const subscribe = useCallback(
+    (onChange: () => void) =>
+      store === null ? () => undefined : store.subscribe(onChange),
+    [store],
+  );
+  return useSyncExternalStore(subscribe, () =>
+    store === null || messageId === null
+      ? null
+      : (store
+          .getState()
+          .messages.find((message) => message.messageId === messageId) ?? null),
+  );
 }
 
 /**

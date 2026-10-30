@@ -6,24 +6,24 @@ import type {
 
 /**
  * The thread open beside a bot's channel, by the message it hangs off: a
- * member's post, one of the bot's questions or proposals, or one of its
- * direct replies.
+ * member's post, or one of the bot's own rows.
  */
 export interface BotOpenThread {
   readonly anchorMessageId: string;
   /**
    * The thread opens with the first reply under its anchor, sent with the
-   * anchor's id: the bot's question, proposal or direct reply, or a post the
-   * bot answered in the channel (reply mode `direct`). `false` for a post's
-   * own thread.
+   * anchor's id: one of the bot's rows, or a post the bot answered in the
+   * channel (reply mode `direct`). `false` for a post's own thread.
    */
   readonly announcement: boolean;
   /**
-   * The anchor is the bot's direct reply, whose own thread only a bound host
-   * that names it among its thread anchors opens: its box sends only while
-   * the bot's binding does.
+   * The thread anchor (`threadAnchors.kinds`) a bound host must name to
+   * open a thread under the anchor: `"answer"` for the bot's direct reply,
+   * `"message"` for any other row of the bot that is no question or
+   * proposal. Its box sends only while the bot's binding names it. `null`
+   * for a row every host takes a reply under.
    */
-  readonly answer: boolean;
+  readonly anchorKind: string | null;
   /**
    * The person's post that opened the thread as its send was accepted, which
    * the channel knows before the thread list or the channel's own row does.
