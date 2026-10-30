@@ -15,7 +15,11 @@ import {
   BotSessionContext,
   type BotSessionAccess,
 } from "@/components/bots/bot-session-context";
-import type { BotSend } from "@/lib/bots/bot-send-tool";
+import {
+  sendQuestionStates,
+  type BotSend,
+  type BotSendQuestion,
+} from "@/lib/bots/bot-send-tool";
 import { firstLineOf } from "@/lib/bots/bot-trunk-model";
 import { postTextOf } from "@/lib/bots/reply-row";
 
@@ -23,14 +27,18 @@ import { postTextOf } from "@/lib/bots/reply-row";
  * One of the bot's sends in its session, read-only (Tracy Bots T93): where it
  * went - the channel, or the session's thread named by its post - and what it
  * posted, its Markdown rendered as the channel renders it, a reply's choices and a question's options drawn as they read, with
- * nothing to press but the link to where it landed: the post a reply or
- * question follows, the thread, or the channel. What in a task a send
- * pointed at (T89) is named under its text, never acted on. A question is
- * drawn as the bot asked it and claims no state - neither open nor answered
- * nor settled: the tool call does not name the post it wrote, so the
- * settlement arrives with the host stamping that post on the call. Nothing
- * is answered here. Outside a bot's session it names no place and links
+ * nothing to press but the link to where it landed. What in a task a send
+ * pointed at (T89) is named under its text, never acted on. Nothing is
+ * answered here. Outside a bot's session it names no place and links
  * nowhere.
+ *
+ * Where the host stamped the post the send wrote on its call (T94), the link
+ * goes to that post - in the channel, or its thread - and a question reads
+ * the post as the channel holds it: each question settled says so as the
+ * channel's card does (answered by whom, skipped, or settled by the bot),
+ * and one still open says nothing. A send from before the stamp links to
+ * the post a reply or question follows, the thread, or the channel, and a
+ * question claims no state.
  */
 export function BotSendCard(props: {
   readonly id: string;
@@ -54,20 +62,11 @@ export function BotSendCard(props: {
       </div>
       <div data-chat-find-unit={findUnitId ?? undefined}>
         {send.kind === "ask" ? (
-          <ol className="flex flex-col gap-1.5">
-            {send.questions.map((question) => (
-              <li
-                key={question.text}
-                data-testid="bot-send-question"
-                className="flex flex-col gap-1"
-              >
-                <p className="whitespace-pre-wrap text-foreground">
-                  {question.text}
-                </p>
-                <SendOptions options={question.options} />
-              </li>
-            ))}
-          </ol>
+          <AskedQuestions
+            questions={send.questions}
+            receipt={send.receipt}
+            access={access}
+          />
         ) : (
           <>
             <div data-testid="bot-send-text" className="text-foreground">
@@ -88,6 +87,73 @@ export function BotSendCard(props: {
         <SendSurface kind={send.surface} />
       )}
     </div>
+  );
+}
+
+/** A question's questions, read against the post it wrote where the host stamped it in a bot's session. */
+function AskedQuestions(props: {
+  readonly questions: ReadonlyArray<BotSendQuestion>;
+  readonly receipt: BotSend["receipt"];
+  readonly access: BotSessionAccess | null;
+}): ReactNode {
+  const { questions, receipt, access } = props;
+  if (access === null || receipt === null) {
+    return <SendQuestions questions={questions} states={null} />;
+  }
+  return (
+    <ChannelPost
+      botId={access.botId}
+      hostId={access.hostId}
+      conversationId={receipt.conversationId}
+      messageId={receipt.messageId}
+      fetchCold
+    >
+      {(post) => (
+        <SendQuestions
+          questions={questions}
+          states={sendQuestionStates(post, access)}
+        />
+      )}
+    </ChannelPost>
+  );
+}
+
+/**
+ * A question's questions as the bot asked them, and under each settled one
+ * what the channel's card says of it; `states` is `null` where the post is
+ * not read.
+ */
+function SendQuestions(props: {
+  readonly questions: ReadonlyArray<BotSendQuestion>;
+  readonly states: ReadonlyArray<string | null> | null;
+}): ReactNode {
+  const { questions, states } = props;
+  return (
+    <ol className="flex flex-col gap-1.5">
+      {questions.map((question, index) => {
+        const state = states?.[index] ?? null;
+        return (
+          <li
+            key={question.text}
+            data-testid="bot-send-question"
+            className="flex flex-col gap-1"
+          >
+            <p className="whitespace-pre-wrap text-foreground">
+              {question.text}
+            </p>
+            <SendOptions options={question.options} />
+            {state === null ? null : (
+              <p
+                data-testid="bot-send-question-state"
+                className="whitespace-pre-wrap text-ui-xs text-muted-foreground"
+              >
+                {state}
+              </p>
+            )}
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -150,9 +216,10 @@ function SendPlace(props: {
 }
 
 /**
- * The link to where a send landed: a reply's or question's post in the
- * channel, the thread it went to, or the channel. Nothing outside a bot's
- * session.
+ * The link to where a send landed: the post it wrote where the host stamped
+ * it - in the channel, or in its thread, opened on it - else a reply's or
+ * question's post in the channel, the thread it went to, or the channel.
+ * Nothing outside a bot's session.
  */
 function SendLink(props: {
   readonly send: BotSend;
@@ -162,10 +229,12 @@ function SendLink(props: {
   if (access === null) return null;
   const thread = threadOf(send, access);
   const repliesTo = send.kind === "announce" ? null : send.repliesTo;
+  const post = thread === null ? send.receipt : null;
   const go =
-    thread === null
-      ? () => access.openChannel(repliesTo)
-      : () => access.openThread(thread.threadId);
+    thread !== null
+      ? () =>
+          access.openThread(thread.threadId, send.receipt?.messageId ?? null)
+      : () => access.openChannel(post?.messageId ?? repliesTo);
   return (
     <Button
       type="button"
@@ -175,7 +244,11 @@ function SendLink(props: {
       data-testid="bot-send-open"
       onClick={go}
     >
-      {sendLinkLabel(send, thread !== null, repliesTo !== null)}
+      {sendLinkLabel(
+        send,
+        thread !== null,
+        post !== null || repliesTo !== null,
+      )}
     </Button>
   );
 }
@@ -183,13 +256,13 @@ function SendLink(props: {
 function sendLinkLabel(
   send: BotSend,
   inThread: boolean,
-  followsPost: boolean,
+  opensPost: boolean,
 ): string {
   if (send.kind === "ask") {
     return inThread ? "Open in the thread" : "Open in the channel";
   }
   if (inThread) return "Open thread";
-  return followsPost ? "Open post" : "Open channel";
+  return opensPost ? "Open post" : "Open channel";
 }
 
 const SURFACE_LABELS = {

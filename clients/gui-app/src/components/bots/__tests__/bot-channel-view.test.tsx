@@ -28,7 +28,10 @@ import type {
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-context";
-import type { BotTranscriptSurface } from "@/components/bots/bot-chat-transcript";
+import type {
+  BotTranscriptLanding,
+  BotTranscriptSurface,
+} from "@/components/bots/bot-chat-transcript";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 interface ThreadListCall {
@@ -91,6 +94,8 @@ const mocks = vi.hoisted(() => {
       // `false`: the thread list has not answered (pending, or failed).
       threadListAnswered: true,
       threadListError: false,
+      // Whether the read of the bot's conversations failed.
+      conversationsError: false,
       // Whether a `bot.conversation.send` is in flight.
       sending: false,
       chats,
@@ -113,7 +118,7 @@ vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
     data: { conversations: mocks.state.conversations },
-    isError: false,
+    isError: mocks.state.conversationsError,
     refetch: vi.fn(),
   }),
 }));
@@ -174,15 +179,17 @@ vi.mock("@/components/bots/bot-chat-transcript", () => ({
   BotChatTranscript: (props: {
     chatId: string;
     surface: BotTranscriptSurface | null;
+    landOn: BotTranscriptLanding | null;
   }) => {
     const surface = props.surface;
     return (
       <div
         data-testid={`stub-transcript-${surface === null ? "session" : surface.kind}`}
         data-chat-id={props.chatId}
+        data-land-on={props.landOn?.messageId ?? "none"}
         data-answer-threads={
           surface !== null && surface.kind === "channel"
-            ? String(surface.answerThreads)
+            ? String(surface.threadAnchorKinds.includes("answer"))
             : ""
         }
       >
@@ -264,7 +271,7 @@ function PostStub(props: {
   readonly threadLine: (postMessageId: string) => ChatBotThreadLine | null;
   readonly openThread: ((postMessageId: string) => void) | null;
   readonly openAnnouncementThread:
-    | ((announcementId: string, answer: boolean) => void)
+    | ((announcementId: string, anchorKind: string | null) => void)
     | null;
 }): ReactNode {
   const line = props.threadLine(props.postId);
@@ -309,7 +316,7 @@ function PostStub(props: {
           onClick={() =>
             openAnnouncementThread(
               props.postId,
-              mocks.answerIds.includes(props.postId),
+              mocks.answerIds.includes(props.postId) ? "answer" : null,
             )
           }
         />
@@ -318,7 +325,10 @@ function PostStub(props: {
   );
 }
 
-import { BotChannelView } from "@/components/bots/bot-channel-view";
+import {
+  BotChannelView,
+  type BotChannelLanding,
+} from "@/components/bots/bot-channel-view";
 import { BotSendFailedNotice } from "@/components/bots/bot-channel-notices";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import { threadOpenOf } from "@/lib/bots/bot-trunk-model";
@@ -388,9 +398,12 @@ interface MountOptions {
 const QUESTION_1: BotOpenThread = {
   anchorMessageId: "question-1",
   announcement: true,
-  answer: false,
+  anchorKind: null,
   sent: null,
 };
+
+/** Where the next mount lands the channel; `null` for where it opens. */
+let mountLanding: BotChannelLanding | null = null;
 
 function mount(options: MountOptions): {
   readonly onOpenThread: Mock<(open: BotOpenThread | null) => void>;
@@ -418,7 +431,7 @@ function mount(options: MountOptions): {
             trunkChatId="trunk-chat"
             onOpenTurn={vi.fn()}
             onOpenSession={vi.fn()}
-            landOn={null}
+            landOn={mountLanding}
             openMemory={null}
             onOpenMemory={vi.fn()}
             environmentId="env-1"
@@ -440,7 +453,7 @@ function mount(options: MountOptions): {
       : {
           anchorMessageId: options.openThreadPostId,
           announcement: false,
-          answer: false,
+          anchorKind: null,
           sent: null,
         };
   const result = render(tree(current));
@@ -463,6 +476,7 @@ function lastThreadListCall(): ThreadListCall {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mountLanding = null;
   mocks.threadListCalls.length = 0;
   mocks.state.paneVisible = true;
   mocks.state.threadListSupported = true;
@@ -477,6 +491,7 @@ beforeEach(() => {
   mocks.answerIds = [];
   mocks.state.threadListAnswered = true;
   mocks.state.threadListError = false;
+  mocks.state.conversationsError = false;
   mocks.state.sending = false;
   mocks.state.chats = {};
   mocks.postIds = [];
@@ -642,7 +657,7 @@ describe("<BotChannelView /> channel", () => {
     expect(onOpenThread).toHaveBeenCalledWith({
       anchorMessageId: "post-a",
       announcement: false,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
   });
@@ -724,7 +739,7 @@ describe("<BotChannelView /> channel", () => {
     reopen({
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     });
     expect(sendable()).toBe("true");
@@ -735,7 +750,7 @@ describe("<BotChannelView /> channel", () => {
     reopen({
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     });
     expect(answerThreads()).toBe("false");
@@ -752,7 +767,7 @@ describe("<BotChannelView /> channel", () => {
     reopen({
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     });
     expect(answerThreads()).toBe("false");
@@ -763,7 +778,7 @@ describe("<BotChannelView /> channel", () => {
     reopen({
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     });
     expect(sendable()).toBe("false");
@@ -774,7 +789,7 @@ describe("<BotChannelView /> channel", () => {
     reopen({
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     });
     expect(answerThreads()).toBe("true");
@@ -789,7 +804,7 @@ describe("<BotChannelView /> channel", () => {
     const ANSWER_THREAD: BotOpenThread = {
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     };
     mocks.state.binding = { hostId: "host-capable", epoch: 3 };
@@ -818,12 +833,98 @@ describe("<BotChannelView /> channel", () => {
     expect(sendable()).toBe("true");
   });
 
+  it("sends from the box under another row of the bot only while the bot's binding names that row among the rows a thread roots on", () => {
+    const sendable = (): string | null =>
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-bot-thread-composer")
+        .getAttribute("data-sendable");
+    const NOTICE_THREAD: BotOpenThread = {
+      anchorMessageId: "notice-1",
+      announcement: true,
+      anchorKind: "message",
+      sent: null,
+    };
+    mocks.state.binding = { hostId: "host-capable", epoch: 3 };
+    mocks.state.threadAnchors = saidBy("host-capable", 3, [
+      "answer",
+      "message",
+    ]);
+    const { reopen } = mount({ openThreadPostId: null });
+    reopen(NOTICE_THREAD);
+    expect(sendable()).toBe("true");
+
+    // A host that roots threads on a direct answer and on nothing else.
+    mocks.state.threadAnchors = saidBy("host-capable", 3, ["answer"]);
+    reopen(NOTICE_THREAD);
+    expect(sendable()).toBe("false");
+  });
+
+  it("takes no send in a listed thread whose anchor no member wrote, opened by its anchor alone, until the channel's row says which row it is", () => {
+    const sendable = (): string | null =>
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-bot-thread-composer")
+        .getAttribute("data-sendable");
+    mocks.state.binding = { hostId: "host-capable", epoch: 3 };
+    mocks.state.threadAnchors = saidBy("host-capable", 3, [
+      "answer",
+      "message",
+    ]);
+    mocks.state.threads = [
+      thread("thread-notice", "notice-1", {
+        anchor: {
+          messageId: "notice-1",
+          requestId: "req-thread-notice",
+          senderUserId: null,
+          sentAt: 1_000,
+          resolvedAt: null,
+        },
+        replyCount: 1,
+        lastReplyAt: 8_000,
+      }),
+    ];
+    const { reopen } = mount({ openThreadPostId: null });
+    reopen({
+      anchorMessageId: "notice-1",
+      announcement: false,
+      anchorKind: null,
+      sent: null,
+    });
+
+    expect(sendable()).toBe("false");
+  });
+
+  it("offers no box in a thread opened by its anchor alone before the list has it, and one that sends once the list says a member wrote the anchor", () => {
+    const panel = (): HTMLElement => screen.getByTestId("bot-thread-panel");
+    const BY_ANCHOR: BotOpenThread = {
+      anchorMessageId: "post-late",
+      announcement: false,
+      anchorKind: null,
+      sent: null,
+    };
+    mocks.state.threads = [];
+    const { reopen } = mount({ openThreadPostId: null });
+    reopen(BY_ANCHOR);
+
+    expect(
+      within(panel()).queryByTestId("stub-bot-thread-composer"),
+    ).toBeNull();
+
+    mocks.state.threads = [thread("thread-late", "post-late", {})];
+    reopen(BY_ANCHOR);
+
+    expect(
+      within(panel())
+        .getByTestId("stub-bot-thread-composer")
+        .getAttribute("data-sendable"),
+    ).toBe("true");
+  });
+
   it("keeps the box under a direct reply mounted, beside Retry, through a failed read of the list after a claim, and sending once the read recovers", async () => {
     const user = userEvent.setup();
     const ANSWER_THREAD: BotOpenThread = {
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     };
     mocks.state.binding = { hostId: "host-capable", epoch: 3 };
@@ -859,7 +960,7 @@ describe("<BotChannelView /> channel", () => {
     const ANSWER_THREAD: BotOpenThread = {
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     };
     mocks.state.binding = { hostId: "host-capable", epoch: 3 };
@@ -922,7 +1023,6 @@ describe("<BotChannelView /> channel", () => {
       repliesTo: "post-1",
     };
     const how = threadOpenOf(reply);
-    if (how === null) throw new Error("a direct reply roots a thread");
     const fromTask: BotOpenThread = {
       anchorMessageId: reply.messageId,
       ...how,
@@ -962,7 +1062,7 @@ describe("<BotChannelView /> channel", () => {
     const ANSWER_THREAD: BotOpenThread = {
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     };
     mocks.state.binding = { hostId: "host-capable", epoch: 3 };
@@ -1059,7 +1159,7 @@ describe("<BotChannelView /> channel", () => {
         {
           anchorMessageId: "answer-1",
           announcement: true,
-          answer: true,
+          anchorKind: "answer",
           sent: null,
         },
       ],
@@ -1067,7 +1167,7 @@ describe("<BotChannelView /> channel", () => {
         {
           anchorMessageId: "post-1",
           announcement: true,
-          answer: false,
+          anchorKind: null,
           sent: null,
         },
       ],
@@ -1075,7 +1175,7 @@ describe("<BotChannelView /> channel", () => {
     reopen({
       anchorMessageId: "answer-1",
       announcement: true,
-      answer: true,
+      anchorKind: "answer",
       sent: null,
     });
     expect(
@@ -1084,7 +1184,7 @@ describe("<BotChannelView /> channel", () => {
     reopen({
       anchorMessageId: "post-1",
       announcement: true,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
     expect(
@@ -1123,7 +1223,7 @@ describe("<BotChannelView /> channel", () => {
     reopen({
       anchorMessageId: "post-a",
       announcement: false,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
 
@@ -1137,7 +1237,7 @@ describe("<BotChannelView /> channel", () => {
     reopen({
       anchorMessageId: "post-a",
       announcement: false,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
 
@@ -1352,6 +1452,116 @@ describe("<BotChannelView /> open thread", () => {
     useBotPaneWidthsStore.getState().resetWidth("thread");
   });
 
+  it("lands the open thread's replies on the message of it the tab named, and leaves the channel where it opens", () => {
+    mountLanding = {
+      messageId: "reply-a9",
+      sendPostId: null,
+      threadId: "thread-a",
+      visit: 1,
+    };
+    mount({ openThreadPostId: "post-a" });
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(
+      within(panel)
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on"),
+    ).toBe("reply-a9");
+    expect(
+      screen
+        .getByTestId("stub-transcript-channel")
+        .getAttribute("data-land-on"),
+    ).toBe("none");
+  });
+
+  it("lands the thread once: the memory taking its place and Back to it open it where it opens", () => {
+    mountLanding = {
+      messageId: "reply-a9",
+      sendPostId: null,
+      threadId: "thread-a",
+      visit: 1,
+    };
+    const view = mount({ openThreadPostId: "post-a" });
+    const threadLanding = (): string | null =>
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on");
+    expect(threadLanding()).toBe("reply-a9");
+
+    // The memory takes the thread's slot; its Back puts the thread back.
+    view.reopen(null);
+    expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
+    view.reopen({
+      anchorMessageId: "post-a",
+      announcement: false,
+      anchorKind: null,
+      sent: null,
+    });
+
+    expect(threadLanding()).toBe("none");
+  });
+
+  it("lands the thread once: a failed read of the channel and its retry draw it where it opens", () => {
+    mountLanding = {
+      messageId: "reply-a9",
+      sendPostId: null,
+      threadId: "thread-a",
+      visit: 1,
+    };
+    const view = mount({ openThreadPostId: "post-a" });
+    const threadLanding = (): string | null =>
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on");
+    expect(threadLanding()).toBe("reply-a9");
+
+    mocks.state.conversationsError = true;
+    view.rerender();
+    expect(screen.getByTestId("bot-channel-error")).toBeTruthy();
+    expect(screen.queryByTestId("bot-thread-panel")).toBeNull();
+    mocks.state.conversationsError = false;
+    view.rerender();
+
+    expect(threadLanding()).toBe("none");
+  });
+
+  it("holds the landing while the thread list has not answered, and lands once it does", () => {
+    mocks.state.threadListAnswered = false;
+    mountLanding = {
+      messageId: "reply-a9",
+      sendPostId: null,
+      threadId: "thread-a",
+      visit: 1,
+    };
+    const view = mount({ openThreadPostId: "post-a" });
+    expect(screen.queryByTestId("stub-transcript-thread")).toBeNull();
+
+    mocks.state.threadListAnswered = true;
+    view.rerender();
+
+    expect(
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on"),
+    ).toBe("reply-a9");
+  });
+
+  it("lands no thread on a message the tab named for another thread", () => {
+    mountLanding = {
+      messageId: "reply-b9",
+      sendPostId: null,
+      threadId: "thread-b",
+      visit: 1,
+    };
+    mount({ openThreadPostId: "post-a" });
+
+    expect(
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on"),
+    ).toBe("none");
+  });
+
   it("reads the thread's chat in the panel and replies into that thread", () => {
     mount({ openThreadPostId: "post-a" });
 
@@ -1511,7 +1721,7 @@ describe("<BotChannelView /> a post whose answer lands in a thread", () => {
   const POSTED: BotOpenThread = {
     anchorMessageId: "post-new",
     announcement: false,
-    answer: false,
+    anchorKind: null,
     sent: {
       threadId: "thread-new",
       requestId: "request-new",

@@ -1011,6 +1011,7 @@ const SHARED_TOOL: ToolSegment = {
   managedCommand: null,
   agentMessageReceipt: null,
   agentMessageDelivery: null,
+  botSendReceipt: null,
   isStreaming: false,
   endState: null,
   stopped: false,

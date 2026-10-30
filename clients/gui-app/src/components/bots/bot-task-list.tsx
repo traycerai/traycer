@@ -359,7 +359,7 @@ function BotViewOriginLines(props: {
                     anchorMessageId: post.messageId,
                     announcement:
                       post.thread === null || open?.announcement === true,
-                    answer: open?.answer ?? false,
+                    anchorKind: open?.anchorKind ?? null,
                     sent: null,
                   })
                 }
@@ -468,7 +468,7 @@ function CreatorLink(props: {
         place.onOpenPost({
           anchorMessageId,
           announcement: open.announcement,
-          answer: open.answer,
+          anchorKind: open.anchorKind,
           sent: null,
         })
       }

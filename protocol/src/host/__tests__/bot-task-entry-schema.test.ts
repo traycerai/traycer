@@ -637,14 +637,18 @@ describe("bot.subscribe@1.5 open surfaces and card actions", () => {
     };
   }
 
-  it("carries a task's open surfaces and the subscriber's actions to a 1.5 subscriber", () => {
-    expect(line.latestMinor).toBe(5);
-    const latest =
-      line.versions[5].contract.serverFrameSchema.parse(snapshotWithOpen());
-    if (latest.kind !== "snapshot") throw new Error("not a snapshot");
-    expect(latest.tasks[0]?.inputNeeded).toEqual(OPEN);
-    expect(latest.surfaceActions).toEqual(ACTIONS);
-  });
+  it.each([5, 6] as const)(
+    "carries a task's open surfaces and the subscriber's actions to a 1.%i subscriber",
+    (minor) => {
+      const parsed =
+        line.versions[minor].contract.serverFrameSchema.parse(
+          snapshotWithOpen(),
+        );
+      if (parsed.kind !== "snapshot") throw new Error("not a snapshot");
+      expect(parsed.tasks[0]?.inputNeeded).toEqual(OPEN);
+      expect(parsed.surfaceActions).toEqual(ACTIONS);
+    },
+  );
 
   it("strips both for a 1.4 subscriber", () => {
     const parsed =

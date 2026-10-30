@@ -444,7 +444,12 @@ describe("a post the trunk failed to answer", () => {
     ).toBeTruthy();
     await user.click(receipt);
     expect(openedSessions).toEqual([
-      { chatId: TRUNK_ID, threadId: null, messageId: FAILED_PROMPT_ID },
+      {
+        chatId: TRUNK_ID,
+        threadId: null,
+        messageId: FAILED_PROMPT_ID,
+        sendPostId: null,
+      },
     ]);
   });
 });

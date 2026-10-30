@@ -32,7 +32,10 @@ import { botTabRouteOf } from "@/lib/bots/bot-tab-route";
 import { TeamSetupChannel } from "@/components/bots/team-setup-channel";
 import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
-import { BotChannelView } from "@/components/bots/bot-channel-view";
+import {
+  BotChannelView,
+  type BotChannelLanding,
+} from "@/components/bots/bot-channel-view";
 import {
   memoryRailOver,
   sessionTargetOfTurn,
@@ -43,7 +46,6 @@ import {
   type BotSessionOpen,
   type BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
-import type { BotTranscriptLanding } from "@/components/bots/bot-chat-transcript";
 import {
   BotSessionView,
   type BotOpenSession,
@@ -452,18 +454,18 @@ function useBotTabSession(args: {
   readonly setOpenThread: (open: BotOpenThread | null) => void;
 }): {
   readonly session: BotOpenSession | null;
-  readonly channelLanding: BotTranscriptLanding | null;
+  readonly channelLanding: BotChannelLanding | null;
   readonly openSession: BotSessionOpen;
   readonly openTurn: BotTurnOpen;
   readonly closeSession: () => void;
   readonly changeView: (view: BotTabView) => void;
   readonly showChannel: (messageId: string | null) => void;
-  readonly showThread: (threadId: string) => void;
+  readonly showThread: (threadId: string, messageId: string | null) => void;
 } {
   const { threads, onViewChange, setOpenThread } = args;
   const [shown, setShown] = useState<{
     readonly session: BotOpenSession | null;
-    readonly channelLanding: BotTranscriptLanding | null;
+    readonly channelLanding: BotChannelLanding | null;
     readonly visits: number;
   }>({ session: null, channelLanding: null, visits: 0 });
   const openSession = useCallback<BotSessionOpen>((target) => {
@@ -476,7 +478,11 @@ function useBotTabSession(args: {
           landOn:
             target.messageId === null
               ? null
-              : { messageId: target.messageId, visit },
+              : {
+                  messageId: target.messageId,
+                  sendPostId: target.sendPostId,
+                  visit,
+                },
         },
         channelLanding: null,
         visits: visit,
@@ -484,26 +490,36 @@ function useBotTabSession(args: {
     });
   }, []);
   const openTurn = useCallback<BotTurnOpen>(
-    (ref) => openSession(sessionTargetOfTurn(ref)),
+    (ref, sendPostId) => openSession(sessionTargetOfTurn(ref, sendPostId)),
     [openSession],
   );
   const closeSession = useCallback(
     () => setShown((previous) => ({ ...previous, session: null })),
     [],
   );
-  const showChannel = useCallback(
-    (messageId: string | null) => {
+  // The channel shows, landed on a message of it or of the thread beside it.
+  const showLanded = useCallback(
+    (landOn: Omit<BotChannelLanding, "visit"> | null) => {
       setShown((previous) => {
         const visit = previous.visits + 1;
         return {
           session: null,
-          channelLanding: messageId === null ? null : { messageId, visit },
+          channelLanding: landOn === null ? null : { ...landOn, visit },
           visits: visit,
         };
       });
       onViewChange("messages");
     },
     [onViewChange],
+  );
+  const showChannel = useCallback(
+    (messageId: string | null) =>
+      showLanded(
+        messageId === null
+          ? null
+          : { messageId, sendPostId: null, threadId: null },
+      ),
+    [showLanded],
   );
   // Leaving Messages spends the channel's landing: the channel mounts again
   // when Messages shows, and must not land on that post a second time.
@@ -521,22 +537,26 @@ function useBotTabSession(args: {
     [onViewChange],
   );
   // A thread the list does not name has no post to open it by: the channel
-  // shows instead.
+  // shows instead. One it names opens on `messageId` where one is named.
   const showThread = useCallback(
-    (threadId: string) => {
+    (threadId: string, messageId: string | null) => {
       const anchor =
         threads?.find((thread) => thread.threadId === threadId)?.anchor ?? null;
-      showChannel(null);
+      showLanded(
+        anchor === null || messageId === null
+          ? null
+          : { messageId, sendPostId: null, threadId },
+      );
       if (anchor !== null) {
         setOpenThread({
           anchorMessageId: anchor.messageId,
           announcement: false,
-          answer: false,
+          anchorKind: null,
           sent: null,
         });
       }
     },
-    [setOpenThread, showChannel, threads],
+    [setOpenThread, showLanded, threads],
   );
   return {
     session: shown.session,

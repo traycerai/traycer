@@ -185,6 +185,7 @@ function toolCallBlock(input: ToolCallInput): ContentBlock {
     managedCommand: null,
     agentMessageReceipt: null,
     agentMessageDelivery: null,
+    botSendReceipt: null,
     artifact: null,
     mcpApp: null,
     progress: null,
@@ -502,7 +503,7 @@ export const openedSessions: BotSessionTarget[] = [];
 export const THREAD_OPEN: BotOpenThread = {
   anchorMessageId: POST_ID,
   announcement: false,
-  answer: false,
+  anchorKind: null,
   sent: null,
 };
 
