@@ -525,9 +525,11 @@ export function createSimulatorStreamController(
       // A new subscriber starts on H.264 with its own config and keyframe.
       mjpegRequested = false;
       decoder?.reset();
-    } else {
-      clearWatchdog();
+      firstFrame = false;
     }
+    // Silence during an outage is not a missing-video failure. A continued
+    // stream restores its clock; a fresh open starts a new frame deadline.
+    clearWatchdog();
     clearStallTimer();
     publish({
       lifecycle: "reconnecting",
@@ -536,6 +538,20 @@ export function createSimulatorStreamController(
       stalled: false,
     });
     heldState = retained;
+  }
+
+  function noteFreshOpen(): void {
+    if (heldState !== null) {
+      // A subscribe held before its first frame opens a fresh cycle.
+      // Its first frame must not remain masked by the ended hold.
+      heldState = null;
+      mjpegRequested = false;
+      decoder?.reset();
+      publish({ lifecycle: "connecting", detail: null });
+    }
+    // open() already starts the initial deadline before subscribing.
+    // Rebuilds have no pending watchdog and owe their own first frame.
+    if (watchdog === null) armWatchdog();
   }
 
   const handleStatus = (
@@ -552,14 +568,8 @@ export function createSimulatorStreamController(
         streamOpen = true;
         if (continuity === "continued") {
           restoreHeldStream();
-        } else if (heldState !== null) {
-          // A subscribe held before its first frame opens a fresh cycle.
-          // Its first frame must not remain masked by the ended hold.
-          heldState = null;
-          mjpegRequested = false;
-          decoder?.reset();
-          publish({ lifecycle: "connecting", detail: null });
-          armWatchdog();
+        } else {
+          noteFreshOpen();
         }
         if (wantMjpeg) requestMjpeg();
         return;
