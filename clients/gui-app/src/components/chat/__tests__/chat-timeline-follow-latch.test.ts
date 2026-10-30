@@ -225,6 +225,11 @@ interface FakeListRef {
   readonly removeRow: (key: string) => void;
   /** The size the list laid out, which the DOM may lag. */
   readonly setContentLength: (length: number) => void;
+  /** The container the list renders a row into, as `elementAtIndex` gives
+   *  it. Only a row a fixture lays out has one. */
+  readonly setRowElement: (key: string, element: HTMLElement) => void;
+  /** The last row the list has rendered, when it lags the data's end. */
+  readonly setRenderedEnd: (index: number) => void;
   readonly cancelPendingScroll: Mock<() => boolean>;
   readonly scrollToEnd: Mock<() => Promise<void>>;
   readonly scrollToOffset: Mock<
@@ -243,14 +248,16 @@ const FAKE_LAST_ROW_TOP_PX = 1000;
 function makeFakeListState(
   rowTops: ReadonlyMap<string, number>,
   contentLength: number,
+  rowElements: ReadonlyMap<string, HTMLElement>,
+  renderedEnd: number | null,
 ) {
   const keys = [...rowTops.keys()];
   const state: LegendListState = {
     activeStickyIndex: -1,
     contentLength,
     data: keys,
-    elementAtIndex: () => null,
-    end: 0,
+    elementAtIndex: (index) => rowElements.get(keys[index]) ?? null,
+    end: renderedEnd ?? keys.length - 1,
     endBuffered: 0,
     isAtEnd: false,
     isAtStart: false,
@@ -281,6 +288,8 @@ function makeFakeListRef(node: HTMLDivElement): FakeListRef {
   const rowTops = new Map<string, number>([
     [FAKE_LAST_ROW_KEY, FAKE_LAST_ROW_TOP_PX],
   ]);
+  const rowElements = new Map<string, HTMLElement>();
+  let renderedEnd: number | null = null;
   let contentLength = 0;
   const cancelPendingScroll = vi.fn((): boolean => false);
   const scrollToEnd = vi.fn((): Promise<void> => Promise.resolve());
@@ -293,7 +302,8 @@ function makeFakeListRef(node: HTMLDivElement): FakeListRef {
     getNativeScrollRef: () => node,
     getScrollableNode: () => node,
     getScrollResponder: () => null,
-    getState: () => makeFakeListState(rowTops, contentLength),
+    getState: () =>
+      makeFakeListState(rowTops, contentLength, rowElements, renderedEnd),
     reportContentInset: notImplemented,
     scrollIndexIntoView: notImplemented,
     scrollItemIntoView: notImplemented,
@@ -312,6 +322,12 @@ function makeFakeListRef(node: HTMLDivElement): FakeListRef {
     removeRow: (key) => rowTops.delete(key),
     setContentLength: (length) => {
       contentLength = length;
+    },
+    setRowElement: (key, element) => {
+      rowElements.set(key, element);
+    },
+    setRenderedEnd: (index) => {
+      renderedEnd = index;
     },
     cancelPendingScroll,
     scrollToEnd,
@@ -2970,25 +2986,23 @@ describe("useChatTimelineFollowLatch", () => {
     /** Offset in the list's content, so its screen top is this minus the
      *  node's scrollTop. */
     offset: number;
-    readonly height: number;
+    height: number;
   }
 
-  /** Gives the node a real edge: the list's content container, a row that
-   *  spans the node's top edge, and an element inside it that crosses the
-   *  edge. jsdom has no layout, so rects follow `scrollTop`. */
-  function installEdgeLayout(node: HTMLDivElement): (offset: number) => void {
+  /** The one laid-out DOM the latch reads: jsdom has no layout, so every
+   *  element's rect comes from an offset in the list's content, and screen
+   *  tops follow `scrollTop`. Both the edge fixture and the tail-block
+   *  fixture are built on this, so there is never a second content
+   *  container for `:scope > .legend-list-content-container` to pick from. */
+  function installContentLayout(node: HTMLDivElement): {
+    readonly content: HTMLDivElement;
+    readonly place: (element: Element, layout: ElementLayout) => ElementLayout;
+  } {
     const content = document.createElement("div");
     content.className = "legend-list-content-container";
-    const row = document.createElement("div");
-    const edgeElement = document.createElement("div");
-    const edgeLayout: ElementLayout = { offset: 1000, height: 100 };
-    row.appendChild(edgeElement);
-    content.appendChild(row);
     node.appendChild(content);
     const layouts = new Map<Element, ElementLayout>([
       [content, { offset: 0, height: node.scrollHeight }],
-      [row, { offset: 900, height: 400 }],
-      [edgeElement, edgeLayout],
     ]);
     vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
       function (this: Element): DOMRect {
@@ -3014,10 +3028,353 @@ describe("useChatTimelineFollowLatch", () => {
         };
       },
     );
+    return {
+      content,
+      place: (element, layout) => {
+        layouts.set(element, layout);
+        return layout;
+      },
+    };
+  }
+
+  /** Gives the node a real edge: a row that spans the node's top edge, and an
+   *  element inside it that crosses the edge. */
+  function installEdgeLayout(node: HTMLDivElement): (offset: number) => void {
+    const { content, place } = installContentLayout(node);
+    const row = document.createElement("div");
+    const edgeElement = document.createElement("div");
+    row.appendChild(edgeElement);
+    content.appendChild(row);
+    place(row, { offset: 900, height: 400 });
+    const edgeLayout = place(edgeElement, { offset: 1000, height: 100 });
     return (offset) => {
       edgeLayout.offset = offset;
     };
   }
+
+  /** The transcript's last row as the app really renders one: a markdown
+   *  body holding an image and, after it, the trailing paragraph the reader
+   *  was thrown at. Below the row sit the list's end inset and a footer,
+   *  which are in the content container but are not data rows. */
+  function installTailBlockLayout(
+    node: HTMLDivElement,
+    listRef: FakeListRef,
+  ): {
+    readonly growImage: (by: number) => void;
+    readonly appendBlock: (text: string, height: number) => void;
+    readonly streamIntoTail: (text: string) => void;
+    readonly remountTail: () => void;
+    readonly recycleTail: (text: string, by: number) => void;
+  } {
+    const { content, place } = installContentLayout(node);
+    const row = document.createElement("div");
+    // A markdown body lays its children out in its own place, so it has no
+    // box: the latch has to look through it, as the list does.
+    const body = document.createElement("div");
+    const image = document.createElement("img");
+    const paragraph = document.createElement("p");
+    paragraph.textContent = "the last words the reader was looking at";
+    body.append(image, paragraph);
+    row.appendChild(body);
+    content.appendChild(row);
+    const rowLayout = place(row, { offset: 1000, height: 500 });
+    place(body, { offset: 1000, height: 0 });
+    const imageLayout = place(image, { offset: 1000, height: 300 });
+    const paragraphLayout = place(paragraph, { offset: 1300, height: 200 });
+    // Not data rows: the list's end inset and a footer. Their tops move with
+    // any growth above them, a tail append included.
+    for (const [offset, height] of [
+      [1500, 40],
+      [1540, 60],
+    ]) {
+      const below = document.createElement("div");
+      content.appendChild(below);
+      place(below, { offset, height });
+    }
+    listRef.setRowElement(FAKE_LAST_ROW_KEY, row);
+    const lastBlock = (): ElementLayout => paragraphLayout;
+    return {
+      growImage: (by) => {
+        imageLayout.height += by;
+        lastBlock().offset += by;
+        rowLayout.height += by;
+      },
+      appendBlock: (text, height) => {
+        const block = document.createElement("p");
+        block.textContent = text;
+        body.appendChild(block);
+        place(block, {
+          offset: lastBlock().offset + lastBlock().height,
+          height,
+        });
+        rowLayout.height += height;
+      },
+      streamIntoTail: (text) => {
+        paragraph.textContent = `${paragraph.textContent}${text}`;
+        paragraphLayout.height += 20;
+        rowLayout.height += 20;
+      },
+      recycleTail: (text, by) => {
+        paragraph.textContent = text;
+        paragraphLayout.offset += by;
+      },
+      remountTail: () => {
+        const fresh = document.createElement("p");
+        fresh.textContent = "a different message entirely";
+        paragraph.replaceWith(fresh);
+        place(fresh, { ...paragraphLayout });
+      },
+    };
+  }
+
+  describe("the end a wheel headed for, tracked by its own block", () => {
+    function wheeledTowardTheEnd() {
+      const node = shim.makeNode({
+        scrollTop: 700,
+        scrollHeight: 1600,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const layout = installTailBlockLayout(node, listRef);
+      const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
+      renderHook(() =>
+        useChatTimelineFollowLatch(listRef, false, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+        }),
+      );
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: 180 }));
+      // The image resolves to a taller aspect ratio below the view's top
+      // edge. The row's top does not move and the list writes nothing, but
+      // the paragraph the wheel headed for is 300 further down.
+      layout.growImage(300);
+      shim.setGeometry(node, { scrollHeight: 1900 });
+      fireResizeObservers();
+      return { node, listRef, onFollowIntentChange };
+    }
+
+    it("does not reattach a reader who stops where the growing image moved the tail from", () => {
+      const { node, listRef, onFollowIntentChange } = wheeledTowardTheEnd();
+
+      shim.setGeometry(node, { scrollTop: 1100 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("reattaches a reader who reaches where the growing image put the tail", () => {
+      const { node, listRef, onFollowIntentChange } = wheeledTowardTheEnd();
+
+      // The reply's chunk grows the tail past the reader before the report,
+      // so only the end the wheel headed for can reattach them.
+      shim.setGeometry(node, { scrollTop: 1400, scrollHeight: 1960 });
+      fireResizeObservers();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalled();
+    });
+  });
+
+  describe("the end a lifted finger was thrown at, tracked by its own block", () => {
+    function liftedBelowTheEnd(withUnrenderedTail: boolean) {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1600,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const layout = installTailBlockLayout(node, listRef);
+      if (withUnrenderedTail) {
+        // A row past the one laid out, which the list has not rendered.
+        listRef.setRowTop("unrendered-last-row", 1600);
+        listRef.setRenderedEnd(0);
+      }
+      const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
+      renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+        }),
+      );
+      fireNativeScroll(node);
+      // The finger drags away from the end and flings back toward it.
+      fireTouch(node, "touchstart", 300);
+      fireTouch(node, "touchmove", 400);
+      shim.setGeometry(node, { scrollTop: 800 });
+      fireNativeScroll(node);
+      fireTouch(node, "touchend", 400);
+      fireTouch(node, "touchstart", 400);
+      fireTouch(node, "touchmove", 300);
+      shim.setGeometry(node, { scrollTop: 860 });
+      fireNativeScroll(node);
+      fireTouch(node, "touchend", 300);
+      flushAnimationFrame();
+      flushAnimationFrame();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      listRef.scrollToEnd.mockClear();
+      return { node, listRef, layout, onFollowIntentChange };
+    }
+
+    it("does not follow a fling that stops where an image growing above the tail has moved the end from", () => {
+      const { node, listRef, layout, onFollowIntentChange } =
+        liftedBelowTheEnd(false);
+
+      // The image resolves to a taller aspect ratio below the view's top
+      // edge. The row's top does not move and the list writes nothing, but
+      // the paragraph the finger was thrown at is 60 further down.
+      layout.growImage(60);
+      shim.setGeometry(node, { scrollHeight: 1660 });
+      fireResizeObservers();
+      shim.setGeometry(node, { scrollTop: 1100 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("control: a fling that carries on to where the growing image put the tail arrives", () => {
+      const { node, listRef, layout, onFollowIntentChange } =
+        liftedBelowTheEnd(false);
+
+      layout.growImage(60);
+      shim.setGeometry(node, { scrollHeight: 1660 });
+      fireResizeObservers();
+      // The reply's chunk grows the tail past it before the report, so only
+      // the momentum can follow.
+      shim.setGeometry(node, { scrollTop: 1160 });
+      shim.setGeometry(node, { scrollHeight: 1760 });
+      fireResizeObservers();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalled();
+    });
+
+    it("control: streaming into the tail paragraph still arrives at the end it was thrown at", () => {
+      const { node, listRef, layout, onFollowIntentChange } =
+        liftedBelowTheEnd(false);
+
+      // The reply streams on into the same paragraph. It grows downward, so
+      // where it starts - the content the finger was thrown at - stands.
+      layout.streamIntoTail(" and then some more of the same reply");
+      shim.setGeometry(node, { scrollHeight: 1620 });
+      fireResizeObservers();
+      shim.setGeometry(node, { scrollTop: 1100 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalled();
+    });
+
+    it("keeps answering when the reply streams a token into a tail paragraph shorter than the head", () => {
+      const { node, listRef, layout, onFollowIntentChange } =
+        liftedBelowTheEnd(false);
+
+      // The paragraph the finger was thrown at is 40 characters, under the
+      // head's 64, so the next token extends the head the lift recorded.
+      // The block goes on answering, and it says the end has moved 60 past
+      // where this fling stops.
+      layout.growImage(60);
+      layout.streamIntoTail(" and a little");
+      shim.setGeometry(node, { scrollHeight: 1680 });
+      fireResizeObservers();
+      shim.setGeometry(node, { scrollTop: 1100 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("control: a block appended after the tail still arrives at the end it was thrown at", () => {
+      const { node, listRef, layout, onFollowIntentChange } =
+        liftedBelowTheEnd(false);
+
+      layout.appendBlock("a second paragraph the reply went on to write", 80);
+      shim.setGeometry(node, { scrollHeight: 1680 });
+      fireResizeObservers();
+      shim.setGeometry(node, { scrollTop: 1100 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalled();
+    });
+
+    it("falls back to the row when the list has re-mounted the tail block", () => {
+      const { node, listRef, layout, onFollowIntentChange } =
+        liftedBelowTheEnd(false);
+
+      // The list reuses the row for other content. The recorded block is
+      // gone, so its movement says nothing, and the row's shift answers
+      // instead - here zero, so the end stands where it was thrown at.
+      layout.remountTail();
+      fireResizeObservers();
+      // The tail grows past them before the report, so the strict bottom
+      // cannot be what follows them.
+      shim.setGeometry(node, { scrollTop: 1100, scrollHeight: 1700 });
+      fireResizeObservers();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalled();
+    });
+
+    it("falls back to the row when the list has reused the tail block for other content", () => {
+      const { node, listRef, layout, onFollowIntentChange } =
+        liftedBelowTheEnd(false);
+
+      // The element stays, so nothing about it is gone - but the list has
+      // put a different message in it, standing somewhere else, and where
+      // that has moved to says nothing about the content this fling was
+      // thrown at.
+      layout.recycleTail("a different message in the same element", 200);
+      fireResizeObservers();
+      shim.setGeometry(node, { scrollTop: 1100, scrollHeight: 1700 });
+      fireResizeObservers();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalled();
+    });
+
+    it("tracks no tail block while the list has not rendered the transcript's last row", () => {
+      // The row laid out is then one in the middle of the transcript, and
+      // its blocks are not the end's. The list names no container for the
+      // row it has not rendered, so the row's shift answers instead - and
+      // it says the rows have not moved.
+      const { node, listRef, layout, onFollowIntentChange } =
+        liftedBelowTheEnd(true);
+
+      layout.growImage(60);
+      shim.setGeometry(node, { scrollHeight: 1660 });
+      fireResizeObservers();
+      shim.setGeometry(node, { scrollTop: 1100, scrollHeight: 1700 });
+      fireResizeObservers();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalled();
+    });
+
+    it("declines when the list has re-mounted the tail block and replaced the rows too", () => {
+      const { node, listRef, layout, onFollowIntentChange } =
+        liftedBelowTheEnd(false);
+
+      // Neither the block nor the row can say what the list moved.
+      layout.remountTail();
+      listRef.removeRow(FAKE_LAST_ROW_KEY);
+      listRef.setRowTop("rechunked-row", 300);
+      listRef.setRowTop("rechunked-last-row", 700);
+      fireResizeObservers();
+      shim.setGeometry(node, { scrollTop: 1100, scrollHeight: 1700 });
+      fireResizeObservers();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+  });
 
   describe("a following reader's finger toward the end while the stream grows", () => {
     const TAIL_ROW_KEY = "tail-row";

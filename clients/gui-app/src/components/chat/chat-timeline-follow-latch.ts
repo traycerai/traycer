@@ -207,9 +207,12 @@ interface ReaderEndCandidate {
   readonly readerGestureGeneration: number;
   /** As `ReaderMomentumEnd.targetContentEnd`, for the gesture's end. */
   readonly targetContentEnd: number;
-  /** The list's last row when the gesture began. Rows above the reader that
-   *  the list remeasures since move it, and the list moves the reader with
-   *  them, so the end the gesture headed for has moved by the same amount. */
+  /** As `ReaderMomentumEnd.tailBlock`, for the gesture's end. */
+  readonly tailBlock: TailBlock | null;
+  /** The list's last row when the gesture began, read only when the tail
+   *  block cannot be (`tailBlockShift`). Rows above the reader that the list
+   *  remeasures since move it, and the list moves the reader with them, so
+   *  the end the gesture headed for has moved by the same amount. */
   readonly lastRow: ListRowTop | null;
   /** The reader reached the strict bottom while a recovering transcript held
    *  reattachment off; the settle that lifts the hold lets them follow. */
@@ -228,6 +231,9 @@ interface ReaderMomentumEnd {
    *  moving the view at all, which is why this end cannot be read from the
    *  writes the list announces. */
   readonly targetContentEnd: number;
+  /** The last block of that content, which is what the end moves with
+   *  (`tailBlockOf`). Read first; the row is the fallback. */
+  readonly tailBlock: TailBlock | null;
   /** The list's last row at the lift, as `ReaderEndCandidate.lastRow`. */
   readonly lastRow: ListRowTop | null;
   /** Where the view stood at the lift, carried with every announced write
@@ -622,6 +628,7 @@ function readerEndCandidateFor(input: {
   return {
     readerGestureGeneration: input.readerGestureGeneration,
     targetContentEnd: geometry.scrollHeight,
+    tailBlock: tailBlockOf(input.list),
     lastRow: lastListRowTop(input.list),
     reached: false,
   };
@@ -637,6 +644,131 @@ function reachedReaderEnd(
     return null;
   }
   return { ...candidate, reached: true };
+}
+
+/** The last block of the content that ended the transcript, and where it
+ *  stood. The end a reader is thrown at is the end of that content, and only
+ *  this block moves with it: the row's top does not, because the row can grow
+ *  from the inside - an image in it resolving taller above a trailing
+ *  paragraph moves the paragraph and leaves the row where it was. */
+interface TailBlock {
+  readonly element: Element;
+  /** Its top in the list's content container's coordinates. Measured there
+   *  rather than against the row, so rows above remeasuring move it too and
+   *  the row's own shift needs no separate reading. */
+  readonly contentTop: number;
+  /** The first 64 characters of its text, in tree order, as the list's own
+   *  edge anchor reads them (`edgeAnchorHead`). The list reuses row
+   *  containers, and a reused one says nothing about the content this was
+   *  thrown at (`tailBlockHolds`). */
+  readonly head: string;
+}
+
+const TAIL_BLOCK_HEAD_LENGTH = 64;
+
+function tailBlockHead(node: Element): string {
+  // 4 | 8 is NodeFilter.SHOW_TEXT | NodeFilter.SHOW_CDATA_SECTION, spelled as
+  // values so no global is needed, as the list spells it.
+  const walker = node.ownerDocument.createTreeWalker(node, 4 | 8);
+  let head = "";
+  for (
+    let part = walker.nextNode();
+    part !== null && head.length < TAIL_BLOCK_HEAD_LENGTH;
+    part = walker.nextNode()
+  ) {
+    head += part.nodeValue ?? "";
+  }
+  return head.slice(0, TAIL_BLOCK_HEAD_LENGTH);
+}
+
+/** The block still holds the content it was recorded with: the head it reads
+ *  now begins with the head it read then. A paragraph the reply is still
+ *  writing starts shorter than the head's 64 characters, and the tokens that
+ *  follow are the same content, so they extend that head rather than replace
+ *  it. A recycled element's text does not begin with another message's, and
+ *  one with no text at all (an image, a rule) has an empty head, which only
+ *  an empty head matches - a recycled element cannot pass by having none. */
+function tailBlockHolds(current: string, captured: string): boolean {
+  return (
+    current === captured ||
+    (captured.length > 0 && current.startsWith(captured))
+  );
+}
+
+function contentContainerOf(node: HTMLElement): Element | null {
+  return node.querySelector(`:scope > .${LEGEND_LIST_CONTENT_CONTAINER_CLASS}`);
+}
+
+/** The last child with a box of its own; one with no box (`display: contents`,
+ *  as markdown and component wrappers use) lays its children out in its place,
+ *  so it is searched in its stead. */
+function lastBoxedChild(parent: Element): Element | null {
+  for (
+    let child = parent.lastElementChild;
+    child !== null;
+    child = child.previousElementSibling
+  ) {
+    if (child.getBoundingClientRect().height > 0) return child;
+    const inner = lastBoxedChild(child);
+    if (inner !== null) return inner;
+  }
+  return null;
+}
+
+/** The tail block of the transcript's last row, as it stands now. None when
+ *  the list has not rendered that row: the lowest thing laid out is then a
+ *  row in the middle of the transcript, whose movement is not the end's, and
+ *  the list names no container for a row it has not rendered. */
+function tailBlockOf(list: LegendListRef | null): TailBlock | null {
+  if (list === null) return null;
+  const content = contentContainerOf(list.getScrollableNode());
+  if (content === null) return null;
+  const state = list.getState();
+  const last = state.data.length - 1;
+  if (last < 0) return null;
+  // The list's own container-to-key mapping, so a spacer the app's end inset
+  // renders, or a footer, is never mistaken for the last row: their tops move
+  // with a tail that grows, and the end a reader was thrown at does not. It
+  // answers for a rendered row only, which is the whole of that guard.
+  const row: unknown = state.elementAtIndex(last);
+  if (!(row instanceof HTMLElement) || !content.contains(row)) return null;
+  let element: Element = row;
+  for (;;) {
+    const next = lastBoxedChild(element);
+    if (next === null) break;
+    element = next;
+  }
+  if (element === row && row.getBoundingClientRect().height === 0) return null;
+  return {
+    element,
+    contentTop:
+      element.getBoundingClientRect().top - content.getBoundingClientRect().top,
+    head: tailBlockHead(element),
+  };
+}
+
+/** How far the tail block has moved since it was recorded, and null when it
+ *  cannot be told: the block is gone, or the list has reused its element for
+ *  other content. The caller then falls back to the row's own shift. */
+function tailBlockShift(
+  list: LegendListRef | null,
+  tail: TailBlock | null,
+): number | null {
+  if (tail === null || list === null) return null;
+  const content = contentContainerOf(list.getScrollableNode());
+  if (
+    content === null ||
+    !tail.element.isConnected ||
+    !content.contains(tail.element) ||
+    !tailBlockHolds(tailBlockHead(tail.element), tail.head)
+  ) {
+    return null;
+  }
+  return (
+    tail.element.getBoundingClientRect().top -
+    content.getBoundingClientRect().top -
+    tail.contentTop
+  );
 }
 
 function lastListRowTop(list: LegendListRef | null): ListRowTop | null {
@@ -656,6 +788,7 @@ function readerMomentumEndFor(
 ): ReaderMomentumEnd {
   return {
     targetContentEnd: geometry.scrollHeight,
+    tailBlock: tailBlockOf(list),
     lastRow: lastListRowTop(list),
     liftScrollTop: geometry.scrollTop,
   };
@@ -1412,7 +1545,8 @@ export function useChatTimelineFollowLatch(
       const shift =
         readerCandidate === null
           ? null
-          : listRowShift(listRef.current, readerCandidate.lastRow);
+          : (tailBlockShift(listRef.current, readerCandidate.tailBlock) ??
+            listRowShift(listRef.current, readerCandidate.lastRow));
       const reachedGestureStartEnd =
         readerCandidate !== null &&
         shift !== null &&
@@ -1705,7 +1839,9 @@ export function useChatTimelineFollowLatch(
       // re-bases the lift (`noteReportAfterLiftLanding`), so the guard has
       // to be here rather than at either caller.
       if (liftAwaitsLandingRef.current) return false;
-      const shift = listRowShift(listRef.current, momentum.lastRow);
+      const shift =
+        tailBlockShift(listRef.current, momentum.tailBlock) ??
+        listRowShift(listRef.current, momentum.lastRow);
       if (shift === null) return false;
       return (
         geometry.scrollTop >=
