@@ -185,15 +185,20 @@ function createCountingArtifactFactory(): CountingArtifactFactory {
     },
     deliverMethodUnsupported(artifactId): void {
       const callbacks = requireLive(artifactId);
-      callbacks.onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: {
-          code: "INCOMPATIBLE",
-          reason: "artifact.subscribe is not served by this host",
-          incompatibleMethods: null,
-          upgradeGuidance: null,
+      callbacks.onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: {
+            code: "INCOMPATIBLE",
+            reason: "artifact.subscribe is not served by this host",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
         },
-      });
+        null,
+        null,
+      );
     },
   };
 }
@@ -243,15 +248,20 @@ function createCountingStatusFactory(): CountingStatusFactory {
      */
     deliverMethodUnsupported(): void {
       if (live === null) throw new Error("no status client was constructed");
-      live.onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: {
-          code: "INCOMPATIBLE",
-          reason: "epic.status.subscribe is not served by this host",
-          incompatibleMethods: null,
-          upgradeGuidance: null,
+      live.onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: {
+            code: "INCOMPATIBLE",
+            reason: "epic.status.subscribe is not served by this host",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
         },
-      });
+        null,
+        null,
+      );
     },
   };
 }
@@ -321,15 +331,20 @@ function createCountingStateFactory(): CountingStateFactory {
     closeCount: () => closes,
     deliverMethodUnsupported(): void {
       if (live === null) throw new Error("no state client was constructed");
-      live.onConnectionStatus("closed", {
-        kind: "fatalError",
-        details: {
-          code: "INCOMPATIBLE",
-          reason: "epic.state.subscribe is not served by this host",
-          incompatibleMethods: null,
-          upgradeGuidance: null,
+      live.onConnectionStatus(
+        "closed",
+        {
+          kind: "fatalError",
+          details: {
+            code: "INCOMPATIBLE",
+            reason: "epic.state.subscribe is not served by this host",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
         },
-      });
+        null,
+        null,
+      );
     },
   };
 }
@@ -1021,7 +1036,7 @@ function createControllableStatusFactory(): ControllableStatusFactory {
   }
   return {
     factory,
-    open: () => requireLive().onConnectionStatus("open", null),
+    open: () => requireLive().onConnectionStatus("open", null, null, null),
     deliverSnapshot: (frame) => requireLive().onSnapshot(frame, true),
   };
 }
@@ -1045,7 +1060,7 @@ function createControllableStateFactory(): ControllableStateFactory {
   }
   return {
     factory,
-    open: () => requireLive().onConnectionStatus("open", null),
+    open: () => requireLive().onConnectionStatus("open", null, null, null),
     deliverSnapshot: (frame) => requireLive().onSnapshot(frame),
   };
 }

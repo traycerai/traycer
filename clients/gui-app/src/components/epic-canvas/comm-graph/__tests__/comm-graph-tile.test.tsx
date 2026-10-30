@@ -1091,7 +1091,7 @@ describe("CommGraphTile", () => {
       });
 
       act(() => {
-        openedByHost.get(HOST_A)?.onStatus(status);
+        openedByHost.get(HOST_A)?.onStatus(status, null);
         // Two origin hosts fall back to two relay CANDIDATES here (no
         // directory is mocked in this file), and the manager fails over
         // through them one at a time on rejection - synchronously, within

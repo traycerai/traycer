@@ -401,7 +401,7 @@ function emitOwnerChatSnapshot(
   chatId: string,
   hostId: string,
 ): void {
-  callbacks().onConnectionStatus("open", null, null);
+  callbacks().onConnectionStatus("open", null, null, null);
   const chat: Chat = {
     id: chatId,
     parentId: null,
@@ -701,7 +701,7 @@ function emitOwnerChatSnapshotWithQueue(
   input: ReconnectChatSnapshotWithQueue,
 ): void {
   const { callbacks, epicId, chatId, hostId, queue, events } = input;
-  callbacks().onConnectionStatus("open", null, null);
+  callbacks().onConnectionStatus("open", null, null, null);
   const chat: Chat = {
     id: chatId,
     parentId: null,
@@ -755,7 +755,7 @@ function emitOwnerWindowedChatSnapshot(
   chatId: string,
   hostId: string,
 ): void {
-  callbacks().onConnectionStatus("open", null, null);
+  callbacks().onConnectionStatus("open", null, null, null);
   callbacks().onWindowedSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -3122,7 +3122,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
 
       // The transport drops and comes back while the host is still restoring:
       // the snapshot carries the durable START but no outcome yet.
-      chat.callbacks().onConnectionStatus("reconnecting", null, null);
+      chat.callbacks().onConnectionStatus("reconnecting", null, null, null);
       emitOwnerChatSnapshotWithQueue({
         callbacks: chat.callbacks,
         epicId: EPIC,
@@ -3144,7 +3144,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
       // Long past the retention window, with a second snapshot pass running
       // the pruner: the record is lifecycle-locked while the restore runs.
       vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS * 3);
-      chat.callbacks().onConnectionStatus("reconnecting", null, null);
+      chat.callbacks().onConnectionStatus("reconnecting", null, null, null);
       emitOwnerChatSnapshotWithQueue({
         callbacks: chat.callbacks,
         epicId: EPIC,
@@ -3230,7 +3230,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
       expect(isEpicParked(EPIC)).toBe(false);
 
       // The outcome for THIS action: retired, parked, no frame needed.
-      chat.callbacks().onConnectionStatus("reconnecting", null, null);
+      chat.callbacks().onConnectionStatus("reconnecting", null, null, null);
       emitOwnerChatSnapshotWithQueue({
         callbacks: chat.callbacks,
         epicId: EPIC,
@@ -3318,7 +3318,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
         // The restore finishes while the transport is down; both live
         // notifications die with it; the windowed reconnect's tail has no
         // events to carry the outcome.
-        chat.callbacks().onConnectionStatus("reconnecting", null, null);
+        chat.callbacks().onConnectionStatus("reconnecting", null, null, null);
         emitOwnerWindowedChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
         expect(chat.handle.store.getState().restore, answer).toBeNull();
         expect(

@@ -5,6 +5,7 @@ import type {
   ServerFrameHandler,
   StatusChangeHandler,
   StreamCloseReason,
+  StreamContinuity,
   StreamFrameEnvelope,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import {
@@ -185,7 +186,14 @@ class ControlledSession implements IStreamSession {
   }
 
   emitClosed(reason: StreamCloseReason): void {
-    this.statusChangeHandler?.("closed", reason, null);
+    this.statusChangeHandler?.("closed", reason, null, null);
+  }
+
+  emitContinuityStatus(
+    status: "open" | "reconnecting",
+    continuity: StreamContinuity,
+  ): void {
+    this.statusChangeHandler?.(status, null, null, continuity);
   }
 
   emitServerFrame(envelope: StreamFrameEnvelope): void {
@@ -679,6 +687,113 @@ describe("cloud notifications store", () => {
     });
     expect(useCloudNotificationsStore.getState().rows).toEqual({});
     close();
+  });
+
+  describe("while the host holds the stream", () => {
+    function openConnectedFeed() {
+      const client = new ControlledWsStreamClient();
+      const close = openCloudNotificationsStream(
+        reconnectEngine,
+        client,
+        "user-a",
+        null,
+        null,
+      );
+      const session = client.sessions[0];
+      const row = cloudRow("entry-a", 4, "host-a");
+      session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 4,
+        rows: [row],
+        summary,
+      });
+      return { session, close, row };
+    }
+
+    it("reports reconnecting while held and restores the prior state on a continued open", () => {
+      const { session, close, row } = openConnectedFeed();
+
+      session.emitContinuityStatus("reconnecting", "held");
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "reconnecting",
+      );
+
+      session.emitContinuityStatus("open", "continued");
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "connected",
+      );
+      expect(useCloudNotificationsStore.getState().rows).toEqual({
+        [cloudNotificationFeedId("entry-a")]: row,
+      });
+      close();
+    });
+
+    it("keeps the cloud's own reconnecting report after a continued open", () => {
+      const { session, close } = openConnectedFeed();
+
+      session.emitContinuityStatus("reconnecting", "held");
+      session.emitServerFrame({
+        kind: "connectionState",
+        hasBinaryPayload: false,
+        connectionState: "reconnecting",
+      });
+      session.emitContinuityStatus("open", "continued");
+
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "reconnecting",
+      );
+      close();
+    });
+
+    it("keeps a snapshot replayed while held from reading as connected until the continued open", () => {
+      const { session, close } = openConnectedFeed();
+
+      session.emitContinuityStatus("reconnecting", "held");
+      session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 5,
+        rows: [],
+        summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
+      });
+      expect(useCloudNotificationsStore.getState().rows).toEqual({});
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "reconnecting",
+      );
+
+      session.emitContinuityStatus("open", "continued");
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "connected",
+      );
+      close();
+    });
+
+    it("reads a snapshot as connected again once the hold ends", () => {
+      const { session, close } = openConnectedFeed();
+
+      session.emitContinuityStatus("reconnecting", "held");
+      session.emitContinuityStatus("reconnecting", null);
+      session.emitContinuityStatus("open", null);
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "reconnecting",
+      );
+      session.emitServerFrame({
+        kind: "snapshot",
+        hasBinaryPayload: false,
+        connectionState: "connected",
+        version: 5,
+        rows: [],
+        summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
+      });
+
+      expect(useCloudNotificationsStore.getState().connectionState).toBe(
+        "connected",
+      );
+      close();
+    });
   });
 
   it("lands a snapshot carrying a dropped environments kind, without its row, instead of rejecting the feed", () => {

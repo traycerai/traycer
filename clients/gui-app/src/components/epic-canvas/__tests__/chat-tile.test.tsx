@@ -775,7 +775,7 @@ function createChatHarness(): ChatHarness {
       streamCreations += 1;
       if (snapshot !== null) {
         setTimeout(() => {
-          nextCallbacks.onConnectionStatus("open", null, null);
+          nextCallbacks.onConnectionStatus("open", null, null, null);
           emitChatSnapshotWithMessages({
             callbacks: nextCallbacks,
             access: snapshot.access,
@@ -2203,12 +2203,17 @@ describe("<ChatTile />", () => {
     // Three refusals from a host that is up bring the buttons early.
     act(() => {
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        chatHarness.callbacks().onConnectionStatus("reconnecting", null, {
-          code: "SESSION_CLOSED",
-          reason: "SESSION_CLOSED: chat session is closing",
-          incompatibleMethods: null,
-          upgradeGuidance: null,
-        });
+        chatHarness.callbacks().onConnectionStatus(
+          "reconnecting",
+          null,
+          {
+            code: "SESSION_CLOSED",
+            reason: "SESSION_CLOSED: chat session is closing",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+          null,
+        );
       }
     });
     const body = screen.getByTestId("chat-tile-pre-content-chat-1");
@@ -2431,7 +2436,9 @@ describe("<ChatTile />", () => {
         }),
       ];
       act(() => {
-        chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+        chatHarness
+          .callbacks()
+          .onConnectionStatus("reconnecting", null, null, null);
       });
 
       await waitFor(() => {
@@ -2491,7 +2498,9 @@ describe("<ChatTile />", () => {
       }),
     ];
     act(() =>
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null),
+      chatHarness
+        .callbacks()
+        .onConnectionStatus("reconnecting", null, null, null),
     );
 
     await waitFor(() =>
@@ -2547,7 +2556,9 @@ describe("<ChatTile />", () => {
       }),
     ];
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+      chatHarness
+        .callbacks()
+        .onConnectionStatus("reconnecting", null, null, null);
     });
     await waitFor(() => {
       expect(
@@ -2564,7 +2575,9 @@ describe("<ChatTile />", () => {
     renderChatTile();
     await waitForChatTileLoaded();
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+      chatHarness
+        .callbacks()
+        .onConnectionStatus("reconnecting", null, null, null);
     });
     expect(
       screen.getByTestId("chat-composer-reconnecting").textContent,
@@ -3106,7 +3119,9 @@ describe("<ChatTile />", () => {
       savedPrompts: ReadonlyArray<SentPrompt>,
     ): void {
       act(() => {
-        chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+        chatHarness
+          .callbacks()
+          .onConnectionStatus("reconnecting", null, null, null);
         emitChatSnapshotWithMessages({
           callbacks: chatHarness.callbacks(),
           access: "owner",
@@ -5328,8 +5343,10 @@ describe("<ChatTile />", () => {
     });
 
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
-      chatHarness.callbacks().onConnectionStatus("open", null, null);
+      chatHarness
+        .callbacks()
+        .onConnectionStatus("reconnecting", null, null, null);
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
     });
 
     expect(screen.getByText("Host chat content")).not.toBeNull();
@@ -5402,8 +5419,10 @@ describe("<ChatTile />", () => {
     });
 
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
-      chatHarness.callbacks().onConnectionStatus("open", null, null);
+      chatHarness
+        .callbacks()
+        .onConnectionStatus("reconnecting", null, null, null);
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
     });
 
     expect(chatHarness.sent).toHaveLength(1);
@@ -6950,6 +6969,7 @@ describe("<ChatTile />", () => {
             upgradeGuidance: null,
           },
         },
+        null,
         null,
       );
     });

@@ -341,7 +341,7 @@ describe("initial chat handoff route coordinator", () => {
     // Owner snapshot with no chat seeded yet (epic.create's chat write has not
     // projected). The hook eager-opens the tab but must not create a chat.
     act(() => {
-      epicCallbacks.onConnectionStatus("open", null, true);
+      epicCallbacks.onConnectionStatus("open", null, true, null);
       epicCallbacks.onSnapshot(
         makeMeta("owner"),
         Y.encodeStateAsUpdate(new Y.Doc()),
@@ -385,7 +385,7 @@ describe("initial chat handoff route coordinator", () => {
     const donor = new Y.Doc();
     seedDocWithChat(donor);
     act(() => {
-      epicCallbacks.onConnectionStatus("open", null, true);
+      epicCallbacks.onConnectionStatus("open", null, true, null);
       epicCallbacks.onSnapshot(makeMeta("owner"), Y.encodeStateAsUpdate(donor));
     });
 
@@ -430,7 +430,7 @@ describe("initial chat handoff route coordinator", () => {
     const donor = new Y.Doc();
     seedDocWithChat(donor);
     act(() => {
-      epicCallbacks.onConnectionStatus("open", null, true);
+      epicCallbacks.onConnectionStatus("open", null, true, null);
       // Viewer is not `epicReady`, so adoption must not advance the handoff.
       epicCallbacks.onSnapshot(
         makeMeta("viewer"),
@@ -479,7 +479,7 @@ describe("initial chat handoff route coordinator", () => {
     const donor = new Y.Doc();
     seedDocWithChat(donor);
     act(() => {
-      epicCallbacks.onConnectionStatus("open", null, true);
+      epicCallbacks.onConnectionStatus("open", null, true, null);
       epicCallbacks.onSnapshot(makeMeta("owner"), Y.encodeStateAsUpdate(donor));
     });
 
@@ -559,7 +559,7 @@ describe("initial chat handoff route coordinator", () => {
     // Owner snapshot, live connection, and NO chat in the projection: the
     // epic is ready and the chat still is not there.
     act(() => {
-      epicCallbacks.onConnectionStatus("open", null, true);
+      epicCallbacks.onConnectionStatus("open", null, true, null);
       epicCallbacks.onSnapshot(
         makeMeta("owner"),
         Y.encodeStateAsUpdate(new Y.Doc()),
@@ -630,7 +630,7 @@ describe("initial chat handoff route coordinator", () => {
     // 0ms timer this test now controls.
     vi.useFakeTimers();
     act(() => {
-      epicCallbacks.onConnectionStatus("open", null, true);
+      epicCallbacks.onConnectionStatus("open", null, true, null);
     });
 
     act(() => {
@@ -673,7 +673,7 @@ describe("initial chat handoff route coordinator", () => {
     const epicCallbacks = callbacks;
 
     act(() => {
-      epicCallbacks.onConnectionStatus("open", null, true);
+      epicCallbacks.onConnectionStatus("open", null, true, null);
       epicCallbacks.onSnapshot(
         makeMeta("owner"),
         Y.encodeStateAsUpdate(new Y.Doc()),

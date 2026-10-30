@@ -2497,7 +2497,7 @@ function buildRetentionHandleWithNeverSettlingWrite(epicId: string): {
     writeCommand: () => new Promise<{ readonly hostId: string }>(() => {}),
   });
   if (captured.value === null) throw new Error("factory not invoked");
-  captured.value.onConnectionStatus("open", null, false);
+  captured.value.onConnectionStatus("open", null, false, null);
   captured.value.onSnapshot(
     writeGateOpenSnapshotMeta(epicId),
     Y.encodeStateAsUpdate(new Y.Doc()),

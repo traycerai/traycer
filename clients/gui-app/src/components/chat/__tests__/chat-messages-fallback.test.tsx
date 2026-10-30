@@ -625,7 +625,7 @@ function bootstrap(
   returning: PendingReturn | undefined,
   lastFallbackOutcome: LastFallbackOutcome | undefined,
 ): number {
-  harness.callbacks().onConnectionStatus("open", null, null);
+  harness.callbacks().onConnectionStatus("open", null, null, null);
   harness.callbacks().onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -2047,7 +2047,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     // transition (chat-session-store.ts ~5680), NOT "connecting" - using
     // "connecting" here would leave `reconnectEpoch` identical to
     // `baselineEpoch` and this whole scenario would silently test nothing.
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
     const reconnectEpoch = bootstrap(
       harness,
       initialHold,
@@ -2709,7 +2709,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
   } {
     const harness = createWindowedHarness();
     registerHarness(harness); // real registry lease, independent of any mount
-    harness.callbacks().onConnectionStatus("open", null, null);
+    harness.callbacks().onConnectionStatus("open", null, null, null);
     // A truly EMPTY snapshot (`rowCount: 0`, `tail.fromOrdinal: 0`) folds
     // immediately - `isTailHydrated` reads it TRUE with nothing to cover -
     // so this establishes a genuine AUTHORITATIVE baseline (the FOLD sets
@@ -2858,8 +2858,8 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     // fires on "reconnecting"/"closed", advancing `connectionEpoch` while
     // `transcriptBaselineEpoch` still reads the OLD value. No component is
     // mounted to observe any of this.
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
-    harness.callbacks().onConnectionStatus("open", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
+    harness.callbacks().onConnectionStatus("open", null, null, null);
     expect(harness.handle.store.getState().connectionEpoch).not.toBe(epoch);
     expect(harness.handle.store.getState().transcriptBaselineEpoch).toBe(epoch);
 
@@ -3050,7 +3050,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
   it("R1: independent outcome metadata speaks while its assistant row is unloaded, then a real onRange hydrates that SAME row/block through the REAL rendered-messages mapper - the already-spoken announcement is retained, not replayed", async () => {
     const harness = createWindowedHarness();
     registerHarness(harness);
-    harness.callbacks().onConnectionStatus("open", null, null);
+    harness.callbacks().onConnectionStatus("open", null, null, null);
     // A truly empty baseline folds immediately (same technique as D224).
     // `D224_WINDOW_EPOCH` is the WIRE epoch for every snapshot/range below -
     // an independent coordinate from `epoch` (`transcriptBaselineEpoch`,
@@ -3688,14 +3688,14 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
 
       // Not ready BEFORE the switch exists, so its first sight is an absorbing
       // observation - the same position a warm remount puts an old event in.
-      harness.callbacks().onConnectionStatus("connecting", null, null);
+      harness.callbacks().onConnectionStatus("connecting", null, null, null);
       await flushAnnouncer();
       publishHeldSwitch(harness);
       await flushAnnouncer();
       expect(liveRegionText()).not.toContain("Switched this chat to");
 
       const commits = await captureLiveRegionCommits(() => {
-        harness.callbacks().onConnectionStatus("open", null, null);
+        harness.callbacks().onConnectionStatus("open", null, null, null);
         vi.advanceTimersByTime(MANUAL_LABEL_HOLD_MS + 5_000);
       });
       expect(countSentenceOccurrences(commits, SWITCHED_SLUG_SENTENCE)).toBe(0);
@@ -3748,7 +3748,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       await flushAnnouncer();
       expect(liveRegionText()).not.toContain("Switched this chat to");
 
-      harness.callbacks().onConnectionStatus("connecting", null, null);
+      harness.callbacks().onConnectionStatus("connecting", null, null, null);
       await flushAnnouncer();
 
       modelLabelOverride.value = new Map([
@@ -3767,7 +3767,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       expect(liveRegionText()).not.toContain("Switched this chat to");
 
       const commits = await captureLiveRegionCommits(() => {
-        harness.callbacks().onConnectionStatus("open", null, null);
+        harness.callbacks().onConnectionStatus("open", null, null, null);
         // The restore observe absorbs (`!wasReady`); the 0ms wake is what
         // brings the hold back to a frame that can actually speak.
         vi.advanceTimersByTime(0);
@@ -3807,7 +3807,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       await flushAnnouncer();
       expect(liveRegionText()).not.toContain("Switched this chat to");
 
-      harness.callbacks().onConnectionStatus("connecting", null, null);
+      harness.callbacks().onConnectionStatus("connecting", null, null, null);
       await flushAnnouncer();
       expect(liveRegionText()).not.toContain("Switched this chat to");
 
@@ -3818,7 +3818,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       expect(liveRegionText()).not.toContain("Switched this chat to");
 
       const commits = await captureLiveRegionCommits(() => {
-        harness.callbacks().onConnectionStatus("open", null, null);
+        harness.callbacks().onConnectionStatus("open", null, null, null);
         // The restore observe is absorbing (`!wasReady`). Production arms a
         // 0ms timer so the next observe — now non-absorbing — can expire.
         vi.advanceTimersByTime(0);

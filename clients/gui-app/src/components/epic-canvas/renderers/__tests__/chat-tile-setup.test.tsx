@@ -193,7 +193,7 @@ function emitSnapshot(
   events: ReadonlyArray<ChatEvent>,
   messages: ReadonlyArray<Message>,
 ): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -249,7 +249,7 @@ function emitWindowedSnapshot(
   callbacks: ChatStreamCallbacks,
   restorableSetupInterruption: RestorableSetupInterruption | null,
 ): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onWindowedSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,

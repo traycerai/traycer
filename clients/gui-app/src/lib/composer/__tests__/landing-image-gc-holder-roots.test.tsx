@@ -199,7 +199,7 @@ function createHarness(session: Modules["session"]): Harness {
 }
 
 function emitSnapshot(harness: Harness): void {
-  harness.callbacks().onConnectionStatus("open", null, null);
+  harness.callbacks().onConnectionStatus("open", null, null, null);
   harness.callbacks().onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,

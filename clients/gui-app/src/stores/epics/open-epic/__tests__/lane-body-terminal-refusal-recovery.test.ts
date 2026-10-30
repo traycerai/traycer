@@ -226,9 +226,9 @@ function createRefusalRig(): RefusalRig {
     },
     async reconnect(): Promise<void> {
       const status = liveStatus();
-      status.onConnectionStatus("reconnecting", null);
+      status.onConnectionStatus("reconnecting", null, null, null);
       await settle();
-      status.onConnectionStatus("open", null);
+      status.onConnectionStatus("open", null, null, null);
       await settle();
     },
     async pushUnchangedWorld(): Promise<void> {

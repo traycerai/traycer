@@ -518,6 +518,7 @@ export function openCloudNotificationsStream(
       {},
     );
     currentSession = session;
+    let heldConnectionState: CloudNotificationsConnectionState | null = null;
     session.onServerFrame((envelope, binaryPayload) => {
       if (currentSession !== session) return;
       if (useCloudNotificationsStore.getState().sessionEpoch !== sessionEpoch) {
@@ -542,21 +543,45 @@ export function openCloudNotificationsStream(
             .getState()
             .applySnapshot(parsed.data);
           if (arrivals === null) return;
+          if (heldConnectionState !== null) {
+            heldConnectionState = "connected";
+            useCloudNotificationsStore
+              .getState()
+              .setConnectionState("reconnecting");
+          }
           onSnapshot?.({ rows: keptCloudFeedRows(parsed.data.rows), arrivals });
           reopenScheduler.resetBackoff();
           return;
         }
         case "connectionState":
+          if (heldConnectionState !== null) {
+            heldConnectionState = parsed.data.connectionState;
+          }
           useCloudNotificationsStore
             .getState()
-            .setConnectionState(parsed.data.connectionState);
+            .setConnectionState(
+              heldConnectionState === null
+                ? parsed.data.connectionState
+                : "reconnecting",
+            );
           return;
         case "pong":
           return;
       }
     });
-    session.onStatusChange((status, reason) => {
+    session.onStatusChange((status, reason, _retryCause, continuity) => {
       if (currentSession !== session) return;
+      if (continuity === "held") {
+        heldConnectionState ??=
+          useCloudNotificationsStore.getState().connectionState;
+      } else {
+        if (continuity === "continued" && heldConnectionState !== null) {
+          useCloudNotificationsStore
+            .getState()
+            .setConnectionState(heldConnectionState);
+        }
+        heldConnectionState = null;
+      }
       if (status === "closed") {
         useCloudNotificationsStore
           .getState()

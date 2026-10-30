@@ -332,10 +332,15 @@ describe("managed-command output store", () => {
     expect(h.sent).toHaveLength(1);
     expect(h.handle.store.getState().loadingOlder).toBe(true);
 
-    h.emit().onConnectionStatus("closed", {
-      kind: "fatalError",
-      details: OUTPUT_FAILED,
-    });
+    h.emit().onConnectionStatus(
+      "closed",
+      {
+        kind: "fatalError",
+        details: OUTPUT_FAILED,
+      },
+      null,
+      null,
+    );
 
     expect(h.handle.store.getState().loadingOlder).toBe(false);
     expect(h.handle.store.getState().fatalClose).toEqual(OUTPUT_FAILED);

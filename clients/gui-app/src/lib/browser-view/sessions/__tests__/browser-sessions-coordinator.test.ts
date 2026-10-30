@@ -789,6 +789,138 @@ describe("browser sessions coordinator registry", () => {
     );
   });
 
+  describe("while the host holds the stream", () => {
+    const VIEWPORT_FRAME = {
+      kind: "viewportState",
+      hasBinaryPayload: false,
+      sessionId: "session-1",
+      tabId: "tab-1",
+      intent: { mode: "fit" },
+      applied: null,
+      revision: 1,
+      source: null,
+      fitOwnerId: null,
+    } as const;
+
+    function openWithState() {
+      const harness = createTransportHarness();
+      const { key } = acquire({
+        scope: independentScope(),
+        openTransport: harness.openTransport,
+      });
+      const session = soleSession(soleClient(harness.clients));
+      const read = () => {
+        const state = browserSessionsCoordinatorState(key);
+        if (state === null) throw new Error("expected coordinator state");
+        return state;
+      };
+      session.emit(
+        {
+          kind: "snapshot",
+          hasBinaryPayload: false,
+          sessions: [sessionInfo({ sessionId: "session-1" })],
+        },
+        null,
+      );
+      session.emit(VIEWPORT_FRAME, null);
+      const outcome = { settled: null as "resolved" | "rejected" | null };
+      const open = read().openTab(null, "https://example.com");
+      open.then(
+        () => {
+          outcome.settled = "resolved";
+        },
+        () => {
+          outcome.settled = "rejected";
+        },
+      );
+      return { session, read, outcome, open };
+    }
+
+    it("keeps the inventory, viewports, pending requests and generation while held, and is live again on a continued open with no snapshot", async () => {
+      const { session, read, outcome, open } = openWithState();
+      const generation = read().connectionGeneration;
+      expect(read().inventoryReady).toBe(true);
+
+      session.emitContinuityStatus("reconnecting", "held");
+      await Promise.resolve();
+
+      expect(read().lifecycle).toBe("reconnecting");
+      expect(read().inventoryReady).toBe(true);
+      expect(Object.keys(read().viewports)).toEqual(["tab-1"]);
+      expect(read().connectionGeneration).toBe(generation);
+      expect(outcome.settled).toBeNull();
+
+      session.emitContinuityStatus("open", "continued");
+
+      expect(read().lifecycle).toBe("live");
+      expect(read().inventoryReady).toBe(true);
+      expect(Object.keys(read().viewports)).toEqual(["tab-1"]);
+      expect(read().connectionGeneration).toBe(generation);
+      // The request survived the hold, so the host's answer still settles it.
+      session.emit(
+        {
+          kind: "openTabResult",
+          hasBinaryPayload: false,
+          requestId: requestIdOf(sentFrameOfKind(session, "openTab")),
+          result: {
+            ok: true,
+            sessionId: "session-1",
+            tabId: "tab-1",
+            handoffToken: null,
+          },
+        },
+        null,
+      );
+      await expect(open).resolves.toMatchObject({ handoffToken: null });
+    });
+
+    it("resets and rejects what was pending once the hold ends, and allocates a new generation on the next open", async () => {
+      const { session, read, outcome } = openWithState();
+      const generation = read().connectionGeneration;
+
+      session.emitContinuityStatus("reconnecting", "held");
+      session.emitContinuityStatus("reconnecting", null);
+      await Promise.resolve();
+
+      expect(read().inventoryReady).toBe(false);
+      expect(read().viewports).toEqual({});
+      expect(outcome.settled).toBe("rejected");
+
+      session.emitContinuityStatus("open", null);
+      expect(read().connectionGeneration).toBeGreaterThan(generation);
+      expect(read().inventoryReady).toBe(false);
+    });
+  });
+
+  it("allocates a new generation when a retry replaces a stream that was held", () => {
+    const harness = createTransportHarness();
+    const { key } = acquire({
+      scope: independentScope(),
+      openTransport: harness.openTransport,
+    });
+    const read = () => {
+      const state = browserSessionsCoordinatorState(key);
+      if (state === null) throw new Error("expected coordinator state");
+      return state;
+    };
+    const generation = read().connectionGeneration;
+
+    soleSession(soleClient(harness.clients)).emitContinuityStatus(
+      "reconnecting",
+      "held",
+    );
+    read().retry();
+
+    const replacement = harness.clients.at(-1);
+    if (replacement === undefined || replacement === harness.clients[0]) {
+      throw new Error("expected a replacement transport");
+    }
+    soleSession(replacement).emitStatus("open");
+
+    expect(read().lifecycle).toBe("live");
+    expect(read().connectionGeneration).toBeGreaterThan(generation);
+  });
+
   it("resolves attachTab from its own actionAck, leaving an interleaved closeTab pending", async () => {
     const harness = createTransportHarness();
     const { key } = acquire({

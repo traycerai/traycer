@@ -89,7 +89,7 @@ function createHarness(): Harness {
 }
 
 function emitOwnerSnapshot(callbacks: ChatStreamCallbacks): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   const chat: Chat = {
     id: CHAT_ID,
     parentId: null,
@@ -194,7 +194,7 @@ describe("steersAwaitingAck: a steer that will never get an ack leaves no entry"
     if (clientActionId === null) throw new Error("Expected a dispatch");
     expect(steersAwaitingAck.has(clientActionId)).toBe(true);
 
-    harness.callbacks().onConnectionStatus("reconnecting", null, null);
+    harness.callbacks().onConnectionStatus("reconnecting", null, null, null);
     emitOwnerSnapshot(harness.callbacks());
 
     // The sweep ran: the steer's pending action is gone with its connection.

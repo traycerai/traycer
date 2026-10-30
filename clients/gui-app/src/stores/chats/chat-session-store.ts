@@ -216,6 +216,7 @@ import {
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
@@ -10178,9 +10179,12 @@ export function createChatSessionStoreWithNotificationDependencies(
               )),
         }));
       },
-      onConnectionStatus: (status, reason, retryCause) => {
+      onConnectionStatus: (status, reason, retryCause, continuity) => {
         if (disposed) return;
-        if (status === "reconnecting" || status === "closed") {
+        if (
+          continuity !== "held" &&
+          (status === "reconnecting" || status === "closed")
+        ) {
           if (sendTimings.enabled) {
             for (const action of Object.values(get().pendingActions)) {
               if (action.action === "send" && action.messageId !== null)
@@ -10265,7 +10269,11 @@ export function createChatSessionStoreWithNotificationDependencies(
           // and dropping them on a click would put the reader back on the
           // spinner they just escaped.
           const resolvePreSnapshotRetries = () => {
-            if (state.snapshotLoaded || status !== "reconnecting") {
+            if (
+              state.snapshotLoaded ||
+              status !== "reconnecting" ||
+              continuity === "held"
+            ) {
               return state.preSnapshotRetries;
             }
             return countPreSnapshotRetry(
@@ -10345,6 +10353,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         status: StreamConnectionStatus,
         reason: StreamCloseReason | null,
         retryCause: FatalErrorDetails | null,
+        continuity: StreamContinuity,
       ): void => {
         if (!streamGuard.isCurrent(streamGeneration)) return;
         // A RETRYABLE fatalError is the transport saying "not now" - the client
@@ -10379,7 +10388,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               );
           }
         }
-        callbacks.onConnectionStatus(status, reason, retryCause);
+        callbacks.onConnectionStatus(status, reason, retryCause, continuity);
       };
       return {
         onSnapshot: (frame) => {
@@ -10468,9 +10477,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Nothing can interleave in the gap: construction runs to completion in
         // one task, so the only thing this reorders against is the rest of that
         // construction, and the epoch bump inside is counted either way.
-        onConnectionStatus: (status, reason, retryCause) => {
+        onConnectionStatus: (status, reason, retryCause, continuity) => {
           if (storeReady) {
-            applyConnectionStatus(status, reason, retryCause);
+            applyConnectionStatus(status, reason, retryCause, continuity);
             return;
           }
           queueMicrotask(() => {
@@ -10480,7 +10489,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             // on, and running it would trade a synchronous throw for an
             // unhandled one in a microtask.
             if (!storeReady) return;
-            applyConnectionStatus(status, reason, retryCause);
+            applyConnectionStatus(status, reason, retryCause, continuity);
           });
         },
       };
