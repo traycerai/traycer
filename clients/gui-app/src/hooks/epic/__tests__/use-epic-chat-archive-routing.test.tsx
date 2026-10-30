@@ -1512,6 +1512,7 @@ describe("a write enacted by a stand-in", () => {
   const TUI_ID = "tui-moved";
   const TASK_ID = "task-moved";
   const SETTINGS: ChatRunSettings = {
+    ultracode: false,
     harnessId: "codex",
     model: "gpt-5-codex",
     permissionMode: "supervised",

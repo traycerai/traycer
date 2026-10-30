@@ -42,6 +42,7 @@ const CONTENT_2: JsonContent = {
 const SENDER = { type: "user" as const, userId: "user-1" };
 
 const SETTINGS = {
+  ultracode: false,
   harnessId: "codex" as const,
   model: "gpt-5-codex",
   permissionMode: "supervised" as const,

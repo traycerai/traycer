@@ -112,7 +112,7 @@ function emitSnapshot(
   suggestedPrompt: string | undefined,
   thinkingTokensEstimate: number | undefined,
 ): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -476,7 +476,7 @@ describe("chat-session-store suggestedPrompt and thinkingTokens (T14)", () => {
       expect(cleared.suggestedPrompt).toBeUndefined();
       expect(cleared.thinkingTokens).toBe(null);
 
-      callbacks.onConnectionStatus("reconnecting", null, null);
+      callbacks.onConnectionStatus("reconnecting", null, null, null);
       emitSnapshot(
         callbacks,
         activeTurn("turn-3", "running"),
@@ -499,7 +499,7 @@ describe("chat-session-store suggestedPrompt and thinkingTokens (T14)", () => {
     try {
       const callbacks = harness.callbacks();
       emitSnapshot(callbacks, activeTurn("turn-1", "running"), "chip", 10);
-      callbacks.onConnectionStatus("reconnecting", null, null);
+      callbacks.onConnectionStatus("reconnecting", null, null, null);
       emitSnapshot(
         callbacks,
         activeTurn("turn-1", "running"),

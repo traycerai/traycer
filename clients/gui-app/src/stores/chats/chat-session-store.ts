@@ -216,6 +216,7 @@ import {
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import { buildAttachmentsFromJSONContent } from "@/lib/composer/tiptap-json-content";
@@ -273,6 +274,7 @@ import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol"
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
 import type { RestoreResultEntry } from "@traycer/protocol/persistence/epic/checkpoint-manifests";
 import type {
+  ChatRunSettingsPreUltracode,
   PermissionMode,
   TokenUsage,
 } from "@traycer/protocol/persistence/epic/foundation";
@@ -344,6 +346,7 @@ export type ChatStreamClientHandle = Pick<
       // `auto`, and collapsing the two would veto the mode across every
       // fixture that predates it.
       | "autoPermissionModeProtocolSupported"
+      | "ultracodeProtocolSupported"
       // Optional, and absent reads as `null`, for the same reason.
       | "queuePauseReasonProtocolSupported"
     >
@@ -432,8 +435,12 @@ export interface ConfirmedManualFallbackAction {
    */
   readonly userMessageId: string;
   readonly turnId: string;
-  /** Where a switch went. `null` for `retry` and `wait_once`, which stay put. */
-  readonly target: ChatRunSettings | null;
+  /**
+   * Where a switch went, as reported by the frozen fallback unary. This
+   * announcement metadata carries no assertion about the chat's saved request.
+   * `null` for `retry` and `wait_once`, which stay put.
+   */
+  readonly target: ChatRunSettingsPreUltracode | null;
   /**
    * Monotonic per store instance - the consumer's dedupe key.
    *
@@ -1405,6 +1412,7 @@ export interface ChatSessionState {
    * chat composer has to hold both and this is the half only a session knows.
    */
   readonly autoPermissionModeProtocolSupported: boolean | null;
+  readonly ultracodeProtocolSupported: boolean;
   /**
    * Whether THIS tab's negotiated `chat.subscribe` line publishes the queue's
    * `pausedReason` (`@1.18`), or `null` while the session cannot say.
@@ -2575,6 +2583,7 @@ function chatRunSettingsEqual(a: ChatRunSettings, b: ChatRunSettings): boolean {
     reasoningEffort: a.reasoningEffort === b.reasoningEffort,
     serviceTier: a.serviceTier === b.serviceTier,
     agentMode: a.agentMode === b.agentMode,
+    ultracode: a.ultracode === b.ultracode,
     // `??` guards a pre-profile queued item (the field is missing, not
     // `null`, on an old serialized `ChatRunSettings`) so it still compares
     // equal to a fresh ambient commit instead of spuriously restamping.
@@ -10170,9 +10179,12 @@ export function createChatSessionStoreWithNotificationDependencies(
               )),
         }));
       },
-      onConnectionStatus: (status, reason, retryCause) => {
+      onConnectionStatus: (status, reason, retryCause, continuity) => {
         if (disposed) return;
-        if (status === "reconnecting" || status === "closed") {
+        if (
+          continuity !== "held" &&
+          (status === "reconnecting" || status === "closed")
+        ) {
           if (sendTimings.enabled) {
             for (const action of Object.values(get().pendingActions)) {
               if (action.action === "send" && action.messageId !== null)
@@ -10257,7 +10269,11 @@ export function createChatSessionStoreWithNotificationDependencies(
           // and dropping them on a click would put the reader back on the
           // spinner they just escaped.
           const resolvePreSnapshotRetries = () => {
-            if (state.snapshotLoaded || status !== "reconnecting") {
+            if (
+              state.snapshotLoaded ||
+              status !== "reconnecting" ||
+              continuity === "held"
+            ) {
               return state.preSnapshotRetries;
             }
             return countPreSnapshotRetry(
@@ -10283,6 +10299,9 @@ export function createChatSessionStoreWithNotificationDependencies(
               resolveInterviewDeliveryRetryProtocolSupported(),
             autoPermissionModeProtocolSupported:
               resolveAutoPermissionModeProtocolSupported(),
+            ultracodeProtocolSupported:
+              status === "open" &&
+              streamClient?.ultracodeProtocolSupported?.() === true,
             queuePauseReasonProtocolSupported:
               resolveQueuePauseReasonProtocolSupported(),
             fatalClose: resolveFatalClose(),
@@ -10334,6 +10353,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         status: StreamConnectionStatus,
         reason: StreamCloseReason | null,
         retryCause: FatalErrorDetails | null,
+        continuity: StreamContinuity,
       ): void => {
         if (!streamGuard.isCurrent(streamGeneration)) return;
         // A RETRYABLE fatalError is the transport saying "not now" - the client
@@ -10368,7 +10388,7 @@ export function createChatSessionStoreWithNotificationDependencies(
               );
           }
         }
-        callbacks.onConnectionStatus(status, reason, retryCause);
+        callbacks.onConnectionStatus(status, reason, retryCause, continuity);
       };
       return {
         onSnapshot: (frame) => {
@@ -10457,9 +10477,9 @@ export function createChatSessionStoreWithNotificationDependencies(
         // Nothing can interleave in the gap: construction runs to completion in
         // one task, so the only thing this reorders against is the rest of that
         // construction, and the epoch bump inside is counted either way.
-        onConnectionStatus: (status, reason, retryCause) => {
+        onConnectionStatus: (status, reason, retryCause, continuity) => {
           if (storeReady) {
-            applyConnectionStatus(status, reason, retryCause);
+            applyConnectionStatus(status, reason, retryCause, continuity);
             return;
           }
           queueMicrotask(() => {
@@ -10469,7 +10489,7 @@ export function createChatSessionStoreWithNotificationDependencies(
             // on, and running it would trade a synchronous throw for an
             // unhandled one in a microtask.
             if (!storeReady) return;
-            applyConnectionStatus(status, reason, retryCause);
+            applyConnectionStatus(status, reason, retryCause, continuity);
           });
         },
       };
@@ -10555,6 +10575,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       // `null`, not `false` - no session has answered yet, so the catalog line
       // decides alone rather than the mode being vetoed before a handshake.
       autoPermissionModeProtocolSupported: null,
+      ultracodeProtocolSupported: false,
       queuePauseReasonProtocolSupported: null,
       turnInProgress: undefined,
       sendWouldQueue: undefined,
@@ -10714,6 +10735,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           draftBlobBridgeSupported: false,
           interviewDeliveryRetryProtocolSupported: false,
           autoPermissionModeProtocolSupported: null,
+          ultracodeProtocolSupported: false,
           queuePauseReasonProtocolSupported: null,
           fatalClose: null,
           snapshotLoaded: false,
@@ -12493,6 +12515,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           draftBlobBridgeSupported: false,
           interviewDeliveryRetryProtocolSupported: false,
           autoPermissionModeProtocolSupported: null,
+          ultracodeProtocolSupported: false,
           queuePauseReasonProtocolSupported: null,
         });
       },

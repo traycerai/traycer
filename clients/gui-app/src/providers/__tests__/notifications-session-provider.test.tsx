@@ -499,15 +499,15 @@ class MockStreamSession implements IStreamSession {
   }
 
   emitOpen(): void {
-    this.statusChangeHandler?.("open", null, null);
+    this.statusChangeHandler?.("open", null, null, null);
   }
 
   emitStatus(status: "connecting" | "open" | "closed" | "reconnecting"): void {
-    this.statusChangeHandler?.(status, null, null);
+    this.statusChangeHandler?.(status, null, null, null);
   }
 
   emitClosed(reason: StreamCloseReason): void {
-    this.statusChangeHandler?.("closed", reason, null);
+    this.statusChangeHandler?.("closed", reason, null, null);
   }
 }
 

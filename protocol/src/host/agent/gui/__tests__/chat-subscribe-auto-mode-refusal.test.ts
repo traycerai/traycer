@@ -60,6 +60,27 @@ function parseLiveClientFrame(
   return chatSubscribeClientFrameSchema.parse(raw);
 }
 
+function frameWithoutUltracodeTuple(frame: ChatSubscribeClientFrame) {
+  switch (frame.kind) {
+    case "send":
+    case "editUserMessage":
+    case "queueSettingsUpdate":
+    case "queueSettingsRestamp": {
+      const { ultracode: _ultracode, ...settings } = frame.settings;
+      return { ...frame, settings };
+    }
+    case "queueSteerNow": {
+      if (frame.newSettings === null) {
+        throw new Error("expected a settings tuple");
+      }
+      const { ultracode: _ultracode, ...newSettings } = frame.newSettings;
+      return { ...frame, newSettings };
+    }
+    default:
+      throw new Error("expected a settings-bearing client frame");
+  }
+}
+
 // The six client-frame kinds `subscribe.ts` re-binds to the live permission
 // mode enum on the auto line (see `chatSubscribeClientFrameSchemaMiddleOptionsLive`
 // and the two `.extend({ settings: chatRunSettingsSchema })` spots at the top
@@ -183,9 +204,12 @@ describe("projectChatClientFrameForVersion: the auto cliff at the live chat.subs
     it(`leaves ${frameKind.kind} carrying "${PRE_AUTO_SAMPLE_MODE}" unaffected two minors below the auto line`, () => {
       const frame = parseLiveClientFrame(frameKind.build(PRE_AUTO_SAMPLE_MODE));
 
-      expect(projectChatClientFrameForVersion(frame, TWO_BELOW_AUTO)).toBe(
-        frame,
-      );
+      const projected = projectChatClientFrameForVersion(frame, TWO_BELOW_AUTO);
+      if (frame.kind === "activePermissionModeUpdate") {
+        expect(projected).toBe(frame);
+      } else {
+        expect(projected).toEqual(frameWithoutUltracodeTuple(frame));
+      }
     });
 
     it(`refuses ${frameKind.kind} carrying "${AUTO_MODE}" one minor below the auto line - still pre-auto`, () => {
@@ -196,10 +220,14 @@ describe("projectChatClientFrameForVersion: the auto cliff at the live chat.subs
       );
     });
 
-    it(`passes ${frameKind.kind} carrying "${AUTO_MODE}" through unchanged on the auto line`, () => {
+    it(`passes ${frameKind.kind} carrying "${AUTO_MODE}" on the auto line`, () => {
       const frame = parseLiveClientFrame(frameKind.build(AUTO_MODE));
-
-      expect(projectChatClientFrameForVersion(frame, AUTO_LINE)).toBe(frame);
+      const projected = projectChatClientFrameForVersion(frame, AUTO_LINE);
+      if (frame.kind === "activePermissionModeUpdate") {
+        expect(projected).toBe(frame);
+      } else {
+        expect(projected).toEqual(frameWithoutUltracodeTuple(frame));
+      }
     });
 
     it(`refuses ${frameKind.kind} carrying "${AUTO_MODE}" when the handshake has not resolved (null)`, () => {

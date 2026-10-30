@@ -644,6 +644,7 @@ const PENDING_DRAFT_CONTENT: JsonContent = {
   ],
 };
 const QUEUED_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "queued-model",
   permissionMode: "supervised",
@@ -653,6 +654,7 @@ const QUEUED_SETTINGS: ChatRunSettings = {
   profileId: null,
 };
 const UPDATED_QUEUE_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-live",
   permissionMode: "full_access",
@@ -671,6 +673,7 @@ const INITIAL_HANDOFF_CONTENT: JsonContent = {
   ],
 };
 const INITIAL_HANDOFF_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "codex-handoff",
   permissionMode: "supervised",
@@ -680,6 +683,7 @@ const INITIAL_HANDOFF_SETTINGS: ChatRunSettings = {
   profileId: null,
 };
 const SESSION_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-live",
   permissionMode: "full_access",
@@ -771,7 +775,7 @@ function createChatHarness(): ChatHarness {
       streamCreations += 1;
       if (snapshot !== null) {
         setTimeout(() => {
-          nextCallbacks.onConnectionStatus("open", null, null);
+          nextCallbacks.onConnectionStatus("open", null, null, null);
           emitChatSnapshotWithMessages({
             callbacks: nextCallbacks,
             access: snapshot.access,
@@ -2199,12 +2203,17 @@ describe("<ChatTile />", () => {
     // Three refusals from a host that is up bring the buttons early.
     act(() => {
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        chatHarness.callbacks().onConnectionStatus("reconnecting", null, {
-          code: "SESSION_CLOSED",
-          reason: "SESSION_CLOSED: chat session is closing",
-          incompatibleMethods: null,
-          upgradeGuidance: null,
-        });
+        chatHarness.callbacks().onConnectionStatus(
+          "reconnecting",
+          null,
+          {
+            code: "SESSION_CLOSED",
+            reason: "SESSION_CLOSED: chat session is closing",
+            incompatibleMethods: null,
+            upgradeGuidance: null,
+          },
+          null,
+        );
       }
     });
     const body = screen.getByTestId("chat-tile-pre-content-chat-1");
@@ -2427,7 +2436,9 @@ describe("<ChatTile />", () => {
         }),
       ];
       act(() => {
-        chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+        chatHarness
+          .callbacks()
+          .onConnectionStatus("reconnecting", null, null, null);
       });
 
       await waitFor(() => {
@@ -2487,7 +2498,9 @@ describe("<ChatTile />", () => {
       }),
     ];
     act(() =>
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null),
+      chatHarness
+        .callbacks()
+        .onConnectionStatus("reconnecting", null, null, null),
     );
 
     await waitFor(() =>
@@ -2543,7 +2556,9 @@ describe("<ChatTile />", () => {
       }),
     ];
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+      chatHarness
+        .callbacks()
+        .onConnectionStatus("reconnecting", null, null, null);
     });
     await waitFor(() => {
       expect(
@@ -2560,7 +2575,9 @@ describe("<ChatTile />", () => {
     renderChatTile();
     await waitForChatTileLoaded();
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+      chatHarness
+        .callbacks()
+        .onConnectionStatus("reconnecting", null, null, null);
     });
     expect(
       screen.getByTestId("chat-composer-reconnecting").textContent,
@@ -3102,7 +3119,9 @@ describe("<ChatTile />", () => {
       savedPrompts: ReadonlyArray<SentPrompt>,
     ): void {
       act(() => {
-        chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
+        chatHarness
+          .callbacks()
+          .onConnectionStatus("reconnecting", null, null, null);
         emitChatSnapshotWithMessages({
           callbacks: chatHarness.callbacks(),
           access: "owner",
@@ -5324,8 +5343,10 @@ describe("<ChatTile />", () => {
     });
 
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
-      chatHarness.callbacks().onConnectionStatus("open", null, null);
+      chatHarness
+        .callbacks()
+        .onConnectionStatus("reconnecting", null, null, null);
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
     });
 
     expect(screen.getByText("Host chat content")).not.toBeNull();
@@ -5398,8 +5419,10 @@ describe("<ChatTile />", () => {
     });
 
     act(() => {
-      chatHarness.callbacks().onConnectionStatus("reconnecting", null, null);
-      chatHarness.callbacks().onConnectionStatus("open", null, null);
+      chatHarness
+        .callbacks()
+        .onConnectionStatus("reconnecting", null, null, null);
+      chatHarness.callbacks().onConnectionStatus("open", null, null, null);
     });
 
     expect(chatHarness.sent).toHaveLength(1);
@@ -6946,6 +6969,7 @@ describe("<ChatTile />", () => {
             upgradeGuidance: null,
           },
         },
+        null,
         null,
       );
     });

@@ -121,6 +121,7 @@ function renderToolbarStore() {
       hostId: "host-a",
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       stagedSurfaceKey: null,
       sendsToRestingSandbox: false,
     }),

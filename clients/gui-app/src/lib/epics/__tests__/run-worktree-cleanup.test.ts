@@ -165,7 +165,7 @@ function stubOpenStreamTransport(): (hostId: string) => DurableStreamTransport {
 
 /** Drives the command to the point where the host has accepted it. */
 function reachHost(): void {
-  commandCallbacks().onConnectionStatus("open", null);
+  commandCallbacks().onConnectionStatus("open", null, null, null);
 }
 
 function runTaskCleanup(
@@ -326,7 +326,7 @@ describe("runWorktreeCleanup on a current host", () => {
     const promise = runTaskCleanup(["/wt/a", "/wt/b"]);
     reachHost();
     commandCallbacks().onTargetComplete("/wt/a", true, undefined, undefined);
-    commandCallbacks().onConnectionStatus("reconnecting", null);
+    commandCallbacks().onConnectionStatus("reconnecting", null, null, null);
 
     await expect(promise).resolves.toEqual({
       removed: ["/wt/a"],
@@ -345,7 +345,7 @@ describe("runWorktreeCleanup on a current host", () => {
     const promise = runTaskCleanup(["/wt/a"]);
     // No `open`: the subscribe frame never got to a live socket, so nothing was
     // attempted and there is nothing uncertain about it.
-    commandCallbacks().onConnectionStatus("reconnecting", null);
+    commandCallbacks().onConnectionStatus("reconnecting", null, null, null);
 
     await expect(promise).resolves.toEqual({
       removed: [],
@@ -375,7 +375,7 @@ describe("runWorktreeCleanup on a current host", () => {
 
   it("ignores normal startup statuses", async () => {
     const promise = runTaskCleanup(["/wt/a"]);
-    commandCallbacks().onConnectionStatus("connecting", null);
+    commandCallbacks().onConnectionStatus("connecting", null, null, null);
     reachHost();
     commandCallbacks().onTargetComplete("/wt/a", true, undefined, undefined);
     commandCallbacks().onCommandComplete({
@@ -435,7 +435,12 @@ describe("runWorktreeCleanup on an older host", () => {
   it("fails fast and settles when a per-target stream drops", async () => {
     const promise = runTaskCleanup(["/wt/a"]);
     await reportUnsupported();
-    legacyCallbacksFor("/wt/a").onConnectionStatus("reconnecting", null);
+    legacyCallbacksFor("/wt/a").onConnectionStatus(
+      "reconnecting",
+      null,
+      null,
+      null,
+    );
 
     await expect(promise).resolves.toEqual({
       removed: [],
@@ -449,7 +454,7 @@ describe("runWorktreeCleanup on an older host", () => {
   it("treats a per-target close before a terminal frame as a failure", async () => {
     const promise = runTaskCleanup(["/wt/a"]);
     await reportUnsupported();
-    legacyCallbacksFor("/wt/a").onConnectionStatus("closed", null);
+    legacyCallbacksFor("/wt/a").onConnectionStatus("closed", null, null, null);
 
     await expect(promise).resolves.toEqual({
       removed: [],
@@ -495,8 +500,13 @@ describe("runWorktreeCleanup on an older host", () => {
   it("ignores normal per-target startup statuses until a terminal frame arrives", async () => {
     const promise = runTaskCleanup(["/wt/a"]);
     await reportUnsupported();
-    legacyCallbacksFor("/wt/a").onConnectionStatus("connecting", null);
-    legacyCallbacksFor("/wt/a").onConnectionStatus("open", null);
+    legacyCallbacksFor("/wt/a").onConnectionStatus(
+      "connecting",
+      null,
+      null,
+      null,
+    );
+    legacyCallbacksFor("/wt/a").onConnectionStatus("open", null, null, null);
     legacyCallbacksFor("/wt/a").onComplete(true);
 
     await expect(promise).resolves.toEqual({
@@ -615,5 +625,95 @@ describe("runWorktreeCleanup stopOwners paths", () => {
     });
     expect(commandMock.commands).toHaveLength(1);
     expect(legacyMock.paths).toEqual([]);
+  });
+});
+
+describe("runWorktreeCleanup while the host holds the stream", () => {
+  it("keeps a command pending through a held reconnect and settles from the frames after a continued open", async () => {
+    const promise = runTaskCleanup(["/wt/a", "/wt/b"]);
+    commandCallbacks().onConnectionStatus("open", null, null, null);
+    commandCallbacks().onTargetComplete("/wt/a", true, undefined, undefined);
+
+    commandCallbacks().onConnectionStatus("reconnecting", null, null, "held");
+    commandCallbacks().onConnectionStatus("open", null, null, "continued");
+    commandCallbacks().onTargetComplete("/wt/b", true, undefined, undefined);
+    commandCallbacks().onCommandComplete({
+      requestedCount: 2,
+      deletedCount: 2,
+      failedCount: 0,
+    });
+
+    await expect(promise).resolves.toEqual({
+      removed: ["/wt/a", "/wt/b"],
+      failed: [],
+      uncertain: [],
+    });
+    expect(commandMock.commands).toHaveLength(1);
+  });
+
+  it("settles a command as unconfirmed when the hold ends in a plain reconnect", async () => {
+    const promise = runTaskCleanup(["/wt/a", "/wt/b"]);
+    commandCallbacks().onConnectionStatus("open", null, null, null);
+    commandCallbacks().onTargetComplete("/wt/a", true, undefined, undefined);
+
+    commandCallbacks().onConnectionStatus("reconnecting", null, null, "held");
+    commandCallbacks().onConnectionStatus("reconnecting", null, null, null);
+
+    await expect(promise).resolves.toEqual({
+      removed: ["/wt/a"],
+      failed: [],
+      uncertain: ["/wt/b"],
+    });
+  });
+
+  it("keeps a per-target delete pending through a held reconnect and takes its terminal frame after a continued open", async () => {
+    const promise = runTaskCleanup(["/wt/a"]);
+    await reportUnsupported();
+    legacyCallbacksFor("/wt/a").onConnectionStatus("open", null, null, null);
+
+    legacyCallbacksFor("/wt/a").onConnectionStatus(
+      "reconnecting",
+      null,
+      null,
+      "held",
+    );
+    legacyCallbacksFor("/wt/a").onConnectionStatus(
+      "open",
+      null,
+      null,
+      "continued",
+    );
+    legacyCallbacksFor("/wt/a").onComplete(true);
+
+    await expect(promise).resolves.toEqual({
+      removed: ["/wt/a"],
+      failed: [],
+      uncertain: [],
+    });
+  });
+
+  it("settles a per-target delete as unconfirmed when the hold ends in a plain reconnect", async () => {
+    const promise = runTaskCleanup(["/wt/a"]);
+    await reportUnsupported();
+    legacyCallbacksFor("/wt/a").onConnectionStatus("open", null, null, null);
+
+    legacyCallbacksFor("/wt/a").onConnectionStatus(
+      "reconnecting",
+      null,
+      null,
+      "held",
+    );
+    legacyCallbacksFor("/wt/a").onConnectionStatus(
+      "reconnecting",
+      null,
+      null,
+      null,
+    );
+
+    await expect(promise).resolves.toEqual({
+      removed: [],
+      failed: [],
+      uncertain: ["/wt/a"],
+    });
   });
 });

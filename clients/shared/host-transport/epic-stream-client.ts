@@ -42,6 +42,7 @@ import type {
   IStreamSession,
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { IStreamClient } from "./i-stream-client";
@@ -239,6 +240,7 @@ export interface EpicStreamCallbacks {
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
     durabilityStatusNegotiated: boolean,
+    continuity: StreamContinuity,
   ) => void;
 }
 
@@ -394,11 +396,12 @@ export class EpicStreamClient {
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
-    this.session.onStatusChange((status, reason) => {
+    this.session.onStatusChange((status, reason, _retryCause, continuity) => {
       this.callbacks.onConnectionStatus(
         status,
         reason,
         status === "open" && this.peerSpeaksDurabilityStatus(),
+        continuity,
       );
     });
   }

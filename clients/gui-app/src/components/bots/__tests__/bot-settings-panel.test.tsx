@@ -194,6 +194,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
           reasoningFallback: "model-default",
           seedKey: "bot-settings-test",
           values: {
+            ultracode: false,
             permission: settings?.permissionMode ?? "supervised",
             selection: {
               harnessId: settings?.harnessId ?? "codex",
@@ -206,6 +207,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
           onSettingsChange: null,
           tuiOnly: false,
           chatLineCarriesAutoMode: null,
+          ultracodeCarried: false,
           hostId: "host-1",
         });
         return created;
@@ -314,6 +316,7 @@ describe("<BotChannelSettingsPanel /> model", () => {
     expect(seed).toEqual({
       kind: "fallback",
       settings: {
+        ultracode: false,
         harnessId: "claude",
         model: "model-b",
         permissionMode: useSettingsStore.getState().defaultPermission,
@@ -719,6 +722,7 @@ describe("<BotChannelSettingsPanel /> Max Mode label", () => {
         liveStore().getState().setCatalog({
           hostId: "host-1",
           chatLineCarriesAutoMode: null,
+          ultracodeCarried: false,
           keepsUnavailablePick: false,
           harnesses: undefined,
           modelsHarnessId: "cursor",

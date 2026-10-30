@@ -1,5 +1,8 @@
 import { useState } from "react";
-import { StaticEpicNodeIcon } from "@/components/epic-canvas/epic-node-tab-icon";
+import {
+  FileArtifactIcon,
+  StaticEpicNodeIcon,
+} from "@/components/epic-canvas/epic-node-tab-icon";
 import { StartTruncatedText } from "@/components/ui/start-truncated-text";
 import { artifactDiffRenderable } from "@/lib/chat/artifact-diff-renderable";
 import { artifactOperationVerb } from "@/lib/chat/artifact-operation-verb";
@@ -34,10 +37,17 @@ export function ArtifactChangeRow(props: { row: ArtifactChangeRowModel }) {
 
   const header = (
     <>
-      <StaticEpicNodeIcon
-        type={display.displayKind}
-        className="size-3.5 shrink-0 text-muted-foreground/80"
-      />
+      {display.displayKind === "file" ? (
+        <FileArtifactIcon
+          viewer={display.fileViewer}
+          className="size-3.5 shrink-0 text-muted-foreground/80"
+        />
+      ) : (
+        <StaticEpicNodeIcon
+          type={display.displayKind}
+          className="size-3.5 shrink-0 text-muted-foreground/80"
+        />
+      )}
       <span className="shrink-0 text-ui-sm font-medium text-foreground/85">
         {artifactOperationVerb(row.operation)}
       </span>

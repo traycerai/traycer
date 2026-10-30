@@ -15,7 +15,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 11
+              "const": 12
             }
           },
           "required": [
@@ -236,6 +236,10 @@ export const chatSyncSchemaSurfaceBaseline = {
                           "type": "null"
                         }
                       ]
+                    },
+                    "ultracode": {
+                      "default": false,
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -453,7 +457,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 11
+              "const": 12
             }
           },
           "required": [
@@ -680,6 +684,10 @@ export const chatSyncSchemaSurfaceBaseline = {
                         }
                       ]
                     },
+                    "ultracode": {
+                      "default": false,
+                      "type": "boolean"
+                    },
                     "residual": {}
                   },
                   "required": [
@@ -690,6 +698,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                     "serviceTier",
                     "agentMode",
                     "profileId",
+                    "ultracode",
                     "residual"
                   ],
                   "additionalProperties": false
@@ -1206,7 +1215,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 11
+              "const": 12
             }
           },
           "required": [
@@ -1281,7 +1290,7 @@ export const chatSyncSchemaSurfaceBaseline = {
             },
             "minor": {
               "type": "number",
-              "const": 11
+              "const": 12
             }
           },
           "required": [

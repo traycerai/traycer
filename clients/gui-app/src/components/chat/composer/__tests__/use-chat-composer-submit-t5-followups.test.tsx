@@ -243,6 +243,7 @@ function makeToolbarStore(seedKey: string) {
     reasoningFallback: "model-default",
     seedKey,
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: { harnessId: "codex", modelSlug: "gpt-5", profileId: null },
       reasoning: "medium",
@@ -251,6 +252,7 @@ function makeToolbarStore(seedKey: string) {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
 }

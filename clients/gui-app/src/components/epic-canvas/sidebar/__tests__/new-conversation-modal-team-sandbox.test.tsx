@@ -338,9 +338,11 @@ vi.mock("@/lib/composer/repointed-staging-toast", () => ({
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
   const store = createStore(() => ({
+    ultracode: false,
     selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
     // The raw pick; `selection` above is what this host's catalog shows.
     values: {
+      ultracode: false,
       selection: {
         harnessId: "codex",
         modelSlug: "gpt-6.1-sol",
@@ -653,6 +655,7 @@ afterEach(() => {
   testState.toolbarStore?.setState({
     catalog: { hostId: null, harnesses: undefined, modelsLoaded: false },
     values: {
+      ultracode: false,
       selection: {
         harnessId: "codex",
         modelSlug: "gpt-6.1-sol",
@@ -861,6 +864,7 @@ describe("new-conversation modal refusals at Send", () => {
     act(() =>
       testState.toolbarStore?.setState({
         values: {
+          ultracode: false,
           selection: {
             harnessId: "traycer",
             modelSlug: "claude-sonnet-5.5",
@@ -909,6 +913,7 @@ describe("new-conversation modal's send on a staged sandbox", () => {
     act(() =>
       testState.toolbarStore?.setState({
         values: {
+          ultracode: false,
           selection: {
             harnessId: "claude",
             modelSlug: "opus",

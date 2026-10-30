@@ -658,6 +658,60 @@ describe("useLandingComposerActions", () => {
     queryClient.clear();
   });
 
+  // The first send carries the toolbar's saved Ultracode request on the
+  // opening message: a Claude selection keeps it, any other harness states
+  // false even when the toolbar still holds true.
+  it.each([
+    ["claude", "claude-opus-4-7", true],
+    ["codex", "gpt-5-codex", false],
+  ] as const)(
+    "carries the toolbar's saved request for %s / %s on the opening message as %s",
+    async (harnessId, modelSlug, expected) => {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const { result } = renderHook(
+        () => useLandingComposerActions(useTestPlacementTarget()),
+        {
+          wrapper: queryClientWrapper(queryClient),
+        },
+      );
+
+      act(() => {
+        result.current.submit({
+          draftId: null,
+          editor: editorHandleForPrompt(SUBMITTED_PROMPT),
+          slashCatalog: null,
+          owner: null,
+          teamSandboxHarnessBlocked: false,
+          settled: null,
+          toolbar: {
+            ...defaultToolbar(),
+            selection: { harnessId, modelSlug, profileId: null },
+            ultracode: true,
+          },
+        });
+      });
+
+      await waitFor(() => {
+        expect(
+          landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
+        ).toBe(true);
+      });
+
+      const createEpicCall = landingMocks.request.mock.calls.find(
+        (c) => c[0] === "epic.create",
+      );
+      expect(createEpicCall?.[1]).toMatchObject({
+        chat: {
+          initialMessage: { settings: { harnessId, ultracode: expected } },
+        },
+      });
+
+      queryClient.clear();
+    },
+  );
+
   // Widening the divergence beyond the suite defaults: an explicit target
   // host that is neither `undefined` nor coincidentally equal to the local
   // host id, still pinned against the local id and not the target.
@@ -1182,6 +1236,7 @@ describe("useLandingComposerActions", () => {
       }),
     ).toBe(createEpicName(SUBMITTED_PROMPT));
     const expectedSettings = {
+      ultracode: false,
       harnessId: "codex",
       model: "gpt-5-codex",
       permissionMode: "supervised",
@@ -2137,6 +2192,7 @@ describe("useLandingComposerActions", () => {
     expect(
       useComposerRunSettingsStore.getState().getGlobalRunSettings(TEST_HOST_ID),
     ).toEqual({
+      ultracode: false,
       harnessId: "codex",
       model: "gpt-5-codex",
       permissionMode: "supervised",
@@ -4444,6 +4500,7 @@ function queryClientWrapper(
 
 function defaultToolbar() {
   return {
+    ultracode: false,
     selection: {
       harnessId: "codex" as const,
       modelSlug: "gpt-5-codex",

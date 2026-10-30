@@ -122,6 +122,7 @@ function props(
       steerCapable: false,
       steerProtocolSupported: true,
       autoPermissionModeProtocolSupported: null,
+      ultracodeProtocolSupported: false,
       getDraftBlobBridgeSupported: () => false,
       getActiveTurnForSteer: () => null,
       // Unused by this suite - it covers the unanswerable-interview escape
@@ -207,6 +208,7 @@ function interviewState(
 }
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "codex-test",
   permissionMode: "supervised",

@@ -249,6 +249,7 @@ export function startLocalHostInventorySubscription(
     const speaksForTheSubscription = (): boolean =>
       currentStreamToken === token &&
       deps.identity().generation === generationAtOpen;
+    let snapshotCoversSubscription = false;
     stream = new HostInventoryStreamClient({
       wsStreamClient: client,
       callbacks: {
@@ -265,6 +266,7 @@ export function startLocalHostInventorySubscription(
           // sandbox row to lose, so a @1.0 snapshot is the whole personal
           // registry, as it was in the release before them.
           if (UNRELEASED_FEATURES_ENABLED && !snapshot.includesSandboxRows) {
+            snapshotCoversSubscription = false;
             setPushActive(false);
             return;
           }
@@ -280,6 +282,7 @@ export function startLocalHostInventorySubscription(
             openedAtGeneration: generationAtOpen,
           });
           if (snapshot.stale) {
+            snapshotCoversSubscription = false;
             setPushActive(false);
             return;
           }
@@ -288,16 +291,22 @@ export function startLocalHostInventorySubscription(
           // after an account switch, whose rows the consumer has just
           // rejected - would report coverage the new account does not have.
           if (!speaksForTheSubscription()) return;
+          snapshotCoversSubscription = true;
           setPushActive(true);
         },
-        onConnectionStatus: (status) => {
+        onConnectionStatus: (status, _reason, _retryCause, continuity) => {
           if (disposed) return;
           // Only `open` arms it, and `open` alone does not: a stream that is
           // connected but has said nothing yet is not covering anything. The
           // first snapshot arms it (the host sends one on subscribe), and any
           // other status disarms it immediately - from any stream, because
           // withdrawing coverage is never the unsafe direction.
-          if (status !== "open") setPushActive(false);
+          if (status !== "open") {
+            if (continuity !== "held") snapshotCoversSubscription = false;
+            setPushActive(false);
+          } else if (continuity === "continued" && speaksForTheSubscription()) {
+            setPushActive(snapshotCoversSubscription);
+          }
         },
       },
     });

@@ -1,3 +1,4 @@
+import { useUltracodeCarrierSupported } from "@/components/home/data/model-ultracode";
 import { signedInUserId } from "@/lib/sandboxes/sandbox-account-fence";
 import {
   transitionPendingSend,
@@ -1014,6 +1015,10 @@ export function NewConversationModalBody(props: {
   // than silently submitted as the new chat/agent's initial settings. The
   // catalog reads through that same client, so a pinned modal offers the
   // pinned host's harnesses/models, not the active host's.
+  const ultracodeCarried = useUltracodeCarrierSupported(
+    resolvedHostId,
+    "epic.createChat",
+  );
   const toolbarStore = useComposerToolbarStore(
     null,
     fallbackSeedSource(draftSettings, hostClient),
@@ -1023,6 +1028,7 @@ export function NewConversationModalBody(props: {
       hostId: resolvedHostId,
       tuiOnly: draftComposerMode === "terminal",
       chatLineCarriesAutoMode: null,
+      ultracodeCarried,
       // The key `useInTaskSandboxStagingSurface` stages under below; a named
       // host stages nothing.
       stagedSurfaceKey:
@@ -1444,6 +1450,7 @@ export function NewConversationModalBody(props: {
         permission: toolbar.permission,
         reasoning: toolbar.reasoning,
         serviceTier: toolbar.serviceTier,
+        ultracode: toolbar.ultracode,
       });
       if (settings.model.length === 0) return;
       // Global, single-selection billing context captured at create time; it
@@ -2736,8 +2743,9 @@ function useLatestConversationSettingsSeed(): {
       };
     }
     if (latest.ownerKind === "chat") {
+      const settings = projection.chats.byId[latest.id].settings ?? null;
       return {
-        settings: projection.chats.byId[latest.id].settings ?? null,
+        settings: settings === null ? null : { ...settings, ultracode: false },
         composerMode: "chat",
       };
     }
@@ -2751,6 +2759,7 @@ function useLatestConversationSettingsSeed(): {
     }
     return {
       settings: {
+        ultracode: false,
         harnessId: agent.harnessId,
         model: agent.model ?? "",
         permissionMode: defaults.defaultPermission,

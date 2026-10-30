@@ -2922,23 +2922,24 @@ function liveEpicNodeArchivedFromHandle(
 /**
  * The viewer a file artifact opens in, decided from the same on-disk name and
  * media type its tile decides from, so the glyph a row shows names what
- * clicking it does. Null for every other node, and for a file not yet synced.
+ * clicking it does. Null for every other node, for a file not yet synced, and
+ * for a null `artifactId` (a row whose artifact the caller cannot name).
  */
 export function useEpicFileArtifactViewer(
-  artifactId: string,
+  artifactId: string | null,
 ): ArtifactFileViewer | null {
   return useEpicStore((s) => fileArtifactViewerFromState(s, artifactId));
 }
 
 /**
  * Provider-optional counterpart to {@link useEpicFileArtifactViewer} for the
- * shared tab icon, which also renders in provider-less drag previews: an epic
- * with no mounted session has no file to read, so the glyph stays the plain
- * file.
+ * shared artifact icon, which also renders in provider-less drag previews and
+ * mention lists: an epic with no mounted session has no file to read, and a
+ * null `artifactId` names no file, so in both the glyph stays the plain file.
  */
 export function useRegisteredEpicFileArtifactViewer(
   epicId: string,
-  artifactId: string,
+  artifactId: string | null,
 ): ArtifactFileViewer | null {
   const registry = getOpenEpicRegistry();
   const handle = useSyncExternalStore(
@@ -2958,9 +2959,10 @@ export function useRegisteredEpicFileArtifactViewer(
 
 function fileArtifactViewerFromState(
   state: OpenEpicState,
-  artifactId: string,
+  artifactId: string | null,
 ): ArtifactFileViewer | null {
-  if (!Object.hasOwn(state.artifacts.byId, artifactId)) return null;
+  if (artifactId === null || !Object.hasOwn(state.artifacts.byId, artifactId))
+    return null;
   const artifact = state.artifacts.byId[artifactId];
   if (artifact.kind !== "file" || artifact.object === undefined) return null;
   return artifactFileViewer(artifact.folderName, artifact.object.mediaType);

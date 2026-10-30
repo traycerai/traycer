@@ -65,9 +65,9 @@ function approvalRequestedFrame(
 }
 
 describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 lines, 1.15 still installed", () => {
-  it("binds 1.16 and 1.15 to their own contracts - the head has since moved to 1.40", () => {
+  it("binds 1.16 and 1.15 to their own contracts - the head has since moved to 1.41", () => {
     const line = hostStreamRpcRegistry["chat.subscribe"][1];
-    expect(line.latestMinor).toBe(40);
+    expect(line.latestMinor).toBe(41);
     expect(line.versions[40].contract).toBe(chatSubscribeV140);
     expect(line.versions[39].contract).toBe(chatSubscribeV139);
     expect(line.versions[38].contract).toBe(chatSubscribeV138);
@@ -150,7 +150,7 @@ describe("chat.subscribe registry: 1.16 installed below the 1.17 through 1.22 li
     expect(chatSubscribeV139.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
-    expect(chatSubscribeV140.serverFrameSchema).toBe(
+    expect(chatSubscribeV140.serverFrameSchema).not.toBe(
       openChatSubscribeWindowedServerFrameSchema,
     );
     // 1.36 carries 1.35's frames unchanged.

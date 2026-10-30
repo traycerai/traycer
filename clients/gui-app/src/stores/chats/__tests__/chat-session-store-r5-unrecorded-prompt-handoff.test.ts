@@ -102,6 +102,7 @@ const OWNER_ID = "owner-r5";
 const HOST_ID = "host-r5";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -226,7 +227,7 @@ function createIdleChatHandle(
 function emitOwnerSnapshot(callbacks: ChatStreamCallbacks): void {
   const epicId = EPIC_ID;
   const chatId = CHAT_ID;
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   const chat: Chat = {
     id: chatId,
     parentId: null,

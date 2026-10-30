@@ -299,7 +299,7 @@ describe("<EpicConnectionToasts />", () => {
     // first-time bootstrap (which reads as "connecting" and fires no toast).
     // Transport open + cloud caught up is what latches "connected once".
     act(() => {
-      streams[0].callbacks.onConnectionStatus("open", null, true);
+      streams[0].callbacks.onConnectionStatus("open", null, true, null);
       streams[0].callbacks.onCloudSyncStatus(
         "connected",
         NO_CLOUD_SYNC_DURABILITY,
@@ -307,11 +307,11 @@ describe("<EpicConnectionToasts />", () => {
     });
 
     act(() => {
-      streams[0].callbacks.onConnectionStatus("reconnecting", null, true);
+      streams[0].callbacks.onConnectionStatus("reconnecting", null, true, null);
     });
 
     act(() => {
-      streams[0].callbacks.onConnectionStatus("open", null, true);
+      streams[0].callbacks.onConnectionStatus("open", null, true, null);
     });
 
     expect(sonner.warning).not.toHaveBeenCalled();

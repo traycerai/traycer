@@ -278,6 +278,7 @@ function parseTaskCreateInput(opts: TaskCreateOptions): TaskCreateInput {
     );
   }
   const settings = parseUserInput(chatRunSettingsSchema, {
+    ultracode: false,
     harnessId: opts.harness,
     model: opts.model,
     permissionMode: opts.permissionMode ?? "full_access",

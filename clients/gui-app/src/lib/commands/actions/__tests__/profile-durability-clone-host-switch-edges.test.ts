@@ -43,6 +43,7 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
  */
 
 const BASE_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "sonnet-4.5",
   permissionMode: "supervised",

@@ -327,6 +327,7 @@ function createLiveSessionHandle(
     kind: "terminal",
     viewer: "presentation",
     streamClientFactory: () => ({
+      supportsViewerFrames: () => false,
       sendAction: () => undefined,
       close: () => undefined,
     }),

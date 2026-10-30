@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import {
+  hostStreamRpcRegistry,
+  type HostStreamRpcRegistry,
+} from "@traycer/protocol/host/registry";
 import {
   createRequestContext,
   identityFromAuthenticatedUser,
@@ -18,6 +21,11 @@ import type {
   StreamWebSocketMessageEvent,
 } from "../ws-stream-factory";
 import { WsStreamClient } from "../ws-stream-client";
+import { FakeStreamClient } from "../__testing__/fake-stream-client";
+import { LogicalStream } from "@traycer/protocol/host-transport/remote/logical-stream";
+import { QosClass } from "@traycer/protocol/host-transport/mux";
+import type { IStreamClient } from "../i-stream-client";
+import type { StreamFrameEnvelope } from "../i-stream-session";
 import {
   ResourcesStreamClient,
   type ResourcesProjectionPayload,
@@ -829,6 +837,109 @@ describe("ResourcesStreamClient scope support", () => {
 
     expect(verdicts).toEqual(["unsupported", "unknown"]);
 
+    client.close();
+  });
+});
+
+describe("ResourcesStreamClient held continuity", () => {
+  function startInteractive(): {
+    readonly client: ResourcesStreamClient;
+    readonly session: FakeStreamClient["sessions"][number];
+  } {
+    const fake = new FakeStreamClient(true);
+    const client = new ResourcesStreamClient({
+      wsStreamClient: fake,
+      scope: { kind: "global" },
+      callbacks: trackScopeSupport().callbacks,
+    });
+    const session = fake.sessions[0];
+    if (session === undefined) throw new Error("no session was subscribed");
+    session.negotiatedSchemaVersion = { major: 1, minor: 5 };
+    client.setDemand("interactive");
+    expect(session.framesOfKind("setDemand")).toHaveLength(1);
+    return { client, session };
+  }
+
+  it("keeps the sent demand across a held reconnect and a continued open", () => {
+    const { client, session } = startInteractive();
+
+    session.emitContinuityStatus("reconnecting", "held");
+    session.emitContinuityStatus("open", "continued");
+
+    expect(session.framesOfKind("setDemand")).toHaveLength(1);
+    client.close();
+  });
+
+  it("publishes the demand again after a plain reconnect", () => {
+    const { client, session } = startInteractive();
+
+    session.emitContinuityStatus("reconnecting", null);
+    session.emitContinuityStatus("open", null);
+
+    expect(session.framesOfKind("setDemand")).toHaveLength(2);
+    expect(session.sentFrames.at(-1)).toEqual({
+      kind: "setDemand",
+      demand: "interactive",
+      hasBinaryPayload: false,
+    });
+    client.close();
+  });
+
+  // A real `LogicalStream` drops client frames until its first frame opens it,
+  // and a hold that began before that does not change it - yet its version is
+  // already negotiated, so the demand is chosen with nowhere to go.
+  it("publishes a demand chosen during an initial hold once the first frame opens the stream", () => {
+    const wire: StreamFrameEnvelope[] = [];
+    const stream = new LogicalStream({
+      streamId: 1,
+      method: "resources.subscribe",
+      paramsProvider: () => ({}),
+      schemaVersion: { major: 1, minor: 5 },
+      requiredSchemaVersion: null,
+      qos: QosClass.INTERACTIVE,
+      port: {
+        sendStreamFrame: (_streamId, envelope) => {
+          wire.push(envelope);
+        },
+        closeStream: () => undefined,
+        requestSessionReconnect: () => undefined,
+        streamOutboundDebtBytes: () => 0,
+      },
+    });
+    const wsStreamClient: IStreamClient<HostStreamRpcRegistry> = {
+      subscribe: () => stream,
+      subscribeWithParamsProvider: () => stream,
+      getMethodSchemaVersion: () => null,
+    };
+    const client = new ResourcesStreamClient({
+      wsStreamClient,
+      scope: { kind: "global" },
+      callbacks: trackScopeSupport().callbacks,
+    });
+    stream.updateSchemaVersion({ major: 1, minor: 5 });
+
+    stream.notifyHeld();
+    client.setDemand("interactive");
+    expect(wire).toEqual([]);
+
+    stream.deliverServerFrame({ kind: "pong", hasBinaryPayload: false }, null);
+
+    expect(wire).toEqual([
+      { kind: "setDemand", demand: "interactive", hasBinaryPayload: false },
+    ]);
+
+    // Once open, a hold queues the next choice for the resume, which then
+    // continues the same cycle without declaring it a second time.
+    stream.notifyHeld();
+    client.setDemand("background");
+    expect(wire).toHaveLength(2);
+    expect(wire[1]).toEqual({
+      kind: "setDemand",
+      demand: "background",
+      hasBinaryPayload: false,
+    });
+    stream.notifyContinued();
+    expect(wire).toHaveLength(2);
     client.close();
   });
 });

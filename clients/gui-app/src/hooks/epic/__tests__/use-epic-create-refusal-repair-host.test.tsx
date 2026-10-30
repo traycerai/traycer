@@ -18,7 +18,7 @@ import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { hostRpcRegistry, type HostRpcRegistry } from "@traycer/protocol/host";
 import type {
-  CreateEpicRequestV13,
+  CreateEpicRequestV14,
   CreateEpicResponse,
   CreateEpicResponseV12,
   EpicCreateRefusal,
@@ -81,7 +81,7 @@ const REFUSAL: EpicCreateRefusal = {
   remedy: "Quit the other Traycer running on this machine, then rebind.",
 };
 
-const CREATE_VARIABLES: CreateEpicRequestV13 = {
+const CREATE_VARIABLES: CreateEpicRequestV14 = {
   epic: {
     id: "epic-1",
     title: "Epic",
@@ -393,6 +393,7 @@ describe("a missing-attachment-bytes refusal retries once under the same idempot
   };
 
   const SETTINGS = {
+    ultracode: false,
     harnessId: "codex" as const,
     model: "gpt-5.4",
     permissionMode: "supervised" as const,
@@ -422,7 +423,7 @@ describe("a missing-attachment-bytes refusal retries once under the same idempot
     };
   }
 
-  function createVariablesWithHash(hash: string): CreateEpicRequestV13 {
+  function createVariablesWithHash(hash: string): CreateEpicRequestV14 {
     return {
       epic: {
         id: "epic-mab",

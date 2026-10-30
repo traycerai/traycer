@@ -160,7 +160,7 @@ export function installManagedCommandChatSession(args: {
     },
     setConnectionStatus: (status: StreamConnectionStatus) => {
       const reason: StreamCloseReason | null = null;
-      callbacks().onConnectionStatus(status, reason, null);
+      callbacks().onConnectionStatus(status, reason, null, null);
     },
     setPortForwards: (portForwards) => {
       callbacks().onPortForwardsChanged({

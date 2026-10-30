@@ -530,7 +530,7 @@ function deliverSnapshot(stream: ControlledEpicStream, roomId: string): void {
   // write-throughs only while LIVE (snapshot loaded, host transport open), so
   // a fixture that stops at the snapshot describes a session that writes
   // nothing.
-  stream.callbacks.onConnectionStatus("open", null, false);
+  stream.callbacks.onConnectionStatus("open", null, false, null);
   stream.callbacks.onSnapshot(snapshotMeta(roomId), new Uint8Array([0, 0]));
 }
 

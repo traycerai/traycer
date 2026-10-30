@@ -161,6 +161,7 @@ export function CreateBotForm(props: {
       hostId,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       stagedSurfaceKey: null,
       sendsToRestingSandbox: false,
     },
@@ -296,6 +297,7 @@ export function CreateBotForm(props: {
         <span className="text-ui-xs text-muted-foreground">Model</span>
         <div className="flex min-w-0">
           <HarnessModelPicker
+            withUltracode={false}
             labelDisplay="responsive"
             maxModeContext={maxModeContext}
             store={toolbarStore}

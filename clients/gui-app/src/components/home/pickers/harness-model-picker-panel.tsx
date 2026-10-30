@@ -47,6 +47,10 @@ import {
   type ServiceTierFooterConfig,
 } from "@/components/home/pickers/harness-model-picker-footers";
 import type { MaxModeContext } from "@/components/home/data/model-max-mode";
+import {
+  UltracodeFooterButton,
+  type UltracodeFooterConfig,
+} from "@/components/home/pickers/ultracode-footer-button";
 
 /**
  * What the picker's body draws from. Props only: the live picker feeds it from
@@ -116,6 +120,7 @@ export interface HarnessModelPickerPanelBodyProps {
   readonly onActiveRow: (rowId: string) => void;
   readonly onSelectRow: (row: HarnessModelRow) => void;
   readonly reasoningFooter: ReasoningFooterConfig | null;
+  readonly ultracodeFooter: UltracodeFooterConfig | null;
   /** The picker's `visibleOpen`, for the footer's max treatment. */
   readonly reasoningPickerOpen: boolean;
   readonly serviceTierFooter: ServiceTierFooterConfig | null;
@@ -293,6 +298,7 @@ export function HarnessModelPickerPanelBody(
     onActiveRow,
     onSelectRow,
     reasoningFooter,
+    ultracodeFooter,
     reasoningPickerOpen,
     serviceTierFooter,
     maxModeContextKind,
@@ -451,6 +457,9 @@ export function HarnessModelPickerPanelBody(
               rowsDisabled={teamBlocked}
             />
           </div>
+          {ultracodeFooter === null ? null : (
+            <UltracodeFooterButton {...ultracodeFooter} />
+          )}
           <HarnessModelPickerModelSettingsFooter
             reasoning={reasoningFooter}
             pickerOpen={reasoningPickerOpen}
@@ -477,6 +486,6 @@ function isInsideEmbeddingFooter(target: EventTarget): boolean {
 function isInsideSpeedMenu(target: EventTarget): boolean {
   return (
     target instanceof Element &&
-    target.closest("[data-picker-speed-menu]") !== null
+    target.closest("[data-picker-speed-menu], [data-picker-ultracode]") !== null
   );
 }

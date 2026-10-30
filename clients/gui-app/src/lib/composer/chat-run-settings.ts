@@ -29,8 +29,9 @@ export function buildChatRunSettings(input: {
   permission: PermissionMode;
   reasoning: ReasoningLevel;
   serviceTier: ServiceTier;
+  ultracode: boolean;
 }): ChatRunSettings {
-  const { selection, permission, reasoning, serviceTier } = input;
+  const { selection, permission, reasoning, serviceTier, ultracode } = input;
   const trimmedServiceTier = serviceTier.trim();
   return {
     harnessId: selection.harnessId,
@@ -45,6 +46,7 @@ export function buildChatRunSettings(input: {
     // mode; nothing reads it back.
     agentMode: "regular",
     profileId: selection.profileId,
+    ultracode: selection.harnessId === "claude" && ultracode,
   };
 }
 
@@ -78,6 +80,7 @@ export function importedChatSettingsSeed(
     harnessId: sourceProvider,
     model: "",
     profileId: null,
+    ultracode: false,
   };
 }
 

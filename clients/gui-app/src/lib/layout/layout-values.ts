@@ -35,6 +35,9 @@ export type RegionSize = "full" | "chip";
 /** How the model chip draws the thinking effort. */
 export type ModelStyle = "text" | "bars" | "bars-text";
 
+/** How the model chip draws a requested Ultracode, after the effort. */
+export type UltracodeStyle = "text" | "icon" | "icon-text";
+
 /**
  * The composer toolbar's chrome: a bordered chip on the app's own background,
  * or flat with just a hover highlight. One setting for the whole row (attach,
@@ -87,6 +90,10 @@ export const LAYOUT_VALUE_ENUM_MEMBERS: ReadonlyArray<string> = Object.keys({
   ...({ full: true, chip: true } satisfies Record<RegionSize, true>),
   ...({ text: true, bars: true, "bars-text": true } satisfies Record<
     ModelStyle,
+    true
+  >),
+  ...({ text: true, icon: true, "icon-text": true } satisfies Record<
+    UltracodeStyle,
     true
   >),
   ...({ flat: true, bordered: true } satisfies Record<ToolbarStyle, true>),
@@ -198,6 +205,7 @@ export interface ContextUsageValues extends ShownValues {
  */
 export interface ModelValues {
   readonly style: ModelStyle;
+  readonly ultracodeStyle: UltracodeStyle;
   readonly reasoningControl: ReasoningControl;
   readonly toolbarStyle: ToolbarStyle;
 }

@@ -26,6 +26,7 @@ function catalog(
     catalog: {
       hostId: "sbx-host",
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       keepsUnavailablePick: false,
       harnesses,
       modelsHarnessId: "codex",

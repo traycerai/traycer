@@ -143,7 +143,7 @@ function createSharedRoomRig(): SharedRoomRig {
     handle,
     donorArtifacts,
     open(): void {
-      live().onConnectionStatus("open", null, false);
+      live().onConnectionStatus("open", null, false, null);
       live().onSnapshot(buildMeta(), Y.encodeStateAsUpdate(donor));
     },
     materializeRoom(contentA: string, contentB: string): void {

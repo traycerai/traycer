@@ -13,8 +13,8 @@ import {
   autoJudgeSetResponseSchema,
 } from "../auto-mode/contracts.js";
 import {
-  getChatRunSettingsResponseSchema,
-  getChatRunSettingsBatchResponseSchema,
+  getChatRunSettingsResponseSchemaV41,
+  getChatRunSettingsBatchResponseSchemaV21,
 } from "../epic/chat-records.js";
 import { providersListResponseSchema } from "../provider-schemas.js";
 import { providersRefreshProfileStatusResponseSchema } from "../rate-limit/schemas.js";
@@ -82,13 +82,13 @@ const HEAD_NAMES_ITS_CANONICAL_ALIAS: readonly [
   // docblock above. Its exclusion is asserted below, not merely omitted.
   [
     "epic.getChatRunSettings",
-    "getChatRunSettingsResponseSchema",
-    getChatRunSettingsResponseSchema,
+    "getChatRunSettingsResponseSchemaV41",
+    getChatRunSettingsResponseSchemaV41,
   ],
   [
     "epic.getChatRunSettingsBatch",
-    "getChatRunSettingsBatchResponseSchema",
-    getChatRunSettingsBatchResponseSchema,
+    "getChatRunSettingsBatchResponseSchemaV21",
+    getChatRunSettingsBatchResponseSchemaV21,
   ],
   [
     "providers.refreshProfileStatus",

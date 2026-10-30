@@ -33,6 +33,7 @@ import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-st
 
 const NODE_ID = "chat-queue-1";
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -345,7 +346,7 @@ function openRunningChatOn(
 
 /** Open the stream and seat the running turn with its one queued row. */
 function openRunningStream(callbacks: ChatStreamCallbacks): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -878,7 +879,7 @@ describe("answering a held steer refusal", () => {
       sent.filter((frame) => frame.kind === "queueSettingsUpdate");
 
     act(() => {
-      callbacks.onConnectionStatus("reconnecting", null, null);
+      callbacks.onConnectionStatus("reconnecting", null, null, null);
     });
     act(() => {
       tile.result.current.steerRestart.onOpenChange(false);

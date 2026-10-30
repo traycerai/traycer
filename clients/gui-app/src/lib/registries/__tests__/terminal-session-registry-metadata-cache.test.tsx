@@ -134,7 +134,11 @@ function setup() {
   __setTerminalStreamClientFactoryForTests((streamArgs) => {
     factoryCalls += 1;
     capturedCallbacks = streamArgs.callbacks;
-    return { sendAction: () => undefined, close: () => undefined };
+    return {
+      supportsViewerFrames: () => false,
+      sendAction: () => undefined,
+      close: () => undefined,
+    };
   });
 
   function wrapper({ children }: { children: ReactNode }) {

@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
+import type { ConfirmedManualFallbackAction } from "@/stores/chats/chat-session-store";
 import { useExistingChatSessionHandle } from "@/lib/registries/chat-session-registry";
 
 /**
@@ -14,7 +14,7 @@ export interface ConfirmedManualActionReport {
   readonly rung: "retry" | "switch" | "wait_once";
   readonly userMessageId: string;
   readonly turnId: string;
-  readonly target: ChatRunSettings | null;
+  readonly target: ConfirmedManualFallbackAction["target"];
 }
 
 export type ConfirmedManualActionPublisher = (

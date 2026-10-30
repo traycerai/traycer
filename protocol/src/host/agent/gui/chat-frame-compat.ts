@@ -429,7 +429,7 @@ export function supportsInterviewSettlementActions(
  * rather than being widened to mean "current", and a third growth above `1.13`
  * needs its own test here for the same reason.
  */
-export function projectChatClientFrameForVersion(
+function projectChatClientFrameBeforeUltracode(
   frame: ChatSubscribeClientFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeClientFrame {
@@ -1185,7 +1185,7 @@ function projectSnapshot(
  * Queue prompt items carry the same user-authored browser payload as accepted
  * messages, so snapshots and `queueChanged` frames project that payload too.
  */
-export function projectChatServerFrameForVersion(
+function projectChatServerFrameBeforeUltracode(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
@@ -1616,3 +1616,156 @@ export const CHAT_SUBSCRIBE_BOT_SEND_RECEIPT_MINOR = 40;
 
 /** Older peers receive accumulated changes without new-kind artifact tags. */
 export const CHAT_SUBSCRIBE_CHECKPOINT_ARTIFACT_KINDS_MINOR = 33;
+
+export const CHAT_SUBSCRIBE_ULTRACODE_MINOR = 41;
+
+export function chatLineCarriesUltracode(
+  negotiated: SchemaVersion | null,
+): boolean {
+  return (
+    negotiated !== null &&
+    negotiated.major === 1 &&
+    negotiated.minor >= CHAT_SUBSCRIBE_ULTRACODE_MINOR
+  );
+}
+
+function stripUltracodeTuple(value: unknown): unknown {
+  if (!isRecord(value) || !("ultracode" in value)) return value;
+  const { ultracode: _ultracode, ...settings } = value;
+  return settings;
+}
+
+function projectUltracodeQueue(value: unknown): unknown {
+  if (!isRecord(value) || !Array.isArray(value.items)) return value;
+  let changed = false;
+  const items = value.items.map((item: unknown) => {
+    if (!isRecord(item) || item.kind !== "prompt") return item;
+    const settings = stripUltracodeTuple(item.settings);
+    if (settings === item.settings) return item;
+    changed = true;
+    return { ...item, settings };
+  });
+  return changed ? { ...value, items } : value;
+}
+
+function projectUltracodeTupleFields(
+  value: Record<string, unknown>,
+  keys: ReadonlyArray<string>,
+): Record<string, unknown> {
+  let projected = value;
+  for (const key of keys) {
+    const settings = stripUltracodeTuple(value[key]);
+    if (settings !== value[key]) {
+      projected = { ...projected, [key]: settings };
+    }
+  }
+  return projected;
+}
+
+/** Only the declared tuple carriers, never arbitrary transcript/metadata trees. */
+function projectUltracodeContainers(
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  let projected = value;
+  if (isRecord(value.chat)) {
+    const chat = projectUltracodeTupleFields(value.chat, ["settings"]);
+    if (chat !== value.chat) projected = { ...projected, chat };
+  }
+  const queue = projectUltracodeQueue(value.queue);
+  if (queue !== value.queue) projected = { ...projected, queue };
+  if (isRecord(value.pendingFallback)) {
+    const fallback = value.pendingFallback;
+    let pendingFallback = projectUltracodeTupleFields(fallback, [
+      "failedTuple",
+      "targetTuple",
+    ]);
+    if (isRecord(fallback.impendingAction)) {
+      const impendingAction = projectUltracodeTupleFields(
+        fallback.impendingAction,
+        ["target"],
+      );
+      if (impendingAction !== fallback.impendingAction) {
+        pendingFallback = { ...pendingFallback, impendingAction };
+      }
+    }
+    if (pendingFallback !== fallback) {
+      projected = { ...projected, pendingFallback };
+    }
+  }
+  if (isRecord(value.pendingReturn)) {
+    const pendingReturn = projectUltracodeTupleFields(value.pendingReturn, [
+      "preferredTuple",
+      "fallbackTuple",
+    ]);
+    if (pendingReturn !== value.pendingReturn) {
+      projected = { ...projected, pendingReturn };
+    }
+  }
+  if (isRecord(value.lastFailedAttempt)) {
+    const lastFailedAttempt = projectUltracodeTupleFields(
+      value.lastFailedAttempt,
+      ["failedTuple"],
+    );
+    if (lastFailedAttempt !== value.lastFailedAttempt) {
+      projected = { ...projected, lastFailedAttempt };
+    }
+  }
+  return projected;
+}
+
+/** Older stream lines carry the tuple without the per-chat request. */
+function omitChatClientFrameUltracode(
+  frame: ProjectedChatSubscribeClientFrame,
+): ProjectedChatSubscribeClientFrame {
+  switch (frame.kind) {
+    case "send":
+    case "editUserMessage":
+    case "queueSettingsUpdate":
+    case "queueSettingsRestamp": {
+      const settings = stripUltracodeTuple(frame.settings);
+      return settings === frame.settings ? frame : { ...frame, settings };
+    }
+    case "queueSteerNow": {
+      const newSettings = stripUltracodeTuple(frame.newSettings);
+      return newSettings === frame.newSettings
+        ? frame
+        : { ...frame, newSettings };
+    }
+    default:
+      return frame;
+  }
+}
+
+export function projectChatClientFrameForVersion(
+  frame: ChatSubscribeClientFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeClientFrame {
+  const projected = projectChatClientFrameBeforeUltracode(frame, negotiated);
+  return chatLineCarriesUltracode(negotiated)
+    ? projected
+    : omitChatClientFrameUltracode(projected);
+}
+
+export function projectChatServerFrameForVersion(
+  frame: ProjectedChatSubscribeServerFrame,
+  negotiated: SchemaVersion | null,
+): ProjectedChatSubscribeServerFrame {
+  const projected = projectChatServerFrameBeforeUltracode(frame, negotiated);
+  if (chatLineCarriesUltracode(negotiated)) return projected;
+  if (projected.kind === "snapshot" && isRecord(projected.snapshot)) {
+    const snapshot = projectUltracodeContainers(projected.snapshot);
+    return snapshot === projected.snapshot
+      ? projected
+      : { ...projected, snapshot };
+  }
+  if (
+    projected.kind === "queueChanged" ||
+    projected.kind === "turnStateChanged"
+  ) {
+    const containers = projectUltracodeContainers(projected);
+    return containers === projected
+      ? projected
+      : { ...projected, ...containers };
+  }
+  return projected;
+}

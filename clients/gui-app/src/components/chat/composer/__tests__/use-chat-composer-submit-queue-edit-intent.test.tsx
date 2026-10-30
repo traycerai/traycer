@@ -127,6 +127,7 @@ function mountSubmit(
     reasoningFallback: "model-default",
     seedKey: "queue-edit-intent-submit",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: { harnessId: "codex", modelSlug: "gpt-5", profileId: null },
       reasoning: "medium",
@@ -135,6 +136,7 @@ function mountSubmit(
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
   return renderHook(
@@ -340,6 +342,7 @@ describe("steering a queue edit that changes settings", () => {
       reasoningFallback: "model-default",
       seedKey: "queue-edit-steer-restart",
       values: {
+        ultracode: false,
         permission: "supervised",
         selection: { harnessId: "codex", modelSlug: "gpt-5", profileId: null },
         reasoning: "medium",
@@ -348,6 +351,7 @@ describe("steering a queue edit that changes settings", () => {
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: null,
     });
     const hook = renderHook(() =>

@@ -97,6 +97,7 @@ export function SampleWorkspaceBody() {
       onSettingsChange: null,
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
+      ultracodeCarried: false,
       hostId: null,
     }),
   );

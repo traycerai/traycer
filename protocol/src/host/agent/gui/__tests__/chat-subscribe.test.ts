@@ -2309,7 +2309,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
 });
 
 describe("chat.subscribe registry membership", () => {
-  it("registers chat.subscribe major 1 latestMinor 40 as chatSubscribeV140", () => {
+  it("registers chat.subscribe major 1 latestMinor 41 as chatSubscribeV141", () => {
     const entry = hostStreamRpcRegistry["chat.subscribe"];
     expect(entry).toBeDefined();
     // Registering `8` was the switch to the windowed line: a stream minor
@@ -2396,8 +2396,9 @@ describe("chat.subscribe registry membership", () => {
     // stripped for every `<=1.37` peer. `39` adds the `notification-digest` queue
     // item, omitted for every `<=1.38` peer. `40` adds the queued steer's
     // restart confirmation and the typed reasons on its refusal, both
-    // projected away for every `<=1.39` peer.
-    expect(entry[1].latestMinor).toBe(40);
+    // projected away for every `<=1.39` peer. `41` carries the per-chat
+    // Ultracode request; all earlier settings tuples remain frozen.
+    expect(entry[1].latestMinor).toBe(41);
     expect(entry[1].versions[6].contract).toBe(chatSubscribeV16);
     expect(entry[1].versions[7].contract).toBe(chatSubscribeV17);
     expect(entry[1].versions[8].contract).toBe(chatSubscribeV18);
@@ -2992,6 +2993,7 @@ describe("chat.subscribe Reasonix released-frame freezes", () => {
   });
 
   const reasonixSettings = {
+    ultracode: false,
     harnessId: "reasonix" as const,
     model: "reasonix-pro",
     permissionMode: "supervised" as const,
