@@ -21,6 +21,10 @@ fi
 cd "$here"
 # -deadlock: a behaviour whose budgets are spent and whose tile is quiet
 # stops; that is quiescence, not a deadlock.
-exec "$java_bin" -XX:+UseParallelGC -Xmx"${JAVA_XMX:-3g}" -cp "$jar" tlc2.TLC \
+# TLC extracts its standard modules into java.io.tmpdir. Parallel configs
+# need distinct directories so one parser cannot read another's partial file.
+run_dir="$here/states/$(basename "$config")"
+mkdir -p "$run_dir"
+exec "$java_bin" -Djava.io.tmpdir="$run_dir" -XX:+UseParallelGC -Xmx"${JAVA_XMX:-3g}" -cp "$jar" tlc2.TLC \
   -config "$config.cfg" -metadir "$here/states/$(basename "$config")" \
   -workers "${TLC_WORKERS:-2}" -deadlock "$@" ChatScroll.tla

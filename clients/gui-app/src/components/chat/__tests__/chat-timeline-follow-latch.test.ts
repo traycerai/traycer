@@ -1326,6 +1326,91 @@ describe("useChatTimelineFollowLatch", () => {
     });
   });
 
+  // P9 - a lifted finger's momentum travels across an unobserved viewport
+  // clamp and still arrives, because the clamp's own delta is carried into
+  // `liftScrollTop` exactly as it is into every other reference
+  // (`noteViewportGrowthClamp`). Deleting that one carry leaves the lift
+  // point stale: the clamp's own relocation of the view then reads as
+  // partial progress toward the end, and the real travel afterwards falls
+  // short of what the stale, unabsorbed lift point demands.
+  //
+  // 1. A following reader at the end {1000, 1500, 500} drags to 900 and
+  //    lifts, unreported: departs, and the lift records momentum - target
+  //    content end 1500, lift point 900.
+  // 2. The viewport grows to 700 and the content to 1800, unobserved: the
+  //    browser clamps the view 900 -> 800 (`min(900, 1500-700)`).
+  // 3. First read at the clamp's own landing, {800, 1800, 700}: travelled
+  //    nowhere yet either way - the clamp relocated the lift point itself
+  //    (correct) or did not (mutant), and 800 is not past either reading of
+  //    it.
+  // 4. The fling continues to 850, no further growth: past the absorbed
+  //    lift point (800) - arrives. Past the stale one (900) - does not.
+  describe("a lifted finger's momentum travelling across an unobserved viewport clamp", () => {
+    function liftedWithMomentum() {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+        }),
+      );
+
+      fireNativeScroll(node);
+      fireTouch(node, "touchstart", 400);
+      shim.setGeometry(node, { scrollTop: 900 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      fireTouch(node, "touchend", 400);
+
+      return { node, listRef, onFollowIntentChange, result };
+    }
+
+    it("arrives once the fling continues past an absorbed clamp, observed by native scroll reports", () => {
+      const { node, listRef, onFollowIntentChange } = liftedWithMomentum();
+
+      // The unobserved clamp, carrying the lift point from 900 to 800.
+      shim.setGeometry(node, {
+        clientHeight: 700,
+        scrollHeight: 1800,
+        scrollTop: 800,
+      });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      // The fling continues past the absorbed lift point.
+      shim.setGeometry(node, { scrollTop: 850 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalled();
+    });
+
+    it("arrives once the fling continues past an absorbed clamp, observed by a maintenance read", () => {
+      const { node, listRef, onFollowIntentChange, result } =
+        liftedWithMomentum();
+
+      shim.setGeometry(node, {
+        clientHeight: 700,
+        scrollHeight: 1800,
+        scrollTop: 800,
+      });
+      result.current.followEndIfPermitted();
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      shim.setGeometry(node, { scrollTop: 850 });
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalled();
+    });
+  });
+
   it("ends a bounded correction burst without inventing reader departure", () => {
     const node = shim.makeNode({
       scrollTop: 1200,
@@ -1450,8 +1535,61 @@ describe("useChatTimelineFollowLatch", () => {
       direction: "away-from-end",
       freezeInFlightScroll: true,
       publishesReaderPosition: true,
+      viewportCanAnswer: true,
     });
     expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("reports that the viewport could not answer a wheel at the top", () => {
+    const node = shim.makeNode({
+      scrollTop: 0,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onReaderGesture = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, false, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onReaderGesture,
+      }),
+    );
+
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+
+    expect(onReaderGesture).toHaveBeenCalledWith({
+      direction: "away-from-end",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+      viewportCanAnswer: false,
+    });
+  });
+
+  // Control: one pixel off the top edge, the same wheel can still move the
+  // view, so the viewport can answer it.
+  it("reports that the viewport could answer a wheel one pixel off the top", () => {
+    const node = shim.makeNode({
+      scrollTop: 1,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onReaderGesture = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, false, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onReaderGesture,
+      }),
+    );
+
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+
+    expect(onReaderGesture).toHaveBeenCalledWith({
+      direction: "away-from-end",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+      viewportCanAnswer: true,
+    });
   });
 
   it("blocks a maintain correction between wheel intent and native scroll", () => {
@@ -2685,6 +2823,7 @@ describe("useChatTimelineFollowLatch", () => {
         direction: "away-from-end",
         freezeInFlightScroll: true,
         publishesReaderPosition: true,
+        viewportCanAnswer: true,
       });
       expect(listRef.scrollToEnd).not.toHaveBeenCalled();
       expect(node.scrollTop).toBe(960);
@@ -2892,6 +3031,7 @@ describe("useChatTimelineFollowLatch", () => {
         direction: "away-from-end",
         freezeInFlightScroll: true,
         publishesReaderPosition: true,
+        viewportCanAnswer: true,
       });
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
       expect(node.scrollTop).toBe(1160);
@@ -4588,6 +4728,7 @@ describe("useChatTimelineFollowLatch", () => {
       direction: "indeterminate",
       freezeInFlightScroll: true,
       publishesReaderPosition: true,
+      viewportCanAnswer: true,
     });
     fireTouch(node, "touchend", 100);
     shim.setGeometry(node, { scrollHeight: 1900 });
@@ -4600,6 +4741,7 @@ describe("useChatTimelineFollowLatch", () => {
       direction: "indeterminate",
       freezeInFlightScroll: true,
       publishesReaderPosition: true,
+      viewportCanAnswer: true,
     };
 
     function mountFreeReader(isSuppressed: () => boolean) {
@@ -5182,6 +5324,707 @@ describe("useChatTimelineFollowLatch", () => {
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
   });
 
+  // TLA+ `phone_viewport_tail` (8 states): a resting finger never moves, the
+  // keyboard closing grows the viewport and the browser clamps onto it in
+  // one step, and a row above regrows the end before anything is observed.
+  // jsdom never clamps `scrollTop` itself, so the clamp and the regrowth are
+  // modelled directly on the shim, with no observation between them.
+  it("keeps a resting finger's follow through a viewport-grow clamp observed by its native scroll report", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 400);
+    // The keyboard closes and the browser clamps the view onto the taller
+    // viewport's end in the same step - no observation in between.
+    shim.setGeometry(node, { clientHeight: 600, scrollTop: 900 });
+    // A row above the reading edge regrows the end past the clamp, with
+    // nothing observed or announced yet.
+    shim.setGeometry(node, { scrollHeight: 1600 });
+
+    fireNativeScroll(node);
+    fireTouch(node, "touchend", 400);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalled();
+  });
+
+  it("keeps a resting finger's follow through a viewport-grow clamp observed by a maintenance read", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 400);
+    shim.setGeometry(node, { clientHeight: 600, scrollTop: 900 });
+    shim.setGeometry(node, { scrollHeight: 1600 });
+
+    result.current.followEndIfPermitted();
+    fireTouch(node, "touchend", 400);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalled();
+  });
+
+  // TLA+ `phone_pad_tail` (12 states): same family, but the clamp is
+  // announced - the list's own pad reset (#3081) - and the hole is that the
+  // announcement carries the gesture reference, the ledger and the
+  // departure offset but not the touch rest reference.
+  it("keeps a resting finger's follow through an announced pad-restore clamp observed by its native scroll report", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 400);
+    // The pad reset clamps the view, announced exactly as the patched list
+    // announces it: `cause: "range"`, because dropping the pad moves the view
+    // only by taking away the end it was resting on. No content moved.
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: {
+          from: 1000,
+          fromEnd: 1000,
+          to: 800,
+          intended: 800,
+          cause: "range",
+        },
+      }),
+    );
+    shim.setGeometry(node, { scrollTop: 800, scrollHeight: 1300 });
+    // The tail regrows before the first read.
+    shim.setGeometry(node, { scrollHeight: 1400 });
+
+    fireNativeScroll(node);
+    fireTouch(node, "touchend", 400);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalled();
+  });
+
+  it("keeps a resting finger's follow through an announced pad-restore clamp observed by a maintenance read", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 400);
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: {
+          from: 1000,
+          fromEnd: 1000,
+          to: 800,
+          intended: 800,
+          cause: "range",
+        },
+      }),
+    );
+    shim.setGeometry(node, { scrollTop: 800, scrollHeight: 1300 });
+    shim.setGeometry(node, { scrollHeight: 1400 });
+
+    result.current.followEndIfPermitted();
+    fireTouch(node, "touchend", 400);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalled();
+  });
+
+  // TLA+ `ChatScroll_armless_viewport` (10 states, `I_IntentHeld`): same
+  // viewport-grow clamp, but armless - no touchstart, wheel or press - so the
+  // departure can only come from the ledger (`expectedScrollTopRef`) alone,
+  // through `publishUnannouncedDeparture`.
+  it("keeps an armless following reader through a viewport-grow clamp observed by its native scroll report", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    // A real scroll report primes the ledger at the strict bottom - the
+    // reader's last known position before the clamp. Nothing is armed.
+    fireNativeScroll(node);
+
+    // The viewport grows and the browser clamps in the same step, with no
+    // observation in between.
+    shim.setGeometry(node, { clientHeight: 600, scrollTop: 900 });
+    // A row above the reading edge regrows the end past the clamp, still
+    // unobserved.
+    shim.setGeometry(node, { scrollHeight: 1600 });
+
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalled();
+  });
+
+  it("keeps an armless following reader through a viewport-grow clamp observed by a maintenance read", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+
+    shim.setGeometry(node, { clientHeight: 600, scrollTop: 900 });
+    shim.setGeometry(node, { scrollHeight: 1600 });
+
+    result.current.followEndIfPermitted();
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  // N1 - a reader who really scrolled through the same unobserved window must
+  // still be departed: absorption is refused whenever the observed offset
+  // does not land exactly on the clamp `viewportGrowthClamp` predicts, so a
+  // real scroll alongside the growth is never swallowed.
+  it("departs an armless reader whose own scroll landed off the clamp's predicted offset, observed by a native scroll report", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    // Primes the ledger at the strict bottom.
+    fireNativeScroll(node);
+
+    // The viewport grows (a pure clamp would land at 900) and the tail
+    // regrows, but the reader's own scroll lands them at 960 - more than the
+    // epsilon away from 900, so none of the drop is the clamp's to absorb.
+    shim.setGeometry(node, {
+      clientHeight: 600,
+      scrollHeight: 1700,
+      scrollTop: 960,
+    });
+
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).toHaveBeenCalledWith(false);
+  });
+
+  it("departs an armless reader whose own scroll landed off the clamp's predicted offset, observed by a maintenance read", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+
+    shim.setGeometry(node, {
+      clientHeight: 600,
+      scrollHeight: 1700,
+      scrollTop: 960,
+    });
+
+    result.current.followEndIfPermitted();
+
+    expect(onFollowIntentChange).toHaveBeenCalledWith(false);
+  });
+
+  // N2 - a finger's own unreported pixel, still theirs, must survive an
+  // announced range clamp landing on top of it. Carried field-wise by the
+  // write's own delta, the step keeps the pixel; re-armed at the live
+  // geometry (the write already landed when the announcement fires, as
+  // `moveChatTimelineScroller` lands its write before dispatching), it is
+  // erased and no departure fires.
+  it("departs a resting finger whose own unreported pixel survives an announced range clamp", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 400);
+    // The finger's own drag moves the view up 50px, with no scroll report of
+    // it yet.
+    shim.setGeometry(node, { scrollTop: 950 });
+    // The list's pad-reset clamps the view and announces the write after it
+    // lands, as the real write-then-announce order does.
+    shim.setGeometry(node, { scrollTop: 900, scrollHeight: 1400 });
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: {
+          from: 950,
+          fromEnd: 950,
+          to: 900,
+          intended: 900,
+          cause: "range",
+        },
+      }),
+    );
+    // The tail regrows before anything is read.
+    shim.setGeometry(node, { scrollHeight: 1450 });
+
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).toHaveBeenCalledWith(false);
+    fireTouch(node, "touchend", 400);
+  });
+
+  // N3 - the touch reference is NOT carried on an offset write. jsdom gives
+  // `touchStep` no real edge mark (there is no laid-out content under the
+  // node, so `edgeMarkOf` is always null), so `rise` is always null and
+  // `touchStep` can never net a content-relative row shift against a
+  // same-sized scrollTop write the way a real layout would - there is no
+  // drag magnitude where carrying the compensation both (a) still departs a
+  // reader who really dragged away by it and (b) does not, which is what a
+  // faithful "drags away by about the same amount" witness would need. The
+  // same invariant - an offset write must not be folded into the touch
+  // step's baseline - is provable without a real layout by its mirror case
+  // instead: a finger that returns to EXACTLY where it started after the
+  // compensation has made no real movement at all, and carrying the
+  // compensation onto the step would misread that net-zero return as a
+  // departure.
+  it("does not depart a resting finger who returns to where they started across an announced offset write", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 400);
+    // Content grows 40px above the view; the list writes the offset to hold
+    // the view's content still, and announces the write as an offset cause -
+    // the content moved with it, so a content-relative reference has already
+    // netted it out.
+    shim.setGeometry(node, { scrollTop: 1040, scrollHeight: 1540 });
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: {
+          from: 1000,
+          fromEnd: 1000,
+          to: 1040,
+          intended: 1040,
+          cause: "offset",
+        },
+      }),
+    );
+    // The finger's own drag returns the view to exactly where the step
+    // began - no real movement at all - with no scroll report of it yet.
+    shim.setGeometry(node, { scrollTop: 1000 });
+
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    fireTouch(node, "touchend", 400);
+  });
+
+  // N5 - a clamp the pad reset's announcement must not hide. The remembered
+  // ("last observed") geometry is not where the view IS, it is where the
+  // view would be from everything the latch knows about - so a clamp that
+  // landed unobserved before the announcement is still there to be found as
+  // the difference once the announcement moves that remembered geometry by
+  // its own delta, rather than snapping it onto the announcement's own `to`
+  // (which would assert the view's whole offset as already accounted for
+  // and swallow the earlier unobserved clamp).
+  //
+  // 1. Last read: {scrollTop: 70, scrollHeight: 90, clientHeight: 20} - end
+  //    70, a following reader at the end, touch step armed at 70.
+  // 2. The viewport grows to clientHeight: 30, unobserved - new end 60, so
+  //    the browser clamps the view 70 -> 60. Nothing has seen this yet.
+  // 3. The pad reset announces a range move {from: 60, fromEnd: 60, to: 40,
+  //    cause: "range"}; delta -20.
+  // 4. The tail regrows to scrollHeight: 80 before the first read.
+  // 5. The read: live is {scrollTop: 40, scrollHeight: 80, clientHeight: 30}.
+  it("absorbs an unobserved viewport clamp that an announced range move's delta carries past it, observed by a native scroll report", () => {
+    const node = shim.makeNode({
+      scrollTop: 70,
+      scrollHeight: 90,
+      clientHeight: 20,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    // 1. Primes the last-observed geometry at the strict bottom.
+    fireNativeScroll(node);
+    fireTouch(node, "touchstart", 400);
+
+    // 2. The viewport grows and the browser clamps, unobserved.
+    shim.setGeometry(node, { clientHeight: 30, scrollTop: 60 });
+
+    // 3. The pad reset's range move, announced.
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: { from: 60, fromEnd: 60, to: 40, intended: 40, cause: "range" },
+      }),
+    );
+    shim.setGeometry(node, { scrollTop: 40 });
+
+    // 4. The tail regrows before anything is read.
+    shim.setGeometry(node, { scrollHeight: 80 });
+
+    // 5. The read.
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    fireTouch(node, "touchend", 400);
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("absorbs an unobserved viewport clamp that an announced range move's delta carries past it, observed by a maintenance read", () => {
+    const node = shim.makeNode({
+      scrollTop: 70,
+      scrollHeight: 90,
+      clientHeight: 20,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+    fireTouch(node, "touchstart", 400);
+
+    shim.setGeometry(node, { clientHeight: 30, scrollTop: 60 });
+
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: { from: 60, fromEnd: 60, to: 40, intended: 40, cause: "range" },
+      }),
+    );
+    shim.setGeometry(node, { scrollTop: 40 });
+
+    shim.setGeometry(node, { scrollHeight: 80 });
+
+    result.current.followEndIfPermitted();
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    fireTouch(node, "touchend", 400);
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+  });
+
+  // N6 - the in-between state the delta form gets wrong. A range move's
+  // `fromEnd - to` is how much content it actually took away; the view's own
+  // `to - from` is how far the view itself moved. They coincide only when the
+  // view sat exactly at the old end (`from === fromEnd`); whenever the view
+  // sat below it, the content taken away is more than the view moved by
+  // exactly that gap - here 300px. `geometryAfterAnnouncedMove`'s delta form
+  // overstates the content left by that same 300px, so the remembered
+  // geometry never looks clamped against a later viewport growth that the
+  // exact form catches cleanly.
+  //
+  // 1. Last read: {scrollTop: 1000, scrollHeight: 1500, clientHeight: 500} -
+  //    end 1000, a following reader at the end, no arm.
+  // 2. A range move {from: 1000, fromEnd: 1300, to: 1000, cause: "range"}:
+  //    the view sat 300px below the pre-move end and does not itself move.
+  //    Exact: remembered content height 1500 - (1300-1000) = 1200. Delta:
+  //    1500 + (1000-1000) = 1500, unchanged - the shrink is lost.
+  // 3. The viewport grows to clientHeight: 750, unobserved, and the browser
+  //    clamps the view to 450 - exactly `min(1000, 1200-750)` under the exact
+  //    form, which is NOT `min(1000, 1500-750)=750` under the delta form.
+  // 4. The read: live is {scrollTop: 450, scrollHeight: 1300,
+  //    clientHeight: 750} - 100px off the live strict bottom either way, so
+  //    only the absorption (or its absence) decides it.
+  it("absorbs a viewport clamp predicted from a range move's exact content loss, not its view-delta overstatement, observed by a native scroll report", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    // 1. Primes the last-observed geometry at the strict bottom.
+    fireNativeScroll(node);
+
+    // 2. The range move, announced - the view sat 300px below the old end.
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: {
+          from: 1000,
+          fromEnd: 1300,
+          to: 1000,
+          intended: 1000,
+          cause: "range",
+        },
+      }),
+    );
+
+    // 3. The viewport grows and the browser clamps, unobserved.
+    shim.setGeometry(node, { clientHeight: 750, scrollTop: 450 });
+
+    // 4. The read, 100px off the live strict bottom either way.
+    shim.setGeometry(node, { scrollHeight: 1300 });
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("absorbs a viewport clamp predicted from a range move's exact content loss, not its view-delta overstatement, observed by a maintenance read", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: {
+          from: 1000,
+          fromEnd: 1300,
+          to: 1000,
+          intended: 1000,
+          cause: "range",
+        },
+      }),
+    );
+
+    shim.setGeometry(node, { clientHeight: 750, scrollTop: 450 });
+
+    shim.setGeometry(node, { scrollHeight: 1300 });
+    result.current.followEndIfPermitted();
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+  });
+
+  // N4 - an iOS bounce settle is not this path's clamp: `viewportGrowthClamp`
+  // must refuse to treat a mid-bounce overscrolled reference as evidence of
+  // a viewport that grew. `clientHeight` never changes here - nothing about
+  // the viewport does - so the growth guard is the only thing standing
+  // between a pure elastic rubber-band settle and a false absorption.
+  //
+  // Armless: a mid-bounce read {scrollTop: 1100, scrollHeight: 1500,
+  // clientHeight: 500} (end 1000, 100px into the rubber band) is itself
+  // `restingScrollTop`-clamped to 1000 for the ledger, same as the settle's
+  // own resting value, so this shape cannot tell the guarded code from the
+  // unguarded code apart through the ledger alone - verified: mutating the
+  // guard away produces the identical `[]` here. It is still worth keeping
+  // as the "nothing happens" sanity case the resting-finger version below
+  // is contrasted against.
+  it("is unmoved by an armless iOS bounce settling with no viewport change, observed by a native scroll report", () => {
+    const node = shim.makeNode({
+      scrollTop: 1100,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    // Primes the reference at the mid-bounce read.
+    fireNativeScroll(node);
+
+    // The bounce settles with no viewport change, and the tail regrows over
+    // the settle before anything is read.
+    shim.setGeometry(node, { scrollTop: 1000, scrollHeight: 1600 });
+
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+  });
+
+  it("is unmoved by an armless iOS bounce settling with no viewport change, observed by a maintenance read", () => {
+    const node = shim.makeNode({
+      scrollTop: 1100,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+    shim.setGeometry(node, { scrollTop: 1000, scrollHeight: 1600 });
+    result.current.followEndIfPermitted();
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+  });
+
+  // Resting finger: a touch arm's `scrollTopAtStep` is captured RAW (not
+  // `restingScrollTop`-clamped), so a 15px mid-bounce overscroll survives
+  // into it untouched. With the guard present, nothing absorbs the bounce,
+  // and a clean settle at the true end (1000) sits 15px from that raw step -
+  // read, correctly or not, as the finger having moved. That reading is an
+  // existing property of resting-finger handling through a bounce with no
+  // absorber at all, so it is what main does too, and this PR must not
+  // change it. Without the guard, the same arithmetic that would predict a
+  // viewport-growth clamp also predicts this settle's offset exactly (both
+  // reduce to `min(rawOverscrolledStep, trueEnd)` when `clientHeight` is
+  // unchanged), so the absorber wrongly fires and carries the step to
+  // exactly where the settle landed - erasing the 15px and reading the
+  // bounce as weightless. Main and the fix must agree (both depart); only
+  // the mutant disagrees (no departure, and the correction it then runs).
+  it("departs a resting finger through an iOS bounce settling with no viewport change, observed by a native scroll report", () => {
+    const node = shim.makeNode({
+      scrollTop: 1015,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+    fireTouch(node, "touchstart", 400);
+
+    shim.setGeometry(node, { scrollTop: 1000, scrollHeight: 1600 });
+
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).toHaveBeenCalledWith(false);
+    fireTouch(node, "touchend", 400);
+  });
+
+  // The maintenance read defers to the finger (`armBlocksAutomaticCorrection`)
+  // and never calls `touchStep` itself, but it still runs
+  // `noteViewportGrowthClamp` first - so the absorption (or its refusal)
+  // happens here, before the touch arm is ever read; the departure (or its
+  // absence) only surfaces at the lift, through `clearTouch`'s own catch-up.
+  it("departs a resting finger through an iOS bounce settling with no viewport change, observed by a maintenance read", () => {
+    const node = shim.makeNode({
+      scrollTop: 1015,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+    fireTouch(node, "touchstart", 400);
+
+    shim.setGeometry(node, { scrollTop: 1000, scrollHeight: 1600 });
+
+    result.current.followEndIfPermitted();
+    fireTouch(node, "touchend", 400);
+
+    expect(onFollowIntentChange).toHaveBeenCalledWith(false);
+  });
+
   it("departs a following reader whose press stepped to an end only a maintain read saw", () => {
     const node = shim.makeNode({
       scrollTop: 1000,
@@ -5684,14 +6527,14 @@ describe("useChatTimelineFollowLatch", () => {
       });
       const listRef = makeFakeListRef(node);
       const onFollowIntentChange = vi.fn();
-      renderHook(() =>
+      const { result } = renderHook(() =>
         useChatTimelineFollowLatch(listRef, false, true, {
           ...DEFAULT_FOLLOW_LATCH_OPTIONS,
           onFollowIntentChange,
         }),
       );
       node.dispatchEvent(new WheelEvent("wheel", { deltaY: 180 }));
-      return { node, listRef, onFollowIntentChange };
+      return { node, listRef, onFollowIntentChange, result };
     }
 
     // Rows above the reader remeasure by 300px: the list moves the last row
@@ -5766,6 +6609,116 @@ describe("useChatTimelineFollowLatch", () => {
 
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
       expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
+
+    // P7: the wheel moved the view nothing - the viewport grows just enough
+    // to bring the end (recorded at the wheel) up onto the view by itself -
+    // so no scroll report is ever owed and the report path above
+    // (`fireNativeScroll`) never gets a chance to judge the candidate. Then
+    // the tail outgrows even that: `scrollHeight` climbs further, which
+    // would read as "nowhere near the live end" to `isChatTimelineAtStrictBottom`,
+    // but the candidate's target is fixed to the content height the wheel
+    // saw, so it is unmoved by content that landed after. Only a maintenance
+    // read (`followEndIfPermitted`, as a real resize/data-change maintain
+    // trigger would call it) ever looks again - left unseen, this reader
+    // would stay detached at an end they asked for and already reached.
+    it("reattaches a reader whose end a maintenance read alone catches, with no scroll report of its own, after the tail outgrows it", () => {
+      const { node, listRef, onFollowIntentChange, result } =
+        mountDetachedReader();
+
+      // The viewport grows from 500 to 800: the end the wheel recorded
+      // (1500 - clientHeight) comes down from 1000 to exactly 700, meeting
+      // the view with nothing to scroll. The tail then grows past it, to
+      // 1900 - far from the *live* end (1900-800=1100), but the candidate's
+      // target stayed at the wheel's own 1500.
+      shim.setGeometry(node, { clientHeight: 800, scrollHeight: 1900 });
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // P8 - three refusals of the maintenance-read arrival (P7's mechanism),
+  // plus a fourth case from CodeRabbit. A stale-generation refusal is not
+  // listed here: every call that bumps `readerGestureGenerationRef` also
+  // replaces or nulls `readerEndCandidateRef` in the same act
+  // (`noteReaderGesture`, `handleTouchStart`), so a candidate whose own
+  // generation mismatches the current one never actually sits in the ref to
+  // be read - the check is real belt-and-suspenders, but nothing in this
+  // hook's own call graph can arm it independently of the candidate already
+  // being null. Verified, not forced: a dedicated witness for it would be a
+  // knife-edge fixture asserting a path this hook cannot reach on its own.
+  describe("a toward-end reader's end arrival a maintenance read sees, refused", () => {
+    function mountDetachedReader(
+      isCorrectionSuppressed: (() => boolean) | undefined,
+    ) {
+      const node = shim.makeNode({
+        scrollTop: 700,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, false, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+          isCorrectionSuppressed,
+        }),
+      );
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: 180 }));
+      return { node, listRef, onFollowIntentChange, result };
+    }
+
+    it("does not reattach once a touch contact clears the pending candidate", () => {
+      const { node, onFollowIntentChange, result } =
+        mountDetachedReader(undefined);
+
+      // The touch clears `readerEndCandidateRef` outright (`handleTouchStart`).
+      fireTouch(node, "touchstart", 400);
+
+      shim.setGeometry(node, { clientHeight: 800, scrollHeight: 1900 });
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      fireTouch(node, "touchend", 400);
+    });
+
+    it("does not reattach a met candidate while correction is suppressed", () => {
+      const { onFollowIntentChange, node, result } = mountDetachedReader(
+        () => true,
+      );
+
+      shim.setGeometry(node, { clientHeight: 800, scrollHeight: 1900 });
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+    });
+
+    // CodeRabbit: the candidate is read fresh every call, so a reader who
+    // moves away for real between the clamp and the maintenance read is
+    // judged by where they ended up, not by a momentary match the clamp
+    // alone would have produced.
+    it("does not reattach once the reader has genuinely moved further away since the clamp", () => {
+      const { node, onFollowIntentChange, result } =
+        mountDetachedReader(undefined);
+
+      // The viewport grows to 800 (candidate threshold 1500-800=700,
+      // exactly the wheel's own offset - momentarily "met" if read here).
+      shim.setGeometry(node, { clientHeight: 800 });
+      // Before any read, the reader's own further scroll away is reported.
+      shim.setGeometry(node, { scrollTop: 600 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
     });
   });
 
@@ -7298,6 +8251,7 @@ describe("useChatTimelineFollowLatch", () => {
       direction: "away-from-end",
       freezeInFlightScroll: true,
       publishesReaderPosition: true,
+      viewportCanAnswer: true,
     } as const;
 
     // Following at the strict bottom with one report seen, so the latch knows
