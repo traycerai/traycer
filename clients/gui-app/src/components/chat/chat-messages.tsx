@@ -375,6 +375,76 @@ function probeRestorePath(path: string): void {
   Reflect.set(globalThis, "__restorePath", [entry]);
 }
 
+// TEMPORARY DIAGNOSTIC - probe branch only, never for `main`. Records every
+// anchor WRITTEN, so a save that captures the reader's apparent position during
+// a transient layout can be told apart from a layout that re-expands after the
+// restore has retired.
+function probeSave(
+  site: string,
+  state: {
+    readonly mode: string;
+    readonly anchorMessageId: string | null;
+    readonly anchorIndex: number | null;
+    readonly offset: number;
+  },
+  generation: number,
+): void {
+  probeRestorePath(
+    [
+      `save:${site}`,
+      `id=${state.anchorMessageId ?? "none"}`,
+      `idx=${state.anchorIndex === null ? "none" : String(state.anchorIndex)}`,
+      `off=${String(Math.round(state.offset))}`,
+      `mode=${state.mode}`,
+      `gen=${String(generation)}`,
+    ].join(","),
+  );
+}
+
+// TEMPORARY DIAGNOSTIC - probe branch only. After a restore retires, samples
+// the saved row's real content offset and the total content height every frame
+// for ~3s. Logs only when one of them CHANGES, so the log stays readable while
+// still showing a layout that moves after nothing is left to re-check it.
+function probeSampleAfterValidated(
+  scrollNode: Element,
+  messageId: string,
+): void {
+  const startedAt = performance.now();
+  let frames = 0;
+  let last = "";
+  const step = (): void => {
+    frames += 1;
+    const row = scrollNode.querySelector(
+      `[data-message-id="${CSS.escape(messageId)}"]`,
+    );
+    const rowAt =
+      row === null
+        ? "gone"
+        : String(
+            Math.round(
+              row.getBoundingClientRect().top -
+                scrollNode.getBoundingClientRect().top +
+                scrollNode.scrollTop,
+            ),
+          );
+    const content = String(scrollNode.scrollHeight);
+    const scroll = String(Math.round(scrollNode.scrollTop));
+    const key = `${rowAt}/${content}/${scroll}`;
+    if (key !== last) {
+      last = key;
+      probeRestorePath(
+        `after:f${String(frames)},rowAt=${rowAt},content=${content},scroll=${scroll}`,
+      );
+    }
+    if (performance.now() - startedAt < 3_000) {
+      requestAnimationFrame(step);
+      return;
+    }
+    probeRestorePath(`after:end,frames=${String(frames)},final=${key}`);
+  };
+  requestAnimationFrame(step);
+}
+
 /** The controller's own follow-vs-free scroll state - a pure mirror of
  *  LegendList's strict `isAtEnd`, never an independent source of truth. */
 type ChatTimelineScrollMode = "following-end" | "free-scrolling";
@@ -3117,6 +3187,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         : lastVisibleScrollSnapshotRef.current;
       if (snapshot === null) return;
       const commit = isLive ? saveChatTabState : commitChatTabStateToDurable;
+      probeSave(
+        isLive ? "persist-current:live" : "persist-current:durable",
+        snapshot,
+        readerPositionGenerationRef.current,
+      );
       commit({ identity, ...snapshot });
     };
     persistCurrentScrollRef.current = persistCurrentScroll;
@@ -3145,6 +3220,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         () => {
           const snapshot = captureLiveChatTabScrollSnapshot();
           if (snapshot !== null) {
+            probeSave(
+              "viewport-capture",
+              snapshot,
+              readerPositionGenerationRef.current,
+            );
             saveChatTabState({ identity, ...snapshot });
           }
         },
@@ -3513,6 +3593,18 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const { isAborted, onValidated, onExhausted } = policy;
       const list = chatTimelineRef.current;
       const initialIndex = rowIndexByKeyRef.current.get(messageId);
+      // TEMPORARY DIAGNOSTIC - probe branch only. The anchor READ BACK, so it
+      // can be matched against the `save:` entry that produced it.
+      probeRestorePath(
+        [
+          "restore:entry",
+          `id=${messageId}`,
+          `idx=${initialIndex === undefined ? "none" : String(initialIndex)}`,
+          `off=${String(Math.round(viewOffset))}`,
+          `gen=${String(readerPositionGenerationRef.current)}`,
+          `list=${list === null ? "none" : "yes"}`,
+        ].join(","),
+      );
       if (!list || initialIndex === undefined) return false;
 
       activeNavigationSettleCleanupRef.current?.();
@@ -3635,6 +3727,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           // follow authority after the saved row has actually landed.
           setTimelineMode("free-scrolling", false);
           onValidated();
+          // TEMPORARY DIAGNOSTIC - probe branch only. Watch the saved row for
+          // ~3s after this restore has retired.
+          probeSampleAfterValidated(scrollNode, messageId);
           // Positioning the owning placeholder is only a bootstrap. Only the
           // exact part's validated callback clears the hydration transaction.
           if (
@@ -4093,6 +4188,11 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // reader genuinely was at.
       const snapshot = lastVisibleScrollSnapshotRef.current;
       if (snapshot !== null) {
+        probeSave(
+          "visible-mirror",
+          snapshot,
+          readerPositionGenerationRef.current,
+        );
         saveChatTabState({ identity, ...snapshot });
       }
       return;
