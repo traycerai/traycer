@@ -307,9 +307,10 @@ sequenceDiagram
 
 Every relay attach carries `grant`, `park=1` and, once a leg has been replaced,
 `prev=<code>:<reason>` (telemetry only). The relay's Worker copies a field only
-when it is well formed, so `prev` must be at most 64 characters with a reason of
-lowercase letters, digits and `-`. A malformed field is dropped, never refused,
-and a relay that predates a field ignores it.
+when it is well formed, and records only a fixed set of reasons, so the client
+names a reason from that set and otherwise leaves it empty: `prev=1000:`. The code
+is what the measurement needs. A malformed field is dropped, never refused, and
+a relay that predates a field ignores it.
 
 ### Session continuity: the `RESUME` exchange
 

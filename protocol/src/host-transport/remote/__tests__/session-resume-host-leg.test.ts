@@ -1681,7 +1681,7 @@ describe("RemoteSession host-leg resume", () => {
 
       expect(new URL(host.urls[0] ?? "").searchParams.has("prev")).toBe(false);
       expect(new URL(host.urls[1] ?? "").searchParams.get("prev")).toBe(
-        "1006:server-drop",
+        "1006:",
       );
     });
   });

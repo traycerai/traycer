@@ -63,6 +63,26 @@ export const RELAY_WAKE_PROBE_TIMEOUT_CLOSE_REASON = "relay-wake-probe-timeout";
  */
 export const RELAY_RELINK_CLOSE_CODE = 4007;
 export const RELAY_RELINK_CLOSE_REASON = "relay-relink";
+const RELAY_DIAL_TIMEOUT_CLOSE_REASON = "relay-dial-timeout";
+const RELAY_SOCKET_ERROR_CLOSE_REASON = "relay-socket-error";
+const RELAY_MISSED_PONGS_CLOSE_REASON = "relay-missed-pongs";
+const RELAY_PING_SEND_FAILED_CLOSE_REASON = "relay-ping-send-failed";
+
+/**
+ * The close reasons `prev` may name: the fixed set the relay records, this
+ * socket's own plus the host's `shutdown`. Anything else would be counted as
+ * `other` at best, and refused outright if it fails the Worker's shape check,
+ * which would lose the close code the measurement needs.
+ */
+const PREV_REASONS: ReadonlySet<string> = new Set([
+  RELAY_DIAL_TIMEOUT_CLOSE_REASON,
+  RELAY_SOCKET_ERROR_CLOSE_REASON,
+  RELAY_MISSED_PONGS_CLOSE_REASON,
+  RELAY_PING_SEND_FAILED_CLOSE_REASON,
+  RELAY_WAKE_PROBE_TIMEOUT_CLOSE_REASON,
+  RELAY_RELINK_CLOSE_REASON,
+  "shutdown",
+]);
 
 /**
  * Relay session-kill / peer-death reasons (mirror relay-do `KillReason`).
@@ -235,7 +255,7 @@ export class RelaySocket {
     this.dialTimer = setTimeout(() => {
       this.dialTimer = null;
       if (!this.opened) {
-        this.fail(4000, "relay-dial-timeout");
+        this.fail(4000, RELAY_DIAL_TIMEOUT_CLOSE_REASON);
       }
     }, RELAY_DIAL_TIMEOUT_MS);
   }
@@ -473,7 +493,7 @@ export class RelaySocket {
       if (socket !== this.socket) {
         return;
       }
-      this.fail(4005, "relay-socket-error");
+      this.fail(4005, RELAY_SOCKET_ERROR_CLOSE_REASON);
     };
     socket.onclose = (event: WebSocketCloseEvent) => {
       if (socket !== this.socket) {
@@ -613,7 +633,7 @@ export class RelaySocket {
         ? Math.min(derivedMs, RELAY_AWAITING_DEADLINE_CAP_MULTIPLE * floorMs)
         : derivedMs;
       if (now - silentSince >= timeoutMs) {
-        this.fail(4004, "relay-missed-pongs");
+        this.fail(4004, RELAY_MISSED_PONGS_CLOSE_REASON);
         return;
       }
       const socket = this.socket;
@@ -631,7 +651,7 @@ export class RelaySocket {
         socket.send(SOCKET_KEEPALIVE_PING);
         this.path.notePingSent(now);
       } catch {
-        this.fail(4005, "relay-ping-send-failed");
+        this.fail(4005, RELAY_PING_SEND_FAILED_CLOSE_REASON);
       }
     }, RELAY_PING_TICK_MS);
   }
@@ -652,7 +672,7 @@ export class RelaySocket {
       Date.now() - this.lastInboundAt >=
       this.path.deadlineMs(RELAY_PONG_TIMEOUT_MS)
     ) {
-      this.fail(4004, "relay-missed-pongs");
+      this.fail(4004, RELAY_MISSED_PONGS_CLOSE_REASON);
       return;
     }
     const socket = this.socket;
@@ -667,7 +687,7 @@ export class RelaySocket {
     try {
       socket.send(SOCKET_KEEPALIVE_PING);
     } catch {
-      this.fail(4005, "relay-ping-send-failed");
+      this.fail(4005, RELAY_PING_SEND_FAILED_CLOSE_REASON);
     }
   }
 
@@ -733,9 +753,6 @@ export class RelaySocket {
   }
 }
 
-/** The relay's Worker drops a longer `prev` rather than truncating it. */
-const PREV_MAX_CHARS = 64;
-
 /**
  * Appends the attach grant as a `?grant=` query param (fallback presentation),
  * `park=1` so the relay parks this leg's loss, `resume=<sid>:<key>` for a
@@ -756,11 +773,8 @@ function withAttachQuery(
   if (previousLeg === null) {
     return url;
   }
-  const prev = `${previousLeg.code}:${previousLeg.reason}`.slice(
-    0,
-    PREV_MAX_CHARS,
-  );
-  return `${url}&prev=${encodeURIComponent(prev)}`;
+  const reason = PREV_REASONS.has(previousLeg.reason) ? previousLeg.reason : "";
+  return `${url}&prev=${encodeURIComponent(`${previousLeg.code}:${reason}`)}`;
 }
 
 // -----------------------------------------------------------------------------

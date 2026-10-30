@@ -873,7 +873,7 @@ describe("RemoteSession relink on an own-leg loss", () => {
           return Promise.resolve();
         },
         closedWith: null,
-        prev: "1006:net",
+        prev: "1006:",
       },
       {
         name: "a socket error",
