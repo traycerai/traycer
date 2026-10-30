@@ -837,7 +837,7 @@ describe("service install lifecycle re-registration", () => {
       });
 
       expect(handle.state.postSwapError).toBe(
-        "the previous CLI-registered host was still shutting down, so the host was not started",
+        "the previous CLI-registered host may still be running, so the host was not started",
       );
       expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
       expect(harness.start).not.toHaveBeenCalled();

@@ -2415,21 +2415,32 @@ async function probeAgentWedge(
 }
 
 /**
- * The host this CLI label's own supervisor runs: the published host whose
- * parent is the job's launchd pid. `null` when the label runs no process,
- * nothing is published, the published host is another supervisor's child
- * (Desktop's agent's host, which a retirement keeps), or the parent cannot be
- * read - then the retirement runs as it did before, with no host to wait for.
+ * The host this CLI label's own supervisor runs, captured before the bootout.
+ * `none` only on positive evidence: the label runs no process, nothing is
+ * published, or the published host is another supervisor's child (Desktop's
+ * agent's host, which a retirement keeps). A parent that cannot be read
+ * counts as the label's: waiting on a host that is in fact gone ends at the
+ * first probe. An unreadable `pid.json` leaves a host that may be running and
+ * cannot be waited on.
  */
+type RetiredCliHost =
+  | { readonly kind: "none" }
+  | { readonly kind: "published"; readonly host: PublishedProcess }
+  | { readonly kind: "unidentified" };
+
 async function readRetiredCliHost(
   label: ServiceLabel,
   ownership: LaunchdOwnership,
   run: ProcessRunner,
-): Promise<PublishedProcess | null> {
-  if (ownership.kind !== "cli-or-other" || ownership.pid === null) return null;
-  const host = await readHostPidMetadata(label.environment);
-  if (host === null) return null;
-  const parentPid = await run("ps", ["-o", "ppid=", "-p", String(host.pid)], {
+): Promise<RetiredCliHost> {
+  if (ownership.kind !== "cli-or-other" || ownership.pid === null) {
+    return { kind: "none" };
+  }
+  const evidence = await readHostPidMetadataEvidence(label.environment);
+  if (evidence.kind === "absent") return { kind: "none" };
+  if (evidence.kind === "unreadable") return { kind: "unidentified" };
+  const { pid, processStartIdentity } = evidence.metadata;
+  const parentPid = await run("ps", ["-o", "ppid=", "-p", String(pid)], {
     env: undefined,
     cwd: undefined,
     timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
@@ -2442,9 +2453,17 @@ async function readRetiredCliHost(
       return null;
     },
   );
-  return parentPid === ownership.pid
-    ? { pid: host.pid, startIdentity: host.processStartIdentity }
-    : null;
+  if (
+    parentPid !== null &&
+    !Number.isNaN(parentPid) &&
+    parentPid !== ownership.pid
+  ) {
+    return { kind: "none" };
+  }
+  return {
+    kind: "published",
+    host: { pid, startIdentity: processStartIdentity },
+  };
 }
 
 async function retireCompetingRegistration(
@@ -2527,7 +2546,7 @@ async function retireCompetingRegistration(
   // also set below when NO bootout runs. The record decorator reads this as
   // "the registration may be gone" (see `CompetingRegistrationRetirement`).
   let bootoutIndeterminate = false;
-  let retiredHost: PublishedProcess | null = null;
+  let retiredHost: RetiredCliHost = { kind: "none" };
   if (ownership === null) {
     // Deliberately no bootout on an unknown owner. The one thing that would
     // make eviction catastrophic here is the CLI label BEING Desktop's
@@ -2603,38 +2622,6 @@ async function retireCompetingRegistration(
       { label: label.id, agentLabel: agentLabelId },
     );
   }
-  // The label leaving launchd is not the host leaving: a job still on
-  // launchd's default 5 s `ExitTimeOut` has only its supervisor SIGKILLed, and
-  // the host lives on in its own session through its graceful shutdown. The
-  // agent started below would meet it, decline, and exit 0, so wait for the
-  // captured host itself first.
-  let retiredHostStillExiting = false;
-  if (bootedOut && retiredHost !== null) {
-    const captured = retiredHost;
-    retiredHostStillExiting =
-      (await waitForPublishedProcessExit(
-        getPublishedProcessIdentityVerdict,
-        captured,
-        () => {
-          logger.info(
-            "Service repair: waiting for the evicted CLI-label host to finish shutting down.",
-            { label: label.id, pid: captured.pid },
-          );
-        },
-        (cause) => {
-          logger.warn(
-            "Service repair: could not probe the evicted CLI-label host.",
-            { label: label.id, pid: captured.pid, cause: describeCause(cause) },
-          );
-        },
-      )) !== "gone";
-    if (retiredHostStillExiting) {
-      logger.warn(
-        "Service repair: removed the competing CLI registration, but its host is still shutting down; Traycer starts its own host once it has (open Traycer, or log out and back in, if the host stays unreachable).",
-        { label: label.id, agentLabel: agentLabelId, pid: captured.pid },
-      );
-    }
-  }
   // The manifest removal is local, instantaneous and the durable half of the
   // repair ("does not come back at the next login"), so it runs before the
   // kickstart rather than behind a subprocess that can burn its timeout.
@@ -2670,6 +2657,41 @@ async function retireCompetingRegistration(
         { label: label.id, manifestPath, cause: describeCause(cause) },
       );
     }
+  }
+  // The label leaving launchd is not the host leaving: a job still on
+  // launchd's default 5 s `ExitTimeOut` has only its supervisor SIGKILLed, and
+  // the host lives on in its own session through its graceful shutdown. The
+  // agent started below would meet it, decline, and exit 0, so wait for the
+  // captured host itself first. After the manifest removal, so the durable
+  // half never waits behind it.
+  let retiredHostStillExiting = false;
+  if (bootedOut && retiredHost.kind === "unidentified") {
+    retiredHostStillExiting = true;
+  } else if (bootedOut && retiredHost.kind === "published") {
+    const captured = retiredHost.host;
+    retiredHostStillExiting =
+      (await waitForPublishedProcessExit(
+        getPublishedProcessIdentityVerdict,
+        captured,
+        () => {
+          logger.info(
+            "Service repair: waiting for the evicted CLI-label host to finish shutting down.",
+            { label: label.id, pid: captured.pid },
+          );
+        },
+        (cause) => {
+          logger.warn(
+            "Service repair: could not probe the evicted CLI-label host.",
+            { label: label.id, pid: captured.pid, cause: describeCause(cause) },
+          );
+        },
+      )) !== "gone";
+  }
+  if (retiredHostStillExiting) {
+    logger.warn(
+      "Service repair: removed the competing CLI registration, but its host may still be running; Traycer starts its own host once it has exited (open Traycer, or log out and back in, if the host stays unreachable).",
+      { label: label.id, agentLabel: agentLabelId },
+    );
   }
   // ONLY after an eviction actually happened. A failed bootout means the
   // competing host is still running, and starting the agent beside it would

@@ -6214,10 +6214,13 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         });
         const pid = child.pid;
         if (pid === undefined) throw new Error("the orphan host has no pid");
-        MOCKS.readHostPidMetadata.mockResolvedValue({
-          ...HOST_PID_METADATA,
-          pid,
-          processStartIdentity: readProcessStartIdentity(pid),
+        MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+          kind: "read",
+          metadata: {
+            ...HOST_PID_METADATA,
+            pid,
+            processStartIdentity: readProcessStartIdentity(pid),
+          },
         });
         MOCKS.getPublishedProcessIdentityVerdict.mockImplementation(
           getPublishedProcessIdentityVerdict,
@@ -6226,13 +6229,14 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
 
       interface OrphanRunnerHooks {
-        readonly parentPid: number;
+        readonly parentPid: number | null;
         readonly onBootout: () => void;
         readonly onKickstart: () => void;
       }
 
-      // `ps -o ppid=` answers with the given parent; everything else is the
-      // plain launchctl fake with a loaded CLI job that has a pid.
+      // `ps -o ppid=` answers with the given parent, or fails when it is
+      // null; everything else is the plain launchctl fake with a loaded CLI
+      // job that has a pid.
       function makeOrphanRunner(
         calls: RecordedCall[],
         hooks: OrphanRunnerHooks,
@@ -6244,6 +6248,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         return drainingBootouts(async (command, args, options) => {
           if (command === "ps") {
             calls.push({ command, args });
+            if (hooks.parentPid === null) throw new Error("ps is unavailable");
             return {
               stdout: `${hooks.parentPid}\n`,
               stderr: "",
@@ -6306,6 +6311,83 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         const runner = makeOrphanRunner(calls, {
           parentPid: CLI_JOB_PID,
           // The host is still shutting down well after the label is gone.
+          onBootout: () => {
+            setTimeout(() => host.kill("SIGKILL"), 600);
+          },
+          onKickstart: () => {
+            hostExitedAtKickstart = hasExited(host);
+          },
+        });
+
+        await expect(
+          createMacosController(runner).retireCompetingRegistration(label),
+        ).resolves.toEqual({
+          kind: "retired",
+          bootedOut: true,
+          manifestRemoved: true,
+          agentStartRequested: true,
+        });
+
+        expect(hostExitedAtKickstart).toBe(true);
+      });
+
+      it("removes the manifest before waiting for the host", async () => {
+        const host = await publishOrphanHost();
+        let manifestPresentAtFirstProbe: boolean | null = null;
+        MOCKS.getPublishedProcessIdentityVerdict.mockImplementation(
+          async (pid: number, startIdentity: string | null) => {
+            manifestPresentAtFirstProbe ??= existsSync(
+              join(tempPlistDir, `${label.id}.plist`),
+            );
+            return getPublishedProcessIdentityVerdict(pid, startIdentity);
+          },
+        );
+        const runner = makeOrphanRunner([], {
+          parentPid: CLI_JOB_PID,
+          onBootout: () => {
+            setTimeout(() => host.kill("SIGKILL"), 600);
+          },
+          onKickstart: () => {},
+        });
+
+        await createMacosController(runner).retireCompetingRegistration(label);
+
+        expect(manifestPresentAtFirstProbe).toBe(false);
+      });
+
+      it("does not start Desktop's agent when the retired host's pid.json is unreadable", async () => {
+        await publishOrphanHost();
+        MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+          kind: "unreadable",
+          cause: "not valid JSON",
+        });
+        const calls: RecordedCall[] = [];
+        const runner = makeOrphanRunner(calls, {
+          parentPid: CLI_JOB_PID,
+          onBootout: () => {},
+          onKickstart: () => {},
+        });
+
+        await expect(
+          createMacosController(runner).retireCompetingRegistration(label),
+        ).resolves.toEqual({
+          kind: "removed-host-still-exiting",
+          manifestRemoved: true,
+        });
+
+        expect(bootoutTargets(calls)).toHaveLength(1);
+        expect(calls.filter((call) => call.args[0] === "kickstart")).toEqual(
+          [],
+        );
+        expect(MOCKS.getPublishedProcessIdentityVerdict).not.toHaveBeenCalled();
+      });
+
+      it("waits for a host whose parent cannot be read", async () => {
+        const host = await publishOrphanHost();
+        const calls: RecordedCall[] = [];
+        let hostExitedAtKickstart: boolean | null = null;
+        const runner = makeOrphanRunner(calls, {
+          parentPid: null,
           onBootout: () => {
             setTimeout(() => host.kill("SIGKILL"), 600);
           },

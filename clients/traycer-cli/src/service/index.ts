@@ -127,8 +127,9 @@ export type CompetingRegistrationRetirement =
       readonly manifestRemoved: boolean;
       readonly agentStartRequested: boolean;
     }
-  // The competing registration was booted out, but the host it ran was still
-  // shutting down when the wait for it ran out, so Desktop's agent was NOT
+  // The competing registration was booted out, but the host it ran may still
+  // be running (it outlived the wait for it, or its `pid.json` could not be
+  // read, so it could not be waited on), so Desktop's agent was NOT
   // started (its host would have declined beside the old one and stayed
   // down). Desktop brings its host up once the old one is gone: its own
   // ensure while it runs, its next launch, or the next login.
