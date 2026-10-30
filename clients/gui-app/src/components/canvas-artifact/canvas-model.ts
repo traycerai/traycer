@@ -6,7 +6,7 @@ import type {
 } from "@traycer/protocol/persistence/epic/canvas-layout";
 
 export const CANVAS_LOCAL_ORIGIN = Symbol("canvas-local");
-export const LIVE_BOARD_LIMIT = 8;
+export const LIVE_BOARD_SLOT_BUDGET = 24;
 /** The selection/board inspector is parked, not removed: the panels stay in
  * the tree behind this flag until the inspector earns its place in the UI. */
 export const CANVAS_INSPECTOR_ENABLED: boolean = false;
@@ -98,25 +98,66 @@ export function adjacentFullscreenBoard(
   const index = sequence.indexOf(path);
   return index < 0 ? null : (sequence[index + direction] ?? null);
 }
-/** The page's boards nearest the centre, the ones worth a live frame. */
-export function selectLiveBoards(
-  items: CanvasPageItems,
-  center: CanvasPoint,
-  limit: number,
-): ReadonlySet<string> {
-  return new Set(
-    items.boards
-      .map(([path, board], order) => {
-        const frame = boardFrame(board);
-        const distance =
-          (frame.x + frame.w / 2 - center.x) ** 2 +
-          (frame.y + frame.h / 2 - center.y) ** 2;
-        return { path, distance, order };
-      })
-      .sort((a, b) => a.distance - b.distance || a.order - b.order)
-      .slice(0, Math.max(0, limit))
-      .map((item) => item.path),
-  );
+/** Insertion order is also the mount order, so visible boards load first. */
+export function selectLiveBoards({
+  boards,
+  pageBoards,
+  byteLengths,
+  viewport,
+  fullscreenBoard,
+  playingBoard,
+  recentBoards,
+  slotBudget,
+}: {
+  readonly boards: Readonly<Record<string, CanvasBoard>>;
+  readonly pageBoards: readonly string[];
+  readonly byteLengths: Readonly<Record<string, number>> | null;
+  readonly viewport: CanvasBoardFrame;
+  readonly fullscreenBoard: string | null;
+  readonly playingBoard: string | null;
+  readonly recentBoards: readonly string[];
+  readonly slotBudget: number;
+}): ReadonlySet<string> {
+  const live = new Set<string>();
+  if (slotBudget <= 0) return live;
+  const available = (path: string): boolean =>
+    Object.hasOwn(boards, path) &&
+    (byteLengths === null || Object.hasOwn(byteLengths, path));
+  const nearest = pageBoards
+    .filter(available)
+    .map((path, order) => {
+      const frame = boardFrame(boards[path]);
+      return {
+        path,
+        order,
+        visible:
+          frame.x < viewport.x + viewport.w &&
+          frame.x + frame.w > viewport.x &&
+          frame.y < viewport.y + viewport.h &&
+          frame.y + frame.h > viewport.y,
+        distance:
+          (frame.x + frame.w / 2 - viewport.x - viewport.w / 2) ** 2 +
+          (frame.y + frame.h / 2 - viewport.y - viewport.h / 2) ** 2,
+      };
+    })
+    .sort((a, b) => a.distance - b.distance || a.order - b.order);
+  const candidates = new Set([
+    ...(fullscreenBoard === null ? [] : [fullscreenBoard]),
+    ...(playingBoard === null ? [] : [playingBoard]),
+    ...nearest.filter((board) => board.visible).map((board) => board.path),
+    ...recentBoards,
+    ...nearest.map((board) => board.path),
+  ]);
+  let used = 0;
+  for (const path of candidates) {
+    if (!available(path)) continue;
+    const weight = 1 + Math.floor((byteLengths?.[path] ?? 0) / (40 * 1024));
+    // Even an unusually large board must be viewable when it has priority.
+    if (live.size > 0 && used + weight > slotBudget) continue;
+    live.add(path);
+    used += weight;
+  }
+  return live;
 }
 export interface CursorThrottle<T> {
   readonly push: (value: T) => void;
