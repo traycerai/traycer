@@ -1796,8 +1796,8 @@ describe("ChatMessages scroll policy", () => {
 
       // A toward-end key that moves the view is decided by its scroll report,
       // as on main: one that lands the reader on the strict bottom leaves
-      // them free until that report comes.
-      it("does not re-attach a free reader on the key alone when a toward-end step lands them at the strict bottom", async () => {
+      // them free until that report comes, and the report re-attaches them.
+      it("re-attaches a free reader a toward-end step lands at the strict bottom at its scroll report, not before", async () => {
         const messages = makeCompletedTranscript(20);
         renderChatMessages({
           messages,
@@ -1818,6 +1818,10 @@ describe("ChatMessages scroll policy", () => {
         expect(scrollNode.scrollTop).toBe(max);
         expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
         expect(isJumpPillVisible()).toBe(true);
+
+        await fireScrollTopAndFlush(max);
+        expect(scrollNode.dataset.scrollMode).toBe("following-end");
+        expect(isJumpPillVisible()).toBe(false);
       });
     });
   });
