@@ -13,7 +13,7 @@ BASE = dict(
     Fixes="{}", REST=4, DataAnchored="TRUE", InitialEnd="FALSE", DeferAdjust="FALSE",
     Grows=0, Appends=0, Prepends=0, Wheels=0, Drags=0, Clicks=0, Touches=0,
     Flings=0, Minimaps=0, PhonePicks=0, Pills=0, Hides=0, Remounts=0, Jumps=0, NestedWheels=0,
-    UnscrolledWheels=0, Pads=0, TurnEnds=0, Relayouts=0, IdleShrinks=0, IdleClamp="FALSE", Cycles=0,
+    UnscrolledWheels=0, Pads=0, TurnEnds=0, Relayouts=0, IdleShrinks=0, IdleClamp="FALSE", Cycles=0, AboveTailGrows=0, TailRemounts=0, Viewports=0, AppWrites=0, TailHead='"p"',
     WheelDirs='{"toward-end", "away-from-end"}', WheelsApart="FALSE", ReportBeforeGrowth="FALSE",
 )
 
@@ -71,6 +71,8 @@ CONFIGS = {
                    dict(PHONE, Grows=1, Touches=1, PhonePicks=1)),
     "phone_read": ("Phone: the reader pans and flings while a reply streams.",
                    dict(PHONE, Grows=2, Touches=2, Flings=1)),
+    "phone_above_tail": ("Phone: content above the last paragraph grows while a native fling heads for it.",
+                         dict(PHONE, Grows=1, Touches=1, Flings=1, AboveTailGrows=1)),
     "phone_read_turn": ("Phone: the same, and the turn ends.",
                         dict(PHONE, Grows=2, Touches=2, Flings=1, TurnEnds=1)),
     "phone_restore": ("Phone: a restored position, touched while it converges, then hidden.",
@@ -171,7 +173,7 @@ SHIPPED = ["nav", "toward", "restore", "pill", "cancel", "paint", "supersede", "
            "arrive", "live", "hold-init", "fling", "evidence", "nested", "fallen", "depart",
            "keep", "padend", "turnguard", "ledger", "ledgermaint", "translate", "followguard",
            "liftledger", "obsarm", "momstill", "freeland", "freelanddep", "armcarry", "restspend",
-           "deprebase", "heldgap", "pressland", "pressstep", "padannounce", "idlehold"]
+           "deprebase", "heldgap", "pressland", "pressstep", "padannounce", "idlehold", "momhybrid", "tailblock"]
 FIXED = "{" + ", ".join(f'"{f}"' for f in SHIPPED) + "}"
 
 # Configs also run with one shipped fix taken out (`_fixed_no<fix>`;
@@ -193,7 +195,8 @@ VARIANTS = {
     "teleport_pill": EVERY_RULE + ["noevidence"],
     "touch_end": EVERY_RULE + ["nosupersede", "noobsarm", "nomomstill"],
     "stream_f2": ["noevidence", "nodepart", "notranslate"],
-    "phone_read": ["nofling", "noledger", "noliftledger"],
+    "phone_read": ["nofling", "noledger", "noliftledger", "nomomhybrid_notailblock"],
+    "phone_above_tail": ["notailblock"],
     "phone_pick": ["notranslate"],
     "phone_restore": ["noobsarm"],
     "release_wheel": EVERY_RULE + ["noevidence"],

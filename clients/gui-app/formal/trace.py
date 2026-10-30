@@ -142,7 +142,7 @@ def describe(w, intent, est0):
         flags.append(f"pendMeas=r{w['pendMeas']['row']}")
     if w["pendEnd"]:
         flags.append(f"pendEnd=#{w['pendEnd']}")
-    if w["deferred"] != -1:
+    if w.get("deferred", -1) != -1:
         flags.append(f"deferred={w['deferred']}")
     if w["flingDir"]:
         flags.append(f"fling{w['flingDir']:+d}")

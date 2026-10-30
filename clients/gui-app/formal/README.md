@@ -8,9 +8,9 @@ within small budgets and checks what a reader would notice.
 
 ## Current scope and CI status
 
-`SHIPPED` in `gen-configs.py` models OSS main at `0c9863c3c` (#3079), retaining #3053 row-shift momentum.
-The generated set contains 172 exploration configs. The initial CI run selects
-23 bounded configs explicitly in `expected.py`; it does not claim the final
+`SHIPPED` in `gen-configs.py` models OSS main at `4706d7b5c`, including #3071 at `ef13d502f`.
+The generated set contains 176 exploration configs. The initial CI run selects
+26 bounded configs explicitly in `expected.py`; it does not claim the final
 full generated matrix has completed. It includes passing shipped configurations
 and failing controls whose invariant sets must remain reproducible.
 
@@ -27,12 +27,22 @@ by its actual delta before any observer can see regrowth. `PadCycle` represents
 an atomic reset, clamp and reopen. Fixed following/press cases hold;
 `drag_pad_fixed_nopadannounce` keeps the prior 13-state unmoved-press witness.
 
-Pending work stays separate: #3071's tail-block momentum and the newer
-contact-reference and owed-departure rules. The model currently seeds a
+The landed `momhybrid` / `tailblock` rules use announced-write travel and
+a lift-time content end tracked by the trailing block. Pending work stays
+separate: the contact-reference and owed-departure rules. The model currently seeds a
 changed-to-free mode directly in `LatchSetIntent`, a stronger abstraction
 than main's incomplete navigation/restore publications. That coverage will
 be split into explicit publication and owed state with the pending fix;
 these bounded checks are not evidence that main already handles those paths.
+
+`ChatScroll_phone_above_tail_fixed` remains an exploration-only, known
+19-state `I_IntentHeld` witness on #3071: an unrendered lift-time last row
+has no captured tail block, so later growth above its final paragraph is
+missed by the row fallback. A lazy-capture fix-forward is pending; this is a
+production defect, not a residue. The positive config will join CI after
+that fix lands. CI includes the fixed nested-wheel input-consuming no-op
+and the row-only before-fix controls. The `nopadannounce` control also keeps
+the known 18-state Mode/Pill symptoms of the unannounced pad clamp.
 
 ## What is modelled
 
@@ -94,7 +104,7 @@ the rows the list has mounted (a blank frame) cannot be seen.
 
 `Fixes` switches the client's fixes on. `gen-configs.py` writes every config
 twice: `<name>` is the code before them (`Fixes = {}`), `<name>_fixed` the set
-the client ships (`{"nav", "toward", "restore", "pill", "cancel", "paint", "supersede", "reach", "arrive", "live", "hold-init", "fling", "evidence", "nested", "fallen", "depart", "keep", "padend", "turnguard", "ledger", "ledgermaint", "translate", "followguard", "liftledger", "obsarm", "momstill", "freeland", "freelanddep", "armcarry", "restspend", "deprebase", "heldgap", "pressland", "pressstep", "padannounce", "idlehold"}`).
+the client ships (`{"nav", "toward", "restore", "pill", "cancel", "paint", "supersede", "reach", "arrive", "live", "hold-init", "fling", "evidence", "nested", "fallen", "depart", "keep", "padend", "turnguard", "ledger", "ledgermaint", "translate", "followguard", "liftledger", "obsarm", "momstill", "freeland", "freelanddep", "armcarry", "restspend", "deprebase", "heldgap", "pressland", "pressstep", "padannounce", "idlehold", "momhybrid", "tailblock"}`).
 Some configs also run with one of them taken out (`<name>_fixed_no<fix>`;
 `_fixed_nohold` takes out the estimate hold), with a rejected rule added
 (`<name>_fixed_with<rule>`), and the estimate configs with `"hold-init"`
@@ -231,7 +241,7 @@ producer regression from independent drag movement.
 | `TouchMoveDelivered` | —                                                                                                                                                                | `TRUE`: `touchmove` keeps arriving through the native pan |
 | `HasScrollEnd`       | `TRUE`                                                                                                                                                           | `FALSE`                                                   |
 | `DeferUnderFinger`   | `FALSE`                                                                                                                                                          | `FALSE`: a scrollTop write under a finger applies at once |
-| `Foreground`         | `TRUE` (`FALSE` in `nav_follow_bg`: an occluded window stops frames, timers still run; and in `release_wheel`, a renderer starved of frames on a loaded machine) |
+| `Foreground`         | `TRUE` (`FALSE` in `nav_follow_bg`: an occluded window stops frames, timers still run; and in `release_wheel`, a renderer starved of frames on a loaded machine) | `TRUE`                                                    |
 
 Three more switches belong to the list rather than the platform:
 `DataAnchored` is `TRUE` for the chat timeline (its MVCP data channel anchors
@@ -352,14 +362,37 @@ were the model's first assumption about the native pan, and iOS 27 does not
 behave that way.
 
 Only the phone configurations and bounds explicitly selected in
-`expected.py` are part of this initial CI claim; deeper momentum comparisons
-remain pending #3071. The independent `liftEnd` ghost records the content a native fling headed
-for. `FlingStep` asks to follow when it reaches that content even after tail
-growth. A seen `TouchStart` takes intent from its current geometry. These
-oracle rules apply independently of production momentum and expose its
-re-recorded target losing a streaming arrival in deeper probes (15 states
-in `phone_read_fixed`, 14 in `phone_read_turn_fixed` under the comparison
-snapshot); they are not a claim that main has #3071's fix.
+`expected.py` are part of this CI claim. The independent `liftEnd` ghost
+records the content a native fling headed for, including its lift-time end
+inset and the live viewport conversion. Tail extension below that content
+leaves its target still; content above its final block moves it.
+`FlingStep` uses this physical contract independently of production momentum.
+A seen `TouchStart` takes intent from current geometry.
+
+`momhybrid` (#3071) records the lift offset and content end once. Every
+announced write carries the offset by actual movement; observations only
+judge it. The first report after a flagged lift mismatch re-bases the travel
+baseline and clears its guard. Browser writes never replay unannounced after
+lift: a touch-overridden assignment has no deferred-replay actor. Pending
+list commands still use their announced writes and carried targets.
+
+`tailblock` tracks one physical trailing block per row. Capture records
+whether it was rendered (`InWindow` is the model's mounted-window abstraction).
+Its head check preserves equality and a nonempty captured prefix, rejecting
+an empty captured head once text appears. Remount or head invalidity falls
+back to the row shift; a missing recorded row means known zero, while a
+recorded row whose position cannot be recovered declines arrival. The actual
+DOM walk to the deepest boxed descendant is source-inspected rather than
+represented as a DOM tree. Stable contiguous row identity omits the source's
+same-count re-key fallback mechanics.
+
+`AboveTailGrow` resolves content above the final paragraph without moving the
+row's top. `phone_above_tail_fixed_notailblock` retains the row-only early
+arrival witness; `phone_read_fixed_nomomhybrid_notailblock` keeps the old
+re-recorded target's lost streaming arrival. `Viewports`, `TailRemounts` and
+`AppWrites` are finite extra probe budgets, off in ordinary configs. Current
+contact/viewport defects remain separate pre-fix probes until their producer
+and latch rule lands; they are not new residue exceptions.
 
 `NoOpPicks = FALSE` limits picks to rows whose landing moves the view, which
 separates the streaming form of a minimap failure from its no-op form.
