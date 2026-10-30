@@ -54,10 +54,11 @@ interface Frame {
   readonly rectReads: Element[];
   readonly nativeFocusArgs: unknown[][];
   readonly native: {
-    readonly scrollIntoView: unknown;
-    readonly scrollIntoViewIfNeeded: unknown;
-    readonly htmlFocus: unknown;
-    readonly svgFocus: unknown;
+    readonly scrollIntoView: PropertyDescriptor;
+    readonly scrollIntoViewIfNeeded: PropertyDescriptor;
+    readonly attachShadow: PropertyDescriptor;
+    readonly htmlFocus: PropertyDescriptor;
+    readonly svgFocus: PropertyDescriptor;
   };
   place: (element: Element, layout: Layout) => void;
 }
@@ -82,6 +83,12 @@ function invoke(fn: unknown, self: object, args: readonly unknown[]): void {
 
 function valueOf(owner: object, name: string): unknown {
   return Object.getOwnPropertyDescriptor(owner, name)?.value;
+}
+
+function describedBy(owner: object, name: string): PropertyDescriptor {
+  const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+  if (descriptor === undefined) throw new Error(`no ${name}`);
+  return descriptor;
 }
 
 function record(call: unknown): ScrollCall["behavior"] {
@@ -227,10 +234,11 @@ function startFrame(canvas: boolean): Frame {
   }) as typeof window.getComputedStyle;
 
   const native = {
-    scrollIntoView: valueOf(proto, "scrollIntoView"),
-    scrollIntoViewIfNeeded: valueOf(proto, "scrollIntoViewIfNeeded"),
-    htmlFocus: valueOf(window.HTMLElement.prototype, "focus"),
-    svgFocus: valueOf(window.SVGElement.prototype, "focus"),
+    scrollIntoView: describedBy(proto, "scrollIntoView"),
+    scrollIntoViewIfNeeded: describedBy(proto, "scrollIntoViewIfNeeded"),
+    attachShadow: describedBy(proto, "attachShadow"),
+    htmlFocus: describedBy(window.HTMLElement.prototype, "focus"),
+    svgFocus: describedBy(window.SVGElement.prototype, "focus"),
   };
   Object.defineProperty(window.document, "scrollingElement", {
     configurable: true,
@@ -932,27 +940,219 @@ describe("focus inside a frame", () => {
   });
 });
 
+describe("content slotted into a shadow root", () => {
+  /**
+   * An outer scroller holding a shadow host, with the slot the host's own
+   * content is assigned to inside a scroller of the shadow root's. The
+   * target sits below both ports, so each has work to do and the outer
+   * one's share is what is left after the inner one has moved.
+   */
+  function slottedIntoScroller(
+    frame: Frame,
+    init: ShadowRootInit,
+  ): { outer: HTMLElement; inner: HTMLElement; target: HTMLElement } {
+    const doc = frame.window.document;
+    const outer = doc.createElement("div");
+    const host = doc.createElement("div");
+    const target = doc.createElement("button");
+    doc.body.append(outer);
+    outer.append(host);
+    host.append(target);
+    const inner = doc.createElement("div");
+    inner.append(doc.createElement("slot"));
+    host.attachShadow(init).append(inner);
+    frame.place(outer, {
+      rect: { top: 0, bottom: 100, left: 0, right: 100 },
+      client: { height: 100, width: 100 },
+      scroll: { height: 1000, width: 1000, top: 0, left: 0 },
+      style: SCROLLER_STYLE,
+    });
+    frame.place(inner, {
+      rect: { top: 200, bottom: 300, left: 0, right: 100 },
+      client: { height: 100, width: 100 },
+      scroll: { height: 1000, width: 1000, top: 0, left: 0 },
+      style: SCROLLER_STYLE,
+    });
+    frame.place(target, {
+      rect: { top: 500, bottom: 540, left: 0, right: 40 },
+    });
+    return { outer, inner, target };
+  }
+
+  // The flat tree is where the scrollers are: the target's light-tree
+  // parent is the host, and going straight there walks past the scroller
+  // the content is actually rendered in. The outer scroller then moves by
+  // the whole distance instead of what is left of it.
+  it.each([{ mode: "closed" }, { mode: "open" }] as const)(
+    "scrolls the scrollers around the slot, $mode root",
+    (init) => {
+      const frame = startFrame(false);
+      const { outer, inner, target } = slottedIntoScroller(frame, init);
+
+      scrollIntoView(target, { block: "start" });
+
+      expect(frame.scrolls).toEqual([
+        { scroller: inner, top: 300, left: 0, behavior: "auto" },
+        { scroller: outer, top: 200, left: 0, behavior: "auto" },
+      ]);
+    },
+  );
+
+  // The mode comes from the getter taken before the page ran, so an
+  // accessor the page puts in its place answers nobody: reading it would
+  // land after the root is attached, where it could lie or throw.
+  it("keeps a closed root whose mode the page's own accessor denies", () => {
+    const frame = startFrame(false);
+    Object.defineProperty(frame.window.ShadowRoot.prototype, "mode", {
+      configurable: true,
+      get: (): string => "open",
+    });
+    const { outer, inner, target } = slottedIntoScroller(frame, {
+      mode: "closed",
+    });
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([
+      { scroller: inner, top: 300, left: 0, behavior: "auto" },
+      { scroller: outer, top: 200, left: 0, behavior: "auto" },
+    ]);
+  });
+
+  // Whatever the page has done to the globals the capture reads, its own
+  // `attachShadow` still returns the root the engine made it.
+  it("hands back the root even where the capture cannot run", () => {
+    const frame = startFrame(false);
+    const host = frame.window.document.createElement("div");
+    Object.defineProperty(frame.window.Element, Symbol.hasInstance, {
+      configurable: true,
+      value: (): boolean => {
+        throw new Error("the page's own hasInstance");
+      },
+    });
+
+    const root = host.attachShadow({ mode: "closed" });
+
+    expect(root).toBeInstanceOf(frame.window.ShadowRoot);
+    expect(root.host).toBe(host);
+  });
+
+  // The engine reads the dictionary once, converting it as it is called.
+  // Reading it again after the root is attached is a second chance for the
+  // page's own accessor to answer differently, or to throw where nothing
+  // threw before — and by then the root exists.
+  it("takes the mode from the root, not from the page's dictionary again", () => {
+    const frame = startFrame(false);
+    let reads = 0;
+    const init: ShadowRootInit = {
+      get mode(): ShadowRootMode {
+        reads += 1;
+        if (reads > 1) throw new Error("the mode was read again");
+        return "closed";
+      },
+    };
+    const { outer, inner, target } = slottedIntoScroller(frame, init);
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(reads).toBe(1);
+    expect(frame.scrolls).toEqual([
+      { scroller: inner, top: 300, left: 0, behavior: "auto" },
+      { scroller: outer, top: 200, left: 0, behavior: "auto" },
+    ]);
+  });
+
+  // Which slot, not just some slot: the engine's assignment decides, and
+  // the scrollers around the two differ.
+  it("scrolls the scrollers around the slot the target is assigned to", () => {
+    const frame = startFrame(false);
+    const doc = frame.window.document;
+    const outer = doc.createElement("div");
+    const host = doc.createElement("div");
+    const target = doc.createElement("button");
+    target.setAttribute("slot", "second");
+    doc.body.append(outer);
+    outer.append(host);
+    host.append(target);
+    const root = host.attachShadow({ mode: "closed" });
+    const ports: HTMLElement[] = [];
+    for (const name of ["", "second"]) {
+      const port = doc.createElement("div");
+      const slot = doc.createElement("slot");
+      if (name !== "") slot.setAttribute("name", name);
+      port.append(slot);
+      root.append(port);
+      ports.push(port);
+    }
+    frame.place(outer, {
+      rect: { top: 0, bottom: 100, left: 0, right: 100 },
+      client: { height: 100, width: 100 },
+      scroll: { height: 1000, width: 1000, top: 0, left: 0 },
+      style: SCROLLER_STYLE,
+    });
+    frame.place(ports[0], {
+      rect: { top: 200, bottom: 300, left: 0, right: 100 },
+      client: { height: 100, width: 100 },
+      scroll: { height: 1000, width: 1000, top: 0, left: 0 },
+      style: SCROLLER_STYLE,
+    });
+    frame.place(ports[1], {
+      rect: { top: 600, bottom: 700, left: 0, right: 100 },
+      client: { height: 100, width: 100 },
+      scroll: { height: 1000, width: 1000, top: 0, left: 0 },
+      style: SCROLLER_STYLE,
+    });
+    frame.place(target, {
+      rect: { top: 900, bottom: 940, left: 0, right: 40 },
+    });
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([
+      { scroller: ports[1], top: 300, left: 0, behavior: "auto" },
+      { scroller: outer, top: 600, left: 0, behavior: "auto" },
+    ]);
+  });
+
+  it("leaves a closed root as closed as the page made it", () => {
+    const frame = startFrame(false);
+    const host = frame.window.document.createElement("div");
+
+    const root = host.attachShadow({ mode: "closed" });
+
+    expect(root).toBeInstanceOf(frame.window.ShadowRoot);
+    expect(root.host).toBe(host);
+    expect(host.shadowRoot).toBe(null);
+  });
+});
+
 describe("the replaced functions", () => {
-  it("look native: same name and length, non-enumerable", () => {
+  // Indistinguishable from the function it replaced but for the value:
+  // same name and length, and the property left exactly as declared, which
+  // for an interface operation is enumerable.
+  it("look native: same name and length, same descriptor", () => {
     const frame = startFrame(false);
     const proto = frame.window.Element.prototype;
     const htmlProto = frame.window.HTMLElement.prototype;
 
-    const replaced: [object, string, unknown][] = [
+    const replaced: [object, string, PropertyDescriptor][] = [
       [proto, "scrollIntoView", frame.native.scrollIntoView],
       [proto, "scrollIntoViewIfNeeded", frame.native.scrollIntoViewIfNeeded],
+      [proto, "attachShadow", frame.native.attachShadow],
       [htmlProto, "focus", frame.native.htmlFocus],
     ];
     for (const [owner, name, native] of replaced) {
-      const descriptor = Object.getOwnPropertyDescriptor(owner, name);
-      expect(descriptor?.value).not.toBe(native);
+      const descriptor = describedBy(owner, name);
+      expect(descriptor.value).not.toBe(native.value);
       const identity = (fn: unknown): unknown[] => [
         Reflect.get(Object(fn), "name"),
         Reflect.get(Object(fn), "length"),
       ];
-      expect(identity(descriptor?.value)).toEqual(identity(native));
-      expect(descriptor?.enumerable).toBe(false);
-      expect(Object.keys(owner)).not.toContain(name);
+      expect(identity(descriptor.value)).toEqual(identity(native.value));
+      expect({ ...descriptor, value: null }).toEqual({
+        ...native,
+        value: null,
+      });
     }
   });
 
@@ -960,15 +1160,20 @@ describe("the replaced functions", () => {
     const frame = startFrame(true);
     const proto = frame.window.Element.prototype;
 
-    expect(valueOf(proto, "scrollIntoView")).toBe(frame.native.scrollIntoView);
+    expect(valueOf(proto, "scrollIntoView")).toBe(
+      frame.native.scrollIntoView.value,
+    );
     expect(valueOf(proto, "scrollIntoViewIfNeeded")).toBe(
-      frame.native.scrollIntoViewIfNeeded,
+      frame.native.scrollIntoViewIfNeeded.value,
+    );
+    expect(valueOf(proto, "attachShadow")).toBe(
+      frame.native.attachShadow.value,
     );
     expect(valueOf(frame.window.HTMLElement.prototype, "focus")).toBe(
-      frame.native.htmlFocus,
+      frame.native.htmlFocus.value,
     );
     expect(valueOf(frame.window.SVGElement.prototype, "focus")).toBe(
-      frame.native.svgFocus,
+      frame.native.svgFocus.value,
     );
   });
 });
