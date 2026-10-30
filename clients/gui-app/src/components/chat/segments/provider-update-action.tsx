@@ -71,6 +71,7 @@ function ProviderUpdateButton({
       {failure === null ? null : (
         <span
           data-testid="provider-update-failure"
+          role="alert"
           className="whitespace-pre-wrap break-words text-destructive"
         >
           {failure}

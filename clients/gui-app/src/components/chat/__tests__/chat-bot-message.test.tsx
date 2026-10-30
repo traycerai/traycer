@@ -613,14 +613,16 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
     expect(update).toHaveBeenCalledTimes(1);
   });
 
-  it("holds the line's Update while the update runs", () => {
+  it("holds the line's Update while the update runs, keeping its label with dots after it", () => {
     renderRow(memberPost(OPEN_REQUEST), outdated(vi.fn(), true, null));
 
+    const update = within(
+      screen.getByTestId("bot-message-unanswered"),
+    ).getByRole("button", { name: "Update" });
+    expect(update.hasAttribute("disabled")).toBe(true);
     expect(
-      within(screen.getByTestId("bot-message-unanswered"))
-        .getByRole("button", { name: "Update" })
-        .hasAttribute("disabled"),
-    ).toBe(true);
+      within(update).getByTestId("bot-message-unanswered-update-pending"),
+    ).toBeTruthy();
   });
 
   it("says under the line why the update did not take, and keeps Update to try again", () => {
@@ -629,7 +631,8 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
       outdated(vi.fn(), false, "Grok is disabled on this host."),
     );
 
-    expect(screen.getByTestId("bot-message-update-failure").textContent).toBe(
+    // Announced where it appears: focus stays on the line's buttons.
+    expect(screen.getByRole("alert").textContent).toBe(
       "Grok is disabled on this host.",
     );
     expect(

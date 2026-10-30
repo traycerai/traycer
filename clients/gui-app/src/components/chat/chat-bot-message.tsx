@@ -24,6 +24,7 @@ import {
   BOT_THREAD_ANCHOR_MESSAGE,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
   Drawer,
@@ -778,6 +779,8 @@ function UnansweredLine(props: {
     readonly label: string;
     readonly testId: string;
     readonly disabled: boolean;
+    /** Its work is running: the label stays and dots follow it. */
+    readonly pending: boolean;
     readonly onClick: () => void;
   }> = [
     ...(failed.onRetry === null
@@ -787,6 +790,7 @@ function UnansweredLine(props: {
             label: "Retry",
             testId: "bot-message-unanswered-retry",
             disabled: failed.retrying,
+            pending: false,
             onClick: failed.onRetry,
           },
         ]),
@@ -797,6 +801,7 @@ function UnansweredLine(props: {
             label: "Edit",
             testId: "bot-message-unanswered-edit",
             disabled: false,
+            pending: false,
             onClick: failed.onEdit,
           },
         ]),
@@ -807,6 +812,7 @@ function UnansweredLine(props: {
             label: "Sign in",
             testId: "bot-message-unanswered-sign-in",
             disabled: false,
+            pending: false,
             onClick: failed.onSignIn,
           },
         ]),
@@ -817,6 +823,7 @@ function UnansweredLine(props: {
             label: "Update",
             testId: "bot-message-unanswered-update",
             disabled: failed.updating,
+            pending: failed.updating,
             onClick: failed.onUpdate,
           },
         ]),
@@ -844,6 +851,13 @@ function UnansweredLine(props: {
             className="rounded-sm font-medium hover:underline focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
           >
             {action.label}
+            {action.pending ? (
+              <AgentSpinningDots
+                className={undefined}
+                testId={`${action.testId}-pending`}
+                variant={undefined}
+              />
+            ) : null}
           </button>
         </Fragment>
       ))}
@@ -853,6 +867,7 @@ function UnansweredLine(props: {
     failed.updateFailure === null ? null : (
       <p
         data-testid="bot-message-update-failure"
+        role="alert"
         className="text-ui-xs break-words whitespace-pre-wrap text-destructive"
       >
         {failed.updateFailure}

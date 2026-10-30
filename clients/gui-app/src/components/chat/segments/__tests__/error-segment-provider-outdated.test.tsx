@@ -17,7 +17,10 @@ import {
 } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import { mockRemoteHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
+import {
+  mockLocalHostEntry,
+  mockRemoteHostEntry,
+} from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import {
   recordNegotiatedHostManifest,
@@ -38,7 +41,7 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import { hostRpcSchedulingPolicy } from "@/lib/host-rpc-policy/host-method-policy-table";
 import { createAppQueryClient } from "@/lib/query-client";
-import { hostQueryKeys } from "@/lib/query-keys";
+import { hostQueryKeys, providersMutationKeys } from "@/lib/query-keys";
 import { ErrorSegment } from "../error-segment";
 
 /** The host that ran the turn: the one the recording client addresses. */
@@ -84,9 +87,15 @@ type FakeHost = {
    * as it stood when the read arrived (a slow host).
    */
   listHeld: Promise<void> | null;
+  /** How many of the next `providers.list` reads fail. */
+  listRefusals: number;
 };
 
 let host: FakeHost;
+/** The host client the row's requesters are cut from. */
+let playingSpine: HostClient<HostRpcRegistry> | null = null;
+/** Renders the rows again, as fresh elements. */
+let rerenderRows: () => void = () => undefined;
 
 function grokRow(): ProviderCliState {
   return {
@@ -119,12 +128,17 @@ function grokRow(): ProviderCliState {
 function hostClientPlaying(
   queryClient: QueryClient,
 ): HostClient<HostRpcRegistry> {
+  const hosts = [mockRemoteHostEntry, mockLocalHostEntry];
   const messenger = new MockHostMessenger<HostRpcRegistry>({
     registry: hostRpcRegistry,
     requestId: () => "request-update",
     handlers: {
       "providers.list": async () => {
         host.asked = [...host.asked, "list"];
+        if (host.listRefusals > 0) {
+          host.listRefusals -= 1;
+          throw new Error("The host did not answer the list.");
+        }
         const answer = { providers: [grokRow()], native: null };
         await host.listHeld;
         return answer;
@@ -154,13 +168,13 @@ function hostClientPlaying(
     schedulingPolicy: hostRpcSchedulingPolicy,
     invalidator: createHostQueryInvalidator(queryClient),
     findHostById: (hostId) =>
-      hostId === mockRemoteHostEntry.hostId ? mockRemoteHostEntry : null,
+      hosts.find((entry) => entry.hostId === hostId) ?? null,
     messenger,
   });
   spine.setRequestContext(
     createRequestContextFixture({ origin: "renderer", bearerToken: "tok-1" }),
   );
-  return spine.createRequester(mockRemoteHostEntry);
+  return spine;
 }
 
 /** Holds every `providers.list` answer until the returned release runs. */
@@ -190,8 +204,10 @@ function renderRows(
   turnIds: ReadonlyArray<string>,
 ): QueryClient {
   const queryClient = createAppQueryClient();
-  mocks.client = hostClientPlaying(queryClient);
-  render(
+  const spine = hostClientPlaying(queryClient);
+  playingSpine = spine;
+  mocks.client = spine.createRequester(mockRemoteHostEntry);
+  const tree = (): React.JSX.Element => (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <TabHostProvider hostId={HOST_ID}>
@@ -213,8 +229,10 @@ function renderRows(
           </ChatTranscriptProvider>
         </TabHostProvider>
       </TooltipProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  const view = render(tree());
+  rerenderRows = () => view.rerender(tree());
   return queryClient;
 }
 
@@ -260,6 +278,7 @@ beforeEach(() => {
     install: { status: "installed", version: INSTALLED },
     ensure: "starts",
     listHeld: null,
+    listRefusals: 0,
   };
   hostOffers(["providers.ensurePack"]);
 });
@@ -269,6 +288,8 @@ afterEach(() => {
   cleanup();
   resetNegotiatedManifests();
   mocks.client = null;
+  playingSpine = null;
+  rerenderRows = () => undefined;
 });
 
 describe("<ErrorSegment /> a provider whose command-line tool is out of date", () => {
@@ -395,7 +416,14 @@ describe("<ErrorSegment /> a provider whose command-line tool is out of date", (
       await user.click(button);
       await waitFor(() => expect(updates()).toBe(index + 1));
     }
-    await waitFor(() => expect(queryClient.isMutating()).toBe(0));
+    // Every update was answered; each press now waits on its list read.
+    await waitFor(() =>
+      expect(
+        queryClient.isMutating({
+          mutationKey: providersMutationKeys.ensurePack(),
+        }),
+      ).toBe(0),
+    );
     expect(updateButtons().map((button) => button.disabled)).toEqual([
       true,
       true,
@@ -502,6 +530,57 @@ describe("<ErrorSegment /> a provider whose command-line tool is out of date", (
       (await screen.findByTestId("provider-update-failure")).textContent,
     ).toBe(
       "The update failed: the download could not be reached. Retry when you're back online.",
+    );
+    expect(updateButton().disabled).toBe(false);
+  });
+
+  it("stays pending with no failure when the list read after the update fails, until the list's own next read answers, and asks for the update once", async () => {
+    const user = userEvent.setup();
+    host.listRefusals = 1;
+    const release = holdList();
+    const queryClient = renderRow("provider_outdated", OUTDATED);
+
+    await user.click(updateButton());
+
+    // The press's own read failed; the list's next read is out.
+    await waitFor(() => expect(listReads()).toBe(2));
+    expect(updateButton().disabled).toBe(true);
+    expect(screen.queryByTestId("provider-update-failure")).toBeNull();
+
+    release();
+    await waitFor(() =>
+      expect(
+        queryClient.getQueryData<{
+          readonly providers: ReadonlyArray<ProviderCliState>;
+        }>(LIST_KEY)?.providers[0]?.managedInstallState?.status,
+      ).toBe("downloading"),
+    );
+    expect(updateButton().disabled).toBe(true);
+
+    host.install = { status: "installed", version: NEWEST };
+    await queryClient.invalidateQueries({
+      queryKey: hostQueryKeys.methodScope(HOST_ID, "providers.list"),
+    });
+
+    await waitFor(() => expect(updateButton().disabled).toBe(false));
+    expect(screen.queryByTestId("provider-update-failure")).toBeNull();
+    expect(host.asked.filter((asked) => asked === "update grok")).toEqual([
+      "update grok",
+    ]);
+  });
+
+  it("drops what a press says once the row's client answers for another host", async () => {
+    const user = userEvent.setup();
+    host.ensure = new Error("Grok is disabled on this host.");
+    renderRow("provider_outdated", OUTDATED);
+    await user.click(updateButton());
+    await screen.findByTestId("provider-update-failure");
+
+    mocks.client = playingSpine?.createRequester(mockLocalHostEntry) ?? null;
+    rerenderRows();
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("provider-update-failure")).toBeNull(),
     );
     expect(updateButton().disabled).toBe(false);
   });
