@@ -3308,6 +3308,28 @@ describe("useChatTimelineFollowLatch", () => {
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
     });
 
+    // A slow approach's last step into the end can be under a pixel: still
+    // past where their departure stood, so still theirs.
+    it("a held reader's slow scroll reaching the end mid-turn in sub-pixel steps follows", () => {
+      const { node, listRef, onFollowIntentChange, result } =
+        followingWithTurn();
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -80 }));
+      shim.setGeometry(node, { scrollTop: 960 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+      for (const scrollTop of [980, 998.6, 999.4, 1000]) {
+        shim.setGeometry(node, { scrollTop });
+        fireNativeScroll(node);
+      }
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+
+      shim.setGeometry(node, { scrollHeight: 1600 });
+      result.current.followEndIfPermitted();
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
+
     // Their own report at the strict bottom, past where the departure stood,
     // is them arriving: it follows, though the turn runs.
     it("guard: a held reader whose report reaches the strict bottom mid-turn follows", () => {
@@ -3355,6 +3377,93 @@ describe("useChatTimelineFollowLatch", () => {
       shim.setGeometry(node, { scrollTop: 1000 });
       result.current.followEndIfPermitted();
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+  });
+
+  describe("a wheel a nested scroller owned, departed by the tail ahead of a report that never comes", () => {
+    function followingWithNestedScroller() {
+      const turnRunning = { current: true };
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const nested = shim.makeNode({
+        scrollTop: 0,
+        scrollHeight: 400,
+        clientHeight: 100,
+      });
+      nested.style.overflowY = "auto";
+      node.appendChild(nested);
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, true, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+          isTurnRunning: () => turnRunning.current,
+        }),
+      );
+      fireNativeScroll(node);
+      return {
+        node,
+        nested,
+        listRef,
+        onFollowIntentChange,
+        result,
+        turnRunning,
+      };
+    }
+
+    // The nested scroller at its top owned the wheel and never moved the
+    // transcript: its `scrollend` ends the wait for a report, so the turn's
+    // rest follows them, and the tail's next growth with them.
+    it("the turn's rest follows them at the strict bottom once the nested scroller's scroll has ended", () => {
+      const {
+        node,
+        nested,
+        listRef,
+        onFollowIntentChange,
+        result,
+        turnRunning,
+      } = followingWithNestedScroller();
+
+      nested.dispatchEvent(
+        new WheelEvent("wheel", { deltaY: -120, bubbles: true }),
+      );
+      shim.setGeometry(node, { scrollHeight: 1600 });
+      result.current.followEndIfPermitted();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+      shim.setGeometry(node, { scrollHeight: 1500 });
+      result.current.followEndIfPermitted();
+      nested.dispatchEvent(new Event("scrollend"));
+      expect(onFollowIntentChange.mock.calls).toEqual([[false]]);
+
+      turnRunning.current = false;
+      result.current.reconcileTurnAtRest();
+      expect(onFollowIntentChange.mock.calls).toEqual([[false], [true]]);
+
+      shim.setGeometry(node, { scrollHeight: 1600 });
+      result.current.followEndIfPermitted();
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+    });
+
+    it("with no turn running, the end meeting them after the nested scroller's scroll has ended follows them", () => {
+      const { node, nested, onFollowIntentChange, result, turnRunning } =
+        followingWithNestedScroller();
+      turnRunning.current = false;
+
+      nested.dispatchEvent(
+        new WheelEvent("wheel", { deltaY: -120, bubbles: true }),
+      );
+      shim.setGeometry(node, { scrollHeight: 1600 });
+      result.current.followEndIfPermitted();
+      nested.dispatchEvent(new Event("scrollend"));
+      shim.setGeometry(node, { scrollHeight: 1500 });
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange.mock.calls).toEqual([[false], [true]]);
     });
   });
 
