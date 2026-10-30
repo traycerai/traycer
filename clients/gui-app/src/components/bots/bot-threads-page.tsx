@@ -174,7 +174,7 @@ function ThreadRowFromPost(props: {
     onOpenPost({
       anchorMessageId,
       announcement: open.announcement,
-      answer: open.answer,
+      anchorKind: open.anchorKind,
       sent: null,
     });
   };

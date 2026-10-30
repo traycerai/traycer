@@ -421,7 +421,7 @@ vi.mock("@/components/bots/bot-activity-page", () => ({
           props.onOpenPost({
             anchorMessageId: "post-1",
             announcement: false,
-            answer: false,
+            anchorKind: null,
             sent: null,
           })
         }
