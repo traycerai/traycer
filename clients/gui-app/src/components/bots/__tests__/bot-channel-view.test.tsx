@@ -1494,7 +1494,7 @@ describe("<BotChannelView /> open thread", () => {
     view.reopen({
       anchorMessageId: "post-a",
       announcement: false,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
 
