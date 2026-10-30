@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -71,6 +72,8 @@ const mocks = vi.hoisted(() => ({
     mediaType: "video/mp4",
   } as EpicReadArtifactObjectResponse,
   probeRequests: [] as unknown[],
+  // Replaces `probeResponse` for a probe that fails or never answers.
+  probeAnswer: null as (() => Promise<EpicReadArtifactObjectResponse>) | null,
   createdUrls: [] as string[],
   revokedUrls: [] as string[],
 }));
@@ -127,11 +130,14 @@ vi.mock("@/hooks/host/use-host-query", async () => {
         queryFn: () => {
           if (isProbe) {
             mocks.probeRequests.push(input.params);
-            return Promise.resolve(mocks.probeResponse);
+            return mocks.probeAnswer === null
+              ? Promise.resolve(mocks.probeResponse)
+              : mocks.probeAnswer();
           }
           mocks.urlRequests.push(input.params);
           return Promise.resolve(mocks.urlResponse);
         },
+        retry: false,
         enabled:
           (isProbe || mocks.hostQuery === null) &&
           input.options.enabled !== false,
@@ -192,6 +198,7 @@ afterEach(() => {
     mediaType: "video/mp4",
   };
   mocks.probeRequests.length = 0;
+  mocks.probeAnswer = null;
   mocks.createdUrls.length = 0;
   mocks.revokedUrls.length = 0;
 });
@@ -715,6 +722,84 @@ describe("<FileArtifactViewer /> media in the native shell", () => {
     );
     expect(bridge.registered).toEqual([]);
     expect(spans).toEqual([]);
+  });
+
+  it.each([
+    [
+      "says it cannot serve the object",
+      () =>
+        Promise.resolve<EpicReadArtifactObjectResponse>({
+          kind: "unavailable",
+          reason: "missing",
+        }),
+    ],
+    ["fails to answer the probe", () => Promise.reject(new Error("socket"))],
+  ])(
+    "plays from the cloud when this machine's host %s",
+    async (_case, probeAnswer) => {
+      const bridge = mediaBridge(false);
+      mocks.runnerHost = nativeHostWith(bridge);
+      mocks.probeAnswer = probeAnswer;
+      const signed = "https://cdn.example.test/clip.mp4?sig=no-byte";
+      mocks.hostQuery = {
+        data: { kind: "url", url: signed, expiresAt: Date.now() + 60_000 },
+        isPending: false,
+        refetch: vi.fn<(...args: unknown[]) => unknown>(),
+      };
+      const { readSpan } = recordedMediaSpans();
+
+      const { container } = renderViewer(
+        "clip.mp4",
+        mediaObject("published", "video/mp4"),
+        readSpan,
+      );
+
+      await waitFor(() =>
+        expect(container.querySelector("video")?.getAttribute("src")).toBe(
+          signed,
+        ),
+      );
+      expect(bridge.registered).toEqual([]);
+    },
+  );
+
+  // A host asked for a sha it does not hold starts the fetch and holds the
+  // reply for up to 3 s; the player must not wait that long on a probe.
+  it("plays from the cloud when this machine's host has not answered the probe within a second", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const bridge = mediaBridge(false);
+      mocks.runnerHost = nativeHostWith(bridge);
+      mocks.probeAnswer = () => new Promise(() => {});
+      const signed = "https://cdn.example.test/clip.mp4?sig=slow-probe";
+      mocks.hostQuery = {
+        data: { kind: "url", url: signed, expiresAt: Date.now() + 60_000 },
+        isPending: false,
+        refetch: vi.fn<(...args: unknown[]) => unknown>(),
+      };
+      const { readSpan } = recordedMediaSpans();
+
+      const { container } = renderViewer(
+        "clip.mp4",
+        mediaObject("published", "video/mp4"),
+        readSpan,
+      );
+
+      act(() => {
+        vi.advanceTimersByTime(900);
+      });
+      expect(container.querySelector("video")).toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+
+      expect(container.querySelector("video")?.getAttribute("src")).toBe(
+        signed,
+      );
+      expect(bridge.registered).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows the player only after the shell has registered the mount", async () => {
