@@ -35,6 +35,7 @@ import {
 import {
   DEFAULT_EPIC_NODE_ICON_COLORS,
   normalizeEpicNodeIconColor,
+  normalizeEpicNodeIconColors,
   type EpicNodeIconColors,
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
@@ -735,8 +736,11 @@ export const useSettingsStore = create<SettingsState>()(
       // rather than as that name. `defaultSelection` is re-derived because
       // nothing writes it after first launch, so a blob saved before
       // `profileId` existed keeps that older shape forever (see
-      // `resolvePersistedDefaultSelection`). Every other field keeps the
-      // default shallow merge behavior.
+      // `resolvePersistedDefaultSelection`). `artifactIconColors` is
+      // re-derived because a blob saved before a node kind existed (html,
+      // canvas, file) has no colour for it, and that kind's glyph would render
+      // untinted forever while every other kind is coloured. Every other field
+      // keeps the default shallow merge behavior.
       merge: (persistedState, currentState) => {
         const persisted: Record<string, unknown> = isRecord(persistedState)
           ? persistedState
@@ -749,6 +753,9 @@ export const useSettingsStore = create<SettingsState>()(
           ),
           defaultSelection: resolvePersistedDefaultSelection(
             persisted.defaultSelection,
+          ),
+          artifactIconColors: normalizeEpicNodeIconColors(
+            persisted.artifactIconColors,
           ),
           showGreeting:
             typeof persisted.showGreeting === "boolean"

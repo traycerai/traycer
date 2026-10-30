@@ -29,6 +29,10 @@ import * as Y from "yjs";
 import type { Awareness } from "y-protocols/awareness";
 import { artifactFolderChain } from "@/lib/artifacts/artifact-folder-chain";
 import {
+  artifactFileViewer,
+  type ArtifactFileViewer,
+} from "@/lib/files/artifact-file-viewer";
+import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
@@ -2913,6 +2917,53 @@ function liveEpicNodeArchivedFromHandle(
     return state.tuiAgents.byId[nodeId].archivedAt !== null;
   }
   return false;
+}
+
+/**
+ * The viewer a file artifact opens in, decided from the same on-disk name and
+ * media type its tile decides from, so the glyph a row shows names what
+ * clicking it does. Null for every other node, and for a file not yet synced.
+ */
+export function useEpicFileArtifactViewer(
+  artifactId: string,
+): ArtifactFileViewer | null {
+  return useEpicStore((s) => fileArtifactViewerFromState(s, artifactId));
+}
+
+/**
+ * Provider-optional counterpart to {@link useEpicFileArtifactViewer} for the
+ * shared tab icon, which also renders in provider-less drag previews: an epic
+ * with no mounted session has no file to read, so the glyph stays the plain
+ * file.
+ */
+export function useRegisteredEpicFileArtifactViewer(
+  epicId: string,
+  artifactId: string,
+): ArtifactFileViewer | null {
+  const registry = getOpenEpicRegistry();
+  const handle = useSyncExternalStore(
+    (listener) => registry.subscribe(listener),
+    () => registry.peek(epicId),
+    () => null,
+  );
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () =>
+      handle === null
+        ? null
+        : fileArtifactViewerFromState(handle.store.getState(), artifactId),
+    () => null,
+  );
+}
+
+function fileArtifactViewerFromState(
+  state: OpenEpicState,
+  artifactId: string,
+): ArtifactFileViewer | null {
+  if (!Object.hasOwn(state.artifacts.byId, artifactId)) return null;
+  const artifact = state.artifacts.byId[artifactId];
+  if (artifact.kind !== "file" || artifact.object === undefined) return null;
+  return artifactFileViewer(artifact.folderName, artifact.object.mediaType);
 }
 
 /**
