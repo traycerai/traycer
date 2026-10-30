@@ -416,7 +416,9 @@ export type HostNotificationEntryV23 = z.infer<
 /**
  * The environments redesign's kinds: `environment.move.stalled`,
  * `environment.apply.failed`, `team.role.changed`, `team.host.returned` and
- * `secret.removed`. The server no longer writes this kind; readers drop it.
+ * `secret.removed`. The server no longer writes these kinds and readers drop
+ * them, except `team.role.changed` — the center's one named exception, which
+ * is written and shown; see its payload schema.
  */
 const environmentMoveStalledEntryArm = lazySchema(() =>
   z.object({
@@ -820,6 +822,12 @@ export function streamCarriesChannelEmissionFrame(
  * carries agent states only. The server no longer writes them, and a read
  * leaves out any row a store still holds. Released contracts already exclude
  * every one, so no released caller's exclusion changes.
+ *
+ * `team.role.changed` is deliberately NOT here. A member is told their own
+ * role moved the way a task's collaborators are told theirs did, so that kind
+ * is read in the center like any other row — and announced nowhere live, which
+ * the clients own (gui-app's `NO_LIVE_ANNOUNCE_NOTIFICATION_KINDS`, mirrored by
+ * the server's own push set).
  */
 export const RETIRED_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] =
   [
@@ -833,7 +841,6 @@ export const RETIRED_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] =
     "team.policy.authority_expired",
     "team.installing_admin.gone",
     "team.plan.unlinked",
-    "team.role.changed",
     "team.host.returned",
     "secret.export.minted",
     "secret.rotated",

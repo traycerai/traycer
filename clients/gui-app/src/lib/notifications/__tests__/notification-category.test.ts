@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ALL_NOTIFICATION_CATEGORIES,
+  categoryForHostNotification,
   categoryForNotificationSource,
   type NotificationCategory,
 } from "@/lib/notifications/notification-category";
@@ -28,6 +29,30 @@ describe("categoryForNotificationSource", () => {
       "task",
     ]);
     expect(ALL_NOTIFICATION_CATEGORIES.size).toBe(3);
+  });
+
+  it("files a role change under Collaboration on both of its lanes", () => {
+    // The task-sharing role change it mirrors is a `global` row, so it is a
+    // Collaboration row; this one arrives as a host or cloud row, whose source
+    // alone would file membership news under Task activity.
+    expect(categoryForHostNotification("host", "team.role.changed")).toBe(
+      "collaboration",
+    );
+    expect(categoryForHostNotification("cloud", "team.role.changed")).toBe(
+      "collaboration",
+    );
+    expect(categoryForNotificationSource("global")).toBe("collaboration");
+  });
+
+  it("leaves every other host and cloud row to its source", () => {
+    for (const source of ["host", "cloud"] as const) {
+      expect(categoryForHostNotification(source, "approval.requested")).toBe(
+        categoryForNotificationSource(source),
+      );
+      expect(
+        categoryForHostNotification(source, "host.operation.finished"),
+      ).toBe(categoryForNotificationSource(source));
+    }
   });
 
   it("covers every category returned by the source map", () => {

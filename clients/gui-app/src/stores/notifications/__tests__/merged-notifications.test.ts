@@ -761,6 +761,33 @@ describe("merged notifications feed", () => {
     });
   });
 
+  it("projects a role change as collaboration, not as its host lane's task", () => {
+    // The row the member is told their own role moved by, which mirrors the
+    // task-sharing role change — a `global`, Collaboration row. Its lane says
+    // task, so the projection has to read the kind for the filter to keep it
+    // under Collaboration.
+    expect(
+      rowFromHostEntry({
+        id: "role-1",
+        updatedAt: 10,
+        readAt: null,
+        kind: "team.role.changed",
+        sourceRef: null,
+        severity: "info",
+        outcome: "completed",
+        epicId: null,
+        chatId: null,
+        payload: {
+          kind: "team_role_changed",
+          environmentId: "env-1",
+          teamName: "Acme",
+          from: "editor",
+          to: "admin",
+        },
+      }),
+    ).toMatchObject({ category: "collaboration", severity: "info" });
+  });
+
   it("routes a parked managed-command delivery back to the chat holding it", () => {
     expect(
       rowFromHostEntry({

@@ -33,6 +33,7 @@ import {
   invalidateNotificationIndicatorsForEntities,
 } from "@/lib/notifications/notification-indicator-cache";
 import {
+  categoryForHostNotification,
   categoryForNotificationSource,
   type NotificationCategory,
 } from "@/lib/notifications/notification-category";
@@ -2105,7 +2106,7 @@ function rowFromHostEntryForOrigin(
     resolvedAt: "resolvedAt" in entry ? (entry.resolvedAt ?? null) : null,
     sourceRef: entry.sourceRef,
     originHostId,
-    category: categoryForNotificationSource("host"),
+    category: categoryForHostNotification("host", entry.kind),
   };
 }
 
@@ -2187,7 +2188,7 @@ export function rowFromCloudFeedRow(
       "resolvedAt" in row.entry ? (row.entry.resolvedAt ?? null) : null,
     sourceRef: row.entry.sourceRef,
     originHostId: row.originHostId,
-    category: categoryForNotificationSource("cloud"),
+    category: categoryForHostNotification("cloud", row.entry.kind),
   };
 }
 
