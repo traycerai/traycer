@@ -22,7 +22,8 @@ export interface ChatBotThreadLine {
  * A message the bot failed to answer, or whose answer is held: why, and what
  * a member can do about it: send it to the bot again as it is, on their own
  * message put its text back in the box to edit and send as a new message
- * that replaces it, and sign in where that is the fix.
+ * that replaces it, sign in where that is the fix, and update the provider's
+ * command-line tool where that is.
  */
 export interface ChatBotFailedRequest {
   /** `failed`: the answer errored; `parked`: it is held and has not started. */
@@ -31,6 +32,15 @@ export interface ChatBotFailedRequest {
   readonly summary: string | null;
   /** Opens the provider's sign-in on the bot's host; `null` unless signing in is the fix. */
   readonly signIn: (() => void) | null;
+  /**
+   * Updates the provider's command-line tool on the bot's host; `null`
+   * unless an out-of-date tool is the fix and that host can update it.
+   */
+  readonly update: (() => void) | null;
+  /** `true` from the press until the host's install of the update settles. */
+  readonly updating: boolean;
+  /** Why the last update did not take; `null` otherwise. */
+  readonly updateFailure: string | null;
   /**
    * Sends it again; `text` is the message's own. `null` where it cannot be
    * sent again: a host that cannot re-deliver, or a message whose text is not
