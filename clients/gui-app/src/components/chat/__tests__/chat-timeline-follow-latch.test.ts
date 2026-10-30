@@ -3360,6 +3360,24 @@ describe("useChatTimelineFollowLatch", () => {
       expect(listRef.scrollToEnd).not.toHaveBeenCalled();
     });
 
+    it("does not follow it when a row was appended below the row the lift read", () => {
+      // The transcript now ends with content this fling was never thrown
+      // at, so the list's last row is no longer the one whose size the lift
+      // recorded, and nothing left reads back what that row did. The
+      // appended row being the same size as the one the lift read is no
+      // answer: it is a different row.
+      const { node, listRef, onFollowIntentChange } = liftedBelowTheEnd(true);
+
+      listRef.setRowTop("appended-row", 1900);
+      listRef.setRowSize("appended-row", 300);
+      shim.setGeometry(node, { scrollTop: 1100, scrollHeight: 2200 });
+      fireResizeObservers();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
     it("control: a reader whose last row the lift did render is not held by its size", () => {
       // The near reader. Their end is tracked by its own block, so a row
       // growing below the tail - the reply streaming on - never reaches
