@@ -5873,6 +5873,24 @@ describe("<HarnessModelPicker />", () => {
       },
     );
 
+    it("the chip draws the request the way Layout's Ultracode style asks", async () => {
+      useLayoutStore
+        .getState()
+        .setRegionValues("model", { ultracodeStyle: "icon" });
+      await openClaudePicker(OFFERING, {
+        withUltracode: true,
+        ultracode: true,
+        carried: true,
+      });
+
+      const chip = screen.getByRole("button", {
+        name: /^Offering Model/,
+        hidden: true,
+      });
+      expect(within(chip).getByTestId("model-ultracode-icon")).toBeDefined();
+      expect(chip.textContent).not.toContain("Ultracode");
+    });
+
     it("a surface that cannot carry the request keeps the row, checked and disabled, with the normal hint", async () => {
       const harness = await openClaudePicker(OFFERING, {
         withUltracode: true,

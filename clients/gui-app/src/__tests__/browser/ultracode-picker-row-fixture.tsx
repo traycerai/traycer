@@ -25,6 +25,7 @@ import { hostQueryKeys } from "@/lib/query-keys";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { useLayoutStore } from "@/stores/layout/layout-store";
 
 /**
  * Drives the public chat picker against a local mock host. The toolbar store
@@ -53,6 +54,13 @@ const CLAUDE_LABEL = params.get("label") === "long" ? LONG_LABEL : "Opus 5.5";
 // The phone toolbar's chip by default; `display=responsive` is the desktop
 // chip inside the composer shell's `@container`, which collapses when narrow.
 const RESPONSIVE = params.get("display") === "responsive";
+// Layout ▸ Model ▸ Ultracode, set the way the editor sets it.
+const ULTRACODE_STYLE = params.get("ultracode");
+if (ULTRACODE_STYLE === "icon" || ULTRACODE_STYLE === "icon-text") {
+  useLayoutStore
+    .getState()
+    .setRegionValues("model", { ultracodeStyle: ULTRACODE_STYLE });
+}
 const EFFORTS = [
   { id: "low", label: "Low", description: null },
   { id: "high", label: "High", description: null },

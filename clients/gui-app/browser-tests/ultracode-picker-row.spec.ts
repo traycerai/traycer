@@ -356,3 +356,28 @@ test("a narrow desktop composer keeps Ultracode beside the harness glyph", async
   expect(await unclipped(text)).toBe(true);
   expect(await inside(text, chip)).toBe(true);
 });
+
+for (const [style, display, width] of [
+  ["icon-text", "", 320],
+  ["icon", "&display=responsive", 400],
+] as const) {
+  test(`the ${style} Ultracode style keeps its mark inside the chip at ${String(width)}px (${display || "model-only"})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 720 });
+    await open(page, `?offered=true&label=long&ultracode=${style}${display}`);
+    const chip = requestedChip(page);
+    const icon = chip.getByTestId("model-ultracode-icon");
+
+    await expect(icon).toBeVisible();
+    expect(await inside(icon, chip)).toBe(true);
+    expect((await box(chip)).right).toBeLessThanOrEqual(width);
+    const text = chip.getByText("Ultracode", { exact: true });
+    if (style === "icon") {
+      await expect(text).toHaveCount(0);
+      return;
+    }
+    expect(await unclipped(text)).toBe(true);
+    expect(await inside(text, chip)).toBe(true);
+  });
+}

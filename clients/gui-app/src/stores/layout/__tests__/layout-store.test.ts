@@ -136,6 +136,7 @@ describe("useLayoutStore", () => {
         effectiveLayoutValues("default", getLayoutSnapshot().overrides).model,
       ).toEqual({
         style: "bars",
+        ultracodeStyle: "text",
         reasoningControl: "slider",
         toolbarStyle: "flat",
       });

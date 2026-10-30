@@ -1,15 +1,22 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UltracodeFooterButton } from "@/components/home/pickers/ultracode-footer-button";
 import { HarnessModelTrigger } from "@/components/home/pickers/harness-model-trigger";
+import type { UltracodeStyle } from "@/lib/layout/layout-values";
 
 /**
  * The picker's Ultracode row: a native switch named by its label, the exact
  * single-line hint, and a disabled switch (with the normal hint) while the
  * model's eligibility is unknown. Nothing here reads a build constant, so the
  * production build, where the global unreleased switch is off, shows the same
- * row. The trigger writes "Ultracode" after the effort only for a requested
- * saved intent.
+ * row. The trigger draws the request after the effort, as Layout ▸ Model ▸
+ * Ultracode asks, only for a requested saved intent.
  */
 
 afterEach(() => {
@@ -117,9 +124,9 @@ describe("<UltracodeFooterButton />", () => {
   });
 });
 
-describe("<HarnessModelTrigger /> Ultracode text", () => {
+describe("<HarnessModelTrigger /> Ultracode mark", () => {
   function renderTrigger(
-    ultracodeRequested: boolean | undefined,
+    ultracode: UltracodeStyle | null,
     labelDisplay: "responsive" | "model-only",
   ) {
     render(
@@ -131,7 +138,7 @@ describe("<HarnessModelTrigger /> Ultracode text", () => {
         reasoningIndicator="text"
         serviceTierLabel={null}
         serviceTierActive={false}
-        ultracodeRequested={ultracodeRequested}
+        ultracode={ultracode}
         profileLabel={null}
         profileAccentDot={null}
         isLoading={false}
@@ -142,29 +149,31 @@ describe("<HarnessModelTrigger /> Ultracode text", () => {
   }
 
   it.each([
-    ["responsive", "ClaudeOpus 5.5·High·Ultracode"],
-    ["model-only", "ClaudeOpus 5.5·Ultracode"],
+    ["text", "responsive", "ClaudeOpus 5.5·High·Ultracode", false],
+    ["text", "model-only", "ClaudeOpus 5.5·Ultracode", false],
+    ["icon", "responsive", "ClaudeOpus 5.5·High·", true],
+    ["icon-text", "responsive", "ClaudeOpus 5.5·High·Ultracode", true],
+    ["icon-text", "model-only", "ClaudeOpus 5.5·Ultracode", true],
   ] as const)(
-    "writes Ultracode after the %s label for a requested intent",
-    (labelDisplay, written) => {
-      renderTrigger(true, labelDisplay);
+    "draws the %s style after the %s label",
+    (style, labelDisplay, written, icon) => {
+      renderTrigger(style, labelDisplay);
       const trigger = screen.getByRole("button");
       expect(trigger.textContent).toBe(written);
+      expect(
+        within(trigger).queryByTestId("model-ultracode-icon") !== null,
+      ).toBe(icon);
       expect(trigger.getAttribute("aria-label")).toBe(
         "Opus 5.5, Thinking High, Ultracode requested",
       );
     },
   );
 
-  it.each([false, undefined])(
-    "writes nothing when the request is %s",
-    (requested) => {
-      renderTrigger(requested, "responsive");
-      const trigger = screen.getByRole("button");
-      expect(trigger.textContent).toBe("ClaudeOpus 5.5·High");
-      expect(trigger.getAttribute("aria-label")).toBe(
-        "Opus 5.5, Thinking High",
-      );
-    },
-  );
+  it("draws nothing without a request", () => {
+    renderTrigger(null, "responsive");
+    const trigger = screen.getByRole("button");
+    expect(trigger.textContent).toBe("ClaudeOpus 5.5·High");
+    expect(within(trigger).queryByTestId("model-ultracode-icon")).toBeNull();
+    expect(trigger.getAttribute("aria-label")).toBe("Opus 5.5, Thinking High");
+  });
 });
