@@ -7,6 +7,7 @@ import type {
 
 export const CANVAS_LOCAL_ORIGIN = Symbol("canvas-local");
 export const LIVE_BOARD_SLOT_BUDGET = 24;
+const LIVE_BOARD_BYTES_PER_SLOT = 40 * 1024;
 /** The selection/board inspector is parked, not removed: the panels stay in
  * the tree behind this flag until the inspector earns its place in the UI. */
 export const CANVAS_INSPECTOR_ENABLED: boolean = false;
@@ -151,7 +152,8 @@ export function selectLiveBoards({
   let used = 0;
   for (const path of candidates) {
     if (!available(path)) continue;
-    const weight = 1 + Math.floor((byteLengths?.[path] ?? 0) / (40 * 1024));
+    const weight =
+      1 + Math.floor((byteLengths?.[path] ?? 0) / LIVE_BOARD_BYTES_PER_SLOT);
     // Even an unusually large board must be viewable when it has priority.
     if (live.size > 0 && used + weight > slotBudget) continue;
     live.add(path);
