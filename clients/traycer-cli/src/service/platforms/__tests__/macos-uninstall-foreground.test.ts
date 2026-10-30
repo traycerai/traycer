@@ -3,7 +3,7 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import { createMacosController, type ProcessRunner } from "../macos";
-import { serviceLabelFor } from "../../label";
+import { serviceLabelFor, smAppServiceAgentLabelId } from "../../label";
 import { hostPidMetadataPath } from "../../../store/paths";
 
 // PIN: `host service uninstall` over a live FOREGROUND run must not refuse on
@@ -23,6 +23,9 @@ import { hostPidMetadataPath } from "../../../store/paths";
 // macOS uninstall has no reason to touch it, and this proves it doesn't.
 describe("macOS service uninstall - foreground-leave field is inert", () => {
   const label = serviceLabelFor("production");
+  const guiDomain = `gui/${process.getuid?.() ?? 0}`;
+  const serviceTarget = `${guiDomain}/${label.id}`;
+  const agentTarget = `${guiDomain}/${smAppServiceAgentLabelId(label)}`;
   const pidMetadataPath = hostPidMetadataPath(label.environment);
   const pidMetadataBytes = JSON.stringify(
     {
@@ -54,16 +57,21 @@ describe("macOS service uninstall - foreground-leave field is inert", () => {
     // `print` until the label is positively gone) before moving on - see
     // `bootoutAndWait` in `macos.ts`. The two ownership-probe `print` calls
     // happen before any bootout and still see the job loaded (exit 0); the
-    // drain-poll `print` after each bootout reports the label gone on its
-    // first call, so the wait never reaches its real budget.
-    let bootedOut = false;
+    // drain-poll `print` after each bootout reports that SAME target's label
+    // gone on its first call, so the wait never reaches its real budget.
+    // Tracked per target, not as one shared flag: a shared flag would also
+    // mask a regression that boots out or polls the wrong label, since any
+    // bootout would make every subsequent print on EITHER target report
+    // gone.
+    const bootedOutTargets = new Set<string>();
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
+      const target = args[1] ?? "";
       if (args[0] === "bootout") {
-        bootedOut = true;
+        bootedOutTargets.add(target);
         return { stdout: "", stderr: "", exitCode: 0 };
       }
-      if (args[0] === "print" && bootedOut) {
+      if (args[0] === "print" && bootedOutTargets.has(target)) {
         return {
           stdout: "",
           stderr: `Could not find service in domain for user gui: 501\n`,
@@ -89,14 +97,18 @@ describe("macOS service uninstall - foreground-leave field is inert", () => {
       expect(call.command).toBe("launchctl");
       expect(["print", "bootout"]).toContain(call.args[0]);
     }
-    const verbs = calls.map((call) => call.args[0]);
-    expect(verbs).toEqual([
-      "print",
-      "print",
-      "bootout",
-      "print",
-      "bootout",
-      "print",
+    // Verb AND target: the uninstall path drains two distinct labels (the
+    // SMAppService agent, then the CLI service), each with its own
+    // ownership probe, bootout and drain-poll - asserting the verb alone
+    // would pass just as well on a regression that booted out or polled the
+    // wrong label.
+    expect(calls.map((call) => [call.args[0], call.args[1]])).toEqual([
+      ["print", serviceTarget],
+      ["print", agentTarget],
+      ["bootout", agentTarget],
+      ["print", agentTarget],
+      ["bootout", serviceTarget],
+      ["print", serviceTarget],
     ]);
 
     // pid.json is untouched: exists, byte-identical to what was there before
