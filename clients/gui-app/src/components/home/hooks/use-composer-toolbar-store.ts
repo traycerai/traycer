@@ -23,6 +23,7 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
 import {
   createComposerToolbarStore,
   type ComposerToolbarStore,
+  type ComposerToolbarStoreState,
   type ComposerToolbarValues,
 } from "@/stores/composer/composer-toolbar-store";
 import { commitSelection } from "@/stores/composer/commit-selection";
@@ -43,6 +44,7 @@ import {
 } from "@/lib/composer/chat-run-settings";
 import { useTeamSandboxHarnessGate } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
 import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
+import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
 import { useStagedSandboxStore } from "@/stores/composer/staged-sandbox-store";
 
 const EMPTY_MODELS: ReadonlyArray<ModelOption> = [];
@@ -94,6 +96,12 @@ export interface ComposerToolbarCatalogScope {
    * shows that pick rather than swapping it for one this host can run.
    */
   readonly stagedSurfaceKey: string | null;
+  /**
+   * Whether this composer's send wakes the resting sandbox its chat is bound
+   * to. The send runs there, not on `hostId`, so the toolbar keeps the chat's
+   * own pick, as it does for a staged sandbox.
+   */
+  readonly sendsToRestingSandbox: boolean;
 }
 
 /**
@@ -148,6 +156,7 @@ export function useComposerToolbarStore(
     tuiOnly,
     chatLineCarriesAutoMode,
     stagedSurfaceKey,
+    sendsToRestingSandbox,
   } = catalog;
   const activityEnabled = useSurfaceActivity();
   const defaultPermission = useSettingsStore((s) => s.defaultPermission);
@@ -251,19 +260,21 @@ export function useComposerToolbarStore(
   // (availability rerouting included); `modelsHarnessId` rides along so a
   // stale response can never resolve a slug for the wrong harness.
   const harnessId = useStore(store, (s) => s.selection.harnessId);
+  const staged = useStagedSandboxStore(
+    (s) =>
+      stagedSurfaceKey !== null && s.bySurface[stagedSurfaceKey] !== undefined,
+  );
+  const sandboxRunTarget = sandboxRunTargetOf(staged, sendsToRestingSandbox);
   const harnessesQuery = useGuiHarnessesQueryForClient(hostClient, {
     enabled: activityEnabled,
     subscribed: activityEnabled,
   });
-  const modelsQuery = useGuiHarnessModelsQueryForClient(
+  const modelsData = useToolbarModelsData({
     hostClient,
     harnessId,
-    null,
-    {
-      enabled: activityEnabled,
-      subscribed: activityEnabled,
-    },
-  );
+    activityEnabled,
+    cloudTraycer: sandboxRunTarget !== null && harnessId === "traycer",
+  });
   // Read the cache regardless of `activityEnabled`. The gate above already does
   // the whole job it exists for - an inactive surface fetches nothing and holds
   // no observer - and `enabled:false` does not evict what is already cached.
@@ -274,18 +285,17 @@ export function useComposerToolbarStore(
   // was invisible while an inactive surface was also a hidden one, and became a
   // visible defect with split panes, where the unfocused pane stays on screen.
   const harnesses = harnessesQuery.data?.harnesses;
-  const models = modelsQuery.data?.models ?? EMPTY_MODELS;
+  const models = modelsData ?? EMPTY_MODELS;
   // Explicit load status for the CURRENT `harnessId`'s models query, threaded to
   // the store so it can tell "loading" from "loaded empty" (the query is keyed
   // on `harnessId`, so `data` resets to undefined during a cross-harness switch
   // until the new harness's models land). Never inferred from `models.length`.
-  const modelsLoaded = modelsQuery.data !== undefined;
-  const staged = useStagedSandboxStore(
-    (s) =>
-      stagedSurfaceKey !== null && s.bySurface[stagedSurfaceKey] !== undefined,
-  );
+  const modelsLoaded = modelsData !== undefined;
   const keepsUnavailablePick =
-    useSandboxHostConfiguration(hostId) !== null || staged;
+    useSandboxHostConfiguration(hostId) !== null || sandboxRunTarget !== null;
+  useEffect(() => {
+    store.setState({ sandboxRunTarget });
+  }, [store, sandboxRunTarget]);
   useEffect(() => {
     store.getState().setCatalog({
       hostId,
@@ -351,6 +361,40 @@ interface ComposerToolbarDefaults {
   readonly selection: HarnessModelSelection;
   readonly reasoning: ReasoningLevel;
   readonly serviceTier: ServiceTier;
+}
+
+/**
+ * The models the store resolves its slug against, `undefined` until they
+ * load. A Traycer pick sent to a sandbox lists the cloud catalog's: the host
+ * this store reads may have Traycer off, or be the resting sandbox itself,
+ * and neither says what the sandbox runs.
+ */
+function useToolbarModelsData(input: {
+  readonly hostClient: HostClient<HostRpcRegistry> | null;
+  readonly harnessId: ProviderId;
+  readonly activityEnabled: boolean;
+  readonly cloudTraycer: boolean;
+}): ReadonlyArray<ModelOption> | undefined {
+  const { hostClient, harnessId, activityEnabled, cloudTraycer } = input;
+  const hostActive = activityEnabled && !cloudTraycer;
+  const modelsQuery = useGuiHarnessModelsQueryForClient(
+    hostClient,
+    harnessId,
+    null,
+    { enabled: hostActive, subscribed: hostActive },
+  );
+  const cloudModelsQuery = useSandboxTraycerModels(
+    activityEnabled && cloudTraycer,
+  );
+  return cloudTraycer ? cloudModelsQuery.data : modelsQuery.data?.models;
+}
+
+function sandboxRunTargetOf(
+  staged: boolean,
+  sendsToRestingSandbox: boolean,
+): ComposerToolbarStoreState["sandboxRunTarget"] {
+  if (sendsToRestingSandbox) return "resting";
+  return staged ? "staged" : null;
 }
 
 function chatRunSettingsSeedKey(settingsSeed: ChatRunSettings | null): string {

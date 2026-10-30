@@ -1,3 +1,4 @@
+import { format } from "node:util";
 import type { CliErrorCode } from "./errors";
 import type { RuntimeContext } from "./runtime";
 import { writeStderr, writeStdout } from "./std-write";
@@ -125,6 +126,22 @@ function writeStdoutLine(line: string): void {
 
 function writeStderrLine(line: string): void {
   writeStderr(`${line}\n`);
+}
+
+// In JSON mode every stdout line is one NDJSON event, but the shared client
+// libraries the CLI bundles log diagnostics through `console.log` /
+// `console.info` / `console.debug` - the stream transport announces every
+// close that way - and Node writes those to stdout, between the events. The
+// CLI itself never writes through `console`, so in JSON mode those three go
+// to stderr instead, where the diagnostics stay readable and the stream stays
+// parseable.
+export function keepConsoleOffStdout(): void {
+  const toStderr = (...args: unknown[]): void => {
+    writeStderrLine(format(...args));
+  };
+  console.log = toStderr;
+  console.info = toStderr;
+  console.debug = toStderr;
 }
 
 // Renders a single-line progress bar for a percent-bearing tick, e.g.

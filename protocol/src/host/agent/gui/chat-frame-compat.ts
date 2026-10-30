@@ -44,20 +44,36 @@ import type { ChatSubscribeClientFrame } from "@traycer/protocol/host/agent/gui/
  */
 const CHAT_SUBSCRIBE_DRAFT_IMAGE_CAUSE_MINOR = 12;
 
+/**
+ * The minor that added the typed `steerRestartReasons` to a rejected
+ * `QUEUE_STEER_RESTART_UNCONFIRMED` acknowledgement. A host refuses an
+ * unconfirmed restart only for a peer on this line, so a lower peer never
+ * receives that code; the reasons are stripped for it all the same.
+ */
+export const CHAT_SUBSCRIBE_STEER_RESTART_CONFIRM_MINOR = 40;
+
 export function projectChatActionAckForVersion(
   frame: ProjectedChatSubscribeServerFrame,
   negotiated: SchemaVersion | null,
 ): ProjectedChatSubscribeServerFrame {
   if (frame.kind !== "actionAck") return frame;
+  const minor =
+    negotiated !== null && negotiated.major === 1 ? negotiated.minor : null;
+  let projected = frame;
   if (
-    negotiated !== null &&
-    negotiated.major === 1 &&
-    negotiated.minor >= CHAT_SUBSCRIBE_DRAFT_IMAGE_CAUSE_MINOR
+    (minor === null || minor < CHAT_SUBSCRIBE_STEER_RESTART_CONFIRM_MINOR) &&
+    "steerRestartReasons" in projected
   ) {
-    return frame;
+    const { steerRestartReasons: _reasons, ...rest } = projected;
+    projected = rest;
   }
-  if (!("cause" in frame)) return frame;
-  const { cause: _cause, ...projected } = frame;
+  if (
+    (minor === null || minor < CHAT_SUBSCRIBE_DRAFT_IMAGE_CAUSE_MINOR) &&
+    "cause" in projected
+  ) {
+    const { cause: _cause, ...rest } = projected;
+    projected = rest;
+  }
   return projected;
 }
 
@@ -1590,6 +1606,13 @@ export const CHAT_SUBSCRIBE_HTML_ARTIFACTS_MINOR = 30;
 
 /** Older peers receive the tool row without its inline artifact stamp. */
 export const CHAT_SUBSCRIBE_ARTIFACT_STAMP_MINOR = 31;
+
+/**
+ * Older peers receive a bot's send without the post it wrote
+ * (`tool_call.botSendReceipt`, Tracy Bots T94). It rides the unreleased
+ * `1.40`; the host deletes the key below it.
+ */
+export const CHAT_SUBSCRIBE_BOT_SEND_RECEIPT_MINOR = 40;
 
 /** Older peers receive accumulated changes without new-kind artifact tags. */
 export const CHAT_SUBSCRIBE_CHECKPOINT_ARTIFACT_KINDS_MINOR = 33;

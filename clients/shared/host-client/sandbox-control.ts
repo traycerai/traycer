@@ -24,6 +24,11 @@ import {
   type SandboxVerbGesture,
   type UserSandboxCost,
 } from "@traycer/protocol/host/sandbox-control";
+import {
+  agentReasoningEffortOptionSchema,
+  type GuiAgentModelOption,
+} from "@traycer/protocol/host/agent/gui/unary-schemas";
+import { z } from "zod";
 import { composeRequestAbort } from "../auth/request-abort";
 
 /**
@@ -103,6 +108,13 @@ export type SandboxListFetchResult =
 
 export type SandboxCatalogueFetchResult =
   | { readonly kind: "ok"; readonly catalogue: SandboxCatalogue }
+  | SandboxControlFailure;
+
+export type TraycerModelsFetchResult =
+  | {
+      readonly kind: "ok";
+      readonly models: ReadonlyArray<GuiAgentModelOption>;
+    }
   | SandboxControlFailure;
 
 export type SandboxCostsFetchResult =
@@ -346,6 +358,115 @@ export async function fetchSandboxCatalogueViaHttp(
     };
   }
   return { kind: "ok", catalogue: parsed.data };
+}
+
+/** The keys of a Traycer catalog row the picker shows; the rest are the server's. */
+const traycerCatalogModelSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1).nullish(),
+  description: z.string().nullish(),
+  provider: z.string().min(1).nullish(),
+  contextWindow: z.number().nullish(),
+  maxOutputTokens: z.number().nullish(),
+  supportsImages: z.boolean().nullish(),
+  defaultReasoningEffort: z.string().nullish(),
+  supportedReasoningEfforts: z
+    .array(agentReasoningEffortOptionSchema)
+    .nullish(),
+  deprecationNotice: z.string().nullish(),
+});
+type TraycerCatalogModel = z.infer<typeof traycerCatalogModelSchema>;
+
+/**
+ * The catalog names its upstream by id alone. A group header never prefixes
+ * its models' names (the picker strips it from them), so gemini's is its
+ * vendor; an unknown id is title-cased.
+ */
+const TRAYCER_PROVIDER_LABELS: Readonly<Record<string, string>> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  xai: "xAI",
+  meta: "Meta",
+  openrouter: "OpenRouter",
+  gemini: "Google",
+};
+
+function traycerProviderLabel(provider: string): string {
+  return (
+    TRAYCER_PROVIDER_LABELS[provider] ??
+    provider
+      .split(/[-_]/)
+      .filter((part) => part.length > 0)
+      .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+      .join(" ")
+  );
+}
+
+/** A catalog row as the Traycer harness lists it, under the same slug. */
+function traycerModelOption(model: TraycerCatalogModel): GuiAgentModelOption {
+  const provider = model.provider ?? null;
+  return {
+    harnessId: "traycer",
+    slug: `traycer:${model.id}`,
+    label: model.name ?? model.id,
+    description: model.description ?? null,
+    contextWindow: model.contextWindow ?? null,
+    maxOutputTokens: model.maxOutputTokens ?? null,
+    defaultReasoningEffort: model.defaultReasoningEffort ?? null,
+    supportedReasoningEfforts: model.supportedReasoningEfforts ?? [],
+    defaultServiceTier: null,
+    supportedServiceTiers: [],
+    deprecationNotice: model.deprecationNotice ?? null,
+    metadata: {
+      ...(provider === null
+        ? {}
+        : {
+            openCodeProviderId: provider,
+            openCodeProviderLabel: traycerProviderLabel(provider),
+          }),
+      ...(model.supportsImages === true
+        ? { supportsImages: true, inputModalities: ["text", "image"] }
+        : {}),
+    },
+  };
+}
+
+/**
+ * `GET /api/traycer/models`: the cloud's Traycer Inference catalog, for a
+ * sandbox's model picker - the person's own host may have Traycer off, and a
+ * sandbox's host answers nothing while it rests. No `nativeProviders` is
+ * sent, so the server lists only the models every host runs, and every row
+ * runs on a sandbox. A row this build cannot read is left out; a body that is
+ * not a list is a contract failure.
+ */
+export async function fetchTraycerModelsViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+  proxyToken: string | null,
+): Promise<TraycerModelsFetchResult> {
+  const base = serverBaseUrl.endsWith("/")
+    ? serverBaseUrl
+    : `${serverBaseUrl}/`;
+  const raw = await call(
+    new URL("api/traycer/models", base).toString(),
+    { method: "GET", body: null, timeoutMs: SANDBOX_CONTROL_FETCH_TIMEOUT_MS },
+    bearerToken,
+    proxyToken,
+  );
+  if (raw.kind === "network-error") return raw;
+  if (!isSuccess(raw.status)) return failureOf(raw.status, raw.body);
+  if (!Array.isArray(raw.body)) {
+    return {
+      kind: "network-error",
+      detail: "the Traycer model catalog did not match the contract",
+    };
+  }
+  const models: GuiAgentModelOption[] = [];
+  for (const entry of raw.body) {
+    const parsed = traycerCatalogModelSchema.safeParse(entry);
+    if (parsed.success) models.push(traycerModelOption(parsed.data));
+  }
+  return { kind: "ok", models };
 }
 
 /**

@@ -1,9 +1,9 @@
 /**
  * The REAL `useBotUpdateRunSettingsMutation` over a real `HostClient` and
  * `QueryClient`: a run-settings write that the host accepts invalidates the
- * cached `bot.list` of every host, not only the one the write went through, so
- * the bot settings panel re-renders from the row the host now holds (`bot-settings-panel-reseed.test.tsx` pins what the panel
- * does with it).
+ * cached `bot.list` of every host, not only the one the write went through.
+ * What the panel does with a new row is pinned separately in
+ * `bot-settings-panel-reseed.test.tsx`.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";

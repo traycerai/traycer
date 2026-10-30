@@ -15,7 +15,7 @@
   "type": "module",
   "scripts": {
     "traycer": "bun run src/index.ts",
-    "compile": "tsgo --noEmit --singleThreaded --incremental --tsBuildInfoFile node_modules/.tmp/compile.tsbuildinfo",
+    "compile": "node ../../scripts/tsrs.mjs --noEmit --singleThreaded --incremental --tsBuildInfoFile node_modules/.tmp/compile.tsbuildinfo",
     "format": "oxfmt .",
     "format:check": "oxfmt --check .",
     "lint": "bun run lint:files .",

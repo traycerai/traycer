@@ -12,7 +12,7 @@
 // `host-update-ack.ts` re-exports everything below, so no existing importer
 // moves. NOTHING HERE MAY IMPORT `node:` - a pin below reads this file's own
 // source and enforces it, because the failure it prevents is invisible to
-// both `tsgo` and a vitest run under node: the renderer type-checks, the unit
+// both `tsrs` and a vitest run under node: the renderer type-checks, the unit
 // suite passes, and the production bundle is what breaks.
 
 /**

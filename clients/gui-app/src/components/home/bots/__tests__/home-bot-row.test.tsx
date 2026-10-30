@@ -12,6 +12,7 @@ import type {
   BotActivity,
   BotRecord,
   BotSessionActivity,
+  BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
 
@@ -82,6 +83,8 @@ function snapshotWith(activity: BotActivity | null): BotSubscriptionSnapshot {
     openRequestCount: 0,
     conversationsRevision: null,
     notificationSubscriptions: null,
+    surfaceActions: null,
+    stoppedNotificationWatches: null,
     boundHost: { hostId: OWN, epoch: 1, isThisHost: false },
     activity,
   };
@@ -157,7 +160,6 @@ function mountRow(input: Mount): void {
         environmentOwnerKind={input.environmentOwnerKind}
         createdBy={input.createdBy}
         isMain={input.isMain}
-        entryLocked={false}
       />
     </StrictMode>,
   );
@@ -336,6 +338,8 @@ describe("<HomeBotRow /> state", () => {
       openRequestCount: 0,
       conversationsRevision: null,
       notificationSubscriptions: null,
+      surfaceActions: null,
+      stoppedNotificationWatches: null,
       boundHost: { hostId: null, epoch: 2, isThisHost: false },
       activity: null,
     };
@@ -464,5 +468,44 @@ describe("<HomeBotRow /> main bot", () => {
     mountRow(OWN_AND_DIALABLE);
 
     expect(screen.queryByRole("img", { name: "Main bot" })).toBeNull();
+  });
+});
+
+describe("<HomeBotRow /> tasks", () => {
+  const TASK: BotTaskEntry = {
+    taskId: "task-1",
+    cadence: { kind: "every", seconds: 21_600 },
+    lastCheckinAt: null,
+    lastCheckin: null,
+    nextAt: null,
+    state: "tracking",
+    endedReason: null,
+    createdByUserId: null,
+    spun: true,
+    label: null,
+    originRequestId: null,
+    createdByChatId: null,
+    checkins: null,
+    inputNeeded: null,
+    pause: null,
+    stop: null,
+    runRequest: null,
+  };
+
+  it("counts the tasks the bot spun and says nothing of check-ins", () => {
+    mocks.state.snapshot = {
+      ...snapshotWith({ trunk: IDLE, threads: {} }),
+      tasks: [
+        TASK,
+        { ...TASK, taskId: "task-2" },
+        { ...TASK, taskId: "task-3", spun: false },
+      ],
+    };
+    mountRow(OWN_AND_DIALABLE);
+
+    expect(screen.getByTestId("home-bot-tasks").textContent).toBe("2 tasks");
+    expect(screen.getByTestId("home-bot-row").textContent).not.toContain(
+      "check-in",
+    );
   });
 });

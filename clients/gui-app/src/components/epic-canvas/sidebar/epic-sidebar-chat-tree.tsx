@@ -30,6 +30,10 @@ import {
 } from "@/components/epic-canvas/sidebar/task-host-groups-model";
 import { useHostRefusesEpicStore } from "@/hooks/chats/use-host-refuses-epic-store";
 import { useOwnerSandboxOpensLive } from "@/hooks/chats/use-owner-sandbox-opens-live";
+import {
+  TaskHostsViewContext,
+  useChatSandboxRowLine,
+} from "@/hooks/sandboxes/use-chat-sandbox-row-line";
 import { settleDetachedEpicMutation } from "@/lib/artifacts/detached-epic-mutation";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { chatOpensPublishedCopy } from "@/lib/chats/chat-open-tile-ref";
@@ -163,6 +167,7 @@ import {
   useEpicAgentActivityTiers,
   type AgentActivityTier,
   useEpicChatIds,
+  useEpicChatIdsNamedByCloudRows,
   useEpicConnectionStatus,
   useEpicNodeArchived,
   useEpicNodeUpdatedAt,
@@ -880,24 +885,6 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       tree,
     );
   }, [baseArchiveHiddenIds, revealRequest, tree]);
-
-  // Two independent narrowings, kept separate on purpose. `filterRootIds` is
-  // the interface/ownership filter result and feeds the "no matches" empty
-  // state and forced expansion; `rootIds` additionally drops archived roots
-  // and is what actually renders. Collapsing them would make an all-archived
-  // tree show the filter-empty state instead of the archived one, blaming a
-  // filter that is not hiding anything.
-  const rootIds = useMemo(
-    () =>
-      archiveHiddenIds.size === 0
-        ? filterRootIds
-        : filterRootIds.filter((id) => !archiveHiddenIds.has(id)),
-    [filterRootIds, archiveHiddenIds],
-  );
-  const visibleIds = useMemo(
-    () => combineSidebarVisibleIds(revealVisibleIds, archiveHiddenIds, tree),
-    [revealVisibleIds, archiveHiddenIds, tree],
-  );
   // Resolved once here and threaded down, matching how this body already
   // handles every other epic-level fact.
   const localChatIds = useEpicChatIds();
@@ -999,6 +986,38 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     revealRequest,
     unfoldedCloudChats,
   ]);
+  // A team host's chat is held as its creator's untitled stand-in until it
+  // first publishes, while the environment arm already serves it, titled, as
+  // a cloud row. Once that row is among the cloud rows this list renders it
+  // is the chat's one row - the list this tree shows anyway once the stand-in
+  // retires - so the stand-in is left out beside the archive-hidden rows
+  // rather than drawn as a second agent. Until then the stand-in stays.
+  const armStandInIds = useEpicChatIdsNamedByCloudRows(visibleCloudChats);
+  const hiddenIds = useMemo(
+    () =>
+      armStandInIds.length === 0
+        ? archiveHiddenIds
+        : new Set([...archiveHiddenIds, ...armStandInIds]),
+    [archiveHiddenIds, armStandInIds],
+  );
+
+  // Two independent narrowings, kept separate on purpose. `filterRootIds` is
+  // the interface/ownership filter result and feeds the "no matches" empty
+  // state and forced expansion; `rootIds` additionally drops archived roots
+  // and is what actually renders. Collapsing them would make an all-archived
+  // tree show the filter-empty state instead of the archived one, blaming a
+  // filter that is not hiding anything.
+  const rootIds = useMemo(
+    () =>
+      hiddenIds.size === 0
+        ? filterRootIds
+        : filterRootIds.filter((id) => !hiddenIds.has(id)),
+    [filterRootIds, hiddenIds],
+  );
+  const visibleIds = useMemo(
+    () => combineSidebarVisibleIds(revealVisibleIds, hiddenIds, tree),
+    [revealVisibleIds, hiddenIds, tree],
+  );
   const activeArtifactId = useActiveEpicArtifactId(tabId);
   const permissionRole = useEpicPermissionRole();
   const connectionStatus = useEpicConnectionStatus();
@@ -1247,10 +1266,10 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
     if (narrowedMatchIds === null) return 0;
     let localMatches = 0;
     for (const id of narrowedMatchIds) {
-      if (!archiveHiddenIds.has(id)) localMatches += 1;
+      if (!hiddenIds.has(id)) localMatches += 1;
     }
     return localMatches + visibleCloudChats.length;
-  }, [narrowedMatchIds, archiveHiddenIds, visibleCloudChats]);
+  }, [narrowedMatchIds, hiddenIds, visibleCloudChats]);
   // "No agents yet" is now a statement about the TASK rather than this device,
   // so a task whose only agents live on an unreachable host is not empty - it
   // is a list of locked rows. That is the whole restoration.
@@ -1467,38 +1486,40 @@ export function ChatTreePanelBody(props: ChatTreePanelBodyProps) {
       <NotificationIndicatorSnapshot onChange={setNotificationIndicators} />
       <SidebarChatSharingContext.Provider value={chatSharingValue}>
         <TaskHostReachContext value={unreachableHostIds}>
-          <SidebarViewerContext.Provider value={isViewer}>
-            <SidebarSortContext.Provider value={comparator}>
-              <SidebarSortClockContext.Provider value={sortClock}>
-                <SidebarFilterVisibilityContext.Provider value={visibleIds}>
-                  {searchOpen &&
-                  !selectionMode &&
-                  surfaceSearchQuery === null ? (
-                    <ChatSearchHeaderInput
-                      tabId={tabId}
-                      resultCount={searchResultCount}
-                    />
-                  ) : null}
-                  {/* One clock for the tree's rows, owner cards and name labels
+          <TaskHostsViewContext value={taskHostsView}>
+            <SidebarViewerContext.Provider value={isViewer}>
+              <SidebarSortContext.Provider value={comparator}>
+                <SidebarSortClockContext.Provider value={sortClock}>
+                  <SidebarFilterVisibilityContext.Provider value={visibleIds}>
+                    {searchOpen &&
+                    !selectionMode &&
+                    surfaceSearchQuery === null ? (
+                      <ChatSearchHeaderInput
+                        tabId={tabId}
+                        resultCount={searchResultCount}
+                      />
+                    ) : null}
+                    {/* One clock for the tree's rows, owner cards and name labels
                     alike: the first waits, the next row's opens at once. */}
-                  <HoverCardGroup>
-                    <SidebarContent>
-                      <SidebarGroup className="min-h-0 flex-1">
-                        <SidebarGroupContent
-                          ref={treeRegionRef}
-                          className="flex min-h-0 flex-1 flex-col"
-                          data-testid="epic-chat-tree-region"
-                        >
-                          {panelContent}
-                          {messageHits.node}
-                        </SidebarGroupContent>
-                      </SidebarGroup>
-                    </SidebarContent>
-                  </HoverCardGroup>
-                </SidebarFilterVisibilityContext.Provider>
-              </SidebarSortClockContext.Provider>
-            </SidebarSortContext.Provider>
-          </SidebarViewerContext.Provider>
+                    <HoverCardGroup>
+                      <SidebarContent>
+                        <SidebarGroup className="min-h-0 flex-1">
+                          <SidebarGroupContent
+                            ref={treeRegionRef}
+                            className="flex min-h-0 flex-1 flex-col"
+                            data-testid="epic-chat-tree-region"
+                          >
+                            {panelContent}
+                            {messageHits.node}
+                          </SidebarGroupContent>
+                        </SidebarGroup>
+                      </SidebarContent>
+                    </HoverCardGroup>
+                  </SidebarFilterVisibilityContext.Provider>
+                </SidebarSortClockContext.Provider>
+              </SidebarSortContext.Provider>
+            </SidebarViewerContext.Provider>
+          </TaskHostsViewContext>
         </TaskHostReachContext>
       </SidebarChatSharingContext.Provider>
     </ChatIndicatorHostScopes>
@@ -2894,8 +2915,10 @@ interface ChatRowButtonProps {
  */
 function describeOfflineLockForAria(
   lock: OfflineRowLock | null,
+  sandboxLine: string | null,
 ): string | null {
   if (lock === null) return null;
+  if (sandboxLine !== null) return sandboxLine;
   if (lock.reason === "host-older-than-data") {
     return `on ${lock.hostLabel}, needs a host update, opens read-only`;
   }
@@ -2960,6 +2983,8 @@ function chatRowAriaLabel(input: {
   readonly isArchived: boolean;
   readonly sharedWithTask: boolean;
   readonly offlineLock: OfflineRowLock | null;
+  /** The owner sandbox's line, which replaces the offline wording. */
+  readonly sandboxLine: string | null;
   readonly ownerNotReachable: boolean;
   readonly sessionState: AgentSessionState | null;
 }): string {
@@ -2967,7 +2992,7 @@ function chatRowAriaLabel(input: {
     input.isArchived ? "archived" : null,
     describeSessionStateForAria(input.sessionState, input.isArchived, true),
     input.sharedWithTask ? "shared with task" : null,
-    describeOfflineLockForAria(input.offlineLock),
+    describeOfflineLockForAria(input.offlineLock, input.sandboxLine),
     input.ownerNotReachable ? TASK_HOST_UNREACHABLE_LINE : null,
   ]
     .filter((part): part is string => part !== null)
@@ -3010,8 +3035,21 @@ type OfflineRowLock = {
   readonly reason: "owner-offline" | "host-older-than-data";
 };
 
-/** The tooltip for {@link OfflineRowLock}, in that promise's own words. */
-function offlineRowLockTooltip(lock: OfflineRowLock): string {
+/** Whether a lock opens a chat's published copy because its owner is out. */
+function opensCopyWhileOwnerOffline(lock: OfflineRowLock | null): boolean {
+  return lock?.access === "published-copy" && lock.reason === "owner-offline";
+}
+
+/**
+ * The tooltip for {@link OfflineRowLock}, in that promise's own words. A
+ * sandbox owner says its own line instead of "offline".
+ */
+function offlineRowLockTooltip(
+  lock: OfflineRowLock,
+  sandboxLine: string | null,
+): string {
+  if (sandboxLine !== null)
+    return `${sandboxLine} Opens read-only from the last published copy.`;
   if (lock.reason === "host-older-than-data") {
     return `Lives on ${lock.hostLabel}, which needs a host update to read this agent. Opens read-only from the last published copy.`;
   }
@@ -3227,6 +3265,10 @@ function ChatRowButton(props: ChatRowButtonProps) {
     ownerRefusesStore,
     rowOwnerUserId,
   ]);
+  const sandboxLine = useChatSandboxRowLine(
+    ownerHostId,
+    opensCopyWhileOwnerOffline(offlineLock),
+  );
   const dragData = useMemo<EpicCanvasSidebarNodeDragData | null>(
     () =>
       sourceHostId === null
@@ -3368,6 +3410,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
         isArchived,
         sharedWithTask: showSharedIndicator,
         offlineLock,
+        sandboxLine,
         ownerNotReachable,
         sessionState: sessionFacet.sessionState,
       })}
@@ -3421,7 +3464,7 @@ function ChatRowButton(props: ChatRowButtonProps) {
             ) : null}
             {offlineLock !== null ? (
               <LazySidebarTooltipWrapper
-                label={offlineRowLockTooltip(offlineLock)}
+                label={offlineRowLockTooltip(offlineLock, sandboxLine)}
                 side={popoverSide}
                 sideOffset={undefined}
                 align={placement?.align}

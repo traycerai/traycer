@@ -24,6 +24,8 @@ import type { RetainingChatServingWitness } from "@/lib/chats/pool-chat-serving-
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { publishedChatTileId } from "@/stores/epics/canvas/tile-schema/published-chat-tile";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import type { TaskHostsView } from "@/hooks/epic/use-task-hosts-view";
+import { TaskHostsViewContext } from "@/hooks/sandboxes/use-chat-sandbox-row-line";
 
 /**
  * The row's HOST SCOPE, pinned.
@@ -152,6 +154,22 @@ const CHAT: CloudChatSummary = {
   isOwnedByViewer: true,
 };
 
+/** The task's hosts as the Agents panel reads them: host-b, by its label. */
+function taskHosts(label: string | null): TaskHostsView {
+  return {
+    kind: "hosts",
+    hosts: [
+      {
+        hostId: "host-b",
+        label,
+        principal: { kind: "user", id: "user-1" },
+        reach: "same_principal",
+        sandboxEnd: null,
+      },
+    ],
+  };
+}
+
 /**
  * The `openTile` seam mock runs synchronously, so clicking a row reaches it
  * with the intent the row built.
@@ -182,21 +200,54 @@ describe("EpicSidebarCloudChatRow", () => {
     // Hosts are a property of the row now, and so is being locked. An
     // `aria-label` on the glyph inside a labelled button never surfaces, and the
     // tooltip beside it is hover-only, so the state has to reach the name the
-    // row announces or it reaches nobody.
+    // row announces or it reaches nobody. The task's hosts name host-b as a
+    // person's machine, as the Agents panel provides them.
     render(
-      <EpicSidebarCloudChatRow
-        chat={CHAT}
-        childEntries={NO_CHILDREN}
-        expansion={LEAF_EXPANSION}
-        tabId="tab-1"
-        depth={0}
-        selectionMode={false}
-      />,
+      <TaskHostsViewContext value={taskHosts(null)}>
+        <EpicSidebarCloudChatRow
+          chat={CHAT}
+          childEntries={NO_CHILDREN}
+          expansion={LEAF_EXPANSION}
+          tabId="tab-1"
+          depth={0}
+          selectionMode={false}
+        />
+      </TaskHostsViewContext>,
     );
     expect(
       screen.getByRole("button", {
         name: "Walkthrough — On Tanveer's laptop, offline",
       }),
+    ).toBeTruthy();
+  });
+
+  it.each([
+    [
+      "a sandbox the task names",
+      taskHosts("e2e-sbx-p1"),
+      "e2e-sbx-p1 isn't available — this chat stays readable.",
+    ],
+    [
+      "a host nothing names as a sandbox, as an ordinary offline host",
+      { kind: "none" } as const,
+      "On Tanveer's laptop, offline",
+    ],
+  ])("says the lock for %s", (_case, view, line) => {
+    render(
+      <TaskHostsViewContext value={view}>
+        <EpicSidebarCloudChatRow
+          chat={CHAT}
+          childEntries={NO_CHILDREN}
+          expansion={LEAF_EXPANSION}
+          tabId="tab-1"
+          depth={0}
+          selectionMode={false}
+        />
+      </TaskHostsViewContext>,
+    );
+
+    expect(
+      screen.getByRole("button", { name: `Walkthrough — ${line}` }),
     ).toBeTruthy();
   });
 

@@ -84,6 +84,7 @@ const handlers = {
   "environment.configuration.skills.list": () => ({
     outcome: "listed" as const,
     revision: null,
+    policyRevision: null,
     skills: [
       {
         name: "review",
@@ -91,8 +92,13 @@ const handlers = {
         origin: "room" as const,
         edited: false,
         offFor: [],
+        policy: "evolve" as const,
+        version: null,
+        updateAvailable: false,
+        upstream: null,
       },
     ],
+    deletedBundled: [],
   }),
   "environment.configuration.skills.remove": () => ({
     outcome: "removed" as const,
@@ -113,7 +119,7 @@ function negotiateEverywhere(): void {
       "environment.configuration.mcpServers.list": V10,
       "environment.configuration.mcpServers.delete": V10,
       "environment.configuration.mcpServers.setEnabled": V10,
-      "environment.configuration.skills.list": V10,
+      "environment.configuration.skills.list": { major: 1, minor: 1 },
       "environment.configuration.skills.remove": V10,
     });
   }

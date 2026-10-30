@@ -45,7 +45,6 @@ export function makeMergedNotificationRow(
     resolvedAt: null,
     sourceRef: null,
     originHostId: null,
-    providerPackAttribution: null,
     category: categoryForNotificationSource(source),
     ...overrides,
   };

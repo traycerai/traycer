@@ -4,11 +4,10 @@ import type {
 } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IncompatibilityUpgradeGuidance } from "@traycer/protocol/framework/index";
-import {
-  resolvedHostLabel,
-  type HostReachability,
-  type HostReachabilityHostKind,
-  type HostReachabilityStatus,
+import type {
+  HostReachability,
+  HostReachabilityHostKind,
+  HostReachabilityStatus,
 } from "@/hooks/agent/use-host-reachability";
 import {
   fatalRemedyIsHostUpdate,
@@ -150,6 +149,11 @@ export interface ChatTilePreContentFrame {
   readonly cloneAllowed: boolean;
   /** See `ChatPreContentInput.hasReadySession`. */
   readonly hasReadySession: boolean;
+  /**
+   * A resting or unreachable sandbox's footer under the tile says why the
+   * chat is not loading, so the body narrates no offline host of its own.
+   */
+  readonly sandboxFooter: boolean;
 }
 
 /**
@@ -290,25 +294,6 @@ export interface ChatPreContentInput {
    */
   readonly hasReadySession: boolean;
   readonly elapsed: ChatPreContentElapsed;
-}
-
-/**
- * The label the chat tile names its host by, in the strip and the body alike,
- * or `null` for "the host".
- *
- * `useHostReachability` falls back to the raw host id wherever the directory
- * has no label - a listed entry with an empty one, a host it does not list -
- * and `resolvedHostLabel` clears only the `checking` state. A host id is not
- * a name a person can act on, so it reads as no label here.
- */
-export function chatTileHostLabel(
-  reachability: HostReachability,
-  hostId: string,
-): string | null {
-  const label = resolvedHostLabel(reachability);
-  return label === null || label.length === 0 || label === hostId
-    ? null
-    : label;
 }
 
 /**

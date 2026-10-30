@@ -148,6 +148,7 @@ import type {
   SandboxCatalogueFetchResult,
   SandboxCreateFetchResult,
   SandboxListFetchResult,
+  TraycerModelsFetchResult,
   SandboxCostsFetchResult,
   SandboxLifecycleVerbFetchResult,
   SandboxVerbFetchResult,
@@ -236,6 +237,7 @@ export interface DesktopPreloadBridge {
   getSandboxCatalogue(
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult>;
+  getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -1232,6 +1234,10 @@ export class DesktopRunnerHost implements IRunnerHost {
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult> {
     return this.bridge.getSandboxCatalogue(bearerToken);
+  }
+
+  getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult> {
+    return this.bridge.getTraycerModels(bearerToken);
   }
 
   createSandbox(

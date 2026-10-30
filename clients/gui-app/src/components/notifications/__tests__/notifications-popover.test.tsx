@@ -37,6 +37,7 @@ import {
 import {
   __resetHostNotificationsStoreForTests,
   useHostNotificationsStore,
+  type HostNotificationFeedEntry,
 } from "@/stores/notifications/host-notifications-store";
 import {
   __resetNotificationsStoreForTests,
@@ -1318,6 +1319,68 @@ describe("NotificationsPopover", () => {
     );
   });
 
+  it("leaves Mark all read disabled when the host's only unread rows are retired kinds", async () => {
+    notificationFeedMode.value = "cloud";
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [],
+      summary: { totalCount: 0, unreadCount: 0, attentionCount: 0 },
+      version: 1,
+    });
+    const retired: ReadonlyArray<HostNotificationFeedEntry> = [
+      {
+        id: "held-sandbox-notice",
+        updatedAt: 10,
+        readAt: null,
+        kind: "sandbox.notice",
+        sourceRef: "held-sandbox-notice",
+        severity: "info",
+        outcome: "completed",
+        epicId: null,
+        chatId: null,
+        payload: {
+          kind: "sandbox_notice",
+          sandboxId: "sbx-1",
+          sandboxName: "build box",
+          notice: { kind: "resting_destroyed" },
+        },
+      },
+      {
+        id: "held-apply-failed",
+        updatedAt: 11,
+        readAt: null,
+        kind: "environment.apply.failed",
+        sourceRef: "held-apply-failed",
+        severity: "info",
+        outcome: "errored",
+        epicId: null,
+        chatId: null,
+        payload: {
+          kind: "environment_apply_failed",
+          environmentId: "env-1",
+          hostId: "host-1",
+          hostName: "dev-box",
+          itemKey: "settings",
+          reason: "settings_not_applied",
+        },
+      },
+    ];
+    useHostNotificationsStore.getState().applySnapshot({
+      attention: { entries: [], nextCursor: null },
+      recent: { entries: retired, nextCursor: null },
+      summary: { unreadCount: 2, attentionCount: 0 },
+    });
+    const { router } = buildRouterWithCapture(
+      { epicId: null, tabId: null, focusArtifactId: null, focusThreadId: null },
+      () => undefined,
+    );
+    renderRouter(router);
+
+    const markAll = await screen.findByTestId<HTMLButtonElement>(
+      "notifications-mark-all-read",
+    );
+    expect(markAll.disabled).toBe(true);
+  });
+
   it("does not render a trailing tick for an already-read cloud row", async () => {
     notificationFeedMode.value = "cloud";
     useCloudNotificationsStore.getState().applySnapshot({
@@ -1667,31 +1730,9 @@ describe("NotificationsPopover", () => {
     expect(timestamp.textContent).toBe("2m ago");
   });
 
-  it("uses workspace glyphs for worktree lifecycle notifications", async () => {
+  it("uses the folder glyph for a failed workspace operation", async () => {
     applyHostSnapshot(
       [
-        {
-          id: "worktree.deletion:command-1",
-          updatedAt: 200,
-          readAt: null,
-          kind: "host.operation.finished",
-          sourceRef: "command-1",
-          severity: "done",
-          outcome: "completed",
-          epicId: null,
-          chatId: null,
-          payload: {
-            kind: "worktree_deletion",
-            operation: "worktree.deletion",
-            title: "Worktree deleted",
-            message: "Deleted 1 worktree.",
-            commandId: "command-1",
-            source: "settings",
-            requestedCount: 1,
-            deletedCount: 1,
-            failedCount: 0,
-          },
-        },
         {
           id: "workspace.operation.failed:event-1",
           updatedAt: 100,
@@ -1715,7 +1756,7 @@ describe("NotificationsPopover", () => {
           },
         },
       ],
-      { unreadCount: 2, attentionCount: 1 },
+      { unreadCount: 1, attentionCount: 1 },
     );
     const captured: TargetCapture = {
       epicId: null,
@@ -1726,21 +1767,12 @@ describe("NotificationsPopover", () => {
     const { router } = buildRouterWithCapture(captured, () => undefined);
     renderRouter(router);
 
-    await screen.findByText("Worktree deleted");
-    const rows = screen.getAllByTestId("notification-entry");
-    const deletionRow = rows.find(
-      (row) =>
-        row.dataset.notificationId === "host:worktree.deletion:command-1",
-    );
+    const rows = await screen.findAllByTestId("notification-entry");
     const creationFailureRow = rows.find(
       (row) =>
         row.dataset.notificationId ===
         "host:workspace.operation.failed:event-1",
     );
-    expect(deletionRow?.querySelector(".lucide-trash-2")).not.toBeNull();
-    expect(
-      deletionRow?.querySelector(".lucide-message-square-check"),
-    ).toBeNull();
     expect(
       creationFailureRow?.querySelector(".lucide-folder-x"),
     ).not.toBeNull();

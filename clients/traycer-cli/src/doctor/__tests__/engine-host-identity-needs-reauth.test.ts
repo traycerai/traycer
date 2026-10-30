@@ -307,8 +307,7 @@ describe("runDoctor host identity needs-reauth", () => {
 
     expect(issue?.message).toContain("traycer login");
     expect(issue?.message).toContain("shared CLI credentials file");
-    // Unlike the auth plane's card, this button does the thing the card
-    // describes, so it is offered.
+    // A sign-in is the repair, so the button that runs one is offered.
     expect(issue?.terminalCommand).toBe("traycer login");
     expect(issue?.fixAction).toBeNull();
     // The disambiguation, in the copy itself.
@@ -316,7 +315,7 @@ describe("runDoctor host identity needs-reauth", () => {
   });
 
   it("reports BOTH planes as two distinct issues when both markers are set", async () => {
-    // Never one conflated verdict: two faults, two repairs, and the auth
+    // Never one conflated verdict: two faults, two issues, and the auth
     // plane's own verdict is untouched by the identity probe running.
     stageHostNotRunning("production");
     writeIdentityMarker("production", {
@@ -346,9 +345,13 @@ describe("runDoctor host identity needs-reauth", () => {
       reason: "a freshly refreshed credential was itself rejected",
       recordedAt: "2026-08-20T09:00:00.000Z",
     });
-    // And the recoveries point in opposite directions.
+    // Both are repaired by signing in; the credential only while the host is
+    // running, which its own message says.
     expect(identity?.terminalCommand).toBe("traycer login");
-    expect(credential?.terminalCommand).toBeNull();
+    expect(credential?.terminalCommand).toBe("traycer login");
+    expect(credential?.message).toContain(
+      "while the host is running: run `traycer login`",
+    );
     expect(credential?.message).toContain("open the Traycer desktop app");
     // Exactly one of each - substituted nowhere, duplicated nowhere.
     expect(issues.filter((i) => i.code === IDENTITY_CODE)).toHaveLength(1);

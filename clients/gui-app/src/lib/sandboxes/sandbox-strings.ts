@@ -16,6 +16,7 @@ import {
   formatCreditsRequired,
   formatMemory,
 } from "@/lib/sandboxes/sandbox-pricing";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * The version of the consequences block's wording. A full render is recorded
@@ -110,7 +111,10 @@ export function collapsedConfigurationsLabel(
     : `Personal and ${teamsLabel}`;
 }
 
-export const SEARCH_HOSTS_PLACEHOLDER = "Search hosts";
+/** The search field above a host list; the ellipsis spelling is the older one. */
+export const SEARCH_HOSTS_PLACEHOLDER = UNRELEASED_FEATURES_ENABLED
+  ? "Search hosts"
+  : "Search hosts…";
 
 /** The chip and row title of the machine this app runs on. */
 export const THIS_COMPUTER = "This computer";
@@ -431,13 +435,19 @@ export function sandboxCreditShortLine(
   if (creditSource === null || (!waking && creditSource === "personal")) {
     return notEnoughCreditsText(shortfallMc, options);
   }
-  const allowance =
-    configuration.kind === "team" && creditSource === "team-allowance";
+  const allowance = creditSource === "team-allowance";
   const whose = context === "sentence" ? "Your" : "your";
-  const pot =
-    configuration.kind === "team" && creditSource !== "personal"
-      ? `${whose} ${configuration.teamName} ${allowance ? "allowance" : "credits"}`
-      : `${whose} credits`;
+  // The refusal names the pot; the configuration only supplies the team's
+  // name. A refusal from a team pot with no team configuration known (the
+  // directory had no row) still says it was the team's, never the person's.
+  let pot = `${whose} credits`;
+  if (creditSource !== "personal") {
+    if (configuration.kind === "team") {
+      pot = `${whose} ${configuration.teamName} ${allowance ? "allowance" : "credits"}`;
+    } else {
+      pot = `${whose} ${allowance ? "team allowance" : "team's credits"}`;
+    }
+  }
   if (shortfallMc === null) {
     if (!waking && allowance)
       return `${pot} is too short to start this sandbox for an hour.`;
@@ -457,12 +467,29 @@ export function shapeNotOfferedLine(region: string, shape: string): string {
 
 export const SANDBOXES_UNAVAILABLE = "Sandboxes are unavailable right now.";
 
+/** Held while the catalogue says which agents sandboxes run. */
+export const CHECKING_SANDBOX_AGENTS =
+  "Checking which agents run on sandboxes.";
+
+/** The catalogue could not be read, so Send is held until Retry reads it. */
+export const COULDNT_CHECK_SANDBOX_AGENTS =
+  "Couldn't check which agents run on sandboxes.";
+
 export function agentNotOfferedOnSandboxesLine(agent: string): string {
   return `${agent} doesn't run on sandboxes. Choose a Traycer model to run agents here.`;
 }
 
-export function enableSandboxInferenceLine(configuration: string): string {
-  return `Turn on Traycer Inference in ${configuration}'s Providers to run agents on sandboxes.`;
+/**
+ * The sandbox's own Traycer Inference switch is off. A line that names the
+ * sandbox passes its name; a composer on that sandbox passes `null`.
+ */
+export function traycerOffOnSandboxLine(name: string | null): string {
+  return `Traycer Inference is off on ${name ?? "this sandbox"}, so agents can't run on it.`;
+}
+
+/** The sandbox is up, and no agent the send asked for can run on it. */
+export function agentsCantRunOnSandboxLine(name: string | null): string {
+  return `Agents can't run on ${name ?? "this sandbox"}.`;
 }
 
 /**
@@ -487,6 +514,7 @@ export const OPEN_TERMINAL = "Open terminal";
 
 export const STARTING_SANDBOX = "Starting sandbox";
 export const RESUMING_SANDBOX = "Resuming sandbox";
+export const SANDBOX_AWAKE = "Sandbox awake";
 export const SANDBOX_READY = "Sandbox ready";
 /** The setup line names the sandbox; a row's button passes `null`. */
 export function stoppingSandboxLine(name: string | null): string {
@@ -581,12 +609,22 @@ export function sandboxVerbFailureLine(
 
 export const COMPUTE_CHARGED_WHILE_AWAKE =
   "Compute is charged while it is awake.";
+
+/** A settings failure's line once its sandbox is no longer awake: no claim it is. */
+export function settingsDidntApplyOnLine(
+  configuration: string,
+  name: string,
+  reference: string,
+): string {
+  return `${configuration}'s settings didn't apply on ${name} · ${reference}`;
+}
+
 export const RETRY_APPLYING = "Retry applying";
 export const STOP = "Stop";
 
 /** The settled line's idle rule, with the configured period. */
 export function idleRuleLine(idleMinutes: number): string {
-  return `After ${idleMinutes} minutes with no agent turn, running shell or attached tab, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it rests.`;
+  return `After ${idleMinutes} minutes with no agent turn, running shell or browser tab on screen, this sandbox suspends. Closing this tab does not stop running work or immediately stop charges; storage is charged while it rests.`;
 }
 
 // ── Who: started, kept, paid ──────────────────────────────────────────────
@@ -686,3 +724,10 @@ export function hoverSandboxIdentity(args: {
 export function hoverAgentIdentity(agent: string, payer: string): string {
   return `${AGENT_SANDBOX} · created by ${agent} for this task · paid by ${payer}`;
 }
+
+/**
+ * Why a build without sandboxes (`unreleased-features.ts`) reaches no sandbox
+ * control plane: the reason every sandbox read and write answers there.
+ */
+export const SANDBOXES_NOT_IN_THIS_BUILD =
+  "Sandboxes are not available in this build.";

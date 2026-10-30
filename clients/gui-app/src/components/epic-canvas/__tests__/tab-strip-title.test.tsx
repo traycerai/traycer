@@ -38,6 +38,8 @@ import { TestEpicSessionWrapper } from "./test-epic-session";
 import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 
 import { anyTooltipHasText } from "@/components/ui/__tests__/tooltip-probe";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import type { ChatProjection } from "@/stores/epics/open-epic/types";
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => vi.fn(),
   useRouter: () => ({
@@ -114,6 +116,16 @@ vi.mock("@dnd-kit/core", () => ({
   useDroppable: () => ({
     setNodeRef: (_element: HTMLElement | null) => undefined,
   }),
+}));
+
+// The environment arm is a team environment's own stream: the one source a
+// team host's chat title reaches its creator through.
+const armRows = vi.hoisted((): { value: readonly CloudChatSummary[] } => ({
+  value: [],
+}));
+vi.mock("@/hooks/environment/use-environment-arms", () => ({
+  useEnvironmentArmChats: (taskId: string) =>
+    taskId.length === 0 ? [] : armRows.value,
 }));
 
 // Intentionally do not mock ChatProgressIcon: title-generation composition
@@ -272,6 +284,7 @@ describe("TabStrip title", () => {
     resetAgentActivity();
     harness.teardown();
     useEpicCanvasStore.getState().clearAllTitleGenerationPending();
+    armRows.value = [];
   });
 
   it("renders projected artifact titles over the canvas tab's opening name", async () => {
@@ -346,6 +359,71 @@ describe("TabStrip title", () => {
     expect(
       screen.getByTestId(`tab-title-generating-${TAB.instanceId}`),
     ).toBeTruthy();
+  });
+
+  it("the title spinner ends when the arm row carries a team host chat's title", async () => {
+    // A team host keys the chat it creates by its environment: the creator
+    // holds an untitled stand-in, and the arm serves the generated title.
+    const standIn: ChatProjection = {
+      id: CHAT_ID,
+      title: "",
+      parentId: null,
+      createdAt: 0,
+      updatedAt: 0,
+      userId: "viewer-1",
+      ownedByViewer: true,
+      hostId: TAB.hostId,
+      isTitleEditedByUser: false,
+      docResident: false,
+      settings: null,
+      archivedAt: null,
+    };
+    armRows.value = [
+      {
+        identity: {
+          taskId: EPIC_ID,
+          chatId: CHAT_ID,
+          ownerUserId: "env-pool",
+        },
+        ownerHostId: TAB.hostId,
+        createdAt: 1,
+        visibility: "task",
+        title: "E2E Sandbox Test",
+        isTitleEditedByUser: false,
+        parentChatId: null,
+        isArchived: false,
+        runSettingsSummary: null,
+        metadataUpdatedAt: 2,
+        headSha256: null,
+        publishedAt: null,
+        throughRecordSeq: null,
+        isOwnedByViewer: false,
+      },
+    ];
+    renderTabStrip({ ...TAB, name: "Untitled agent" }, true);
+    await flushEpicSnapshot();
+    const handle = __getOpenEpicRegistryForTests().get(EPIC_ID);
+    if (handle === null) throw new Error("expected open epic handle");
+    // The seeded chat is titled, which would settle a mark made while it is
+    // still on screen; the send marks the title pending once its stand-in is
+    // held.
+    act(() => {
+      handle.store.setState({
+        chats: { allIds: [CHAT_ID], byId: { [CHAT_ID]: standIn } },
+      });
+    });
+    act(() => {
+      useEpicCanvasStore.getState().markChatTitlePending(CHAT_ID, "");
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getAllByRole("tab", { name: "E2E Sandbox Test" }),
+      ).toHaveLength(1);
+    });
+    expect(
+      screen.queryByTestId(`tab-title-generating-${TAB.instanceId}`),
+    ).toBeNull();
   });
 
   it("shows running chat status over the title spinner on first-send overlap", async () => {

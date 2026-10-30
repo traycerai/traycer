@@ -55,6 +55,7 @@ import {
   runnerQueryKeys,
 } from "@/lib/query-keys/runner-mutation-keys";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { hostNameFromLabel } from "@/lib/host/host-name";
 
 export interface HostRuntimeBinding<Registry extends VersionedRpcRegistry> {
   readonly runtime: HostRuntime<Registry>;
@@ -515,10 +516,13 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
             client: runnerHost.selectionAuthority,
             kernel: selectionKernel,
             hostLabels: {
-              // Falls back to the id rather than to a placeholder: a move the
-              // directory has not caught up with yet is exactly when the user
-              // most needs to know WHICH host, and an id is at least true.
-              labelFor: (hostId) => directory.findById(hostId)?.label ?? hostId,
+              // "the host" for a host the directory has not named yet: an id
+              // is true, but it names nothing a person can act on.
+              labelFor: (hostId) =>
+                hostNameFromLabel(
+                  directory.findById(hostId)?.label ?? null,
+                  hostId,
+                ),
             },
           });
           const nextBinding = {

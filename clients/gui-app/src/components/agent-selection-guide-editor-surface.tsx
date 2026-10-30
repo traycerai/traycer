@@ -2,6 +2,10 @@ import type { ReactNode } from "react";
 import { MarkdownEditPreview } from "@/components/markdown-edit-preview";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import {
+  AGENT_SELECTION_GUIDE_DESCRIPTION,
+  AGENT_SELECTION_GUIDE_REVERT_LABEL,
+} from "@/components/agent-selection-guide-copy";
 
 export const AGENT_SELECTION_GUIDE_TITLE = "Agent selection guide";
 
@@ -47,6 +51,11 @@ export function AgentSelectionGuideEditorSurface({
         <h2 id={titleId} className="text-ui-md font-semibold text-foreground">
           {AGENT_SELECTION_GUIDE_TITLE}
         </h2>
+        {AGENT_SELECTION_GUIDE_DESCRIPTION === null ? null : (
+          <p className="mt-1 text-ui-xs text-muted-foreground">
+            {AGENT_SELECTION_GUIDE_DESCRIPTION}
+          </p>
+        )}
       </div>
 
       <div
@@ -81,7 +90,7 @@ export function AgentSelectionGuideEditorSurface({
           data-testid={revertTestId}
           className="h-7"
         >
-          Reset to default
+          {AGENT_SELECTION_GUIDE_REVERT_LABEL}
         </Button>
         {status}
       </div>

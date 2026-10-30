@@ -25,8 +25,15 @@ import {
   environmentConfigurationMcpServersPutV11,
   environmentConfigurationPolicyPutV10,
   environmentConfigurationSkillsListV10,
+  environmentConfigurationSkillsListV11,
   environmentConfigurationSkillsRemoveV10,
+  environmentConfigurationSkillsRestoreBundledV10,
+  environmentConfigurationSkillsSearchV10,
+  environmentConfigurationSkillsSetPolicyV10,
+  environmentConfigurationSkillsImportV10,
   environmentConfigurationSkillsSetProvidersV10,
+  environmentConfigurationSkillsStateV10,
+  environmentConfigurationSkillsUpdateV10,
   environmentConfigurationSkillsUploadV10,
   environmentHistoryV10,
   environmentPlansListV10,
@@ -929,6 +936,104 @@ const REDESIGN_WIRE_CASES: readonly RedesignWireCase[] = [
     badResponse: { outcome: "saved", reason: null },
   },
   {
+    method: "environment.configuration.skills.setPolicy",
+    contract: environmentConfigurationSkillsSetPolicyV10,
+    request: {
+      environmentId: TEAM.environmentId,
+      name: "release-notes",
+      policy: "frozen",
+      revision: null,
+    },
+    badRequest: {
+      environmentId: TEAM.environmentId,
+      name: "release-notes",
+      policy: "pinned",
+      revision: null,
+    },
+    response: {
+      outcome: "refused",
+      revision: "abc123",
+      reason: "policies_unreadable",
+    },
+    badResponse: { outcome: "saved", reason: null },
+  },
+  {
+    method: "environment.configuration.skills.update",
+    contract: environmentConfigurationSkillsUpdateV10,
+    request: {
+      environmentId: TEAM.environmentId,
+      name: "release-notes",
+      confirm: true,
+    },
+    badRequest: { environmentId: TEAM.environmentId, name: "release-notes" },
+    response: { outcome: "refused", reason: "has_edits" },
+    badResponse: { outcome: "refused", reason: "too_large" },
+  },
+  {
+    method: "environment.configuration.skills.state",
+    contract: environmentConfigurationSkillsStateV10,
+    request: { environmentId: TEAM.environmentId, refresh: true },
+    badRequest: { environmentId: TEAM.environmentId },
+    response: {
+      outcome: "listed",
+      skills: [
+        { name: "release-notes", version: "1.0.0", updateAvailable: true },
+      ],
+      deletedBundled: ["old-skill"],
+    },
+    badResponse: { outcome: "listed", skills: [] },
+  },
+  {
+    method: "environment.configuration.skills.import",
+    contract: environmentConfigurationSkillsImportV10,
+    request: {
+      step: "inspect",
+      environmentId: TEAM.environmentId,
+      source: "owner/repo",
+    },
+    badRequest: { step: "inspect", environmentId: TEAM.environmentId },
+    response: {
+      outcome: "inspected",
+      token: "tok",
+      commitSha: "a".repeat(40),
+      candidates: [
+        {
+          name: "release-notes",
+          description: null,
+          relPath: "skills/release-notes",
+          installed: false,
+        },
+      ],
+    },
+    badResponse: { outcome: "imported" },
+  },
+  {
+    method: "environment.configuration.skills.search",
+    contract: environmentConfigurationSkillsSearchV10,
+    request: { query: "review", owner: null },
+    badRequest: { query: "r", owner: null },
+    response: {
+      outcome: "found",
+      skills: [
+        {
+          id: "acme/skills/review",
+          name: "review",
+          installs: 12,
+          source: "acme/skills",
+        },
+      ],
+    },
+    badResponse: { outcome: "found", skills: [{ id: "acme/skills/review" }] },
+  },
+  {
+    method: "environment.configuration.skills.restoreBundled",
+    contract: environmentConfigurationSkillsRestoreBundledV10,
+    request: { environmentId: TEAM.environmentId, name: "release-notes" },
+    badRequest: { environmentId: TEAM.environmentId, name: "" },
+    response: { outcome: "refused", reason: "not_deleted" },
+    badResponse: { outcome: "saved", reason: null },
+  },
+  {
     method: "environment.configuration.skills.upload",
     contract: environmentConfigurationSkillsUploadV10,
     request: {
@@ -1176,7 +1281,8 @@ describe("the environments redesign's new @1.0 methods", () => {
           ? 2
           : wire.method === "environment.move.stopPreview" ||
               wire.method === "environment.configuration.mcpServers.put" ||
-              wire.method === "environment.configuration.guide.get"
+              wire.method === "environment.configuration.guide.get" ||
+              wire.method === "environment.configuration.skills.list"
             ? 1
             : 0,
       );
@@ -1202,6 +1308,14 @@ describe("the environments redesign's new @1.0 methods", () => {
       ).toBe(false);
     },
   );
+
+  it("skills.state answers forbidden to a caller who may not refresh", () => {
+    expect(
+      environmentConfigurationSkillsStateV10.responseSchema.safeParse({
+        outcome: "forbidden",
+      }).success,
+    ).toBe(true);
+  });
 
   it("mcpServers.put@1.1 takes a picked secret and names the saved server; a 1.0 answer upgrades with no id", () => {
     const entry = hostRpcRegistry["environment.configuration.mcpServers.put"];
@@ -1712,5 +1826,195 @@ describe("environment.configuration.guide.get@1.1", () => {
         request,
       ),
     ).toEqual(request);
+  });
+});
+
+describe("environment.configuration.skills.list@1.1", () => {
+  const ONE_ZERO = { major: 1, minor: 0 } as const;
+  const ONE_ONE = { major: 1, minor: 1 } as const;
+  const registry = hostRpcRegistry["environment.configuration.skills.list"];
+  const row = {
+    name: "release-notes",
+    description: null,
+    origin: "bundled" as const,
+    edited: false,
+    offFor: ["codex"],
+  };
+
+  it("parses an @1.1 answer with policy, version, update flag, upstream and the deleted built-ins", () => {
+    const answer = {
+      outcome: "listed",
+      revision: null,
+      policyRevision: "p1",
+      skills: [
+        {
+          ...row,
+          policy: "evolve",
+          version: "1.2.3",
+          updateAvailable: true,
+          upstream: { source: "https://example.com/skills.git", ref: "main" },
+        },
+      ],
+      deletedBundled: ["old-skill"],
+    };
+    expect(
+      environmentConfigurationSkillsListV11.responseSchema.parse(answer),
+    ).toEqual(answer);
+    expect(
+      environmentConfigurationSkillsListV11.responseSchema.safeParse({
+        ...answer,
+        skills: [{ ...row, policy: "auto-update" }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("upgrades an @1.0 answer: a bundled skill nobody edited follows upstream, any other evolves", () => {
+    const answer = environmentConfigurationSkillsListV10.responseSchema.parse({
+      outcome: "listed",
+      revision: "r1",
+      skills: [
+        row,
+        { ...row, name: "edited", edited: true },
+        { ...row, name: "mine", origin: "room" },
+      ],
+    });
+    expect(
+      upgradeResponseToVersion(registry, ONE_ZERO, ONE_ONE, answer),
+    ).toEqual({
+      outcome: "listed",
+      revision: "r1",
+      policyRevision: null,
+      skills: [
+        {
+          ...row,
+          policy: "auto-update",
+          version: null,
+          updateAvailable: false,
+          upstream: null,
+        },
+        {
+          ...row,
+          name: "edited",
+          edited: true,
+          policy: "evolve",
+          version: null,
+          updateAvailable: false,
+          upstream: null,
+        },
+        {
+          ...row,
+          name: "mine",
+          origin: "room",
+          policy: "evolve",
+          version: null,
+          updateAvailable: false,
+          upstream: null,
+        },
+      ],
+      deletedBundled: [],
+    });
+  });
+
+  it("keeps the @1.0 row schema frozen: it parses a bare row and drops the @1.1 fields", () => {
+    const parsed = environmentConfigurationSkillsListV10.responseSchema.parse({
+      outcome: "listed",
+      revision: null,
+      skills: [{ ...row, policy: "frozen" }],
+    });
+    expect(parsed).toEqual({
+      outcome: "listed",
+      revision: null,
+      skills: [row],
+    });
+  });
+});
+
+describe("environment.configuration.skills.import@1.0 and skills.update's fetch_failed", () => {
+  const importRegistry =
+    hostRpcRegistry["environment.configuration.skills.import"][1].versions[0]
+      .contract;
+
+  it("parses the install step and rejects an empty name list", () => {
+    const install = {
+      step: "install",
+      environmentId: TEAM.environmentId,
+      token: "tok",
+      names: ["release-notes"],
+    };
+    expect(importRegistry.requestSchema.parse(install)).toEqual(install);
+    expect(
+      importRegistry.requestSchema.safeParse({ ...install, names: [] }).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    { outcome: "installed", names: ["release-notes"] },
+    { outcome: "refused", reason: "bundled_name", name: "release-notes" },
+    { outcome: "refused", reason: "expired", name: null },
+    { outcome: "stale" },
+    { outcome: "not_served" },
+    { outcome: "forbidden" },
+  ])("round-trips the $outcome answer", (answer) => {
+    expect(importRegistry.responseSchema.parse(answer)).toEqual(answer);
+  });
+
+  it("rejects a refusal reason it does not know", () => {
+    expect(
+      importRegistry.responseSchema.safeParse({
+        outcome: "refused",
+        reason: "unknown_reason",
+        name: null,
+      }).success,
+    ).toBe(false);
+  });
+
+  const inspected = (token: string, commitSha: string) => ({
+    outcome: "inspected",
+    token,
+    commitSha,
+    candidates: [],
+  });
+  const install = (token: string) => ({
+    step: "install",
+    environmentId: TEAM.environmentId,
+    token,
+    names: ["release-notes"],
+  });
+
+  it("takes a 128-character token on both ends and refuses 129", () => {
+    const long = "t".repeat(128);
+    expect(
+      importRegistry.responseSchema.parse(inspected(long, "a".repeat(40))),
+    ).toEqual(inspected(long, "a".repeat(40)));
+    expect(importRegistry.requestSchema.parse(install(long))).toEqual(
+      install(long),
+    );
+    const longer = "t".repeat(129);
+    expect(
+      importRegistry.responseSchema.safeParse(inspected(longer, "a".repeat(40)))
+        .success,
+    ).toBe(false);
+    expect(
+      importRegistry.requestSchema.safeParse(install(longer)).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    ["39 characters", "a".repeat(39)],
+    ["41 characters", "a".repeat(41)],
+    ["uppercase hex", "A".repeat(40)],
+    ["a non-hex character", `${"a".repeat(39)}g`],
+  ])("refuses a commit of %s", (_, commitSha) => {
+    expect(
+      importRegistry.responseSchema.safeParse(inspected("tok", commitSha))
+        .success,
+    ).toBe(false);
+  });
+
+  it("parses fetch_failed as an update refusal", () => {
+    const answer = { outcome: "refused", reason: "fetch_failed" };
+    expect(
+      environmentConfigurationSkillsUpdateV10.responseSchema.parse(answer),
+    ).toEqual(answer);
   });
 });

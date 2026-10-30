@@ -10,7 +10,12 @@ import type { StripTabItem, StripTabItemInput } from "./use-strip-tab-item";
 export function StripTabContextMenu(props: {
   readonly item: Pick<
     StripTabItem,
-    "displayTab" | "canEditTitle" | "rename" | "setTaskPinned"
+    | "displayTab"
+    | "canEditTitle"
+    | "canClose"
+    | "close"
+    | "rename"
+    | "setTaskPinned"
   >;
   readonly input: StripTabItemInput;
   readonly children: ReactElement;
@@ -49,11 +54,13 @@ export function StripTabContextMenu(props: {
       <ContextMenuTrigger asChild>{props.children}</ContextMenuTrigger>
       <TabContextMenuContent
         tab={item.displayTab}
+        canClose={item.canClose}
         canCloseOtherTabs={input.canCloseOtherTabs}
         canOpenInNewWindow={input.canOpenInNewWindow}
         canEditTitle={item.canEditTitle}
         taskPinnedState={input.taskPinnedState}
         isTaskPinPending={input.isTaskPinPending}
+        onClose={item.close}
         onCloseOtherTabs={input.onCloseOtherTabs}
         onDuplicateTab={input.onDuplicateTab}
         onOpenInNewWindow={input.onOpenInNewWindow}

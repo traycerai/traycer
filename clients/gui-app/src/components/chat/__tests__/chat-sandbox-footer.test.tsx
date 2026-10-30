@@ -8,7 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
-import type { ChatSandboxState } from "@/lib/sandboxes/chat-sandbox-state";
+import {
+  resolveChatSandbox,
+  type ChatSandboxLine,
+  type ChatSandboxState,
+} from "@/lib/sandboxes/chat-sandbox-state";
 
 const h = vi.hoisted(() => ({
   mutate: vi.fn<(verb: string) => void>(),
@@ -41,8 +45,6 @@ import {
 import { sandboxRowActionLabel } from "@/lib/sandboxes/sandbox-row-lines";
 import { useAuthStore } from "@/stores/auth/auth-store";
 
-const ENDED_AT = Date.UTC(2026, 9, 27, 6, 21);
-
 function render(ui: ReactNode) {
   const queryClient = new QueryClient({
     defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
@@ -74,6 +76,16 @@ function resting(
   };
 }
 
+/** The line the resolver hands the footer, for a viewer who may wake it. */
+function lineOf(state: ChatSandboxState): ChatSandboxLine | null {
+  return resolveChatSandbox(state, {
+    reachable: false,
+    canEdit: true,
+    ownedByViewer: true,
+    environmentOwned: false,
+  }).line;
+}
+
 function unreachable(lastContactMinutes: number | null): ChatSandboxState {
   return {
     kind: "unreachable",
@@ -82,7 +94,10 @@ function unreachable(lastContactMinutes: number | null): ChatSandboxState {
       displayName: "e2e-sbx-live",
       state: "awake",
     }),
-    lastContactMinutes,
+    lastSeenAt:
+      lastContactMinutes === null
+        ? null
+        : Date.now() - lastContactMinutes * 60_000 - 20_000,
   };
 }
 
@@ -111,7 +126,9 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
     (state, line) => {
       render(
         <ChatSandboxFooter
-          state={resting(state, { team: false, wakeChangesPayer: false })}
+          line={lineOf(
+            resting(state, { team: false, wakeChangesPayer: false }),
+          )}
         />,
       );
 
@@ -122,7 +139,9 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
   it("adds the team clauses only when the wake changes who pays", () => {
     const { unmount } = render(
       <ChatSandboxFooter
-        state={resting("suspended", { team: true, wakeChangesPayer: true })}
+        line={lineOf(
+          resting("suspended", { team: true, wakeChangesPayer: true }),
+        )}
       />,
     );
     const paying = document.body.textContent;
@@ -135,7 +154,9 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
 
     render(
       <ChatSandboxFooter
-        state={resting("suspended", { team: true, wakeChangesPayer: false })}
+        line={lineOf(
+          resting("suspended", { team: true, wakeChangesPayer: false }),
+        )}
       />,
     );
     const same = document.body.textContent;
@@ -147,7 +168,9 @@ describe("<ChatSandboxFooter /> a resting sandbox", () => {
   it("offers no action and no offline or clone wording: the next message is the wake", () => {
     render(
       <ChatSandboxFooter
-        state={resting("stopped", { team: false, wakeChangesPayer: false })}
+        line={lineOf(
+          resting("stopped", { team: false, wakeChangesPayer: false }),
+        )}
       />,
     );
 
@@ -171,7 +194,7 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
   }
 
   it("says the personal sandbox is frozen out of credits instead of promising the next message wakes it, and offers Add credits", () => {
-    render(<ChatSandboxFooter state={frozen(false)} />);
+    render(<ChatSandboxFooter line={lineOf(frozen(false))} />);
 
     const text = document.body.textContent;
     expect(text).toContain(sandboxFrozenLine(FROZEN_AT));
@@ -190,7 +213,7 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
     });
     const state = frozen(true);
     if (state.kind !== "resting") throw new Error("expected a resting state");
-    render(<ChatSandboxFooter state={state} />);
+    render(<ChatSandboxFooter line={lineOf(state)} />);
 
     expect(document.body.textContent).toContain(
       sandboxTeamFrozenStateLine(state.sandbox, "viewer"),
@@ -210,7 +233,7 @@ describe("<ChatSandboxFooter /> a frozen sandbox", () => {
 
 describe("<ChatSandboxFooter /> an awake sandbox that cannot be reached", () => {
   it("says it is running but not connected, with the last contact, and offers Stop and Details", async () => {
-    render(<ChatSandboxFooter state={unreachable(7)} />);
+    render(<ChatSandboxFooter line={lineOf(unreachable(7))} />);
 
     expect(document.body.textContent).toContain(
       "e2e-sbx-live is running, but Traycer can’t connect · last contact 7 min ago",
@@ -226,7 +249,7 @@ describe("<ChatSandboxFooter /> an awake sandbox that cannot be reached", () => 
   });
 
   it("leaves the last contact out when none is known", () => {
-    render(<ChatSandboxFooter state={unreachable(null)} />);
+    render(<ChatSandboxFooter line={lineOf(unreachable(null))} />);
 
     const text = document.body.textContent;
     expect(text).toContain(
@@ -237,49 +260,23 @@ describe("<ChatSandboxFooter /> an awake sandbox that cannot be reached", () => 
   });
 });
 
-describe("<ChatSandboxFooter /> a destroyed sandbox", () => {
-  const destroyed: ChatSandboxState = {
-    kind: "destroyed",
-    ended: {
-      name: "e2e-sbx-stop3",
-      end: {
-        state: "destroyed",
-        destroyedAt: ENDED_AT,
-        cause: "resting",
-        actor: null,
-      },
-    },
-  };
-
-  it("says what ended it and offers only Details, never Stop or a wake", () => {
-    render(<ChatSandboxFooter state={destroyed} />);
-
-    expect(document.body.textContent).toContain(
-      "e2e-sbx-stop3 was destroyed on Oct 27 at 06:21 UTC after its resting period.",
-    );
-    expect(
-      screen.getAllByRole("button").map((button) => button.textContent),
-    ).toEqual(["Details"]);
-    expect(h.mutate).not.toHaveBeenCalled();
+describe("<ChatSandboxFooter /> no footer line", () => {
+  const unresolved = resting("suspended", {
+    team: true,
+    wakeChangesPayer: false,
   });
 
-  it("opens the task-visible details through a real click", async () => {
-    render(<ChatSandboxFooter state={destroyed} />);
-
-    await userEvent.click(screen.getByRole("button", { name: "Details" }));
-
-    const details = await screen.findByTestId("task-sandbox-end-details");
-    expect(details.textContent).toContain("e2e-sbx-stop3");
-    expect(details.textContent).toContain("Oct 27");
-    expect(h.openDetails).not.toHaveBeenCalled();
-  });
-});
-
-describe("<ChatSandboxFooter /> no sandbox state", () => {
-  it("renders nothing", () => {
-    const { container } = render(
-      <ChatSandboxFooter state={{ kind: "none" }} />,
-    );
+  it.each([
+    ["none", { kind: "none" }],
+    ["an unknown state", { kind: "pending", name: "e2e-sbx-p1" }],
+    [
+      "a resting sandbox before its configuration resolves, whose slot line says it",
+      unresolved.kind === "resting"
+        ? { ...unresolved, configuration: null }
+        : unresolved,
+    ],
+  ] as const)("renders nothing for %s", (_case, state) => {
+    const { container } = render(<ChatSandboxFooter line={lineOf(state)} />);
 
     expect(container.textContent).toBe("");
   });

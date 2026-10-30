@@ -208,6 +208,21 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => ({ hostId: "host-1" }),
 }));
 
+// The Mobile simulators panel's presence rule, asked for on every render of the
+// panel host: its real hook reads the host binding - through the `@/lib/host`
+// barrel, whose `useHostBinding` this suite's `@/lib/host/runtime` stub does
+// not carry - and issues a `simulator.status` host query. Neither input present,
+// so the panel is absent; the file-tree panel is this suite's subject.
+vi.mock(
+  "@/components/epic-canvas/sidebar/use-simulator-panel-availability",
+  () => ({
+    useSimulatorPanelAvailability: () => ({
+      localHostRunsSimulators: false,
+      hasSimulatorRecords: false,
+    }),
+  }),
+);
+
 vi.mock("@/hooks/epic/use-epic-node-mutations", () => ({
   useEpicCreateArtifact: () => ({ mutate: vi.fn(), isPending: false }),
   useEpicDeleteArtifact: () => ({

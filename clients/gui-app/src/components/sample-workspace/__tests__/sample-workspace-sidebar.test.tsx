@@ -120,14 +120,18 @@ describe("the sample sidebar's icon rail", () => {
 
     const rail = useLayoutStore.getState().arrangement.rail;
     expect(rail.filter((entry) => entry.kind === "divider")).toHaveLength(1);
+    // The sample task holds no simulator on a machine that runs none, so the
+    // auto Mobile simulators entry draws nothing.
     expect(
       railEntries().map((node) => node.getAttribute("aria-label")),
     ).toEqual(
-      rail.map((entry) =>
-        entry.kind === "panel"
-          ? getLeftPanelDefinition(leftPanelIdForRailRegion(entry.id)).title
-          : null,
-      ),
+      rail
+        .filter((entry) => entry.id !== "railSimulators")
+        .map((entry) =>
+          entry.kind === "panel"
+            ? getLeftPanelDefinition(leftPanelIdForRailRegion(entry.id)).title
+            : null,
+        ),
     );
     const dividers = screen.getAllByTestId("epic-rail-divider");
     expect(dividers).toHaveLength(1);
@@ -231,7 +235,9 @@ describe("the sample sidebar's icon rail", () => {
 
     render(<SampleWorkspaceSidebar />);
 
-    const rail = useLayoutStore.getState().arrangement.rail;
+    const rail = useLayoutStore
+      .getState()
+      .arrangement.rail.filter((entry) => entry.id !== "railSimulators");
     const nodes = railEntries();
     expect(nodes).toHaveLength(rail.length);
     for (const [index, entry] of rail.entries()) {

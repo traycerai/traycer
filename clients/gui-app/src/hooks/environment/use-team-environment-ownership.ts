@@ -15,6 +15,7 @@ import {
   authorizesCloudCapability,
   useAuthStore,
 } from "@/stores/auth/auth-store";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * Whether a chat's owner is a team environment: `team` for a team sandbox's
@@ -71,7 +72,12 @@ export function useTeamEnvironmentOwnership(
   const authorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );
-  const listApplies = authorized && readProcessHostRpcTierPlan().pool !== null;
+  // No team environments to list in a build without them
+  // (`unreleased-features.ts`).
+  const listApplies =
+    UNRELEASED_FEATURES_ENABLED &&
+    authorized &&
+    readProcessHostRpcTierPlan().pool !== null;
   const environments = useEnvironmentListQuery(
     useOptionalHostClient(),
     listApplies,

@@ -1,8 +1,401 @@
+diff --git a/react-native.web.d.ts b/react-native.web.d.ts
+index b6c7481603f4119495551b3e4c1c071984c144af..54cfca30be22310b025fc2ad0af66f91dba32bba 100644
+--- a/react-native.web.d.ts
++++ b/react-native.web.d.ts
+@@ -562,6 +562,8 @@ type LegendListState$1 = {
+     isWithinMaintainScrollAtEndThreshold: boolean;
+     getAverageItemSizes: () => Record<string, LegendListAverageItemSize>;
+     indexByKey: (key: string) => number | undefined;
++    /** Patched: the key the list gives the item at an index in range. */
++    keyAtIndex: (index: number) => string;
+     listen: <T extends LegendListListenerType>(listenerType: T, callback: (value: ListenerTypeValueMap[T]) => void) => () => void;
+     listenToPosition: (key: string, callback: (value: number) => void) => () => void;
+     positionAtIndex: (index: number) => number;
+@@ -683,6 +685,12 @@ type LegendListRef$1 = {
+      * @param size - The measured item size.
+      */
+     setItemSize(itemKey: string, size: Pick<LayoutRectangle, "height" | "width">): void;
++    /**
++     * Patched: retires the scroll command the list holds, unrun or awaiting
++     * completion, with its target and anchor lock, and settles its promise.
++     * Returns whether one was held.
++     */
++    cancelPendingScroll(): boolean;
+     /**
+      * Sets whether scroll processing is enabled.
+      * @param enabled - If true, scroll processing is enabled.
 diff --git a/react-native.web.js b/react-native.web.js
-index ea0348877ff08eb9962ff97efebf2cc19cffad11..6428c53754dc69e29fc364509adb573c910b81c7 100644
+index ea0348877ff08eb9962ff97efebf2cc19cffad11..ed4647a6a78537a4032aa412122a0f19159f0714 100644
 --- a/react-native.web.js
 +++ b/react-native.web.js
-@@ -5637,6 +5637,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -789,7 +789,15 @@ function recalculateSettledScroll(ctx) {
+   var _a3, _b;
+   const state = ctx.state;
+   if ((_a3 = state.props) == null ? void 0 : _a3.data) {
+-    (_b = state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { forceFullItemPositions: true });
++    // Patched: this full re-layout re-estimates every unmeasured row, which
++    // can move the rows above the view by tens of thousands of pixels after
++    // a long jump. Anchor it, so the rows the finished scroll left on screen
++    // stay there - unless it finished at the end, the place the reader asked
++    // for: anchoring rows there inflates the content for a frame.
++    const contentSize = getContentSize(ctx);
++    const distanceFromEnd = contentSize - state.scroll - state.scrollLength - getContentInsetEnd(ctx);
++    const finishedAtEnd = contentSize < state.scrollLength || distanceFromEnd <= EDGE_POSITION_EPSILON;
++    (_b = state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { doMVCP: !finishedAtEnd, forceFullItemPositions: true });
+   }
+   checkThresholds(ctx);
+ }
+@@ -1224,7 +1232,7 @@ function calculateOffsetWithOffsetPosition(ctx, offsetParam, params) {
+     const itemSize = Math.max(0, measuredItemSize - (isOutOfBounds ? 0 : ctx.scrollAxisGap));
+     const trailingInset = getContentInsetEnd(ctx);
+     offset -= viewPosition * (state.scrollLength - trailingInset - itemSize);
+-    if (!isOutOfBounds && index === state.props.data.length - 1) {
++    if (!isOutOfBounds && index === state.props.data.length - 1 && viewPosition > 0) {
+       const footerSize = peek$(ctx, "footerSize") || 0;
+       offset += footerSize;
+     }
+@@ -1480,9 +1488,55 @@ function doMaintainScrollAtEnd(ctx) {
+ }
+
+ // src/utils/requestAdjust.ts
++// Patched: a command anchors a pass while it holds the scroller: while the
++// view stands where that command last put it, within the epsilon the list
++// already uses for this same comparison when it issues one, or while an
++// animated command is still taking the view to its target. Once a write the
++// command did not make - a reader pressing Home among them - has moved the
++// view off that offset, the command no longer holds the scroller, and growth
++// at its target is not where the reader is looking.
++function commandHoldingScroller(ctx) {
++  const scrollingTo = ctx.state.scrollingTo;
++  if (scrollingTo != null && scrollingTo.animated) {
++    return scrollingTo;
++  }
++  return commandPlacedAtItsTarget(ctx);
++}
++// Patched: a command holds a RECORD of where it put the view only once it has
++// put it somewhere, which an animated command has not: that one is still
++// travelling, and its `targetOffset` is still the absolute offset it was asked
++// for. `getResolvedScrollCompletionState` reads that offset to judge arrival,
++// and for an animated command anywhere but iOS it cannot offset that
++// comparison by the adjust, so moving the record can keep that check from
++// resolving and leave the command in flight. If the reader's own input then
++// cancels or replaces it before it has completed at its index, the adjust it
++// was holding lands from the scroller's live offset instead of taking the view
++// where the reader sent it. A command placed at its target does hold a record,
++// and that record travels with every adjust and with the end clamp below.
++function commandPlacedAtItsTarget(ctx) {
++  const state = ctx.state;
++  const scrollingTo = state.scrollingTo;
++  if (scrollingTo == null || scrollingTo.animated) {
++    return void 0;
++  }
++  const targetOffset = scrollingTo.targetOffset;
++  if (targetOffset === void 0) {
++    return void 0;
++  }
++  return Math.abs(state.scroll - targetOffset) <= 1 ? scrollingTo : void 0;
++}
+ function requestAdjust(ctx, positionDiff, dataChanged) {
+   const state = ctx.state;
+   if (Math.abs(positionDiff) > 0.1) {
++    // Patched: an adjust moves the view by moving the content under it, so a
++    // command placed at its target now stands at a new offset. Its record of
++    // where it put the view travels with every adjust, or the two drift apart
++    // for the rest of that command's life and each later growth at its target
++    // reads the view as somebody else's and stops following it.
++    const placedCommand = commandPlacedAtItsTarget(ctx);
++    if (placedCommand !== void 0) {
++      placedCommand.targetOffset += positionDiff;
++    }
+     const doit = () => {
+       {
+         state.scrollAdjustHandler.requestAdjust(positionDiff);
+@@ -1639,9 +1693,127 @@ function resolvePendingNativeMVCPAdjust(ctx, newScroll) {
+   }
+   return false;
+ }
++// Patched: the top-edge anchor. When the row under the viewport's top edge is
++// re-measured, hold the element at that edge still instead of the first row
++// whose top is on screen. Growth inside that row below the edge (a card opened
++// there, a reply streaming on) then moves nothing, and growth above the edge
++// is compensated exactly. A row measured for the first time keeps the
++// library's choice, and so does a row whose recorded element is gone.
++function findEdgeContainer(ctx, edgeY) {
++  const state = ctx.state;
++  const read = (key) => {
++    const containerId = state.containerItemKeys.get(key);
++    const ref = containerId === void 0 ? void 0 : ctx.viewRefs.get(containerId);
++    const el = ref == null ? void 0 : ref.current;
++    if (!el) {
++      return void 0;
++    }
++    const rect = el.getBoundingClientRect();
++    return rect.top < edgeY && rect.bottom > edgeY ? { el, key, rect } : void 0;
++  };
++  const hintIndex = state.startNoBuffer;
++  if (hintIndex !== void 0 && hintIndex !== null && hintIndex >= 0) {
++    const hintKey = state.idCache[hintIndex] != null ? state.idCache[hintIndex] : getId(state, hintIndex);
++    const hinted = hintKey === void 0 ? void 0 : read(hintKey);
++    if (hinted) {
++      return hinted;
++    }
++  }
++  for (const key of state.containerItemKeys.keys()) {
++    const hit = read(key);
++    if (hit) {
++      return hit;
++    }
++  }
++  return void 0;
++}
++function findEdgeElement(root, edgeY) {
++  let node = root;
++  for (; ; ) {
++    const next = findEdgeChild(node, edgeY);
++    if (next === void 0) {
++      return node;
++    }
++    if (next.below) {
++      return next.el;
++    }
++    node = next.el;
++  }
++}
++// The first child box that crosses or follows the edge. A child with no box
++// of its own (`display: contents`, as markdown and component wrappers use)
++// lays its children out in its place, so they are searched in its stead.
++function findEdgeChild(parent, edgeY) {
++  for (let child = parent.firstElementChild; child; child = child.nextElementSibling) {
++    const rect = child.getBoundingClientRect();
++    if (rect.height === 0) {
++      const inner = findEdgeChild(child, edgeY);
++      if (inner !== void 0) {
++        return inner;
++      }
++      continue;
++    }
++    if (rect.bottom > edgeY) {
++      return { el: child, below: rect.top > edgeY };
++    }
++  }
++  return void 0;
++}
++// What the anchor holds. A renderer that reuses an element for other content
++// (blocks inserted above it, keyed by position) leaves a node whose movement
++// says nothing about the reader's text. Only the first 64 characters are read:
++// the node can be a whole code block, and this runs on every scroll event.
++// Its text nodes in tree order are what textContent concatenates (4 | 8 is
++// NodeFilter.SHOW_TEXT | NodeFilter.SHOW_CDATA_SECTION, spelled as values so
++// no global is needed).
++function edgeAnchorHead(node) {
++  const walker = node.ownerDocument.createTreeWalker(node, 4 | 8);
++  let head = "";
++  for (let part = walker.nextNode(); part !== null && head.length < 64; part = walker.nextNode()) {
++    head += part.data;
++  }
++  return head.slice(0, 64);
++}
++function recordEdgeAnchor(ctx) {
++  const state = ctx.state;
++  state.edgeAnchor = void 0;
++  const scroller = state.refScroller.current;
++  const scrollNode = !scroller || state.props.horizontal || typeof scroller.getScrollableNode !== "function" ? void 0 : scroller.getScrollableNode();
++  if (!scrollNode || typeof scrollNode.getBoundingClientRect !== "function") {
++    return;
++  }
++  const edgeY = scrollNode.getBoundingClientRect().top;
++  const hit = findEdgeContainer(ctx, edgeY);
++  if (!hit) {
++    return;
++  }
++  const node = findEdgeElement(hit.el, edgeY);
++  state.edgeAnchor = {
++    key: hit.key,
++    node,
++    offset: node.getBoundingClientRect().top - hit.rect.top,
++    head: edgeAnchorHead(node)
++  };
++}
++function measureEdgeAnchorShift(ctx, anchor) {
++  const state = ctx.state;
++  const containerId = state.containerItemKeys.get(anchor.key);
++  const ref = containerId === void 0 ? void 0 : ctx.viewRefs.get(containerId);
++  const el = ref == null ? void 0 : ref.current;
++  if (!el || !anchor.node.isConnected || !el.contains(anchor.node) || edgeAnchorHead(anchor.node) !== anchor.head) {
++    return void 0;
++  }
++  const offset = anchor.node.getBoundingClientRect().top - el.getBoundingClientRect().top;
++  const shift = offset - anchor.offset;
++  anchor.offset = offset;
++  return shift;
++}
+ function prepareMVCP(ctx, dataChanged) {
+   const state = ctx.state;
+   const { idsInView, positions, props } = state;
++  const remeasuredKeys = state.remeasuredKeys;
++  state.remeasuredKeys = void 0;
++  let edgeAnchorShift;
+   const {
+     maintainVisibleContentPosition: { data: mvcpData, size: mvcpScroll, shouldRestorePosition }
+   } = props;
+@@ -1656,8 +1828,18 @@ function prepareMVCP(ctx, dataChanged) {
+   let prevPosition;
+   let targetId;
+   const idsInViewWithPositions = [];
+-  const scrollTarget = scrollingTo == null ? void 0 : scrollingTo.index;
+-  const scrollingToViewPosition = scrollingTo == null ? void 0 : scrollingTo.viewPosition;
++  // Patched: a command anchors this pass only while it still holds the
++  // scroller, and it holds it while the view stands where that command last
++  // put it. Once a write the command did not make - a reader's Home among
++  // them - has moved the view, the command's target is not what the reader is
++  // looking at, and anchoring on it would carry them by growth they are
++  // nowhere near. The pass then anchors on the view itself, exactly as it does
++  // with no command in flight, so a reader who has taken the view over still
++  // keeps their place. An animated command is still taking the view to its
++  // target, so it keeps its anchor.
++  const anchoringCommand = commandHoldingScroller(ctx);
++  const scrollTarget = anchoringCommand == null ? void 0 : anchoringCommand.index;
++  const scrollingToViewPosition = anchoringCommand == null ? void 0 : anchoringCommand.viewPosition;
+   const isEndAnchoredScrollTarget = scrollTarget !== void 0 && state.props.data.length > 0 && scrollTarget >= state.props.data.length - 1 && (scrollingToViewPosition != null ? scrollingToViewPosition : 0) > 0;
+   const shouldMVCP = dataChanged ? mvcpData : mvcpScroll;
+   const indexByKey = state.indexByKey;
+@@ -1670,7 +1852,11 @@ function prepareMVCP(ctx, dataChanged) {
+     } else if (scrollTarget !== void 0) {
+       targetId = getId(state, scrollTarget);
+     } else if (idsInView.length > 0 && state.didContainersLayout && !dataChanged) {
+-      targetId = idsInView.find((id) => indexByKey.get(id) !== void 0);
++      const edgeAnchor = state.edgeAnchor;
++      if (edgeAnchor !== void 0 && remeasuredKeys !== void 0 && remeasuredKeys.has(edgeAnchor.key) && indexByKey.get(edgeAnchor.key) !== void 0) {
++        edgeAnchorShift = measureEdgeAnchorShift(ctx, edgeAnchor);
++      }
++      targetId = edgeAnchorShift !== void 0 ? edgeAnchor.key : idsInView.find((id) => indexByKey.get(id) !== void 0);
+     }
+     if (dataChanged && idsInView.length > 0 && state.didContainersLayout) {
+       for (let i = 0; i < idsInView.length; i++) {
+@@ -1744,6 +1930,16 @@ function prepareMVCP(ctx, dataChanged) {
+               diff = Math.max(0, totalSize - state.scroll - state.scrollLength);
+             } else {
+               const maxScroll = Math.max(0, totalSize - state.scrollLength);
++              // Patched: this moves the view itself, with no adjust to carry
++              // a placed command's record along, so the record travels the
++              // same distance here. Without it a row above the target taking
++              // the content below the view leaves that command's record behind,
++              // and the next growth at its target - the rest of the streaming
++              // reply - is read as somebody else's and never followed.
++              const placedCommand = commandPlacedAtItsTarget(ctx);
++              if (placedCommand !== void 0) {
++                placedCommand.targetOffset += maxScroll - state.scroll;
++              }
+               state.scroll = maxScroll;
+               state.scrollPending = maxScroll;
+               diff = 0;
+@@ -1752,15 +1948,29 @@ function prepareMVCP(ctx, dataChanged) {
+           positionDiff = diff;
+           anchorIdForLock = targetId;
+           anchorPositionForLock = newPosition;
++          if (edgeAnchorShift !== void 0) {
++            positionDiff += edgeAnchorShift;
++          }
+         }
+       }
+-      if (scrollingToViewPosition && scrollingToViewPosition > 0) {
+-        const newSize = getItemSize(ctx, targetId, scrollTarget, state.props.data[scrollTarget]);
+-        const prevSize = scrollingTo == null ? void 0 : scrollingTo.itemSize;
++      // Patched: keyed on the command itself, not on the one this pass
++      // anchored on, so its record of its target row's size stays current
++      // either way and a command that does move the view later lands on that
++      // row as it is then. Only a command this pass anchored on - one that
++      // holds the scroller - adds that row's growth to the adjust; for any
++      // other, the growth is not where the reader is.
++      const commandIndex = scrollingTo == null ? void 0 : scrollingTo.index;
++      const commandViewPosition = scrollingTo == null ? void 0 : scrollingTo.viewPosition;
++      if (commandViewPosition && commandViewPosition > 0 && commandIndex !== void 0) {
++        const commandTargetId = getId(state, commandIndex);
++        const newSize = getItemSize(ctx, commandTargetId, commandIndex, state.props.data[commandIndex]);
++        const prevSize = scrollingTo.itemSize;
+         if (newSize !== void 0 && prevSize !== void 0 && newSize !== prevSize) {
+           const diff = newSize - prevSize;
+           if (diff !== 0) {
+-            positionDiff += diff * scrollingToViewPosition;
++            if (anchoringCommand != null) {
++              positionDiff += diff * commandViewPosition;
++            }
+             scrollingTo.itemSize = newSize;
+           }
+         }
+@@ -2535,7 +2745,13 @@ function getPreservedEndAnchorOffsetDiff(ctx) {
+     return;
+   }
+   const currentOffset = typeof state.lastNativeScroll === "number" && Number.isFinite(state.lastNativeScroll) ? state.lastNativeScroll : getObservedBootstrapInitialScrollOffset(state);
+-  return resolveInitialScrollOffset(ctx, initialScroll) - currentOffset;
++  // Patched: the end anchor is at most the content's last offset. A negative
++  // `viewOffset` lets `clampScrollOffset` carry it past that, to an offset no
++  // scroll reaches, and the per-frame correction toward it never settles.
++  const resolvedOffset = resolveInitialScrollOffset(ctx, initialScroll);
++  const contentSize = getContentSize(ctx);
++  const endOffset = Number.isFinite(contentSize) && Number.isFinite(state.scrollLength) ? Math.max(0, contentSize - state.scrollLength) : resolvedOffset;
++  return Math.min(resolvedOffset, endOffset) - currentOffset;
+ }
+ function schedulePreservedEndAnchorCorrection(ctx) {
+   if (getPreservedEndAnchorOffsetDiff(ctx) === void 0) {
+@@ -4844,6 +5060,9 @@ function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+   const diff = updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem);
+   const size = roundSize(horizontal ? sizeObj.width : sizeObj.height);
+   if (diff !== 0) {
++    if (prevSizeKnown !== void 0) {
++      (state.remeasuredKeys || (state.remeasuredKeys = /* @__PURE__ */ new Set())).add(itemKey);
++    }
+     minIndexSizeChanged = minIndexSizeChanged !== void 0 ? Math.min(minIndexSizeChanged, index) : index;
+     const { startBuffered, endBuffered } = state;
+     needsRecalculate || (needsRecalculate = index >= startBuffered && index <= endBuffered);
+@@ -4886,6 +5105,7 @@ function updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+     indexByKey,
+     sizesKnown,
+     averageSizes,
++    averagedSizeByKey,
+     props: { data, horizontal, getItemType, getFixedItemSize }
+   } = state;
+   if (!data) return 0;
+@@ -4909,6 +5129,22 @@ function updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+   sizesKnown.set(itemKey, size);
+   if (fixedItemSize === void 0 && size > 0) {
+     itemType != null ? itemType : itemType = getItemType ? (_b = getItemType(itemData, index)) != null ? _b : "" : "";
++    // Patched: an average counts each key's size once, under the type it was
++    // measured as. A placeholder and the row it becomes share a key but not a
++    // type, so a new type takes the key's size out of the old type's average
++    // and adds it to its own; replacing it in the new type's average drove that
++    // average negative, and every unmeasured row of the type was then placed
++    // backwards, over the rows on screen.
++    const counted = averagedSizeByKey.get(itemKey);
++    if (counted !== void 0 && counted.itemType !== itemType) {
++      const previous = averageSizes[counted.itemType];
++      if (previous && previous.num > 1) {
++        previous.avg = (previous.avg * previous.num - counted.size) / (previous.num - 1);
++        previous.num--;
++      } else {
++        delete averageSizes[counted.itemType];
++      }
++    }
+     let averages = averageSizes[itemType];
+     if (!averages) {
+       averages = averageSizes[itemType] = { avg: 0, num: 0 };
+@@ -4916,12 +5152,13 @@ function updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+     if (averages.num === 0) {
+       averages.avg = size;
+       averages.num++;
+-    } else if (prevSizeKnown !== void 0 && prevSizeKnown > 0) {
+-      averages.avg += (size - prevSizeKnown) / averages.num;
++    } else if (counted !== void 0 && counted.itemType === itemType) {
++      averages.avg += (size - counted.size) / averages.num;
+     } else {
+       averages.avg = (averages.avg * averages.num + size) / (averages.num + 1);
+       averages.num++;
+     }
++    averagedSizeByKey.set(itemKey, { itemType, size });
+   }
+   if (!prevSize || Math.abs(prevSize - size) > 0.1) {
+     setSize(ctx, itemKey, size);
+@@ -5637,6 +5874,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
@@ -14,7 +407,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..6428c53754dc69e29fc364509adb573c
    const items = elements.map((element) => {
      var _a3;
      return [element, (_a3 = indexByElement.get(element)) != null ? _a3 : null];
-@@ -5672,7 +5677,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5672,7 +5914,9 @@ function sortDOMElements(container, indexByElement) {
            break;
          }
        }
@@ -25,7 +418,18 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..6428c53754dc69e29fc364509adb573c
          container.insertBefore(element, nextStableElement);
        } else {
          container.appendChild(element);
-@@ -6123,10 +6130,14 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
+@@ -6106,7 +6350,9 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
+       } else {
+         options.top = clampedOffset;
+       }
+-      target.scrollTo(options);
++      moveScrollerAnnounced(target, options.top !== void 0 ? options.top : target.scrollTop, () => {
++        target.scrollTo(options);
++      });
+     },
+     [getMaxScrollOffset, getScrollTarget, horizontal, isWindowScroll]
+   );
+@@ -6123,10 +6369,16 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
        isWindowScroll: () => isWindowScroll,
        scrollBy: (x, y) => {
          const target = getScrollTarget();
@@ -38,28 +442,524 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..6428c53754dc69e29fc364509adb573c
 +        const isWindowTarget = typeof window !== "undefined" && target === window;
 +        const currentLeft = isWindowTarget ? window.scrollX : target.scrollLeft;
 +        const currentTop = isWindowTarget ? window.scrollY : target.scrollTop;
-+        target.scrollTo({ behavior: "auto", left: currentLeft + x, top: currentTop + y });
++        moveScrollerAnnounced(target, currentTop + y, () => {
++          target.scrollTo({ behavior: "auto", left: currentLeft + x, top: currentTop + y });
++        });
        },
        scrollTo: (options) => {
          const { x = 0, y = 0, animated = true } = options;
-@@ -6390,7 +6401,11 @@ function getScrollAdjustTarget(ctx, contentNode) {
+@@ -6389,8 +6641,29 @@ function getScrollAdjustTarget(ctx, contentNode) {
+   }
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
++// Patched: every write the list makes to its scroller is announced on the
++// scroller as it happens: the offset before and after it, the end before it,
++// and the offset it asked for, which iOS lands after the lift under a finger.
++// A pan that reaches the page as scroll reports alone (iOS delivers no touch
++// event for a contact on a fling) is told apart from the list's by these.
++function moveScrollerAnnounced(target, intendedTop, move) {
++  if (!target || typeof target.dispatchEvent !== "function" || typeof CustomEvent === "undefined" || typeof window !== "undefined" && target === window) {
++    move();
++    return;
++  }
++  const from = target.scrollTop;
++  const fromEnd = target.scrollHeight - target.clientHeight;
++  move();
++  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to: target.scrollTop, intended: Math.max(0, Math.min(intendedTop, fromEnd)) } }));
++}
  function scrollAdjustBy(el, left, top) {
 -  el.scrollBy({ behavior: "auto", left, top });
 +  // iOS WebKit applies a relative scrollBy twice (once synchronously, once
 +  // more on the next scroll event), which doubles every position adjustment
 +  // during a touch fling. Write the absolute target instead; it lands once on
 +  // every engine.
-+  el.scrollTo({ behavior: "auto", left: el.scrollLeft + left, top: el.scrollTop + top });
++  moveScrollerAnnounced(el, el.scrollTop + top, () => {
++    el.scrollTo({ behavior: "auto", left: el.scrollLeft + left, top: el.scrollTop + top });
++  });
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
+@@ -6757,6 +7030,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+     for (const key in state.averageSizes) {
+       delete state.averageSizes[key];
+     }
++    state.averagedSizeByKey.clear();
+     state.minIndexSizeChanged = 0;
+     state.scrollForNextCalculateItemsInView = void 0;
+   }
+@@ -7001,6 +7275,7 @@ function onScroll(ctx, event) {
+   }
+   state.scrollPending = newScroll;
+   updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
++  recordEdgeAnchor(ctx);
+   trackInitialScrollNativeProgress(state, newScroll);
+   clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
+   if (state.scrollingTo) {
+@@ -7103,7 +7378,15 @@ var ScrollAdjustHandler = class {
+           targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
+           targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
+         } else {
+-          targetScroll = clampScrollOffset(this.ctx, state.scroll + pending);
++          // Patched: from the scroller's live offset, not `state.scroll`. A
++          // command that ends the animated one - the reader's wheel cancelling
++          // it, or a new scroll replacing it - can come after the scroller has
++          // moved and before its scroll event reaches the list, and this lands
++          // as an absolute write: from `state.scroll` it would undo the scroll
++          // the list has not seen yet, the reader's own wheel among it.
++          const observedScroll = state.refScroller.current && state.refScroller.current.getCurrentScrollOffset ? state.refScroller.current.getCurrentScrollOffset() : void 0;
++          const baseScroll = typeof observedScroll === "number" && Number.isFinite(observedScroll) ? observedScroll : state.scroll;
++          targetScroll = clampScrollOffset(this.ctx, baseScroll + pending);
+         }
+         const adjustment = targetScroll - state.scroll;
+         if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
+@@ -7283,6 +7566,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+     }
+   };
+   const startImperativeScroll = (resolve) => {
++    // Patched: a new command replaces the one the list holds. Commit the
++    // scroll adjust that command deferred while animating, or the new target
++    // is computed from positions the screen has not taken yet.
++    if (state.scrollingTo !== void 0) {
++      state.scrollAdjustHandler.commitPendingAdjust(void 0);
++    }
+     state.scheduledWork.cancel("imperativeScrollReady");
+     const token = ++imperativeScrollToken;
+     settlePendingImperativeScroll(state);
+@@ -7333,6 +7622,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+     for (const key in state.averageSizes) {
+       delete state.averageSizes[key];
+     }
++    state.averagedSizeByKey.clear();
+     state.minIndexSizeChanged = 0;
+     state.scrollForNextCalculateItemsInView = void 0;
+     state.pendingTotalSize = void 0;
+@@ -7370,6 +7660,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+       endBuffered: state.endBuffered,
+       getAverageItemSizes: () => getAverageItemSizes(state),
+       indexByKey: (key) => state.indexByKey.get(key),
++      // Patched: the key the list gives the item at an index in range.
++      keyAtIndex: (index) => getId(state, index),
+       isAtEnd: peek$(ctx, "isAtEnd"),
+       isAtStart: peek$(ctx, "isAtStart"),
+       isEndReached: state.isEndReached,
+@@ -7448,6 +7740,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+     setItemSize: (itemKey, size) => {
+       updateItemSizes(ctx, { itemKey, size });
+     },
++    // Patched: retire the scroll command a reader's own input has ended - one
++    // still held for its layout to settle, a scrollToEnd waiting for its
++    // commit, one awaiting completion, or the first-paint scroll in flight -
++    // with its target and its data change's anchor lock, but not the runner
++    // later scrollToEnd commands need. Held adjusts land, as its finish would.
++    cancelPendingScroll: () => {
++      state.mvcpAnchorLock = void 0;
++      if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {
++        return false;
++      }
++      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);
++      ++imperativeScrollToken;
++      const runPendingScrollToEnd = state.runPendingScrollToEnd;
++      cancelImperativeScroll(state);
++      state.runPendingScrollToEnd = runPendingScrollToEnd;
++      state.scrollAdjustHandler.commitPendingAdjust(void 0);
++      if (isInitialScrollInFlight) {
++        // It has placed the view: finish it where the reader is. Left
++        // unfinished, the next measurement re-issues it over them, and the
++        // list holds back its scroll reports until it finishes. One not yet
++        // issued is left to place the saved row.
++        clearBootstrapInitialScrollSession(state);
++        finishInitialScroll(ctx, {
++          recalculateItems: true,
++          resolvedOffset: getObservedBootstrapInitialScrollOffset(state)
++        });
++      }
++      return true;
++    },
+     setScrollProcessingEnabled: (enabled) => {
+       state.scrollProcessingEnabled = enabled;
+     },
+@@ -7845,6 +8166,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+       ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
+       ctx.state = {
+         averageSizes: {},
++        // Patched: the type and size each key's measurement is counted under
++        // in averageSizes.
++        averagedSizeByKey: /* @__PURE__ */ new Map(),
+         columnSpans: [],
+         columns: [],
+         containerItemGenerations: [],
 diff --git a/react-native.web.mjs b/react-native.web.mjs
-index c96345be154d77f66c26ea42cea15a18e22f5dfa..398e2eaa326d808f95fcf54ee8c398378b0df13f 100644
+index c96345be154d77f66c26ea42cea15a18e22f5dfa..f5aa49de11a722bc5bee838d85504627f8520fef 100644
 --- a/react-native.web.mjs
 +++ b/react-native.web.mjs
-@@ -5616,6 +5616,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -768,7 +768,15 @@ function recalculateSettledScroll(ctx) {
+   var _a3, _b;
+   const state = ctx.state;
+   if ((_a3 = state.props) == null ? void 0 : _a3.data) {
+-    (_b = state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { forceFullItemPositions: true });
++    // Patched: this full re-layout re-estimates every unmeasured row, which
++    // can move the rows above the view by tens of thousands of pixels after
++    // a long jump. Anchor it, so the rows the finished scroll left on screen
++    // stay there - unless it finished at the end, the place the reader asked
++    // for: anchoring rows there inflates the content for a frame.
++    const contentSize = getContentSize(ctx);
++    const distanceFromEnd = contentSize - state.scroll - state.scrollLength - getContentInsetEnd(ctx);
++    const finishedAtEnd = contentSize < state.scrollLength || distanceFromEnd <= EDGE_POSITION_EPSILON;
++    (_b = state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { doMVCP: !finishedAtEnd, forceFullItemPositions: true });
+   }
+   checkThresholds(ctx);
+ }
+@@ -1203,7 +1211,7 @@ function calculateOffsetWithOffsetPosition(ctx, offsetParam, params) {
+     const itemSize = Math.max(0, measuredItemSize - (isOutOfBounds ? 0 : ctx.scrollAxisGap));
+     const trailingInset = getContentInsetEnd(ctx);
+     offset -= viewPosition * (state.scrollLength - trailingInset - itemSize);
+-    if (!isOutOfBounds && index === state.props.data.length - 1) {
++    if (!isOutOfBounds && index === state.props.data.length - 1 && viewPosition > 0) {
+       const footerSize = peek$(ctx, "footerSize") || 0;
+       offset += footerSize;
+     }
+@@ -1459,9 +1467,55 @@ function doMaintainScrollAtEnd(ctx) {
+ }
+
+ // src/utils/requestAdjust.ts
++// Patched: a command anchors a pass while it holds the scroller: while the
++// view stands where that command last put it, within the epsilon the list
++// already uses for this same comparison when it issues one, or while an
++// animated command is still taking the view to its target. Once a write the
++// command did not make - a reader pressing Home among them - has moved the
++// view off that offset, the command no longer holds the scroller, and growth
++// at its target is not where the reader is looking.
++function commandHoldingScroller(ctx) {
++  const scrollingTo = ctx.state.scrollingTo;
++  if (scrollingTo != null && scrollingTo.animated) {
++    return scrollingTo;
++  }
++  return commandPlacedAtItsTarget(ctx);
++}
++// Patched: a command holds a RECORD of where it put the view only once it has
++// put it somewhere, which an animated command has not: that one is still
++// travelling, and its `targetOffset` is still the absolute offset it was asked
++// for. `getResolvedScrollCompletionState` reads that offset to judge arrival,
++// and for an animated command anywhere but iOS it cannot offset that
++// comparison by the adjust, so moving the record can keep that check from
++// resolving and leave the command in flight. If the reader's own input then
++// cancels or replaces it before it has completed at its index, the adjust it
++// was holding lands from the scroller's live offset instead of taking the view
++// where the reader sent it. A command placed at its target does hold a record,
++// and that record travels with every adjust and with the end clamp below.
++function commandPlacedAtItsTarget(ctx) {
++  const state = ctx.state;
++  const scrollingTo = state.scrollingTo;
++  if (scrollingTo == null || scrollingTo.animated) {
++    return void 0;
++  }
++  const targetOffset = scrollingTo.targetOffset;
++  if (targetOffset === void 0) {
++    return void 0;
++  }
++  return Math.abs(state.scroll - targetOffset) <= 1 ? scrollingTo : void 0;
++}
+ function requestAdjust(ctx, positionDiff, dataChanged) {
+   const state = ctx.state;
+   if (Math.abs(positionDiff) > 0.1) {
++    // Patched: an adjust moves the view by moving the content under it, so a
++    // command placed at its target now stands at a new offset. Its record of
++    // where it put the view travels with every adjust, or the two drift apart
++    // for the rest of that command's life and each later growth at its target
++    // reads the view as somebody else's and stops following it.
++    const placedCommand = commandPlacedAtItsTarget(ctx);
++    if (placedCommand !== void 0) {
++      placedCommand.targetOffset += positionDiff;
++    }
+     const doit = () => {
+       {
+         state.scrollAdjustHandler.requestAdjust(positionDiff);
+@@ -1618,9 +1672,127 @@ function resolvePendingNativeMVCPAdjust(ctx, newScroll) {
+   }
+   return false;
+ }
++// Patched: the top-edge anchor. When the row under the viewport's top edge is
++// re-measured, hold the element at that edge still instead of the first row
++// whose top is on screen. Growth inside that row below the edge (a card opened
++// there, a reply streaming on) then moves nothing, and growth above the edge
++// is compensated exactly. A row measured for the first time keeps the
++// library's choice, and so does a row whose recorded element is gone.
++function findEdgeContainer(ctx, edgeY) {
++  const state = ctx.state;
++  const read = (key) => {
++    const containerId = state.containerItemKeys.get(key);
++    const ref = containerId === void 0 ? void 0 : ctx.viewRefs.get(containerId);
++    const el = ref == null ? void 0 : ref.current;
++    if (!el) {
++      return void 0;
++    }
++    const rect = el.getBoundingClientRect();
++    return rect.top < edgeY && rect.bottom > edgeY ? { el, key, rect } : void 0;
++  };
++  const hintIndex = state.startNoBuffer;
++  if (hintIndex !== void 0 && hintIndex !== null && hintIndex >= 0) {
++    const hintKey = state.idCache[hintIndex] != null ? state.idCache[hintIndex] : getId(state, hintIndex);
++    const hinted = hintKey === void 0 ? void 0 : read(hintKey);
++    if (hinted) {
++      return hinted;
++    }
++  }
++  for (const key of state.containerItemKeys.keys()) {
++    const hit = read(key);
++    if (hit) {
++      return hit;
++    }
++  }
++  return void 0;
++}
++function findEdgeElement(root, edgeY) {
++  let node = root;
++  for (; ; ) {
++    const next = findEdgeChild(node, edgeY);
++    if (next === void 0) {
++      return node;
++    }
++    if (next.below) {
++      return next.el;
++    }
++    node = next.el;
++  }
++}
++// The first child box that crosses or follows the edge. A child with no box
++// of its own (`display: contents`, as markdown and component wrappers use)
++// lays its children out in its place, so they are searched in its stead.
++function findEdgeChild(parent, edgeY) {
++  for (let child = parent.firstElementChild; child; child = child.nextElementSibling) {
++    const rect = child.getBoundingClientRect();
++    if (rect.height === 0) {
++      const inner = findEdgeChild(child, edgeY);
++      if (inner !== void 0) {
++        return inner;
++      }
++      continue;
++    }
++    if (rect.bottom > edgeY) {
++      return { el: child, below: rect.top > edgeY };
++    }
++  }
++  return void 0;
++}
++// What the anchor holds. A renderer that reuses an element for other content
++// (blocks inserted above it, keyed by position) leaves a node whose movement
++// says nothing about the reader's text. Only the first 64 characters are read:
++// the node can be a whole code block, and this runs on every scroll event.
++// Its text nodes in tree order are what textContent concatenates (4 | 8 is
++// NodeFilter.SHOW_TEXT | NodeFilter.SHOW_CDATA_SECTION, spelled as values so
++// no global is needed).
++function edgeAnchorHead(node) {
++  const walker = node.ownerDocument.createTreeWalker(node, 4 | 8);
++  let head = "";
++  for (let part = walker.nextNode(); part !== null && head.length < 64; part = walker.nextNode()) {
++    head += part.data;
++  }
++  return head.slice(0, 64);
++}
++function recordEdgeAnchor(ctx) {
++  const state = ctx.state;
++  state.edgeAnchor = void 0;
++  const scroller = state.refScroller.current;
++  const scrollNode = !scroller || state.props.horizontal || typeof scroller.getScrollableNode !== "function" ? void 0 : scroller.getScrollableNode();
++  if (!scrollNode || typeof scrollNode.getBoundingClientRect !== "function") {
++    return;
++  }
++  const edgeY = scrollNode.getBoundingClientRect().top;
++  const hit = findEdgeContainer(ctx, edgeY);
++  if (!hit) {
++    return;
++  }
++  const node = findEdgeElement(hit.el, edgeY);
++  state.edgeAnchor = {
++    key: hit.key,
++    node,
++    offset: node.getBoundingClientRect().top - hit.rect.top,
++    head: edgeAnchorHead(node)
++  };
++}
++function measureEdgeAnchorShift(ctx, anchor) {
++  const state = ctx.state;
++  const containerId = state.containerItemKeys.get(anchor.key);
++  const ref = containerId === void 0 ? void 0 : ctx.viewRefs.get(containerId);
++  const el = ref == null ? void 0 : ref.current;
++  if (!el || !anchor.node.isConnected || !el.contains(anchor.node) || edgeAnchorHead(anchor.node) !== anchor.head) {
++    return void 0;
++  }
++  const offset = anchor.node.getBoundingClientRect().top - el.getBoundingClientRect().top;
++  const shift = offset - anchor.offset;
++  anchor.offset = offset;
++  return shift;
++}
+ function prepareMVCP(ctx, dataChanged) {
+   const state = ctx.state;
+   const { idsInView, positions, props } = state;
++  const remeasuredKeys = state.remeasuredKeys;
++  state.remeasuredKeys = void 0;
++  let edgeAnchorShift;
+   const {
+     maintainVisibleContentPosition: { data: mvcpData, size: mvcpScroll, shouldRestorePosition }
+   } = props;
+@@ -1635,8 +1807,18 @@ function prepareMVCP(ctx, dataChanged) {
+   let prevPosition;
+   let targetId;
+   const idsInViewWithPositions = [];
+-  const scrollTarget = scrollingTo == null ? void 0 : scrollingTo.index;
+-  const scrollingToViewPosition = scrollingTo == null ? void 0 : scrollingTo.viewPosition;
++  // Patched: a command anchors this pass only while it still holds the
++  // scroller, and it holds it while the view stands where that command last
++  // put it. Once a write the command did not make - a reader's Home among
++  // them - has moved the view, the command's target is not what the reader is
++  // looking at, and anchoring on it would carry them by growth they are
++  // nowhere near. The pass then anchors on the view itself, exactly as it does
++  // with no command in flight, so a reader who has taken the view over still
++  // keeps their place. An animated command is still taking the view to its
++  // target, so it keeps its anchor.
++  const anchoringCommand = commandHoldingScroller(ctx);
++  const scrollTarget = anchoringCommand == null ? void 0 : anchoringCommand.index;
++  const scrollingToViewPosition = anchoringCommand == null ? void 0 : anchoringCommand.viewPosition;
+   const isEndAnchoredScrollTarget = scrollTarget !== void 0 && state.props.data.length > 0 && scrollTarget >= state.props.data.length - 1 && (scrollingToViewPosition != null ? scrollingToViewPosition : 0) > 0;
+   const shouldMVCP = dataChanged ? mvcpData : mvcpScroll;
+   const indexByKey = state.indexByKey;
+@@ -1649,7 +1831,11 @@ function prepareMVCP(ctx, dataChanged) {
+     } else if (scrollTarget !== void 0) {
+       targetId = getId(state, scrollTarget);
+     } else if (idsInView.length > 0 && state.didContainersLayout && !dataChanged) {
+-      targetId = idsInView.find((id) => indexByKey.get(id) !== void 0);
++      const edgeAnchor = state.edgeAnchor;
++      if (edgeAnchor !== void 0 && remeasuredKeys !== void 0 && remeasuredKeys.has(edgeAnchor.key) && indexByKey.get(edgeAnchor.key) !== void 0) {
++        edgeAnchorShift = measureEdgeAnchorShift(ctx, edgeAnchor);
++      }
++      targetId = edgeAnchorShift !== void 0 ? edgeAnchor.key : idsInView.find((id) => indexByKey.get(id) !== void 0);
+     }
+     if (dataChanged && idsInView.length > 0 && state.didContainersLayout) {
+       for (let i = 0; i < idsInView.length; i++) {
+@@ -1723,6 +1909,16 @@ function prepareMVCP(ctx, dataChanged) {
+               diff = Math.max(0, totalSize - state.scroll - state.scrollLength);
+             } else {
+               const maxScroll = Math.max(0, totalSize - state.scrollLength);
++              // Patched: this moves the view itself, with no adjust to carry
++              // a placed command's record along, so the record travels the
++              // same distance here. Without it a row above the target taking
++              // the content below the view leaves that command's record behind,
++              // and the next growth at its target - the rest of the streaming
++              // reply - is read as somebody else's and never followed.
++              const placedCommand = commandPlacedAtItsTarget(ctx);
++              if (placedCommand !== void 0) {
++                placedCommand.targetOffset += maxScroll - state.scroll;
++              }
+               state.scroll = maxScroll;
+               state.scrollPending = maxScroll;
+               diff = 0;
+@@ -1731,15 +1927,29 @@ function prepareMVCP(ctx, dataChanged) {
+           positionDiff = diff;
+           anchorIdForLock = targetId;
+           anchorPositionForLock = newPosition;
++          if (edgeAnchorShift !== void 0) {
++            positionDiff += edgeAnchorShift;
++          }
+         }
+       }
+-      if (scrollingToViewPosition && scrollingToViewPosition > 0) {
+-        const newSize = getItemSize(ctx, targetId, scrollTarget, state.props.data[scrollTarget]);
+-        const prevSize = scrollingTo == null ? void 0 : scrollingTo.itemSize;
++      // Patched: keyed on the command itself, not on the one this pass
++      // anchored on, so its record of its target row's size stays current
++      // either way and a command that does move the view later lands on that
++      // row as it is then. Only a command this pass anchored on - one that
++      // holds the scroller - adds that row's growth to the adjust; for any
++      // other, the growth is not where the reader is.
++      const commandIndex = scrollingTo == null ? void 0 : scrollingTo.index;
++      const commandViewPosition = scrollingTo == null ? void 0 : scrollingTo.viewPosition;
++      if (commandViewPosition && commandViewPosition > 0 && commandIndex !== void 0) {
++        const commandTargetId = getId(state, commandIndex);
++        const newSize = getItemSize(ctx, commandTargetId, commandIndex, state.props.data[commandIndex]);
++        const prevSize = scrollingTo.itemSize;
+         if (newSize !== void 0 && prevSize !== void 0 && newSize !== prevSize) {
+           const diff = newSize - prevSize;
+           if (diff !== 0) {
+-            positionDiff += diff * scrollingToViewPosition;
++            if (anchoringCommand != null) {
++              positionDiff += diff * commandViewPosition;
++            }
+             scrollingTo.itemSize = newSize;
+           }
+         }
+@@ -2514,7 +2724,13 @@ function getPreservedEndAnchorOffsetDiff(ctx) {
+     return;
+   }
+   const currentOffset = typeof state.lastNativeScroll === "number" && Number.isFinite(state.lastNativeScroll) ? state.lastNativeScroll : getObservedBootstrapInitialScrollOffset(state);
+-  return resolveInitialScrollOffset(ctx, initialScroll) - currentOffset;
++  // Patched: the end anchor is at most the content's last offset. A negative
++  // `viewOffset` lets `clampScrollOffset` carry it past that, to an offset no
++  // scroll reaches, and the per-frame correction toward it never settles.
++  const resolvedOffset = resolveInitialScrollOffset(ctx, initialScroll);
++  const contentSize = getContentSize(ctx);
++  const endOffset = Number.isFinite(contentSize) && Number.isFinite(state.scrollLength) ? Math.max(0, contentSize - state.scrollLength) : resolvedOffset;
++  return Math.min(resolvedOffset, endOffset) - currentOffset;
+ }
+ function schedulePreservedEndAnchorCorrection(ctx) {
+   if (getPreservedEndAnchorOffsetDiff(ctx) === void 0) {
+@@ -4823,6 +5039,9 @@ function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+   const diff = updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem);
+   const size = roundSize(horizontal ? sizeObj.width : sizeObj.height);
+   if (diff !== 0) {
++    if (prevSizeKnown !== void 0) {
++      (state.remeasuredKeys || (state.remeasuredKeys = /* @__PURE__ */ new Set())).add(itemKey);
++    }
+     minIndexSizeChanged = minIndexSizeChanged !== void 0 ? Math.min(minIndexSizeChanged, index) : index;
+     const { startBuffered, endBuffered } = state;
+     needsRecalculate || (needsRecalculate = index >= startBuffered && index <= endBuffered);
+@@ -4865,6 +5084,7 @@ function updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+     indexByKey,
+     sizesKnown,
+     averageSizes,
++    averagedSizeByKey,
+     props: { data, horizontal, getItemType, getFixedItemSize }
+   } = state;
+   if (!data) return 0;
+@@ -4888,6 +5108,22 @@ function updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+   sizesKnown.set(itemKey, size);
+   if (fixedItemSize === void 0 && size > 0) {
+     itemType != null ? itemType : itemType = getItemType ? (_b = getItemType(itemData, index)) != null ? _b : "" : "";
++    // Patched: an average counts each key's size once, under the type it was
++    // measured as. A placeholder and the row it becomes share a key but not a
++    // type, so a new type takes the key's size out of the old type's average
++    // and adds it to its own; replacing it in the new type's average drove that
++    // average negative, and every unmeasured row of the type was then placed
++    // backwards, over the rows on screen.
++    const counted = averagedSizeByKey.get(itemKey);
++    if (counted !== void 0 && counted.itemType !== itemType) {
++      const previous = averageSizes[counted.itemType];
++      if (previous && previous.num > 1) {
++        previous.avg = (previous.avg * previous.num - counted.size) / (previous.num - 1);
++        previous.num--;
++      } else {
++        delete averageSizes[counted.itemType];
++      }
++    }
+     let averages = averageSizes[itemType];
+     if (!averages) {
+       averages = averageSizes[itemType] = { avg: 0, num: 0 };
+@@ -4895,12 +5131,13 @@ function updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+     if (averages.num === 0) {
+       averages.avg = size;
+       averages.num++;
+-    } else if (prevSizeKnown !== void 0 && prevSizeKnown > 0) {
+-      averages.avg += (size - prevSizeKnown) / averages.num;
++    } else if (counted !== void 0 && counted.itemType === itemType) {
++      averages.avg += (size - counted.size) / averages.num;
+     } else {
+       averages.avg = (averages.avg * averages.num + size) / (averages.num + 1);
+       averages.num++;
+     }
++    averagedSizeByKey.set(itemKey, { itemType, size });
+   }
+   if (!prevSize || Math.abs(prevSize - size) > 0.1) {
+     setSize(ctx, itemKey, size);
+@@ -5616,6 +5853,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
@@ -71,7 +971,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..398e2eaa326d808f95fcf54ee8c39837
    const items = elements.map((element) => {
      var _a3;
      return [element, (_a3 = indexByElement.get(element)) != null ? _a3 : null];
-@@ -5651,7 +5656,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5651,7 +5893,9 @@ function sortDOMElements(container, indexByElement) {
            break;
          }
        }
@@ -82,7 +982,18 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..398e2eaa326d808f95fcf54ee8c39837
          container.insertBefore(element, nextStableElement);
        } else {
          container.appendChild(element);
-@@ -6102,10 +6109,14 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+@@ -6085,7 +6329,9 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+       } else {
+         options.top = clampedOffset;
+       }
+-      target.scrollTo(options);
++      moveScrollerAnnounced(target, options.top !== void 0 ? options.top : target.scrollTop, () => {
++        target.scrollTo(options);
++      });
+     },
+     [getMaxScrollOffset, getScrollTarget, horizontal, isWindowScroll]
+   );
+@@ -6102,10 +6348,16 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
        isWindowScroll: () => isWindowScroll,
        scrollBy: (x, y) => {
          const target = getScrollTarget();
@@ -95,28 +1006,238 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..398e2eaa326d808f95fcf54ee8c39837
 +        const isWindowTarget = typeof window !== "undefined" && target === window;
 +        const currentLeft = isWindowTarget ? window.scrollX : target.scrollLeft;
 +        const currentTop = isWindowTarget ? window.scrollY : target.scrollTop;
-+        target.scrollTo({ behavior: "auto", left: currentLeft + x, top: currentTop + y });
++        moveScrollerAnnounced(target, currentTop + y, () => {
++          target.scrollTo({ behavior: "auto", left: currentLeft + x, top: currentTop + y });
++        });
        },
        scrollTo: (options) => {
          const { x = 0, y = 0, animated = true } = options;
-@@ -6369,7 +6380,11 @@ function getScrollAdjustTarget(ctx, contentNode) {
+@@ -6368,8 +6620,29 @@ function getScrollAdjustTarget(ctx, contentNode) {
+   }
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
++// Patched: every write the list makes to its scroller is announced on the
++// scroller as it happens: the offset before and after it, the end before it,
++// and the offset it asked for, which iOS lands after the lift under a finger.
++// A pan that reaches the page as scroll reports alone (iOS delivers no touch
++// event for a contact on a fling) is told apart from the list's by these.
++function moveScrollerAnnounced(target, intendedTop, move) {
++  if (!target || typeof target.dispatchEvent !== "function" || typeof CustomEvent === "undefined" || typeof window !== "undefined" && target === window) {
++    move();
++    return;
++  }
++  const from = target.scrollTop;
++  const fromEnd = target.scrollHeight - target.clientHeight;
++  move();
++  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to: target.scrollTop, intended: Math.max(0, Math.min(intendedTop, fromEnd)) } }));
++}
  function scrollAdjustBy(el, left, top) {
 -  el.scrollBy({ behavior: "auto", left, top });
 +  // iOS WebKit applies a relative scrollBy twice (once synchronously, once
 +  // more on the next scroll event), which doubles every position adjustment
 +  // during a touch fling. Write the absolute target instead; it lands once on
 +  // every engine.
-+  el.scrollTo({ behavior: "auto", left: el.scrollLeft + left, top: el.scrollTop + top });
++  moveScrollerAnnounced(el, el.scrollTop + top, () => {
++    el.scrollTo({ behavior: "auto", left: el.scrollLeft + left, top: el.scrollTop + top });
++  });
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
+@@ -6736,6 +7009,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+     for (const key in state.averageSizes) {
+       delete state.averageSizes[key];
+     }
++    state.averagedSizeByKey.clear();
+     state.minIndexSizeChanged = 0;
+     state.scrollForNextCalculateItemsInView = void 0;
+   }
+@@ -6980,6 +7254,7 @@ function onScroll(ctx, event) {
+   }
+   state.scrollPending = newScroll;
+   updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
++  recordEdgeAnchor(ctx);
+   trackInitialScrollNativeProgress(state, newScroll);
+   clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
+   if (state.scrollingTo) {
+@@ -7082,7 +7357,15 @@ var ScrollAdjustHandler = class {
+           targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
+           targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
+         } else {
+-          targetScroll = clampScrollOffset(this.ctx, state.scroll + pending);
++          // Patched: from the scroller's live offset, not `state.scroll`. A
++          // command that ends the animated one - the reader's wheel cancelling
++          // it, or a new scroll replacing it - can come after the scroller has
++          // moved and before its scroll event reaches the list, and this lands
++          // as an absolute write: from `state.scroll` it would undo the scroll
++          // the list has not seen yet, the reader's own wheel among it.
++          const observedScroll = state.refScroller.current && state.refScroller.current.getCurrentScrollOffset ? state.refScroller.current.getCurrentScrollOffset() : void 0;
++          const baseScroll = typeof observedScroll === "number" && Number.isFinite(observedScroll) ? observedScroll : state.scroll;
++          targetScroll = clampScrollOffset(this.ctx, baseScroll + pending);
+         }
+         const adjustment = targetScroll - state.scroll;
+         if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
+@@ -7262,6 +7545,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+     }
+   };
+   const startImperativeScroll = (resolve) => {
++    // Patched: a new command replaces the one the list holds. Commit the
++    // scroll adjust that command deferred while animating, or the new target
++    // is computed from positions the screen has not taken yet.
++    if (state.scrollingTo !== void 0) {
++      state.scrollAdjustHandler.commitPendingAdjust(void 0);
++    }
+     state.scheduledWork.cancel("imperativeScrollReady");
+     const token = ++imperativeScrollToken;
+     settlePendingImperativeScroll(state);
+@@ -7312,6 +7601,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+     for (const key in state.averageSizes) {
+       delete state.averageSizes[key];
+     }
++    state.averagedSizeByKey.clear();
+     state.minIndexSizeChanged = 0;
+     state.scrollForNextCalculateItemsInView = void 0;
+     state.pendingTotalSize = void 0;
+@@ -7349,6 +7639,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+       endBuffered: state.endBuffered,
+       getAverageItemSizes: () => getAverageItemSizes(state),
+       indexByKey: (key) => state.indexByKey.get(key),
++      // Patched: the key the list gives the item at an index in range.
++      keyAtIndex: (index) => getId(state, index),
+       isAtEnd: peek$(ctx, "isAtEnd"),
+       isAtStart: peek$(ctx, "isAtStart"),
+       isEndReached: state.isEndReached,
+@@ -7427,6 +7719,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+     setItemSize: (itemKey, size) => {
+       updateItemSizes(ctx, { itemKey, size });
+     },
++    // Patched: retire the scroll command a reader's own input has ended - one
++    // still held for its layout to settle, a scrollToEnd waiting for its
++    // commit, one awaiting completion, or the first-paint scroll in flight -
++    // with its target and its data change's anchor lock, but not the runner
++    // later scrollToEnd commands need. Held adjusts land, as its finish would.
++    cancelPendingScroll: () => {
++      state.mvcpAnchorLock = void 0;
++      if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {
++        return false;
++      }
++      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);
++      ++imperativeScrollToken;
++      const runPendingScrollToEnd = state.runPendingScrollToEnd;
++      cancelImperativeScroll(state);
++      state.runPendingScrollToEnd = runPendingScrollToEnd;
++      state.scrollAdjustHandler.commitPendingAdjust(void 0);
++      if (isInitialScrollInFlight) {
++        // It has placed the view: finish it where the reader is. Left
++        // unfinished, the next measurement re-issues it over them, and the
++        // list holds back its scroll reports until it finishes. One not yet
++        // issued is left to place the saved row.
++        clearBootstrapInitialScrollSession(state);
++        finishInitialScroll(ctx, {
++          recalculateItems: true,
++          resolvedOffset: getObservedBootstrapInitialScrollOffset(state)
++        });
++      }
++      return true;
++    },
+     setScrollProcessingEnabled: (enabled) => {
+       state.scrollProcessingEnabled = enabled;
+     },
+@@ -7824,6 +8145,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+       ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
+       ctx.state = {
+         averageSizes: {},
++        // Patched: the type and size each key's measurement is counted under
++        // in averageSizes.
++        averagedSizeByKey: /* @__PURE__ */ new Map(),
+         columnSpans: [],
+         columns: [],
+         containerItemGenerations: [],
+diff --git a/react.d.ts b/react.d.ts
+index b6c7481603f4119495551b3e4c1c071984c144af..54cfca30be22310b025fc2ad0af66f91dba32bba 100644
+--- a/react.d.ts
++++ b/react.d.ts
+@@ -562,6 +562,8 @@ type LegendListState$1 = {
+     isWithinMaintainScrollAtEndThreshold: boolean;
+     getAverageItemSizes: () => Record<string, LegendListAverageItemSize>;
+     indexByKey: (key: string) => number | undefined;
++    /** Patched: the key the list gives the item at an index in range. */
++    keyAtIndex: (index: number) => string;
+     listen: <T extends LegendListListenerType>(listenerType: T, callback: (value: ListenerTypeValueMap[T]) => void) => () => void;
+     listenToPosition: (key: string, callback: (value: number) => void) => () => void;
+     positionAtIndex: (index: number) => number;
+@@ -683,6 +685,12 @@ type LegendListRef$1 = {
+      * @param size - The measured item size.
+      */
+     setItemSize(itemKey: string, size: Pick<LayoutRectangle, "height" | "width">): void;
++    /**
++     * Patched: retires the scroll command the list holds, unrun or awaiting
++     * completion, with its target and anchor lock, and settles its promise.
++     * Returns whether one was held.
++     */
++    cancelPendingScroll(): boolean;
+     /**
+      * Sets whether scroll processing is enabled.
+      * @param enabled - If true, scroll processing is enabled.
 diff --git a/react.js b/react.js
-index ea0348877ff08eb9962ff97efebf2cc19cffad11..939d249a70a8f5ebd1ae2e26ad1126225f854c9e 100644
+index ea0348877ff08eb9962ff97efebf2cc19cffad11..1e1ddcd0248b7d52387148800603f13af518edb6 100644
 --- a/react.js
 +++ b/react.js
-@@ -1143,6 +1143,7 @@ function areKnownOrFixedItemSizesAvailable(ctx, startIndex, endIndex) {
+@@ -785,11 +785,31 @@ function checkThresholds(ctx, allowedEdge) {
+ }
+
+ // src/core/recalculateSettledScroll.ts
+-function recalculateSettledScroll(ctx) {
++// Patched: whether a scroll target asks for the end of the list - its last
++// row, bottom-aligned.
++function isEndScrollTarget(ctx, target) {
++  const data = ctx.state.props.data;
++  return !!target && !!data && target.index === data.length - 1 && target.viewPosition === 1;
++}
++function recalculateSettledScroll(ctx, initialScrollToEnd) {
+   var _a3, _b;
+   const state = ctx.state;
+   if ((_a3 = state.props) == null ? void 0 : _a3.data) {
+-    (_b = state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { forceFullItemPositions: true });
++    // Patched: this full re-layout re-estimates every unmeasured row, which
++    // can move the rows above the view by tens of thousands of pixels after
++    // a long jump. Anchor it, so the rows the finished scroll left on screen
++    // stay there - unless it finished at the end, where anchoring rows
++    // inflates the content for a frame. That pass anchors nothing, so the
++    // unmeasured rows above the view keep their estimates in it, except after
++    // the initial scroll to the end with the scroller there too
++    // (`refreshEstimatesAtEnd`; see `holdCachedEstimatesAbove` in
++    // calculateItemsInView).
++    const contentSize = getContentSize(ctx);
++    const distanceFromEnd = contentSize - state.scroll - state.scrollLength - getContentInsetEnd(ctx);
++    const finishedAtEnd = contentSize < state.scrollLength || distanceFromEnd <= EDGE_POSITION_EPSILON;
++    const liveOffset = state.refScroller.current && state.refScroller.current.getCurrentScrollOffset ? state.refScroller.current.getCurrentScrollOffset() : void 0;
++    const liveAtEnd = typeof liveOffset !== "number" || !Number.isFinite(liveOffset) || contentSize - liveOffset - state.scrollLength - getContentInsetEnd(ctx) <= EDGE_POSITION_EPSILON;
++    (_b = state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { doMVCP: !finishedAtEnd, forceFullItemPositions: true, refreshEstimatesAtEnd: finishedAtEnd && !!initialScrollToEnd && liveAtEnd });
+   }
+   checkThresholds(ctx);
+ }
+@@ -938,6 +958,11 @@ function clearPreservedInitialScrollTarget(state) {
+ function finishInitialScroll(ctx, options) {
+   var _a3, _b, _c;
+   const state = ctx.state;
++  // Patched: whether this is the initial scroll to the end finishing, read
++  // before `complete` clears its target. Only its first finish counts: while
++  // that target is kept for a resize, every scroll that finishes comes
++  // through here, a follow to the end after the reader's wheel among them.
++  const initialScrollToEnd = !state.didFinishInitialScroll && isEndScrollTarget(ctx, state.initialScroll);
+   if ((options == null ? void 0 : options.resolvedOffset) !== void 0) {
+     syncInitialScrollOffset(state, options.resolvedOffset);
+   } else if ((options == null ? void 0 : options.syncObservedOffset) && ((_a3 = state.initialScrollSession) == null ? void 0 : _a3.kind) === "offset") {
+@@ -972,7 +997,7 @@ function finishInitialScroll(ctx, options) {
+       clearPreservedInitialScrollTarget(state);
+     }
+     if (options == null ? void 0 : options.recalculateItems) {
+-      recalculateSettledScroll(ctx);
++      recalculateSettledScroll(ctx, initialScrollToEnd);
+     }
+     setInitialRenderState(ctx, { didInitialScroll: true });
+     if (shouldReleaseDeferredPublicOnScroll) {
+@@ -1143,6 +1168,7 @@ function areKnownOrFixedItemSizesAvailable(ctx, startIndex, endIndex) {
    }
    return true;
  }
@@ -124,7 +1245,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..939d249a70a8f5ebd1ae2e26ad112622
  function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, notifyTotalSize, resolved) {
    var _a3, _b, _c, _d;
    const state = ctx.state;
-@@ -1158,8 +1159,18 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+@@ -1158,8 +1184,18 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
    }
    let size;
    const renderedSize = sizes.get(key);
@@ -135,8 +1256,8 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..939d249a70a8f5ebd1ae2e26ad112622
 +  if (preferCachedSize && renderedSize !== void 0) {
 +    // Cached sizes for never-measured items are estimates, not measurements.
 +    // Reuse them for positional stability unless the live type average proves
-+    // that the estimate is grossly stale.
-+    if (useAverageSize && !scrollingTo) {
++    // that the estimate is grossly stale, in a pass that can anchor the change.
++    if (useAverageSize && !scrollingTo && preferCachedSize !== "always") {
 +      itemType = (_b = resolved == null ? void 0 : resolved.itemType) != null ? _b : getItemType ? (_a3 = getItemType(data, index)) != null ? _a3 : "" : "";
 +      averageSizeForType = (_c = averageSizes[itemType]) == null ? void 0 : _c.avg;
 +    }
@@ -145,7 +1266,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..939d249a70a8f5ebd1ae2e26ad112622
        return renderedSize;
      }
    }
-@@ -1168,9 +1179,9 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+@@ -1168,9 +1204,9 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
      setSize(ctx, key, size, notifyTotalSize);
      return size;
    }
@@ -157,7 +1278,382 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..939d249a70a8f5ebd1ae2e26ad112622
      if (averageSizeForType !== void 0) {
        size = roundSize(averageSizeForType);
      }
-@@ -4318,7 +4329,10 @@ function calculateItemsInView(ctx, params = {}) {
+@@ -1224,7 +1260,7 @@ function calculateOffsetWithOffsetPosition(ctx, offsetParam, params) {
+     const itemSize = Math.max(0, measuredItemSize - (isOutOfBounds ? 0 : ctx.scrollAxisGap));
+     const trailingInset = getContentInsetEnd(ctx);
+     offset -= viewPosition * (state.scrollLength - trailingInset - itemSize);
+-    if (!isOutOfBounds && index === state.props.data.length - 1) {
++    if (!isOutOfBounds && index === state.props.data.length - 1 && viewPosition > 0) {
+       const footerSize = peek$(ctx, "footerSize") || 0;
+       offset += footerSize;
+     }
+@@ -1480,9 +1516,55 @@ function doMaintainScrollAtEnd(ctx) {
+ }
+
+ // src/utils/requestAdjust.ts
++// Patched: a command anchors a pass while it holds the scroller: while the
++// view stands where that command last put it, within the epsilon the list
++// already uses for this same comparison when it issues one, or while an
++// animated command is still taking the view to its target. Once a write the
++// command did not make - a reader pressing Home among them - has moved the
++// view off that offset, the command no longer holds the scroller, and growth
++// at its target is not where the reader is looking.
++function commandHoldingScroller(ctx) {
++  const scrollingTo = ctx.state.scrollingTo;
++  if (scrollingTo != null && scrollingTo.animated) {
++    return scrollingTo;
++  }
++  return commandPlacedAtItsTarget(ctx);
++}
++// Patched: a command holds a RECORD of where it put the view only once it has
++// put it somewhere, which an animated command has not: that one is still
++// travelling, and its `targetOffset` is still the absolute offset it was asked
++// for. `getResolvedScrollCompletionState` reads that offset to judge arrival,
++// and for an animated command anywhere but iOS it cannot offset that
++// comparison by the adjust, so moving the record can keep that check from
++// resolving and leave the command in flight. If the reader's own input then
++// cancels or replaces it before it has completed at its index, the adjust it
++// was holding lands from the scroller's live offset instead of taking the view
++// where the reader sent it. A command placed at its target does hold a record,
++// and that record travels with every adjust and with the end clamp below.
++function commandPlacedAtItsTarget(ctx) {
++  const state = ctx.state;
++  const scrollingTo = state.scrollingTo;
++  if (scrollingTo == null || scrollingTo.animated) {
++    return void 0;
++  }
++  const targetOffset = scrollingTo.targetOffset;
++  if (targetOffset === void 0) {
++    return void 0;
++  }
++  return Math.abs(state.scroll - targetOffset) <= 1 ? scrollingTo : void 0;
++}
+ function requestAdjust(ctx, positionDiff, dataChanged) {
+   const state = ctx.state;
+   if (Math.abs(positionDiff) > 0.1) {
++    // Patched: an adjust moves the view by moving the content under it, so a
++    // command placed at its target now stands at a new offset. Its record of
++    // where it put the view travels with every adjust, or the two drift apart
++    // for the rest of that command's life and each later growth at its target
++    // reads the view as somebody else's and stops following it.
++    const placedCommand = commandPlacedAtItsTarget(ctx);
++    if (placedCommand !== void 0) {
++      placedCommand.targetOffset += positionDiff;
++    }
+     const doit = () => {
+       {
+         state.scrollAdjustHandler.requestAdjust(positionDiff);
+@@ -1639,9 +1721,127 @@ function resolvePendingNativeMVCPAdjust(ctx, newScroll) {
+   }
+   return false;
+ }
++// Patched: the top-edge anchor. When the row under the viewport's top edge is
++// re-measured, hold the element at that edge still instead of the first row
++// whose top is on screen. Growth inside that row below the edge (a card opened
++// there, a reply streaming on) then moves nothing, and growth above the edge
++// is compensated exactly. A row measured for the first time keeps the
++// library's choice, and so does a row whose recorded element is gone.
++function findEdgeContainer(ctx, edgeY) {
++  const state = ctx.state;
++  const read = (key) => {
++    const containerId = state.containerItemKeys.get(key);
++    const ref = containerId === void 0 ? void 0 : ctx.viewRefs.get(containerId);
++    const el = ref == null ? void 0 : ref.current;
++    if (!el) {
++      return void 0;
++    }
++    const rect = el.getBoundingClientRect();
++    return rect.top < edgeY && rect.bottom > edgeY ? { el, key, rect } : void 0;
++  };
++  const hintIndex = state.startNoBuffer;
++  if (hintIndex !== void 0 && hintIndex !== null && hintIndex >= 0) {
++    const hintKey = state.idCache[hintIndex] != null ? state.idCache[hintIndex] : getId(state, hintIndex);
++    const hinted = hintKey === void 0 ? void 0 : read(hintKey);
++    if (hinted) {
++      return hinted;
++    }
++  }
++  for (const key of state.containerItemKeys.keys()) {
++    const hit = read(key);
++    if (hit) {
++      return hit;
++    }
++  }
++  return void 0;
++}
++function findEdgeElement(root, edgeY) {
++  let node = root;
++  for (; ; ) {
++    const next = findEdgeChild(node, edgeY);
++    if (next === void 0) {
++      return node;
++    }
++    if (next.below) {
++      return next.el;
++    }
++    node = next.el;
++  }
++}
++// The first child box that crosses or follows the edge. A child with no box
++// of its own (`display: contents`, as markdown and component wrappers use)
++// lays its children out in its place, so they are searched in its stead.
++function findEdgeChild(parent, edgeY) {
++  for (let child = parent.firstElementChild; child; child = child.nextElementSibling) {
++    const rect = child.getBoundingClientRect();
++    if (rect.height === 0) {
++      const inner = findEdgeChild(child, edgeY);
++      if (inner !== void 0) {
++        return inner;
++      }
++      continue;
++    }
++    if (rect.bottom > edgeY) {
++      return { el: child, below: rect.top > edgeY };
++    }
++  }
++  return void 0;
++}
++// What the anchor holds. A renderer that reuses an element for other content
++// (blocks inserted above it, keyed by position) leaves a node whose movement
++// says nothing about the reader's text. Only the first 64 characters are read:
++// the node can be a whole code block, and this runs on every scroll event.
++// Its text nodes in tree order are what textContent concatenates (4 | 8 is
++// NodeFilter.SHOW_TEXT | NodeFilter.SHOW_CDATA_SECTION, spelled as values so
++// no global is needed).
++function edgeAnchorHead(node) {
++  const walker = node.ownerDocument.createTreeWalker(node, 4 | 8);
++  let head = "";
++  for (let part = walker.nextNode(); part !== null && head.length < 64; part = walker.nextNode()) {
++    head += part.data;
++  }
++  return head.slice(0, 64);
++}
++function recordEdgeAnchor(ctx) {
++  const state = ctx.state;
++  state.edgeAnchor = void 0;
++  const scroller = state.refScroller.current;
++  const scrollNode = !scroller || state.props.horizontal || typeof scroller.getScrollableNode !== "function" ? void 0 : scroller.getScrollableNode();
++  if (!scrollNode || typeof scrollNode.getBoundingClientRect !== "function") {
++    return;
++  }
++  const edgeY = scrollNode.getBoundingClientRect().top;
++  const hit = findEdgeContainer(ctx, edgeY);
++  if (!hit) {
++    return;
++  }
++  const node = findEdgeElement(hit.el, edgeY);
++  state.edgeAnchor = {
++    key: hit.key,
++    node,
++    offset: node.getBoundingClientRect().top - hit.rect.top,
++    head: edgeAnchorHead(node)
++  };
++}
++function measureEdgeAnchorShift(ctx, anchor) {
++  const state = ctx.state;
++  const containerId = state.containerItemKeys.get(anchor.key);
++  const ref = containerId === void 0 ? void 0 : ctx.viewRefs.get(containerId);
++  const el = ref == null ? void 0 : ref.current;
++  if (!el || !anchor.node.isConnected || !el.contains(anchor.node) || edgeAnchorHead(anchor.node) !== anchor.head) {
++    return void 0;
++  }
++  const offset = anchor.node.getBoundingClientRect().top - el.getBoundingClientRect().top;
++  const shift = offset - anchor.offset;
++  anchor.offset = offset;
++  return shift;
++}
+ function prepareMVCP(ctx, dataChanged) {
+   const state = ctx.state;
+   const { idsInView, positions, props } = state;
++  const remeasuredKeys = state.remeasuredKeys;
++  state.remeasuredKeys = void 0;
++  let edgeAnchorShift;
+   const {
+     maintainVisibleContentPosition: { data: mvcpData, size: mvcpScroll, shouldRestorePosition }
+   } = props;
+@@ -1656,8 +1856,18 @@ function prepareMVCP(ctx, dataChanged) {
+   let prevPosition;
+   let targetId;
+   const idsInViewWithPositions = [];
+-  const scrollTarget = scrollingTo == null ? void 0 : scrollingTo.index;
+-  const scrollingToViewPosition = scrollingTo == null ? void 0 : scrollingTo.viewPosition;
++  // Patched: a command anchors this pass only while it still holds the
++  // scroller, and it holds it while the view stands where that command last
++  // put it. Once a write the command did not make - a reader's Home among
++  // them - has moved the view, the command's target is not what the reader is
++  // looking at, and anchoring on it would carry them by growth they are
++  // nowhere near. The pass then anchors on the view itself, exactly as it does
++  // with no command in flight, so a reader who has taken the view over still
++  // keeps their place. An animated command is still taking the view to its
++  // target, so it keeps its anchor.
++  const anchoringCommand = commandHoldingScroller(ctx);
++  const scrollTarget = anchoringCommand == null ? void 0 : anchoringCommand.index;
++  const scrollingToViewPosition = anchoringCommand == null ? void 0 : anchoringCommand.viewPosition;
+   const isEndAnchoredScrollTarget = scrollTarget !== void 0 && state.props.data.length > 0 && scrollTarget >= state.props.data.length - 1 && (scrollingToViewPosition != null ? scrollingToViewPosition : 0) > 0;
+   const shouldMVCP = dataChanged ? mvcpData : mvcpScroll;
+   const indexByKey = state.indexByKey;
+@@ -1670,7 +1880,11 @@ function prepareMVCP(ctx, dataChanged) {
+     } else if (scrollTarget !== void 0) {
+       targetId = getId(state, scrollTarget);
+     } else if (idsInView.length > 0 && state.didContainersLayout && !dataChanged) {
+-      targetId = idsInView.find((id) => indexByKey.get(id) !== void 0);
++      const edgeAnchor = state.edgeAnchor;
++      if (edgeAnchor !== void 0 && remeasuredKeys !== void 0 && remeasuredKeys.has(edgeAnchor.key) && indexByKey.get(edgeAnchor.key) !== void 0) {
++        edgeAnchorShift = measureEdgeAnchorShift(ctx, edgeAnchor);
++      }
++      targetId = edgeAnchorShift !== void 0 ? edgeAnchor.key : idsInView.find((id) => indexByKey.get(id) !== void 0);
+     }
+     if (dataChanged && idsInView.length > 0 && state.didContainersLayout) {
+       for (let i = 0; i < idsInView.length; i++) {
+@@ -1690,6 +1904,16 @@ function prepareMVCP(ctx, dataChanged) {
+         prevPosition = positions[targetIndex];
+       }
+     }
++    // Patched: a pass with nothing to anchor to - no target with a position
++    // before it, no row in view to fall back on and no scroll target's size
++    // to compensate - returns no adjustment, so the caller sees a pass that
++    // anchors nothing and holds the estimates above the view
++    // (`holdCachedEstimatesAbove`). The adjustment it would have returned
++    // moved nothing: no lock without an anchor, no native queue on web, a
++    // zero diff.
++    if (prevPosition === void 0 && idsInViewWithPositions.length === 0 && !(scrollingToViewPosition && scrollingToViewPosition > 0)) {
++      return void 0;
++    }
+     return () => {
+       let positionDiff = 0;
+       let anchorIdForLock = anchorLock == null ? void 0 : anchorLock.id;
+@@ -1744,6 +1968,16 @@ function prepareMVCP(ctx, dataChanged) {
+               diff = Math.max(0, totalSize - state.scroll - state.scrollLength);
+             } else {
+               const maxScroll = Math.max(0, totalSize - state.scrollLength);
++              // Patched: this moves the view itself, with no adjust to carry
++              // a placed command's record along, so the record travels the
++              // same distance here. Without it a row above the target taking
++              // the content below the view leaves that command's record behind,
++              // and the next growth at its target - the rest of the streaming
++              // reply - is read as somebody else's and never followed.
++              const placedCommand = commandPlacedAtItsTarget(ctx);
++              if (placedCommand !== void 0) {
++                placedCommand.targetOffset += maxScroll - state.scroll;
++              }
+               state.scroll = maxScroll;
+               state.scrollPending = maxScroll;
+               diff = 0;
+@@ -1752,15 +1986,29 @@ function prepareMVCP(ctx, dataChanged) {
+           positionDiff = diff;
+           anchorIdForLock = targetId;
+           anchorPositionForLock = newPosition;
++          if (edgeAnchorShift !== void 0) {
++            positionDiff += edgeAnchorShift;
++          }
+         }
+       }
+-      if (scrollingToViewPosition && scrollingToViewPosition > 0) {
+-        const newSize = getItemSize(ctx, targetId, scrollTarget, state.props.data[scrollTarget]);
+-        const prevSize = scrollingTo == null ? void 0 : scrollingTo.itemSize;
++      // Patched: keyed on the command itself, not on the one this pass
++      // anchored on, so its record of its target row's size stays current
++      // either way and a command that does move the view later lands on that
++      // row as it is then. Only a command this pass anchored on - one that
++      // holds the scroller - adds that row's growth to the adjust; for any
++      // other, the growth is not where the reader is.
++      const commandIndex = scrollingTo == null ? void 0 : scrollingTo.index;
++      const commandViewPosition = scrollingTo == null ? void 0 : scrollingTo.viewPosition;
++      if (commandViewPosition && commandViewPosition > 0 && commandIndex !== void 0) {
++        const commandTargetId = getId(state, commandIndex);
++        const newSize = getItemSize(ctx, commandTargetId, commandIndex, state.props.data[commandIndex]);
++        const prevSize = scrollingTo.itemSize;
+         if (newSize !== void 0 && prevSize !== void 0 && newSize !== prevSize) {
+           const diff = newSize - prevSize;
+           if (diff !== 0) {
+-            positionDiff += diff * scrollingToViewPosition;
++            if (anchoringCommand != null) {
++              positionDiff += diff * commandViewPosition;
++            }
+             scrollingTo.itemSize = newSize;
+           }
+         }
+@@ -1891,6 +2139,17 @@ function updateScroll(ctx, newScroll, forceUpdate, options) {
+   state.scrollTime = currentTime;
+   const scrollDelta = Math.abs(newScroll - prevScroll);
+   const isUserScrollEvent = !!(options == null ? void 0 : options.fromNativeScrollEvent) && scrollDelta > 0.1 && !adjustChanged && scrollingTo === void 0 && !state.pendingNativeMVCPAdjust;
++  // Patched: the reader's own scroll away from the end retires the finished
++  // initial scroll's end target, which otherwise outlives it (a pending
++  // footer layout keeps it alive, and the fallback clear waits 2s): a layout
++  // change then corrected a reader who had left the end back onto it. The
++  // reader's part of a native scroll is what the list's own adjustment does
++  // not account for; a scroll that leaves the reader at the end, like a
++  // clamp, keeps the target.
++  const readerScrollDelta = newScroll - prevScroll - (lastScrollAdjustForHistory === void 0 ? 0 : adjust - lastScrollAdjustForHistory);
++  if (!!(options == null ? void 0 : options.fromNativeScrollEvent) && scrollingTo === void 0 && !state.pendingNativeMVCPAdjust && readerScrollDelta < -EDGE_POSITION_EPSILON && state.didFinishInitialScroll && ((_a3 = state.initialScroll) == null ? void 0 : _a3.viewPosition) === 1 && !isOffsetInitialScrollSession(state) && getContentSize(ctx) - newScroll - state.scrollLength - getContentInsetEnd(ctx) > EDGE_POSITION_EPSILON) {
++    clearPreservedInitialScrollTarget(state);
++  }
+   const allowedEdge = isUserScrollEvent ? beginReachedEdgeUserScroll(ctx, newScroll - prevScroll) : void 0;
+   const didResolvePendingNativeMVCPAdjust = resolvePendingNativeMVCPAdjust(ctx, newScroll);
+   const scrollLength = state.scrollLength;
+@@ -2535,7 +2794,13 @@ function getPreservedEndAnchorOffsetDiff(ctx) {
+     return;
+   }
+   const currentOffset = typeof state.lastNativeScroll === "number" && Number.isFinite(state.lastNativeScroll) ? state.lastNativeScroll : getObservedBootstrapInitialScrollOffset(state);
+-  return resolveInitialScrollOffset(ctx, initialScroll) - currentOffset;
++  // Patched: the end anchor is at most the content's last offset. A negative
++  // `viewOffset` lets `clampScrollOffset` carry it past that, to an offset no
++  // scroll reaches, and the per-frame correction toward it never settles.
++  const resolvedOffset = resolveInitialScrollOffset(ctx, initialScroll);
++  const contentSize = getContentSize(ctx);
++  const endOffset = Number.isFinite(contentSize) && Number.isFinite(state.scrollLength) ? Math.max(0, contentSize - state.scrollLength) : resolvedOffset;
++  return Math.min(resolvedOffset, endOffset) - currentOffset;
+ }
+ function schedulePreservedEndAnchorCorrection(ctx) {
+   if (getPreservedEndAnchorOffsetDiff(ctx) === void 0) {
+@@ -3437,6 +3702,7 @@ function updateSnapToOffsets(ctx) {
+ // src/core/updateItemPositions.ts
+ function updateItemPositions(ctx, dataChanged, {
+   doMVCP,
++  holdCachedEstimatesAbove,
+   forceFullUpdate = false,
+   optimizeForVisibleWindow = false,
+   scrollBottomBuffered,
+@@ -3444,6 +3710,7 @@ function updateItemPositions(ctx, dataChanged, {
+   startIndex
+ } = {
+   doMVCP: false,
++  holdCachedEstimatesAbove: void 0,
+   forceFullUpdate: false,
+   optimizeForVisibleWindow: false,
+   scrollBottomBuffered: -1,
+@@ -3474,6 +3741,12 @@ function updateItemPositions(ctx, dataChanged, {
+   const maxVisibleArea = scrollBottomBuffered + 1e3;
+   const useAverageSize = true;
+   const preferCachedSize = !doMVCP || dataChanged || state.scrollAdjustHandler.getAdjust() !== 0 || ((_b = peek$(ctx, "scrollAdjustPending")) != null ? _b : 0) !== 0;
++  // Patched: an unmeasured row that starts above `holdCachedEstimatesAbove`
++  // (see `calculateItemsInView`) keeps its cached estimate ("always": no
++  // stale-estimate escape). Rows from there down re-estimate as before. Read
++  // from the top this pass lays the row at, not `positions`: a data change
++  // empties `positions` before this runs.
++  const preferCachedSizeAt = (top) => holdCachedEstimatesAbove !== void 0 && top < holdCachedEstimatesAbove ? "always" : preferCachedSize;
+   const notifyTotalSizeWhileCachingSizes = false;
+   let currentRowTop = 0;
+   let column = 1;
+@@ -3508,7 +3781,7 @@ function updateItemPositions(ctx, dataChanged, {
+         prevIndex,
+         data[prevIndex],
+         useAverageSize,
+-        preferCachedSize,
++        preferCachedSizeAt(prevPosition),
+         notifyTotalSizeWhileCachingSizes
+       );
+       currentRowTop = prevPosition + prevSize;
+@@ -3543,7 +3816,7 @@ function updateItemPositions(ctx, dataChanged, {
+       maxSizeInRow = 0;
+     }
+     const knownSize = sizesKnown.get(id);
+-    const size = knownSize !== void 0 ? knownSize : getItemSize(ctx, id, i, data[i], useAverageSize, preferCachedSize, notifyTotalSizeWhileCachingSizes);
++    const size = knownSize !== void 0 ? knownSize : getItemSize(ctx, id, i, data[i], useAverageSize, preferCachedSizeAt(currentRowTop), notifyTotalSizeWhileCachingSizes);
+     if (IS_DEV && needsIndexByKey) {
+       if (indexByKeyForChecking.has(id)) {
+         console.error(
+@@ -4318,14 +4591,38 @@ function calculateItemsInView(ctx, params = {}) {
          }
        }
      }
@@ -169,7 +1665,35 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..939d249a70a8f5ebd1ae2e26ad112622
      if (dataChanged) {
        resetLayoutCachesForDataChange(state);
      }
-@@ -4806,6 +4820,11 @@ function updateItemSizesBatch(ctx, measurements) {
+     const startIndex = forceFullItemPositions || dataChanged ? 0 : (_e = minIndexSizeChanged != null ? minIndexSizeChanged : state.startBuffered) != null ? _e : 0;
+     const optimizeForVisibleWindow = !forceFullItemPositions && !dataChanged && numColumns > 1 && minIndexSizeChanged !== void 0;
++    // Patched: in a pass that anchors nothing (`prepareMVCP` did not run, or
++    // found nothing to anchor to), the unmeasured rows on screen and above it
++    // keep their cached estimates; only a pass that anchors refreshes them.
++    // Replacing a stale one moves every row after it, the reader's with them:
++    // re-estimating the unmeasured rows above a reader near the end of a long
++    // list threw them a hundred rows up. That covers a scroll-driven pass, one
++    // during an initial-scroll bootstrap (which suppresses MVCP), a data
++    // change MVCP does not anchor, a size change with no row to anchor to, and
++    // the settled re-layout of a later scroll that finished at the end: the
++    // list judges that from its own offset, which can still be at the end
++    // after the reader's wheel has left it. One unanchored pass refreshes
++    // them: the settled re-layout of the initial scroll to the end, the first
++    // time it finishes and with the scroller at the end too
++    // (`refreshEstimatesAtEnd`). Held there, the estimates the load left
++    // stale would land in a later anchored pass as one large adjustment,
++    // which a follow at the end reads as the reader leaving it. Rows below
++    // the view, which the reader does not see move, and every row of a list
++    // that never maintains the position, refresh in any pass.
++    const mvcpConfig = state.props.maintainVisibleContentPosition;
++    const holdCachedEstimatesAbove = checkMVCP === void 0 && (mvcpConfig.data || mvcpConfig.size) && !params.refreshEstimatesAtEnd ? state.scroll + state.scrollLength : void 0;
+     updateItemPositions(ctx, dataChanged, {
+       doMVCP,
++      holdCachedEstimatesAbove,
+       forceFullUpdate: !!forceFullItemPositions,
+       optimizeForVisibleWindow,
+       scrollBottomBuffered,
+@@ -4806,6 +5103,11 @@ function updateItemSizesBatch(ctx, measurements) {
  function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
    var _a3, _b;
    const state = ctx.state;
@@ -181,7 +1705,64 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..939d249a70a8f5ebd1ae2e26ad112622
    const userScrollAnchorReset = state.userScrollAnchorReset;
    const didMeasureUserScrollAnchorResetItem = !!(userScrollAnchorReset == null ? void 0 : userScrollAnchorReset.keys.delete(itemKey));
    const {
-@@ -5637,6 +5656,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -4844,6 +5146,9 @@ function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+   const diff = updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem);
+   const size = roundSize(horizontal ? sizeObj.width : sizeObj.height);
+   if (diff !== 0) {
++    if (prevSizeKnown !== void 0) {
++      (state.remeasuredKeys || (state.remeasuredKeys = /* @__PURE__ */ new Set())).add(itemKey);
++    }
+     minIndexSizeChanged = minIndexSizeChanged !== void 0 ? Math.min(minIndexSizeChanged, index) : index;
+     const { startBuffered, endBuffered } = state;
+     needsRecalculate || (needsRecalculate = index >= startBuffered && index <= endBuffered);
+@@ -4886,6 +5191,7 @@ function updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+     indexByKey,
+     sizesKnown,
+     averageSizes,
++    averagedSizeByKey,
+     props: { data, horizontal, getItemType, getFixedItemSize }
+   } = state;
+   if (!data) return 0;
+@@ -4909,6 +5215,22 @@ function updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+   sizesKnown.set(itemKey, size);
+   if (fixedItemSize === void 0 && size > 0) {
+     itemType != null ? itemType : itemType = getItemType ? (_b = getItemType(itemData, index)) != null ? _b : "" : "";
++    // Patched: an average counts each key's size once, under the type it was
++    // measured as. A placeholder and the row it becomes share a key but not a
++    // type, so a new type takes the key's size out of the old type's average
++    // and adds it to its own; replacing it in the new type's average drove that
++    // average negative, and every unmeasured row of the type was then placed
++    // backwards, over the rows on screen.
++    const counted = averagedSizeByKey.get(itemKey);
++    if (counted !== void 0 && counted.itemType !== itemType) {
++      const previous = averageSizes[counted.itemType];
++      if (previous && previous.num > 1) {
++        previous.avg = (previous.avg * previous.num - counted.size) / (previous.num - 1);
++        previous.num--;
++      } else {
++        delete averageSizes[counted.itemType];
++      }
++    }
+     let averages = averageSizes[itemType];
+     if (!averages) {
+       averages = averageSizes[itemType] = { avg: 0, num: 0 };
+@@ -4916,12 +5238,13 @@ function updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+     if (averages.num === 0) {
+       averages.avg = size;
+       averages.num++;
+-    } else if (prevSizeKnown !== void 0 && prevSizeKnown > 0) {
+-      averages.avg += (size - prevSizeKnown) / averages.num;
++    } else if (counted !== void 0 && counted.itemType === itemType) {
++      averages.avg += (size - counted.size) / averages.num;
+     } else {
+       averages.avg = (averages.avg * averages.num + size) / (averages.num + 1);
+       averages.num++;
+     }
++    averagedSizeByKey.set(itemKey, { itemType, size });
+   }
+   if (!prevSize || Math.abs(prevSize - size) > 0.1) {
+     setSize(ctx, itemKey, size);
+@@ -5637,6 +5960,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
@@ -193,7 +1774,7 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..939d249a70a8f5ebd1ae2e26ad112622
    const items = elements.map((element) => {
      var _a3;
      return [element, (_a3 = indexByElement.get(element)) != null ? _a3 : null];
-@@ -5672,7 +5696,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5672,7 +6000,9 @@ function sortDOMElements(container, indexByElement) {
            break;
          }
        }
@@ -204,7 +1785,18 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..939d249a70a8f5ebd1ae2e26ad112622
          container.insertBefore(element, nextStableElement);
        } else {
          container.appendChild(element);
-@@ -6123,10 +6149,14 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
+@@ -6106,7 +6436,9 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
+       } else {
+         options.top = clampedOffset;
+       }
+-      target.scrollTo(options);
++      moveScrollerAnnounced(target, options.top !== void 0 ? options.top : target.scrollTop, () => {
++        target.scrollTo(options);
++      });
+     },
+     [getMaxScrollOffset, getScrollTarget, horizontal, isWindowScroll]
+   );
+@@ -6123,10 +6455,16 @@ var ListComponentScrollView = React3.forwardRef(function ListComponentScrollView
        isWindowScroll: () => isWindowScroll,
        scrollBy: (x, y) => {
          const target = getScrollTarget();
@@ -217,24 +1809,60 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..939d249a70a8f5ebd1ae2e26ad112622
 +        const isWindowTarget = typeof window !== "undefined" && target === window;
 +        const currentLeft = isWindowTarget ? window.scrollX : target.scrollLeft;
 +        const currentTop = isWindowTarget ? window.scrollY : target.scrollTop;
-+        target.scrollTo({ behavior: "auto", left: currentLeft + x, top: currentTop + y });
++        moveScrollerAnnounced(target, currentTop + y, () => {
++          target.scrollTo({ behavior: "auto", left: currentLeft + x, top: currentTop + y });
++        });
        },
        scrollTo: (options) => {
          const { x = 0, y = 0, animated = true } = options;
-@@ -6390,7 +6420,11 @@ function getScrollAdjustTarget(ctx, contentNode) {
+@@ -6389,8 +6727,29 @@ function getScrollAdjustTarget(ctx, contentNode) {
+   }
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
++// Patched: every write the list makes to its scroller is announced on the
++// scroller as it happens: the offset before and after it, the end before it,
++// and the offset it asked for, which iOS lands after the lift under a finger.
++// A pan that reaches the page as scroll reports alone (iOS delivers no touch
++// event for a contact on a fling) is told apart from the list's by these.
++function moveScrollerAnnounced(target, intendedTop, move) {
++  if (!target || typeof target.dispatchEvent !== "function" || typeof CustomEvent === "undefined" || typeof window !== "undefined" && target === window) {
++    move();
++    return;
++  }
++  const from = target.scrollTop;
++  const fromEnd = target.scrollHeight - target.clientHeight;
++  move();
++  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to: target.scrollTop, intended: Math.max(0, Math.min(intendedTop, fromEnd)) } }));
++}
  function scrollAdjustBy(el, left, top) {
 -  el.scrollBy({ behavior: "auto", left, top });
 +  // iOS WebKit applies a relative scrollBy twice (once synchronously, once
 +  // more on the next scroll event), which doubles every position adjustment
 +  // during a touch fling. Write the absolute target instead; it lands once on
 +  // every engine.
-+  el.scrollTo({ behavior: "auto", left: el.scrollLeft + left, top: el.scrollTop + top });
++  moveScrollerAnnounced(el, el.scrollTop + top, () => {
++    el.scrollTo({ behavior: "auto", left: el.scrollLeft + left, top: el.scrollTop + top });
++  });
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -7054,7 +7088,8 @@ var ScheduledWork = class {
+@@ -6757,6 +7116,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+     for (const key in state.averageSizes) {
+       delete state.averageSizes[key];
+     }
++    state.averagedSizeByKey.clear();
+     state.minIndexSizeChanged = 0;
+     state.scrollForNextCalculateItemsInView = void 0;
+   }
+@@ -7001,6 +7361,7 @@ function onScroll(ctx, event) {
+   }
+   state.scrollPending = newScroll;
+   updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
++  recordEdgeAnchor(ctx);
+   trackInitialScrollNativeProgress(state, newScroll);
+   clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
+   if (state.scrollingTo) {
+@@ -7054,7 +7415,8 @@ var ScheduledWork = class {
      const work = this.work.get(key);
      if (work) {
        this.work.delete(key);
@@ -244,11 +1872,159 @@ index ea0348877ff08eb9962ff97efebf2cc19cffad11..939d249a70a8f5ebd1ae2e26ad112622
      }
    }
    has(key) {
+@@ -7103,7 +7465,15 @@ var ScrollAdjustHandler = class {
+           targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
+           targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
+         } else {
+-          targetScroll = clampScrollOffset(this.ctx, state.scroll + pending);
++          // Patched: from the scroller's live offset, not `state.scroll`. A
++          // command that ends the animated one - the reader's wheel cancelling
++          // it, or a new scroll replacing it - can come after the scroller has
++          // moved and before its scroll event reaches the list, and this lands
++          // as an absolute write: from `state.scroll` it would undo the scroll
++          // the list has not seen yet, the reader's own wheel among it.
++          const observedScroll = state.refScroller.current && state.refScroller.current.getCurrentScrollOffset ? state.refScroller.current.getCurrentScrollOffset() : void 0;
++          const baseScroll = typeof observedScroll === "number" && Number.isFinite(observedScroll) ? observedScroll : state.scroll;
++          targetScroll = clampScrollOffset(this.ctx, baseScroll + pending);
+         }
+         const adjustment = targetScroll - state.scroll;
+         if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
+@@ -7283,6 +7653,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+     }
+   };
+   const startImperativeScroll = (resolve) => {
++    // Patched: a new command replaces the one the list holds. Commit the
++    // scroll adjust that command deferred while animating, or the new target
++    // is computed from positions the screen has not taken yet.
++    if (state.scrollingTo !== void 0) {
++      state.scrollAdjustHandler.commitPendingAdjust(void 0);
++    }
+     state.scheduledWork.cancel("imperativeScrollReady");
+     const token = ++imperativeScrollToken;
+     settlePendingImperativeScroll(state);
+@@ -7333,6 +7709,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+     for (const key in state.averageSizes) {
+       delete state.averageSizes[key];
+     }
++    state.averagedSizeByKey.clear();
+     state.minIndexSizeChanged = 0;
+     state.scrollForNextCalculateItemsInView = void 0;
+     state.pendingTotalSize = void 0;
+@@ -7370,6 +7747,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+       endBuffered: state.endBuffered,
+       getAverageItemSizes: () => getAverageItemSizes(state),
+       indexByKey: (key) => state.indexByKey.get(key),
++      // Patched: the key the list gives the item at an index in range.
++      keyAtIndex: (index) => getId(state, index),
+       isAtEnd: peek$(ctx, "isAtEnd"),
+       isAtStart: peek$(ctx, "isAtStart"),
+       isEndReached: state.isEndReached,
+@@ -7448,6 +7827,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+     setItemSize: (itemKey, size) => {
+       updateItemSizes(ctx, { itemKey, size });
+     },
++    // Patched: retire the scroll command a reader's own input has ended - one
++    // still held for its layout to settle, a scrollToEnd waiting for its
++    // commit, one awaiting completion, or the first-paint scroll in flight -
++    // with its target and its data change's anchor lock, but not the runner
++    // later scrollToEnd commands need. Held adjusts land, as its finish would.
++    cancelPendingScroll: () => {
++      state.mvcpAnchorLock = void 0;
++      if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {
++        return false;
++      }
++      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);
++      ++imperativeScrollToken;
++      const runPendingScrollToEnd = state.runPendingScrollToEnd;
++      cancelImperativeScroll(state);
++      state.runPendingScrollToEnd = runPendingScrollToEnd;
++      state.scrollAdjustHandler.commitPendingAdjust(void 0);
++      if (isInitialScrollInFlight) {
++        // It has placed the view: finish it where the reader is. Left
++        // unfinished, the next measurement re-issues it over them, and the
++        // list holds back its scroll reports until it finishes. One not yet
++        // issued is left to place the saved row.
++        clearBootstrapInitialScrollSession(state);
++        finishInitialScroll(ctx, {
++          recalculateItems: true,
++          resolvedOffset: getObservedBootstrapInitialScrollOffset(state)
++        });
++      }
++      return true;
++    },
+     setScrollProcessingEnabled: (enabled) => {
+       state.scrollProcessingEnabled = enabled;
+     },
+@@ -7845,6 +8253,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+       ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
+       ctx.state = {
+         averageSizes: {},
++        // Patched: the type and size each key's measurement is counted under
++        // in averageSizes.
++        averagedSizeByKey: /* @__PURE__ */ new Map(),
+         columnSpans: [],
+         columns: [],
+         containerItemGenerations: [],
 diff --git a/react.mjs b/react.mjs
-index c96345be154d77f66c26ea42cea15a18e22f5dfa..9aa5fdae18b4aee698119831291e3b10b8da15e5 100644
+index c96345be154d77f66c26ea42cea15a18e22f5dfa..a82770b003cae2bedea88ccc58c43a1808716b8c 100644
 --- a/react.mjs
 +++ b/react.mjs
-@@ -1122,6 +1122,7 @@ function areKnownOrFixedItemSizesAvailable(ctx, startIndex, endIndex) {
+@@ -764,11 +764,31 @@ function checkThresholds(ctx, allowedEdge) {
+ }
+
+ // src/core/recalculateSettledScroll.ts
+-function recalculateSettledScroll(ctx) {
++// Patched: whether a scroll target asks for the end of the list - its last
++// row, bottom-aligned.
++function isEndScrollTarget(ctx, target) {
++  const data = ctx.state.props.data;
++  return !!target && !!data && target.index === data.length - 1 && target.viewPosition === 1;
++}
++function recalculateSettledScroll(ctx, initialScrollToEnd) {
+   var _a3, _b;
+   const state = ctx.state;
+   if ((_a3 = state.props) == null ? void 0 : _a3.data) {
+-    (_b = state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { forceFullItemPositions: true });
++    // Patched: this full re-layout re-estimates every unmeasured row, which
++    // can move the rows above the view by tens of thousands of pixels after
++    // a long jump. Anchor it, so the rows the finished scroll left on screen
++    // stay there - unless it finished at the end, where anchoring rows
++    // inflates the content for a frame. That pass anchors nothing, so the
++    // unmeasured rows above the view keep their estimates in it, except after
++    // the initial scroll to the end with the scroller there too
++    // (`refreshEstimatesAtEnd`; see `holdCachedEstimatesAbove` in
++    // calculateItemsInView).
++    const contentSize = getContentSize(ctx);
++    const distanceFromEnd = contentSize - state.scroll - state.scrollLength - getContentInsetEnd(ctx);
++    const finishedAtEnd = contentSize < state.scrollLength || distanceFromEnd <= EDGE_POSITION_EPSILON;
++    const liveOffset = state.refScroller.current && state.refScroller.current.getCurrentScrollOffset ? state.refScroller.current.getCurrentScrollOffset() : void 0;
++    const liveAtEnd = typeof liveOffset !== "number" || !Number.isFinite(liveOffset) || contentSize - liveOffset - state.scrollLength - getContentInsetEnd(ctx) <= EDGE_POSITION_EPSILON;
++    (_b = state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { doMVCP: !finishedAtEnd, forceFullItemPositions: true, refreshEstimatesAtEnd: finishedAtEnd && !!initialScrollToEnd && liveAtEnd });
+   }
+   checkThresholds(ctx);
+ }
+@@ -917,6 +937,11 @@ function clearPreservedInitialScrollTarget(state) {
+ function finishInitialScroll(ctx, options) {
+   var _a3, _b, _c;
+   const state = ctx.state;
++  // Patched: whether this is the initial scroll to the end finishing, read
++  // before `complete` clears its target. Only its first finish counts: while
++  // that target is kept for a resize, every scroll that finishes comes
++  // through here, a follow to the end after the reader's wheel among them.
++  const initialScrollToEnd = !state.didFinishInitialScroll && isEndScrollTarget(ctx, state.initialScroll);
+   if ((options == null ? void 0 : options.resolvedOffset) !== void 0) {
+     syncInitialScrollOffset(state, options.resolvedOffset);
+   } else if ((options == null ? void 0 : options.syncObservedOffset) && ((_a3 = state.initialScrollSession) == null ? void 0 : _a3.kind) === "offset") {
+@@ -951,7 +976,7 @@ function finishInitialScroll(ctx, options) {
+       clearPreservedInitialScrollTarget(state);
+     }
+     if (options == null ? void 0 : options.recalculateItems) {
+-      recalculateSettledScroll(ctx);
++      recalculateSettledScroll(ctx, initialScrollToEnd);
+     }
+     setInitialRenderState(ctx, { didInitialScroll: true });
+     if (shouldReleaseDeferredPublicOnScroll) {
+@@ -1122,6 +1147,7 @@ function areKnownOrFixedItemSizesAvailable(ctx, startIndex, endIndex) {
    }
    return true;
  }
@@ -256,7 +2032,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..9aa5fdae18b4aee698119831291e3b10
  function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, notifyTotalSize, resolved) {
    var _a3, _b, _c, _d;
    const state = ctx.state;
-@@ -1137,8 +1138,18 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+@@ -1137,8 +1163,18 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
    }
    let size;
    const renderedSize = sizes.get(key);
@@ -267,8 +2043,8 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..9aa5fdae18b4aee698119831291e3b10
 +  if (preferCachedSize && renderedSize !== void 0) {
 +    // Cached sizes for never-measured items are estimates, not measurements.
 +    // Reuse them for positional stability unless the live type average proves
-+    // that the estimate is grossly stale.
-+    if (useAverageSize && !scrollingTo) {
++    // that the estimate is grossly stale, in a pass that can anchor the change.
++    if (useAverageSize && !scrollingTo && preferCachedSize !== "always") {
 +      itemType = (_b = resolved == null ? void 0 : resolved.itemType) != null ? _b : getItemType ? (_a3 = getItemType(data, index)) != null ? _a3 : "" : "";
 +      averageSizeForType = (_c = averageSizes[itemType]) == null ? void 0 : _c.avg;
 +    }
@@ -277,7 +2053,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..9aa5fdae18b4aee698119831291e3b10
        return renderedSize;
      }
    }
-@@ -1147,9 +1158,9 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
+@@ -1147,9 +1183,9 @@ function getItemSize(ctx, key, index, data, useAverageSize, preferCachedSize, no
      setSize(ctx, key, size, notifyTotalSize);
      return size;
    }
@@ -289,7 +2065,382 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..9aa5fdae18b4aee698119831291e3b10
      if (averageSizeForType !== void 0) {
        size = roundSize(averageSizeForType);
      }
-@@ -4297,7 +4308,10 @@ function calculateItemsInView(ctx, params = {}) {
+@@ -1203,7 +1239,7 @@ function calculateOffsetWithOffsetPosition(ctx, offsetParam, params) {
+     const itemSize = Math.max(0, measuredItemSize - (isOutOfBounds ? 0 : ctx.scrollAxisGap));
+     const trailingInset = getContentInsetEnd(ctx);
+     offset -= viewPosition * (state.scrollLength - trailingInset - itemSize);
+-    if (!isOutOfBounds && index === state.props.data.length - 1) {
++    if (!isOutOfBounds && index === state.props.data.length - 1 && viewPosition > 0) {
+       const footerSize = peek$(ctx, "footerSize") || 0;
+       offset += footerSize;
+     }
+@@ -1459,9 +1495,55 @@ function doMaintainScrollAtEnd(ctx) {
+ }
+
+ // src/utils/requestAdjust.ts
++// Patched: a command anchors a pass while it holds the scroller: while the
++// view stands where that command last put it, within the epsilon the list
++// already uses for this same comparison when it issues one, or while an
++// animated command is still taking the view to its target. Once a write the
++// command did not make - a reader pressing Home among them - has moved the
++// view off that offset, the command no longer holds the scroller, and growth
++// at its target is not where the reader is looking.
++function commandHoldingScroller(ctx) {
++  const scrollingTo = ctx.state.scrollingTo;
++  if (scrollingTo != null && scrollingTo.animated) {
++    return scrollingTo;
++  }
++  return commandPlacedAtItsTarget(ctx);
++}
++// Patched: a command holds a RECORD of where it put the view only once it has
++// put it somewhere, which an animated command has not: that one is still
++// travelling, and its `targetOffset` is still the absolute offset it was asked
++// for. `getResolvedScrollCompletionState` reads that offset to judge arrival,
++// and for an animated command anywhere but iOS it cannot offset that
++// comparison by the adjust, so moving the record can keep that check from
++// resolving and leave the command in flight. If the reader's own input then
++// cancels or replaces it before it has completed at its index, the adjust it
++// was holding lands from the scroller's live offset instead of taking the view
++// where the reader sent it. A command placed at its target does hold a record,
++// and that record travels with every adjust and with the end clamp below.
++function commandPlacedAtItsTarget(ctx) {
++  const state = ctx.state;
++  const scrollingTo = state.scrollingTo;
++  if (scrollingTo == null || scrollingTo.animated) {
++    return void 0;
++  }
++  const targetOffset = scrollingTo.targetOffset;
++  if (targetOffset === void 0) {
++    return void 0;
++  }
++  return Math.abs(state.scroll - targetOffset) <= 1 ? scrollingTo : void 0;
++}
+ function requestAdjust(ctx, positionDiff, dataChanged) {
+   const state = ctx.state;
+   if (Math.abs(positionDiff) > 0.1) {
++    // Patched: an adjust moves the view by moving the content under it, so a
++    // command placed at its target now stands at a new offset. Its record of
++    // where it put the view travels with every adjust, or the two drift apart
++    // for the rest of that command's life and each later growth at its target
++    // reads the view as somebody else's and stops following it.
++    const placedCommand = commandPlacedAtItsTarget(ctx);
++    if (placedCommand !== void 0) {
++      placedCommand.targetOffset += positionDiff;
++    }
+     const doit = () => {
+       {
+         state.scrollAdjustHandler.requestAdjust(positionDiff);
+@@ -1618,9 +1700,127 @@ function resolvePendingNativeMVCPAdjust(ctx, newScroll) {
+   }
+   return false;
+ }
++// Patched: the top-edge anchor. When the row under the viewport's top edge is
++// re-measured, hold the element at that edge still instead of the first row
++// whose top is on screen. Growth inside that row below the edge (a card opened
++// there, a reply streaming on) then moves nothing, and growth above the edge
++// is compensated exactly. A row measured for the first time keeps the
++// library's choice, and so does a row whose recorded element is gone.
++function findEdgeContainer(ctx, edgeY) {
++  const state = ctx.state;
++  const read = (key) => {
++    const containerId = state.containerItemKeys.get(key);
++    const ref = containerId === void 0 ? void 0 : ctx.viewRefs.get(containerId);
++    const el = ref == null ? void 0 : ref.current;
++    if (!el) {
++      return void 0;
++    }
++    const rect = el.getBoundingClientRect();
++    return rect.top < edgeY && rect.bottom > edgeY ? { el, key, rect } : void 0;
++  };
++  const hintIndex = state.startNoBuffer;
++  if (hintIndex !== void 0 && hintIndex !== null && hintIndex >= 0) {
++    const hintKey = state.idCache[hintIndex] != null ? state.idCache[hintIndex] : getId(state, hintIndex);
++    const hinted = hintKey === void 0 ? void 0 : read(hintKey);
++    if (hinted) {
++      return hinted;
++    }
++  }
++  for (const key of state.containerItemKeys.keys()) {
++    const hit = read(key);
++    if (hit) {
++      return hit;
++    }
++  }
++  return void 0;
++}
++function findEdgeElement(root, edgeY) {
++  let node = root;
++  for (; ; ) {
++    const next = findEdgeChild(node, edgeY);
++    if (next === void 0) {
++      return node;
++    }
++    if (next.below) {
++      return next.el;
++    }
++    node = next.el;
++  }
++}
++// The first child box that crosses or follows the edge. A child with no box
++// of its own (`display: contents`, as markdown and component wrappers use)
++// lays its children out in its place, so they are searched in its stead.
++function findEdgeChild(parent, edgeY) {
++  for (let child = parent.firstElementChild; child; child = child.nextElementSibling) {
++    const rect = child.getBoundingClientRect();
++    if (rect.height === 0) {
++      const inner = findEdgeChild(child, edgeY);
++      if (inner !== void 0) {
++        return inner;
++      }
++      continue;
++    }
++    if (rect.bottom > edgeY) {
++      return { el: child, below: rect.top > edgeY };
++    }
++  }
++  return void 0;
++}
++// What the anchor holds. A renderer that reuses an element for other content
++// (blocks inserted above it, keyed by position) leaves a node whose movement
++// says nothing about the reader's text. Only the first 64 characters are read:
++// the node can be a whole code block, and this runs on every scroll event.
++// Its text nodes in tree order are what textContent concatenates (4 | 8 is
++// NodeFilter.SHOW_TEXT | NodeFilter.SHOW_CDATA_SECTION, spelled as values so
++// no global is needed).
++function edgeAnchorHead(node) {
++  const walker = node.ownerDocument.createTreeWalker(node, 4 | 8);
++  let head = "";
++  for (let part = walker.nextNode(); part !== null && head.length < 64; part = walker.nextNode()) {
++    head += part.data;
++  }
++  return head.slice(0, 64);
++}
++function recordEdgeAnchor(ctx) {
++  const state = ctx.state;
++  state.edgeAnchor = void 0;
++  const scroller = state.refScroller.current;
++  const scrollNode = !scroller || state.props.horizontal || typeof scroller.getScrollableNode !== "function" ? void 0 : scroller.getScrollableNode();
++  if (!scrollNode || typeof scrollNode.getBoundingClientRect !== "function") {
++    return;
++  }
++  const edgeY = scrollNode.getBoundingClientRect().top;
++  const hit = findEdgeContainer(ctx, edgeY);
++  if (!hit) {
++    return;
++  }
++  const node = findEdgeElement(hit.el, edgeY);
++  state.edgeAnchor = {
++    key: hit.key,
++    node,
++    offset: node.getBoundingClientRect().top - hit.rect.top,
++    head: edgeAnchorHead(node)
++  };
++}
++function measureEdgeAnchorShift(ctx, anchor) {
++  const state = ctx.state;
++  const containerId = state.containerItemKeys.get(anchor.key);
++  const ref = containerId === void 0 ? void 0 : ctx.viewRefs.get(containerId);
++  const el = ref == null ? void 0 : ref.current;
++  if (!el || !anchor.node.isConnected || !el.contains(anchor.node) || edgeAnchorHead(anchor.node) !== anchor.head) {
++    return void 0;
++  }
++  const offset = anchor.node.getBoundingClientRect().top - el.getBoundingClientRect().top;
++  const shift = offset - anchor.offset;
++  anchor.offset = offset;
++  return shift;
++}
+ function prepareMVCP(ctx, dataChanged) {
+   const state = ctx.state;
+   const { idsInView, positions, props } = state;
++  const remeasuredKeys = state.remeasuredKeys;
++  state.remeasuredKeys = void 0;
++  let edgeAnchorShift;
+   const {
+     maintainVisibleContentPosition: { data: mvcpData, size: mvcpScroll, shouldRestorePosition }
+   } = props;
+@@ -1635,8 +1835,18 @@ function prepareMVCP(ctx, dataChanged) {
+   let prevPosition;
+   let targetId;
+   const idsInViewWithPositions = [];
+-  const scrollTarget = scrollingTo == null ? void 0 : scrollingTo.index;
+-  const scrollingToViewPosition = scrollingTo == null ? void 0 : scrollingTo.viewPosition;
++  // Patched: a command anchors this pass only while it still holds the
++  // scroller, and it holds it while the view stands where that command last
++  // put it. Once a write the command did not make - a reader's Home among
++  // them - has moved the view, the command's target is not what the reader is
++  // looking at, and anchoring on it would carry them by growth they are
++  // nowhere near. The pass then anchors on the view itself, exactly as it does
++  // with no command in flight, so a reader who has taken the view over still
++  // keeps their place. An animated command is still taking the view to its
++  // target, so it keeps its anchor.
++  const anchoringCommand = commandHoldingScroller(ctx);
++  const scrollTarget = anchoringCommand == null ? void 0 : anchoringCommand.index;
++  const scrollingToViewPosition = anchoringCommand == null ? void 0 : anchoringCommand.viewPosition;
+   const isEndAnchoredScrollTarget = scrollTarget !== void 0 && state.props.data.length > 0 && scrollTarget >= state.props.data.length - 1 && (scrollingToViewPosition != null ? scrollingToViewPosition : 0) > 0;
+   const shouldMVCP = dataChanged ? mvcpData : mvcpScroll;
+   const indexByKey = state.indexByKey;
+@@ -1649,7 +1859,11 @@ function prepareMVCP(ctx, dataChanged) {
+     } else if (scrollTarget !== void 0) {
+       targetId = getId(state, scrollTarget);
+     } else if (idsInView.length > 0 && state.didContainersLayout && !dataChanged) {
+-      targetId = idsInView.find((id) => indexByKey.get(id) !== void 0);
++      const edgeAnchor = state.edgeAnchor;
++      if (edgeAnchor !== void 0 && remeasuredKeys !== void 0 && remeasuredKeys.has(edgeAnchor.key) && indexByKey.get(edgeAnchor.key) !== void 0) {
++        edgeAnchorShift = measureEdgeAnchorShift(ctx, edgeAnchor);
++      }
++      targetId = edgeAnchorShift !== void 0 ? edgeAnchor.key : idsInView.find((id) => indexByKey.get(id) !== void 0);
+     }
+     if (dataChanged && idsInView.length > 0 && state.didContainersLayout) {
+       for (let i = 0; i < idsInView.length; i++) {
+@@ -1669,6 +1883,16 @@ function prepareMVCP(ctx, dataChanged) {
+         prevPosition = positions[targetIndex];
+       }
+     }
++    // Patched: a pass with nothing to anchor to - no target with a position
++    // before it, no row in view to fall back on and no scroll target's size
++    // to compensate - returns no adjustment, so the caller sees a pass that
++    // anchors nothing and holds the estimates above the view
++    // (`holdCachedEstimatesAbove`). The adjustment it would have returned
++    // moved nothing: no lock without an anchor, no native queue on web, a
++    // zero diff.
++    if (prevPosition === void 0 && idsInViewWithPositions.length === 0 && !(scrollingToViewPosition && scrollingToViewPosition > 0)) {
++      return void 0;
++    }
+     return () => {
+       let positionDiff = 0;
+       let anchorIdForLock = anchorLock == null ? void 0 : anchorLock.id;
+@@ -1723,6 +1947,16 @@ function prepareMVCP(ctx, dataChanged) {
+               diff = Math.max(0, totalSize - state.scroll - state.scrollLength);
+             } else {
+               const maxScroll = Math.max(0, totalSize - state.scrollLength);
++              // Patched: this moves the view itself, with no adjust to carry
++              // a placed command's record along, so the record travels the
++              // same distance here. Without it a row above the target taking
++              // the content below the view leaves that command's record behind,
++              // and the next growth at its target - the rest of the streaming
++              // reply - is read as somebody else's and never followed.
++              const placedCommand = commandPlacedAtItsTarget(ctx);
++              if (placedCommand !== void 0) {
++                placedCommand.targetOffset += maxScroll - state.scroll;
++              }
+               state.scroll = maxScroll;
+               state.scrollPending = maxScroll;
+               diff = 0;
+@@ -1731,15 +1965,29 @@ function prepareMVCP(ctx, dataChanged) {
+           positionDiff = diff;
+           anchorIdForLock = targetId;
+           anchorPositionForLock = newPosition;
++          if (edgeAnchorShift !== void 0) {
++            positionDiff += edgeAnchorShift;
++          }
+         }
+       }
+-      if (scrollingToViewPosition && scrollingToViewPosition > 0) {
+-        const newSize = getItemSize(ctx, targetId, scrollTarget, state.props.data[scrollTarget]);
+-        const prevSize = scrollingTo == null ? void 0 : scrollingTo.itemSize;
++      // Patched: keyed on the command itself, not on the one this pass
++      // anchored on, so its record of its target row's size stays current
++      // either way and a command that does move the view later lands on that
++      // row as it is then. Only a command this pass anchored on - one that
++      // holds the scroller - adds that row's growth to the adjust; for any
++      // other, the growth is not where the reader is.
++      const commandIndex = scrollingTo == null ? void 0 : scrollingTo.index;
++      const commandViewPosition = scrollingTo == null ? void 0 : scrollingTo.viewPosition;
++      if (commandViewPosition && commandViewPosition > 0 && commandIndex !== void 0) {
++        const commandTargetId = getId(state, commandIndex);
++        const newSize = getItemSize(ctx, commandTargetId, commandIndex, state.props.data[commandIndex]);
++        const prevSize = scrollingTo.itemSize;
+         if (newSize !== void 0 && prevSize !== void 0 && newSize !== prevSize) {
+           const diff = newSize - prevSize;
+           if (diff !== 0) {
+-            positionDiff += diff * scrollingToViewPosition;
++            if (anchoringCommand != null) {
++              positionDiff += diff * commandViewPosition;
++            }
+             scrollingTo.itemSize = newSize;
+           }
+         }
+@@ -1870,6 +2118,17 @@ function updateScroll(ctx, newScroll, forceUpdate, options) {
+   state.scrollTime = currentTime;
+   const scrollDelta = Math.abs(newScroll - prevScroll);
+   const isUserScrollEvent = !!(options == null ? void 0 : options.fromNativeScrollEvent) && scrollDelta > 0.1 && !adjustChanged && scrollingTo === void 0 && !state.pendingNativeMVCPAdjust;
++  // Patched: the reader's own scroll away from the end retires the finished
++  // initial scroll's end target, which otherwise outlives it (a pending
++  // footer layout keeps it alive, and the fallback clear waits 2s): a layout
++  // change then corrected a reader who had left the end back onto it. The
++  // reader's part of a native scroll is what the list's own adjustment does
++  // not account for; a scroll that leaves the reader at the end, like a
++  // clamp, keeps the target.
++  const readerScrollDelta = newScroll - prevScroll - (lastScrollAdjustForHistory === void 0 ? 0 : adjust - lastScrollAdjustForHistory);
++  if (!!(options == null ? void 0 : options.fromNativeScrollEvent) && scrollingTo === void 0 && !state.pendingNativeMVCPAdjust && readerScrollDelta < -EDGE_POSITION_EPSILON && state.didFinishInitialScroll && ((_a3 = state.initialScroll) == null ? void 0 : _a3.viewPosition) === 1 && !isOffsetInitialScrollSession(state) && getContentSize(ctx) - newScroll - state.scrollLength - getContentInsetEnd(ctx) > EDGE_POSITION_EPSILON) {
++    clearPreservedInitialScrollTarget(state);
++  }
+   const allowedEdge = isUserScrollEvent ? beginReachedEdgeUserScroll(ctx, newScroll - prevScroll) : void 0;
+   const didResolvePendingNativeMVCPAdjust = resolvePendingNativeMVCPAdjust(ctx, newScroll);
+   const scrollLength = state.scrollLength;
+@@ -2514,7 +2773,13 @@ function getPreservedEndAnchorOffsetDiff(ctx) {
+     return;
+   }
+   const currentOffset = typeof state.lastNativeScroll === "number" && Number.isFinite(state.lastNativeScroll) ? state.lastNativeScroll : getObservedBootstrapInitialScrollOffset(state);
+-  return resolveInitialScrollOffset(ctx, initialScroll) - currentOffset;
++  // Patched: the end anchor is at most the content's last offset. A negative
++  // `viewOffset` lets `clampScrollOffset` carry it past that, to an offset no
++  // scroll reaches, and the per-frame correction toward it never settles.
++  const resolvedOffset = resolveInitialScrollOffset(ctx, initialScroll);
++  const contentSize = getContentSize(ctx);
++  const endOffset = Number.isFinite(contentSize) && Number.isFinite(state.scrollLength) ? Math.max(0, contentSize - state.scrollLength) : resolvedOffset;
++  return Math.min(resolvedOffset, endOffset) - currentOffset;
+ }
+ function schedulePreservedEndAnchorCorrection(ctx) {
+   if (getPreservedEndAnchorOffsetDiff(ctx) === void 0) {
+@@ -3416,6 +3681,7 @@ function updateSnapToOffsets(ctx) {
+ // src/core/updateItemPositions.ts
+ function updateItemPositions(ctx, dataChanged, {
+   doMVCP,
++  holdCachedEstimatesAbove,
+   forceFullUpdate = false,
+   optimizeForVisibleWindow = false,
+   scrollBottomBuffered,
+@@ -3423,6 +3689,7 @@ function updateItemPositions(ctx, dataChanged, {
+   startIndex
+ } = {
+   doMVCP: false,
++  holdCachedEstimatesAbove: void 0,
+   forceFullUpdate: false,
+   optimizeForVisibleWindow: false,
+   scrollBottomBuffered: -1,
+@@ -3453,6 +3720,12 @@ function updateItemPositions(ctx, dataChanged, {
+   const maxVisibleArea = scrollBottomBuffered + 1e3;
+   const useAverageSize = true;
+   const preferCachedSize = !doMVCP || dataChanged || state.scrollAdjustHandler.getAdjust() !== 0 || ((_b = peek$(ctx, "scrollAdjustPending")) != null ? _b : 0) !== 0;
++  // Patched: an unmeasured row that starts above `holdCachedEstimatesAbove`
++  // (see `calculateItemsInView`) keeps its cached estimate ("always": no
++  // stale-estimate escape). Rows from there down re-estimate as before. Read
++  // from the top this pass lays the row at, not `positions`: a data change
++  // empties `positions` before this runs.
++  const preferCachedSizeAt = (top) => holdCachedEstimatesAbove !== void 0 && top < holdCachedEstimatesAbove ? "always" : preferCachedSize;
+   const notifyTotalSizeWhileCachingSizes = false;
+   let currentRowTop = 0;
+   let column = 1;
+@@ -3487,7 +3760,7 @@ function updateItemPositions(ctx, dataChanged, {
+         prevIndex,
+         data[prevIndex],
+         useAverageSize,
+-        preferCachedSize,
++        preferCachedSizeAt(prevPosition),
+         notifyTotalSizeWhileCachingSizes
+       );
+       currentRowTop = prevPosition + prevSize;
+@@ -3522,7 +3795,7 @@ function updateItemPositions(ctx, dataChanged, {
+       maxSizeInRow = 0;
+     }
+     const knownSize = sizesKnown.get(id);
+-    const size = knownSize !== void 0 ? knownSize : getItemSize(ctx, id, i, data[i], useAverageSize, preferCachedSize, notifyTotalSizeWhileCachingSizes);
++    const size = knownSize !== void 0 ? knownSize : getItemSize(ctx, id, i, data[i], useAverageSize, preferCachedSizeAt(currentRowTop), notifyTotalSizeWhileCachingSizes);
+     if (IS_DEV && needsIndexByKey) {
+       if (indexByKeyForChecking.has(id)) {
+         console.error(
+@@ -4297,14 +4570,38 @@ function calculateItemsInView(ctx, params = {}) {
          }
        }
      }
@@ -301,7 +2452,35 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..9aa5fdae18b4aee698119831291e3b10
      if (dataChanged) {
        resetLayoutCachesForDataChange(state);
      }
-@@ -4785,6 +4799,11 @@ function updateItemSizesBatch(ctx, measurements) {
+     const startIndex = forceFullItemPositions || dataChanged ? 0 : (_e = minIndexSizeChanged != null ? minIndexSizeChanged : state.startBuffered) != null ? _e : 0;
+     const optimizeForVisibleWindow = !forceFullItemPositions && !dataChanged && numColumns > 1 && minIndexSizeChanged !== void 0;
++    // Patched: in a pass that anchors nothing (`prepareMVCP` did not run, or
++    // found nothing to anchor to), the unmeasured rows on screen and above it
++    // keep their cached estimates; only a pass that anchors refreshes them.
++    // Replacing a stale one moves every row after it, the reader's with them:
++    // re-estimating the unmeasured rows above a reader near the end of a long
++    // list threw them a hundred rows up. That covers a scroll-driven pass, one
++    // during an initial-scroll bootstrap (which suppresses MVCP), a data
++    // change MVCP does not anchor, a size change with no row to anchor to, and
++    // the settled re-layout of a later scroll that finished at the end: the
++    // list judges that from its own offset, which can still be at the end
++    // after the reader's wheel has left it. One unanchored pass refreshes
++    // them: the settled re-layout of the initial scroll to the end, the first
++    // time it finishes and with the scroller at the end too
++    // (`refreshEstimatesAtEnd`). Held there, the estimates the load left
++    // stale would land in a later anchored pass as one large adjustment,
++    // which a follow at the end reads as the reader leaving it. Rows below
++    // the view, which the reader does not see move, and every row of a list
++    // that never maintains the position, refresh in any pass.
++    const mvcpConfig = state.props.maintainVisibleContentPosition;
++    const holdCachedEstimatesAbove = checkMVCP === void 0 && (mvcpConfig.data || mvcpConfig.size) && !params.refreshEstimatesAtEnd ? state.scroll + state.scrollLength : void 0;
+     updateItemPositions(ctx, dataChanged, {
+       doMVCP,
++      holdCachedEstimatesAbove,
+       forceFullUpdate: !!forceFullItemPositions,
+       optimizeForVisibleWindow,
+       scrollBottomBuffered,
+@@ -4785,6 +5082,11 @@ function updateItemSizesBatch(ctx, measurements) {
  function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
    var _a3, _b;
    const state = ctx.state;
@@ -313,7 +2492,64 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..9aa5fdae18b4aee698119831291e3b10
    const userScrollAnchorReset = state.userScrollAnchorReset;
    const didMeasureUserScrollAnchorResetItem = !!(userScrollAnchorReset == null ? void 0 : userScrollAnchorReset.keys.delete(itemKey));
    const {
-@@ -5616,6 +5635,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
+@@ -4823,6 +5125,9 @@ function applyItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+   const diff = updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem);
+   const size = roundSize(horizontal ? sizeObj.width : sizeObj.height);
+   if (diff !== 0) {
++    if (prevSizeKnown !== void 0) {
++      (state.remeasuredKeys || (state.remeasuredKeys = /* @__PURE__ */ new Set())).add(itemKey);
++    }
+     minIndexSizeChanged = minIndexSizeChanged !== void 0 ? Math.min(minIndexSizeChanged, index) : index;
+     const { startBuffered, endBuffered } = state;
+     needsRecalculate || (needsRecalculate = index >= startBuffered && index <= endBuffered);
+@@ -4865,6 +5170,7 @@ function updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+     indexByKey,
+     sizesKnown,
+     averageSizes,
++    averagedSizeByKey,
+     props: { data, horizontal, getItemType, getFixedItemSize }
+   } = state;
+   if (!data) return 0;
+@@ -4888,6 +5194,22 @@ function updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+   sizesKnown.set(itemKey, size);
+   if (fixedItemSize === void 0 && size > 0) {
+     itemType != null ? itemType : itemType = getItemType ? (_b = getItemType(itemData, index)) != null ? _b : "" : "";
++    // Patched: an average counts each key's size once, under the type it was
++    // measured as. A placeholder and the row it becomes share a key but not a
++    // type, so a new type takes the key's size out of the old type's average
++    // and adds it to its own; replacing it in the new type's average drove that
++    // average negative, and every unmeasured row of the type was then placed
++    // backwards, over the rows on screen.
++    const counted = averagedSizeByKey.get(itemKey);
++    if (counted !== void 0 && counted.itemType !== itemType) {
++      const previous = averageSizes[counted.itemType];
++      if (previous && previous.num > 1) {
++        previous.avg = (previous.avg * previous.num - counted.size) / (previous.num - 1);
++        previous.num--;
++      } else {
++        delete averageSizes[counted.itemType];
++      }
++    }
+     let averages = averageSizes[itemType];
+     if (!averages) {
+       averages = averageSizes[itemType] = { avg: 0, num: 0 };
+@@ -4895,12 +5217,13 @@ function updateOneItemSize(ctx, itemKey, sizeObj, resolvedMeasurementItem) {
+     if (averages.num === 0) {
+       averages.avg = size;
+       averages.num++;
+-    } else if (prevSizeKnown !== void 0 && prevSizeKnown > 0) {
+-      averages.avg += (size - prevSizeKnown) / averages.num;
++    } else if (counted !== void 0 && counted.itemType === itemType) {
++      averages.avg += (size - counted.size) / averages.num;
+     } else {
+       averages.avg = (averages.avg * averages.num + size) / (averages.num + 1);
+       averages.num++;
+     }
++    averagedSizeByKey.set(itemKey, { itemType, size });
+   }
+   if (!prevSize || Math.abs(prevSize - size) > 0.1) {
+     setSize(ctx, itemKey, size);
+@@ -5616,6 +5939,11 @@ var ContainerSlot = typedMemo(function ContainerSlot2(props) {
  function sortDOMElements(container, indexByElement) {
    const elements = Array.from(container.children);
    if (elements.length <= 1) return elements;
@@ -325,7 +2561,7 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..9aa5fdae18b4aee698119831291e3b10
    const items = elements.map((element) => {
      var _a3;
      return [element, (_a3 = indexByElement.get(element)) != null ? _a3 : null];
-@@ -5651,7 +5675,9 @@ function sortDOMElements(container, indexByElement) {
+@@ -5651,7 +5979,9 @@ function sortDOMElements(container, indexByElement) {
            break;
          }
        }
@@ -336,7 +2572,18 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..9aa5fdae18b4aee698119831291e3b10
          container.insertBefore(element, nextStableElement);
        } else {
          container.appendChild(element);
-@@ -6102,10 +6128,14 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+@@ -6085,7 +6415,9 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
+       } else {
+         options.top = clampedOffset;
+       }
+-      target.scrollTo(options);
++      moveScrollerAnnounced(target, options.top !== void 0 ? options.top : target.scrollTop, () => {
++        target.scrollTo(options);
++      });
+     },
+     [getMaxScrollOffset, getScrollTarget, horizontal, isWindowScroll]
+   );
+@@ -6102,10 +6434,16 @@ var ListComponentScrollView = forwardRef(function ListComponentScrollView2({
        isWindowScroll: () => isWindowScroll,
        scrollBy: (x, y) => {
          const target = getScrollTarget();
@@ -349,24 +2596,60 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..9aa5fdae18b4aee698119831291e3b10
 +        const isWindowTarget = typeof window !== "undefined" && target === window;
 +        const currentLeft = isWindowTarget ? window.scrollX : target.scrollLeft;
 +        const currentTop = isWindowTarget ? window.scrollY : target.scrollTop;
-+        target.scrollTo({ behavior: "auto", left: currentLeft + x, top: currentTop + y });
++        moveScrollerAnnounced(target, currentTop + y, () => {
++          target.scrollTo({ behavior: "auto", left: currentLeft + x, top: currentTop + y });
++        });
        },
        scrollTo: (options) => {
          const { x = 0, y = 0, animated = true } = options;
-@@ -6369,7 +6399,11 @@ function getScrollAdjustTarget(ctx, contentNode) {
+@@ -6368,8 +6706,29 @@ function getScrollAdjustTarget(ctx, contentNode) {
+   }
    return scrollElement ? { contentNode: resolvedContentNode, scrollElement } : null;
  }
++// Patched: every write the list makes to its scroller is announced on the
++// scroller as it happens: the offset before and after it, the end before it,
++// and the offset it asked for, which iOS lands after the lift under a finger.
++// A pan that reaches the page as scroll reports alone (iOS delivers no touch
++// event for a contact on a fling) is told apart from the list's by these.
++function moveScrollerAnnounced(target, intendedTop, move) {
++  if (!target || typeof target.dispatchEvent !== "function" || typeof CustomEvent === "undefined" || typeof window !== "undefined" && target === window) {
++    move();
++    return;
++  }
++  const from = target.scrollTop;
++  const fromEnd = target.scrollHeight - target.clientHeight;
++  move();
++  target.dispatchEvent(new CustomEvent("legend-list-scroller-moved", { detail: { from, fromEnd, to: target.scrollTop, intended: Math.max(0, Math.min(intendedTop, fromEnd)) } }));
++}
  function scrollAdjustBy(el, left, top) {
 -  el.scrollBy({ behavior: "auto", left, top });
 +  // iOS WebKit applies a relative scrollBy twice (once synchronously, once
 +  // more on the next scroll event), which doubles every position adjustment
 +  // during a touch fling. Write the absolute target instead; it lands once on
 +  // every engine.
-+  el.scrollTo({ behavior: "auto", left: el.scrollLeft + left, top: el.scrollTop + top });
++  moveScrollerAnnounced(el, el.scrollTop + top, () => {
++    el.scrollTo({ behavior: "auto", left: el.scrollLeft + left, top: el.scrollTop + top });
++  });
  }
  function ScrollAdjust() {
    const ctx = useStateContext();
-@@ -7033,7 +7067,8 @@ var ScheduledWork = class {
+@@ -6736,6 +7095,7 @@ function checkResetContainers(ctx, dataProp, { didColumnsChange = false } = {})
+     for (const key in state.averageSizes) {
+       delete state.averageSizes[key];
+     }
++    state.averagedSizeByKey.clear();
+     state.minIndexSizeChanged = 0;
+     state.scrollForNextCalculateItemsInView = void 0;
+   }
+@@ -6980,6 +7340,7 @@ function onScroll(ctx, event) {
+   }
+   state.scrollPending = newScroll;
+   updateScroll(ctx, newScroll, insetChanged, { fromNativeScrollEvent: true });
++  recordEdgeAnchor(ctx);
+   trackInitialScrollNativeProgress(state, newScroll);
+   clearFinishedBootstrapInitialScrollTargetIfMovedAway(ctx);
+   if (state.scrollingTo) {
+@@ -7033,7 +7394,8 @@ var ScheduledWork = class {
      const work = this.work.get(key);
      if (work) {
        this.work.delete(key);
@@ -376,3 +2659,96 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..9aa5fdae18b4aee698119831291e3b10
      }
    }
    has(key) {
+@@ -7082,7 +7444,15 @@ var ScrollAdjustHandler = class {
+           targetScroll = calculateOffsetWithOffsetPosition(this.ctx, currentOffset, scrollTarget);
+           targetScroll = clampScrollOffset(this.ctx, targetScroll, scrollTarget);
+         } else {
+-          targetScroll = clampScrollOffset(this.ctx, state.scroll + pending);
++          // Patched: from the scroller's live offset, not `state.scroll`. A
++          // command that ends the animated one - the reader's wheel cancelling
++          // it, or a new scroll replacing it - can come after the scroller has
++          // moved and before its scroll event reaches the list, and this lands
++          // as an absolute write: from `state.scroll` it would undo the scroll
++          // the list has not seen yet, the reader's own wheel among it.
++          const observedScroll = state.refScroller.current && state.refScroller.current.getCurrentScrollOffset ? state.refScroller.current.getCurrentScrollOffset() : void 0;
++          const baseScroll = typeof observedScroll === "number" && Number.isFinite(observedScroll) ? observedScroll : state.scroll;
++          targetScroll = clampScrollOffset(this.ctx, baseScroll + pending);
+         }
+         const adjustment = targetScroll - state.scroll;
+         if (Math.abs(adjustment) > 0.1 || Math.abs(pending) > 0.1) {
+@@ -7262,6 +7632,12 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+     }
+   };
+   const startImperativeScroll = (resolve) => {
++    // Patched: a new command replaces the one the list holds. Commit the
++    // scroll adjust that command deferred while animating, or the new target
++    // is computed from positions the screen has not taken yet.
++    if (state.scrollingTo !== void 0) {
++      state.scrollAdjustHandler.commitPendingAdjust(void 0);
++    }
+     state.scheduledWork.cancel("imperativeScrollReady");
+     const token = ++imperativeScrollToken;
+     settlePendingImperativeScroll(state);
+@@ -7312,6 +7688,7 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+     for (const key in state.averageSizes) {
+       delete state.averageSizes[key];
+     }
++    state.averagedSizeByKey.clear();
+     state.minIndexSizeChanged = 0;
+     state.scrollForNextCalculateItemsInView = void 0;
+     state.pendingTotalSize = void 0;
+@@ -7349,6 +7726,8 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+       endBuffered: state.endBuffered,
+       getAverageItemSizes: () => getAverageItemSizes(state),
+       indexByKey: (key) => state.indexByKey.get(key),
++      // Patched: the key the list gives the item at an index in range.
++      keyAtIndex: (index) => getId(state, index),
+       isAtEnd: peek$(ctx, "isAtEnd"),
+       isAtStart: peek$(ctx, "isAtStart"),
+       isEndReached: state.isEndReached,
+@@ -7427,6 +7806,35 @@ function createImperativeHandle(ctx, scheduleImperativeScrollCommit) {
+     setItemSize: (itemKey, size) => {
+       updateItemSizes(ctx, { itemKey, size });
+     },
++    // Patched: retire the scroll command a reader's own input has ended - one
++    // still held for its layout to settle, a scrollToEnd waiting for its
++    // commit, one awaiting completion, or the first-paint scroll in flight -
++    // with its target and its data change's anchor lock, but not the runner
++    // later scrollToEnd commands need. Held adjusts land, as its finish would.
++    cancelPendingScroll: () => {
++      state.mvcpAnchorLock = void 0;
++      if (!state.scheduledWork.has("imperativeScrollReady") && state.pendingScrollToEnd === void 0 && state.scrollingTo === void 0) {
++        return false;
++      }
++      const isInitialScrollInFlight = !!(state.scrollingTo && state.scrollingTo.isInitialScroll);
++      ++imperativeScrollToken;
++      const runPendingScrollToEnd = state.runPendingScrollToEnd;
++      cancelImperativeScroll(state);
++      state.runPendingScrollToEnd = runPendingScrollToEnd;
++      state.scrollAdjustHandler.commitPendingAdjust(void 0);
++      if (isInitialScrollInFlight) {
++        // It has placed the view: finish it where the reader is. Left
++        // unfinished, the next measurement re-issues it over them, and the
++        // list holds back its scroll reports until it finishes. One not yet
++        // issued is left to place the saved row.
++        clearBootstrapInitialScrollSession(state);
++        finishInitialScroll(ctx, {
++          recalculateItems: true,
++          resolvedOffset: getObservedBootstrapInitialScrollOffset(state)
++        });
++      }
++      return true;
++    },
+     setScrollProcessingEnabled: (enabled) => {
+       state.scrollProcessingEnabled = enabled;
+     },
+@@ -7824,6 +8232,9 @@ var LegendListInner = typedForwardRef(function LegendListInner2(props, forwarded
+       ctx.values.set("adaptiveRender", (_m = experimental_adaptiveRender == null ? void 0 : experimental_adaptiveRender.initialMode) != null ? _m : "normal");
+       ctx.state = {
+         averageSizes: {},
++        // Patched: the type and size each key's measurement is counted under
++        // in averageSizes.
++        averagedSizeByKey: /* @__PURE__ */ new Map(),
+         columnSpans: [],
+         columns: [],
+         containerItemGenerations: [],

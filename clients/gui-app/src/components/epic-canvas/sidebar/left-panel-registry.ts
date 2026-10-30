@@ -6,6 +6,7 @@ import {
   Globe2,
   MessageSquareText,
   MessagesSquare,
+  Smartphone,
   Terminal,
   UserPlus,
   type LucideIcon,
@@ -20,11 +21,18 @@ import {
 export const COMMENTS_AUTO_HINT =
   "Auto: appears after you open or start a comment on the active artifact.";
 
+export const SIMULATORS_AUTO_HINT =
+  "Auto: appears when this machine can run simulators or this task has one open.";
+
 export interface LeftPanelAvailabilityContext {
   readonly commentsPanelRevealed: boolean;
   readonly hasActiveCommentableArtifact: boolean;
   /** At least one PR was discovered from this epic's chats. */
   readonly hasPullRequests: boolean;
+  /** This machine's host reports a simulator platform it can run. */
+  readonly localHostRunsSimulators: boolean;
+  /** The task's simulator catalog holds at least one record. */
+  readonly hasSimulatorRecords: boolean;
   /**
    * Explicit show/hide the user chose from the rail context menu. Wins over
    * `isAutoVisible`; an absent entry means the panel follows its own rule.
@@ -92,6 +100,17 @@ export const LEFT_PANEL_DEFINITIONS: ReadonlyArray<LeftPanelMetadataDefinition> 
       isAutoVisible: () => true,
       forcedOnHint: null,
       supportsHeaderSearch: true,
+    },
+    {
+      // Presence-gated: a machine that cannot run simulators, in a task that
+      // holds none on any other machine, has nothing to list here.
+      id: "simulators",
+      title: "Mobile simulators",
+      icon: Smartphone,
+      isAutoVisible: (context) =>
+        context.localHostRunsSimulators || context.hasSimulatorRecords,
+      forcedOnHint: "No simulators here yet",
+      supportsHeaderSearch: false,
     },
     {
       id: "artifacts",

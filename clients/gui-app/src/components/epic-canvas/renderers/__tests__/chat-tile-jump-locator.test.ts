@@ -117,6 +117,7 @@ function toolSegment(input: {
             messageId: input.agentMessageReceipt.messageId,
           },
     agentMessageDelivery: null,
+    botSendReceipt: null,
     isStreaming: false,
     endState: null,
     stopped: false,

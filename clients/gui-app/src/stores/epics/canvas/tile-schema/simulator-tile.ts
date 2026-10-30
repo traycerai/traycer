@@ -49,6 +49,11 @@ export function makeSimulatorTileRef(args: {
   readonly simulatorId: string;
   readonly platform: SimulatorPlatform;
   readonly name: string;
+  /**
+   * The instance `simulatorId` is the id of, from the same answer or session
+   * that named it. Null when the caller has only a device row to go on.
+   */
+  readonly instanceKey: string | null;
 }): SimulatorTileRef {
   return {
     id: simulatorTileId(args),
@@ -58,6 +63,7 @@ export function makeSimulatorTileRef(args: {
     hostId: args.hostId,
     simulatorId: args.simulatorId,
     platform: args.platform,
+    instanceKey: args.instanceKey,
   };
 }
 
@@ -87,6 +93,12 @@ function parseSimulatorTileRef(value: unknown): SimulatorTileRef | null {
     hostId: value.hostId,
     simulatorId: value.simulatorId,
     platform: value.platform,
+    // Absent from every tile stored before the field, which then resolves
+    // exactly as it did: by its id, and for an Android serial by AVD name.
+    instanceKey:
+      typeof value.instanceKey === "string" && value.instanceKey.length > 0
+        ? value.instanceKey
+        : null,
   };
 }
 
@@ -99,6 +111,7 @@ function serializeSimulatorTileRef(ref: SimulatorTileRef): DesktopJsonValue {
     hostId: ref.hostId,
     simulatorId: ref.simulatorId,
     platform: ref.platform,
+    instanceKey: ref.instanceKey,
   };
 }
 

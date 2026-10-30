@@ -12,6 +12,8 @@ import {
   type ChatFindRevealTarget,
 } from "@/components/chat/chat-find";
 import { subagentCardPath } from "@/components/chat/segments/subagent-display";
+import { BotSessionContext } from "@/components/bots/bot-session-context";
+import { askedConversationIds } from "@/lib/bots/bot-send-tool";
 import {
   CHAT_FIND_INDEX_ABSENT,
   ChatFindIndexDemandSource,
@@ -45,6 +47,8 @@ import {
   use,
   useCallback,
   useLayoutEffect,
+  useMemo,
+  useReducer,
   useRef,
   useState,
   type RefObject,
@@ -222,6 +226,13 @@ export function useChatFindController(
   useLayoutEffect(() => {
     queuePauseReasonSupportRef.current = queuePauseReasonSupport;
   }, [queuePauseReasonSupport]);
+  // A bot's session's send cards read their posts' state (Tracy Bots T94);
+  // read through a ref for the same reason.
+  const botSession = use(BotSessionContext);
+  const botSessionRef = useRef(botSession);
+  useLayoutEffect(() => {
+    botSessionRef.current = botSession;
+  }, [botSession]);
 
   const chatFindAdapterRef = useRef<ChatFindAdapter | null>(null);
   const activeFindRevealRef = useRef<ChatFindRevealTarget | null>(null);
@@ -561,14 +572,35 @@ export function useChatFindController(
     [applyFindOpenedTarget],
   );
 
+  // A question settled, or its post read, while Find is open changes what
+  // the card says: the rows are read again once the card has drawn it. Only
+  // a bot's session has questions to watch, so no other chat scans for them.
+  const askedInKey = useMemo(
+    () =>
+      botSession === null ? "" : askedConversationIds(messages).join("\n"),
+    [botSession, messages],
+  );
+  const [questionStatesRevision, noteQuestionStates] = useReducer(
+    (revision: number) => revision + 1,
+    0,
+  );
+  useLayoutEffect(() => {
+    if (botSession === null || askedInKey.length === 0) return undefined;
+    return botSession.watchQuestionStates(
+      askedInKey.split("\n"),
+      noteQuestionStates,
+    );
+  }, [askedInKey, botSession]);
   // Thinking's Shown regroups runs as surely as promotion does.
   const thinkingShown = useRegionShown("thinking");
   useLayoutEffect(() => {
     chatFindAdapterRef.current?.notifyRowsChanged();
   }, [
     backgroundToolBlockIds,
+    botSession,
     messages,
     queuePauseReasonSupport,
+    questionStatesRevision,
     thinkingShown,
   ]);
 
@@ -607,6 +639,8 @@ export function useChatFindController(
             queuePauseReasonProtocolSupported:
               queuePauseReasonSupportRef.current,
             splitLongTurns,
+            botSendQuestionStates:
+              botSessionRef.current?.questionStatesOf ?? null,
           },
         );
       },

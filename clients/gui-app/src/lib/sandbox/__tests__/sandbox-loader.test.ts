@@ -1,4 +1,4 @@
-import { JSDOM, VirtualConsole } from "jsdom";
+import { JSDOM, VirtualConsole, type DOMWindow } from "jsdom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildDocument, type ArtifactPageRole } from "../sandbox-document";
 
@@ -80,49 +80,135 @@ describe("sandbox loader theme", () => {
   });
 });
 
+/**
+ * Runs the written document's bootstrap in a window of its own, closed
+ * afterwards, so no listener it registers outlives the test. `posted` holds
+ * what the bootstrap sent to its parent, each with its target origin.
+ */
+async function inBootstrapWindow<T>(
+  run: (page: DOMWindow, posted: unknown[]) => T,
+): Promise<T> {
+  const bootstrap = between(
+    await deliver("page", true),
+    "<script>",
+    "</script>",
+  );
+  const { window: page } = new JSDOM(
+    "<!doctype html><html><body></body></html>",
+    { runScripts: "dangerously", virtualConsole: new VirtualConsole() },
+  );
+  const posted: unknown[] = [];
+  page.postMessage = (message: unknown, targetOrigin: unknown) => {
+    posted.push([message, targetOrigin]);
+  };
+  try {
+    // The bootstrap runs inside the written document; here it runs in this one.
+    page.eval(bootstrap);
+    return run(page, posted);
+  } finally {
+    page.close();
+  }
+}
+
 describe("sandbox loader wheel", () => {
   it("hands a wheel the page cannot use to the app, and leaves one it can scroll", async () => {
-    const html = await deliver("page", true);
-    const bootstrap = between(html, "<script>", "</script>");
-    const post = vi
-      .spyOn(window, "postMessage")
-      .mockImplementation(() => undefined);
-    // The bootstrap runs inside the written document; here it runs in this one.
-    window.eval(bootstrap);
+    await inBootstrapWindow((page, posted) => {
+      const { document } = page;
+      const wheel = (target: Element, init: WheelEventInit): WheelEvent => {
+        const event = new page.WheelEvent("wheel", {
+          bubbles: true,
+          cancelable: true,
+          ...init,
+        });
+        target.dispatchEvent(event);
+        return event;
+      };
+      const unscrollable = document.body.appendChild(
+        document.createElement("p"),
+      );
+      const panel = document.body.appendChild(document.createElement("div"));
+      panel.style.overflowY = "auto";
+      Object.defineProperty(panel, "scrollHeight", { value: 900 });
+      Object.defineProperty(panel, "clientHeight", { value: 300 });
+      const inPanel = panel.appendChild(document.createElement("span"));
 
-    const wheel = (target: Element, init: WheelEventInit): WheelEvent => {
-      const event = new WheelEvent("wheel", {
-        bubbles: true,
-        cancelable: true,
-        ...init,
-      });
-      target.dispatchEvent(event);
-      return event;
-    };
-    const unscrollable = document.body.appendChild(document.createElement("p"));
-    const panel = document.body.appendChild(document.createElement("div"));
-    panel.style.overflowY = "auto";
-    Object.defineProperty(panel, "scrollHeight", { value: 900 });
-    Object.defineProperty(panel, "clientHeight", { value: 300 });
-    const inPanel = panel.appendChild(document.createElement("span"));
+      const given = wheel(unscrollable, { deltaY: 40, deltaMode: 0 });
+      expect(given.defaultPrevented).toBe(true);
+      expect(posted).toEqual([
+        [
+          {
+            jsonrpc: "2.0",
+            method: "traycer/notifications/wheel",
+            params: { deltaX: 0, deltaY: 40, deltaMode: 0 },
+          },
+          "*",
+        ],
+      ]);
 
-    const given = wheel(unscrollable, { deltaY: 40, deltaMode: 0 });
-    expect(given.defaultPrevented).toBe(true);
-    expect(post).toHaveBeenCalledWith(
-      {
-        jsonrpc: "2.0",
-        method: "traycer/notifications/wheel",
-        params: { deltaX: 0, deltaY: 40, deltaMode: 0 },
-      },
-      "*",
+      posted.length = 0;
+      expect(wheel(inPanel, { deltaY: 40 }).defaultPrevented).toBe(false);
+      expect(
+        wheel(unscrollable, { deltaY: 40, ctrlKey: true }).defaultPrevented,
+      ).toBe(false);
+      expect(posted).toEqual([]);
+    });
+  });
+});
+
+describe("sandbox loader touch relay", () => {
+  // The browser gives a swipe to the scroller that can take its first move,
+  // for the whole contact. One the page scrolls never reaches the transcript,
+  // so reporting its direction leaves the transcript waiting for a scroll
+  // that never comes.
+  function swipe(
+    target: (page: DOMWindow) => Element,
+  ): Promise<readonly unknown[]> {
+    return inBootstrapWindow((page, posted) => {
+      const element = target(page);
+      const touch = (type: string, clientY: number): void => {
+        const event = new page.Event(type, { bubbles: true });
+        Object.defineProperty(event, "touches", {
+          value: {
+            item: (index: number) => (index === 0 ? { clientY } : null),
+          },
+        });
+        element.dispatchEvent(event);
+      };
+      touch("touchstart", 300);
+      // Fingers moving up: toward the end of the content.
+      touch("touchmove", 280);
+      touch("touchmove", 250);
+      touch("touchmove", 200);
+      return posted;
+    });
+  }
+
+  it("leaves a swipe over content the page can scroll to the page", async () => {
+    const posted = await swipe(({ document }) => {
+      const panel = document.body.appendChild(document.createElement("div"));
+      panel.style.overflowY = "auto";
+      Object.defineProperty(panel, "scrollHeight", { value: 900 });
+      Object.defineProperty(panel, "clientHeight", { value: 300 });
+      return panel.appendChild(document.createElement("span"));
+    });
+
+    expect(posted).toEqual([]);
+  });
+
+  it("control: reports each move of a swipe over content nothing can scroll, once", async () => {
+    const posted = await swipe(({ document }) =>
+      document.body.appendChild(document.createElement("p")),
     );
 
-    post.mockClear();
-    expect(wheel(inPanel, { deltaY: 40 }).defaultPrevented).toBe(false);
-    expect(
-      wheel(unscrollable, { deltaY: 40, ctrlKey: true }).defaultPrevented,
-    ).toBe(false);
-    expect(post).not.toHaveBeenCalled();
+    const gesture = [
+      {
+        jsonrpc: "2.0",
+        method: "traycer/notifications/scroll-gesture",
+        params: { direction: "toward-end" },
+      },
+      "*",
+    ];
+    expect(posted).toEqual([gesture, gesture, gesture]);
   });
 });
 

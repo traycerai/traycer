@@ -8,7 +8,7 @@
  *
  * A region is a THING ON SCREEN, not a setting: `usageLimits` is the one
  * region the three old usage rows collapsed into (L-28), and the sidebar rail
- * is nine regions rather than one list, because each icon is hoverable,
+ * is ten regions rather than one list, because each icon is hoverable,
  * selectable and separately shown or hidden.
  */
 
@@ -39,6 +39,7 @@ export type RailRegionId =
   | "railAgents"
   | "railTerminals"
   | "railBrowsers"
+  | "railSimulators"
   | "railArtifacts"
   | "railGitDiff"
   | "railPullRequests"
@@ -55,7 +56,10 @@ export type RailRegionId =
 export type ChatDisplayRegionId = "toolActivity" | "thinking" | "timestamps";
 
 /** The rail panels whose presence rule can leave them out, and so offer Auto. */
-export type AutoRailRegionId = "railPullRequests" | "railComments";
+export type AutoRailRegionId =
+  | "railSimulators"
+  | "railPullRequests"
+  | "railComments";
 
 export type RegionId =
   | "homeTab"

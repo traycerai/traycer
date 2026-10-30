@@ -1,7 +1,18 @@
 import { useReadingWidthStyle } from "@/lib/layout-overrides";
 import { TeamEpicPersonalLine } from "@/components/chat/composer/team-epic-personal-line";
-import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { Lock } from "lucide-react";
+import {
+  ChatSandboxLineContext,
+  ChatStateLineContext,
+} from "./chat-state-line";
 import type {
   BackgroundItem,
   ChatActiveTurn,
@@ -67,6 +78,7 @@ import {
   ChatComposerDeliveryStatus,
 } from "@/components/chat/composer/chat-composer-delivery-status";
 import { ChatComposerOpencodeLineHeld } from "@/components/chat/composer/chat-composer-opencode-line-held";
+import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import type {
   PendingInterviewView,
   UnanswerableInterviewView,
@@ -136,8 +148,11 @@ export interface ChatLowerRuntimeState {
 }
 
 export interface ChatLowerAccessState {
-  /** Only the composer can enqueue a message for its resting sandbox. */
-  readonly restingSandbox?: boolean;
+  /**
+   * The sandbox this chat's next message wakes; only the composer can enqueue
+   * one for it.
+   */
+  readonly restingSandbox?: RestingChatSandbox;
   /** The serving host has a copy, not authority over the owner's workspace. */
   readonly isCopy: boolean;
   readonly isViewer: boolean;
@@ -188,6 +203,7 @@ export interface ChatLowerTurnState {
   readonly autoPermissionModeProtocolSupported: boolean | null;
   /** Own live stream's draft-blob bridge capability. */
   readonly getDraftBlobBridgeSupported: () => boolean;
+  readonly getQueuedSteerRestartConfirmationSupported?: () => boolean;
   /** Reads the live active turn at submit time for the Cmd+Enter drift check. */
   readonly getActiveTurnForSteer: () => ChatActiveTurn | null;
   /** Reads the live turn lifecycle, including ID-less activation boundaries. */
@@ -376,6 +392,8 @@ export function ChatLowerInteractionSurfaces(
     props.turn.autoPermissionModeProtocolSupported;
   const turnGetDraftBlobBridgeSupported =
     props.turn.getDraftBlobBridgeSupported;
+  const turnGetQueuedSteerRestartConfirmationSupported =
+    props.turn.getQueuedSteerRestartConfirmationSupported;
   const turnGetActiveTurnForSteer = props.turn.getActiveTurnForSteer;
   const turnGetStopConfirmationTarget = props.turn.getStopConfirmationTarget;
 
@@ -426,6 +444,8 @@ export function ChatLowerInteractionSurfaces(
       autoPermissionModeProtocolSupported:
         turnAutoPermissionModeProtocolSupported,
       getDraftBlobBridgeSupported: turnGetDraftBlobBridgeSupported,
+      getQueuedSteerRestartConfirmationSupported:
+        turnGetQueuedSteerRestartConfirmationSupported,
       getActiveTurnForSteer: turnGetActiveTurnForSteer,
       getStopConfirmationTarget: turnGetStopConfirmationTarget,
       stopDisabled: turnStopDisabled,
@@ -437,6 +457,7 @@ export function ChatLowerInteractionSurfaces(
       turnSteerProtocolSupported,
       turnAutoPermissionModeProtocolSupported,
       turnGetDraftBlobBridgeSupported,
+      turnGetQueuedSteerRestartConfirmationSupported,
       turnGetActiveTurnForSteer,
       turnGetStopConfirmationTarget,
       turnStopDisabled,
@@ -785,10 +806,22 @@ function ComposerSurface(props: {
 }): ReactNode {
   const { model, layout } = props;
   const tabHostId = useTabHostId();
+  const stateLine = useContext(ChatStateLineContext);
+  // Before the snapshot the pre-content body says the state line instead.
   if (!model.runtime.snapshotLoaded) {
     return null;
   }
-  if (model.access.isViewer && model.access.restingSandbox !== true) {
+  if (stateLine !== null) {
+    return (
+      <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
+        <ReadOnlyComposerNotice
+          notice={stateLine.line}
+          actions={stateLine.actions}
+        />
+      </ComposerSlotShell>
+    );
+  }
+  if (model.access.isViewer && model.access.restingSandbox === undefined) {
     return <ViewerComposerSurface model={model} layout={layout} />;
   }
   // The escape hatch stacks ABOVE the card/composer rather than replacing
@@ -874,6 +907,7 @@ function ViewerComposerSurface(props: {
   readonly layout: ComposerSurfaceLayout;
 }): ReactNode {
   const { model, layout } = props;
+  const sandboxSays = useContext(ChatSandboxLineContext);
   if (model.subagentView !== null) {
     return (
       <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
@@ -886,7 +920,12 @@ function ViewerComposerSurface(props: {
   return (
     <ComposerSlotShell topSpacing={layout.topSpacing} bottomSpacing="normal">
       <div className="flex flex-col gap-3">
-        <ReadOnlyComposerNotice notice={model.access.readOnlyNotice} />
+        {sandboxSays ? null : (
+          <ReadOnlyComposerNotice
+            notice={model.access.readOnlyNotice}
+            actions={null}
+          />
+        )}
         {model.access.isCopy ? null : (
           <ComposerReadonlyWorkspaceModeRow
             workspaceSlot={model.composer.workspaceControls}
@@ -904,8 +943,10 @@ function LiveChatComposer(props: {
 }) {
   const { model } = props;
   const tabHostId = useTabHostId();
+  const sandboxSays = useContext(ChatSandboxLineContext);
   const restingMessage =
-    model.access.restingSandbox === true && model.queue.editingItem === null;
+    model.access.restingSandbox !== undefined &&
+    model.queue.editingItem === null;
   return (
     <ChatComposer
       key={model.queue.editingItem?.queueItemId}
@@ -933,6 +974,9 @@ function LiveChatComposer(props: {
         model.turn.autoPermissionModeProtocolSupported
       }
       getDraftBlobBridgeSupported={model.turn.getDraftBlobBridgeSupported}
+      getQueuedSteerRestartConfirmationSupported={
+        model.turn.getQueuedSteerRestartConfirmationSupported
+      }
       getActiveTurnForSteer={model.turn.getActiveTurnForSteer}
       editingQueueItemId={model.queue.editingItem?.queueItemId ?? null}
       onCancelQueueEdit={model.queue.onCancelEdit}
@@ -954,11 +998,12 @@ function LiveChatComposer(props: {
             tabHostId={tabHostId}
             onContinue={model.composer.onContinueOnTeamHosts}
           />
-          <ChatComposerDeliveryStatus />
+          <ChatComposerDeliveryStatus hideReconnecting={sandboxSays} />
           <ChatComposerOpencodeLineHeld />
         </>
       }
       suggestedPrompt={model.composer.suggestedPrompt}
+      restingSandbox={model.access.restingSandbox ?? null}
     />
   );
 }
@@ -1064,9 +1109,12 @@ function SubagentViewNotice(props: { readonly view: SubagentDockView }) {
   );
 }
 
-function ReadOnlyComposerNotice(props: { readonly notice: string | null }) {
+function ReadOnlyComposerNotice(props: {
+  readonly notice: string | null;
+  readonly actions: ReactNode;
+}) {
   return (
-    <div className="flex items-start gap-2 rounded-md border border-canvas-border/70 bg-canvas px-3 py-2 text-ui-sm text-muted-foreground">
+    <div className="flex flex-wrap items-start gap-2 rounded-md border border-canvas-border/70 bg-canvas px-3 py-2 text-ui-sm text-muted-foreground">
       {/* The same lock the sidebar row and tab strip mark read-only chats
           with, aligned to the first line of a notice that can wrap. */}
       <Lock className="mt-0.5 size-3.5 shrink-0" aria-hidden />
@@ -1074,6 +1122,7 @@ function ReadOnlyComposerNotice(props: { readonly notice: string | null }) {
         {props.notice ??
           "Read-only viewer. The agent owner can send prompts and manage this queue."}
       </span>
+      {props.actions}
     </div>
   );
 }

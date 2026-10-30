@@ -1,5 +1,9 @@
 import type { AgentFailureReason } from "@traycer/protocol/persistence/epic/content-blocks";
 import { fallbackReasonLabel } from "@traycer/protocol/host/notifications/presentation";
+import {
+  PROVIDER_OUTDATED_ERROR_CODE,
+  PROVIDER_OUTDATED_HOST_OWNER_ERROR_CODE,
+} from "@traycer/protocol/host/agent/gui/agent-runtime";
 
 /**
  * How a failed turn's row should PRESENT itself.
@@ -113,6 +117,11 @@ const INTERRUPTED_UNTYPED_CODES: ReadonlyMap<string, string> = new Map([
   ["TEAM_MEMBER_REMOVED", "Member left the team"],
   ["TEAM_HOST_RECONNECTING", "Waiting for the team's host"],
   ["CLAUDE_PREVIOUS_SESSION_STOPPING", "Previous session still stopping"],
+  // The provider refused the turn because its command-line tool is too old;
+  // the host's message names the provider and, where this host cannot update
+  // it, who or what does.
+  [PROVIDER_OUTDATED_ERROR_CODE, "Out of date"],
+  [PROVIDER_OUTDATED_HOST_OWNER_ERROR_CODE, "Out of date"],
 ]);
 
 export interface UntypedCodePresentation {

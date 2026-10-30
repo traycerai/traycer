@@ -507,6 +507,8 @@ function useChatSessionHandleInContainer(input: {
           result.client.autoPermissionModeProtocolSupported(),
         queuePauseReasonProtocolSupported: () =>
           result.client.queuePauseReasonProtocolSupported(),
+        queuedSteerRestartConfirmationSupported: () =>
+          result.client.queuedSteerRestartConfirmationSupported(),
       };
     };
 

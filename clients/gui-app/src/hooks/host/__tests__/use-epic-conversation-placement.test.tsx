@@ -230,6 +230,48 @@ describe("useEpicConversationPlacement", () => {
     expect(result.current.followsEffective).toBe(false);
   });
 
+  it("a caller-NAMED host whose lease is offline stays the destination and refuses, where a pin falls back", () => {
+    // A stopped sandbox's give-back names its host: the message goes there or
+    // nowhere, never to the session's host.
+    act(() => {
+      useSurfaceHostSelectionStore
+        .getState()
+        .setSelection(newConversationSurfaceKey(EPIC_A), "host-sandbox");
+      publishFleet(
+        [
+          { hostId: "host-sandbox", status: "dead" },
+          { hostId: "host-session", status: "ready" },
+        ],
+        "host-session",
+      );
+    });
+    const pinned = renderHook(() =>
+      useEpicConversationPlacement({
+        epicId: EPIC_A,
+        overrideHostId: null,
+        sessionHostId: "host-session",
+      }),
+    );
+    const named = renderHook(() =>
+      useEpicConversationPlacement({
+        epicId: EPIC_A,
+        overrideHostId: "host-sandbox",
+        sessionHostId: "host-session",
+      }),
+    );
+
+    expect(pinned.result.current.submitTarget.resolvedHostId).toBe(
+      "host-session",
+    );
+    expect(named.result.current.submitTarget.resolvedHostId).toBe(
+      "host-sandbox",
+    );
+    expect(named.result.current.submitTarget.client?.getActiveHostId()).toBe(
+      "host-sandbox",
+    );
+    expect(named.result.current.submitTarget.namedHostDead).toBe(true);
+  });
+
   it("a DEAD memory host auto-follows to the session's host, and returns when it is usable again", () => {
     // The pin's death rule, one tier down and then one more: the memory
     // survives the death (sticky return), the resolution moves to the next

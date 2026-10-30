@@ -518,9 +518,9 @@ function persistedBarHost(value: unknown, fallback: BarHost): BarHost {
  * The rail as it was stored. Structure only: `normalizeRail` decides which
  * panels are missing and where they land.
  *
- * A stored list that survives as NOTHING - an empty array, or nine entries
+ * A stored list that survives as NOTHING - an empty array, or ten entries
  * this build has no case for - falls back to the shipped rail rather than to
- * `normalizeRail`'s answer for `[]`, which is all nine panels with no dividers
+ * `normalizeRail`'s answer for `[]`, which is all ten panels with no dividers
  * at all and is not a grouping anybody chose (G1-22).
  */
 function persistedRail(value: unknown): ReadonlyArray<RailEntry> {

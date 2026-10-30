@@ -71,7 +71,9 @@ export interface ChatLocateRowArgs {
  *   epoch this window has left (the key change re-asks).
  * - `found`: the ordinal, in this window's epoch.
  * - `missing`: settled without a row - `found: false`, or the RPC rejected
- *   (`E_HOST_UNSUPPORTED` included). Final for this target and epoch.
+ *   (`E_HOST_UNSUPPORTED` included). Final for this target and epoch until
+ *   it is asked again: while a new ask is in flight the earlier miss is not
+ *   its answer, and it reads `waiting`.
  */
 export type ChatLocateRowAnswer =
   | { readonly status: "waiting" }
@@ -136,7 +138,11 @@ export function useChatLocateRowAnswer(
   if (target === null) return WAITING;
   const data = query.data;
   if (data === undefined) return query.isError ? MISSING : WAITING;
-  if (!data.found) return MISSING;
+  // A miss stands only once no new ask is in flight: a reader mounted to ask
+  // again finds the earlier miss still cached while its own request runs. (A
+  // rejection needs no such guard: asking again puts the query back to
+  // pending, out of its error.)
+  if (!data.found) return query.isFetching ? WAITING : MISSING;
   // The epoch check, and it is load-bearing rather than belt-and-braces: the
   // cache key above stops a SUPERSEDED answer being re-served, and this stops an
   // in-flight one landing after the re-base that voided it. Falling back to

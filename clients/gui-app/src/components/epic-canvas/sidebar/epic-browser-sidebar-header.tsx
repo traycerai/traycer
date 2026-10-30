@@ -145,7 +145,7 @@ export function BrowserOfflineFilter(props: {
         </DropdownMenuCheckboxItem>
         <DropdownMenuSeparator />
         <DropdownMenuSub>
-          <DropdownMenuSubTrigger>Simulator device</DropdownMenuSubTrigger>
+          <DropdownMenuSubTrigger>Open links on</DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="w-[min(90vw,20rem)]">
             <BrowserHostFilterChoices surfaceKey={surfaceKey} />
           </DropdownMenuSubContent>
@@ -156,8 +156,9 @@ export function BrowserOfflineFilter(props: {
 }
 
 /**
- * The simulator inventory keeps its existing selected-device scope.
- * Browser discovery does not read or write this selection.
+ * The machine a link opened from this task lands on: the Browsers surface
+ * pin `useBrowserOpenHost` reads. Browser discovery does not read or write
+ * this selection.
  */
 export function BrowserHostFilterChoices(props: {
   readonly surfaceKey: string;
@@ -173,7 +174,7 @@ export function BrowserHostFilterChoices(props: {
       ?.name ?? "Task host";
   return (
     <>
-      <DropdownMenuLabel>Simulator device</DropdownMenuLabel>
+      <DropdownMenuLabel>Open links on</DropdownMenuLabel>
       <DropdownMenuRadioGroup value={value}>
         <DropdownMenuRadioItem
           value={FOLLOW_TASK_HOST_VALUE}

@@ -345,6 +345,7 @@ export function publishedChatSessionState(
     activeTurn: null,
     turnLifecycleRevision: 0,
     steerProtocolSupported: false,
+    queuedSteerRestartConfirmationSupported: () => false,
     // A published transcript has no live session at all, so it cannot say -
     // and nothing here offers a permission mode to gate in the first place.
     autoPermissionModeProtocolSupported: null,
@@ -429,6 +430,7 @@ export function publishedChatSessionState(
     // No wire here either: no queue edit is ever submitted, and no send can
     // go unanswered.
     queueEditRecords: {},
+    steerRestartRefusals: [],
     unconfirmedSendActionIds: new Set<string>(),
     hashOnlyRecoveries: {},
     currentComposerSettings: null,
@@ -483,6 +485,9 @@ export function publishedChatSessionState(
     queueReorder: () => null,
     queueSteerNow: () => null,
     queueAbortSteer: () => null,
+    takeSteerRestartRefusal: () => null,
+    releaseSteerRestartInitiator: () => undefined,
+    claimSteerRestartRefusal: () => undefined,
     queueSettingsUpdate: () => null,
     updateActivePermissionMode: () => null,
     updateActiveProfile: () => null,

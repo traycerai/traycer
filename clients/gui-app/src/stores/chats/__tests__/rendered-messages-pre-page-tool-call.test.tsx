@@ -53,6 +53,7 @@ function preArtifactToolCall(): Record<string, unknown> {
     managedCommand: null,
     agentMessageReceipt: null,
     agentMessageDelivery: null,
+    botSendReceipt: null,
     progress: null,
     backgroundOutput: null,
     backgroundTask: false,

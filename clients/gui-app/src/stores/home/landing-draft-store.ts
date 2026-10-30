@@ -64,6 +64,14 @@ import { registerLandingDraftRootSource } from "@/lib/composer/landing-image-bud
 import { stripBase64ImageNodesWithSelection } from "@/lib/composer/strip-base64-image-nodes";
 import { draftRuntimeRegistry } from "./draft-runtime-registry";
 import {
+  parseReturnedSandbox,
+  returnedSandboxToJson,
+  sameStoredReturnedSandbox,
+  storeReturnedSandbox,
+  type ReturnedSandbox,
+  type StoredReturnedSandbox,
+} from "@/lib/sandboxes/returned-sandbox";
+import {
   landingPlacementHostId,
   notifyDraftLocalDelete,
   notifyDraftLocalEdit,
@@ -122,6 +130,12 @@ export interface LandingDraftTab {
    * draft/v1 portable payload (`closed`), not from a host SQLite column.
    */
   readonly closed: boolean;
+  /**
+   * The sandbox the message given back into this draft was going to. Local
+   * to this device: the landing composer stages it again while it holds no
+   * pick of its own, so the draft's Send goes there even after a reload.
+   */
+  readonly returnedSandbox: StoredReturnedSandbox | null;
 }
 
 export type LandingDraftAdoption =
@@ -149,6 +163,15 @@ export interface LandingDraftWorkspaceSnapshot {
   readonly primaryPath: string | null;
 }
 
+/**
+ * What an install must be to count, when storage refuses its row. `"saved"`:
+ * the row is taken back out and the install throws - for a caller that keeps
+ * a saved source to retry from until the row is saved. `"in-memory"`: the row
+ * stays, readable until the window closes, and the install throws - for a
+ * caller whose source is already gone, so that row is the last copy there is.
+ */
+export type LandingDraftDurability = "saved" | "in-memory";
+
 /** The row {@link LandingDraftStoreState.installLandingDraft} writes. */
 export interface InstallLandingDraftInput {
   readonly id: string;
@@ -159,6 +182,13 @@ export interface InstallLandingDraftInput {
   readonly composerMode: ComposerMode;
   readonly workspace: LandingDraftWorkspaceSnapshot;
   readonly closed: boolean;
+  /**
+   * Where the draft's message goes, created with the draft in the same
+   * write. Stamped with the signed-in account as `setDraftReturnedSandbox`
+   * stamps it; a stored record keeps its own.
+   */
+  readonly returnedSandbox: ReturnedSandbox | StoredReturnedSandbox | null;
+  readonly durability: LandingDraftDurability;
 }
 
 interface LandingDraftStoreState {
@@ -193,6 +223,8 @@ interface LandingDraftStoreState {
    * touching `activeDraftId` - the stash migration installs many rows at
    * once and Undo restores one the user is not looking at, so neither may
    * hijack the composer. False when `id` is retired or already present.
+   * Throws when storage refuses the row; `durability` says whether the row
+   * stays in memory.
    *
    * Deliberately not `createDraftWithId` + `closeDraft`: that pair sets and
    * then clears the active draft, and fires an image reconcile between the
@@ -253,6 +285,15 @@ interface LandingDraftStoreState {
   setDraftSettings: (id: string, settings: ChatRunSettings) => void;
   /** Update the chat-vs-terminal starting point of a specific draft. */
   setDraftComposerMode: (id: string, mode: ComposerMode) => void;
+  /**
+   * Records, under the signed-in account, or forgets where the draft's
+   * given-back message was going. Not an edit: nothing is published, and the
+   * draft's place in the LRU stays.
+   */
+  setDraftReturnedSandbox: (
+    id: string,
+    returned: ReturnedSandbox | StoredReturnedSandbox | null,
+  ) => void;
   // Returns the paths EVICTED by the 50-folder cap (empty when nothing was
   // evicted) so callers can unstage any in-flight worktree intent for them.
   addDraftResolvedFolders: (
@@ -401,6 +442,7 @@ function readProjectedDrafts(
         workspace: parseLandingDraftWorkspaceSnapshot(draft.workspace),
         ...mirrorFieldsFromExisting(draft.id),
         closed: draft.closed === true,
+        returnedSandbox: parseReturnedSandbox(draft.returnedSandbox),
       },
     ];
   });
@@ -491,6 +533,7 @@ function parsePersistedLandingDrafts(
           workspace: parseLandingDraftWorkspaceSnapshot(raw.workspace),
           ...parseLandingMirrorFields(raw),
           closed: raw.closed === true,
+          returnedSandbox: parseReturnedSandbox(raw.returnedSandbox),
         },
       ];
     }),
@@ -689,6 +732,7 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           // ancestor's cloud row, and the ancestor's own host tombstones
           // (or re-mints) its local row from there.
           supersedes: sourceId,
+          returnedSandbox: source.returnedSandbox,
         };
         set((state) => ({
           drafts: [...uniqueLandingDrafts(state.drafts), next],
@@ -715,11 +759,33 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
           // adopts and publishes it on the next sweep.
           generation: 1,
           closed: input.closed,
+          returnedSandbox:
+            input.returnedSandbox === null
+              ? null
+              : storeReturnedSandbox(input.returnedSandbox),
         };
-        // Partial set: `activeDraftId` is deliberately left where it is.
-        set((state) => ({
-          drafts: [...uniqueLandingDrafts(state.drafts), next],
-        }));
+        const before = get().drafts;
+        try {
+          // Partial set: `activeDraftId` is deliberately left where it is.
+          set((state) => ({
+            drafts: [...uniqueLandingDrafts(state.drafts), next],
+          }));
+        } catch (error: unknown) {
+          // persist sets memory first, then writes storage, and a refused
+          // write throws out of `set` with the row already in memory. For a
+          // saved install, take it back out: a row only memory holds is gone
+          // on reload, and a caller that saw it would end the only copy that
+          // is saved.
+          if (input.durability === "saved") {
+            try {
+              set({ drafts: before });
+            } catch {
+              // Storage still holds the snapshot from before the refused
+              // write.
+            }
+          }
+          throw error;
+        }
         notifyDraftLocalEdit(input.id);
         scheduleLandingImageReconcile();
         return true;
@@ -934,6 +1000,21 @@ export const useLandingDraftStore = create<LandingDraftStoreState>()(
         notifyDraftLocalEdit(id);
       },
 
+      setDraftReturnedSandbox: (id, given) => {
+        const draft = get().drafts.find((d) => d.id === id);
+        const returned = given === null ? null : storeReturnedSandbox(given);
+        if (
+          !draft ||
+          sameStoredReturnedSandbox(draft.returnedSandbox, returned)
+        )
+          return;
+        set((state) => ({
+          drafts: state.drafts.map((d) =>
+            d.id === id ? { ...d, returnedSandbox: returned } : d,
+          ),
+        }));
+      },
+
       restoreDraftWorkspaceForHost: (id, hostId) => {
         set((state) =>
           updateDraftWorkspace(state, id, () =>
@@ -1121,6 +1202,13 @@ function areLandingDraftsEqual(
       return false;
     }
     if (left[index].closed !== right[index].closed) return false;
+    if (
+      !sameStoredReturnedSandbox(
+        left[index].returnedSandbox,
+        right[index].returnedSandbox,
+      )
+    )
+      return false;
   }
   return true;
 }
@@ -1187,6 +1275,9 @@ function projectLandingDraftForDesktop(
     composerMode: draft.composerMode,
     workspace: landingDraftWorkspaceToDesktopValue(draft.workspace),
     closed: draft.closed,
+    ...(draft.returnedSandbox === null
+      ? {}
+      : { returnedSandbox: returnedSandboxToJson(draft.returnedSandbox) }),
   };
 }
 
@@ -1637,6 +1728,7 @@ export function freshLandingMirrorState(): Pick<
   | "publication"
   | "confirmedHostBlobHashes"
   | "closed"
+  | "returnedSandbox"
 > {
   return {
     adoption: UNADOPTED_LANDING_DRAFT,
@@ -1649,6 +1741,7 @@ export function freshLandingMirrorState(): Pick<
     publication: null,
     confirmedHostBlobHashes: [],
     closed: false,
+    returnedSandbox: null,
   };
 }
 
@@ -1915,6 +2008,16 @@ function incomingClosedState(
 }
 
 /**
+ * A host document never carries where the draft's given-back message was
+ * going: that is this device's own record, kept across the host's writes.
+ */
+function keptReturnedSandbox(
+  existing: LandingDraftTab | undefined,
+): StoredReturnedSandbox | null {
+  return existing?.returnedSandbox ?? null;
+}
+
+/**
  * Applies a landing document to the store. Returns whether the row was
  * mutated by it: a retired id, or an older document from the row's current
  * owner, is rejected without touching the row.
@@ -1983,6 +2086,7 @@ export function applyLandingHostDocument(
       document.portable.closed,
       existing,
     ),
+    returnedSandbox: keptReturnedSandbox(existing),
   };
   useLandingDraftStore.setState((state) => {
     const without = state.drafts.filter((draft) => draft.id !== next.id);

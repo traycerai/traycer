@@ -156,6 +156,10 @@ const CHAT_MESSAGE_FIELD_UNCHANGED: {
     a.conversationRequest === b.conversationRequest,
   announcement: (a, b) => a.announcement === b.announcement,
   options: (a, b) => a.options === b.options,
+  // A settlement arrives as a new question object on the same row.
+  question: (a, b) => a.question === b.question,
+  // A resolution arrives as a new surface object on the same row.
+  surface: (a, b) => a.surface === b.surface,
   repliesTo: (a, b) => a.repliesTo === b.repliesTo,
   assistantMeta: (a, b) => a.assistantMeta === b.assistantMeta,
   statusLabel: (a, b) => a.statusLabel === b.statusLabel,

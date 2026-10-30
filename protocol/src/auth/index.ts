@@ -25,6 +25,7 @@ export * from "./link-login";
 export type {
   AuthenticatedUser,
   AuthenticatedUserActingAs,
+  AuthenticatedUserCampaignCredit,
   AuthenticatedUserEnvironments,
   BundleSummary,
   ConnectMCPServerResponse,

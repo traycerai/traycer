@@ -331,9 +331,10 @@ function InlineArtifactActions(props: {
               gesture: "explicit",
               modifiers: null,
               placement: null,
-              // An existing tile may show another version. Keep this captured
-              // preview intact instead of focusing that tile unchanged.
-              dedupe: false,
+              // One tile per artifact, like every other opener. A tile that
+              // is already open adopts this captured version on the hit
+              // (`executeTileOpen`), so the preview still comes up intact.
+              dedupe: true,
               source: "direct_ui",
             });
           }}

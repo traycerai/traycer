@@ -50,6 +50,9 @@ import { useConfigurationSource } from "@/components/settings/environment/config
 import { EnvironmentHostBinding } from "@/components/settings/environment/environment-host-binding";
 import { TeamPermissions } from "@/components/settings/environment/team-permissions";
 import { BrowserAgentAccessGroup } from "@/components/settings/panels/browser-agent-access-group";
+import { UNNAMED_HOST_LABEL } from "@/hooks/agent/use-host-reachability";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
+import type { EnvironmentPick } from "@/lib/settings-environment-pages";
 
 /**
  * Settings ▸ Permissions: which mode, who reviews, what rules, what happened,
@@ -108,7 +111,10 @@ function TeamPermissionsUnlessMachineAsked(): ReactNode {
   const setPick = useSettingsEnvironmentPickStore((state) => state.setPick);
   const hostId = intent?.hostId ?? null;
   const hostName =
-    scope.hosts.find((host) => host.hostId === hostId)?.name ?? hostId;
+    hostId === null
+      ? null
+      : (scope.hosts.find((host) => host.hostId === hostId)?.name ??
+        UNNAMED_HOST_LABEL);
   // Under a team pick the scope is this window's own machine.
   const windowHostId = scope.hostId;
   useLayoutEffect(() => {
@@ -148,6 +154,12 @@ function PermissionsBrowserAgentAccess(): ReactNode {
 
 const PERSONAL_PERMISSIONS_DESCRIPTION =
   "What your agents may do without asking, on every computer and sandbox running Personal.";
+
+function permissionsDescription(pick: EnvironmentPick): string {
+  return pick.kind === "personal"
+    ? PERSONAL_PERMISSIONS_DESCRIPTION
+    : "How much an agent may do on its own, and who reviews the rest.";
+}
 
 /** A machine's Permissions: the five tabs, three of them host-gated. */
 function HostPermissionsSettingsPanel(): ReactNode {
@@ -224,11 +236,7 @@ function HostPermissionsSettingsPanel(): ReactNode {
   return (
     <SettingsPanelShell
       title="Permissions"
-      description={
-        pick.kind === "personal"
-          ? PERSONAL_PERMISSIONS_DESCRIPTION
-          : "How much an agent may do on its own, and who reviews the rest."
-      }
+      description={permissionsDescription(pick)}
       bodyClassName="overflow-visible rounded-none border-none bg-transparent"
     >
       <Tabs
@@ -302,13 +310,17 @@ function HostPermissionsSettingsPanel(): ReactNode {
             />,
           )}
         </TabsContent>
-        <TabsContent
-          value="browser"
-          className="pt-5"
-          {...contentLabel("browser")}
-        >
-          <PermissionsBrowserAgentAccess />
-        </TabsContent>
+        {/* Settings > Browser's row in a build without environments
+            (`PERMISSIONS_TABS`). */}
+        {UNRELEASED_FEATURES_ENABLED ? (
+          <TabsContent
+            value="browser"
+            className="pt-5"
+            {...contentLabel("browser")}
+          >
+            <PermissionsBrowserAgentAccess />
+          </TabsContent>
+        ) : null}
       </Tabs>
     </SettingsPanelShell>
   );

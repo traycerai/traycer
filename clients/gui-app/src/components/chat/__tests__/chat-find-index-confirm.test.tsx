@@ -579,6 +579,7 @@ function mountRow(
     hideReasoning: false,
     queuePauseReasonProtocolSupported: support,
     splitLongTurns: true,
+    botSendQuestionStates: null,
   });
   const element = document.createElement("div");
   element.dataset.messageId = message.id;
@@ -2234,6 +2235,7 @@ const SUBAGENT_NESTED_TOOL_MODEL: ChatMessageModel = assistantSegmentsRow({
           managedCommand: null,
           agentMessageReceipt: null,
           agentMessageDelivery: null,
+          botSendReceipt: null,
           isStreaming: false,
           endState: null,
           stopped: false,
@@ -2508,6 +2510,7 @@ describe("chat find: census of index text the transcript does not paint", () => 
         hideReasoning: false,
         queuePauseReasonProtocolSupported: null,
         splitLongTurns: true,
+        botSendQuestionStates: null,
       },
     ).flatMap((projectedRow) => projectedRow.units);
     expect(
@@ -2533,6 +2536,7 @@ describe("chat find: census of index text the transcript does not paint", () => 
           hideReasoning: false,
           queuePauseReasonProtocolSupported: null,
           splitLongTurns: true,
+          botSendQuestionStates: null,
         },
       ).flatMap((projectedRow) => projectedRow.units);
       const anyUnitMatches = hydratedUnits.some((unit) =>

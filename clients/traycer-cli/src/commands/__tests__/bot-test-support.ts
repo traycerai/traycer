@@ -89,6 +89,15 @@ export function taskEntry(overrides: Partial<BotTaskEntry>): BotTaskEntry {
     state: "tracking",
     endedReason: null,
     createdByUserId: null,
+    spun: true,
+    label: null,
+    originRequestId: null,
+    createdByChatId: null,
+    checkins: null,
+    inputNeeded: null,
+    pause: null,
+    stop: null,
+    runRequest: null,
     ...overrides,
   };
 }

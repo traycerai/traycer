@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   cleanup,
@@ -111,6 +113,7 @@ function frameFor(
     reachability: reachability(status),
     cloneAllowed: true,
     hasReadySession: false,
+    sandboxFooter: false,
   };
 }
 
@@ -140,6 +143,18 @@ function streak(
   };
 }
 
+// The host's name is a query for a host the directory cannot name, so the body
+// mounts under a query client, as it does in the app.
+const queryClient = new QueryClient();
+
+function WithQueryClient(props: { readonly children: ReactNode }): ReactNode {
+  return (
+    <QueryClientProvider client={queryClient}>
+      {props.children}
+    </QueryClientProvider>
+  );
+}
+
 function renderPreContent(
   frame: ChatTilePreContentFrame,
   sessionValue: ChatTilePreContentSession | null,
@@ -150,6 +165,7 @@ function renderPreContent(
       frame={frame}
       session={sessionValue}
     />,
+    { wrapper: WithQueryClient },
   );
 }
 
@@ -276,6 +292,7 @@ describe("<ChatTilePreContent />: the calm waits", () => {
       <div>
         <ChatTilePreContent testId={TEST_ID} frame={frame} session={null} />
       </div>,
+      { wrapper: WithQueryClient },
     );
     const began = body().getAttribute("data-wait-began-at");
     expect(body().getAttribute("data-has-handle")).toBe("false");

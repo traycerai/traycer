@@ -20,6 +20,7 @@ import type {
   SandboxCatalogueFetchResult,
   SandboxCostsFetchResult,
   SandboxCreateFetchResult,
+  TraycerModelsFetchResult,
   SandboxAutomationOpenTarget,
   SandboxCreateRequest,
   SandboxPatchRequest,
@@ -130,6 +131,7 @@ export interface AuthBridgeSurface {
   getSandboxCatalogue(
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult>;
+  getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -280,6 +282,12 @@ export function buildAuthBridge(): AuthBridgeSurface {
         RunnerHostInvoke.getSandboxCatalogue,
         bearerToken,
       ) as Promise<SandboxCatalogueFetchResult>,
+
+    getTraycerModels: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getTraycerModels,
+        bearerToken,
+      ) as Promise<TraycerModelsFetchResult>,
 
     createSandbox: (bearerToken, request) =>
       ipcRenderer.invoke(

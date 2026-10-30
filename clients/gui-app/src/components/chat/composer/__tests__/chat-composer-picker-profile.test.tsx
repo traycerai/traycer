@@ -38,10 +38,15 @@ const captured = vi.hoisted(() => ({
   } | null,
 }));
 
-// A chat composer on a sandbox host refuses an unrunnable agent at Send;
-// nothing in this suite sits on one.
+// A chat composer on a sandbox host, or on a resting sandbox's chat, refuses
+// an unrunnable agent at Send; nothing in this suite sits on either.
 vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
   useSandboxAgentGate: () => ({ blocked: false, hint: null, notice: null }),
+  useRestingSandboxAgentGate: () => ({
+    blocked: false,
+    hint: null,
+    notice: null,
+  }),
 }));
 
 vi.mock("../picker/use-composer-picker-items", () => ({
@@ -89,6 +94,7 @@ vi.mock("@/lib/layout-overrides", () => ({
 }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ fileDrops: {} }),
+  useRunnerHostOrNull: () => null,
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
@@ -236,9 +242,6 @@ vi.mock("../profile-disabled-banner", () => ({
 vi.mock("../provider-reauth-banner", () => ({
   ProviderReauthBanner: () => null,
 }));
-vi.mock("../chat-secret-export-notices", () => ({
-  ChatSecretExportNotices: () => null,
-}));
 vi.mock("@/components/onboarding/first-task-guide", () => ({
   FirstTaskChatGuide: () => null,
 }));
@@ -304,6 +307,7 @@ function mountComposer() {
         topSpacing="normal"
         topSlot={null}
         suggestedPrompt={undefined}
+        restingSandbox={null}
       />
     </QueryClientProvider>,
   );

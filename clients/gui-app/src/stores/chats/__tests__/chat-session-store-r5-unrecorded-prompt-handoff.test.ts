@@ -18,7 +18,15 @@
  * R5F1 - a document that merely "looks right" to a mock can still be one the
  * real destination refuses, and here there is no gap between the two.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type {
   ChatRunSettings,
@@ -31,6 +39,17 @@ import type { HostRpcRegistry } from "@/lib/host";
 import type { WorktreeIntent } from "@traycer/protocol/host/worktree-schemas";
 import type { RemovedWorktreeRefs } from "@/lib/worktree/removed-worktree-refs";
 import { HANDOFF_IMAGE_RESOLUTION_TIMEOUT_MS } from "@/lib/drafts/unrecorded-prompt-handoff";
+import {
+  deleteLandingDraftOnHost,
+  LANDING_DRAFT_PERSIST_KEY,
+  useLandingDraftStore,
+} from "@/stores/home/landing-draft-store";
+import {
+  landingDraftIsRetired,
+  resetLandingDraftRetirementsForTests,
+} from "@/lib/drafts/landing-draft-retirement";
+import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget";
+import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 
 import {
   createChatSessionStore,
@@ -65,6 +84,15 @@ import {
 vi.mock("@/lib/drafts/draft-mirror-coordinator", () => ({
   draftMirrorClientForHost: () => null,
 }));
+
+// Ids the next `uuid` v4 calls answer with, oldest first; empty means real ids.
+// A send's `clientActionId` is the first v4 it draws, so queueing one here
+// makes a second chat send under an action id a first chat already used.
+const pinnedV4Ids = vi.hoisted((): string[] => []);
+vi.mock("uuid", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("uuid")>();
+  return { ...actual, v4: () => pinnedV4Ids.shift() ?? actual.v4() };
+});
 
 const originalCreateImageBitmap = globalThis.createImageBitmap;
 
@@ -1067,4 +1095,217 @@ describe("R5F2: the four-state x cap matrix (each state protects the session, an
       expect(JSON.stringify(installedDraftContaining(text))).toContain(text);
     });
   }
+});
+
+describe("a disposed chat's prompt whose draft the browser refuses to save", () => {
+  it("stays readable in Drafts for the session: the chat held the last copy", async () => {
+    const text = "unrecorded message whose chat is disposed";
+    harness = createHarness();
+    emitOwnerSnapshot(harness.callbacks());
+    const action = sendMessageWithContent(harness, plainContent(text));
+    rejectPlain(
+      harness,
+      action.clientActionId,
+      "The host refused the message.",
+    );
+    // Rejected while hidden: this is the session's only copy of the prompt.
+    expect(
+      harness.handle.store.getState().failedSendRestoration?.content,
+    ).toEqual(plainContent(text));
+    const write = localStorage.setItem.bind(localStorage);
+    const refuse = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation((name, value) => {
+        if (name === LANDING_DRAFT_PERSIST_KEY)
+          throw new DOMException("No room", "QuotaExceededError");
+        write(name, value);
+      });
+    try {
+      harness.handle.dispose();
+      expect(await waitForHandedOffDraft(text, 1000)).toContain(text);
+    } finally {
+      refuse.mockRestore();
+    }
+  });
+
+  describe("with every landing write refused", () => {
+    const REFUSED_TEXT = "unrecorded message the browser cannot save";
+
+    let landingWriteRefusal: MockInstance<Storage["setItem"]> | null = null;
+
+    beforeEach(() => {
+      landingWriteRefusal = null;
+      resetLandingDraftRetirementsForTests();
+      pinnedV4Ids.length = 0;
+    });
+
+    afterEach(() => {
+      landingWriteRefusal?.mockRestore();
+      landingWriteRefusal = null;
+      resetLandingDraftRetirementsForTests();
+      pinnedV4Ids.length = 0;
+    });
+
+    function rowsHolding(text: string) {
+      return useLandingDraftStore
+        .getState()
+        .drafts.filter((draft) => JSON.stringify(draft.content).includes(text));
+    }
+
+    function refuseLandingWrites(): void {
+      const write = localStorage.setItem.bind(localStorage);
+      landingWriteRefusal = vi
+        .spyOn(Storage.prototype, "setItem")
+        .mockImplementation((name, value) => {
+          if (name === LANDING_DRAFT_PERSIST_KEY)
+            throw new DOMException("No room", "QuotaExceededError");
+          write(name, value);
+        });
+    }
+
+    // The crop of an annotation the prompt carries. A landing draft has no
+    // annotation sidecar, so once the chat is disposed the only thing naming
+    // this hash is the teardown's own capture root - which the handoff
+    // releases in its final `finally`, after every attempt and the second
+    // chance have settled.
+    const CROP_HASH = "b".repeat(64);
+
+    function cropAnnotation(): BrowserAnnotationRecord {
+      return {
+        kind: "browser-annotation",
+        annotationId: "ann-refused-teardown",
+        tabId: "tab-1",
+        sessionId: "session-1",
+        origin: "https://example.test",
+        pageUrl: "https://example.test/checkout",
+        pageTitle: "Checkout",
+        source: {
+          kind: "browser",
+          tabId: "tab-1",
+          sessionId: "session-1",
+          origin: "https://example.test",
+          pageUrl: "https://example.test/checkout",
+          pageTitle: "Checkout",
+        },
+        capturedAt: 1_700_000_000_000,
+        comment: "the button is misaligned",
+        counts: { elements: 1, regions: 0, strokes: 2 },
+        elements: [],
+        imageFileName: "crop.png",
+        imageHash: CROP_HASH,
+        droppedElementCount: 0,
+      };
+    }
+
+    /**
+     * Has `chat` hold a rejected prompt and disposes it with the browser
+     * refusing the landing-draft key. Resolves once the teardown handoff has
+     * settled: its capture root for the crop is held the instant the chat is
+     * gone and released only when the whole chain is done. Every state the
+     * landing store passes through on the way is recorded.
+     */
+    async function disposeRefusedChat(
+      chat: Harness,
+      text: string,
+      content: JsonContent,
+    ): Promise<{ readonly clientActionId: string; readonly seen: string[][] }> {
+      emitOwnerSnapshot(chat.callbacks());
+      const action = chat.handle.store.getState().sendMessage({
+        content,
+        sender: { type: "user", userId: OWNER_ID },
+        settings: SETTINGS,
+        attachments: buildAttachmentsFromJSONContent(content),
+        deliveryPolicy: "auto",
+        restore: { content, browserAnnotations: [cropAnnotation()] },
+      });
+      if (action === null) throw new Error("sendMessage was refused");
+      rejectPlain(chat, action.clientActionId, "The host refused the message.");
+      refuseLandingWrites();
+      // The ids of the rows holding the prompt after EVERY change, so a copy
+      // that exists only between two attempts is still seen.
+      const seen: string[][] = [];
+      const stop = useLandingDraftStore.subscribe(() => {
+        seen.push(rowsHolding(text).map((row) => row.id));
+      });
+      try {
+        chat.handle.dispose();
+        expect(landingLiveImageRootHashes().has(CROP_HASH)).toBe(true);
+        await vi.waitFor(
+          () => expect(landingLiveImageRootHashes().has(CROP_HASH)).toBe(false),
+          { timeout: 1000 },
+        );
+      } finally {
+        stop();
+      }
+      return { clientActionId: action.clientActionId, seen };
+    }
+
+    it("leaves exactly one readable copy, at every step of the teardown", async () => {
+      harness = createHarness();
+      const { seen } = await disposeRefusedChat(
+        harness,
+        REFUSED_TEXT,
+        plainContent(REFUSED_TEXT),
+      );
+
+      const rows = rowsHolding(REFUSED_TEXT);
+      expect(rows).toHaveLength(1);
+      expect(JSON.stringify(rows[0]?.content)).toContain(REFUSED_TEXT);
+      // Between the first attempt landing and the second chance running, the
+      // store never held a second row, nor a different id for the prompt.
+      expect(new Set(seen.flat()).size).toBe(1);
+      expect(Math.max(...seen.map((ids) => ids.length))).toBe(1);
+    });
+
+    it("still leaves one copy when the image read fails and the second chance runs", async () => {
+      // A hash no store holds and no host serves: the real resolver answers
+      // nothing, the import throws, and the first write of the shared id is
+      // the text-only install in the handoff's own catch. Its row lands in
+      // memory, the refused write throws, and the teardown's second chance
+      // runs against that row.
+      harness = createHarness();
+      const { seen } = await disposeRefusedChat(
+        harness,
+        REFUSED_TEXT,
+        hashOnlyContent("a".repeat(64), REFUSED_TEXT),
+      );
+
+      expect(rowsHolding(REFUSED_TEXT)).toHaveLength(1);
+      expect(new Set(seen.flat()).size).toBe(1);
+      expect(Math.max(...seen.map((ids) => ids.length))).toBe(1);
+    });
+
+    it("does not bring the prompt back once the person deleted it from Drafts", async () => {
+      harness = createHarness();
+      const { clientActionId } = await disposeRefusedChat(
+        harness,
+        REFUSED_TEXT,
+        plainContent(REFUSED_TEXT),
+      );
+      const copies = rowsHolding(REFUSED_TEXT);
+      expect(copies.length).toBeGreaterThan(0);
+      // The person frees some room before deleting, so the delete itself is
+      // not what the browser refuses; the second teardown meets a full one.
+      landingWriteRefusal?.mockRestore();
+      for (const copy of copies) deleteLandingDraftOnHost(copy.id, HOST_ID);
+      expect(rowsHolding(REFUSED_TEXT)).toHaveLength(0);
+      expect(copies.every((copy) => landingDraftIsRetired(copy.id))).toBe(true);
+
+      // Another chat sends under the same action id and is disposed the same
+      // way: the same prompt, already discarded by the person.
+      secondHarness = createHarness();
+      pinnedV4Ids.push(clientActionId);
+      const again = await disposeRefusedChat(
+        secondHarness,
+        REFUSED_TEXT,
+        plainContent(REFUSED_TEXT),
+      );
+      expect(again.clientActionId).toBe(clientActionId);
+
+      // The handoff has settled, and no state the store passed through held
+      // the prompt: the retired id refused every install.
+      expect(again.seen.flat()).toEqual([]);
+      expect(rowsHolding(REFUSED_TEXT)).toHaveLength(0);
+    });
+  });
 });

@@ -9,6 +9,7 @@ import {
   SelectGroup,
 } from "@/components/ui/select";
 import { useTeamViewingHost } from "@/hooks/environment/team/use-team-viewing-host";
+import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
 
 /**
  * Every team live-fact card selects the same viewing host, and names it the
@@ -47,7 +48,7 @@ export function TeamViewingHostPicker(props: {
               value={host.hostId}
               disabled={!scope.canSelectHost(host.hostId)}
             >
-              {host.hostLabel ?? host.hostId}
+              {hostNameFromLabel(host.hostLabel, host.hostId)}
               {scope.canSelectHost(host.hostId) ? "" : " · offline"}
             </SelectItem>
           ))}
@@ -63,7 +64,7 @@ export function TeamViewingHostPicker(props: {
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-ui-xs text-muted-foreground">
       <span className="min-w-0 truncate">
-        as reported by {viewing.hostLabel ?? viewing.hostId}
+        as reported by {hostNameFromLabel(viewing.hostLabel, viewing.hostId)}
       </span>
       {canSwitch ? (
         <>

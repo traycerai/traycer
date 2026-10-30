@@ -82,7 +82,7 @@ const REFUSAL_COPY: ReadonlyMap<string, string> = new Map([
   ],
   [
     SANDBOX_REFUSAL_CODE_BUSY,
-    "It's in use (an agent turn, a running shell or an open tab), so it stays awake.",
+    "It's in use (an agent turn or a running shell), so it stays awake.",
   ],
   [
     SANDBOX_REFUSAL_CODE_FROZEN,

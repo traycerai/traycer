@@ -10,8 +10,12 @@ import {
 } from "@/lib/provider-ordering";
 import {
   agentNotOfferedOnSandboxesLine,
+  CANCEL_THE_MESSAGE,
   CHOOSE_ANOTHER_HOST,
+  COULDNT_CHECK_SANDBOX_AGENTS,
+  DETAILS,
   OPEN_TERMINAL_INSTEAD,
+  RETRY,
 } from "@/lib/sandboxes/sandbox-strings";
 import type { StagedSandbox } from "@/stores/composer/staged-sandbox-store";
 
@@ -24,13 +28,37 @@ export function stagedSandboxCheckingNotice(
   return notice?.pending === true ? notice : null;
 }
 
-export interface SandboxAgentRemedies {
-  readonly onChooseModel?: () => void;
-  readonly onOpenTerminalInstead?: () => void;
-  readonly onChooseAnotherHost?: () => void;
+/**
+ * The catalogue read ended with nothing to go on - failed, timed out or never
+ * allowed - so which agents sandboxes run is unknown. That is never permission:
+ * Send is held, nothing is created or woken, and Retry reads the catalogue
+ * again. A catalogue that answered without naming its agents (an older server)
+ * is an answer, not this.
+ */
+export function sandboxAgentsUncheckedNotice(
+  onRetry: () => void,
+): ComposerHostNoticeState {
+  return {
+    kind: "refused",
+    message: COULDNT_CHECK_SANDBOX_AGENTS,
+    action: { label: RETRY, onAction: onRetry },
+  };
 }
 
-export function sandboxAgentSecondaryActions(
+export interface SandboxAgentRemedies {
+  /** Opens a model picker on the agents sandboxes offer (`null`: unknown). */
+  readonly onChooseModel?: (
+    offeredAgents: ReadonlyArray<string> | null,
+  ) => void;
+  readonly onOpenTerminalInstead?: () => void;
+  readonly onChooseAnotherHost?: () => void;
+  /** Closes the refusal: nothing is sent, and the text stays in the composer. */
+  readonly onCancelMessage?: () => void;
+  /** The sandbox's details, for a chat bound to one. */
+  readonly onDetails?: () => void;
+}
+
+function sandboxAgentSecondaryActions(
   remedies: SandboxAgentRemedies,
 ): readonly ComposerHostNoticeAction[] {
   const actions: ComposerHostNoticeAction[] = [];
@@ -46,6 +74,15 @@ export function sandboxAgentSecondaryActions(
       onAction: remedies.onChooseAnotherHost,
     });
   }
+  if (remedies.onCancelMessage !== undefined) {
+    actions.push({
+      label: CANCEL_THE_MESSAGE,
+      onAction: remedies.onCancelMessage,
+    });
+  }
+  if (remedies.onDetails !== undefined) {
+    actions.push({ label: DETAILS, onAction: remedies.onDetails });
+  }
   return actions;
 }
 
@@ -54,22 +91,46 @@ export function sandboxAgentDisplayName(harnessId: GuiHarnessId): string {
   return providerId === null ? harnessId : providerDisplayName(providerId);
 }
 
-/** A rejected pick stays selected until the person chooses its replacement. */
-export function sandboxAgentNotOfferedNotice(
-  harnessId: GuiHarnessId,
+/**
+ * A pick the sandbox cannot run, whatever the reason. A rejected pick stays
+ * selected until the person chooses its replacement, so every such refusal
+ * leads with "Choose a model", which opens on what sandboxes offer
+ * (`offeredAgents`, the cloud catalogue's list), never on the rail of the
+ * host the picker reads. `extra` is a remedy only this refusal has, after
+ * the exits.
+ */
+export function sandboxAgentRefusedNotice(
+  message: string,
+  offeredAgents: ReadonlyArray<string> | null,
   remedies: SandboxAgentRemedies,
+  extra: ComposerHostNoticeAction | null,
 ): ComposerHostNoticeState {
+  const chooseModel =
+    remedies.onChooseModel ??
+    ((offered: ReadonlyArray<string> | null) => {
+      openActiveModelPickerForHarness("traycer", null, offered);
+    });
+  const exits = sandboxAgentSecondaryActions(remedies);
   return {
     kind: "refused",
-    message: agentNotOfferedOnSandboxesLine(sandboxAgentDisplayName(harnessId)),
+    message,
     action: {
       label: "Choose a model",
-      onAction:
-        remedies.onChooseModel ??
-        (() => {
-          openActiveModelPickerForHarness("traycer", null);
-        }),
+      onAction: () => chooseModel(offeredAgents),
     },
-    secondaryActions: sandboxAgentSecondaryActions(remedies),
+    secondaryActions: extra === null ? exits : [...exits, extra],
   };
+}
+
+export function sandboxAgentNotOfferedNotice(
+  harnessId: GuiHarnessId,
+  offeredAgents: ReadonlyArray<string> | null,
+  remedies: SandboxAgentRemedies,
+): ComposerHostNoticeState {
+  return sandboxAgentRefusedNotice(
+    agentNotOfferedOnSandboxesLine(sandboxAgentDisplayName(harnessId)),
+    offeredAgents,
+    remedies,
+    null,
+  );
 }

@@ -48,6 +48,11 @@ export interface TaskSandboxEnd {
   readonly destroyedAt: number;
   readonly cause: string;
   readonly actor: string | null;
+  /**
+   * The idle period the idle pass applied, for an `idle` or `burst-idle`
+   * end; `null` for any other cause and from a server that does not send it.
+   */
+  readonly idleMinutes: number | null;
 }
 
 export const taskSandboxEndSchema: z.ZodType<TaskSandboxEnd> = lazySchema(() =>
@@ -56,6 +61,7 @@ export const taskSandboxEndSchema: z.ZodType<TaskSandboxEnd> = lazySchema(() =>
     destroyedAt: z.number().int().nonnegative(),
     cause: z.string().min(1),
     actor: z.string().nullable(),
+    idleMinutes: z.number().int().positive().nullable().default(null),
   }),
 );
 

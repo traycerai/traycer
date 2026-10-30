@@ -116,6 +116,7 @@ function buildMessengerFactory(
             processMemory: null,
             crossHostMessaging: null,
             sessions: null,
+            updatesExternallyManaged: null,
           }),
       },
     });

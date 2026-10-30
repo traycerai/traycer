@@ -95,7 +95,13 @@ export interface ComposerPromptEditorHandle {
    */
   readonly getEditorIncarnation: () => ComposerEditorIncarnation | null;
   readonly focus: () => void;
-  readonly focusAtEnd: () => void;
+  /**
+   * Focuses with the caret at the end. `"reveal-caret"` lets the editor
+   * scroll every scroller holding it until the caret shows; `"hold-view"`
+   * moves no scroller, for an editor inside a transcript the reader is
+   * following.
+   */
+  readonly focusAtEnd: (scroll: "reveal-caret" | "hold-view") => void;
   readonly hasFocus: () => boolean;
   readonly getJSON: () => JsonContent;
   readonly isEmpty: () => boolean;
@@ -573,9 +579,23 @@ function ComposerPromptEditorImpl(props: ComposerPromptEditorProps) {
     editor?.commands.focus();
   }, [editor]);
 
-  const focusAtEnd = useCallback(() => {
-    editor?.commands.focus("end");
-  }, [editor]);
+  const focusAtEnd = useCallback(
+    (scroll: "reveal-caret" | "hold-view") => {
+      if (editor === null) return;
+      if (scroll === "reveal-caret") {
+        editor.commands.focus("end");
+        return;
+      }
+      // Tiptap's own focus scrolls every scroller holding the editor: a
+      // frame later to the caret, and at once on phones (no
+      // `preventScroll`). ProseMirror's own focus never scrolls.
+      editor.view.dispatch(
+        editor.state.tr.setSelection(Selection.atEnd(editor.state.doc)),
+      );
+      editor.view.focus();
+    },
+    [editor],
+  );
 
   const hasFocus = useCallback(
     (): boolean => editor?.isFocused ?? false,

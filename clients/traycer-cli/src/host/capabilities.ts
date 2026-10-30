@@ -23,6 +23,7 @@
  */
 
 import { SUPERVISOR_CAPABILITY_LIFECYCLE_POLICY_V1 } from "@traycer/protocol/config/supervisor-record";
+import { UNRELEASED_FEATURES_ENABLED } from "../unreleased-features";
 
 /** `traycer host start --service-label <label>` - reclaim probe identity binding. */
 export const HOST_CAPABILITY_SERVICE_LABEL = "service-label";
@@ -60,7 +61,8 @@ export const HOST_CAPABILITIES: readonly string[] = [
   HOST_CAPABILITY_MAINTENANCE_LEASE_V1,
   HOST_CAPABILITY_MAINTENANCE_LEASE_V2,
   HOST_CAPABILITY_LIFECYCLE_POLICY_V1,
-  HOST_CAPABILITY_SANDBOX_MODE,
+  // Not advertised by a build without sandboxes (`unreleased-features.ts`).
+  ...(UNRELEASED_FEATURES_ENABLED ? [HOST_CAPABILITY_SANDBOX_MODE] : []),
 ];
 
 export type HostCapabilitiesRequest =

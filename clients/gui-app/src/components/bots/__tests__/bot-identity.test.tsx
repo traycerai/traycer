@@ -9,15 +9,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type Mock,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BotActivity,
   BotSessionActivity,
@@ -79,8 +71,13 @@ const PRESENTATION: ChatBotPresentation = {
   threadLine: null,
   openThread: null,
   openAnnouncementThread: null,
+  threadAnchorKinds: [],
   chooseOption: null,
+  questions: null,
   failedRequest: null,
+  failedRecovery: null,
+  replyReceipt: null,
+  requestReceipt: null,
 };
 
 const PERSON: BotOwner = {
@@ -139,6 +136,8 @@ function snapshot(activity: BotActivity): BotSubscribeServerFrame {
     openRequestCount: 0,
     conversationsRevision: 0,
     notificationSubscriptions: null,
+    surfaceActions: null,
+    stoppedNotificationWatches: null,
     boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
     activity,
     hasBinaryPayload: false,
@@ -170,18 +169,13 @@ function memberPost(): ChatMessageModel {
 function mount(
   messages: ReadonlyArray<ChatMessageModel>,
   owner: BotOwner | null,
-): {
-  readonly session: StubSession;
-  readonly openActivity: Mock<() => void>;
-} {
+): { readonly session: StubSession } {
   const session = new StubSession();
   stream.client = new StubHostStreamClient(session);
-  const openActivity = vi.fn<() => void>();
   const identity: BotIdentity = {
     botId: BOT_ID,
     title: "Tracy",
     owner,
-    openActivity,
   };
   function Providers(props: { readonly children: ReactNode }): ReactNode {
     return (
@@ -212,7 +206,7 @@ function mount(
     </>,
     { wrapper: Providers },
   );
-  return { session, openActivity };
+  return { session };
 }
 
 beforeEach(() => {
@@ -312,9 +306,9 @@ describe("the bot's card", () => {
     );
   });
 
-  it("opens the bot's activity and says who may message it, for a person's bot and a team's", async () => {
+  it("says who may message the bot, and offers no activity link, for a person's bot and a team's", async () => {
     const user = userEvent.setup();
-    const tab = mount([botReply()], PERSON);
+    mount([botReply()], PERSON);
 
     await user.click(screen.getByTestId("bot-row-name"));
     const card = await screen.findByTestId("bot-profile-card");
@@ -322,8 +316,9 @@ describe("the bot's card", () => {
       "Only you",
     );
     expect(card.textContent).toContain("Managed by Olive Owner");
-    await user.click(within(card).getByTestId("bot-profile-view-activity"));
-    expect(tab.openActivity).toHaveBeenCalledTimes(1);
+    expect(
+      within(card).queryByRole("button", { name: "View activity" }),
+    ).toBeNull();
 
     cleanup();
     mount([botReply()], TEAM);
