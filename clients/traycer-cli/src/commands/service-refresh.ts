@@ -48,10 +48,12 @@ export async function refreshServiceDefinitionAtSupervisorStart(
   serviceLabel: string,
   logger: ILogger,
 ): Promise<void> {
-  if (serviceLabel !== serviceLabelFor(environment).id) return;
   const platform = osPlatform();
   if (platform !== "darwin" && platform !== "linux") return;
   try {
+    // Inside the `try`: deriving the label can throw (a dev slot that
+    // sanitizes to nothing), and that must not cost the host its start.
+    if (serviceLabel !== serviceLabelFor(environment).id) return;
     const outcome = await refreshUnderContender(environment, 0);
     if (outcome.result.kind === "refreshed") {
       logger.info("Host service definition refreshed at supervisor start", {
@@ -106,10 +108,15 @@ export function describeServiceDefinitionRefresh(
       return `${service} is not registered; there is no definition to refresh`;
     case "current":
       return `${service} already runs the current launcher; nothing was changed`;
-    case "refreshed":
+    case "refreshed": {
+      const change =
+        outcome.result.form === "exit-timeout"
+          ? "now gives the host its full time to shut down"
+          : "now runs the current launcher";
       return outcome.result.appliesAt === "next-login"
-        ? `${service} now runs the current launcher. Nothing was started or stopped. It applies at the next login, not to a respawn before then: launchd keeps the definition it loaded until the job is unloaded at logout`
-        : `${service} now runs the current launcher. Nothing was started or stopped: the running host keeps running, and the new launcher applies from its next start`;
+        ? `${service} ${change}. Nothing was started or stopped. It applies at the next login, not to a respawn before then: launchd keeps the definition it loaded until the job is unloaded at logout`
+        : `${service} ${change}. Nothing was started or stopped: the running host keeps running, and the new launcher applies from its next start`;
+    }
   }
 }
 

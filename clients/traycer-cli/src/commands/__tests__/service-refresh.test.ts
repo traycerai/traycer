@@ -150,6 +150,18 @@ describe("describeServiceDefinitionRefresh", () => {
     expect(line).not.toContain("applies from its next start");
   });
 
+  it("refreshed, form 'exit-timeout': says the host now gets its full shutdown time, not that the launcher changed", () => {
+    const line = describeServiceDefinitionRefresh(
+      outcomeFor({
+        kind: "refreshed",
+        form: "exit-timeout",
+        appliesAt: "next-start",
+      }),
+    );
+    expect(line).toContain("now gives the host its full time to shut down");
+    expect(line).not.toContain("current launcher");
+  });
+
   it("every case names the label's own id, not a generic 'the service'", () => {
     const other: ServiceLabel = {
       id: "ai.traycer.host.dev.myslot",
@@ -221,6 +233,24 @@ describe("refreshServiceDefinitionAtSupervisorStart", () => {
 
   afterEach(() => {
     osHome.platform = null;
+    vi.unstubAllEnvs();
+  });
+
+  it("a dev slot that sanitizes to nothing (the label cannot be derived): resolves with a warning and never touches the definition", async () => {
+    osHome.platform = "darwin";
+    vi.stubEnv("DEV_DESKTOP_SLOT", "!!!");
+    const lines: LoggedLine[] = [];
+
+    await expect(
+      refreshServiceDefinitionAtSupervisorStart(
+        "dev",
+        "ai.traycer.host.dev",
+        recordingLogger(lines),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(refresherMock.refresh).not.toHaveBeenCalled();
+    expect(lines.map((line) => line.level)).toEqual(["warn"]);
   });
 
   it("another label (Desktop's agent): no refresh attempted, nothing logged", async () => {
