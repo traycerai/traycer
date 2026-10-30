@@ -1,5 +1,6 @@
 import {
   COMMENTS_AUTO_HINT,
+  SIMULATORS_AUTO_HINT,
   getLeftPanelDefinition,
 } from "@/components/epic-canvas/sidebar/left-panel-registry";
 import {
@@ -21,7 +22,7 @@ import type { RailRegionId } from "@/lib/layout/region-id";
 import { alwaysAvailable } from "@/lib/settings/settings-availability";
 
 /**
- * The sidebar rail's nine regions, which are nine because each icon is
+ * The sidebar rail's ten regions, which are ten because each icon is
  * hoverable, selectable and separately shown or hidden.
  *
  * Everything they say identically is said once in {@link railRegionBase}, and
@@ -75,6 +76,15 @@ export const RAIL_TERMINALS_REGION: LayoutRegion<"railTerminals"> = {
 export const RAIL_BROWSERS_REGION: LayoutRegion<"railBrowsers"> = {
   id: "railBrowsers",
   ...railRegionBase("railBrowsers", ["browsers", "web", "pages"], null),
+};
+
+export const RAIL_SIMULATORS_REGION: LayoutRegion<"railSimulators"> = {
+  id: "railSimulators",
+  ...railRegionBase(
+    "railSimulators",
+    ["simulators", "emulators", "mobile", "ios", "android"],
+    SIMULATORS_AUTO_HINT,
+  ),
 };
 
 export const RAIL_ARTIFACTS_REGION: LayoutRegion<"railArtifacts"> = {

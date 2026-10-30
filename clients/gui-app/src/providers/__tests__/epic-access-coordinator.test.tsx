@@ -18,6 +18,7 @@ import type {
 import { EpicAccessCoordinator } from "@/providers/epic-access-coordinator";
 import type { HostRpcRegistry } from "@/lib/host";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { taskReferenceLookupKey } from "@/lib/query-keys/__tests__/task-reference-lookup-key";
 import {
   LIST_CLOUD_TASKS_REQUEST,
   cloudEpicTasksQueryKey,
@@ -360,11 +361,7 @@ describe("EpicAccessCoordinator", () => {
     const handle = registerSession("epic-1");
     seedTabs([{ tabId: "tab-1", epicId: "epic-1", name: "Epic One" }], "tab-1");
     const { queryClient } = renderCoordinatorAt("/epics/epic-1/tab-1");
-    const lookupKey = hostQueryKeys.taskReferenceLookup(
-      TEST_HOST_ID,
-      "user-1",
-      "epic-1",
-    );
+    const lookupKey = taskReferenceLookupKey(TEST_HOST_ID, "user-1", "epic-1");
     queryClient.setQueryData<GetTaskContextsResponse>(lookupKey, {
       tasks: {
         "epic-1": { status: "found", task: listTaskLight("epic-1") },
@@ -897,7 +894,7 @@ describe("EpicAccessCoordinator", () => {
       const { router, queryClient } = renderCoordinatorAt(
         "/epics/epic-1/tab-1",
       );
-      const lookupKey = hostQueryKeys.taskReferenceLookup(
+      const lookupKey = taskReferenceLookupKey(
         TEST_HOST_ID,
         "user-1",
         "epic-1",

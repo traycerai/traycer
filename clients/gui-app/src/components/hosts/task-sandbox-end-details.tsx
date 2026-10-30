@@ -29,7 +29,6 @@ export function TaskSandboxEndDetails(props: {
             {taskSandboxEndLine(props.ended.name, props.ended.end)}
           </DialogDescription>
         </DialogHeader>
-        <p className="text-ui-sm text-muted-foreground">Times are in UTC.</p>
       </DialogContent>
     </Dialog>
   );

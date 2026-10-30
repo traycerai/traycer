@@ -527,7 +527,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "late-accept": ["W.settings", "", "i"],
     "stop-result": ["W.settings", "", "i"],
     "stop-failed": ["W.settings", "", "i"],
-    rest: ["W.settings", "poll", "a"],
+    rest: ["RC", "ret+remove", "a"],
     awake: ["W.settings", "poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
     frozen: ["W.credits", "poll", "a"],
@@ -2734,7 +2734,6 @@ describe("a resting sandbox wakes only for work that can proceed there", () => {
   const HELD = [
     "W.provider",
     "W.credits",
-    "W.settings",
     "W.notsent",
     "W.wake",
     "S.credits",
@@ -2761,6 +2760,19 @@ describe("a resting sandbox wakes only for work that can proceed there", () => {
         expect(resting.state.blocker).toBe(start.blocker);
         expect(resting.effects).toEqual(["poll"]);
       }
+      // Settings are said of an awake sandbox only: at rest the message goes
+      // back, and nothing wakes for it.
+      const refreshed = run(stateOf("chat", "W.settings"), event, {
+        ...defaultFacts("W.settings"),
+        clientReady: false,
+      });
+      const resting = run(
+        refreshed.state,
+        "rest",
+        factsFor("W.settings", "rest"),
+      );
+      expect(resting.state.phase).toBe("returned");
+      expect(resting.effects).toEqual(["return-message", "remove"]);
     },
   );
 

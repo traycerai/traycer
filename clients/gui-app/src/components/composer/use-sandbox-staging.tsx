@@ -40,6 +40,7 @@ import { useSandboxCosts } from "@/hooks/sandboxes/use-sandbox-costs-query";
 import { useMaybeEpicStore } from "@/hooks/use-epic-store";
 import { useSampledNow } from "@/lib/relative-time";
 import { stagedSandboxName } from "@/lib/sandboxes/staged-sandbox-name";
+import { supersedeReturnedSandbox } from "@/lib/sandboxes/returned-sandbox";
 import { wakeSandboxOnPick } from "@/lib/sandboxes/sandbox-wake";
 import {
   SANDBOX_DEFAULT_IDLE_MINUTES,
@@ -101,6 +102,7 @@ import {
 } from "@/stores/sandboxes/sandboxes-page-store";
 import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import type { OpenEpicState } from "@/stores/epics/open-epic/store";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * What an in-task picker knows about its task: the hosts it already uses,
@@ -250,12 +252,18 @@ export function useSandboxStaging(input: {
 }): SandboxStaging | null {
   const { forkOnNew } = input;
   const { memoryHostId } = input;
-  const surfaceKey = input.surface === null ? "" : input.surface.surfaceKey;
-  const task = input.surface === null ? null : input.surface.task;
+  // No surface stages in a build without sandboxes
+  // (`unreleased-features.ts`): the hook answers `null` for every caller, so
+  // each picker draws the plain `Host` group and its own search threshold.
+  const surface = UNRELEASED_FEATURES_ENABLED ? input.surface : null;
+  const surfaceKey = surface === null ? "" : surface.surfaceKey;
+  const task = surface === null ? null : surface.task;
   const viewerUserId = useCloudChatViewerId();
   const user = useAuthUser().data ?? null;
-  const catalogue = useSandboxCatalogue(input.surface !== null).data ?? null;
-  const defaultsFor = useSandboxDefaultsLookup(input.surface !== null);
+  // Neither read without a surface: nothing prices or shapes a stage.
+  const reads = surface !== null;
+  const catalogue = useSandboxCatalogue(reads).data ?? null;
+  const defaultsFor = useSandboxDefaultsLookup(reads);
   const remembered = useSandboxShapeMemoryStore((s) => s.byHost);
   const lastConfigurationByHost = useSandboxShapeMemoryStore(
     (s) => s.lastConfigurationByHost,
@@ -348,6 +356,7 @@ export function useSandboxStaging(input: {
     (target: NewStagedSandboxTarget): void => {
       const namedTarget = { ...target, name: stagedSandboxName(target.name) };
       if (forkOnNew === null) {
+        supersedeReturnedSandbox(surfaceKey);
         useStagedSandboxStore.getState().stage(surfaceKey, namedTarget);
       } else {
         forkOnNew(namedTarget);
@@ -473,7 +482,8 @@ export function useSandboxStaging(input: {
         if (summary === null || !summary.burst) return null;
         return hostConfigurationLabel(host);
       },
-      newRows: rows.map(newRowPresentation),
+      // No New sandbox row in a build without sandboxes.
+      newRows: UNRELEASED_FEATURES_ENABLED ? rows.map(newRowPresentation) : [],
       rememberedConfigurationKey:
         memoryHostId === null
           ? null
@@ -482,7 +492,8 @@ export function useSandboxStaging(input: {
         stage === null || stage.target.kind !== "new"
           ? null
           : stageConfigurationKey(stage.target.configuration),
-      stagedLabel: stage === null ? null : stagedLabel(stage, stagedFacts),
+      stagedLabel:
+        stage === null ? null : stagedLabel(stage, stagedFacts, input.hosts),
       // Running, not settled: a refusal or a failure ends the wait.
       stagedBusy:
         stage !== null && stage.phase !== "staged" && stage.failure === null,
@@ -493,6 +504,8 @@ export function useSandboxStaging(input: {
           wakeSandboxOnPick(host, null);
           return;
         }
+        // The person's pick: a message's returned sandbox no longer applies.
+        supersedeReturnedSandbox(surfaceKey);
         const target = restingTargetFor(host);
         if (target === null) {
           useStagedSandboxStore.getState().clear(surfaceKey);
@@ -591,18 +604,21 @@ export function useSandboxStaging(input: {
       />
     );
 
-  if (input.surface === null) return null;
+  if (surface === null) return null;
   const openTerminalInstead =
     stage === null || stage.phase === "handoff"
       ? null
-      : input.surface.openTerminalInstead;
+      : surface.openTerminalInstead;
   return {
     composer,
     stage,
     consequences,
     openTerminalInstead,
     sheet,
-    chooseAnotherHost: () => useStagedSandboxStore.getState().clear(surfaceKey),
+    chooseAnotherHost: () => {
+      supersedeReturnedSandbox(surfaceKey);
+      useStagedSandboxStore.getState().clear(surfaceKey);
+    },
   };
 }
 
@@ -713,7 +729,11 @@ export function restingVerb(
   return null;
 }
 
-function stagedLabel(stage: StagedSandbox, facts: NewRowFacts | null): string {
+function stagedLabel(
+  stage: StagedSandbox,
+  facts: NewRowFacts | null,
+  hosts: readonly HostScopeOption[],
+): string {
   const { target } = stage;
   if (target.kind === "existing") {
     // Its wake is ticked once the line is past it: the sandbox is awake now.
@@ -724,7 +744,13 @@ function stagedLabel(stage: StagedSandbox, facts: NewRowFacts | null): string {
     ) {
       return awakePickLabel(target.name);
     }
-    return target.verb === "resume"
+    // The row says what the sandbox is now. A draft's returned sandbox keeps
+    // the verb its give-back knew; only an unlisted one goes by it.
+    const row = hosts.find((host) => host.hostId === target.hostId)?.sandbox;
+    const verb =
+      row === undefined || row === null ? target.verb : restingVerb(row.state);
+    if (verb === null) return awakePickLabel(target.name);
+    return verb === "resume"
       ? suspendedPickLabel(target.name)
       : stoppedPickLabel(target.name);
   }

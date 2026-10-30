@@ -1,9 +1,19 @@
 import { describe, expect, it } from "vitest";
+import { buildProtocolSurface } from "@traycer/protocol/framework/surface-build";
+import { RELEASED_FLOOR_METHOD_NAMES } from "@traycer/protocol/host/released-floor";
+import {
+  hostRpcRegistry,
+  hostStreamRpcRegistry,
+} from "@traycer/protocol/host/index";
 import {
   botSubscribeServerFrameSchema,
+  botSurfaceActionStateSchema,
   botTaskEntrySchema,
+  type BotInputNeeded,
+  type BotSurfaceActionState,
   type BotActivity,
   type BotSessionActivity,
+  type BotTaskCheckinRecord,
   type BotTaskEntry,
   type BotTaskLastCheckin,
 } from "@traycer/protocol/host/bot/schemas";
@@ -17,6 +27,15 @@ const TRACKING_EVERY: BotTaskEntry = {
   state: "tracking",
   endedReason: null,
   createdByUserId: null,
+  spun: null,
+  label: null,
+  originRequestId: null,
+  createdByChatId: null,
+  checkins: null,
+  inputNeeded: null,
+  pause: null,
+  stop: null,
+  runRequest: null,
 };
 
 const TRACKING_ON_COMPLETION: BotTaskEntry = {
@@ -28,6 +47,15 @@ const TRACKING_ON_COMPLETION: BotTaskEntry = {
   state: "tracking",
   endedReason: null,
   createdByUserId: null,
+  spun: null,
+  label: null,
+  originRequestId: null,
+  createdByChatId: null,
+  checkins: null,
+  inputNeeded: null,
+  pause: null,
+  stop: null,
+  runRequest: null,
 };
 
 function issuePaths(entry: BotTaskEntry): string[] {
@@ -380,6 +408,418 @@ describe("botTaskEntrySchema createdByUserId", () => {
 
     expect(botTaskEntrySchema.parse(withoutField).createdByUserId).toBeNull();
   });
+});
+
+describe("bot.subscribe@1.3 task provenance", () => {
+  const line = hostStreamRpcRegistry["bot.subscribe"][1];
+  const PROVENANCE = {
+    spun: true,
+    label: "Nightly triage",
+    originRequestId: "req-1",
+    createdByChatId: "thread-1",
+  } as const;
+  const UNKNOWN_PROVENANCE = {
+    spun: null,
+    label: null,
+    originRequestId: null,
+    createdByChatId: null,
+  } as const;
+
+  function snapshotWith(tasks: ReadonlyArray<object>): object {
+    return {
+      ...snapshotFrame([], null),
+      tasks,
+      notificationSubscriptions: null,
+    };
+  }
+
+  it("reads an entry from a host that predates the fields as unknown provenance", () => {
+    const {
+      spun: _spun,
+      label: _label,
+      originRequestId: _origin,
+      createdByChatId: _creator,
+      ...withoutFields
+    } = TRACKING_EVERY;
+
+    expect(botTaskEntrySchema.parse(withoutFields)).toEqual({
+      ...TRACKING_EVERY,
+      ...UNKNOWN_PROVENANCE,
+    });
+  });
+
+  it("carries the provenance to a 1.3 subscriber and strips it below 1.3", () => {
+    const frame = snapshotWith([{ ...TRACKING_EVERY, ...PROVENANCE }]);
+
+    const {
+      checkins: _checkins,
+      inputNeeded: _inputNeeded,
+      pause: _pause,
+      stop: _stop,
+      runRequest: _runRequest,
+      ...v13Entry
+    } = TRACKING_EVERY;
+    const v13 = line.versions[3].contract.serverFrameSchema.parse(frame);
+    expect(v13.kind === "snapshot" ? v13.tasks : null).toEqual([
+      { ...v13Entry, ...PROVENANCE },
+    ]);
+    const {
+      spun: _spun,
+      label: _label,
+      originRequestId: _origin,
+      createdByChatId: _creator,
+      ...v12Entry
+    } = v13Entry;
+    for (const minor of [0, 1, 2] as const) {
+      const parsed =
+        line.versions[minor].contract.serverFrameSchema.parse(frame);
+      expect(parsed.kind === "snapshot" ? parsed.tasks : null).toEqual([
+        v12Entry,
+      ]);
+    }
+  });
+});
+
+describe("bot.subscribe@1.4 check-in history", () => {
+  const line = hostStreamRpcRegistry["bot.subscribe"][1];
+  const HISTORY: BotTaskCheckinRecord[] = [
+    {
+      kind: "missed",
+      dueAt: 1_760_000_000_000,
+      missedThrough: 1_760_001_800_000,
+      reason: "no-host-reported",
+      caughtUpAt: 1_760_003_000_000,
+    },
+    {
+      kind: "received",
+      receivedAt: 1_759_999_000_000,
+      hostId: "host-1",
+      hostName: "laptop",
+      outcome: "still-running",
+      agentsStarted: 2,
+      ticketsOpened: 1,
+      ticketsClosed: 0,
+      backgroundEvents: 3,
+      turn: { chatId: "trunk-1", turnId: "turn-1" },
+      requestedByUserId: null,
+    },
+  ];
+  const WATCH = {
+    target: { kind: "trunk" },
+    attentionOnly: true,
+    everySeconds: null,
+  } as const;
+
+  function snapshotWith(
+    tasks: ReadonlyArray<object>,
+    watches: ReadonlyArray<object>,
+  ): object {
+    return {
+      ...snapshotFrame([], null),
+      tasks,
+      notificationSubscriptions: watches,
+    };
+  }
+
+  it("carries the history and a watch's start to a 1.4 subscriber", () => {
+    const frame = snapshotWith(
+      [{ ...TRACKING_EVERY, checkins: HISTORY }],
+      [{ ...WATCH, since: 1_759_000_000_000 }],
+    );
+
+    const { inputNeeded: _inputNeeded, ...v14Entry } = TRACKING_EVERY;
+    const latest = line.versions[4].contract.serverFrameSchema.parse(frame);
+    expect(latest.kind === "snapshot" ? latest.tasks : null).toEqual([
+      { ...v14Entry, checkins: HISTORY },
+    ]);
+    expect(
+      latest.kind === "snapshot" ? latest.notificationSubscriptions : null,
+    ).toEqual([{ ...WATCH, since: 1_759_000_000_000, digests: null }]);
+  });
+
+  it("strips both for a 1.3 and a 1.2 subscriber", () => {
+    const frame = snapshotWith(
+      [{ ...TRACKING_EVERY, checkins: HISTORY }],
+      [{ ...WATCH, since: 1_759_000_000_000 }],
+    );
+
+    for (const minor of [2, 3] as const) {
+      const parsed =
+        line.versions[minor].contract.serverFrameSchema.parse(frame);
+      if (parsed.kind !== "snapshot") throw new Error("not a snapshot");
+      expect(parsed.tasks[0]).not.toHaveProperty("checkins");
+      expect(parsed.notificationSubscriptions).toEqual([WATCH]);
+    }
+  });
+
+  it("reads an entry and a watch from a host that predates them as unknown", () => {
+    const {
+      checkins: _omitted,
+      inputNeeded: _later,
+      ...withoutHistory
+    } = TRACKING_EVERY;
+    const parsed = botSubscribeServerFrameSchema.parse(
+      snapshotWith([withoutHistory], [WATCH]),
+    );
+
+    if (parsed.kind !== "snapshot") throw new Error("not a snapshot");
+    expect(parsed.tasks[0]?.checkins).toBeNull();
+    expect(parsed.notificationSubscriptions?.[0]?.since).toBeNull();
+  });
+
+  it("refuses a missed record with a reason it does not know", () => {
+    expect(
+      botTaskEntrySchema.safeParse({
+        ...TRACKING_EVERY,
+        checkins: [{ ...HISTORY[0], reason: "host-asleep" }],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("bot.subscribe@1.5 open surfaces and card actions", () => {
+  const line = hostStreamRpcRegistry["bot.subscribe"][1];
+  const OPEN: BotInputNeeded[] = [
+    {
+      hostId: "host-1",
+      hostName: "laptop",
+      agentChatId: "chat-1",
+      surfaceId: "block-1",
+      surface: {
+        kind: "question",
+        blockId: "block-1",
+        questions: [
+          {
+            questionId: "q-1",
+            text: "Which branch?",
+            options: ["main", "dev"],
+            allowsFreeText: true,
+          },
+        ],
+        askedAt: 1_760_000_000_000,
+      },
+      reportedAt: 1_760_000_000_500,
+      acceptsActions: true,
+    },
+    {
+      hostId: "host-2",
+      hostName: "pod",
+      agentChatId: "chat-2",
+      surfaceId: "approval-1",
+      surface: {
+        kind: "approval",
+        approvalId: "approval-1",
+        tool: "Bash",
+        summary: "npm publish",
+        tier: "hard",
+        requiresPerson: true,
+        askedAt: 1_760_000_000_000,
+      },
+      reportedAt: 1_760_000_000_600,
+      acceptsActions: false,
+    },
+  ];
+  const ACTIONS: BotSurfaceActionState[] = [
+    { actionId: "action-1", messageId: "m-1", state: "sending", code: null },
+    {
+      actionId: "action-2",
+      messageId: "m-2",
+      state: "refused",
+      code: "NOT_SUPPORTED",
+    },
+  ];
+
+  function snapshotWithOpen(): object {
+    return {
+      ...snapshotFrame([], null),
+      tasks: [{ ...TRACKING_EVERY, inputNeeded: OPEN }],
+      surfaceActions: ACTIONS,
+    };
+  }
+
+  it.each([5, 6] as const)(
+    "carries a task's open surfaces and the subscriber's actions to a 1.%i subscriber",
+    (minor) => {
+      const parsed =
+        line.versions[minor].contract.serverFrameSchema.parse(
+          snapshotWithOpen(),
+        );
+      if (parsed.kind !== "snapshot") throw new Error("not a snapshot");
+      expect(parsed.tasks[0]?.inputNeeded).toEqual(OPEN);
+      expect(parsed.surfaceActions).toEqual(ACTIONS);
+    },
+  );
+
+  it("strips both for a 1.4 subscriber", () => {
+    const parsed =
+      line.versions[4].contract.serverFrameSchema.parse(snapshotWithOpen());
+    if (parsed.kind !== "snapshot") throw new Error("not a snapshot");
+    expect(parsed.tasks[0]).not.toHaveProperty("inputNeeded");
+    expect(parsed).not.toHaveProperty("surfaceActions");
+  });
+
+  it("reads a host that predates them as unknown", () => {
+    const { inputNeeded: _omitted, ...withoutOpen } = TRACKING_EVERY;
+    const parsed = botSubscribeServerFrameSchema.parse({
+      ...snapshotFrame([], null),
+      tasks: [withoutOpen],
+    });
+    if (parsed.kind !== "snapshot") throw new Error("not a snapshot");
+    expect(parsed.tasks[0]?.inputNeeded).toBeNull();
+    expect(parsed.surfaceActions).toBeNull();
+  });
+
+  it("refuses a refusal code it does not know", () => {
+    expect(
+      botSurfaceActionStateSchema.safeParse({
+        actionId: "a",
+        messageId: "m",
+        state: "refused",
+        code: "SOMETHING_ELSE",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("bot.subscribe@1.4 member actions", () => {
+  const line = hostStreamRpcRegistry["bot.subscribe"][1];
+  const PAUSE = { byUserId: "member-1", since: 1_760_000_000_000 } as const;
+  const RUN = {
+    byUserId: "member-1",
+    requestedAt: 1_760_000_100_000,
+    state: "requested",
+  } as const;
+  const DIGEST = {
+    deliveredAt: 1_760_000_200_000,
+    itemCount: 3,
+    attentionCount: 1,
+    queueItemId: "queue-item-1",
+  } as const;
+  const RECEIVED = {
+    kind: "received",
+    receivedAt: 1_760_000_300_000,
+    hostId: "host-1",
+    hostName: "laptop",
+    outcome: "idle",
+    agentsStarted: 0,
+    ticketsOpened: 0,
+    ticketsClosed: 0,
+    backgroundEvents: 0,
+    turn: null,
+  } as const;
+  const WATCH = {
+    target: { kind: "trunk" },
+    attentionOnly: true,
+    everySeconds: null,
+    since: 1_759_000_000_000,
+  } as const;
+  const STOPPED_WATCH = {
+    target: { kind: "thread", threadId: "thread-1" },
+    attentionOnly: false,
+    everySeconds: 3_600,
+    since: 1_759_000_000_000,
+    stoppedAt: 1_760_000_400_000,
+    stoppedByUserId: "member-1",
+    digests: [DIGEST],
+  } as const;
+  // A 1.4 entry: the `@1.5` open surfaces are not on it.
+  const { inputNeeded: _inputNeeded, ...entryV14 } = TRACKING_EVERY;
+  const frame = {
+    ...snapshotFrame([], null),
+    tasks: [
+      {
+        ...entryV14,
+        pause: PAUSE,
+        runRequest: RUN,
+        checkins: [{ ...RECEIVED, requestedByUserId: "member-1" }],
+      },
+      {
+        ...entryV14,
+        taskId: "task-stopped",
+        state: "ended",
+        endedReason: "by-bot",
+        nextAt: null,
+        stop: { byUserId: "member-1", at: 1_760_000_500_000 },
+      },
+    ],
+    notificationSubscriptions: [{ ...WATCH, digests: [DIGEST] }],
+    stoppedNotificationWatches: [STOPPED_WATCH],
+  };
+
+  it("carries who paused, stopped or ran an automation, the digests and the stopped watches to a 1.4 subscriber", () => {
+    const parsed = line.versions[4].contract.serverFrameSchema.parse(frame);
+
+    expect(parsed).toEqual(frame);
+  });
+
+  it("strips them for a 1.3 subscriber", () => {
+    const parsed = line.versions[3].contract.serverFrameSchema.parse(frame);
+
+    if (parsed.kind !== "snapshot") throw new Error("not a snapshot");
+    for (const task of parsed.tasks) {
+      expect(task).not.toHaveProperty("pause");
+      expect(task).not.toHaveProperty("stop");
+      expect(task).not.toHaveProperty("runRequest");
+    }
+    expect(parsed).not.toHaveProperty("stoppedNotificationWatches");
+    expect(parsed.notificationSubscriptions).toEqual([
+      { target: WATCH.target, attentionOnly: true, everySeconds: null },
+    ]);
+  });
+
+  it("reads a frame from a host that predates them as none", () => {
+    const parsed = botSubscribeServerFrameSchema.parse({
+      ...snapshotFrame([TRACKING_EVERY], null),
+      tasks: [
+        {
+          taskId: TRACKING_EVERY.taskId,
+          cadence: TRACKING_EVERY.cadence,
+          lastCheckinAt: TRACKING_EVERY.lastCheckinAt,
+          lastCheckin: null,
+          nextAt: TRACKING_EVERY.nextAt,
+          state: "tracking",
+          endedReason: null,
+          checkins: [RECEIVED],
+        },
+      ],
+      notificationSubscriptions: [WATCH],
+    });
+
+    if (parsed.kind !== "snapshot") throw new Error("not a snapshot");
+    expect(parsed.tasks[0]).toMatchObject({
+      pause: null,
+      stop: null,
+      runRequest: null,
+      checkins: [{ ...RECEIVED, requestedByUserId: null }],
+    });
+    expect(parsed.notificationSubscriptions?.[0]?.digests).toBeNull();
+    expect(parsed.stoppedNotificationWatches).toBeNull();
+  });
+});
+
+describe("the member action unaries", () => {
+  it.each([
+    "bot.task.runNow",
+    "bot.task.setPaused",
+    "bot.task.stop",
+    "bot.notifications.stop",
+  ] as const)(
+    "registers %s at 1.0 off the released floor, negotiated away by a host without it",
+    (method) => {
+      const registered = hostRpcRegistry[method];
+      expect(registered[1].latestMinor).toBe(0);
+      expect(registered[1].versions[0].contract.method).toBe(method);
+      expect(registered.degrade).toEqual({ kind: "unsupported" });
+
+      const surface = buildProtocolSurface({
+        unary: { [method]: registered },
+        unaryFloorMethodNames: RELEASED_FLOOR_METHOD_NAMES,
+        stream: {},
+      });
+      expect(surface.optionalUnary).toHaveProperty(method);
+      expect(surface.unary).not.toHaveProperty(method);
+    },
+  );
 });
 
 describe("botTaskEntrySchema lastCheckin", () => {

@@ -50,11 +50,31 @@ interface UseHostScopedMutationArgs<
    */
   readonly errorMessage: string | null;
   /**
-   * Method prefixes to invalidate on success. Each entry expands to
-   * `["host", servingHostId, method]` (the pool for a pool-only read, else
-   * the host the mutation went to), dropping every cached query for that
-   * method regardless of params. Pass the full set of read methods this
+   * Method prefixes to invalidate once the mutation SETTLES. Each entry
+   * expands to `["host", servingHostId, method]` (the pool for a pool-only
+   * read, else the host the mutation went to), dropping every cached query for
+   * that method regardless of params. Pass the full set of read methods this
    * mutation affects; an empty list means "no automatic invalidation."
+   *
+   * SETTLED, NOT SUCCEEDED, and that is the contract rather than a detail: a
+   * write whose ANSWER was lost still changed the host. `config.simulator.set`
+   * is the case that proved it - `protocol/src/config/store.ts`'s
+   * `runCliConfigUpdateLocked` resolves only after an atomic tmp+rename under
+   * the settings lock, so by the time anything can fail downstream the new
+   * block is on disk - and the same holds for every host verb that commits
+   * before it replies. Keeping the pre-write read on that path leaves the page
+   * showing a value the host has already replaced, with nothing to move it
+   * (`staleTime` is 60s and these reads do not poll), while the error toast is
+   * telling the user the write "may or may not have gone through". So the
+   * answer the cache must not keep is the stale one, and re-asking is how the
+   * UI finds out which way it went. `useSimulatorOpenMutation` reached the
+   * same conclusion for its own sweep ("a lost answer still leaves a host that
+   * booted the device") - this is that argument applied where every other
+   * host write shares it.
+   *
+   * A genuine refusal re-asks too. It costs one read and re-establishes what
+   * the host actually holds, which is never wrong to know after a failed
+   * write.
    */
   readonly invalidateMethods: ReadonlyArray<keyof HostRpcRegistry & string>;
   /**
@@ -133,7 +153,7 @@ interface UseHostScopedMutationArgs<
 /**
  * Standard host-mutation shape: capture `hostId` in `onMutate` to
  * survive a host swap mid-flight, invalidate the listed read methods
- * for that host on success, surface a host-error toast on failure.
+ * for that host once the write settles, surface a host-error toast on failure.
  */
 export function useHostScopedMutation<
   Method extends keyof HostRpcRegistry & string,
@@ -184,12 +204,20 @@ export function useHostScopedMutationForClient<
             ? (undefined as Captured)
             : args.captureContext(variables),
       }),
+      // The analytics event and the caller's own work are the SUCCESS half and
+      // stay here: one reports a write that landed, the other files a response
+      // this arm is the only one to receive.
       onSuccess: (data, variables, ctx) => {
         trackScopedMutationSuccess(args.mutationKey, variables);
-        // Before the host-id gate: this work is the caller's, and a null host
-        // id is a reason to skip invalidation, not to skip the caller.
         args.onSuccess?.(data, variables, ctx.hostId, ctx.captured);
-        if (ctx.hostId === null) return;
+      },
+      // The sweep, on every settle - see `invalidateMethods`. `ctx` is
+      // optional on this signature because `onMutate` need not have run (a
+      // throw inside it settles the mutation too), and a null host id is a
+      // reason to skip the invalidation rather than to guess a key for it.
+      onSettled: (_data, _error, _variables, ctx) => {
+        const sentOn = ctx?.hostId ?? null;
+        if (sentOn === null) return;
         for (const method of args.invalidateMethods) {
           // Under the tier that answers the read, as `useHostQuery` keys it: a
           // pool-only read is filed under the pool whichever host carried this.
@@ -197,7 +225,7 @@ export function useHostScopedMutationForClient<
             queryKey: hostQueryKeys.methodScope(
               hostRpcServingTierHostId(
                 method,
-                ctx.hostId,
+                sentOn,
                 readProcessHostRpcTierPlan(),
                 null,
               ),

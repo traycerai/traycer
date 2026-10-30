@@ -26,7 +26,7 @@ import { useLayoutStore } from "@/stores/layout/layout-store";
 /**
  * The sidebar rail's shape, read and written where it actually lives.
  *
- * `arrangement.rail` and the nine rail regions' `shown` are the layout store's
+ * `arrangement.rail` and the ten rail regions' `shown` are the layout store's
  * (L-25, L-47), and every sidebar surface reads them from here. This module is
  * that read and its writers, beside the bijection itself.
  *
@@ -71,7 +71,7 @@ export function currentLayoutArrangement(): LayoutArrangement {
 }
 
 /**
- * The nine rail regions' three-state `shown` as the sparse show/hide map every
+ * The ten rail regions' three-state `shown` as the sparse show/hide map every
  * sidebar render path already reads (`isLeftPanelVisible`).
  */
 export function usePanelVisibilityOverrides(): PanelVisibilityOverrideById {

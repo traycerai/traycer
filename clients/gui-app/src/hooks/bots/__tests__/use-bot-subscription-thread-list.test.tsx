@@ -63,9 +63,26 @@ function snapshot(
     openRequestCount,
     conversationsRevision,
     notificationSubscriptions: null,
+    surfaceActions: null,
+    stoppedNotificationWatches: null,
     boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
     activity: null,
     hasBinaryPayload: false,
+  };
+}
+
+/** `snapshot(conversationsRevision, 0)` with the bot bound to `hostId` at `epoch`. */
+function claimed(
+  conversationsRevision: number | null,
+  hostId: string,
+  epoch: number,
+): BotSubscribeServerFrame {
+  const frame = snapshot(conversationsRevision, 0);
+  if (frame.kind !== "snapshot") throw new Error("expected a snapshot");
+  return {
+    ...frame,
+    bot: { ...frame.bot, boundHostId: hostId, hostEpoch: epoch },
+    boundHost: { hostId, epoch, isThisHost: hostId === HOST_ID },
   };
 }
 
@@ -161,7 +178,13 @@ describe("the bot's thread listing follows its subscription", () => {
     world.render();
     act(() => world.session.emit(snapshot(3, 0)));
     await waitFor(() => expect(world.listReads.value).toBe(1));
-    act(() => world.pendingReads[0]?.({ threads: [], trunkCostUsd: 0 }));
+    act(() =>
+      world.pendingReads[0]?.({
+        threads: [],
+        trunkCostUsd: 0,
+        threadAnchors: null,
+      }),
+    );
     await waitFor(() => expect(world.queryClient.isFetching()).toBe(0));
 
     // The open-request count moved; the rows did not. The revision check runs
@@ -181,7 +204,13 @@ describe("the bot's thread listing follows its subscription", () => {
     expect(invalidate).toHaveBeenCalledTimes(1);
 
     await waitFor(() => expect(world.listReads.value).toBe(2));
-    act(() => world.pendingReads[1]?.({ threads: [], trunkCostUsd: 0 }));
+    act(() =>
+      world.pendingReads[1]?.({
+        threads: [],
+        trunkCostUsd: 0,
+        threadAnchors: null,
+      }),
+    );
     await waitFor(() => expect(world.queryClient.isFetching()).toBe(0));
     expect(world.listReads.value).toBe(2);
   });
@@ -210,8 +239,16 @@ describe("the bot's thread listing follows its subscription", () => {
     // The second read answers with the post-reply body, then the first,
     // started before the reply, answers with its stale one.
     act(() => {
-      world.pendingReads[1]?.({ threads: [], trunkCostUsd: 1.5 });
-      world.pendingReads[0]?.({ threads: [], trunkCostUsd: 0 });
+      world.pendingReads[1]?.({
+        threads: [],
+        trunkCostUsd: 1.5,
+        threadAnchors: null,
+      });
+      world.pendingReads[0]?.({
+        threads: [],
+        trunkCostUsd: 0,
+        threadAnchors: null,
+      });
     });
 
     // Settled is the query's own `fetchStatus`, not a timer or a call count.
@@ -224,6 +261,47 @@ describe("the bot's thread listing follows its subscription", () => {
     expect(world.queryClient.getQueryState(world.threadListKey)?.data).toEqual({
       threads: [],
       trunkCostUsd: 1.5,
+      threadAnchors: null,
     });
+  });
+
+  it("reads the listing again when the bot moves to another binding, whatever the revision says, and keeps the new binding's body over a read that started before the move", async () => {
+    const world = fixture();
+    world.render();
+    act(() => world.session.emit(claimed(null, HOST_ID, 0)));
+    await waitFor(() => expect(world.listReads.value).toBe(1));
+
+    // Claimed by another host while the first read is unanswered; the
+    // serving host cannot read the room, so the revision says nothing.
+    act(() => world.session.emit(claimed(null, "host-older", 1)));
+    await waitFor(() => expect(world.listReads.value).toBe(2));
+
+    const before: BotThreadListResponse = {
+      threads: [],
+      trunkCostUsd: 0,
+      threadAnchors: { hostId: HOST_ID, epoch: 0, kinds: ["answer"] },
+    };
+    const after: BotThreadListResponse = {
+      threads: [],
+      trunkCostUsd: 0,
+      threadAnchors: null,
+    };
+    act(() => {
+      world.pendingReads[1]?.(after);
+      world.pendingReads[0]?.(before);
+    });
+
+    await waitFor(() =>
+      expect(
+        world.queryClient.getQueryState(world.threadListKey)?.fetchStatus,
+      ).toBe("idle"),
+    );
+    expect(world.queryClient.getQueryState(world.threadListKey)?.data).toEqual(
+      after,
+    );
+
+    // Claimed again by the same host, under a newer epoch.
+    act(() => world.session.emit(claimed(null, "host-older", 2)));
+    await waitFor(() => expect(world.listReads.value).toBe(3));
   });
 });

@@ -20,7 +20,6 @@ import {
   type EnvironmentMembersListMember,
 } from "@/hooks/environment/use-environment-members-list";
 import { useEnvironmentMembersWrites } from "@/hooks/environment/use-environment-members-writes";
-import { useCompletedMemberRemovalReceipts } from "@/hooks/environment/use-member-removal-receipts";
 import {
   useHostMethodSchemaVersion,
   useHostMethodSupport,
@@ -33,24 +32,14 @@ export interface MembersPageProps {
   readonly environmentId: string;
 }
 
-/**
- * A removal the host answered `pending` for: the row as it was when removed,
- * and the receipt that completes it. Kept apart from the members read, which
- * stops listing the person as soon as the removal commits.
- */
-interface PendingRemoval {
-  readonly member: MembersListMember;
-  readonly receiptId: string;
-  /**
-   * Whether a successful read has stopped listing the person since the
-   * removal was requested: the removal committed, so a read that lists them
-   * again lists a newer membership, and the removal no longer describes them.
-   */
-  readonly unlisted: boolean;
-}
-
 const FALLBACK_TEAM_NAME = "this team";
-const NO_PENDING_REMOVALS: ReadonlyMap<string, PendingRemoval> = new Map();
+
+/**
+ * The members whose removal the host answered `pending` for. The members read
+ * stops listing a person once their removal commits, and that read completes
+ * it.
+ */
+const NO_PENDING_REMOVALS: ReadonlySet<string> = new Set();
 
 function memberRowDetails(subject: MembersDetailsSubject): ReactNode {
   return (
@@ -74,55 +63,30 @@ function listRow(member: EnvironmentMembersListMember): MembersListMember {
   };
 }
 
-/**
- * The read's rows, each pending removal marked on its row, and a pending
- * removal the read no longer lists kept as its own row while it is
- * `pending`. Once its receipt completes the removal is done and the person
- * leaves the list.
- */
+/** The read's rows, each pending removal marked on its row. */
 function overlayRemovals(
   members: readonly EnvironmentMembersListMember[],
-  pendingRemovals: ReadonlyMap<string, PendingRemoval>,
-  completedReceipts: ReadonlySet<string>,
+  pendingRemovals: ReadonlySet<string>,
 ): readonly MembersListMember[] {
-  const removalState = (
-    removal: PendingRemoval,
-  ): MembersListMember["removalState"] =>
-    completedReceipts.has(removal.receiptId) ? "done" : "pending";
-  const rows = members.map((member): MembersListMember => {
-    const removal = pendingRemovals.get(member.userId);
+  return members.map((member): MembersListMember => {
     const row = listRow(member);
-    return removal === undefined
-      ? row
-      : { ...row, removalState: removalState(removal) };
+    return pendingRemovals.has(member.userId)
+      ? { ...row, removalState: "pending" }
+      : row;
   });
-  const listed = new Set(members.map((member) => member.userId));
-  for (const removal of pendingRemovals.values()) {
-    if (listed.has(removal.member.userId)) continue;
-    rows.push({ ...removal.member, removalState: removalState(removal) });
-  }
-  return rows.filter((row) => row.removalState !== "done");
 }
 
 /**
- * The removals as a successful read leaves them: one whose person the read
- * no longer lists is marked unlisted, and one already unlisted whose person
- * the read lists again retires. The same map when nothing moved.
+ * The removals a successful read leaves pending: one whose person the read no
+ * longer lists has committed, and is done. The same set when nothing moved.
  */
 function settleRemovals(
-  pendingRemovals: ReadonlyMap<string, PendingRemoval>,
+  pendingRemovals: ReadonlySet<string>,
   members: readonly EnvironmentMembersListMember[],
-): ReadonlyMap<string, PendingRemoval> {
+): ReadonlySet<string> {
   const listed = new Set(members.map((member) => member.userId));
-  let next: Map<string, PendingRemoval> | null = null;
-  for (const [userId, removal] of pendingRemovals) {
-    const isListed = listed.has(userId);
-    if (isListed === !removal.unlisted) continue;
-    next ??= new Map(pendingRemovals);
-    if (isListed) next.delete(userId);
-    else next.set(userId, { ...removal, unlisted: true });
-  }
-  return next ?? pendingRemovals;
+  const next = new Set([...pendingRemovals].filter((id) => listed.has(id)));
+  return next.size === pendingRemovals.size ? pendingRemovals : next;
 }
 
 function membersReadState(
@@ -179,10 +143,7 @@ export function MembersPage(props: MembersPageProps): ReactNode {
   const writes = useEnvironmentMembersWrites(client, props.environmentId);
   const currentUserId = useAuthStore((state) => state.profile?.userId ?? "");
   const [pendingRemovals, setPendingRemovals] =
-    useState<ReadonlyMap<string, PendingRemoval>>(NO_PENDING_REMOVALS);
-  const completedReceipts = useCompletedMemberRemovalReceipts(
-    props.environmentId,
-  );
+    useState<ReadonlySet<string>>(NO_PENDING_REMOVALS);
   const directory = useHostDirectory();
   const noticeSeenFor = useRef<string | null>(null);
 
@@ -202,8 +163,8 @@ export function MembersPage(props: MembersPageProps): ReactNode {
   }
 
   const members = useMemo(
-    () => overlayRemovals(list.members, pendingRemovals, completedReceipts),
-    [list.members, pendingRemovals, completedReceipts],
+    () => overlayRemovals(list.members, pendingRemovals),
+    [list.members, pendingRemovals],
   );
 
   const viewerFromList = members.find(
@@ -221,18 +182,10 @@ export function MembersPage(props: MembersPageProps): ReactNode {
 
   const onRemove = useCallback(
     (input: { readonly userId: string }) => {
-      const removed = members.find((row) => row.userId === input.userId);
+      const listed = members.some((row) => row.userId === input.userId);
       return writes.remove(input).then((outcome) => {
-        if (outcome.outcome === "pending" && removed !== undefined) {
-          setPendingRemovals((current) => {
-            const next = new Map(current);
-            next.set(input.userId, {
-              member: removed,
-              receiptId: outcome.receiptId,
-              unlisted: false,
-            });
-            return next;
-          });
+        if (outcome.outcome === "pending" && listed) {
+          setPendingRemovals((current) => new Set([...current, input.userId]));
           setSettledRead(null);
         }
         return outcome;
@@ -253,7 +206,6 @@ export function MembersPage(props: MembersPageProps): ReactNode {
       environmentId={props.environmentId}
       teamName={teamName}
       teamHandle={team.teamHandle}
-      teamHostCount={team.hostCount}
       currentUserId={currentUserId}
       viewerRole={viewerRole}
       membersRead={membersRead}

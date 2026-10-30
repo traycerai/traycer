@@ -147,7 +147,6 @@ function storageCredits(
 export function SandboxSessionsBlock(props: {
   readonly report: SandboxSessionReport;
   readonly countLine: boolean;
-  readonly trailing: string | null;
   readonly hostId: string;
   readonly onNavigate: () => void;
 }): ReactNode {
@@ -186,9 +185,7 @@ export function SandboxSessionsBlock(props: {
         />
       )}
       <p className="text-ui-xs text-muted-foreground">
-        {props.trailing === null
-          ? SANDBOX_SESSIONS_CAPTION
-          : `${SANDBOX_SESSIONS_CAPTION} ${props.trailing}`}
+        {SANDBOX_SESSIONS_CAPTION}
       </p>
     </div>
   );
@@ -201,7 +198,6 @@ function VerbConfirmDialog(
     readonly verb: "suspend" | "stop";
     readonly title: string;
     readonly outcome: string;
-    readonly told: string | null;
     readonly actionLabel: string;
   },
 ): ReactNode {
@@ -230,7 +226,6 @@ function VerbConfirmDialog(
         <SandboxSessionsBlock
           report={report}
           countLine
-          trailing={props.told}
           hostId={props.sandbox.hostId}
           onNavigate={() => props.onOpenChange(false)}
         />
@@ -298,11 +293,6 @@ export function SandboxSuspendDialog(props: SandboxDialogProps): ReactNode {
       verb="suspend"
       title={`Suspend ${props.sandbox.displayName}?`}
       outcome={outcome}
-      told={
-        team
-          ? "They and you are told who suspended it and whether it completed."
-          : null
-      }
       actionLabel="Suspend"
     />
   );
@@ -312,7 +302,6 @@ export function SandboxStopDialog(props: SandboxDialogProps): ReactNode {
   const configuration = useDialogConfiguration(props.sandbox);
   const viewerUserId = useViewerUserId();
   const now = useSampledNow();
-  const team = configuration.kind === "team";
   const destroyed = sandboxStopDestroySentence(
     props.sandbox.destroyAfterRestingMinutes,
     now,
@@ -329,11 +318,6 @@ export function SandboxStopDialog(props: SandboxDialogProps): ReactNode {
       ]
         .filter((part): part is string => part !== null)
         .join(" ")}
-      told={
-        team
-          ? "They and you are told who stopped it and whether it completed."
-          : null
-      }
       actionLabel="Stop"
     />
   );
@@ -348,11 +332,16 @@ export function SandboxDestroyDialog(
   },
 ): ReactNode {
   const [typed, setTyped] = useState("");
+  // Every close clears the typed name, a close the surface makes on its own
+  // included, so a reopen always asks for it again.
+  const [wasOpen, setWasOpen] = useState(props.open);
+  if (wasOpen !== props.open) {
+    setWasOpen(props.open);
+    if (!props.open) setTyped("");
+  }
   const destroy = useSandboxDestroy(props.sandbox);
   const operation = useSandboxOperation(props.sandbox.id);
-  const configuration = useDialogConfiguration(props.sandbox);
   const report = useDialogSessions(props.sandbox, props.open);
-  const team = configuration.kind === "team";
   const name = props.sandbox.displayName;
   const reason = sandboxTypedNameReason(typed, name);
   // A stopped or failed sandbox has no process left to end; one mid-destroy
@@ -363,18 +352,14 @@ export function SandboxDestroyDialog(
     <ConfirmDestructiveDialog
       blockedReason={reason}
       open={props.open}
-      onOpenChange={(next) => {
-        if (!next) setTyped("");
-        props.onOpenChange(next);
-      }}
+      onOpenChange={props.onOpenChange}
       title={`Destroy ${name}?`}
-      description={`${sandboxDestroySessionsSentence(report, team, runsNothing)} The disk is not recoverable; files on it were never synced anywhere. Published chats stay readable.`}
+      description={`${sandboxDestroySessionsSentence(report, runsNothing)} The disk is not recoverable; files on it were never synced anywhere. Published chats stay readable.`}
       cascadeSummary={null}
       actionLabel="Destroy"
       isPending={operation?.kind === "pending" && operation.verb === "destroy"}
       onConfirm={() => {
         if (reason !== null) return;
-        setTyped("");
         props.onOpenChange(false);
         destroy.mutate(undefined, {
           onSuccess: (gone) => {
@@ -392,12 +377,8 @@ export function SandboxDestroyDialog(
         <SandboxSessionsBlock
           report={report}
           countLine={false}
-          trailing={team ? "Affected members are told who destroyed it." : null}
           hostId={props.sandbox.hostId}
-          onNavigate={() => {
-            setTyped("");
-            props.onOpenChange(false);
-          }}
+          onNavigate={() => props.onOpenChange(false)}
         />
       )}
       <SandboxDestroyNameField name={name} typed={typed} onChange={setTyped} />
@@ -832,10 +813,10 @@ function IdleSettingsForm(props: {
         onChange={setIdle}
       />
       <p className="text-ui-xs text-muted-foreground">
-        Idle means no agent turn in progress, no running shell and no tab
-        attached. Agent turns in progress are interrupted and continue from the
-        transcript on resume; a coding CLI signed in on its own is signed out
-        before the pause.
+        Idle means no agent turn in progress, no running shell and no browser
+        tab on screen. Agent turns in progress are interrupted and continue from
+        the transcript on resume; a coding CLI signed in on its own is signed
+        out before the pause.
       </p>
       <SandboxPeriodField
         label="Destroy after resting for (empty: never)"
@@ -1043,7 +1024,6 @@ function SandboxBatchDestroyConfirmationTarget(props: {
       <SandboxSessionsBlock
         report={report}
         countLine
-        trailing={null}
         hostId={sandbox.hostId}
         onNavigate={props.onNavigate}
       />

@@ -102,6 +102,8 @@ export function createFakeRunnerHost(
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getSandboxCatalogue: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
+    getTraycerModels: () =>
+      Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     createSandbox: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     destroySandbox: () =>

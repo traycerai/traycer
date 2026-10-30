@@ -5,6 +5,11 @@ import { Button } from "@/components/ui/button";
 import { ReportIssueAction } from "@/components/report-issue/report-issue-action";
 import { createReportIssueContext } from "@/lib/report-issue-context";
 import { cn } from "@/lib/utils";
+import {
+  hostLabelAtSentenceStart,
+  quotedHostReference,
+  UNNAMED_HOST_LABEL,
+} from "@/hooks/agent/use-host-reachability";
 import { tileHostName } from "./tile-host-load-copy";
 
 /**
@@ -79,14 +84,17 @@ function terminalDeadTileMessage(
     return destroyedLine;
   }
   if (reason === "not-running-remotely") {
-    return `This agent is not running on "${hostLabel}" right now, and it can only be started on that computer. The agent and its transcript are kept there — closing this tab only removes it from the canvas.`;
+    const named = tileHostName(
+      hostLabel === UNNAMED_HOST_LABEL ? null : hostLabel,
+    );
+    return `This agent is not running on ${named} right now, and it can only be started on that computer. The agent and its transcript are kept there — closing this tab only removes it from the canvas.`;
   }
   if (reason === "sandbox-stopped") {
-    return `${hostLabel} is stopped. Start it to use this terminal again.`;
+    return `${hostLabelAtSentenceStart(hostLabel)} is stopped. Start it to use this terminal again.`;
   }
   return ownerKind === "agent"
-    ? `Host "${hostLabel}" is unreachable, so this agent is unavailable until that host is back. The agent and its transcript are kept — closing this tab only removes it from the canvas.`
-    : `Host "${hostLabel}" is unreachable. This terminal is permanently closed.`;
+    ? `${quotedHostReference(hostLabel, true)} is unreachable, so this agent is unavailable until that host is back. The agent and its transcript are kept — closing this tab only removes it from the canvas.`
+    : `${quotedHostReference(hostLabel, true)} is unreachable. This terminal is permanently closed.`;
 }
 
 export interface TerminalDeadTileBannerProps {
@@ -176,8 +184,8 @@ export function WorkspaceFileDeadTileBanner(
       data-reason={props.reason}
     >
       <p className="max-w-md">
-        This file is on host &quot;{props.hostLabel}&quot;, which is currently
-        unreachable. The preview will load once that host is back.
+        This file is on {quotedHostReference(props.hostLabel, false)}, which is
+        currently unreachable. The preview will load once that host is back.
       </p>
       <ReportIssueAction
         context={createReportIssueContext({
@@ -209,8 +217,8 @@ export function GitDiffDeadTileBanner(
       data-reason={props.reason}
     >
       <p className="max-w-md">
-        This diff is on host &quot;{props.hostLabel}&quot;, which is currently
-        unreachable. The diff will load once that host is back.
+        This diff is on {quotedHostReference(props.hostLabel, false)}, which is
+        currently unreachable. The diff will load once that host is back.
       </p>
       <ReportIssueAction
         context={createReportIssueContext({
@@ -246,8 +254,8 @@ export function PrDetailDeadTileBanner(
       data-testid={props.testId}
     >
       <p className="max-w-md">
-        This pull request is on host &quot;{props.hostLabel}&quot;, which is
-        currently unreachable. It will load once that host is back.
+        This pull request is on {quotedHostReference(props.hostLabel, false)},
+        which is currently unreachable. It will load once that host is back.
       </p>
       <ReportIssueAction
         context={createReportIssueContext({
@@ -414,7 +422,6 @@ export function ChatCatchingUpBanner(
  *   created the agent.
  */
 export type ChatDeadTileBannerReason =
-  | "sandbox-destroyed"
   | "host-offline"
   | "chat-not-visible"
   | "chat-not-on-this-host"
@@ -423,9 +430,8 @@ export type ChatDeadTileBannerReason =
 
 export interface ChatDeadTileBannerProps {
   /**
-   * The bound host's label, or `null` while the directory has not resolved
-   * one - the copy then says "the host" (a removed sandbox, "This agent's
-   * sandbox") rather than printing a raw id.
+   * The bound host's label, or `null` when nothing names it - the copy then
+   * says "the host" (a removed sandbox, "This agent's sandbox").
    */
   readonly hostLabel: string | null;
   readonly reason: ChatDeadTileBannerReason;
@@ -434,8 +440,8 @@ export interface ChatDeadTileBannerProps {
    * collaborator's shared chat, and every host-naming sentence in the copy
    * table turns false there: the owner's machine can never appear in this
    * account's host directory, so "unreachable" is a fact about THIS viewer's
-   * fleet - not evidence the machine is off - and `hostLabel` has fallen back
-   * to a raw host id that names nothing the reader can act on. Those reasons
+   * fleet - not evidence the machine is off - and `hostLabel` names nothing
+   * the reader can act on. Those reasons
    * swap to the foreign-owner sentence instead. `true` when the owner is
    * unknown: a local chat ref is the viewer's own by construction, so only a
    * positive mismatch may flip the copy.
@@ -474,7 +480,6 @@ export interface ChatDeadTileBannerProps {
    * reads it.
    */
   readonly continueTargetLabel: string | null;
-  readonly details?: ReactNode;
   readonly onClone: () => void;
   readonly cloning: boolean;
   readonly className: string | undefined;
@@ -523,16 +528,6 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
   ChatDeadTileBannerReason,
   ChatDeadTileBannerCopy
 > = {
-  "sandbox-destroyed": {
-    message: (host) => <>{host} was destroyed. This chat stays readable.</>,
-    messageWithoutClone: (host) => (
-      <>{host} was destroyed. This chat stays readable.</>
-    ),
-    reportTitle: "Agent sandbox was destroyed",
-    reportMessage: "The agent’s sandbox was destroyed.",
-    offersClone: true,
-    actionLabel: () => "Continue on another host",
-  },
   // Leads with what the reader can do, beside the button that does it, and
   // keeps the cause: over a loaded transcript there is no body below to say
   // the host is offline, so this sentence is the only one that does.
@@ -797,7 +792,6 @@ function ownerSwappedCopy(props: ChatDeadTileBannerProps): {
   };
 } | null {
   if (
-    props.reason === "sandbox-destroyed" ||
     props.reason === "chat-no-longer-shared" ||
     props.reason === "sandbox-removed"
   ) {
@@ -860,20 +854,17 @@ export function ChatDeadTileBanner(props: ChatDeadTileBannerProps): ReactNode {
           {copy.actionLabel(target)}
         </Button>
       ) : null}
-      {props.details}
-      {props.reason !== "sandbox-destroyed" ? (
-        <ReportIssueAction
-          context={createReportIssueContext({
-            title: report.reportTitle,
-            message: report.reportMessage,
-            code: null,
-            source: "Agent",
-          })}
-          presentation="icon"
-          variant="warning-ghost"
-          className="shrink-0"
-        />
-      ) : null}
+      <ReportIssueAction
+        context={createReportIssueContext({
+          title: report.reportTitle,
+          message: report.reportMessage,
+          code: null,
+          source: "Agent",
+        })}
+        presentation="icon"
+        variant="warning-ghost"
+        className="shrink-0"
+      />
     </div>
   );
 }

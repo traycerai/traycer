@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { hashKey, type Mutation } from "@tanstack/react-query";
 import {
+  SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT,
   sandboxSupportReference,
   type SandboxLifecycleVerb,
 } from "@traycer/protocol/host/sandbox-control";
@@ -16,7 +17,12 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 export type SandboxRowVerb = SandboxLifecycleVerb | "destroy";
 
 export type SandboxRowOperation =
-  | { readonly kind: "pending"; readonly verb: SandboxRowVerb }
+  | {
+      readonly kind: "pending";
+      readonly verb: SandboxRowVerb;
+      /** When the verb was sent; a list answer from before it predates it. */
+      readonly submittedAt: number;
+    }
   | { readonly kind: "skipped"; readonly message: string }
   | {
       readonly kind: "failed";
@@ -62,6 +68,7 @@ export function useSandboxOperation(
           : mutation.state.variables,
       variables: mutation.state.variables,
       status: mutation.state.status,
+      submittedAt: mutation.state.submittedAt,
       error: mutation.state.error,
     }),
     [destroyKey],
@@ -74,7 +81,11 @@ export function useSandboxOperation(
   );
   if (latest === null || !isRowVerb(latest.verb)) return null;
   if (latest.status === "pending") {
-    return { kind: "pending", verb: latest.verb };
+    return {
+      kind: "pending",
+      verb: latest.verb,
+      submittedAt: latest.submittedAt,
+    };
   }
   if (latest.status !== "error" || latest.error === null) return null;
   if (latest.error instanceof SandboxDestroySkippedError) {
@@ -96,6 +107,23 @@ export function useSandboxOperation(
     reference,
     destroyRequest: destroyRetryRequest(latest.variables),
   };
+}
+
+/**
+ * The operation a surface shows, by what it offers now. A transition refused
+ * as a conflict only says the sandbox moved; once the surface no longer
+ * offers that verb, its state line says where, and a Retry would ask the same
+ * question again. Every other failure stays: its Retry can still succeed.
+ */
+export function sandboxOperationShown(
+  operation: SandboxRowOperation | null,
+  offers: (verb: SandboxRowVerb) => boolean,
+): SandboxRowOperation | null {
+  return operation?.kind === "failed" &&
+    operation.code === SANDBOX_REFUSAL_CODE_TRANSITION_CONFLICT &&
+    !offers(operation.verb)
+    ? null
+    : operation;
 }
 
 function isRowVerb(value: unknown): value is SandboxRowVerb {

@@ -80,6 +80,8 @@ const REPLYING_SNAPSHOT: BotSubscribeServerFrame = {
   openRequestCount: 0,
   conversationsRevision: 0,
   notificationSubscriptions: null,
+  surfaceActions: null,
+  stoppedNotificationWatches: null,
   boundHost: { hostId: OWN, epoch: 1, isThisHost: false },
   activity: { trunk: REPLYING, threads: {} },
   hasBinaryPayload: false,
@@ -124,7 +126,6 @@ function mountReplyingRow(): StubSession {
         environmentOwnerKind="organization"
         createdBy={null}
         isMain={false}
-        entryLocked={false}
       />
     </QueryClientProvider>,
   );

@@ -1,18 +1,29 @@
 import { create } from "zustand";
-import type { BotConversationSendDelivery } from "@traycer/protocol/host/bot/conversation-schemas";
+import type {
+  BotConversationSendDelivery,
+  BotTurnRef,
+} from "@traycer/protocol/host/bot/conversation-schemas";
 
 /**
  * The thread open beside a bot's channel, by the message it hangs off: a
- * member's post, or one of the bot's questions or proposals.
+ * member's post, or one of the bot's own rows.
  */
 export interface BotOpenThread {
   readonly anchorMessageId: string;
   /**
    * The thread opens with the first reply under its anchor, sent with the
-   * anchor's id: the bot's question or proposal, or a post the bot answered
-   * in the channel (reply mode `direct`). `false` for a post's own thread.
+   * anchor's id: one of the bot's rows, or a post the bot answered in the
+   * channel (reply mode `direct`). `false` for a post's own thread.
    */
   readonly announcement: boolean;
+  /**
+   * The thread anchor (`threadAnchors.kinds`) a bound host must name to
+   * open a thread under the anchor: `"answer"` for the bot's direct reply,
+   * `"message"` for any other row of the bot that is no question or
+   * proposal. Its box sends only while the bot's binding names it. `null`
+   * for a row every host takes a reply under.
+   */
+  readonly anchorKind: string | null;
   /**
    * The person's post that opened the thread as its send was accepted, which
    * the channel knows before the thread list or the channel's own row does.
@@ -34,31 +45,103 @@ export interface BotSentPost {
   readonly delivery: BotConversationSendDelivery;
 }
 
-interface BotOpenThreadState {
-  readonly byBotId: Readonly<Record<string, BotOpenThread>>;
-  readonly setOpenThread: (botId: string, open: BotOpenThread | null) => void;
+/**
+ * One of the bot's own sessions to open as a read-only chat in place of its
+ * channel (Tracy Bots T93): the trunk's (`threadId` `null`) or a thread's,
+ * and the message of it the view lands on (`null`: where it opens).
+ * `sendPostId` is a post the session's send wrote (T94): the view lands on
+ * that send's card where the session has one, else on `messageId`.
+ */
+export interface BotSessionTarget {
+  readonly chatId: string;
+  readonly threadId: string | null;
+  readonly messageId: string | null;
+  readonly sendPostId: string | null;
+}
+
+/** Opens one of the bot's sessions, read-only, in place of its channel. */
+export type BotSessionOpen = (target: BotSessionTarget) => void;
+
+/**
+ * Opens a turn of the bot: its session, landed on the message that started
+ * the turn, or on the card of the send that wrote `sendPostId` (`null` for
+ * none).
+ */
+export type BotTurnOpen = (ref: BotTurnRef, sendPostId: string | null) => void;
+
+/** Where a turn of the bot is in its session, and the post of it to land on. */
+export function sessionTargetOfTurn(
+  ref: BotTurnRef,
+  sendPostId: string | null,
+): BotSessionTarget {
+  return {
+    chatId: ref.chatId,
+    threadId: ref.threadId,
+    messageId: ref.userMessageId,
+    sendPostId,
+  };
 }
 
 /**
- * Which thread each bot tab has open, held above the tab's views so the
- * thread survives a switch between the channel's tabs (an announcement's
- * thread nobody has started yet still opens as the box that starts it).
- * Closing the tab drops its entry (`closeBotTab`). Not persisted: a restart
- * opens the channel with no thread.
+ * What the bot knows, open in the rail (Tracy Bots T87): read-only, and the
+ * thread it displaced, which its back button restores (`null` when it
+ * displaced none).
+ */
+export interface BotOpenMemory {
+  readonly back: BotOpenThread | null;
+}
+
+/**
+ * What the rail beside a bot's channel holds: one slot, a thread or the
+ * bot's memory, the newer replacing the older.
+ */
+export type BotRail =
+  | ({ readonly kind: "thread" } & BotOpenThread)
+  | ({ readonly kind: "memory" } & BotOpenMemory);
+
+/**
+ * The memory opened over what the rail holds (the bot's profile card): it
+ * takes the one slot and keeps for its back button the thread it displaces,
+ * or the one the memory already open there displaced.
+ */
+export function memoryRailOver(rail: BotRail | null): BotRail {
+  if (rail === null) return { kind: "memory", back: null };
+  if (rail.kind === "thread") return { kind: "memory", back: threadOf(rail) };
+  return { kind: "memory", back: rail.back };
+}
+
+function threadOf(
+  rail: { readonly kind: "thread" } & BotOpenThread,
+): BotOpenThread {
+  const { kind: _kind, ...thread } = rail;
+  return thread;
+}
+
+interface BotOpenThreadState {
+  readonly byBotId: Readonly<Record<string, BotRail>>;
+  readonly setRail: (botId: string, rail: BotRail | null) => void;
+}
+
+/**
+ * What each bot tab's rail holds, held above the tab's views so it survives
+ * a switch between the channel's tabs (an announcement's thread nobody has
+ * started yet still opens as the box that starts it). Closing the tab drops
+ * its entry (`closeBotTab`). Not persisted: a restart opens the channel with
+ * nothing beside it.
  */
 export const useBotOpenThreadStore = create<BotOpenThreadState>()((set) => ({
   byBotId: {},
-  setOpenThread: (botId, open) =>
+  setRail: (botId, rail) =>
     set((state) => {
       const next = { ...state.byBotId };
-      if (open === null) delete next[botId];
-      else next[botId] = open;
+      if (rail === null) delete next[botId];
+      else next[botId] = rail;
       return { byBotId: next };
     }),
 }));
 
-/** The thread open in `botId`'s tab, or `null`. */
-export function useBotOpenThread(botId: string): BotOpenThread | null {
+/** What `botId`'s tab has in its rail, or `null`. */
+export function useBotRail(botId: string): BotRail | null {
   return useBotOpenThreadStore((state) =>
     Object.hasOwn(state.byBotId, botId) ? state.byBotId[botId] : null,
   );

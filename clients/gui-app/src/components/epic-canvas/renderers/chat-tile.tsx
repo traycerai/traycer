@@ -1,12 +1,22 @@
 import type { ChatServingKey } from "@traycer-clients/shared/host-client/host-rpc-routing";
+import type { ChatCatchingUpReason } from "@traycer/protocol/host/chat-serving/index";
 import {
-  restingChatSandbox,
-  type ChatSandboxState,
+  resolveChatSandbox,
+  wakeOf,
+  type ChatSandboxView,
+  type RestingChatSandbox,
 } from "@/lib/sandboxes/chat-sandbox-state";
+import { chatSandboxStateLine } from "./chat-sandbox-state-line";
+import {
+  ChatSandboxLineContext,
+  ChatStateLineContext,
+} from "./chat-state-line";
 import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
-import { taskSandboxEndLine } from "@/lib/sandboxes/task-sandbox-end";
+import { useLiveChatSandboxState } from "@/hooks/sandboxes/use-live-chat-sandbox-state";
 import { TaskSandboxEndDetails } from "@/components/hosts/task-sandbox-end-details";
+import { Button } from "@/components/ui/button";
+import type { TaskSandboxEndedHost } from "@/hooks/epic/use-task-sandbox-end";
 import { useBoundSandboxSend } from "@/hooks/sandboxes/use-bound-sandbox-send";
 import { PendingSandboxSendForChat } from "@/components/sandboxes/pending-sandbox-sends";
 import { SandboxReadyLineForChat } from "@/components/sandboxes/pending-sandbox-sends";
@@ -237,7 +247,10 @@ import {
   useEpicCreateChatForHost,
   useEpicUpdateChatRunSettings,
 } from "@/hooks/epic/use-epic-chat-mutations";
-import { useChatCloneOnHostSwitch } from "@/components/epic-canvas/renderers/use-chat-clone-on-host-switch";
+import {
+  useChatCloneOnHostSwitch,
+  type ChatCloneOnHostSwitch,
+} from "@/components/epic-canvas/renderers/use-chat-clone-on-host-switch";
 import { CloneProfileRecovery } from "@/components/epic-canvas/renderers/clone-profile-recovery";
 import { enqueuePersistChatRunSettings } from "@/lib/chats/chat-run-settings-write-queue";
 import {
@@ -372,10 +385,10 @@ import { ChatTilePreContent } from "./chat-tile-runtime-gate";
 import { MobileDrawerVisibleTilePaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
 import {
   chatPreContentStrip,
-  chatTileHostLabel,
   type ChatLoadWait,
   type ChatTilePreContentFrame,
 } from "./chat-pre-content";
+import { useChatTileHostLabel } from "./use-chat-tile-host-label";
 import { SurfaceActivityProvider } from "@/components/home/composer/surface-activity-context";
 import { chatTileCatalogActivity } from "./chat-tile-surface-activity";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
@@ -418,10 +431,7 @@ interface ChatTileProps {
 }
 
 interface ChatTileSessionViewProps {
-  readonly restingSandbox?: Extract<
-    ChatSandboxState,
-    { readonly kind: "resting" }
-  >;
+  readonly restingSandbox?: RestingChatSandbox;
   readonly handle: ChatSessionStoreHandle;
   readonly node: ChatSurfaceNode;
   readonly viewTabId: string;
@@ -460,13 +470,6 @@ interface ChatTileSessionViewProps {
  * inheriting them. Tiles are one chat for life today; the key keeps that
  * true by construction rather than by a property of the surface host.
  */
-/**
- * The composer lock on a team sandbox's chat the pool serves at rest: the
- * pool never carries a turn, so the reason is the sandbox, not the viewer.
- */
-const CHAT_AT_REST_NOTICE =
-  "No sandbox is running this agent. You can read it, but not send.";
-
 export function ChatTile(props: ChatTileProps) {
   return (
     <ChatTileForChat
@@ -500,6 +503,7 @@ function useChatCloneAllowed(): boolean {
 function useChatTilePreContentFrame(
   reachability: HostReachability,
   hasReadySession: boolean,
+  sandboxFooter: boolean,
 ): ChatTilePreContentFrame {
   const cloneAllowed = useChatCloneAllowed();
   const [wait, setWait] = useState<ChatLoadWait>(() => ({
@@ -515,8 +519,22 @@ function useChatTilePreContentFrame(
     });
   }, []);
   return useMemo(
-    () => ({ wait, restartWait, reachability, cloneAllowed, hasReadySession }),
-    [wait, restartWait, reachability, cloneAllowed, hasReadySession],
+    () => ({
+      wait,
+      restartWait,
+      reachability,
+      cloneAllowed,
+      hasReadySession,
+      sandboxFooter,
+    }),
+    [
+      wait,
+      restartWait,
+      reachability,
+      cloneAllowed,
+      hasReadySession,
+      sandboxFooter,
+    ],
   );
 }
 
@@ -644,18 +662,34 @@ function ChatTileForChat(props: ChatTileProps) {
   // serves never reads as an offline tile.
   const servingKey = { hostId: tabHostId, epicId, chatId: node.id };
   const servingHostId = useChatServingHostId(servingKey);
-  const servedAtRest = servingHostId !== tabHostId;
   const reachability = useHostReachability(servingHostId);
-  const sandboxState = useChatSandboxState(
-    epicId,
-    tabHostId,
-    reachability.status === "reachable",
-  );
+  const hostLabel = useChatTileHostLabel(reachability, tabHostId);
+  const ownerReachability = useHostReachability(tabHostId);
+  const ownerLease = useHostLease(tabHostId);
+  const ownerSessionReady = useRemoteSessionPollReadiness(tabHostId);
+  const { state: sandboxState, reachable: ownerReachable } =
+    useLiveChatSandboxState(
+      epicId,
+      node.id,
+      tabHostId,
+      chatPreContentStrip(
+        ownerReachability.status,
+        ownerLease,
+        ownerSessionReady,
+      ) === "none",
+    );
   const copyFacts = useChatOwnerCopyFacts(
     chatRecord?.userId ?? null,
     tabHostId,
     node.id,
   );
+  const canEdit = useChatCloneAllowed();
+  const sandbox = resolveChatSandbox(sandboxState, {
+    ...copyFacts,
+    reachable: ownerReachable,
+    canEdit,
+  });
+  const sandboxAvailability = chatSandboxAvailability(sandbox, ownerReachable);
   const lease = useHostLease(servingHostId);
   const hasReadySession = useRemoteSessionPollReadiness(servingHostId);
   // The chat's own bounded load (invariant 6), for both halves of the wait:
@@ -670,6 +704,7 @@ function ChatTileForChat(props: ChatTileProps) {
   const preContentFrame = useChatTilePreContentFrame(
     reachability,
     hasReadySession,
+    sandboxAvailability.explainsLoad,
   );
   // Feeds `TombstonedProfileProvider` below - "ran on <label> (removed)" for
   // a message anchored to a since-tombstoned profile. Shares the same
@@ -693,23 +728,22 @@ function ChatTileForChat(props: ChatTileProps) {
   // offline strip and its Clone offer while the directory still says the
   // host is reachable.
   const deadTileBanner = (() => {
+    // A sandbox's one line is its only line: no offline or starting strip
+    // beside it, whatever the host reads.
+    if (sandbox.line !== null) return null;
     const strip = chatPreContentStrip(
       reachability.status,
       lease,
       hasReadySession,
     );
-    if (
-      strip === "offline" &&
-      sandboxState.kind !== "resting" &&
-      sandboxState.kind !== "unreachable"
-    ) {
+    if (strip === "offline") {
       return (
         <ChatDeadTileBannerWithOffer
           epicId={epicId}
           tabId={viewTabId}
           chatId={node.id}
           sourceHostId={tabHostId}
-          hostLabel={chatTileHostLabel(reachability, tabHostId)}
+          hostLabel={hostLabel}
           reason="host-offline"
           // This mount's body is a load state or a cached live session -
           // never a published copy the banner could truthfully point at.
@@ -735,6 +769,22 @@ function ChatTileForChat(props: ChatTileProps) {
     return null;
   })();
 
+  // The one line a sandbox's state says, in the composer's place once the
+  // transcript is in and as the body before it.
+  const stateLine = chatSandboxStateLine(
+    sandbox.line,
+    sandboxState.kind === "destroyed" ? (
+      <SandboxEndActions
+        epicId={epicId}
+        tabId={viewTabId}
+        chatId={node.id}
+        sourceHostId={tabHostId}
+        sourceOwnerUserId={chatRecord?.userId ?? undefined}
+        ended={sandboxState.ended}
+      />
+    ) : null,
+  );
+
   if (handle === null) {
     return (
       <div
@@ -743,12 +793,18 @@ function ChatTileForChat(props: ChatTileProps) {
         className="flex h-full min-h-0 flex-col"
       >
         {deadTileBanner}
-        <ChatTileCatchingUpBanner chat={servingKey} />
-        <ChatTilePreContent
-          testId={`chat-tile-pre-content-${node.id}`}
-          frame={preContentFrame}
-          session={null}
+        <ChatTileCatchingUpBanner
+          chat={servingKey}
+          sandboxSays={sandbox.line !== null}
         />
+        <ChatStateLineContext value={stateLine}>
+          <ChatTilePreContent
+            testId={`chat-tile-pre-content-${node.id}`}
+            frame={preContentFrame}
+            session={null}
+          />
+        </ChatStateLineContext>
+        <ChatSandboxFooter line={sandbox.line} />
       </div>
     );
   }
@@ -756,7 +812,10 @@ function ChatTileForChat(props: ChatTileProps) {
   return (
     <div className="flex h-full min-h-0 flex-col" data-node-id={node.id}>
       {deadTileBanner}
-      <ChatTileCatchingUpBanner chat={servingKey} />
+      <ChatTileCatchingUpBanner
+        chat={servingKey}
+        sandboxSays={sandbox.line !== null}
+      />
       <PendingSandboxSendForChat
         epicId={epicId}
         chatId={node.id}
@@ -767,36 +826,42 @@ function ChatTileForChat(props: ChatTileProps) {
         providers={providersList.data?.providers ?? []}
         hostId={tabHostId}
       >
-        <ChatTileSessionView
-          handle={handle}
-          node={node}
-          viewTabId={viewTabId}
-          tileId={props.tileId}
-          isActive={isActive}
-          currentEpicId={epicId}
-          restingSandbox={restingChatSandbox(
-            sandboxState,
-            preContentFrame.cloneAllowed,
-            copyFacts,
-          )}
-          readOnlyNotice={liveSandboxReadOnlyNotice(sandboxState, servedAtRest)}
-          isLiveSession
-          preContent={preContentFrame}
-        />
+        <ChatSandboxLineContext value={sandbox.line !== null}>
+          <ChatStateLineContext value={stateLine}>
+            <ChatTileSessionView
+              handle={handle}
+              node={node}
+              viewTabId={viewTabId}
+              tileId={props.tileId}
+              isActive={isActive}
+              currentEpicId={epicId}
+              restingSandbox={wakeOf(sandbox)}
+              readOnlyNotice={sandboxAvailability.readOnlyNotice}
+              isLiveSession
+              preContent={preContentFrame}
+            />
+          </ChatStateLineContext>
+        </ChatSandboxLineContext>
       </TombstonedProfileProvider>
-      {sandboxState.kind === "resting" ||
-      sandboxState.kind === "unreachable" ? (
-        <ChatSandboxFooter state={sandboxState} />
-      ) : null}
+      <ChatSandboxFooter line={sandbox.line} />
     </div>
   );
 }
 
+/**
+ * The serving handoff's line, unless the chat's sandbox says its own one
+ * line: a sandbox chat shows exactly one.
+ */
 function ChatTileCatchingUpBanner(props: {
   readonly chat: ChatServingKey;
+  readonly sandboxSays: boolean;
 }): ReactNode {
   const serving = useChatServing(props.chat);
-  if (serving?.state !== "catching-up" || serving.catchingUp === null)
+  if (
+    props.sandboxSays ||
+    serving?.state !== "catching-up" ||
+    serving.catchingUp === null
+  )
     return null;
   return (
     <ChatCatchingUpBanner
@@ -806,14 +871,40 @@ function ChatTileCatchingUpBanner(props: {
   );
 }
 
-function liveSandboxReadOnlyNotice(
-  state: ChatSandboxState,
-  servedAtRest: boolean,
-): string | null {
-  if (state.kind === "destroyed")
-    return taskSandboxEndLine(state.ended.name, state.ended.end);
-  if (servedAtRest && state.kind !== "resting") return CHAT_AT_REST_NOTICE;
-  return null;
+/**
+ * A published copy's catching-up line, unless the owner sandbox says its own
+ * one line, as {@link ChatTileCatchingUpBanner} yields on the live tile.
+ */
+export function SubstitutedCatchingUpBanner(props: {
+  readonly epicId: string;
+  readonly ownerHostId: string;
+  readonly reason: ChatCatchingUpReason;
+  readonly testId: string;
+}): ReactNode {
+  const reachability = useHostReachability(props.ownerHostId);
+  const reachable = reachability.status === "reachable";
+  const state = useChatSandboxState(props.epicId, props.ownerHostId, reachable);
+  const view = resolveChatSandbox(state, {
+    reachable,
+    canEdit: false,
+    ownedByViewer: false,
+    environmentOwned: false,
+  });
+  if (view.line !== null) return null;
+  return <ChatCatchingUpBanner reason={props.reason} testId={props.testId} />;
+}
+
+/** The load body and composer yield to the same sandbox line. */
+function chatSandboxAvailability(
+  view: ChatSandboxView,
+  ownerReachable: boolean,
+): { readonly explainsLoad: boolean; readonly readOnlyNotice: string | null } {
+  const { line } = view;
+  if (line === null) return { explainsLoad: false, readOnlyNotice: null };
+  return {
+    explainsLoad: line.place === "footer" && !ownerReachable,
+    readOnlyNotice: line.place === "slot" ? line.text : null,
+  };
 }
 
 interface ChatDeadTileBannerContainerProps {
@@ -854,14 +945,7 @@ export function ChatDeadTileBannerContainer(
   return <ChatDeadTileBannerWithOffer {...props} cloneAllowed={cloneAllowed} />;
 }
 
-/**
- * The banner and its Clone offer, for a mounting surface that already holds
- * the role gate - the live tile, whose body under the strip reads the same
- * value.
- */
-function useDeadTileSourceOwner(
-  props: ChatDeadTileBannerContainerProps,
-): string | null {
+function useDeadTileSourceOwner(props: DeadTileOfferSource): string | null {
   // The EPIC SESSION's client, by intent: the cloud lookup below SHARES the
   // list the sidebar tree already fetched for this epic, and that fetch rides
   // the session's client - so this must too, or it is a cache miss per host
@@ -889,11 +973,14 @@ function useDeadTileSourceOwner(
   return providedOwnerUserId ?? lookedUpOwnerUserId;
 }
 
-function ChatDeadTileBannerWithOffer(
-  props: ChatDeadTileBannerContainerProps & {
-    readonly cloneAllowed: boolean;
-  },
-): ReactNode {
+/** The chat a dead tile's offer clones or continues, and where it was. */
+type DeadTileOfferSource = Pick<
+  ChatDeadTileBannerContainerProps,
+  "epicId" | "tabId" | "chatId" | "sourceHostId" | "sourceOwnerUserId"
+>;
+
+/** The clone offer a dead tile's banner and a destroyed sandbox's line share. */
+function useDeadTileCloneOffer(props: DeadTileOfferSource) {
   const chatRecord = useChatById(props.chatId);
   const sourceOwnerUserId = useDeadTileSourceOwner(props);
   const sourceTitle = chatRecord?.title ?? "";
@@ -922,6 +1009,32 @@ function ChatDeadTileBannerWithOffer(
     sourceTitle,
     sourceOwnerUserId,
   });
+  return {
+    sourceOwnerUserId,
+    sourceTitle,
+    ownedByViewer,
+    environmentOwned,
+    offer,
+  };
+}
+
+/**
+ * The banner and its Clone offer, for a mounting surface that already holds
+ * the role gate - the live tile, whose body under the strip reads the same
+ * value.
+ */
+function ChatDeadTileBannerWithOffer(
+  props: ChatDeadTileBannerContainerProps & {
+    readonly cloneAllowed: boolean;
+  },
+): ReactNode {
+  const {
+    sourceOwnerUserId,
+    sourceTitle,
+    ownedByViewer,
+    environmentOwned,
+    offer,
+  } = useDeadTileCloneOffer(props);
   // A removed team sandbox's agent continues on another awake sandbox of its
   // team instead of being cloned; a refusal for another environment falls
   // back to the clone.
@@ -933,33 +1046,54 @@ function ChatDeadTileBannerWithOffer(
     name: sourceTitle,
     fallback: offer.clone,
   });
+  // These reasons come from a reachable host's answer, so an awake sandbox
+  // keeps the missing-history explanation and its Clone offer.
+  const hostAnswered =
+    props.reason === "chat-not-visible" ||
+    props.reason === "chat-not-on-this-host";
   const sandboxState = useChatSandboxState(
     props.epicId,
     props.sourceHostId,
-    // These reasons come from a reachable host's answer, so an awake sandbox
-    // must keep the missing-history explanation and its Clone offer.
-    props.reason === "chat-not-visible" ||
-      props.reason === "chat-not-on-this-host",
+    hostAnswered,
   );
-  const reason =
-    sandboxState.kind === "destroyed" ? "sandbox-destroyed" : props.reason;
-  const continues = continueOffer.eligible && reason === "host-offline";
-  if (sandboxState.kind === "resting" || sandboxState.kind === "unreachable")
-    return null;
+  const sandbox = resolveChatSandbox(sandboxState, {
+    reachable: hostAnswered,
+    canEdit: props.cloneAllowed,
+    ownedByViewer,
+    environmentOwned,
+  });
+  const continues = continueOffer.eligible && props.reason === "host-offline";
+  // A sandbox's footer under the chat says its state.
+  if (sandbox.line?.place === "footer") return null;
+  const stateLine = chatSandboxStateLine(
+    sandbox.line,
+    sandboxState.kind === "destroyed" ? (
+      <SandboxEndActionButtons
+        ended={sandboxState.ended}
+        cloneAllowed={props.cloneAllowed}
+        offer={offer}
+      />
+    ) : null,
+  );
+  if (stateLine !== null) {
+    // A copy says the same line, with these same actions, in its own place.
+    if (props.showsPublishedCopy) return null;
+    return (
+      <div
+        role="status"
+        data-testid={props.testId}
+        className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2 text-ui-sm text-muted-foreground"
+      >
+        <span className="min-w-0 flex-1">{stateLine.line}</span>
+        {stateLine.actions}
+      </div>
+    );
+  }
   return (
     <>
       <ChatDeadTileBanner
-        details={
-          sandboxState.kind === "destroyed" ? (
-            <TaskSandboxEndDetails ended={sandboxState.ended} />
-          ) : undefined
-        }
-        hostLabel={
-          sandboxState.kind === "destroyed"
-            ? sandboxState.ended.name
-            : props.hostLabel
-        }
-        reason={continues ? "sandbox-removed" : reason}
+        hostLabel={props.hostLabel}
+        reason={continues ? "sandbox-removed" : props.reason}
         ownedByViewer={ownedByViewer}
         environmentOwned={environmentOwned}
         cloneAllowed={props.cloneAllowed}
@@ -970,6 +1104,59 @@ function ChatDeadTileBannerWithOffer(
         className={undefined}
         testId={props.testId}
       />
+      {offer.profileRecovery !== null ? (
+        <CloneProfileRecovery
+          client={offer.profileRecovery.client}
+          resolution={offer.profileRecovery.resolution}
+          targetHostLabel={offer.profileRecovery.targetHostLabel}
+          onChooseProfile={offer.profileRecovery.chooseProfile}
+          onRetry={offer.profileRecovery.retry}
+          onCancel={offer.profileRecovery.cancel}
+          onOpenProviderSettings={offer.profileRecovery.openProviderSettings}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * A destroyed sandbox's actions: continue the agent on another host, and
+ * Details. They sit in the one line that states the sandbox's end.
+ */
+export function SandboxEndActions(
+  props: DeadTileOfferSource & { readonly ended: TaskSandboxEndedHost },
+): ReactNode {
+  const cloneAllowed = useChatCloneAllowed();
+  const { offer } = useDeadTileCloneOffer(props);
+  return (
+    <SandboxEndActionButtons
+      ended={props.ended}
+      cloneAllowed={cloneAllowed}
+      offer={offer}
+    />
+  );
+}
+
+function SandboxEndActionButtons(props: {
+  readonly ended: TaskSandboxEndedHost;
+  readonly cloneAllowed: boolean;
+  readonly offer: ChatCloneOnHostSwitch;
+}): ReactNode {
+  const { offer } = props;
+  return (
+    <>
+      {props.cloneAllowed ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={offer.cloning}
+          onClick={offer.clone}
+        >
+          Continue on another host
+        </Button>
+      ) : null}
+      <TaskSandboxEndDetails ended={props.ended} />
       {offer.profileRecovery !== null ? (
         <CloneProfileRecovery
           client={offer.profileRecovery.client}
@@ -1941,6 +2128,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 open={view.steerRestart.open}
                 onOpenChange={view.steerRestart.onOpenChange}
                 onRestart={view.steerRestart.onRestart}
+                reasons={view.steerRestart.reasons}
                 changed={view.steerRestart.changed}
               />
               <TeardownCommitDialog
@@ -2327,6 +2515,7 @@ function useChatTileSessionViewModel(
   // chat's binding so sibling chat folders do not appear in this chip.
   const workspaceAvailability = useChatWorkspaceAvailability({
     isCopy,
+    resting: props.restingSandbox !== undefined,
     currentEpicId,
     worktreeBinding: state.worktreeBinding,
     snapshotLoaded: state.snapshotLoaded,
@@ -2502,6 +2691,8 @@ function useChatTileSessionViewModel(
     () => handle.store.getState().draftBlobBridgeSupported,
     [handle.store],
   );
+  const getQueuedSteerRestartConfirmationSupported =
+    handle.store.getState().queuedSteerRestartConfirmationSupported;
   // Declared HERE rather than beside its other readers further down: the
   // initial-chat handoff driver below consumes it too, and a `const` used above
   // its declaration is a TDZ error rather than a hoist. Nothing about the
@@ -3031,6 +3222,7 @@ function useChatTileSessionViewModel(
         initialHostId: targetHostId,
         onlyHostIds: null,
         stagedSandbox: null,
+        carriesComposerDraft: false,
       });
     },
     [forkAtAssistantMessage],
@@ -3043,6 +3235,7 @@ function useChatTileSessionViewModel(
         initialHostId: null,
         onlyHostIds: null,
         stagedSandbox: target,
+        carriesComposerDraft: false,
       });
     },
     [forkAtAssistantMessage],
@@ -3057,6 +3250,7 @@ function useChatTileSessionViewModel(
         initialHostId: first.value,
         onlyHostIds: teamHostIds,
         stagedSandbox: null,
+        carriesComposerDraft: false,
       });
     },
     [forkAtAssistantMessage],
@@ -3226,6 +3420,14 @@ function useChatTileSessionViewModel(
           settings: input.settings,
           intent:
             input.deliveryPolicy === "after_safe_point" ? "steer" : "save",
+          // Confirmed only when the composer's settings dialog asked. Every
+          // other cause to end the turn, a settings change on a harness the
+          // composer does not ask for included, is asked by the queue's
+          // dialog when the host refuses the steer.
+          steerRestartConfirmed:
+            input.deliveryPolicy === "after_safe_point" &&
+            input.restartConfirmed,
+          steerInitiatorId: node.instanceId,
         });
         if (actionId === null) return false;
         dispatchUi({ type: "setEditingQueueItemId", editingQueueItemId: null });
@@ -3248,6 +3450,7 @@ function useChatTileSessionViewModel(
       chatActions,
       dispatchUi,
       dispatchUserSend,
+      node.instanceId,
       profile,
       submitThroughRebindGate,
     ],
@@ -3393,6 +3596,7 @@ function useChatTileSessionViewModel(
           settings: nextStepSettings,
           deliveryPolicy: "auto",
           restore: { content, browserAnnotations: [] },
+          restartConfirmed: false,
         },
         dispatch: dispatchUserSend,
         refusal: nextStepSendRefusal,
@@ -3506,6 +3710,7 @@ function useChatTileSessionViewModel(
           // from live turn/queue state at actual dispatch.
           deliveryPolicy: "auto",
           restore: { content, browserAnnotations: [] },
+          restartConfirmed: false,
         },
         dispatch: dispatchCompactSend,
         refusal: nextStepSendRefusal,
@@ -3551,6 +3756,7 @@ function useChatTileSessionViewModel(
         settings: nextStepSettings,
         deliveryPolicy: "auto",
         restore: { content, browserAnnotations: [] },
+        restartConfirmed: false,
       },
       dispatch: dispatchUserSend,
       refusal: nextStepSendRefusal,
@@ -3750,7 +3956,7 @@ function useChatTileSessionViewModel(
       isViewer: accessFlags.isViewer,
       canAct,
       readOnlyNotice: props.readOnlyNotice,
-      restingSandbox: props.restingSandbox !== undefined,
+      restingSandbox: props.restingSandbox,
     }),
     [
       isCopy,
@@ -3791,6 +3997,7 @@ function useChatTileSessionViewModel(
       steerProtocolSupported,
       autoPermissionModeProtocolSupported,
       getDraftBlobBridgeSupported,
+      getQueuedSteerRestartConfirmationSupported,
       getActiveTurnForSteer,
       getStopConfirmationTarget,
       stopDisabled,
@@ -3802,6 +4009,7 @@ function useChatTileSessionViewModel(
       steerProtocolSupported,
       autoPermissionModeProtocolSupported,
       getDraftBlobBridgeSupported,
+      getQueuedSteerRestartConfirmationSupported,
       getActiveTurnForSteer,
       getStopConfirmationTarget,
       stopDisabled,
@@ -3924,13 +4132,17 @@ function useChatTileSessionViewModel(
         pendingActions: state.pendingActions,
       }),
       onCheckDelivery: chatActions.checkSendDelivery,
+      // A published copy's stream is not down, it never existed: the copy is
+      // frozen `closed`, and nothing will ever reconnect it.
       streamReconnecting:
+        !isCopy &&
         state.snapshotLoaded &&
         state.connectionStatus !== "open" &&
         state.fatalClose === null,
       connectionStatus: state.connectionStatus,
     }),
     [
+      isCopy,
       chatActions.checkSendDelivery,
       state.connectionStatus,
       state.fatalClose,
@@ -4494,20 +4706,25 @@ function useChatMissingWorktreeFocusRefresh(args: {
 
 function useChatWorkspaceAvailability(args: {
   readonly isCopy: boolean;
+  /** The chat's sandbox rests and its next message wakes it. */
+  readonly resting: boolean;
   readonly currentEpicId: string;
   readonly worktreeBinding: WorktreeBinding | null;
   readonly snapshotLoaded: boolean;
   readonly missingWorktreePaths: ReadonlyArray<string>;
 }): WorkspaceComposerAvailability {
   const client = useTabHostClient();
+  const sendsToSandbox = args.isCopy || args.resting;
   const epicWorkspaces = useChatSendGateWorkspaceBindingsForClient({
     client,
     epicId: args.currentEpicId,
-    enabled: !args.isCopy && client !== null,
+    enabled: !sendsToSandbox && client !== null,
   });
-  // A resting copy sends to its sandbox, whose workspace is checked on delivery.
-  // The serving host's folders cannot determine whether that send is allowed.
-  if (args.isCopy) return WORKSPACE_COMPOSER_READY;
+  // A resting chat - its published copy, or its live tile served at rest -
+  // sends to its sandbox, whose workspace is checked on delivery. The tab
+  // host's folders cannot decide that send: it serves the copy, or it is the
+  // resting sandbox itself and answers nothing.
+  if (sendsToSandbox) return WORKSPACE_COMPOSER_READY;
   const epicWorkspaceCount =
     epicWorkspaces.data === undefined ? null : epicWorkspaces.data.rows.length;
 

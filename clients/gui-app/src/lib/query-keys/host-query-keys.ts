@@ -9,18 +9,6 @@ import type { PlainTerminalScope } from "@traycer/protocol/host/terminal/plain-s
 const EPIC_TASK_CONTEXTS_METHOD = "epic.getTaskContexts" as const;
 
 export const hostQueryKeys = {
-  notificationHookRemovalBorrowedStatus: (hostId: string) =>
-    [
-      ...hostQueryKeys.scope(hostId),
-      "notificationHookRemovalBorrowedStatus",
-    ] as const,
-  notificationHookRemovalReadIds: (hostId: string) =>
-    [...hostQueryKeys.scope(hostId), "notificationHookRemovalReadIds"] as const,
-  notificationHookRemovalReadCutoff: (hostId: string) =>
-    [
-      ...hostQueryKeys.scope(hostId),
-      "notificationHookRemovalReadCutoff",
-    ] as const,
   base: () => ["host"] as const,
   scope: (hostId: string | null) =>
     hostId === null
@@ -57,6 +45,48 @@ export const hostQueryKeys = {
         { epicId },
       ),
       userId,
+    ] as const,
+  simulatorCatalog: (
+    hostId: string | null,
+    epicId: string,
+    userId: string | null,
+  ) =>
+    [
+      ...hostQueryKeys.method<HostRpcRegistry, "simulator.catalog.read">(
+        hostId,
+        "simulator.catalog.read",
+        { epicId },
+      ),
+      userId,
+    ] as const,
+  /**
+   * One machine's simulator devices and instances, as the palette and the
+   * mobile switcher list them across several machines at once.
+   *
+   * Under the `simulator.instances` METHOD scope, not the host's alone, so the
+   * invalidations the simulator mutations already send reach this derived
+   * entry by prefix: the instance open's `onSettled`, and the power-off,
+   * shutdown, keep-running and simulators-switch `invalidateMethods` all
+   * sweep that method, with `simulator.list` - the read's other input - in
+   * the same set. Keyed under the host scope alone, the entry outlived every
+   * one of them for the 60 s freshness window.
+   *
+   * `simulatorVerbsV11` is the negotiated gate that DECIDED the cached shape:
+   * a `@1.1` host's entry holds `simulator.instances` rows, a `@1.0` host's
+   * holds the stand-in minted from its booted devices. In the key, so a
+   * renegotiation that moves the gate is a different entry rather than a
+   * reinterpretation of this one.
+   */
+  simulatorInventory: (
+    hostId: string,
+    epicId: string,
+    simulatorVerbsV11: boolean,
+  ) =>
+    [
+      ...hostQueryKeys.methodScope(hostId, "simulator.instances"),
+      "inventory",
+      epicId,
+      simulatorVerbsV11,
     ] as const,
   plainTerminals: (hostId: string, scope: PlainTerminalScope) =>
     hostQueryKeys.method<HostRpcRegistry, "terminal.plain.list">(
@@ -236,22 +266,6 @@ export const hostQueryKeys = {
       >(hostId, EPIC_TASK_CONTEXTS_METHOD, { taskIds: [...taskIds] }),
       userId,
     ] as const,
-  /**
-   * One task's title lookup for a task chip in a message: the
-   * `epic.getTaskContexts` family (so rename, pin and deletion patches reach
-   * it) under a tag of its own, because it lives for the session where the
-   * shared batches go stale and are collected. Matches `useHostQuery` with
-   * `cacheKeyIdentity: [userId, TASK_REFERENCE_LOOKUP_TAG]`.
-   */
-  taskReferenceLookup: (
-    hostId: string | null,
-    userId: string,
-    taskId: string,
-  ) =>
-    [
-      ...hostQueryKeys.epicTaskContexts(hostId, userId, [taskId]),
-      TASK_REFERENCE_LOOKUP_TAG,
-    ] as const,
 };
 
 /** Marks a task chip's own lookup apart from the shared title batches. */
@@ -298,6 +312,25 @@ export function isBrowserCatalogQueryKey(
   return (
     queryKey[0] === "host" &&
     queryKey[methodIndex] === "browser.catalog.read" &&
+    typeof params === "object" &&
+    params !== null &&
+    "epicId" in params &&
+    params.epicId === epicId &&
+    queryKey[methodIndex + 2] === userId
+  );
+}
+
+/** The same viewer/task simulator catalog may have been read through several hosts. */
+export function isSimulatorCatalogQueryKey(
+  queryKey: readonly unknown[],
+  userId: string,
+  epicId: string,
+): boolean {
+  const methodIndex = queryKey[1] === "simulator.catalog.read" ? 1 : 2;
+  const params = queryKey[methodIndex + 1];
+  return (
+    queryKey[0] === "host" &&
+    queryKey[methodIndex] === "simulator.catalog.read" &&
     typeof params === "object" &&
     params !== null &&
     "epicId" in params &&

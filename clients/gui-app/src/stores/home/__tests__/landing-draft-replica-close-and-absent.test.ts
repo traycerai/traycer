@@ -49,6 +49,7 @@ function baseDraft(
     publication: null,
     confirmedHostBlobHashes: [],
     closed: false,
+    returnedSandbox: null,
     ...overrides,
   };
 }

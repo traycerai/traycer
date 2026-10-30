@@ -79,6 +79,9 @@ import { useTerminalDisplayTitle } from "@/hooks/terminal/use-terminal-display-t
 import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 import { useEpicSessionHostClient } from "@/hooks/epic/use-epic-session-host-client";
 import { cloudRowIsViewersOwn } from "@/lib/chats/unified-chat-list";
+import { armRowNamesHeldChat } from "@/lib/chats/compose-task-chat-list";
+import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
+import { useEnvironmentArmChats } from "@/hooks/environment/use-environment-arms";
 import { useAgentRolesEnabled } from "@/hooks/runner/use-runner-feature-settings-query";
 import {
   useMaybeOpenEpicHandle,
@@ -1295,6 +1298,31 @@ export function useMaybeEpicArchivedNodeIds(): readonly string[] {
 }
 
 /**
+ * The held chats one of `cloudRows` already stands for (see
+ * {@link armRowNamesHeldChat}): a team host's chat, held as its creator's
+ * untitled stand-in until it first publishes, whose environment arm row is
+ * among the rows given. The sidebar draws that row in the stand-in's place,
+ * so one chat reads as one row with its title. Sorted, for the reason
+ * {@link useEpicChatIds} gives.
+ */
+export function useEpicChatIdsNamedByCloudRows(
+  cloudRows: readonly CloudChatSummary[],
+): ReadonlyArray<string> {
+  return useEpicStore(
+    useShallow((s): ReadonlyArray<string> => {
+      if (cloudRows.length === 0) return EMPTY_TREE_ID_ARRAY;
+      const ids: string[] = [];
+      for (const row of cloudRows) {
+        const { chatId } = row.identity;
+        if (!Object.hasOwn(s.chats.byId, chatId)) continue;
+        if (armRowNamesHeldChat(row, s.chats.byId[chatId])) ids.push(chatId);
+      }
+      return ids.length === 0 ? EMPTY_TREE_ID_ARRAY : ids.sort();
+    }),
+  );
+}
+
+/**
  * Every chat id this epic's projection holds, nested ones included.
  *
  * The dedup set for the cloud-chat section: a chat the LOCAL tree already
@@ -1879,32 +1907,6 @@ function liveArtifactTitleFromHandle(
   return null;
 }
 
-/**
- * Canonical display title for a canvas tile / node. Live state is the single
- * source of truth - the projected record title for record-backed nodes, the
- * HOST's `terminal.list` rows for terminal tabs (via `useTerminalDisplayTitle`,
- * keyed by the tab's bound host + session id). The tile's persisted `name`
- * snapshot is only a fallback for tiles that have no live title (workspace
- * files, git diff, pre-hydration, a terminal session the host no longer
- * knows). Every render site (visible tab strip, drag overlay, ...) MUST read
- * through this hook - never the raw `node.name` - so the resolve cannot be
- * forgotten in one place.
- *
- * A chat tab whose record the projection does not hold at all reads the cloud
- * chat list next, before the snapshot. The sidebar renders exactly such a chat
- * as a cloud-list row carrying the cloud title, so without this arm the two
- * surfaces disagree for as long as the record plane lags: the serving host's
- * replica inbox starts empty after a restart and fills by reconciliation, and
- * through that window a tile opened before its title was generated announced
- * "Untitled agent" beside a sidebar row with the real name. The list is read
- * on the Epic SESSION's client, the same one the sidebar fetches it on, so the
- * TanStack cache is shared rather than split by host.
- *
- * `terminalHostClient` is the tab's bound-host client for terminal nodes
- * (`null` for every other node kind). The caller resolves it so one
- * `useHostClientForHostId` per tab serves both title resolution and the
- * rename mutation.
- */
 type EpicTabDisplayTitleNode = {
   readonly id: string;
   readonly name: string;
@@ -1969,6 +1971,102 @@ function useCloudChatTitleForAbsentRecord(
   return title !== null && title.length > 0 ? title : null;
 }
 
+/** What the projection holds of a chat, as far as {@link useArmChatTitle} asks. */
+type ArmTitleHeld =
+  | { readonly kind: "titled" }
+  | { readonly kind: "absent" }
+  | {
+      readonly kind: "untitled";
+      readonly hostId: string | null;
+      readonly userId: string | null;
+    };
+
+const ARM_TITLE_HELD_TITLED: ArmTitleHeld = { kind: "titled" };
+const ARM_TITLE_HELD_ABSENT: ArmTitleHeld = { kind: "absent" };
+
+/**
+ * The environment arm's title for a team host's chat the projection has no
+ * title for, else `null`. A team host keys the chat it creates by its
+ * environment, so the creator's projection never receives its record: it holds
+ * an untitled stand-in until the chat first publishes, and nothing after that.
+ * The arm row is the one copy that carries the generated title throughout.
+ *
+ * Only an ARM row is read, never a viewer-list row: a record's own untitled
+ * answer is not overridden by its own cloud row, and a collaborator's row is
+ * not taken (see {@link useCloudChatTitleForAbsentRecord}). Every match is on
+ * the tab's bound host: an absent record, or one held on another host, matches
+ * the row by `(chatId, bound host)`, the pair a host mints; a held stand-in
+ * matches through {@link armRowNamesHeldChat}.
+ */
+function useArmChatTitle(
+  epicId: string,
+  chatId: string | null,
+  boundHostId: string | null,
+): string | null {
+  const hostId = boundHostId === UNKNOWN_HOST_PLACEHOLDER ? null : boundHostId;
+  const held = useEpicStore(
+    useShallow((s): ArmTitleHeld => {
+      if (chatId === null) return ARM_TITLE_HELD_TITLED;
+      if (!Object.hasOwn(s.chats.byId, chatId)) return ARM_TITLE_HELD_ABSENT;
+      const chat = s.chats.byId[chatId];
+      // A record on another host than the tab's is another chat with the same
+      // host-minted id (the isolation `tabMatchesProjectedHost` keeps), so for
+      // this tab the projection holds nothing.
+      if (hostId !== null && chat.hostId !== null && chat.hostId !== hostId) {
+        return ARM_TITLE_HELD_ABSENT;
+      }
+      if (chat.title.length > 0) return ARM_TITLE_HELD_TITLED;
+      return { kind: "untitled", hostId: chat.hostId, userId: chat.userId };
+    }),
+  );
+  const armChats = useEnvironmentArmChats(
+    chatId === null || held.kind === "titled" ? "" : epicId,
+  );
+  if (chatId === null || held.kind === "titled") return null;
+  const row = armChats.find((candidate) => {
+    if (held.kind === "untitled") {
+      return armRowNamesHeldChat(candidate, {
+        id: chatId,
+        hostId: hostId ?? held.hostId,
+        userId: held.userId,
+      });
+    }
+    return (
+      hostId !== null &&
+      candidate.identity.chatId === chatId &&
+      candidate.ownerHostId === hostId
+    );
+  });
+  const title = row?.title ?? null;
+  return title !== null && title.length > 0 ? title : null;
+}
+
+/**
+ * Canonical display title for a canvas tile / node. Live state is the single
+ * source of truth - the projected record title for record-backed nodes, the
+ * HOST's `terminal.list` rows for terminal tabs (via `useTerminalDisplayTitle`,
+ * keyed by the tab's bound host + session id). The tile's persisted `name`
+ * snapshot is only a fallback for tiles that have no live title (workspace
+ * files, git diff, pre-hydration, a terminal session the host no longer
+ * knows). Every render site (visible tab strip, drag overlay, ...) MUST read
+ * through this hook - never the raw `node.name` - so the resolve cannot be
+ * forgotten in one place.
+ *
+ * A chat tab whose record the projection does not hold at all reads the cloud
+ * chat list next, before the snapshot. The sidebar renders exactly such a chat
+ * as a cloud-list row carrying the cloud title, so without this arm the two
+ * surfaces disagree for as long as the record plane lags: the serving host's
+ * replica inbox starts empty after a restart and fills by reconciliation, and
+ * through that window a tile opened before its title was generated announced
+ * "Untitled agent" beside a sidebar row with the real name. The list is read
+ * on the Epic SESSION's client, the same one the sidebar fetches it on, so the
+ * TanStack cache is shared rather than split by host.
+ *
+ * `terminalHostClient` is the tab's bound-host client for terminal nodes
+ * (`null` for every other node kind). The caller resolves it so one
+ * `useHostClientForHostId` per tab serves both title resolution and the
+ * rename mutation.
+ */
 export function useEpicTabDisplayTitle(
   node: EpicTabDisplayTitleNode,
   epicId: string,
@@ -1980,6 +2078,11 @@ export function useEpicTabDisplayTitle(
     matchesProjection ? node.id : null,
   );
   const cloudChatTitle = useCloudChatTitleForAbsentRecord(node, epicId);
+  const armChatTitle = useArmChatTitle(
+    epicId,
+    node.type === "chat" ? node.id : null,
+    node.hostId,
+  );
   const isTerminal = node.type === "terminal";
   const liveTerminalTitle = useTerminalDisplayTitle(
     {
@@ -1993,6 +2096,7 @@ export function useEpicTabDisplayTitle(
   return (
     liveArtifactTitle ??
     cloudChatTitle ??
+    armChatTitle ??
     liveTerminalTitle ??
     liveManagedCommandTitle ??
     node.name
@@ -2021,10 +2125,18 @@ function useManagedCommandOutputTitle(
   return managedCommand === null ? null : managedCommandTitle(managedCommand);
 }
 
+/**
+ * Whether a chat tab's title is still being generated. `epicId` and
+ * `boundHostId` name the tab's task and host, so a team host's chat, whose
+ * title reaches this client only on the environment arm's row, stops spinning
+ * when that title arrives rather than at the backstop.
+ */
 export function useEpicLiveArtifactTitleGenerating(
   artifactId: string | null,
+  epicId: string,
+  boundHostId: string | null,
 ): boolean {
-  const currentTitle = useEpicStore((s) => {
+  const projectedTitle = useEpicStore((s) => {
     if (artifactId === null) return null;
     if (Object.hasOwn(s.chats.byId, artifactId)) {
       const chat = s.chats.byId[artifactId];
@@ -2032,6 +2144,8 @@ export function useEpicLiveArtifactTitleGenerating(
     }
     return null;
   });
+  const armTitle = useArmChatTitle(epicId, artifactId, boundHostId);
+  const currentTitle = projectedTitle ?? armTitle;
   const currentUpdatedAt = useEpicStore((s) => {
     if (artifactId === null) return null;
     if (Object.hasOwn(s.chats.byId, artifactId)) {

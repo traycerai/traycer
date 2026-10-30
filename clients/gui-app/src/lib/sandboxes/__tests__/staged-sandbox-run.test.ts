@@ -859,6 +859,31 @@ describe("runStagedSandbox on a resting sandbox", () => {
     );
   });
 
+  it("keeps the pot a refused wake was checked against, so the line can name it", async () => {
+    useStagedSandboxStore.getState().stage(surfaceKey, {
+      ...RESTING,
+      configuration: { kind: "team", teamId: "team-acme", teamName: "Acme" },
+    });
+    const { deps } = harness({}, false);
+
+    await run(false, {
+      ...deps,
+      wake: () =>
+        Promise.resolve({
+          kind: "credit-gate",
+          shortfallMc: 120,
+          creditSource: "team-allowance",
+          burnMcPerHour: null,
+        }),
+    });
+
+    expect(stageOf().failure).toEqual({
+      kind: "credits",
+      shortfallMc: 120,
+      creditSource: "team-allowance",
+    });
+  });
+
   it("wakes a New sandbox that was already created after a failed wake instead of creating it again", async () => {
     const store = useStagedSandboxStore.getState();
     store.stage(surfaceKey, PERSONAL_NEW);

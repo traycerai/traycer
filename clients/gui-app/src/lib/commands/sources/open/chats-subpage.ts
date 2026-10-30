@@ -29,6 +29,7 @@ import {
 } from "@/lib/commands/sources/open/use-active-epic-projection";
 import type { OpenerInterfaceItems } from "@/lib/commands/sources/open/agents-subpage";
 import type { CommandContext } from "@/lib/commands/types";
+import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
 
 export function useChatsOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
   // The host serving the active epic's projection: the fallback a chat with
@@ -98,11 +99,10 @@ export function useChatsOpenerItems(ctx: CommandContext): OpenerInterfaceItems {
   }, [ctx, projection, activeHostId, defaultHostId, hostLabelById]);
 }
 
-/** Falls back to the raw hostId when the directory has no (or a blank) label for it. */
+/** "the host" when the directory has no (or a blank) label for it - never its id. */
 function chatHostBadgeLabel(
   hostLabelById: ReadonlyMap<string, string>,
   hostId: string,
 ): string {
-  const label = hostLabelById.get(hostId);
-  return label !== undefined && label.length > 0 ? label : hostId;
+  return hostNameFromLabel(hostLabelById.get(hostId) ?? null, hostId);
 }

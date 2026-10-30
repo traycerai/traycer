@@ -9,7 +9,7 @@ export type TeamRole = "admin" | "editor" | "viewer";
 /** `null` is an accepted member on a host that has not yet filled inviteState. */
 export type MemberInviteState = "accepted" | "pending" | null;
 
-export type MemberRemovalState = "none" | "pending" | "done";
+export type MemberRemovalState = "none" | "pending";
 
 /**
  * `failed` is this client's own: the request got no answer (it was refused

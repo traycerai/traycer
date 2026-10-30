@@ -499,17 +499,15 @@ describe("<SandboxCard /> team destroy", () => {
     fireEvent.click(screen.getByTestId("sandbox-card-destroy"));
   }
 
-  it("asks for the typed name on a team card, and says it ends others' sessions", async () => {
+  it("asks for the typed name on a team card, naming no other members it has no list for", async () => {
     renderCard(sandboxOf("suspended", false, { environmentId: ENV }), true);
     openDestroy();
 
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
     expect(dialog.textContent).toContain(
-      "Destroying ends every running session, including other members' running agents.",
+      "Destroying ends every running session. The disk",
     );
-    expect(dialog.textContent).toContain(
-      "Affected members are told who destroyed it.",
-    );
+    expect(dialog.textContent).not.toContain("told who destroyed it");
     expect(screen.getByTestId("sandbox-confirm-destroy-typed")).toBeDefined();
     expect(screen.getByTestId("confirm-action").hasAttribute("disabled")).toBe(
       true,
@@ -552,9 +550,7 @@ describe("<SandboxCard /> team destroy", () => {
     openDestroy();
     const dialog = await screen.findByTestId("confirm-destructive-dialog");
     expect(screen.getByTestId("sandbox-confirm-destroy-typed")).toBeDefined();
-    expect(dialog.textContent).toContain(
-      "Affected members are told who destroyed it.",
-    );
+    expect(dialog.textContent).not.toContain("told who destroyed it");
   });
 
   it("asks for the name on a personal card as well, without the team sentences", async () => {

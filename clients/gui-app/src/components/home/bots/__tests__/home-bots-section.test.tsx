@@ -29,9 +29,16 @@ import type {
   EnvironmentDescriptor,
   EnvironmentHostRecord,
 } from "@traycer/protocol/host/environment/contracts";
+import type { TeamSetup } from "@/hooks/bots/use-team-setups";
+
+/** What a scripted `bot.onboarding.read` answers for one environment. */
+type OnboardingScript =
+  | { setup: { botId: string; title: string } | null }
+  | "fails";
 
 const mocks = vi.hoisted(() => {
   const initialSupport = (): boolean | null => true;
+  const initialOnboardingReads = (): Record<string, OnboardingScript> => ({});
   const hostClient = { stub: "host-client" };
   const environmentRefetch = vi.fn(() => Promise.resolve());
   const botRefetch = vi.fn(() => Promise.resolve());
@@ -66,10 +73,22 @@ const mocks = vi.hoisted(() => {
       connectableResolved: true,
       hostListSupport: true,
       hostLists: new Map<string, ReadonlyArray<EnvironmentHostRecord>>(),
+      /** Whether the host advertises `bot.onboarding.read`. */
+      onboardingSupport: initialSupport(),
+      /** The line the host negotiated for `bot.onboarding.read`. */
+      onboardingVersion: { major: 1, minor: 1 },
+      /** What `bot.onboarding.read` answers per environment id; absent is pending. */
+      onboardingReads: initialOnboardingReads(),
     },
+    /** Each `bot.onboarding.read` batch the section asked for, in order. */
+    onboardingReadCalls: [] as Array<{
+      environmentIds: string[];
+      enabled: boolean;
+    }>,
     groupProps: [] as Array<{
       environmentId: string;
       mainBotId: string | null;
+      setup: TeamSetup | null;
       directoryHostIds: ReadonlySet<string>;
       connectableHostIds: ReadonlySet<string>;
       connectableResolved: boolean;
@@ -109,6 +128,38 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (hostId: string | null, method: string) =>
     mocks.useHostMethodSupport(hostId, method),
+  useHostMethodSchemaVersion: () => mocks.state.onboardingVersion,
+}));
+// The host RPC boundary for `bot.onboarding.read`: it answers what the test
+// scripted, and a query that is not enabled reads as pending, as TanStack's
+// does.
+vi.mock("@/hooks/host/use-host-queries", () => ({
+  useHostQueries: (args: {
+    requests: ReadonlyArray<{ params: { environmentId: string } }>;
+    options: { enabled?: boolean } | null;
+  }) => {
+    const enabled = args.options?.enabled === true;
+    mocks.onboardingReadCalls.push({
+      environmentIds: args.requests.map(
+        (request) => request.params.environmentId,
+      ),
+      enabled,
+    });
+    return args.requests.map((request) => {
+      const script = enabled
+        ? mocks.state.onboardingReads[request.params.environmentId]
+        : undefined;
+      const pending = {
+        status: "pending",
+        data: undefined,
+        dataUpdatedAt: 0,
+        refetch: vi.fn(),
+      };
+      if (script === undefined) return pending;
+      if (script === "fails") return { ...pending, status: "error" };
+      return { ...pending, status: "success", data: script, dataUpdatedAt: 1 };
+    });
+  },
 }));
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
   useHostDirectoryList: () => ({ data: mocks.state.directory }),
@@ -163,10 +214,12 @@ vi.mock("@/components/home/bots/home-bots-group", () => ({
       personalHostIds: ReadonlySet<string> | null;
     };
     environmentHostIds: ReadonlySet<string> | null;
+    setup: TeamSetup | null;
   }) => {
     mocks.groupProps.push({
       environmentId: props.group.environmentId,
       mainBotId: props.group.mainBotId,
+      setup: props.setup,
       directoryHostIds: props.hostReach.directoryHostIds,
       connectableHostIds: props.hostReach.connectableHostIds,
       connectableResolved: props.hostReach.connectableResolved,
@@ -277,12 +330,16 @@ beforeEach(() => {
   mocks.state.connectableResolved = true;
   mocks.state.hostListSupport = true;
   mocks.state.hostLists = new Map();
+  mocks.state.onboardingSupport = true;
+  mocks.state.onboardingVersion = { major: 1, minor: 1 };
+  mocks.state.onboardingReads = {};
+  mocks.onboardingReadCalls.length = 0;
   mocks.groupProps.length = 0;
-  mocks.useHostMethodSupport.mockImplementation((_hostId, method) =>
-    method === "environment.host.list"
-      ? mocks.state.hostListSupport
-      : mocks.state.support,
-  );
+  mocks.useHostMethodSupport.mockImplementation((_hostId, method) => {
+    if (method === "environment.host.list") return mocks.state.hostListSupport;
+    if (method === "bot.onboarding.read") return mocks.state.onboardingSupport;
+    return mocks.state.support;
+  });
   mocks.useEnvironmentHostLists.mockImplementation(() => ({
     hostsByEnvironmentId: mocks.state.hostLists,
     failedEnvironmentIds: new Set<string>(),
@@ -620,6 +677,98 @@ describe("HomeBotsSection what each group is told", () => {
     for (const call of mocks.useEnvironmentHostLists.mock.calls) {
       expect(call[2]).toBe(false);
     }
+  });
+});
+
+/**
+ * The main bot a bot-less team still has to set up: read from
+ * `bot.onboarding.read` for a creatable team with no live bot, on a host that
+ * answers it at 1.1 or later, and handed to that team's group alone.
+ */
+describe("HomeBotsSection team setup", () => {
+  const SETUP = { botId: "bot-tracy-env-team", title: "Tracy" };
+
+  /** The personal environment holds a bot; the team holds none. */
+  function resolveWithBotlessTeam(): void {
+    mocks.state.environments.data = { environments: [PERSONAL, TEAM] };
+    mocks.state.bots.data = {
+      bots: [
+        bot("bot_01ARZ3NDEKTSV4RRFFQ69G5FAW", "env-personal", "Triage Bot"),
+      ],
+      mainBotIds: null,
+    };
+  }
+
+  function requestedEnvironmentIds(): string[] {
+    return mocks.onboardingReadCalls.flatMap((call) => call.environmentIds);
+  }
+
+  it("hands a bot-less team the main bot its onboarding names, and the personal group none", () => {
+    resolveWithBotlessTeam();
+    mocks.state.onboardingReads = { "env-team": { setup: SETUP } };
+    mountSection();
+
+    expect(latestGroupProps("env-team").setup).toEqual({
+      environmentId: "env-team",
+      teamName: "acme",
+      botId: SETUP.botId,
+      title: SETUP.title,
+    });
+    expect(latestGroupProps("env-personal").setup).toBeNull();
+  });
+
+  it.each([
+    {
+      cause: "the host lacks bot.onboarding.read",
+      apply: () => {
+        mocks.state.onboardingSupport = false;
+      },
+    },
+    {
+      cause: "the host answers bot.onboarding.read at 1.0",
+      apply: () => {
+        mocks.state.onboardingVersion = { major: 1, minor: 0 };
+      },
+    },
+  ])(
+    "hands every group no setup and enables no read when $cause",
+    ({ apply }) => {
+      resolveWithBotlessTeam();
+      mocks.state.onboardingReads = { "env-team": { setup: SETUP } };
+      apply();
+      mountSection();
+
+      expect(latestGroupProps("env-team").setup).toBeNull();
+      expect(latestGroupProps("env-personal").setup).toBeNull();
+      expect(mocks.onboardingReadCalls).toContainEqual({
+        environmentIds: ["env-team"],
+        enabled: false,
+      });
+      expect(mocks.onboardingReadCalls.every((call) => !call.enabled)).toBe(
+        true,
+      );
+    },
+  );
+
+  it("never reads a team that has a bot, and hands it no setup", () => {
+    resolveBothQueries();
+    mocks.state.onboardingReads = { "env-team": { setup: SETUP } };
+    mountSection();
+
+    expect(requestedEnvironmentIds()).not.toContain("env-team");
+    expect(latestGroupProps("env-team").setup).toBeNull();
+  });
+
+  it("hands a team no setup when its read fails", () => {
+    resolveWithBotlessTeam();
+    mocks.state.onboardingReads = { "env-team": "fails" };
+    mountSection();
+
+    expect(mocks.onboardingReadCalls).toContainEqual({
+      environmentIds: ["env-team"],
+      enabled: true,
+    });
+    expect(latestGroupProps("env-team").setup).toBeNull();
   });
 });
 

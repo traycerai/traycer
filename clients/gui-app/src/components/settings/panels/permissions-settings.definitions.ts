@@ -1,5 +1,9 @@
-import { alwaysAvailable } from "@/lib/settings/settings-availability";
+import {
+  alwaysAvailable,
+  neverOffered,
+} from "@/lib/settings/settings-availability";
 import { defineSettingsSection } from "@/lib/settings-search/settings-definitions";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 // No host-GATED element carries an anchor (SETTINGS.md § Search); a tab trigger
 // is not gated. The page's five tab triggers are always rendered - the tab bar
@@ -17,7 +21,10 @@ export const PERMISSIONS = defineSettingsSection("permissions", {
   page: {
     availableWhen: alwaysAvailable,
     label: "Permissions",
-    description: "What your agents may do without asking.",
+    // The page's own words off, where the policy covers this host alone.
+    description: UNRELEASED_FEATURES_ENABLED
+      ? "What your agents may do without asking."
+      : "How much an agent may do on its own, and who reviews the rest.",
     keywords: ["permissions", "approve", "approval", "ask before"],
   },
   modesTab: {
@@ -71,7 +78,8 @@ export const PERMISSIONS = defineSettingsSection("permissions", {
     label: "Browser",
     description: "Whether your agents can use Traycer's in-app browser.",
     breadcrumb: "Permissions",
-    availableWhen: alwaysAvailable,
+    // No such tab in a build without environments (`PERMISSIONS_TABS`).
+    availableWhen: UNRELEASED_FEATURES_ENABLED ? alwaysAvailable : neverOffered,
     keywords: [
       "browser agent access",
       "browser",
@@ -207,8 +215,7 @@ export const PERMISSIONS = defineSettingsSection("permissions", {
   },
 });
 
-/** The page's tabs, in order. The open intent's `tab` names one of these. */
-export const PERMISSIONS_TABS = [
+const EVERY_PERMISSIONS_TAB = [
   "modes",
   "judge",
   "rules",
@@ -216,7 +223,17 @@ export const PERMISSIONS_TABS = [
   "browser",
 ] as const;
 
-export type PermissionsTab = (typeof PERMISSIONS_TABS)[number];
+export type PermissionsTab = (typeof EVERY_PERMISSIONS_TAB)[number];
+
+/**
+ * The page's tabs, in order. The open intent's `tab` names one of these. A
+ * build without environments (`unreleased-features.ts`) has no Browser tab:
+ * the switch is a row of Settings > Browser there, as before environments.
+ */
+export const PERMISSIONS_TABS: readonly PermissionsTab[] =
+  UNRELEASED_FEATURES_ENABLED
+    ? EVERY_PERMISSIONS_TAB
+    : EVERY_PERMISSIONS_TAB.filter((tab) => tab !== "browser");
 
 export function isPermissionsTab(
   value: string | null,

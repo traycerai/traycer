@@ -162,13 +162,6 @@ vi.mock("@/components/epic-canvas/sidebar/epic-terminal-sidebar", () => ({
   TerminalsPanelBody: () => <div data-testid="epic-test-terminals-body" />,
 }));
 
-// The Simulators group under the browser rows reads its own host stream and
-// has its own suite (`epic-simulator-sidebar.test.tsx`); this one is about
-// the panels' mechanics, so the group renders nothing here.
-vi.mock("@/components/epic-canvas/sidebar/epic-simulator-sidebar", () => ({
-  SimulatorsSidebarGroup: () => null,
-}));
-
 vi.mock("@/components/epic-canvas/pr/pr-panel-body", () => ({
   PrPanelBody: () => <div data-testid="epic-test-pr-body" />,
 }));
@@ -233,6 +226,19 @@ const browserCatalogActionsState = vi.hoisted(() => ({
 vi.mock("@/hooks/browser/use-browser-catalog-actions", () => ({
   useBrowserCatalogActions: () => browserCatalogActionsState,
 }));
+
+// The Mobile simulators panel's availability reads the local host's
+// `simulator.status` and the task catalog; this suite is about the panels'
+// mechanics, so neither input is present.
+vi.mock(
+  "@/components/epic-canvas/sidebar/use-simulator-panel-availability",
+  () => ({
+    useSimulatorPanelAvailability: () => ({
+      localHostRunsSimulators: false,
+      hasSimulatorRecords: false,
+    }),
+  }),
+);
 
 const EPIC_ID = "epic-sidebar-test";
 const TAB_ID = "epic-sidebar-tab";
@@ -1243,6 +1249,7 @@ describe("<EpicLeftPanelRail />", () => {
         "Agents",
         "Terminals",
         "Browsers",
+        "Mobile simulators",
         "Artifacts",
         "Git Diff",
         "Pull Requests",

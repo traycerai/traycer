@@ -1,3 +1,4 @@
+import { formatCount } from "@/lib/format-count";
 import { SECRET_CUSTODY_SENTENCE } from "@/lib/sandboxes/secrets-page-copy";
 
 /**
@@ -31,15 +32,174 @@ export function toolCountPhrase(count: number): string {
 }
 
 /**
- * A skill's row on its configuration's Skills page: "Built-in" before the
- * providers for Traycer's own; the configuration's own carry no source word,
- * since the page already says whose skills these are.
+ * A skill's row on its configuration's Skills page: "Built-in" for Traycer's
+ * own, then its version when it has one, then the providers; the
+ * configuration's own carry no source word, since the page already says
+ * whose skills these are.
  */
 export function skillPageLine(
   origin: "bundled" | "room",
+  version: string | null,
   providers: string,
 ): string {
-  return origin === "bundled" ? `Built-in · ${providers}` : providers;
+  return [origin === "bundled" ? "Built-in" : null, version, providers]
+    .filter((part) => part !== null)
+    .join(" · ");
+}
+
+/** The update policy control's options, as the page names them. */
+export const SKILL_POLICY_LABELS = {
+  "auto-update": "Auto-update",
+  evolve: "Evolve",
+  frozen: "Frozen",
+} as const;
+
+/** What each policy does, under the page's list. */
+export const SKILL_POLICIES_LINE =
+  "Auto-update: follows upstream, cannot be edited here. Evolve: you and your agents can change it, updates wait for you. Frozen: nothing changes it.";
+
+export const SKILL_UPDATE_AVAILABLE = "Update available";
+export const SKILL_UPDATE_NOW_LABEL = "Update now";
+
+export function evolveTitle(skill: string): string {
+  return `Stop updates for ${skill}?`;
+}
+
+export function evolveDescription(skill: string): string {
+  return `You and your agents can change ${skill}. New versions stop landing on their own; Update now brings one in when you choose.`;
+}
+
+export const EVOLVE_LABEL = "Stop updates";
+
+export function autoUpdateTitle(skill: string): string {
+  return `Replace your changes to ${skill}?`;
+}
+
+export function autoUpdateDescription(skill: string): string {
+  return `${skill} follows upstream again, and your changes to it are replaced by the current version.`;
+}
+
+export const AUTO_UPDATE_LABEL = "Replace changes";
+
+export function updateTitle(skill: string): string {
+  return `Update ${skill}?`;
+}
+
+export function updateDescription(skill: string): string {
+  return `The upstream version replaces ${skill}, and your changes to it are lost.`;
+}
+
+export const DELETED_BUILT_INS_HEADING = "Deleted built-ins";
+export const RESTORE_SKILL_LABEL = "Restore";
+
+/** An edit the host refused because the skill's policy takes none. */
+export const READ_ONLY_EDIT_REFUSAL =
+  "This skill can't be edited while it's set to Auto-update or Frozen. Switch it to Evolve to edit it.";
+
+/** An open draft whose skill another editor removed meanwhile. */
+export function skillRemovedLine(configuration: string): string {
+  return `This skill was removed from ${configuration}.`;
+}
+
+/** An upload over a skill whose policy takes no edit. */
+export function readOnlyUploadRefusal(skill: string): string {
+  return `${skill} is set to Auto-update or Frozen, so it can't be replaced. Switch it to Evolve first.`;
+}
+
+/** Why a policy, update or restore write did not land, by its reason. */
+export function skillWriteRefusal(
+  reason: string | null,
+  failedLine: string,
+): string {
+  if (reason === "not_ready")
+    return "This configuration isn't ready to change these settings yet.";
+  if (reason === "policies_unreadable")
+    return "This configuration's skill update settings couldn't be read.";
+  if (reason === "no_upstream")
+    return "This skill has no source to update from.";
+  if (reason === "fetch_failed")
+    return "Couldn't reach this skill's source. Try again later.";
+  return failedLine;
+}
+
+/**
+ * Where a skill from a source came from, under its name: the source as
+ * typed, without its scheme, then the branch it follows unless it is the
+ * default one.
+ */
+export function skillUpstreamLine(source: string, ref: string): string {
+  const where = source.replace(/^[a-z+]+:\/\//i, "").replace(/\.git$/i, "");
+  return ref === "HEAD" ? `From ${where}` : `From ${where} · ${ref}`;
+}
+
+export const CHECK_SKILL_UPDATES_LABEL = "Check for updates";
+export const IMPORT_SKILL_LABEL = "Import from source";
+
+/** A source holding more skills than one import installs. */
+export function skillImportLimitLine(max: number): string {
+  return `You can import up to ${String(max)} skills at a time.`;
+}
+export const IMPORT_SKILL_TITLE = "Import skills from a source";
+export const IMPORT_SKILL_DESCRIPTION =
+  "Paste a public repository. Imported skills update from it on their own until you change their updates setting.";
+export const IMPORT_SOURCE_HINT =
+  "owner/repo, or an https link to a repository or a folder in it. An npx skills command works too.";
+
+export const SKILLS_DIRECTORY_SEARCH_LABEL = "Search skills.sh";
+
+/** Under the directory search: where results come from, and what a pick reads. */
+export const SKILLS_DIRECTORY_NOTE =
+  "Results come from a public directory. Importing reads the skill from its own repository.";
+
+export const SKILLS_DIRECTORY_NO_RESULTS = "No results";
+
+/** A directory pick the configuration already holds: nothing starts chosen. */
+export function directoryPickInstalledLine(
+  skill: string,
+  configuration: string,
+): string {
+  return `${configuration} already has ${skill}. Choose another skill from this source, or go back.`;
+}
+
+/** A directory pick its source no longer lists: nothing starts chosen. */
+export function directoryPickMissingLine(skill: string): string {
+  return `This source no longer has a skill named ${skill}. Choose from what it holds, or go back.`;
+}
+
+/** A directory result's install count, as the page counts. */
+export function skillInstallsPhrase(count: number): string {
+  return count === 1 ? "1 install" : `${formatCount(count)} installs`;
+}
+
+/** Why an import was refused, by its reason; `name` is the skill it names. */
+export function skillImportRefusal(
+  reason: string,
+  name: string | null,
+  configuration: string,
+): string {
+  const skill = name ?? "A chosen skill";
+  switch (reason) {
+    case "not_ready":
+      return "This configuration isn't ready to change these settings yet.";
+    case "invalid_source":
+      return "Only a public repository can be imported. Paste owner/repo or its https link.";
+    case "fetch_failed":
+      return "Couldn't reach this source. Check it and try again.";
+    case "expired":
+      return "This source changed since it was read. Read it again.";
+    case "not_found":
+      return `${skill} isn't in this source anymore. Read it again.`;
+    case "invalid_name":
+      return `${skill} has a name a skill can't have.`;
+    case "exists":
+      return `${configuration} already has a skill named ${skill}. Remove it first.`;
+    case "bundled_name":
+      return `${skill} is the name of a built-in skill. It can't be imported under that name.`;
+    case "too_large":
+      return "These skills are larger than 32 MB together. Import fewer at once.";
+    default:
+      return "Couldn't import from this source.";
+  }
 }
 
 /**
@@ -76,7 +236,7 @@ export function skillsPageSubtitle(personal: boolean, name: string): string {
 
 /** A built-in skill's line beside its per-provider switches. */
 export const BUILT_IN_SKILL_LINE =
-  "Comes with Traycer and can't be removed. Switch it off for any provider that shouldn't use it.";
+  "Comes with Traycer. Switch it off for any provider that shouldn't use it.";
 
 export function addServerTitle(name: string): string {
   return `Add an MCP server to ${name}`;
@@ -181,6 +341,14 @@ export function removeReach(
   return personal
     ? `This removes ${entry} from every provider on every computer and sandbox running Personal.`
     : `This removes ${entry} from every provider on every host running ${name}.`;
+}
+
+export function removeSkillReach(
+  personal: boolean,
+  name: string,
+  entry: string,
+): string {
+  return `${removeReach(personal, name, entry)} Its folder in Traycer's skills folder is deleted on each of them.`;
 }
 
 /** A removed server's secret: one added with it goes, a picked one stays. */

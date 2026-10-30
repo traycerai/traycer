@@ -19,6 +19,7 @@ import {
 } from "@/stores/notifications/merged-notifications";
 import { useNotificationsNeedsYouCount } from "@/stores/notifications/needs-you-task-count-store";
 import { formatChordForDisplay } from "@/lib/keybindings/chord";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * The badge's arrival and departure, at the `LeaderDigitBadge` values so every
@@ -226,7 +227,10 @@ function needsYouBellLabel(
   needsYou: number,
   state: NotificationBellState,
 ): string {
-  const needs = needsYou === 1 ? "1 needs" : `${needsYou} need`;
+  // Without sandbox notices the count is tasks alone, so it says so again.
+  const singular = UNRELEASED_FEATURES_ENABLED ? "1 needs" : "1 task needs";
+  const plural = UNRELEASED_FEATURES_ENABLED ? "need" : "tasks need";
+  const needs = needsYou === 1 ? singular : `${needsYou} ${plural}`;
   return state.kind === "unknown"
     ? `Notifications, ${needs} you, status unavailable`
     : `Notifications, ${needs} you`;

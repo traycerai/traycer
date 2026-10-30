@@ -755,6 +755,15 @@ export interface SimulatorTileRef {
   readonly hostId: string;
   readonly simulatorId: string;
   readonly platform: SimulatorPlatform;
+  /**
+   * The instance this tile's `simulatorId` was the id OF, as the open that
+   * placed the tile named it: the one record of that pair that outlives both
+   * reads which carry it, so a clone whose emulator has exited is still
+   * resolved as a clone rather than as the device it was named after. Null
+   * for a tile placed from a device row, for a `@1.0` host, which has no
+   * instances, and for every tile stored before this field.
+   */
+  readonly instanceKey: string | null;
 }
 
 export type EpicCanvasTileRef =

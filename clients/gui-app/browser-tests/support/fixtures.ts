@@ -1,5 +1,12 @@
 import type { LaunchOptions, Locator, Page } from "@playwright/test";
 
+declare global {
+  interface Window {
+    /** Wheel events the page has received, counted by `wheelsDelivered`. */
+    __wheelsSeen?: number;
+  }
+}
+
 /**
  * The URL path of a fixture page in `src/__tests__/browser/`, relative to the
  * shared Vite server `playwright.config.ts` starts (its `baseURL`).
@@ -56,6 +63,66 @@ export async function nextFrames(page: Page, count: number): Promise<void> {
       requestAnimationFrame(tick);
     });
   }, count);
+}
+
+/** Far beyond a delivered wheel's latency on a loaded runner: a wheel that
+ *  has not arrived by then never will, and the test says why instead of
+ *  waiting out its own timeout. */
+const WHEEL_DELIVERY_TIMEOUT_MS = 10_000;
+
+export interface WheelDelta {
+  readonly deltaX: number;
+  readonly deltaY: number;
+}
+
+/**
+ * Sends `deltas` as wheel input at the mouse's position, `gapFrames` frames
+ * apart (0: back to back), and resolves once the page has received every one
+ * of them, in an animation frame after the last - when the main thread holds
+ * the scroll offset they produced. `page.mouse.wheel` resolves as soon as the
+ * input is queued, and on a loaded runner a page task sent next (a read, a
+ * hide, a click) can run before the wheel lands: a test that reads a position
+ * after wheeling, or acts on the view the wheel left, sends the wheel through
+ * here. The gaps count from each send, as a burst of bare `page.mouse.wheel`
+ * calls would, so a burst keeps its cadence and waits once, at its end.
+ */
+export async function wheelsDelivered(
+  page: Page,
+  deltas: readonly WheelDelta[],
+  gapFrames: number,
+): Promise<void> {
+  const before = await page.evaluate(() => {
+    if (window.__wheelsSeen === undefined) {
+      window.__wheelsSeen = 0;
+      window.addEventListener(
+        "wheel",
+        () => {
+          window.__wheelsSeen = (window.__wheelsSeen ?? 0) + 1;
+        },
+        { capture: true, passive: true },
+      );
+    }
+    return window.__wheelsSeen;
+  });
+  for (const [index, { deltaX, deltaY }] of deltas.entries()) {
+    if (index > 0 && gapFrames > 0) await nextFrames(page, gapFrames);
+    await page.mouse.wheel(deltaX, deltaY);
+  }
+  const expected = before + deltas.length;
+  try {
+    await page.waitForFunction(
+      (count) => (window.__wheelsSeen ?? 0) >= count,
+      expected,
+      { polling: "raf", timeout: WHEEL_DELIVERY_TIMEOUT_MS },
+    );
+  } catch (error) {
+    const seen = await page.evaluate(() => window.__wheelsSeen ?? 0);
+    throw new Error(
+      `wheelsDelivered: the page received ${String(seen - before)} of ${String(deltas.length)} wheel events in ${String(WHEEL_DELIVERY_TIMEOUT_MS)}ms. ` +
+        "A wheel at a point outside the viewport reaches no page: move the mouse onto the visible part of the element first.",
+      { cause: error },
+    );
+  }
 }
 
 /**

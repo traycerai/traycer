@@ -55,6 +55,21 @@ export function botMemberName(
 }
 
 /**
+ * A member a bot's Activity page names as the one who paused, stopped or ran
+ * something (T92): as {@link botMemberName}, but "a member" where the
+ * directory names no one, a member who has left included, never their id.
+ */
+export function botActivityMemberName(
+  userId: string,
+  viewer: SenderDisplayContext["profile"],
+  resolveMember: BotMemberResolver,
+): string {
+  if (viewer?.userId === userId)
+    return botMemberName(userId, viewer, resolveMember);
+  return resolveMember(userId)?.displayName ?? "a member";
+}
+
+/**
  * A user row's sender picture in a bot chat, the viewer's included; null
  * for an agent sender and for a member the directory has no picture of.
  */

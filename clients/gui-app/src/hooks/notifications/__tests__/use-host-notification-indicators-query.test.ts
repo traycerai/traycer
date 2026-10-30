@@ -1,6 +1,6 @@
 import { createElement, type ReactNode } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
@@ -390,6 +390,7 @@ describe("useHostNotificationIndicators across crossed chunks", () => {
       readonly epicIds: ReadonlyArray<string>;
       readonly chatIds: ReadonlyArray<string>;
     }> = [];
+    let issuedRequestIds = 0;
     const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: createHostQueryInvalidator(queryClient),
@@ -397,7 +398,7 @@ describe("useHostNotificationIndicators across crossed chunks", () => {
         hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
       messenger: new MockHostMessenger<HostRpcRegistry>({
         registry: hostRpcRegistry,
-        requestId: () => `request-${requests.length}`,
+        requestId: () => `request-${issuedRequestIds++}`,
         handlers: {
           "host.notifications.indicatorState": (params) => {
             requests.push({
@@ -446,8 +447,11 @@ describe("useHostNotificationIndicators across crossed chunks", () => {
         }),
       { wrapper },
     );
-    await act(async () => {
-      await flushQueryNotifications();
+    await waitFor(() => {
+      expect(result.current.isPending).toBe(false);
+      expect(Object.keys(result.current.data.chats)).toHaveLength(
+        chatIds.length,
+      );
     });
 
     expect(requests).toHaveLength(2);
@@ -472,6 +476,16 @@ describe("useHostNotificationIndicators across crossed chunks", () => {
       (_value, index) => `chat-${String(index).padStart(4, "0")}`,
     );
     const lastChatId = chatIds[chatIds.length - 1];
+    const answeredChatId = chatIds[0];
+    const answeredState: HostNotificationsIndicatorState = {
+      unreadFailure: false,
+      pendingFork: false,
+      pendingApproval: false,
+      pendingInterview: false,
+      unreadDone: true,
+      unreadCount: 3,
+    };
+    let issuedRequestIds = 0;
     const spine = new HostClient<HostRpcRegistry>({
       registry: hostRpcRegistry,
       invalidator: createHostQueryInvalidator(queryClient),
@@ -479,7 +493,7 @@ describe("useHostNotificationIndicators across crossed chunks", () => {
         hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
       messenger: new MockHostMessenger<HostRpcRegistry>({
         registry: hostRpcRegistry,
-        requestId: () => `request-${chatIds.length}`,
+        requestId: () => `request-${issuedRequestIds++}`,
         handlers: {
           "host.notifications.indicatorState": (params) =>
             // The chunk holding the last id never answers.
@@ -489,7 +503,7 @@ describe("useHostNotificationIndicators across crossed chunks", () => {
                 )
               : {
                   epics: {},
-                  chats: {},
+                  chats: { [answeredChatId]: answeredState },
                   complete: true,
                 },
         },
@@ -519,8 +533,10 @@ describe("useHostNotificationIndicators across crossed chunks", () => {
         }),
       { wrapper },
     );
-    await act(async () => {
-      await flushQueryNotifications();
+    // The answering chunk's indicator reaching the combined result shows its
+    // answer was combined before the other chunk is judged to be missing.
+    await waitFor(() => {
+      expect(result.current.data.chats[answeredChatId]).toEqual(answeredState);
     });
 
     // One chunk said "my origin, whole" and the other has said nothing: the

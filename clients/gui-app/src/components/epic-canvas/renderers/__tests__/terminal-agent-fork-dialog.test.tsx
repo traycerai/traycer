@@ -39,6 +39,11 @@ const dialogMocks = vi.hoisted(() => ({
   validateMutateAsync: vi.fn().mockResolvedValue({ verdicts: [] }),
 }));
 
+// The cloud's Traycer catalog, read only for a Traycer pick sent to a sandbox.
+vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
+  useSandboxTraycerModels: () => ({ data: undefined }),
+}));
+
 vi.mock("@/hooks/agent/use-create-tui-agent", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/hooks/agent/use-create-tui-agent")>();

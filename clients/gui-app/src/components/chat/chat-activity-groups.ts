@@ -7,7 +7,6 @@ import {
   toolUseIdFromInterviewBlockId,
 } from "@traycer/protocol/host/agent/gui/interview-tools";
 import { filePathFromInputDetail } from "@/lib/segment-summary";
-import { formatClockDuration } from "@/lib/format-duration";
 import type {
   ApprovalSegment,
   CommandSegment,
@@ -17,6 +16,7 @@ import type {
   SubagentSegment,
   ToolSegment,
 } from "@/stores/composer/chat-store";
+import { isBotSendToolName } from "@/lib/bots/bot-send-tool";
 import {
   deriveActivityGroupRenderId,
   derivePromotedSubagentRenderId,
@@ -28,6 +28,12 @@ import {
   normalizedToolName,
   toolCallActivityLabel,
 } from "@traycer/protocol/host/agent/gui/activity-step-label";
+import {
+  activitySummaryOf,
+  isMemoryUpdateToolCall,
+  thoughtClockDuration,
+  type ActivitySummaryStep,
+} from "@traycer/protocol/host/agent/gui/activity-summary";
 import type { ToolCallMcpAppStamp } from "@traycer/protocol/persistence/epic/content-blocks";
 
 export type ActivitySegment =
@@ -80,60 +86,6 @@ export type ChatActivityTimelineItem =
       readonly segment: SubagentSegment;
     };
 
-interface ActivitySummaryCounts {
-  // Summed duration of every completed reasoning block folded into the group.
-  thinkingDurationMs: number;
-  // The group contains reasoning AT ALL. Tracked separately from the duration
-  // because a completed block can legitimately have none: `completedDurationMs`
-  // returns null when the block carries no `startedAt` (persisted history), and
-  // 0 when it started and finished inside the same millisecond. Without this,
-  // both summed to 0 and the summary fell through to the generic "Ran activity"
-  // - losing the "Thought" line the block used to render for itself.
-  thinkingPresent: boolean;
-  // At least one reasoning block reported a duration. Distinguishes the two
-  // ways `thinkingDurationMs` stays 0: a same-millisecond block (a real
-  // measurement, which the child renders as "Thought for 1s") from persisted
-  // history with no `startedAt` at all (no measurement, "Thought"). Summing
-  // alone cannot tell them apart, and the child's own formatter can - which is
-  // how the group header and the block it stands in for came to disagree.
-  thinkingDurationKnown: boolean;
-  // At least one FINISHED block contributed nothing to the sum, so
-  // `thinkingDurationMs` is a floor rather than a total. A block is finished
-  // with no duration when it was interrupted, superseded or errored (its
-  // timestamp is the turn-end, not the real finish) or when it predates
-  // `startedAt` - see `completedDurationMs`.
-  //
-  // The clause marks this with a trailing "+" instead of dropping the number.
-  // Dropping it is what a plain "all durations known" check would do, and that
-  // walks the label BACKWARDS - `thought for 5s` -> `thought` the moment an
-  // interrupted block joins a run that had already measured one. That reverse
-  // step is the exact defect `thinkingCompleted` exists to prevent, and it is
-  // reachable live, not just in history. A floor only ever grows.
-  thinkingDurationPartial: boolean;
-  // At least one reasoning block has finished. Once that is true the clause
-  // says "thought", never "thinking", however many new blocks start streaming -
-  // the header describes the whole run, and a run that has already thought does
-  // not stop having done so.
-  thinkingCompleted: boolean;
-  exploredFiles: number;
-  readFiles: number;
-  searched: number;
-  // Distinct edited-file keys (path when extractable, else the tool-use id).
-  // Mutated in place across the single counting pass - the accumulator is built
-  // fresh per `activityGroupSummary` call (see `createEmptyCounts`) and never
-  // shared, so this avoids the O(n^2) full-Set copy a per-add clone would cost.
-  readonly editedFiles: Set<string>;
-  ranCommands: number;
-  ranHooks: number;
-  browsed: number;
-  spawnedSubagents: number;
-  approved: number;
-  denied: number;
-  usedTools: number;
-  monitorUpdates: number;
-  shellUpdates: number;
-}
-
 const EMPTY_QUESTION_TOOL_IDS: ReadonlySet<string> = new Set();
 const EMPTY_PROMOTED_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
 
@@ -172,29 +124,6 @@ const hiddenReasoningTimelineCache = new WeakMap<
   ReadonlyArray<MessageSegment>,
   TimelineCacheEntry
 >();
-
-function createEmptyCounts(): ActivitySummaryCounts {
-  return {
-    thinkingDurationMs: 0,
-    thinkingPresent: false,
-    thinkingDurationKnown: false,
-    thinkingDurationPartial: false,
-    thinkingCompleted: false,
-    exploredFiles: 0,
-    readFiles: 0,
-    searched: 0,
-    editedFiles: new Set(),
-    ranCommands: 0,
-    ranHooks: 0,
-    browsed: 0,
-    spawnedSubagents: 0,
-    approved: 0,
-    denied: 0,
-    usedTools: 0,
-    monitorUpdates: 0,
-    shellUpdates: 0,
-  };
-}
 
 export function buildChatActivityTimeline(
   segments: ReadonlyArray<MessageSegment>,
@@ -348,31 +277,53 @@ function buildChatActivityTimelineImpl(
 export function activityGroupSummary(
   segments: ReadonlyArray<ActivityGroupDetailSegment>,
 ): string {
-  const counts = createEmptyCounts();
-  segments.forEach((segment) => countActivitySegment(counts, segment));
-  const parts = [
-    thinkingPhrase(counts),
-    countPhrase(counts.exploredFiles, "explored", "file", "files"),
-    countPhrase(counts.readFiles, "read", "file", "files"),
-    countPhrase(counts.searched, "searched", "place", "places"),
-    countPhrase(counts.editedFiles.size, "edited", "file", "files"),
-    countPhrase(counts.ranCommands, "ran", "command", "commands"),
-    countPhrase(counts.ranHooks, "ran", "hook", "hooks"),
-    countPhrase(counts.browsed, "browsed", "page", "pages"),
-    countPhrase(counts.spawnedSubagents, "spawned", "subagent", "subagents"),
-    countPhrase(counts.approved, "approved", "request", "requests"),
-    countPhrase(counts.denied, "denied", "request", "requests"),
-    countPhrase(counts.usedTools, "used", "tool", "tools"),
-    counts.monitorUpdates > 0
-      ? `${counts.monitorUpdates} monitor ${counts.monitorUpdates === 1 ? "update" : "updates"}`
-      : null,
-    counts.shellUpdates > 0
-      ? `${counts.shellUpdates} shell ${counts.shellUpdates === 1 ? "update" : "updates"}`
-      : null,
-  ].filter((part): part is string => part !== null);
+  return activitySummaryOf(segments.flatMap(activitySummaryStepsOf));
+}
 
-  if (parts.length === 0) return "Ran activity";
-  return capitalizeFirst(parts.join(", "));
+/** What one segment adds to its group's label (the shared rule, `activitySummaryOf`). */
+function activitySummaryStepsOf(
+  segment: ActivityGroupDetailSegment,
+): ActivitySummaryStep[] {
+  switch (segment.kind) {
+    case "autonomous_resume":
+      return segment.triggers.map((trigger) =>
+        trigger.managedCommand?.monitoring === false
+          ? { kind: "shell_update" }
+          : { kind: "monitor_update" },
+      );
+    case "reasoning":
+      return [
+        {
+          kind: "reasoning",
+          streaming: segment.isStreaming,
+          durationMs: segment.durationMs,
+        },
+      ];
+    case "command":
+      return [{ kind: "command" }];
+    case "file_change":
+      return [{ kind: "file_change", filePath: segment.filePath }];
+    case "subagent":
+      return [{ kind: "subagent" }];
+    case "approval":
+      return [
+        { kind: "approval", approved: segment.decision?.approved === true },
+      ];
+    case "tool":
+      return [
+        isMemoryUpdateToolCall({
+          ...segment,
+          completed: !segment.isStreaming && segment.endState === null,
+        })
+          ? { kind: "memory_update" }
+          : {
+              kind: "tool",
+              toolName: segment.toolName,
+              editKey:
+                filePathFromInputDetail(segment.inputDetail) ?? segment.id,
+            },
+      ];
+  }
 }
 
 /**
@@ -381,8 +332,8 @@ export function activityGroupSummary(
  *
  * In that shape the group header's whole label is that block's label verbatim
  * ("Thinking" / "Thought for Xs") - the row said the same thing a second time,
- * one line lower, and kept saying it after the streaming stopped. `thinkingPhrase`
- * and `reasoningSummaryLabel` are held to producing the same string for the same
+ * one line lower, and kept saying it after the streaming stopped. The thinking
+ * clause of `activitySummaryOf` and `reasoningSummaryLabel` are held to producing the same string for the same
  * block precisely so "verbatim" is a fact rather than an approximation.
  *
  * The "nothing but" is load-bearing, not defensive. Keying this on the reasoning
@@ -434,7 +385,7 @@ export function isReasoningOnlyRun(
  * "Thinking" and ignores whatever duration it may already carry; a finished one
  * reads its total.
  *
- * `thinkingPhrase` is held to producing exactly these three strings, lower-cased,
+ * The thinking clause of `activitySummaryOf` is held to producing exactly these three strings, lower-cased,
  * for a group whose only segment is one reasoning block - which is the entire
  * basis on which `hidesSoleReasoningHeader` deletes the block's own header.
  */
@@ -523,6 +474,11 @@ function shouldPromoteToolSegment(
   // An app is the call's result, rendered where the call was made.
   if (isMcpAppToolCall(segment)) return true;
   if (segment.agentMessageSend !== null) return true;
+  // A bot's reply, question or announcement (Tracy Bots T93) is what its
+  // session said to people: a send, drawn as its own card. Keyed on the name,
+  // which the call has for its whole life, so a send whose input is still
+  // streaming or that failed stands on its own as well.
+  if (isBotSendToolName(segment.toolName)) return true;
   // A shell the agent ran or restarted (`traycer_run_shell` /
   // `traycer_restart_shell`, host-stamped) is a background process that
   // outlives the turn, exactly what the backgrounded-command rule below is for:
@@ -695,127 +651,6 @@ function isSuppressedQuestionTool(
   );
 }
 
-function countMonitorDelivery(
-  counts: ActivitySummaryCounts,
-  segment: MonitorDeliverySegment,
-): void {
-  for (const trigger of segment.triggers) {
-    if (trigger.managedCommand?.monitoring === false) counts.shellUpdates += 1;
-    else counts.monitorUpdates += 1;
-  }
-}
-
-function countActivitySegment(
-  counts: ActivitySummaryCounts,
-  segment: ActivityGroupDetailSegment,
-): void {
-  if (segment.kind === "autonomous_resume") {
-    countMonitorDelivery(counts, segment);
-    return;
-  }
-  if (segment.kind === "reasoning") {
-    countReasoningSegment(counts, segment);
-    return;
-  }
-  if (segment.kind === "command") {
-    counts.ranCommands += 1;
-    return;
-  }
-  if (segment.kind === "file_change") {
-    counts.editedFiles.add(segment.filePath);
-    return;
-  }
-  if (segment.kind === "subagent") {
-    counts.spawnedSubagents += 1;
-    return;
-  }
-  if (segment.kind === "approval") {
-    if (segment.decision?.approved === true) counts.approved += 1;
-    else counts.denied += 1;
-    return;
-  }
-
-  countToolActivity(counts, segment);
-}
-
-function countToolActivity(
-  counts: ActivitySummaryCounts,
-  segment: ToolSegment,
-): void {
-  const kind = activityToolKind(segment.toolName);
-  if (kind === "explore") {
-    counts.exploredFiles += 1;
-    return;
-  }
-  if (kind === "read") {
-    counts.readFiles += 1;
-    return;
-  }
-  if (kind === "search") {
-    counts.searched += 1;
-    return;
-  }
-  if (kind === "edit") {
-    counts.editedFiles.add(
-      filePathFromInputDetail(segment.inputDetail) ?? segment.id,
-    );
-    return;
-  }
-  if (kind === "run") {
-    counts.ranCommands += 1;
-    return;
-  }
-  if (kind === "hook") {
-    counts.ranHooks += 1;
-    return;
-  }
-  if (kind === "browser") {
-    counts.browsed += 1;
-    return;
-  }
-  counts.usedTools += 1;
-}
-
-function countPhrase(
-  count: number,
-  verb: string,
-  singular: string,
-  plural: string,
-): string | null {
-  if (count === 0) return null;
-  return `${verb} ${count} ${count === 1 ? singular : plural}`;
-}
-
-/**
- * Split out of `countActivitySegment` purely to keep that switch under the
- * complexity ceiling - reasoning is the one child kind that contributes two
- * independent facts to the summary rather than a single count.
- */
-function countReasoningSegment(
-  counts: ActivitySummaryCounts,
-  segment: ReasoningSegment,
-): void {
-  counts.thinkingPresent = true;
-  if (segment.isStreaming) {
-    // A block still streaming contributes nothing but its presence, even if it
-    // already carries a duration: `ReasoningSegment` labels a streaming block
-    // "Thinking" and ignores the number, so counting it here would let the
-    // group say "Thought for 3s" over a child still saying "Thinking" - and
-    // `hidesSoleReasoningHeader` would then hide a header that did NOT say the
-    // same thing.
-    return;
-  }
-  counts.thinkingCompleted = true;
-  if (segment.durationMs === null) {
-    // Finished, but unmeasurable - interrupted, superseded, errored, or older
-    // than `startedAt`. The sum it does not join stops being a total.
-    counts.thinkingDurationPartial = true;
-    return;
-  }
-  counts.thinkingDurationKnown = true;
-  counts.thinkingDurationMs += segment.durationMs;
-}
-
 /**
  * The label a reasoning block shows for itself. Lives here, next to the group
  * clause it has to agree with, and is imported by `ReasoningSegment` (the
@@ -830,64 +665,6 @@ function countReasoningSegment(
 export function reasoningSummaryLabel(durationMs: number | null): string {
   if (durationMs === null) return "Thought";
   return `Thought for ${thoughtClockDuration(durationMs)}`;
-}
-
-/**
- * The ONE place a thinking duration becomes a string. `reasoningSummaryLabel`
- * (the block's own header) and `thinkingPhrase` (the group clause standing in
- * for it) both route through here, so the equality `hidesSoleReasoningHeader`
- * bets on is structural rather than two copies of a rounding rule kept in step
- * by hand.
- *
- * `Math.max(1, ...)` is why the rule needs a home: a block that started and
- * finished inside the same millisecond has a real, measured duration of 0 and
- * reads "1s", because "0s" describes nothing. A block with no measurement at
- * all is `null` and never reaches here.
- */
-function thoughtClockDuration(durationMs: number): string {
-  return formatClockDuration(Math.max(1, Math.round(durationMs / 1000)));
-}
-
-/**
- * Leading clause of a group summary that contains reasoning.
- *
- * MONOTONE: `thinking` -> `thought` -> `thought for Xs`, and never backwards.
- * None of the three flags it reads can clear (reasoning is the one child kind
- * that never leaves a run), so the clause can only move forward.
- *
- * Two revisions got this wrong in the same way - by letting a NEW streaming
- * block erase what the run had already done. First a bare "thinking" whenever
- * anything streamed, which shuttled `Thought for 5s, read 3 files` ->
- * `Thinking` -> `Thought for 11s, read 3 files`. Then a duration-only guard,
- * which fixed that everywhere except history with no `startedAt`: total 0,
- * `thought` -> `thinking` -> `thought` on the next block. `thinkingCompleted`
- * closes it - a run that has already thought does not stop having done so.
- *
- * The three branches are exactly `reasoningSummaryLabel`'s three cases, in
- * lower case, and must stay that way: for a group whose only segment is one
- * reasoning block this string IS the whole label, and
- * `hidesSoleReasoningHeader` drops the block's own header on the strength of
- * the two being identical.
- *
- * The "+" suffix is the one thing here `reasoningSummaryLabel` has no analogue
- * for, and it CANNOT break that equality: it needs one finished block with a
- * duration and another without, which is two segments, and a group of two
- * segments is never headerless.
- */
-function thinkingPhrase(counts: ActivitySummaryCounts): string | null {
-  if (!counts.thinkingPresent) return null;
-  if (counts.thinkingDurationKnown) {
-    const clause = `thought for ${thoughtClockDuration(counts.thinkingDurationMs)}`;
-    // A floor, not a total - some finished block could not be measured.
-    return counts.thinkingDurationPartial ? `${clause}+` : clause;
-  }
-  if (counts.thinkingCompleted) return "thought";
-  return "thinking";
-}
-
-function capitalizeFirst(value: string): string {
-  if (value.length === 0) return value;
-  return `${value[0].toUpperCase()}${value.slice(1)}`;
 }
 
 function fileOperationVerb(operation: string): string {

@@ -404,6 +404,7 @@ import {
   chatSubscribeV137,
   chatSubscribeV138,
   chatSubscribeV139,
+  chatSubscribeV140,
 } from "@traycer/protocol/host/agent/gui/contracts";
 import {
   agentTuiGenerateTitleV10,
@@ -449,11 +450,13 @@ import {
   hostStatusUpgradeV16ToV17,
   hostStatusUpgradeV17ToV18,
   hostStatusUpgradeV18ToV19,
+  hostStatusUpgradeV19ToV110,
   hostStatusV15,
   hostStatusV16,
   hostStatusV17,
   hostStatusV18,
   hostStatusV19,
+  hostStatusV110,
 } from "@traycer/protocol/host/status/contracts";
 import {
   hostRestartUpgradeV10ToV11,
@@ -646,13 +649,25 @@ import {
   botConversationSendV10,
   botConversationSendV11,
   botConversationSendUpgradeV10ToV11,
+  botConversationSendV12,
+  botConversationSendUpgradeV11ToV12,
   botThreadListV10,
+  botThreadListV11,
+  botThreadListUpgradeV10ToV11,
+  botTurnLocateV10,
+  botTaskRunNowV10,
+  botTaskSetPausedV10,
+  botTaskStopV10,
+  botNotificationsStopV10,
   botOnboardingChooseV10,
   botOnboardingCompleteV10,
   botOnboardingReadV10,
+  botOnboardingReadV11,
+  botOnboardingReadUpgradeV10ToV11,
   botCreateV10,
   botDeleteV10,
   botListChangedV10,
+  botMemorySubscribeV10,
   botListV10,
   botListV11,
   botListUpgradeV10ToV11,
@@ -661,6 +676,11 @@ import {
   botSubscribeV10,
   botSubscribeV11,
   botSubscribeV12,
+  botSubscribeV13,
+  botSubscribeV14,
+  botSubscribeV15,
+  botSubscribeV16,
+  botSurfaceActV10,
   botUpdateRunSettingsV10,
   botUpdateDirectiveV10,
   botUpdateReplyModeV10,
@@ -1052,13 +1072,27 @@ import {
 import { browserDesktopControlV10 } from "@traycer/protocol/host/browser/desktop-control";
 import { browserCatalogReadV10 } from "@traycer/protocol/host/browser/discovery-contracts";
 import {
+  configSimulatorGetUpgradeV10ToV11,
   configSimulatorGetV10,
+  configSimulatorGetV11,
+  configSimulatorSetUpgradeV10ToV11,
   configSimulatorSetV10,
+  configSimulatorSetV11,
+  simulatorCatalogReadV10,
+  simulatorCloseUpgradeV10ToV11,
   simulatorCloseV10,
+  simulatorCloseV11,
+  simulatorInstancesV10,
+  simulatorListUpgradeV10ToV11,
   simulatorListV10,
+  simulatorListV11,
+  simulatorOpenUpgradeV10ToV11,
   simulatorOpenV10,
+  simulatorOpenV11,
+  simulatorPowerOffV10,
   simulatorRemoveToolsV10,
   simulatorScreenshotV10,
+  simulatorSetKeepRunningV10,
   simulatorShutdownV10,
   simulatorStatusV10,
 } from "@traycer/protocol/host/simulator/contracts";
@@ -1068,6 +1102,7 @@ import {
 } from "@traycer/protocol/host/simulator/actions";
 import {
   simulatorSessionsV10,
+  simulatorSessionsV11,
   simulatorStreamV10,
 } from "@traycer/protocol/host/simulator/stream-contracts";
 import {
@@ -6646,11 +6681,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.simulator.get": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: configSimulatorGetV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: configSimulatorGetV11,
+          upgradeFromPreviousVersion: configSimulatorGetUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6659,11 +6698,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "config.simulator.set": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: configSimulatorSetV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: configSimulatorSetV11,
+          upgradeFromPreviousVersion: configSimulatorSetUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6672,11 +6715,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "simulator.list": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: simulatorListV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: simulatorListV11,
+          upgradeFromPreviousVersion: simulatorListUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6685,11 +6732,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "simulator.open": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: simulatorOpenV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: simulatorOpenV11,
+          upgradeFromPreviousVersion: simulatorOpenUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6698,11 +6749,15 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "simulator.close": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: simulatorCloseV10,
           upgradeFromPreviousVersion: null,
+        },
+        1: {
+          contract: simulatorCloseV11,
+          upgradeFromPreviousVersion: simulatorCloseUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -6780,6 +6835,61 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
       versions: {
         0: {
           contract: simulatorActionV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // Host-wide instance verbs and the catalog relay, new with the `@1.1`
+  // simulator minors: optional like the rest, so an older host reports them
+  // missing and the client hides what needs them.
+  "simulator.instances": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorInstancesV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "simulator.powerOff": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorPowerOffV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "simulator.setKeepRunning": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorSetKeepRunningV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "simulator.catalog.read": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: simulatorCatalogReadV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -9225,7 +9335,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.conversation.send": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: botConversationSendV10,
@@ -9237,6 +9347,26 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
           contract: botConversationSendV11,
           upgradeFromPreviousVersion: botConversationSendUpgradeV10ToV11,
         },
+        // @1.2 answers or skips a bot's question from its card (`answer`, T91).
+        2: {
+          contract: botConversationSendV12,
+          upgradeFromPreviousVersion: botConversationSendUpgradeV11ToV12,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // A member's answer or decision from a bot's surface card (T89), settled
+  // by the host that runs the task's chat.
+  "bot.surface.act": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botSurfaceActV10,
+          upgradeFromPreviousVersion: null,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -9245,10 +9375,84 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.thread.list": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: botThreadListV10,
+          upgradeFromPreviousVersion: null,
+        },
+        // @1.1 names the rows the bound host roots a thread on beyond a
+        // post, a question, a proposal and a direct post (T85).
+        1: {
+          contract: botThreadListV11,
+          upgradeFromPreviousVersion: botThreadListUpgradeV10ToV11,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // The session turns behind a bot's replies, posts and check-ins (T86).
+  "bot.turn.locate": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botTurnLocateV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  // A member's actions on the bot's automations and notification watches
+  // from the Activity page (T92). Same optional posture.
+  "bot.task.runNow": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botTaskRunNowV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.task.setPaused": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botTaskSetPausedV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.task.stop": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botTaskStopV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.notifications.stop": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botNotificationsStopV10,
           upgradeFromPreviousVersion: null,
         },
       },
@@ -9259,11 +9463,17 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.onboarding.read": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: botOnboardingReadV10,
           upgradeFromPreviousVersion: null,
+        },
+        // @1.1 names the team's main bot while it is still to be set up
+        // (`setup`, T67).
+        1: {
+          contract: botOnboardingReadV11,
+          upgradeFromPreviousVersion: botOnboardingReadUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -13539,7 +13749,7 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
   },
   "host.status": {
     1: {
-      latestMinor: 9,
+      latestMinor: 10,
       versions: {
         0: {
           contract: hostStatusV10,
@@ -13584,6 +13794,13 @@ const HOST_RPC_ID_CARRYING_REGISTRY_DEFINITION = {
         9: {
           contract: hostStatusV19,
           upgradeFromPreviousVersion: hostStatusUpgradeV18ToV19,
+        },
+        // @1.10 adds `updatesExternallyManaged`: whether something other than
+        // the host's own CLI owns its version, read before a version list is
+        // offered.
+        10: {
+          contract: hostStatusV110,
+          upgradeFromPreviousVersion: hostStatusUpgradeV19ToV110,
         },
       },
       downgradePathsFromLatest: {},
@@ -14606,7 +14823,8 @@ const HOST_STREAM_RPC_REGISTRY_NOTIFICATIONS_DEFINITION = {
         4: {
           contract: hostNotificationsCloudFeedSubscribeV14,
         },
-        // `sandbox.notice`; `@1.4` is on staging desktops.
+        // `sandbox.notice`, which the server no longer writes; `@1.4` is on
+        // staging desktops.
         5: {
           contract: hostNotificationsCloudFeedSubscribeV15,
         },
@@ -14985,10 +15203,13 @@ const HOST_STREAM_RPC_REGISTRY_CORE_DEFINITION = {
   // the subset rule, and the unary verbs stay off the released floor.
   "simulator.sessions": {
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: simulatorSessionsV10,
+        },
+        1: {
+          contract: simulatorSessionsV11,
         },
       },
     },
@@ -15517,7 +15738,19 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
       // bound to its frozen frames so an older peer's re-parse strips it.
       // @1.2 names the chats subscribed to the person's notification feed
       // (`notificationSubscriptions`, T84); @1.1 is frozen without it.
-      latestMinor: 2,
+      // @1.3 says where each task came from (`spun`, `label`,
+      // `originRequestId`, `createdByChatId`, T82); @1.2 and earlier bind
+      // the task entry frozen without them.
+      // @1.4 carries each task's check-in history (`checkins`) and when each
+      // notification subscription started (`since`, T86); @1.3 is frozen
+      // without them.
+      // @1.5 carries what each task's agents wait on a person for
+      // (`inputNeeded`) and the subscriber's own card actions in flight
+      // (`surfaceActions`, T89); @1.4 is frozen without them.
+      // @1.6 lets a failed turn's reason offer `update-provider` (T71);
+      // @1.1-@1.5 bind activity frozen without it, and the host sends
+      // `none` in its place below 1.6.
+      latestMinor: 6,
       versions: {
         0: {
           contract: botSubscribeV10,
@@ -15527,6 +15760,18 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
         },
         2: {
           contract: botSubscribeV12,
+        },
+        3: {
+          contract: botSubscribeV13,
+        },
+        4: {
+          contract: botSubscribeV14,
+        },
+        5: {
+          contract: botSubscribeV15,
+        },
+        6: {
+          contract: botSubscribeV16,
         },
       },
     },
@@ -15539,6 +15784,18 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
       versions: {
         0: {
           contract: botListChangedV10,
+        },
+      },
+    },
+  },
+  // `bot.memory.subscribe` (Tracy Bots T87): a new name on `/stream`, so no
+  // baseline moves; a host without it shows no memory.
+  "bot.memory.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botMemorySubscribeV10,
         },
       },
     },
@@ -15572,7 +15829,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 39,
+      latestMinor: 40,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -15782,6 +16039,10 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // (projection: the host omits it below @1.39). @1.35 to @1.38 are
         // frozen at their seven-arm queue.
         39: { contract: chatSubscribeV139 },
+        // @1.40: a queued steer that would restart the turn needs the person's
+        // confirmation (`queueSteerNow.restartConfirmed`), and a refused one
+        // names its causes (`actionAck.steerRestartReasons`, stripped below).
+        40: { contract: chatSubscribeV140 },
       },
     },
   },

@@ -343,7 +343,7 @@ describe("BrowserPeekTile", () => {
     // a referent the reader cannot resolve from anything on screen.
     expect(
       screen.getByText(
-        "This tab is open in the Traycer desktop app on host-test, so it can't be streamed here.",
+        "This tab is open in the Traycer desktop app on Studio Mac, so it can't be streamed here.",
       ),
     ).toBeTruthy();
     expect(screen.queryByText("Going native")).toBeNull();

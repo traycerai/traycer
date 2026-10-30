@@ -580,6 +580,9 @@ export const SAMPLE_RAIL_PRESENCE: Omit<
   // `SAMPLE_OPEN_ARTIFACT_ID` is always the open artifact.
   hasActiveCommentableArtifact: true,
   hasPullRequests: SAMPLE_PULL_REQUESTS.length > 0,
+  // The sample task holds no simulator, on a machine that runs none.
+  localHostRunsSimulators: false,
+  hasSimulatorRecords: false,
 };
 export const SAMPLE_TURNS = [
   {

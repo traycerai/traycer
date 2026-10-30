@@ -7,12 +7,31 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import {
+  QueryClient,
+  QueryClientProvider,
+  type QueryKey,
+} from "@tanstack/react-query";
+import type { SchemaVersion } from "@traycer/protocol/framework/index";
 import type {
+  SimulatorHostInstance,
   SimulatorPackState,
+  SimulatorPowerOffRequest,
+  SimulatorPowerOffResponse,
   SimulatorStatusResponse,
 } from "@traycer/protocol/host/simulator/schemas";
 import { HostOverviewSimulatorsTab } from "@/components/settings/panels/host-overview-simulators-tab";
+import { HostOverviewSimulatorsCount } from "@/components/settings/panels/host-overview-simulator-instances";
+import type { HostRpcRegistry } from "@/lib/host";
+import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 
 /**
  * The Host panel's Mobile simulators tab: one switch that gates the rest.
@@ -26,50 +45,117 @@ const HOST = "host-1";
 
 interface TabFakes {
   methodSupport: Record<string, boolean | null>;
-  config: { enabled: boolean };
+  config: { enabled: boolean; idleMinutes?: number };
+  negotiated: SchemaVersion | false | null;
+  instances: SimulatorHostInstance[];
+  powerOff: Mock<
+    (request: SimulatorPowerOffRequest) => Promise<SimulatorPowerOffResponse>
+  >;
   status: SimulatorStatusResponse;
+  /** The host's side of `simulator.status`: answers `status` unless a case says otherwise. */
+  readStatus: Mock<() => Promise<SimulatorStatusResponse>>;
   write: Mock;
   remove: Mock;
   removePending: boolean;
+  titles: Map<string, string>;
+  openTask: Mock<(epicId: string) => void>;
 }
 
 const fakes = vi.hoisted((): TabFakes => ({
   methodSupport: {},
   config: { enabled: false },
+  negotiated: null,
+  instances: [],
+  powerOff: vi.fn(),
   status: {
     platforms: [],
     packState: { kind: "off", reason: null, progress: null },
     packVersion: null,
     installed: null,
   },
+  readStatus: vi.fn(),
   write: vi.fn(),
   remove: vi.fn(),
   removePending: false,
+  titles: new Map(),
+  openTask: vi.fn(),
+}));
+
+vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
+vi.mock("@/lib/tab-navigation", () => ({
+  openOrFocusEpicIntent: (intent: { readonly epicId: string }) => intent,
+  navigateToTabIntent: (
+    _navigate: unknown,
+    intent: { readonly epicId: string },
+  ) => fakes.openTask(intent.epicId),
+}));
+vi.mock("@/components/settings/panels/use-simulator-task-titles", () => ({
+  useSimulatorTaskTitles: () => fakes.titles,
 }));
 
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (_hostId: string | null, method: string) =>
     fakes.methodSupport[method] ?? null,
 }));
-vi.mock("@/hooks/simulator/use-simulator-mutations", () => ({
-  useSimulatorConfigQuery: () => ({
-    data: fakes.config,
-    isPending: false,
-    isError: false,
-  }),
-  useSimulatorStatusQuery: () => ({ data: fakes.status, isError: false }),
-  useSimulatorConfigSetMutation: () => ({
-    mutation: { mutate: fakes.write, isPending: false },
-    supported: true,
-  }),
-  useSimulatorRemoveToolsMutation: (
-    _client: unknown,
-    _hostId: string | null,
-  ) => ({
-    mutation: { mutate: fakes.remove, isPending: fakes.removePending },
-    supported: fakes.methodSupport["simulator.removeTools"] === true,
-  }),
+vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
+  useHostNegotiatedMethodVersion: () => fakes.negotiated,
 }));
+vi.mock("@/hooks/simulator/use-simulator-mutations", async (importOriginal) => {
+  const { useMutation, useQuery } = await import("@tanstack/react-query");
+  const { hostQueryKeys } = await import("@/lib/query-keys/host-query-keys");
+  // The sweep lists are the real ones: Check again is asserted through what
+  // it actually invalidates.
+  const { INSTANCE_INVALIDATIONS } =
+    await importOriginal<
+      typeof import("@/hooks/simulator/use-simulator-mutations")
+    >();
+  return {
+    INSTANCE_INVALIDATIONS,
+    useSimulatorInstancesQuery: () => ({
+      data: { instances: fakes.instances },
+      isError: false,
+    }),
+    useSimulatorPowerOffMutation: () => ({
+      mutation: useMutation({
+        mutationFn: (request: SimulatorPowerOffRequest) =>
+          fakes.powerOff(request),
+      }),
+      supported: true,
+    }),
+    useSimulatorSetKeepRunningMutation: () => ({
+      mutation: { mutate: vi.fn(), isPending: false },
+      supported: true,
+    }),
+    useSimulatorConfigQuery: () => ({
+      data: fakes.config,
+      isPending: false,
+      isError: false,
+    }),
+    // A real query under the real key, so what the tab's Check again
+    // invalidates is what this read answers again from `fakes.readStatus`.
+    useSimulatorStatusQuery: (_client: unknown, hostId: string | null) =>
+      useQuery({
+        queryKey: hostQueryKeys.method<HostRpcRegistry, "simulator.status">(
+          hostId,
+          "simulator.status",
+          {},
+        ),
+        queryFn: () => fakes.readStatus(),
+        staleTime: Number.POSITIVE_INFINITY,
+      }),
+    useSimulatorConfigSetMutation: () => ({
+      mutation: { mutate: fakes.write, isPending: false },
+      supported: true,
+    }),
+    useSimulatorRemoveToolsMutation: (
+      _client: unknown,
+      _hostId: string | null,
+    ) => ({
+      mutation: { mutate: fakes.remove, isPending: fakes.removePending },
+      supported: fakes.methodSupport["simulator.removeTools"] === true,
+    }),
+  };
+});
 
 const OFF: SimulatorPackState = { kind: "off", reason: null, progress: null };
 
@@ -88,7 +174,14 @@ beforeEach(() => {
     "simulator.removeTools": true,
   };
   fakes.config = { enabled: true };
+  fakes.negotiated = null;
+  fakes.instances = [];
+  fakes.powerOff.mockReset();
   fakes.removePending = false;
+  fakes.titles = new Map();
+  fakes.openTask.mockReset();
+  fakes.readStatus.mockReset();
+  fakes.readStatus.mockImplementation(() => Promise.resolve(fakes.status));
   fakes.status = {
     platforms: [
       { platform: "ios", available: true, reason: null },
@@ -108,15 +201,46 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function renderTab(): void {
-  render(
-    <HostOverviewSimulatorsTab
-      client={null}
-      hostId={HOST}
-      hostName="Studio Mac"
-    />,
+function statusKey(): QueryKey {
+  return hostQueryKeys.method<HostRpcRegistry, "simulator.status">(
+    HOST,
+    "simulator.status",
+    {},
   );
 }
+
+/** The tab over a cache already holding the host's last status answer. */
+function renderTab(): QueryClient {
+  const queryClient = new QueryClient();
+  queryClient.setQueryData(statusKey(), fakes.status);
+  render(
+    <QueryClientProvider client={queryClient}>
+      <HostOverviewSimulatorsTab
+        client={null}
+        hostId={HOST}
+        hostName="Studio Mac"
+      />
+    </QueryClientProvider>,
+  );
+  return queryClient;
+}
+
+const RUNNING: SimulatorHostInstance = {
+  instanceKey: "udid-1",
+  name: "iPhone 16",
+  booted: true,
+  cloneOf: null,
+  drivenByAgent: true,
+  keepRunning: false,
+  idleUntil: null,
+  simulatorId: "udid-1",
+  platform: "ios",
+  version: "18.0",
+  cloneOfName: null,
+  bootedByTraycer: true,
+  tasks: [{ epicId: "epic-1" }],
+  otherTaskCount: 1,
+};
 
 function switchRow(): HTMLElement {
   return screen.getByTestId("settings-simulators-enabled");
@@ -251,5 +375,298 @@ describe("HostOverviewSimulatorsTab", () => {
     expect(
       screen.getByTestId("host-overview-mobile-simulators").textContent,
     ).toContain("iOS: No Xcode. Android: No Android SDK.");
+  });
+
+  describe("Check again", () => {
+    const NEITHER: SimulatorStatusResponse = {
+      platforms: [
+        { platform: "ios", available: false, reason: "No Xcode." },
+        { platform: "android", available: false, reason: "No Android SDK." },
+      ],
+      packState: { kind: "unsupported", reason: null, progress: null },
+      packVersion: null,
+      installed: null,
+    };
+    const BOTH: SimulatorStatusResponse = {
+      ...NEITHER,
+      platforms: [
+        { platform: "ios", available: true, reason: null },
+        { platform: "android", available: true, reason: null },
+      ],
+      packState: OFF,
+    };
+    const LIST_KEY = hostQueryKeys.method<HostRpcRegistry, "simulator.list">(
+      HOST,
+      "simulator.list",
+      { epicId: "epic-1" },
+    );
+    /** The palette's inventory: its own `simulator.list`, under the instances scope. */
+    const INVENTORY_KEY = hostQueryKeys.simulatorInventory(
+      HOST,
+      "epic-1",
+      true,
+    );
+    const OTHER_HOST_STATUS_KEY = hostQueryKeys.method<
+      HostRpcRegistry,
+      "simulator.status"
+    >("host-2", "simulator.status", {});
+
+    function checkAgain(): HTMLElement {
+      return screen.getByRole("button", { name: "Check again" });
+    }
+
+    /** The settings row whose label reads `label`. */
+    function rowLabelled(label: string): HTMLElement {
+      const row = screen.getByText(label, { exact: true }).parentElement
+        ?.parentElement;
+      if (row === null || row === undefined) throw new Error(`no ${label} row`);
+      return row;
+    }
+
+    /** The host's next `simulator.status` answer, held until the case releases it. */
+    function holdNextStatus(): (answer: SimulatorStatusResponse) => void {
+      let release: (answer: SimulatorStatusResponse) => void = () => undefined;
+      fakes.readStatus.mockImplementationOnce(
+        () =>
+          new Promise<SimulatorStatusResponse>((resolve) => {
+            release = resolve;
+          }),
+      );
+      return (answer) => {
+        release(answer);
+      };
+    }
+
+    it("off: sits beside the disabled switch, re-reads this host's status, list and inventory, spins while the read is out, and the new answer enables the switch", async () => {
+      fakes.config = { enabled: false };
+      fakes.status = NEITHER;
+      const queryClient = renderTab();
+      queryClient.setQueryData(LIST_KEY, { simulators: [] });
+      queryClient.setQueryData(INVENTORY_KEY, []);
+      queryClient.setQueryData(OTHER_HOST_STATUS_KEY, NEITHER);
+      expect(switchRow().hasAttribute("disabled")).toBe(true);
+      expect(rowLabelled("Use mobile simulators").contains(checkAgain())).toBe(
+        true,
+      );
+      const answer = holdNextStatus();
+
+      fireEvent.click(checkAgain());
+
+      await waitFor(() => {
+        expect(checkAgain()).toHaveProperty("disabled", true);
+      });
+      expect(
+        screen.queryByTestId("settings-simulators-check-again-spinner"),
+      ).not.toBeNull();
+      expect(fakes.readStatus).toHaveBeenCalledTimes(1);
+      expect(queryClient.getQueryState(LIST_KEY)?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(INVENTORY_KEY)?.isInvalidated).toBe(
+        true,
+      );
+      expect(
+        queryClient.getQueryState(OTHER_HOST_STATUS_KEY)?.isInvalidated,
+      ).toBe(false);
+
+      answer(BOTH);
+
+      await waitFor(() => {
+        expect(switchRow().hasAttribute("disabled")).toBe(false);
+      });
+      expect(
+        screen.getByTestId("host-overview-mobile-simulators").textContent,
+      ).toContain("iOS available. Android available.");
+      // Nothing is unavailable any more, so there is nothing to check.
+      expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    });
+
+    it("on: sits on the Platforms row, and the platform the host now finds reads Available", async () => {
+      const queryClient = renderTab();
+      queryClient.setQueryData(LIST_KEY, { simulators: [] });
+      const platforms = rowLabelled("Platforms");
+      expect(platforms.contains(checkAgain())).toBe(true);
+      expect(rowLabelled("Use mobile simulators").contains(checkAgain())).toBe(
+        false,
+      );
+      const answer = holdNextStatus();
+
+      fireEvent.click(checkAgain());
+
+      await waitFor(() => {
+        expect(checkAgain()).toHaveProperty("disabled", true);
+      });
+      expect(queryClient.getQueryState(LIST_KEY)?.isInvalidated).toBe(true);
+
+      answer({ ...fakes.status, platforms: BOTH.platforms });
+
+      await waitFor(() => {
+        expect(
+          screen.getByTestId("settings-simulator-platform-android").textContent,
+        ).toContain("Available");
+      });
+      expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    });
+
+    it("is not drawn while every platform is available, on or off", () => {
+      fakes.status = { ...fakes.status, platforms: BOTH.platforms };
+      renderTab();
+      expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+      cleanup();
+
+      fakes.config = { enabled: false };
+      renderTab();
+      expect(screen.queryByRole("button", { name: "Check again" })).toBeNull();
+    });
+  });
+
+  describe("on a @1.1 host", () => {
+    beforeEach(() => {
+      fakes.negotiated = { major: 1, minor: 1 };
+      fakes.methodSupport["simulator.instances"] = true;
+      fakes.config = { enabled: true, idleMinutes: 15 };
+      fakes.instances = [RUNNING];
+    });
+
+    it("lists what runs now with the Agent badge and the tasks holding it", () => {
+      renderTab();
+      const row = screen.getByTestId("host-overview-simulator-udid-1");
+      expect(within(row).getByText("Agent")).toBeTruthy();
+      expect(row.textContent).toContain("iOS 18.0");
+      expect(
+        screen.getByTestId("host-overview-simulator-tasks-udid-1").textContent,
+      ).toBe("Open inepic-1+1 other");
+    });
+
+    it("links each task it can see by title, falling back to the short id", () => {
+      fakes.instances = [
+        {
+          ...RUNNING,
+          tasks: [{ epicId: "epic-1" }, { epicId: "01JABCDEFGHJKMNP" }],
+          otherTaskCount: 0,
+        },
+      ];
+      fakes.titles = new Map([["epic-1", "Checkout flow"]]);
+      renderTab();
+      const tasks = screen.getByTestId("host-overview-simulator-tasks-udid-1");
+      expect(tasks.textContent).not.toContain("other");
+      fireEvent.click(
+        within(tasks).getByRole("button", { name: "Open task Checkout flow" }),
+      );
+      expect(fakes.openTask).toHaveBeenCalledWith("epic-1");
+      fireEvent.click(
+        within(tasks).getByRole("button", { name: "Open task 01JABCDE" }),
+      );
+      expect(fakes.openTask).toHaveBeenLastCalledWith("01JABCDEFGHJKMNP");
+    });
+
+    it("powers off with confirm false first and closes nothing more when the host just does it", async () => {
+      fakes.powerOff.mockResolvedValueOnce({
+        kind: "powered-off",
+        instanceKey: "udid-1",
+      });
+      renderTab();
+
+      fireEvent.click(
+        screen.getByTestId("host-overview-simulator-power-off-udid-1"),
+      );
+
+      await waitFor(() => {
+        expect(fakes.powerOff).toHaveBeenCalledTimes(1);
+      });
+      expect(fakes.powerOff).toHaveBeenCalledWith({
+        instanceKey: "udid-1",
+        confirm: false,
+      });
+      expect(screen.queryByTestId("confirm-destructive-dialog")).toBeNull();
+    });
+
+    it("asks when the host answers confirm-required, and its confirm sends confirm: true", async () => {
+      fakes.powerOff
+        .mockResolvedValueOnce({
+          kind: "confirm-required",
+          instanceKey: "udid-1",
+        })
+        .mockResolvedValueOnce({ kind: "powered-off", instanceKey: "udid-1" });
+      renderTab();
+
+      fireEvent.click(
+        screen.getByTestId("host-overview-simulator-power-off-udid-1"),
+      );
+
+      const dialog = await screen.findByTestId("confirm-destructive-dialog");
+      expect(dialog.textContent).toContain("Power off iPhone 16?");
+      expect(fakes.powerOff).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByTestId("confirm-action"));
+
+      await waitFor(() => {
+        expect(fakes.powerOff).toHaveBeenCalledTimes(2);
+      });
+      expect(fakes.powerOff).toHaveBeenNthCalledWith(2, {
+        instanceKey: "udid-1",
+        confirm: true,
+      });
+    });
+
+    it("writes the idle window as { enabled: null, idleMinutes } so it never touches the switch", () => {
+      renderTab();
+      const input = screen.getByTestId("settings-simulators-idle-minutes");
+      expect(input).toHaveProperty("value", "15");
+
+      fireEvent.change(input, { target: { value: "45" } });
+      fireEvent.blur(input);
+
+      expect(fakes.write).toHaveBeenCalledTimes(1);
+      expect(fakes.write).toHaveBeenCalledWith({
+        enabled: null,
+        idleMinutes: 45,
+      });
+    });
+
+    it("writes nothing for an out-of-range idle window or a blur with no typed draft", () => {
+      renderTab();
+      const input = screen.getByTestId("settings-simulators-idle-minutes");
+
+      fireEvent.blur(input);
+      fireEvent.change(input, { target: { value: "0" } });
+      fireEvent.blur(input);
+      fireEvent.change(input, { target: { value: "99999" } });
+      fireEvent.blur(input);
+
+      expect(fakes.write).not.toHaveBeenCalled();
+    });
+
+    it("writes a typed value that equals the stale prop, since the prop may lag the host's actual value", () => {
+      renderTab();
+      const input = screen.getByTestId("settings-simulators-idle-minutes");
+
+      fireEvent.change(input, { target: { value: "" } });
+      fireEvent.change(input, { target: { value: "15" } });
+      fireEvent.blur(input);
+
+      expect(fakes.write).toHaveBeenCalledTimes(1);
+      expect(fakes.write).toHaveBeenCalledWith({
+        enabled: null,
+        idleMinutes: 15,
+      });
+    });
+
+    it("counts the running instances on the tab trigger", () => {
+      fakes.instances = [RUNNING, { ...RUNNING, instanceKey: "udid-2" }];
+      render(<HostOverviewSimulatorsCount client={null} hostId={HOST} />);
+      expect(
+        screen
+          .getByTestId("host-overview-simulators-count")
+          .getAttribute("data-count"),
+      ).toBe("2");
+    });
+  });
+
+  it("draws neither Running now nor the idle window on a host that is not @1.1", () => {
+    fakes.config = { enabled: true, idleMinutes: 15 };
+    fakes.instances = [RUNNING];
+    fakes.negotiated = { major: 1, minor: 0 };
+    renderTab();
+    expect(screen.queryByTestId("host-overview-simulator-udid-1")).toBeNull();
+    expect(screen.queryByTestId("settings-simulators-idle-minutes")).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useContext, type ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
@@ -23,7 +23,6 @@ import {
   chatLoadWaitBeganAt,
   chatPreContentElapsed,
   chatPreContentReport,
-  chatTileHostLabel,
   describeChatPreContent,
   STALLED_CHAT_LOAD_ELAPSED_MS,
   type ChatPreContentInput,
@@ -31,6 +30,8 @@ import {
   type ChatTileFatalDetails,
   type ChatTilePreContentFrame,
 } from "./chat-pre-content";
+import { useChatTileHostLabel } from "./use-chat-tile-host-label";
+import { ChatStateLineContext } from "./chat-state-line";
 import { useChatTileHostUpdate } from "./use-chat-tile-host-update";
 
 // The chat tile's body before it has a transcript. Kept separate from
@@ -82,6 +83,8 @@ export function ChatTilePreContent(props: {
   const lease = useHostLease(tabHostId);
   const hostUpdate = useChatTileHostUpdate();
   const ended = useEndedSandboxHost(tabHostId);
+  const hostLabel = useChatTileHostLabel(frame.reachability, tabHostId);
+  const stateLine = useContext(ChatStateLineContext);
   const retries = session?.retries ?? null;
   const reloadStartedAt = session?.reloadStartedAt ?? null;
   const waitBeganAt = chatLoadWaitBeganAt(frame.wait, retries, reloadStartedAt);
@@ -107,7 +110,7 @@ export function ChatTilePreContent(props: {
     lease,
     reachabilityStatus: frame.reachability.status,
     hostKind: frame.reachability.hostKind,
-    hostLabel: chatTileHostLabel(frame.reachability, tabHostId),
+    hostLabel,
     // The versions are the only skew evidence a wait has: there is no close
     // to read a code or a guidance off. The predicate answers from the two
     // alone, where `describeVersionSkew`'s fallback would warn and offer a
@@ -121,6 +124,31 @@ export function ChatTilePreContent(props: {
     hasReadySession: frame.hasReadySession,
     elapsed: chatPreContentElapsed(slow, overdue),
   };
+  // A sandbox's state precedes the wait: its line is the body, and a resting
+  // or unreachable one leaves the body to its footer. Neither is an offline
+  // host or a failed load.
+  if (stateLine !== null) {
+    return (
+      <div
+        data-testid={props.testId}
+        data-arm="sandbox-state"
+        role="status"
+        className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-3 px-6 py-8 text-center"
+      >
+        <p className="max-w-md text-ui-sm text-muted-foreground">
+          {stateLine.line}
+        </p>
+        {stateLine.actions === null ? null : (
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {stateLine.actions}
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (frame.sandboxFooter) {
+    return <div data-testid={props.testId} className="min-h-0 flex-1" />;
+  }
   // A sandbox a member destroyed is not a failed open: the pane's own line
   // says who destroyed it, and there is nothing to try again.
   if (ended !== null && session !== null && session.fatalClose !== null) {

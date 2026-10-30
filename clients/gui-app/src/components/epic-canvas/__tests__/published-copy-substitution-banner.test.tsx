@@ -78,20 +78,25 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
 
 // Both the canvas (for the bound host) and the copy tile (for the owner host)
 // read this - the same host id in the substitution case, so one answer.
-vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("@/hooks/agent/use-host-reachability")
-  >()),
-  useHostReachability: (hostId: string) => ({
-    status: testState.unreachableHostIds.has(hostId)
-      ? "unreachable"
-      : "reachable",
-    hostLabel: hostId,
-    unavailability: null,
-    basis: "directory",
-    hostKind: "unknown",
-  }),
-}));
+// The label is the hook's own for a host it cannot name.
+vi.mock("@/hooks/agent/use-host-reachability", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/hooks/agent/use-host-reachability")
+    >();
+  return {
+    ...actual,
+    useHostReachability: (hostId: string) => ({
+      status: testState.unreachableHostIds.has(hostId)
+        ? "unreachable"
+        : "reachable",
+      hostLabel: actual.UNNAMED_HOST_LABEL,
+      unavailability: null,
+      basis: "directory",
+      hostKind: "unknown",
+    }),
+  };
+});
 
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => testState.sessionHostId,

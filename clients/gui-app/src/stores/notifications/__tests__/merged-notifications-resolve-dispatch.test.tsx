@@ -96,9 +96,6 @@ const publishedFeedMode: { value: FeedMode } = { value: "cloud" };
  */
 const realStoreActions = useCloudNotificationsStore.getState();
 const localWrites = {
-  resolveNoticeLocally: vi.fn((entryId: string, resolvedAt: number): void => {
-    realStoreActions.resolveNoticeLocally(entryId, resolvedAt);
-  }),
   markReadLocally: vi.fn((entryId: string, readAt: number): void => {
     realStoreActions.markReadLocally(entryId, readAt);
   }),
@@ -121,34 +118,30 @@ const FEED_VERSION = 10;
 const CLOUD_MUTATION_KEYS = [
   notificationsMutationKeys.cloudMarkRead(),
   notificationsMutationKeys.cloudMarkAllRead(),
-  notificationsMutationKeys.cloudResolve(),
   notificationsMutationKeys.cloudClear(),
   notificationsMutationKeys.cloudClearAll(),
 ];
 
-function actionableSandboxNotice(
-  entryId: string,
-): HostNotificationsCloudFeedRowV16 {
+function otherChatRow(entryId: string): HostNotificationsCloudFeedRowV16 {
   return {
     entryId,
     originHostId: "host-cloud",
-    coalesceKey: `sandbox-notice:${entryId}`,
+    coalesceKey: `agent.stopped:${entryId}`,
     entry: {
       id: entryId,
       updatedAt: 1,
       readAt: null,
-      kind: "sandbox.notice",
+      kind: "agent.stopped",
       sourceRef: entryId,
-      severity: "needs_action",
+      severity: "done",
       outcome: "completed",
-      epicId: null,
-      chatId: null,
-      resolvedAt: null,
+      epicId: "epic-other",
+      chatId: "chat-other",
       payload: {
-        kind: "sandbox_notice",
-        sandboxId: "sbx-1",
-        sandboxName: "build box",
-        notice: { kind: "resting_destroyed" },
+        kind: "chat",
+        epicId: "epic-other",
+        chatId: "chat-other",
+        outcome: "completed",
       },
     },
     presentation: { epicTitle: "Epic", chatTitle: "Chat" },
@@ -191,7 +184,7 @@ function applyCloudFeed(
     rows: entryIds.map((entryId) =>
       entryId === CHAT_ID || entryId === CHAT_ID_SECOND
         ? chatDone(entryId)
-        : actionableSandboxNotice(entryId),
+        : otherChatRow(entryId),
     ),
     summary: {
       totalCount: entryIds.length,
@@ -316,20 +309,11 @@ interface DispatchCase {
   readonly rpcMethod: string;
   readonly rpcParams: unknown;
   readonly localWrite: LocalWriteName | null;
+  /** Cloud mutations one gesture registers. */
+  readonly cloudMutations: number;
 }
 
 const DISPATCH_CASES: ReadonlyArray<DispatchCase> = [
-  {
-    name: "resolveNotice",
-    kind: "per-entry",
-    feedId: cloudNotificationFeedId(NOTICE_ID),
-    invoke: (actions, row) => {
-      actions.resolveNotice(row);
-    },
-    rpcMethod: "host.notifications.cloudFeed.resolve",
-    rpcParams: { entryId: NOTICE_ID },
-    localWrite: "resolveNoticeLocally",
-  },
   {
     name: "markAsRead",
     kind: "per-entry",
@@ -340,6 +324,7 @@ const DISPATCH_CASES: ReadonlyArray<DispatchCase> = [
     rpcMethod: "host.notifications.cloudFeed.markRead",
     rpcParams: { entryId: NOTICE_ID },
     localWrite: "markReadLocally",
+    cloudMutations: 1,
   },
   {
     name: "clear",
@@ -351,6 +336,7 @@ const DISPATCH_CASES: ReadonlyArray<DispatchCase> = [
     rpcMethod: "host.notifications.cloudFeed.clear",
     rpcParams: { entryId: NOTICE_ID },
     localWrite: null,
+    cloudMutations: 1,
   },
   {
     name: "markEntityAsRead",
@@ -362,6 +348,7 @@ const DISPATCH_CASES: ReadonlyArray<DispatchCase> = [
     rpcMethod: "host.notifications.cloudFeed.markRead",
     rpcParams: { entryId: CHAT_ID },
     localWrite: "beginEntityRead",
+    cloudMutations: 1,
   },
   {
     name: "markAllAsRead",
@@ -373,6 +360,7 @@ const DISPATCH_CASES: ReadonlyArray<DispatchCase> = [
     rpcMethod: "host.notifications.cloudFeed.markAllRead",
     rpcParams: { observedVersion: FEED_VERSION },
     localWrite: "markAllReadLocally",
+    cloudMutations: 1,
   },
   {
     name: "clearAll",
@@ -384,6 +372,7 @@ const DISPATCH_CASES: ReadonlyArray<DispatchCase> = [
     rpcMethod: "host.notifications.cloudFeed.clearAll",
     rpcParams: { observedVersion: FEED_VERSION },
     localWrite: null,
+    cloudMutations: 1,
   },
 ];
 
@@ -899,67 +888,6 @@ describe("useMergedNotificationsActions cloud dispatch fence", () => {
     });
   });
 
-  describe("completion context", () => {
-    it("completes a request in the replacement session that replayed its entry while the request was being prepared", async () => {
-      const queryClient = createQueryClient(new MutationCache());
-      const resolveKey = notificationsMutationKeys.cloudResolve();
-      let replaced = false;
-      // The mutation's own onMutate result lands in a second `pending` event;
-      // the first carries no context. Replacing the session synchronously in
-      // that event puts the swap after the context exists and before the
-      // request leaves.
-      const unsubscribe = queryClient.getMutationCache().subscribe((event) => {
-        if (
-          replaced ||
-          event.type !== "updated" ||
-          event.action.type !== "pending" ||
-          event.mutation.options.mutationKey?.[0] !== resolveKey[0] ||
-          event.mutation.state.context === undefined
-        ) {
-          return;
-        }
-        replaced = true;
-        useCloudNotificationsStore.getState().reset();
-        applyCloudFeed([NOTICE_ID, CHAT_ID], "user-a");
-        for (const write of Object.values(localWrites)) write.mockClear();
-      });
-      const subject = renderSubjectWith(
-        cloudNotificationFeedId(NOTICE_ID),
-        queryClient,
-      );
-      const { actions, row } = subject.current();
-
-      act(() => {
-        actions.resolveNotice(row);
-      });
-      await waitFor(() => {
-        expect(replaced).toBe(true);
-      });
-      await waitFor(() => {
-        expect(queryClient.isMutating()).toBe(0);
-      });
-      unsubscribe();
-
-      expect(
-        hostRequestMock.mock.calls.filter(
-          (call) => call[0] === "host.notifications.cloudFeed.resolve",
-        ),
-      ).toEqual([
-        ["host.notifications.cloudFeed.resolve", { entryId: NOTICE_ID }],
-      ]);
-      const resolved =
-        useCloudNotificationsStore.getState().rows[
-          cloudNotificationFeedId(NOTICE_ID)
-        ];
-      const entry = resolved?.entry;
-      if (entry?.kind !== "sandbox.notice") {
-        throw new Error("expected the replacement session's notice");
-      }
-      expect(entry.readAt).toBeTypeOf("number");
-      expect(entry.resolvedAt).toBeTypeOf("number");
-    });
-  });
-
   describe("entity read expansion", () => {
     it("stops after the first row when the session is replaced mid-expansion", async () => {
       useCloudNotificationsStore.getState().reset();
@@ -1142,7 +1070,9 @@ describe("useMergedNotificationsActions cloud dispatch fence", () => {
             dispatchCase.invoke(actions, row);
             transition.apply(subject);
           });
-          expect(cloudMutationCount(subject.queryClient)).toBe(1);
+          expect(cloudMutationCount(subject.queryClient)).toBe(
+            dispatchCase.cloudMutations,
+          );
 
           // An entity read fixes its feed when the gesture starts, so one
           // queued across a replacement is refused like a bulk gesture.

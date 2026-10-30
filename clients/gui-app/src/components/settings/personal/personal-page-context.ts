@@ -153,6 +153,14 @@ const EMPTY_HELD: ReadonlyMap<string, EnvironmentReviewEntry> = new Map();
 export const PERSONAL_ENTRY_LOCKED_TEXT = "Change this in the dashboard.";
 
 /**
+ * A draft held while editing was taken away for another reason than the
+ * skill becoming one of the person's settings (the role changed, the skill
+ * left the scope that could edit it): it can be discarded, not saved.
+ */
+export const SKILL_EDIT_REVOKED_TEXT =
+  "This skill can't be edited here anymore. Your draft can be discarded, not saved.";
+
+/**
  * What Remove on a Personal MCP server or skill asks: the host forwards it as
  * the item's delete, so it leaves every provider on every host.
  */

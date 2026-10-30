@@ -39,6 +39,7 @@ import type {
   IpcHostController,
   IpcHostLifecycle,
 } from "../ipc/runner-ipc-bridge";
+import { UNRELEASED_FEATURES_ENABLED } from "../../unreleased-features";
 
 /**
  * The identity the persisted preference is scoped to, and the generation the
@@ -333,6 +334,7 @@ export class DesktopHostFleetSource implements HostFleetSource {
     personal: { seq: 0, readAtMs: Number.NEGATIVE_INFINITY },
     team: { seq: 0, readAtMs: Number.NEGATIVE_INFINITY },
   };
+  private pushActive = false;
   private readonly identitySubscription: SelectionSubscription;
   private readonly onHostChange: () => void;
   private disposed = false;
@@ -443,6 +445,29 @@ export class DesktopHostFleetSource implements HostFleetSource {
         error: String(error),
       });
     }
+  }
+
+  /**
+   * Whether a push plane is currently covering the registry, for the cadence
+   * that would otherwise fetch it.
+   *
+   * Only the subscription may set this, and it says `false` for every way its
+   * stream can be less than healthy - including a snapshot the host itself
+   * marked stale. The poll reads it per tick rather than being stopped and
+   * restarted, so the failure mode of this flag getting stuck is a redundant
+   * read, never a fleet that stops being refreshed.
+   *
+   * Read only by the build that ships without team hosts
+   * (`registered-hosts-broadcast.ts`): with team rows in the registry the
+   * bearer read owns a scope no push carries, so the cadence runs whatever
+   * coverage says and this is a diagnostic of the push's health.
+   */
+  setPushActive(active: boolean): void {
+    this.pushActive = active;
+  }
+
+  isPushActive(): boolean {
+    return this.pushActive && !this.disposed;
   }
 
   private async refreshOrThrow(): Promise<void> {
@@ -964,6 +989,10 @@ function scopeRows(
   const personal: HostListItem[] = [];
   const team: HostListItem[] = [];
   for (const row of response.hosts) {
+    // The build that ships without sandboxes adopts no sandbox row from any
+    // read - the poll or a push negotiated at @1.1 - so the fleet holds the
+    // rows a @1.0 subscriber was served, as the release before them.
+    if (!UNRELEASED_FEATURES_ENABLED && row.kind === "sandbox") continue;
     if (registryScopeOf(row) === "team") team.push(row);
     else personal.push(row);
   }

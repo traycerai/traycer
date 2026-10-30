@@ -28,6 +28,7 @@ import {
 import type { StoreApi } from "zustand/vanilla";
 import {
   CHAT_ANCHOR_SETTLE_FALLBACK_MS,
+  CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS,
   ChatMessages,
   type ChatMessageScrollRequest,
   type ChatScrollRequestOutcome,
@@ -101,7 +102,10 @@ import {
   stopReadingAloud,
 } from "@/lib/speech/read-aloud";
 import {
+  advanceLegendListFrames,
+  advanceLegendListTime,
   enableLegendListBrowserScrollEvents,
+  installLegendListTestClock,
   installLegendListViewportMetrics,
   setLegendListScrollContainerScrollHeightOverride,
   settleLegendList,
@@ -228,6 +232,14 @@ const legendListRefHolder = vi.hoisted(() => ({
   current: null as import("@legendapp/list/react").LegendListRef | null,
 }));
 
+// Every scroll command the list's ref has returned and not yet settled. The
+// tee below fills it so a test can wait for the list to hold no command,
+// instead of guessing how many frames that takes on a loaded runner.
+const pendingListCommands = vi.hoisted(() => new Set<Promise<void>>());
+const trackedListInstances = vi.hoisted(
+  () => new WeakSet<import("@legendapp/list/react").LegendListRef>(),
+);
+
 vi.mock("@legendapp/list/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@legendapp/list/react")>();
   const TeedLegendList: typeof actual.LegendList = (props) => {
@@ -236,6 +248,28 @@ vi.mock("@legendapp/list/react", async (importOriginal) => {
     const teeRef = useCallback(
       (instance: import("@legendapp/list/react").LegendListRef | null) => {
         legendListRefHolder.current = instance;
+        if (instance !== null && !trackedListInstances.has(instance)) {
+          trackedListInstances.add(instance);
+          const track = (command: Promise<void>) => {
+            pendingListCommands.add(command);
+            const forget = () => {
+              pendingListCommands.delete(command);
+            };
+            command.then(forget, forget);
+            return command;
+          };
+          const { scrollToEnd, scrollToIndex, scrollToOffset, scrollToItem } =
+            instance;
+          const { scrollIndexIntoView, scrollItemIntoView } = instance;
+          instance.scrollToEnd = (options) => track(scrollToEnd(options));
+          instance.scrollToIndex = (params) => track(scrollToIndex(params));
+          instance.scrollToOffset = (params) => track(scrollToOffset(params));
+          instance.scrollToItem = (params) => track(scrollToItem(params));
+          instance.scrollIndexIntoView = (params) =>
+            track(scrollIndexIntoView(params));
+          instance.scrollItemIntoView = (params) =>
+            track(scrollItemIntoView(params));
+        }
         if (typeof ref === "function") {
           ref(instance);
         } else if (ref) {
@@ -1140,8 +1174,21 @@ function installChatFindHighlights(): void {
   });
 }
 
+// Resolves once the list holds no scroll command. The follow latch's `.then`
+// and the tracking `.then` are both registered when a command is issued,
+// before this `allSettled`, so by the time the set is empty the latch has
+// dropped its record of the command.
+async function settleListCommands(): Promise<void> {
+  while (pendingListCommands.size > 0) {
+    await act(async () => {
+      await Promise.allSettled([...pendingListCommands]);
+    });
+  }
+}
+
 describe("ChatMessages scroll policy", () => {
   beforeEach(() => {
+    pendingListCommands.clear();
     activityGroupOpenIds.lastOpenIds = new Set();
     activityGroupOpenIds.setOpenCalls = [];
     platformMock.isMac = true;
@@ -1465,7 +1512,7 @@ describe("ChatMessages scroll policy", () => {
   });
 
   describe("keyboard scrolling", () => {
-    it("ArrowUp and ArrowDown both cancel live-follow (symmetric, decision #7)", async () => {
+    it("ArrowUp cancels live-follow; ArrowDown while following keeps it, as a downward wheel does", async () => {
       const messages = makeTranscript(16);
       const { rerenderMessages } = renderChatMessages({
         messages,
@@ -1476,23 +1523,12 @@ describe("ChatMessages scroll policy", () => {
       act(() => {
         dispatchKeyInScope("ArrowDown");
       });
-      await fireScrollTopAndFlush(0);
-      await waitFor(() => {
-        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
-      });
-      const afterDown = getScrollNode().scrollTop;
-
+      await settleLegendList();
       let next = appendAssistant(messages, "k-stream-1", 50_000);
       rerenderMessages(next);
       await settleLegendList();
-      expect(getScrollNode().scrollTop).toBe(afterDown);
-      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
-
-      // Re-enter following via the pill after free-scrolling away.
-      await enterFreeScrollingAwayFromEnd();
-      await waitForPillVisible();
-      fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
-      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      expect(isJumpPillVisible()).toBe(false);
 
       act(() => {
         dispatchKeyInScope("ArrowUp");
@@ -1551,6 +1587,47 @@ describe("ChatMessages scroll policy", () => {
 
       expect(commandDown.defaultPrevented).toBe(true);
       expect(scrollNode.scrollTop).toBe(maxScrollTopFor(scrollNode));
+    });
+
+    // The list pads its content end for a frame when the DOM lags the size it
+    // laid out; an End inside that padding paints an empty viewport.
+    it("takes End to the list's content end while it holds padding past it", async () => {
+      const PAD_PX = 80;
+      renderChatMessages({
+        messages: makeTranscript(20),
+        scrollStateKey: "kbd-end-inside-pad",
+      });
+      await settleLegendList();
+      const scrollNode = getScrollNode();
+      const domEnd = maxScrollTopFor(scrollNode);
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("LegendList ref is not mounted");
+      const state = list.getState();
+      vi.spyOn(list, "getState").mockImplementation(() => ({
+        ...state,
+        contentLength: domEnd - PAD_PX + scrollNode.clientHeight,
+      }));
+      const content = scrollNode.querySelector<HTMLElement>(
+        ":scope > .legend-list-content-container",
+      );
+      if (content === null) throw new Error("content container is missing");
+      content.style.paddingBottom = `${PAD_PX}px`;
+      act(() => {
+        scrollNode.scrollTop = 0;
+      });
+
+      const end = new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        scrollNode.dispatchEvent(end);
+      });
+
+      expect(end.defaultPrevented).toBe(true);
+      expect(scrollNode.scrollTop).toBe(domEnd - PAD_PX);
     });
 
     it("leaves a macOS command-arrow chord to a custom keybinding", async () => {
@@ -3941,7 +4018,7 @@ describe("ChatMessages scroll policy", () => {
       },
     );
 
-    it("corrects a restored landing with an absolute measured offset when index restoration is a no-op", async () => {
+    it("re-lands a restored row the bootstrap moved off its measured offset", async () => {
       const messages = makeCompletedTranscript(20);
       const targetIndex = 8;
       const targetId = messages[targetIndex].id;
@@ -3964,25 +4041,506 @@ describe("ChatMessages scroll policy", () => {
       const list = legendListRefHolder.current;
       expect(list).not.toBeNull();
       if (list === null) throw new Error("LegendList ref did not mount");
+      // The bootstrap leaves the list at the top after the restore's first
+      // command: its retry must land the saved row anyway.
       const scrollNode = getScrollNode();
       scrollNode.scrollTop = 0;
-      const indexRestore = vi
-        .spyOn(list, "scrollToIndex")
-        .mockResolvedValue(undefined);
-      const absoluteRestore = vi.spyOn(list, "scrollToOffset");
 
       await settleLegendList();
       await settleLegendList();
 
       const expectedScrollTop = LEGEND_LIST_HEADER_PX + targetIndex * 90 + 12;
-      expect(indexRestore).not.toHaveBeenCalled();
-      expect(absoluteRestore).toHaveBeenCalledWith({
-        offset: expectedScrollTop,
-        animated: false,
-      });
       expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       view.unmount();
+    });
+
+    it("keeps a mount-time free restore running through a bare row pointerdown and saves the reader's next position", async () => {
+      const messages = makeCompletedTranscript(20);
+      const targetIndex = 8;
+      const instanceId = `t5-row-pointerdown-restore-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(instanceId);
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: messages[targetIndex].id,
+        anchorIndex: targetIndex,
+        offset: -12,
+      });
+
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages,
+        scrollStateKey: instanceId,
+        instanceId,
+      });
+      // A click on a row before the restore settles says nothing about where
+      // the reader wants to be.
+      fireEvent.pointerDown(screen.getAllByText(/User message \d+/)[0]);
+      await settleLegendList();
+      await settleLegendList();
+
+      const scrollNode = getScrollNode();
+      expect(scrollNode.scrollTop).toBe(
+        LEGEND_LIST_HEADER_PX + targetIndex * 90 + 12,
+      );
+
+      // Saving resumed: the reader's later position is what persists.
+      const movedTop = LEGEND_LIST_HEADER_PX + 3 * 90 + 12;
+      await act(async () => {
+        scrollNode.scrollTop = movedTop;
+        fireEvent.scroll(scrollNode);
+        await Promise.resolve();
+      });
+      await settleLegendList();
+      view.unmount();
+
+      const saved = restoreChatTabState(
+        identity,
+        messages.map((message) => message.id),
+      );
+      expect(saved.anchorMessageId).toBe(messages[3].id);
+    });
+
+    it("keeps a mount restore of a last-screenful row running through a strict-bottom report and resumes saving", async () => {
+      const messages = makeCompletedTranscript(20);
+      const targetIndex = 18;
+      const instanceId = `t5-strict-bottom-restore-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(instanceId);
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: messages[targetIndex].id,
+        anchorIndex: targetIndex,
+        offset: -12,
+      });
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+      );
+
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages,
+        scrollStateKey: instanceId,
+        instanceId,
+      });
+      // The restore's first command clamps to the strict bottom: the saved
+      // row sits in the last screenful, so its own landing is the bottom.
+      const scrollNode = getScrollNode();
+      await act(async () => {
+        scrollNode.scrollTop = maxScrollTopFor(scrollNode);
+        fireEvent.scroll(scrollNode);
+        await Promise.resolve();
+      });
+      // A row then measures taller: the saved row can now rise to its offset.
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * 90 + 40 + 600,
+      );
+      await settleLegendList();
+      await settleLegendList();
+
+      const movedTop = LEGEND_LIST_HEADER_PX + 3 * 90 + 12;
+      await act(async () => {
+        scrollNode.scrollTop = movedTop;
+        fireEvent.scroll(scrollNode);
+        await Promise.resolve();
+      });
+      await settleLegendList();
+      view.unmount();
+
+      const saved = restoreChatTabState(
+        identity,
+        messages.map((message) => message.id),
+      );
+      expect(saved.anchorMessageId).toBe(messages[3].id);
+    });
+
+    describe("a reader gesture and the list's held scroll command", () => {
+      function mountWithSavedFreePosition() {
+        const messages = makeCompletedTranscript(20);
+        const instanceId = `t5-cancel-pending-${Math.random().toString(36).slice(2)}`;
+        saveChatTabState({
+          identity: makeDefaultTestIdentity(instanceId),
+          mode: "free-scrolling",
+          anchorMessageId: messages[8].id,
+          anchorIndex: 8,
+          offset: -12,
+        });
+        tileLiveness.live = true;
+        return renderChatMessages({
+          messages,
+          scrollStateKey: instanceId,
+          instanceId,
+        });
+      }
+
+      function spyCancelPendingScroll() {
+        const list = legendListRefHolder.current;
+        if (list === null) throw new Error("LegendList ref is not mounted");
+        return vi.spyOn(list, "cancelPendingScroll");
+      }
+
+      it("cancels the command a restore still holds when the reader wheels", () => {
+        const view = mountWithSavedFreePosition();
+        const cancel = spyCancelPendingScroll();
+
+        fireEvent.wheel(getScrollNode(), { deltaY: 40 });
+
+        expect(cancel).toHaveBeenCalledTimes(1);
+        view.unmount();
+      });
+
+      // The scroll box gets the transcript's real height so a following reader
+      // rests at the strict bottom; under the shim's larger height the latch
+      // keeps correcting toward an end it never reaches. The wheel waits for
+      // the list to hold no command, since a correction issued just before it
+      // is in flight and the wheel would rightly cancel it.
+      it("leaves the list alone when a wheel finds no restore or navigation in flight", async () => {
+        const messages = makeCompletedTranscript(20);
+        setLegendListScrollContainerScrollHeightOverride(
+          LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+        );
+        const view = renderChatMessages({
+          messages,
+          scrollStateKey: "t5-cancel-pending-idle",
+        });
+        await settleLegendList();
+        await settleListCommands();
+        const cancel = spyCancelPendingScroll();
+
+        fireEvent.wheel(getScrollNode(), { deltaY: -40 });
+
+        expect(cancel).not.toHaveBeenCalled();
+        view.unmount();
+      });
+
+      // The end pad's reset clamps a departed reader onto the new end while
+      // the turn runs, which holds them there; the turn ending releases them,
+      // since nothing will grow past them now.
+      const TURN_END_PAD_PX = 56;
+      async function heldAtNewEndWhileTurnRuns() {
+        installLegendListTestClock();
+        const messages = makeCompletedTranscript(20);
+        const lastIndex = messages.length - 1;
+        const streaming = messages.map((message, index) =>
+          index === lastIndex
+            ? { ...message, completedAt: null, runState: "running" as const }
+            : message,
+        );
+        const baseHeight = LEGEND_LIST_HEADER_PX + messages.length * 90 + 40;
+        setLegendListScrollContainerScrollHeightOverride(
+          baseHeight + TURN_END_PAD_PX,
+        );
+        const view = renderChatMessages({
+          messages: streaming,
+          scrollStateKey: `t5-turn-rest-${Math.random().toString(36).slice(2)}`,
+        });
+        await settleLegendList();
+        const scrollNode = getScrollNode();
+        const paddedEnd = maxScrollTopFor(scrollNode);
+        act(() => {
+          scrollNode.scrollTop = paddedEnd;
+          fireEvent.scroll(scrollNode);
+        });
+        await advanceLegendListFrames(2);
+        expect(scrollNode.dataset.scrollMode).toBe("following-end");
+
+        fireEvent.wheel(scrollNode, { deltaY: -40 });
+        act(() => {
+          scrollNode.scrollTop = paddedEnd - 40;
+          fireEvent.scroll(scrollNode);
+        });
+        await advanceLegendListFrames(2);
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+
+        // The pad resets and the browser clamps them onto the new end.
+        setLegendListScrollContainerScrollHeightOverride(baseHeight);
+        const end = maxScrollTopFor(scrollNode);
+        act(() => {
+          scrollNode.scrollTop = end;
+          fireEvent.scroll(scrollNode);
+        });
+        await advanceLegendListFrames(2);
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+        return { view, scrollNode, end, messages };
+      }
+
+      it("follows again once the turn ends under a reader the end pad's reset clamped onto the end", async () => {
+        const { view, scrollNode, messages } =
+          await heldAtNewEndWhileTurnRuns();
+
+        view.rerenderMessages(messages);
+        await advanceLegendListFrames(2);
+
+        expect(scrollNode.dataset.scrollMode).toBe("following-end");
+        view.unmount();
+      });
+
+      it("control: leaves a held reader who is away from the strict bottom when the turn ends", async () => {
+        const { view, scrollNode, end, messages } =
+          await heldAtNewEndWhileTurnRuns();
+        act(() => {
+          scrollNode.scrollTop = end - 40;
+        });
+
+        view.rerenderMessages(messages);
+        await advanceLegendListFrames(2);
+
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+        view.unmount();
+      });
+
+      async function mountAndClickScrollToEnd() {
+        const view = renderChatMessages({
+          messages: makeCompletedTranscript(20),
+          scrollStateKey: `t5-cancel-pending-end-${Math.random().toString(36).slice(2)}`,
+        });
+        await settleLegendList();
+        await enterFreeScrollingAwayFromEnd();
+        const pill = queryScrollToEndPill();
+        if (pill === null) throw new Error("scroll-to-end pill is not mounted");
+        fireEvent.click(pill);
+        return view;
+      }
+
+      it("cancels the command an end navigation still holds when the reader wheels", async () => {
+        const view = await mountAndClickScrollToEnd();
+        const cancel = spyCancelPendingScroll();
+
+        fireEvent.wheel(getScrollNode(), { deltaY: 40 });
+
+        expect(cancel).toHaveBeenCalledTimes(1);
+        view.unmount();
+      });
+
+      // Virtual time: the component's navigation claim lasts until its settle
+      // loop ends, which waits on `scrollend` or a 750 ms fallback with
+      // retries and can outlast the loop's last command. Nothing outside the
+      // component can observe it, so the test runs the clock past every wait.
+      it("leaves the list's commands alone when a wheel follows a settled end navigation", async () => {
+        installLegendListTestClock();
+        const messages = makeCompletedTranscript(20);
+        setLegendListScrollContainerScrollHeightOverride(
+          LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+        );
+        const view = renderChatMessages({
+          messages,
+          scrollStateKey: `t5-settled-end-${Math.random().toString(36).slice(2)}`,
+        });
+        await advanceLegendListTime(5 * CHAT_ANCHOR_SETTLE_FALLBACK_MS);
+        const scrollNode = getScrollNode();
+        fireEvent.wheel(scrollNode, { deltaY: -80 });
+        act(() => {
+          scrollNode.scrollTop = 0;
+          fireEvent.scroll(scrollNode);
+        });
+        await advanceLegendListFrames(2);
+        const pill = queryScrollToEndPill();
+        if (pill === null) throw new Error("scroll-to-end pill is not mounted");
+        fireEvent.click(pill);
+        await advanceLegendListTime(5 * CHAT_ANCHOR_SETTLE_FALLBACK_MS);
+        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+        const cancel = spyCancelPendingScroll();
+
+        // Toward the end while following: the latch's own end correction and
+        // a structural commit's anchor lock belong to no navigation.
+        fireEvent.wheel(getScrollNode(), { deltaY: 40 });
+
+        expect(cancel).not.toHaveBeenCalled();
+        view.unmount();
+      });
+
+      // Virtual time, for the same reason as the navigation test above: the
+      // aborted restore's claim ends with its settle loop, which no frame
+      // count on a loaded runner reliably outlasts.
+      it("leaves the list's commands alone once a restore that reader input aborted has settled", async () => {
+        installLegendListTestClock();
+        const view = mountWithSavedFreePosition();
+        const cancel = spyCancelPendingScroll();
+        fireEvent.wheel(getScrollNode(), { deltaY: 40 });
+        expect(cancel).toHaveBeenCalledTimes(1);
+        await advanceLegendListTime(5 * CHAT_ANCHOR_SETTLE_FALLBACK_MS);
+        const scrollNode = getScrollNode();
+        act(() => {
+          scrollNode.scrollTop = maxScrollTopFor(scrollNode);
+          fireEvent.scroll(scrollNode);
+        });
+        await advanceLegendListFrames(2);
+        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+        cancel.mockClear();
+
+        fireEvent.wheel(getScrollNode(), { deltaY: 40 });
+
+        expect(cancel).not.toHaveBeenCalled();
+        view.unmount();
+      });
+
+      // The list holds a command while the window paints no frames, which is
+      // when a settle loop times out and gives up. These hold the command's
+      // promise until the test settles it.
+      describe("a command the list still holds after its loop has given up", () => {
+        function holdListCommands() {
+          const settlers: Array<() => void> = [];
+          return {
+            hold: (): Promise<void> =>
+              new Promise<void>((resolve) => {
+                settlers.push(resolve);
+              }),
+            settleAll: (): void => {
+              for (const settle of settlers.splice(0)) settle();
+            },
+            // Holds the first command only. Later ones (the latch's own end
+            // correction, issued behind the pill's) run to completion, so the
+            // pill's is the one command left held.
+            holdFirst: (): Promise<void> => {
+              if (settlers.length > 0) return Promise.resolve();
+              return new Promise<void>((resolve) => {
+                settlers.push(resolve);
+              });
+            },
+          };
+        }
+
+        // Longer than every attempt of a bounded loop whose waits all time out.
+        async function exhaustTimedOutSettleLoop(): Promise<void> {
+          await advanceLegendListTime(
+            5 * CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS,
+          );
+        }
+
+        function requireList() {
+          const list = legendListRefHolder.current;
+          if (list === null) throw new Error("LegendList ref is not mounted");
+          return list;
+        }
+
+        it("cancels a restore's command until it settles, and only then leaves the list alone", async () => {
+          installLegendListTestClock();
+          const view = mountWithSavedFreePosition();
+          await settleLegendList();
+          await hideWithCollapsedScrollBox(view.rerenderWith);
+          const held = holdListCommands();
+          vi.spyOn(requireList(), "scrollToIndex").mockImplementation(
+            held.hold,
+          );
+          // Showing again replays the saved row, and every wait times out.
+          view.rerenderWith({ visible: true });
+          await exhaustTimedOutSettleLoop();
+          const cancel = spyCancelPendingScroll();
+
+          fireEvent.wheel(getScrollNode(), { deltaY: -40 });
+          expect(cancel).toHaveBeenCalledTimes(1);
+
+          held.settleAll();
+          const scrollNode = getScrollNode();
+          act(() => {
+            scrollNode.scrollTop = maxScrollTopFor(scrollNode);
+            fireEvent.scroll(scrollNode);
+          });
+          await advanceLegendListFrames(2);
+          expect(scrollNode.dataset.scrollMode).toBe("following-end");
+          cancel.mockClear();
+
+          fireEvent.wheel(scrollNode, { deltaY: 40 });
+
+          expect(cancel).not.toHaveBeenCalled();
+          view.unmount();
+        });
+
+        async function clickScrollToEndWithHeldCommand() {
+          installLegendListTestClock();
+          const messages = makeCompletedTranscript(20);
+          setLegendListScrollContainerScrollHeightOverride(
+            LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+          );
+          const view = renderChatMessages({
+            messages,
+            scrollStateKey: `t5-held-end-${Math.random().toString(36).slice(2)}`,
+          });
+          await settleLegendList();
+          const scrollNode = getScrollNode();
+          fireEvent.wheel(scrollNode, { deltaY: -80 });
+          act(() => {
+            scrollNode.scrollTop = 0;
+            fireEvent.scroll(scrollNode);
+          });
+          await advanceLegendListFrames(2);
+          const pill = queryScrollToEndPill();
+          if (pill === null)
+            throw new Error("scroll-to-end pill is not mounted");
+          vi.spyOn(requireList(), "scrollToEnd").mockImplementation(
+            holdListCommands().holdFirst,
+          );
+          fireEvent.click(pill);
+          return view;
+        }
+
+        it("cancels the pill's end command that is still held after its settle", async () => {
+          const view = await clickScrollToEndWithHeldCommand();
+          await advanceLegendListTime(2 * CHAT_ANCHOR_SETTLE_FALLBACK_MS);
+          const cancel = spyCancelPendingScroll();
+
+          fireEvent.wheel(getScrollNode(), { deltaY: -40 });
+
+          expect(cancel).toHaveBeenCalledTimes(1);
+          view.unmount();
+        });
+
+        it("cancels the pill's held end command after a bare pointerdown abandoned its loop", async () => {
+          const view = await clickScrollToEndWithHeldCommand();
+          // A preflight abandons the loop but leaves the list's command.
+          fireEvent.pointerDown(screen.getAllByText(/User message \d+/)[0]);
+          await advanceLegendListTime(2 * CHAT_ANCHOR_SETTLE_FALLBACK_MS);
+          const cancel = spyCancelPendingScroll();
+
+          fireEvent.wheel(getScrollNode(), { deltaY: -40 });
+
+          expect(cancel).toHaveBeenCalledTimes(1);
+          view.unmount();
+        });
+
+        it("cancels a scroll-request landing's command that is still held after its loop gave up", async () => {
+          installLegendListTestClock();
+          const messages = makeCompletedTranscript(20);
+          setLegendListScrollContainerScrollHeightOverride(
+            LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+          );
+          const view = renderChatMessages({
+            messages,
+            scrollStateKey: `t5-held-landing-${Math.random().toString(36).slice(2)}`,
+          });
+          await settleLegendList();
+          const held = holdListCommands();
+          vi.spyOn(requireList(), "scrollToOffset").mockImplementation(
+            held.hold,
+          );
+          view.rerenderWith({
+            scrollRequest: {
+              kind: "message",
+              messageId: messages[3].id,
+              blockId: null,
+              requestId: 51,
+            },
+          });
+          await exhaustTimedOutSettleLoop();
+          const cancel = spyCancelPendingScroll();
+
+          fireEvent.wheel(getScrollNode(), { deltaY: -40 });
+
+          expect(cancel).toHaveBeenCalledTimes(1);
+          view.unmount();
+        });
+      });
+
+      it("keeps the restore's command through a bare pointerdown preflight", () => {
+        const view = mountWithSavedFreePosition();
+        const cancel = spyCancelPendingScroll();
+
+        fireEvent.pointerDown(screen.getAllByText(/User message \d+/)[0]);
+
+        expect(cancel).not.toHaveBeenCalled();
+        view.unmount();
+      });
     });
 
     it("keeps the pre-restore snapshot authoritative when a bootstrap mount unmounts before convergence", () => {
@@ -5402,6 +5960,42 @@ describe("ChatMessages scroll policy", () => {
       });
     });
 
+    it("leaves no owner behind when showing the chat cancels its navigation, so the tail is followed", async () => {
+      const messages = makeCompletedTranscript(24);
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+      );
+      const { rerenderWith, rerenderMessages } = renderChatMessages({
+        messages,
+        scrollStateKey: `scroll-to-top-cancelled-${Math.random().toString(36).slice(2)}`,
+      });
+      await settleLegendList();
+      assertTrueBottomGeometry();
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("LegendList ref is not mounted");
+      // The navigation's command never runs: it stays in flight with the
+      // view still at the tail.
+      vi.spyOn(list, "scrollToIndex").mockReturnValue(
+        new Promise<void>(() => undefined),
+      );
+      act(() => {
+        getScrollNode().dispatchEvent(new ScrollToTopRequestEvent(false));
+      });
+
+      // Showing the chat again cancels it and issues nothing in its place.
+      rerenderWith({ visible: false });
+      rerenderWith({ visible: true });
+      await settleLegendList();
+      const grown = makeCompletedTranscript(26);
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + grown.length * 90 + 40,
+      );
+      rerenderMessages(grown);
+      await settleLegendList();
+
+      assertTrueBottomGeometry();
+    });
+
     it("leaves a request aimed at anything else inside the transcript to the default", async () => {
       renderChatMessages({
         messages: makeTranscript(24),
@@ -5675,6 +6269,47 @@ describe("ChatMessages scroll policy", () => {
         expect(isJumpPillVisible()).toBe(false);
       });
       expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+    });
+
+    it("pill click keeps following a tail that outgrows every landing", async () => {
+      const baseMessages = makeTranscript(30);
+      let heightPx = LEGEND_LIST_HEADER_PX + baseMessages.length * 90 + 40;
+      setLegendListScrollContainerScrollHeightOverride(heightPx);
+      const { rerenderMessages } = renderChatMessages({
+        messages: baseMessages,
+        scrollStateKey: "pill-click-outgrown-tail",
+      });
+      await settleLegendList();
+      await enterFreeScrollingAwayFromEnd();
+      await waitForPillVisible();
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Scroll to end" }));
+      });
+      // Longer than three settles, the tail grows on every frame.
+      let streamed: ReadonlyArray<ChatMessageModel> = baseMessages;
+      for (let frame = 0; frame < 12; frame += 1) {
+        heightPx += 120;
+        setLegendListScrollContainerScrollHeightOverride(heightPx);
+        streamed = appendAssistant(
+          streamed,
+          `outgrown-tail-${frame}`,
+          99_000 + frame,
+        );
+        await act(async () => {
+          rerenderMessages(streamed);
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
+        });
+        expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+        expect(isJumpPillVisible()).toBe(false);
+      }
+
+      await settleLegendList();
+      await settleLegendList();
+      expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+      expect(isJumpPillVisible()).toBe(false);
     });
 
     it("near-end (inside former 10% band, >1px from edge) does not follow growth", async () => {
@@ -6192,17 +6827,17 @@ describe("ChatMessages scroll policy", () => {
         throw new Error("LegendList ref is not mounted");
       }
       // Force the first bounded restore operation (initial + retries) to
-      // resolve its scroll promise without ever applying the target offset,
-      // so every validate() fails and onExhausted runs.
-      const originalScrollToOffset = list.scrollToOffset.bind(list);
+      // resolve its scroll promise without ever landing the saved row, so
+      // every validate() fails and onExhausted runs.
+      const originalScrollToIndex = list.scrollToIndex.bind(list);
       let failLandings = true;
-      const scrollToOffsetSpy = vi
-        .spyOn(list, "scrollToOffset")
+      const scrollToIndexSpy = vi
+        .spyOn(list, "scrollToIndex")
         .mockImplementation((options) => {
           if (failLandings) {
             return Promise.resolve();
           }
-          return originalScrollToOffset(options);
+          return originalScrollToIndex(options);
         });
 
       try {
@@ -6246,7 +6881,7 @@ describe("ChatMessages scroll policy", () => {
         expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
         expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       } finally {
-        scrollToOffsetSpy.mockRestore();
+        scrollToIndexSpy.mockRestore();
       }
     });
 
@@ -6404,21 +7039,24 @@ describe("ChatMessages scroll policy", () => {
       // browser scroll event reports isAtEnd=false - the exact moment the
       // deleted onIsAtEndChange branch used to clear the coordinate) without
       // landing on the saved row+offset that validation requires.
-      const originalScrollToOffset = list.scrollToOffset.bind(list);
+      const originalScrollToIndex = list.scrollToIndex.bind(list);
       let failLandings = true;
-      const scrollToOffsetSpy = vi
-        .spyOn(list, "scrollToOffset")
+      const scrollToIndexSpy = vi
+        .spyOn(list, "scrollToIndex")
         .mockImplementation((options) => {
           if (failLandings) {
             const node = list.getScrollableNode();
+            const rowTop = list.getState().positionAtIndex(options.index);
             const requested =
-              typeof options.offset === "number" ? options.offset : 0;
+              (typeof rowTop === "number" ? rowTop : 0) +
+              LEGEND_LIST_HEADER_PX -
+              (options.viewOffset ?? 0);
             // Offset by more than landing epsilon; leave the strict end so
             // onIsAtEndChange(false) runs under enableLegendListBrowserScrollEvents.
             node.scrollTop = Math.max(0, requested + 80);
             return Promise.resolve();
           }
-          return originalScrollToOffset(options);
+          return originalScrollToIndex(options);
         });
 
       try {
@@ -6464,7 +7102,7 @@ describe("ChatMessages scroll policy", () => {
         expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
         expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       } finally {
-        scrollToOffsetSpy.mockRestore();
+        scrollToIndexSpy.mockRestore();
       }
     });
 

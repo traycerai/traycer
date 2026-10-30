@@ -78,7 +78,7 @@ function stack(id: string): RailEntry {
 }
 
 /**
- * The nine panels with no link and no divider.
+ * The ten panels with no link and no divider.
  *
  * What the reorder tests below are about is `placedBeside`, which places ONE
  * member by id; the shipped rail's stack (L-166) has its own describe, and
@@ -111,6 +111,7 @@ describe("the shipped rail (L-155, L-166)", () => {
       "railArtifacts",
       "railTerminals",
       "railBrowsers",
+      "railSimulators",
       "railGitDiff",
       "railPullRequests",
       "railFileTree",
@@ -145,6 +146,7 @@ describe("the shipped rail (L-155, L-166)", () => {
       "artifacts",
       "terminals",
       "browsers",
+      "simulators",
       "git-diff",
       "pull-requests",
       "file-tree",
@@ -191,6 +193,7 @@ describe("a panel moved within the rail", () => {
       "railArtifacts",
       "railTerminals",
       "railBrowsers",
+      "railSimulators",
       "railGitDiff",
       "railPullRequests",
       "railFileTree",
@@ -210,6 +213,7 @@ describe("a panel moved within the rail", () => {
       "railTerminals",
       "railAgents",
       "railBrowsers",
+      "railSimulators",
       "railGitDiff",
       "railPullRequests",
       "railFileTree",
@@ -340,6 +344,7 @@ describe("railFromPanelIdOrder", () => {
       "railArtifacts",
       "railTerminals",
       "railBrowsers",
+      "railSimulators",
       "railGitDiff",
       "railPullRequests",
       "railFileTree",
@@ -364,9 +369,9 @@ describe("normalizeRail", () => {
         entry.kind === "panel" ? [entry.id] : [],
       ),
     );
-    // Beside Browsers, where it belongs - not appended after Comments.
+    // Beside Mobile simulators, where it belongs - not appended after Comments.
     expect(panelIdsOf(rail).indexOf("git-diff")).toBe(
-      panelIdsOf(rail).indexOf("browsers") + 1,
+      panelIdsOf(rail).indexOf("simulators") + 1,
     );
   });
 
@@ -950,12 +955,13 @@ describe("resolvePersistedArrangement", () => {
     // piling up at the end. The stored divider survives with its id.
     expect(
       arrangement.rail.filter((entry) => entry.kind === "panel"),
-    ).toHaveLength(9);
+    ).toHaveLength(10);
     expect(idsOf(arrangement.rail)).toEqual([
       "railAgents",
       "railArtifacts",
       "railTerminals",
       "railBrowsers",
+      "railSimulators",
       "railGitDiff",
       "railPullRequests",
       "railFileTree",
@@ -1151,6 +1157,7 @@ describe("a stack link, normalised (L-166)", () => {
       "railAgents",
       "railTerminals",
       "railBrowsers",
+      "railSimulators",
       "railGitDiff",
       "railPullRequests",
       "railFileTree",
@@ -1180,6 +1187,7 @@ describe("a stack link, normalised (L-166)", () => {
       "stack:railAgents+railArtifacts+railBrowsers",
       "railArtifacts",
       "railBrowsers",
+      "railSimulators",
       "railTerminals",
       "railGitDiff",
       "railPullRequests",
@@ -1285,6 +1293,7 @@ describe("stacking and unstacking (L-168)", () => {
       "railBrowsers",
       "stack:railBrowsers+railTerminals",
       "railTerminals",
+      "railSimulators",
       "railGitDiff",
       "railPullRequests",
       "railFileTree",
@@ -1301,6 +1310,7 @@ describe("stacking and unstacking (L-168)", () => {
       "railArtifacts",
       "railTerminals",
       "railBrowsers",
+      "railSimulators",
       "railGitDiff",
       "railPullRequests",
       "railFileTree",
@@ -1357,7 +1367,8 @@ describe("stacking and unstacking (L-168)", () => {
       "railTerminals",
       "railBrowsers",
       "railGitDiff",
-      ...idsOf(FLAT_RAIL).slice(5),
+      "railSimulators",
+      ...idsOf(FLAT_RAIL).slice(6),
     ]);
   });
 
@@ -1382,6 +1393,7 @@ describe("stacking and unstacking (L-168)", () => {
       "railArtifacts",
       "railTerminals",
       "railBrowsers",
+      "railSimulators",
       "railGitDiff",
       "railPullRequests",
       "railFileTree",
@@ -1408,6 +1420,7 @@ describe("stacking and unstacking (L-168)", () => {
       "stack:railTerminals+railAgents",
       "railAgents",
       "railBrowsers",
+      "railSimulators",
       "railGitDiff",
       "railPullRequests",
       "railFileTree",
@@ -1562,6 +1575,7 @@ describe("stacking and unstacking (L-168)", () => {
       );
       expect(idsOf(normalizeRail(joined.rail))).toEqual([
         "railBrowsers",
+        "railSimulators",
         "railGitDiff",
         "stack:railGitDiff+railPullRequests",
         "railPullRequests",
@@ -1587,6 +1601,7 @@ describe("stacking and unstacking (L-168)", () => {
         ),
       ).toEqual([
         "railBrowsers",
+        "railSimulators",
         "railGitDiff",
         "stack:railGitDiff+railPullRequests+railAgents+railArtifacts+railTerminals",
         "railPullRequests",
@@ -1612,9 +1627,10 @@ describe("stacking and unstacking (L-168)", () => {
         "stack:railAgents+railTerminals",
         "railTerminals",
         "railBrowsers",
+        "railSimulators",
         "railGitDiff",
         "railArtifacts",
-        ...idsOf(FLAT_RAIL).slice(5),
+        ...idsOf(FLAT_RAIL).slice(6),
       ]);
     });
 
@@ -1649,7 +1665,8 @@ describe("stacking and unstacking (L-168)", () => {
         "railGitDiff",
         "railTerminals",
         "railBrowsers",
-        ...idsOf(FLAT_RAIL).slice(5),
+        "railSimulators",
+        ...idsOf(FLAT_RAIL).slice(6),
       ]);
     });
 
@@ -1732,7 +1749,9 @@ describe("stacking and unstacking (L-168)", () => {
       expect(railPanelToStackBelow(rail, "railArtifacts")).toBe(
         "railTerminals",
       );
-      expect(railPanelToStackBelow(rail, "railBrowsers")).toBe("railGitDiff");
+      expect(railPanelToStackBelow(rail, "railBrowsers")).toBe(
+        "railSimulators",
+      );
     });
 
     it("offers nothing when the next entry is a divider, or there is none", () => {
@@ -1757,7 +1776,7 @@ describe("stacking and unstacking (L-168)", () => {
       ];
 
       expect(railPanelToStackBelow(fourAboveOne, "railBrowsers")).toBe(
-        "railGitDiff",
+        "railSimulators",
       );
     });
 

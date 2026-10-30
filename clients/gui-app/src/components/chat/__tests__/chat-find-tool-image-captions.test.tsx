@@ -101,6 +101,7 @@ function toolSegment(
     managedCommand: null,
     agentMessageReceipt: null,
     agentMessageDelivery: null,
+    botSendReceipt: null,
     isStreaming: false,
     endState: null,
     stopped: false,
@@ -125,6 +126,7 @@ function unitsFor(segment: ToolSegment): ReadonlyArray<ChatFindUnit> {
     hideReasoning: false,
     queuePauseReasonProtocolSupported: null,
     splitLongTurns: true,
+    botSendQuestionStates: null,
   })[0].units;
 }
 

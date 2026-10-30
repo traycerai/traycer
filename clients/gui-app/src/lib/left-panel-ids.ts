@@ -1,5 +1,5 @@
 /**
- * The sidebar's nine panels, as ids.
+ * The sidebar's ten panels, as ids.
  *
  * Zero imports by design, for the same reason `lib/layout/region-id.ts` has
  * none: the layout model owns the rail's shape (`lib/layout/rail.ts`), the
@@ -12,6 +12,7 @@ export const LEFT_PANEL_IDS = [
   "chats",
   "terminals",
   "browsers",
+  "simulators",
   "artifacts",
   "git-diff",
   "pull-requests",

@@ -23,6 +23,7 @@ import {
   type TerminalCreatePayload,
 } from "@/hooks/agent/use-terminal-tile-bootstrap";
 import {
+  hostNameFromLabel,
   useHostReachability,
   resolvedHostLabel,
 } from "@/hooks/agent/use-host-reachability";
@@ -392,8 +393,7 @@ function TuiAgentTileLive(
   // Read off the directory entry this component already holds rather than
   // opening a second reachability subscription per tile: the outer component
   // owns that verdict, and all this arm needs is a name to put in the banner.
-  const hostLabel =
-    hostEntry !== null && hostEntry.label.length > 0 ? hostEntry.label : hostId;
+  const hostLabel = hostNameFromLabel(hostEntry?.label ?? null, hostId);
   const closeTile = useCloseCanvasTileWithNestedFocus(
     props.viewTabId,
     props.tileId,

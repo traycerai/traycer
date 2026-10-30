@@ -64,6 +64,15 @@ const TRAVERSAL_ID = "traversal-reopened-window";
 vi.mock("@/hooks/host/use-host-client-for-host-id", async () =>
   (await import("./routing-picker-kit")).hostClientModule(),
 );
+// The picker's cloud read of Traycer's models, made only when a sandbox
+// refusal opens it; nothing here opens one.
+vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
+  useSandboxTraycerModels: () => ({
+    data: undefined,
+    error: null,
+    isPending: false,
+  }),
+}));
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", async () =>
   (await import("./routing-picker-kit")).catalogModule(),
 );

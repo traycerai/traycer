@@ -158,6 +158,7 @@ import { useTabsStore } from "@/stores/tabs/store";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 import { toast } from "sonner";
+import { returnedSandboxMessageLine } from "@/lib/sandboxes/sandbox-strings";
 import {
   buildDefaultBranchByPath,
   EMPTY_DEFAULT_BRANCH,
@@ -167,6 +168,7 @@ import {
   mainCheckoutHasCommit,
 } from "@/lib/worktree/worktree-intent-seeding";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import type { LandingSandboxSendHandoff } from "./landing-sandbox-send-handoff";
 
 export interface LandingComposerSubmitArgs {
   /** The caller-owned draft; null creates one before the exact attempt starts. */
@@ -229,16 +231,13 @@ export interface LandingStagedSandboxTaskArgs {
   /**
    * Hands the message to the new task, before it opens: `confirm` once the
    * task is created and attached to the sandbox's team, which lets the sandbox
-   * start; `giveBack` ends the send if either step fails and returns the draft
-   * holding the message again (the task replaced its original draft). `null`
-   * when there was nothing to hand, and nothing is created.
+   * start; `giveBack` returns the message to a draft that records its
+   * sandbox if setup fails, for the composer showing it to stage. A
+   * reused source keeps its newer choice: the pending send stays with a
+   * created task, and with none the message is saved in Drafts. `null` when
+   * there was nothing to hand, and nothing is created.
    */
-  readonly hand: (epicId: string) => {
-    /** The send is still pending, rather than cancelled or returned. */
-    readonly isCurrent: () => boolean;
-    readonly confirm: () => void;
-    readonly giveBack: () => string | null;
-  } | null;
+  readonly hand: (epicId: string) => LandingSandboxSendHandoff | null;
 }
 
 export interface TerminalAgentLaunch {
@@ -1649,15 +1648,27 @@ export function useLandingComposerActions(
         (useAuthStore.getState().profile?.userId ?? null) === dispatchUserId;
       // A create or attachment refusal returns the only message copy. An
       // attachment refusal leaves the already-created task on its placement.
-      const giveBack = (): void => {
+      const giveBack = (taskCreated: boolean): void => {
         if (!sameAccount() || !handed.isCurrent()) return;
-        const draftId = handed.giveBack();
-        if (draftId !== null) openLandingDraft(navigate, draftId);
+        const returned = handed.giveBack(taskCreated);
+        if (returned === null) return;
+        const { draftId } = returned;
+        if (returned.kind === "opened") {
+          openLandingDraft(navigate, draftId);
+          return;
+        }
+        // The composer holds the person's next message: saved, not opened.
+        toast(returnedSandboxMessageLine(true), {
+          action: {
+            label: "Open draft",
+            onClick: () => openLandingDraft(navigate, draftId),
+          },
+        });
       };
       const refused = (): void => {
         if (!sameAccount()) return;
         unmarkEpicCreatedThisSession(epicId);
-        giveBack();
+        giveBack(false);
       };
       void createLandingEpic({
         epicId,
@@ -1690,7 +1701,7 @@ export function useLandingComposerActions(
               await attachEnvironmentAsync({ epicId, teamId: attachTeamId });
             } catch (error) {
               if (!isAttachEnvironmentUnsupported(error)) {
-                giveBack();
+                giveBack(true);
                 return;
               }
             }

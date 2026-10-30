@@ -24,12 +24,17 @@ import { createRef, type ReactNode, type RefObject } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LegendListRef } from "@legendapp/list/react";
 import { ChatTimeline } from "@/components/chat/chat-timeline";
-import type { ChatTimelineFollowLatch } from "@/components/chat/chat-timeline-follow-latch";
+import {
+  CHAT_TIMELINE_SCROLLER_MOVED_EVENT,
+  moveChatTimelineScroller,
+  type ChatTimelineFollowLatch,
+} from "@/components/chat/chat-timeline-follow-latch";
 import { transcriptListRows } from "@/stores/chats/transcript-list-rows";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 import { makeMessage, makeMessages } from "./chat-message-fixtures";
 import {
   installLegendListViewportMetrics,
+  setLegendListMessageRowHeightOverrides,
   setLegendListScrollContainerScrollHeightOverride,
   settleLegendList,
 } from "./legend-list-test-environment";
@@ -60,6 +65,19 @@ function requireScrollNode(
     throw new Error("LegendList scrollable node is not mounted");
   }
   return node;
+}
+
+/** The latch's announced move, read back from its own event. */
+function scrollerMoveFrom(
+  event: Event,
+): { readonly from: number; readonly to: number } | null {
+  if (!(event instanceof CustomEvent)) return null;
+  const detail: unknown = event.detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  if (!("from" in detail) || !("to" in detail)) return null;
+  const { from, to } = detail;
+  if (typeof from !== "number" || typeof to !== "number") return null;
+  return { from, to };
 }
 
 /** Real native `scroll` dispatch - matches the latch's direct passive listener. */
@@ -393,7 +411,13 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     const ownedUnderLanding = vi
       .spyOn(list, "scrollToEnd")
       .mockImplementation((): Promise<void> => {
-        node.scrollTop = Math.max(0, maxScrollTop(node) - 72);
+        moveChatTimelineScroller(
+          node,
+          Math.max(0, maxScrollTop(node) - 72),
+          () => {
+            node.scrollTop = Math.max(0, maxScrollTop(node) - 72);
+          },
+        );
         fireNativeScroll(node);
         return Promise.resolve();
       });
@@ -475,7 +499,9 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     const correctionLanding = vi
       .spyOn(list, "scrollToEnd")
       .mockImplementation((): Promise<void> => {
-        node.scrollTop = maxScrollTop(node);
+        moveChatTimelineScroller(node, maxScrollTop(node), () => {
+          node.scrollTop = maxScrollTop(node);
+        });
         fireNativeScroll(node);
         return Promise.resolve();
       });
@@ -542,7 +568,13 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     const scrollToEnd = vi
       .spyOn(list, "scrollToEnd")
       .mockImplementation((): Promise<void> => {
-        node.scrollTop = Math.max(0, maxScrollTop(node) - 40);
+        moveChatTimelineScroller(
+          node,
+          Math.max(0, maxScrollTop(node) - 40),
+          () => {
+            node.scrollTop = Math.max(0, maxScrollTop(node) - 40);
+          },
+        );
         fireNativeScroll(node);
         return Promise.resolve();
       });
@@ -561,7 +593,9 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
         freezeInFlightScroll: true,
         publishesReaderPosition: false,
       });
-      node.scrollTop = Math.max(0, node.scrollTop - 180);
+      moveChatTimelineScroller(node, Math.max(0, node.scrollTop - 180), () => {
+        node.scrollTop = Math.max(0, node.scrollTop - 180);
+      });
       fireNativeScroll(node);
     });
     expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
@@ -579,7 +613,9 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     // The Todo dock now increases the lower-surface inset. Following must
     // remain live and land at the new end instead of surfacing the pill.
     scrollToEnd.mockImplementation((): Promise<void> => {
-      node.scrollTop = maxScrollTop(node);
+      moveChatTimelineScroller(node, maxScrollTop(node), () => {
+        node.scrollTop = maxScrollTop(node);
+      });
       fireNativeScroll(node);
       return Promise.resolve();
     });
@@ -596,6 +632,92 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     expectAtTrueEnd(node);
     expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
     scrollToEnd.mockRestore();
+  });
+
+  // The list patch stops compensating for an end command's target row once a
+  // write that command did not make has moved the view - the write that
+  // otherwise leaves a reader at the top they pressed Home for. A row above the
+  // target collapsing is such a write, made by the list itself when it clamps
+  // its offset to the shortened content, and the reply then streams the height
+  // back. Nothing stands in for `scrollToEnd` here: this is the real latch over
+  // the real patched list, and a reader who never touched the scroller ends the
+  // turn at the end.
+  it("holds a following reader at the end when a row collapses under them and the reply grows back", async () => {
+    const rowCount = 36;
+    const shrinkPx = 28;
+    const messages = makeMessages(rowCount);
+    const collapsingRowId = messages[rowCount - 2]?.id ?? "";
+    const streamingRowId = messages[rowCount - 1]?.id ?? "";
+    const fullHeight = contentHeightForRowCount(rowCount);
+    setLegendListScrollContainerScrollHeightOverride(fullHeight);
+    const onFollowIntentChange = vi.fn();
+    const { listRef } = renderTimeline({ messages, onFollowIntentChange });
+    await settleLegendList();
+
+    const node = requireScrollNode(listRef);
+    // Latch and list both announce the writes they make, so the landing is
+    // observable without standing in for `scrollToEnd`. Which of the two
+    // lands it is deliberately not asserted: either is a correct repair, and
+    // removing one leaves the other to do it.
+    const landings: { readonly from: number; readonly to: number }[] = [];
+    node.addEventListener(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, (event) => {
+      const move = scrollerMoveFrom(event);
+      if (move) landings.push(move);
+    });
+    parkAtStrictBottom(node);
+    await settleLegendList();
+    expectAtTrueEnd(node);
+
+    const remeasureEveryRow = (): void => {
+      act(() => {
+        fireAllResizeObservers((target) =>
+          target instanceof HTMLElement
+            ? makeResizeEntry(
+                target,
+                VIEWPORT_WIDTH_PX,
+                target.getBoundingClientRect().height,
+              )
+            : null,
+        );
+      });
+    };
+
+    // The row above the streaming reply collapses. The content now ends above
+    // the reader, so the list clamps its own offset to the shortened content
+    // and the browser clamps its scroller to the same place and reports it.
+    setLegendListMessageRowHeightOverrides(
+      new Map([[collapsingRowId, ITEM_HEIGHT_PX - shrinkPx]]),
+    );
+    setLegendListScrollContainerScrollHeightOverride(fullHeight - shrinkPx);
+    remeasureEveryRow();
+    node.scrollTop = maxScrollTop(node);
+    fireNativeScroll(node);
+    await settleLegendList();
+    expectAtTrueEnd(node);
+
+    // The reply streams the height back, and this is the turn's last content
+    // change: nothing follows it to correct a view left short of the end.
+    setLegendListMessageRowHeightOverrides(
+      new Map([
+        [collapsingRowId, ITEM_HEIGHT_PX - shrinkPx],
+        [streamingRowId, ITEM_HEIGHT_PX + shrinkPx],
+      ]),
+    );
+    setLegendListScrollContainerScrollHeightOverride(fullHeight);
+    remeasureEveryRow();
+    await settleLegendList();
+    await settleOneFrame();
+
+    expectAtTrueEnd(node);
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    // And an announced correction took them there, from the offset the
+    // collapse left them at - the reader was never yanked silently.
+    expect(
+      landings.filter(
+        (move) =>
+          move.from < maxScrollTop(node) && move.to === maxScrollTop(node),
+      ),
+    ).not.toHaveLength(0);
   });
 
   // -----------------------------------------------------------------------
@@ -1266,6 +1388,65 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       rerenderMessages(next, undefined);
       await settleLegendList();
       expectAtTrueEnd(node);
+    });
+  });
+  // jsdom lays nothing out: these show the patched list announces each write
+  // with its offsets, not that the latch tells a browser's clamp from a pan
+  // (the composer cells of `chat-send-follow.spec.ts` do).
+  describe("the list announces the writes it makes to its scroller", () => {
+    async function mountDetachedAt(scrollTop: number) {
+      const rowCount = 36;
+      setLegendListScrollContainerScrollHeightOverride(
+        contentHeightForRowCount(rowCount),
+      );
+      const { listRef } = renderTimeline({
+        messages: makeMessages(rowCount),
+      });
+      await settleLegendList();
+      const node = requireScrollNode(listRef);
+      const list = listRef.current;
+      if (!list) throw new Error("LegendList ref not mounted");
+      parkAtStrictBottom(node);
+      act(() => {
+        detachReader(node, scrollTop);
+      });
+      const moves: unknown[] = [];
+      node.addEventListener(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, (event) => {
+        if (!(event instanceof CustomEvent)) return;
+        const detail: unknown = event.detail;
+        moves.push(detail);
+      });
+      return { node, list, moves };
+    }
+
+    it("announces a visible-content adjustment with where it started, where the end was, where it landed and where it asked for", async () => {
+      const { node, list, moves } = await mountDetachedAt(1500);
+      const end = maxScrollTop(node);
+
+      act(() => {
+        list.setVisibleContentAnchorOffset(120);
+      });
+
+      expect(moves).toEqual([
+        { from: 1500, fromEnd: end, to: 1620, intended: 1620 },
+      ]);
+    });
+
+    it("announces a scroll to the end from where the reader was", async () => {
+      const { node, list, moves } = await mountDetachedAt(2000);
+      const end = maxScrollTop(node);
+
+      act(() => {
+        void list.scrollToEnd({ animated: false });
+      });
+      await settleLegendList();
+
+      expect(moves).toContainEqual({
+        from: 2000,
+        fromEnd: end,
+        to: end,
+        intended: end,
+      });
     });
   });
 });

@@ -48,7 +48,7 @@ describe("bot.subscribe@1.1 activity reason", () => {
     expect(
       botSessionActivitySchema.safeParse({
         ...FAILED,
-        reason: { ...REASON, action: "update-provider" },
+        reason: { ...REASON, action: "open-settings" },
       }).success,
     ).toBe(false);
   });
@@ -68,9 +68,42 @@ describe("bot.subscribe@1.1 activity reason", () => {
   });
 });
 
+describe("bot.subscribe@1.6 update-provider action", () => {
+  const subscribeLine = hostStreamRpcRegistry["bot.subscribe"][1];
+  const outdated = {
+    ...REASON,
+    summary: "Grok's command-line tool is out of date.",
+    code: "provider_outdated",
+    action: "update-provider",
+  } as const;
+  const frame = (action: "update-provider" | "none") => ({
+    kind: "activity",
+    target: { kind: "trunk" },
+    entry: { ...FAILED, reason: { ...outdated, action } },
+    hasBinaryPayload: false,
+  });
+
+  it("carries update-provider to a 1.6 subscriber", () => {
+    expect(subscribeLine.latestMinor).toBe(6);
+    expect(
+      subscribeLine.versions[6].contract.serverFrameSchema.parse(
+        frame("update-provider"),
+      ),
+    ).toEqual(frame("update-provider"));
+  });
+
+  it("refuses update-provider on every line from 1.1 to 1.5, which read the host's none", () => {
+    for (const minor of [1, 2, 3, 4, 5] as const) {
+      const schema = subscribeLine.versions[minor].contract.serverFrameSchema;
+      expect(schema.safeParse(frame("update-provider")).success).toBe(false);
+      expect(schema.parse(frame("none"))).toEqual(frame("none"));
+    }
+  });
+});
+
 describe("bot.conversation.send@1.1 retry and edit", () => {
   const line = hostRpcRegistry["bot.conversation.send"][1];
-  const latestSend = line.versions[line.latestMinor].contract;
+  const retrySend = line.versions[1].contract;
   const frozenSend = line.versions[0].contract;
   const POST = {
     botId: BOT_ID,
@@ -81,7 +114,7 @@ describe("bot.conversation.send@1.1 retry and edit", () => {
   };
 
   it("upgrades a 1.0 request to a new post: no retry, nothing replaced", () => {
-    const upgrade = line.versions[line.latestMinor].upgradeFromPreviousVersion;
+    const upgrade = line.versions[1].upgradeFromPreviousVersion;
     if (upgrade === null) throw new Error("expected a 1.0 to 1.1 upgrade path");
     expect(
       upgrade.upgradeRequest(frozenSend.requestSchema.parse(POST)),
@@ -99,10 +132,54 @@ describe("bot.conversation.send@1.1 retry and edit", () => {
   });
 
   it("defaults both on a 1.1 request that names neither", () => {
-    expect(latestSend.requestSchema.parse(POST)).toEqual({
+    expect(retrySend.requestSchema.parse(POST)).toEqual({
       ...POST,
       redeliver: null,
       supersedes: null,
+    });
+  });
+});
+
+describe("bot.conversation.send@1.2 a question card's answer", () => {
+  const line = hostRpcRegistry["bot.conversation.send"][1];
+  const latestSend = line.versions[line.latestMinor].contract;
+  const retrySend = line.versions[1].contract;
+  const POST = {
+    botId: BOT_ID,
+    conversationId: "conv-1",
+    text: "Now",
+    threadId: null,
+    announcementId: null,
+    redeliver: null,
+    supersedes: null,
+  };
+  const ANSWER = {
+    questionMessageId: "bot-question:req-q",
+    questionIndex: 0,
+    skipped: false,
+  };
+
+  it("upgrades a 1.1 request to one that answers no question", () => {
+    const upgrade = line.versions[2].upgradeFromPreviousVersion;
+    if (upgrade === null) throw new Error("expected a 1.1 to 1.2 upgrade path");
+    expect(upgrade.upgradeRequest(retrySend.requestSchema.parse(POST))).toEqual(
+      { ...POST, answer: null },
+    );
+  });
+
+  it("freezes 1.1 without the answer, so a request projected onto a 1.1 host loses it", () => {
+    expect(retrySend.requestSchema.parse({ ...POST, answer: ANSWER })).toEqual(
+      POST,
+    );
+  });
+
+  it("keeps the answer on a 1.2 request, and defaults it on one that names none", () => {
+    expect(latestSend.requestSchema.parse({ ...POST, answer: ANSWER })).toEqual(
+      { ...POST, answer: ANSWER },
+    );
+    expect(latestSend.requestSchema.parse(POST)).toEqual({
+      ...POST,
+      answer: null,
     });
   });
 });

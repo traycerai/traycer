@@ -19,6 +19,11 @@ const gateState = vi.hoisted(() => ({
   blockedIds: new Set<string>(),
 }));
 
+// The cloud's Traycer catalog, read only for a Traycer pick sent to a sandbox.
+vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
+  useSandboxTraycerModels: () => ({ data: undefined }),
+}));
+
 vi.mock("@/hooks/sandboxes/use-team-sandbox-harness-blocked", () => {
   const isBlocked = (harnessId: string): boolean =>
     gateState.blockedIds.has(harnessId);
@@ -117,6 +122,7 @@ function renderToolbarStore() {
       tuiOnly: false,
       chatLineCarriesAutoMode: null,
       stagedSurfaceKey: null,
+      sendsToRestingSandbox: false,
     }),
   );
 }

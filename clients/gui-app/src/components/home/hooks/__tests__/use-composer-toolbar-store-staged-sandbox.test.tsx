@@ -38,6 +38,11 @@ function modelOption(harnessId: string, slug: string) {
 const CLAUDE_MODELS = { models: [modelOption("claude", "sonnet-5.5")] };
 const CODEX_MODELS = { models: [modelOption("codex", "gpt-6-astra")] };
 
+// The cloud's Traycer catalog, read only for a Traycer pick sent to a sandbox.
+vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
+  useSandboxTraycerModels: () => ({ data: undefined }),
+}));
+
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessesQueryForClient: () => ({ data: HARNESSES }),
   useGuiHarnessModelsQueryForClient: (
@@ -160,6 +165,7 @@ function renderLandingToolbar() {
         tuiOnly: false,
         chatLineCarriesAutoMode: null,
         stagedSurfaceKey: SURFACE,
+        sendsToRestingSandbox: false,
       },
     ),
   );

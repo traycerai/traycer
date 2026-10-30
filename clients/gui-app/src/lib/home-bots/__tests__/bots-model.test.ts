@@ -8,7 +8,7 @@ import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription"
 import {
   buildHomeBotRow,
   buildHomeBotsModel,
-  foldTaskCheckins,
+  countSpunTasks,
   homeBotState,
   type HomeBotState,
 } from "../bots-model";
@@ -57,36 +57,34 @@ function bot(
   };
 }
 
-function trackingTask(
-  taskId: string,
-  nextAt: number | null,
-  lastCheckinAt: number | null,
-): BotTaskEntry {
+function trackingTask(taskId: string, spun: boolean | null): BotTaskEntry {
   return {
     taskId,
-    cadence:
-      nextAt === null
-        ? { kind: "on-completion" }
-        : { kind: "every", seconds: 60 },
-    lastCheckinAt,
+    cadence: { kind: "every", seconds: 60 },
+    lastCheckinAt: null,
     lastCheckin: null,
-    nextAt,
+    nextAt: null,
     state: "tracking",
     endedReason: null,
     createdByUserId: null,
+    spun,
+    label: null,
+    originRequestId: null,
+    createdByChatId: null,
+    checkins: null,
+    inputNeeded: null,
+    pause: null,
+    stop: null,
+    runRequest: null,
   };
 }
 
-function endedTask(taskId: string, lastCheckinAt: number | null): BotTaskEntry {
+function endedTask(taskId: string): BotTaskEntry {
   return {
-    taskId,
+    ...trackingTask(taskId, true),
     cadence: { kind: "none" },
-    lastCheckinAt,
-    lastCheckin: null,
-    nextAt: null,
     state: "ended",
     endedReason: "by-bot",
-    createdByUserId: null,
   };
 }
 
@@ -103,6 +101,8 @@ function snapshot(input: {
     openRequestCount: input.openRequestCount,
     conversationsRevision: null,
     notificationSubscriptions: null,
+    surfaceActions: null,
+    stoppedNotificationWatches: null,
     boundHost: { hostId: input.hostId, epoch: 2, isThisHost: input.isThisHost },
     activity: null,
   };
@@ -239,28 +239,20 @@ describe("buildHomeBotsModel", () => {
   });
 });
 
-describe("foldTaskCheckins", () => {
-  it("counts only tracking tasks, with the min nextAt and the max lastCheckinAt", () => {
-    const folded = foldTaskCheckins([
-      trackingTask("t1", 500, 100),
-      trackingTask("t2", 300, 250),
-      trackingTask("t3", null, null),
-      endedTask("t4", 9_999),
-    ]);
-    expect(folded).toEqual({ tracking: 3, nextAt: 300, lastAt: 250 });
+describe("countSpunTasks", () => {
+  it("counts the tasks the bot spun and still runs, not the ones it adopted or ended", () => {
+    expect(
+      countSpunTasks([
+        trackingTask("t1", true),
+        trackingTask("t2", true),
+        trackingTask("t3", false),
+        endedTask("t4"),
+      ]),
+    ).toBe(2);
   });
 
-  it("is empty for no tasks and for only ended tasks", () => {
-    expect(foldTaskCheckins([])).toEqual({
-      tracking: 0,
-      nextAt: null,
-      lastAt: null,
-    });
-    expect(foldTaskCheckins([endedTask("t1", 100)])).toEqual({
-      tracking: 0,
-      nextAt: null,
-      lastAt: null,
-    });
+  it("counts an entry from a host that does not say whether the bot spun it", () => {
+    expect(countSpunTasks([trackingTask("t1", null)])).toBe(1);
   });
 });
 
@@ -277,14 +269,12 @@ describe("buildHomeBotRow", () => {
       harness: "claude",
       model: "opus",
       openRequestCount: null,
-      tasksTracking: null,
-      nextCheckinAt: null,
-      lastCheckinAt: null,
+      tasksSpun: null,
       boundHere: null,
     });
   });
 
-  it("takes the snapshot's host, request hint and folded tasks when one arrives", () => {
+  it("takes the snapshot's host, request hint and spun tasks when one arrives", () => {
     const fresher: BotRecord = {
       ...record,
       title: "Fresh title",
@@ -295,9 +285,9 @@ describe("buildHomeBotRow", () => {
       snapshot({
         record: fresher,
         tasks: [
-          trackingTask("t1", 700, 40),
-          trackingTask("t2", 600, 90),
-          endedTask("t3", 5_000),
+          trackingTask("t1", true),
+          trackingTask("t2", true),
+          endedTask("t3"),
         ],
         openRequestCount: 3,
         hostId: "host-snapshot",
@@ -307,15 +297,13 @@ describe("buildHomeBotRow", () => {
     expect(row.boundHostId).toBe("host-snapshot");
     expect(row.boundHere).toBe(true);
     expect(row.openRequestCount).toBe(3);
-    expect(row.tasksTracking).toBe(2);
-    expect(row.nextCheckinAt).toBe(600);
-    expect(row.lastCheckinAt).toBe(90);
+    expect(row.tasksSpun).toBe(2);
     expect(row.title).toBe("Fresh title");
     expect(row.model).toBe("sonnet");
     expect(row.botId).toBe(BOT_A);
   });
 
-  it("reports zero tracked tasks and a null open-request hint from a snapshot without them", () => {
+  it("reports zero tasks and a null open-request hint from a snapshot without them", () => {
     const row = buildHomeBotRow(
       record,
       snapshot({
@@ -326,9 +314,7 @@ describe("buildHomeBotRow", () => {
         isThisHost: false,
       }),
     );
-    expect(row.tasksTracking).toBe(0);
-    expect(row.nextCheckinAt).toBeNull();
-    expect(row.lastCheckinAt).toBeNull();
+    expect(row.tasksSpun).toBe(0);
     expect(row.openRequestCount).toBeNull();
     expect(row.boundHere).toBe(false);
   });
@@ -387,7 +373,7 @@ describe("buildHomeBotRow", () => {
         listed,
         snapshot({
           record: { ...record, hostEpoch: 2, boundHostId: "host-a" },
-          tasks: [trackingTask("t1", 700, 40)],
+          tasks: [trackingTask("t1", true)],
           openRequestCount: 5,
           hostId: "host-a",
           isThisHost: true,
@@ -395,7 +381,7 @@ describe("buildHomeBotRow", () => {
       );
       expect(row.boundHostId).toBe("host-c");
       expect(row.openRequestCount).toBe(5);
-      expect(row.tasksTracking).toBe(1);
+      expect(row.tasksSpun).toBe(1);
       expect(row.boundHere).toBe(true);
     });
   });

@@ -8,9 +8,11 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { hostLabelAtSentenceStart } from "@/hooks/agent/use-host-reachability";
 import { SimulatorSessionBadge } from "@/components/simulator-tile/simulator-session-badge";
 import { UpdateProgressBar } from "@/components/host/update-progress-bar";
 import { simulatorVersionLabel } from "@/lib/simulator-view/simulator-labels";
+import type { SimulatorTileTarget } from "@/lib/simulator-view/simulator-tile-target";
 import { orderSimulators } from "@/lib/simulator-view/simulator-sessions-coordinator";
 import { cn } from "@/lib/utils";
 
@@ -52,7 +54,7 @@ export function SimulatorHostUnreachableView(props: {
       icon={
         <Smartphone className="size-8 text-muted-foreground/45" aria-hidden />
       }
-      title={props.hostLabel}
+      title={hostLabelAtSentenceStart(props.hostLabel)}
       testId="simulator-host-unreachable"
     >
       <p>Host is unreachable. This tile will reconnect on its own.</p>
@@ -82,13 +84,17 @@ export function SimulatorLoadingView(props: { readonly hostLabel: string }) {
 /**
  * The host cannot run simulators at all, or cannot show them to this app.
  * One line per platform with the host's own reason, so the person knows
- * which toolchain the machine is missing.
+ * which toolchain the machine is missing, and Check again for once they have
+ * installed it.
  */
 export function SimulatorUnavailableView(props: {
   readonly hostLabel: string;
   readonly platforms: readonly SimulatorPlatformAvailability[];
   /** The pack's own reason when it, rather than a platform, is what is missing. */
   readonly reason: string | null;
+  readonly onCheckAgain: () => void;
+  /** Whether the read Check again sent is still out. */
+  readonly checking: boolean;
 }) {
   const reasons = props.platforms.filter(
     (platform) => !platform.available && platform.reason !== null,
@@ -96,7 +102,7 @@ export function SimulatorUnavailableView(props: {
   return (
     <SimulatorStateFrame
       icon={<TriangleAlert className="size-8 text-warning" aria-hidden />}
-      title={`${props.hostLabel} can't run simulators`}
+      title={`${hostLabelAtSentenceStart(props.hostLabel)} can't run simulators`}
       testId="simulator-unavailable"
     >
       {props.reason === null ? null : <p>{props.reason}</p>}
@@ -118,6 +124,23 @@ export function SimulatorUnavailableView(props: {
           ))}
         </ul>
       )}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={props.checking}
+        className="mt-2"
+        onClick={props.onCheckAgain}
+      >
+        {props.checking ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId="simulator-check-again-spinner"
+            variant={undefined}
+          />
+        ) : null}
+        Check again
+      </Button>
     </SimulatorStateFrame>
   );
 }
@@ -252,6 +275,31 @@ export function SimulatorFailedView(props: {
 }
 
 /**
+ * Whether the target is a COPY that is not running, which means gone and not
+ * merely powered off: the host removes a clone when its last session ends, so
+ * there is no copy left to boot again and what connecting offers instead is
+ * another copy of the device it was made from.
+ */
+function isLostCopy(target: SimulatorTileTarget): boolean {
+  return target.sourceSimulatorId !== null && !target.summary.booted;
+}
+
+/** What the target's state means for the person, and what connecting costs. */
+function targetStateSentence(target: SimulatorTileTarget): string {
+  if (isLostCopy(target))
+    return "This copy is gone. Booting makes another, which can take a minute.";
+  if (target.summary.booted) return "Running, not yet open in this task.";
+  return "Powered off. Connecting boots it, which can take a minute.";
+}
+
+/** The connect button's word for what it will do. */
+function connectLabel(target: SimulatorTileTarget): string {
+  if (isLostCopy(target)) return "Boot another copy";
+  if (target.summary.booted) return "Connect";
+  return "Boot and connect";
+}
+
+/**
  * The host's simulators when this tile's own is not open in the task yet:
  * the row for this tile's simulator connects (booting it when it is cold),
  * every other row opens a tile of its own.
@@ -260,26 +308,28 @@ export function SimulatorInventoryView(props: {
   readonly hostLabel: string;
   readonly simulators: readonly SimulatorSummary[];
   readonly booting: readonly string[];
-  readonly targetSimulatorId: string;
+  /**
+   * This tile's row as its caller resolved it, which is not always one of
+   * `simulators`: a `@1.1` clone is listed only under its source's
+   * `instances`, so looking the id up here again would answer null for a
+   * clone that is running. Null only when the host lists nothing for it.
+   */
+  readonly target: SimulatorTileTarget | null;
   readonly targetName: string;
   /** Connects this tile's simulator; `null` when the host does not offer `simulator.open`. */
-  readonly onConnect: ((simulator: SimulatorSummary) => void) | null;
+  readonly onConnect: ((target: SimulatorTileTarget) => void) | null;
   /** Whether this tile's own `simulator.open` is in flight. */
   readonly connecting: boolean;
   /** Places another simulator's tile; `null` when the host cannot open one. */
   readonly onOpen: ((simulator: SimulatorSummary) => void) | null;
 }) {
-  const ordered = orderSimulators(props.simulators);
-  const target =
-    ordered.find(
-      (simulator) => simulator.simulatorId === props.targetSimulatorId,
-    ) ?? null;
-  const others = ordered.filter(
-    (simulator) => simulator.simulatorId !== props.targetSimulatorId,
+  const { target } = props;
+  const others = orderSimulators(props.simulators).filter(
+    (simulator) => simulator.simulatorId !== target?.summary.simulatorId,
   );
   const targetBusy =
     target !== null &&
-    (props.booting.includes(target.simulatorId) || props.connecting);
+    (props.booting.includes(target.summary.simulatorId) || props.connecting);
   return (
     <div
       className="flex h-full min-h-0 w-full flex-col items-center gap-4 overflow-y-auto bg-canvas px-6 py-8 text-ui-sm text-muted-foreground"
@@ -292,16 +342,12 @@ export function SimulatorInventoryView(props: {
         </p>
         {target === null ? (
           <p>
-            {props.hostLabel} no longer lists this simulator. Pick another
-            below.
+            {hostLabelAtSentenceStart(props.hostLabel)} no longer lists this
+            simulator. Pick another below.
           </p>
         ) : (
           <>
-            <p>
-              {target.booted
-                ? "Running, not yet open in this task."
-                : "Powered off. Connecting boots it, which can take a minute."}
-            </p>
+            <p>{targetStateSentence(target)}</p>
             <Button
               type="button"
               variant="default"
@@ -317,7 +363,7 @@ export function SimulatorInventoryView(props: {
                   variant={undefined}
                 />
               ) : null}
-              {target.booted ? "Connect" : "Boot and connect"}
+              {connectLabel(target)}
             </Button>
           </>
         )}

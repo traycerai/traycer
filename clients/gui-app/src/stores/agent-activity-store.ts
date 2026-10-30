@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { AgentActivityStreamClient } from "@traycer-clients/shared/host-transport/agent-activity-stream-client";
 import type {
   StreamCloseReason,
@@ -374,6 +375,24 @@ function isUnauthorized(reason: StreamCloseReason | null): boolean {
 export function useEpicAgentActivity(epicId: string | null): EpicAgentActivity {
   const selector = useMemo(() => makeSelectEpicAgentActivity(epicId), [epicId]);
   return useAgentActivityStore(selector);
+}
+
+/**
+ * How many agents are working in each of `epicIds`, in that order, unioned
+ * across hosts as {@link useEpicAgentActivity} reads one epic: a list of
+ * epics read under one subscription, as a bot's Activity page reads its
+ * tasks. Re-renders only when a count moves.
+ */
+export function useEpicsWorkingCounts(
+  epicIds: ReadonlyArray<string>,
+): ReadonlyArray<number> {
+  return useAgentActivityStore(
+    useShallow((state) =>
+      epicIds.map(
+        (epicId) => selectEpicAgentActivity(state.byHost, epicId).working.size,
+      ),
+    ),
+  );
 }
 
 function makeSelectEpicAgentActivity(

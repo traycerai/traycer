@@ -395,21 +395,7 @@ export type HostNotificationWorktreeDeletionFailureKinds = z.infer<
 >;
 
 /**
- * `host.operation.finished` payload for a worktree-deletion command - the
- * first operation arm, and the template for every later one.
- *
- * Carries the common `operation`/`title`/`message` convention (so a client
- * that knows the outer kind but not this arm still renders host-composed
- * copy) plus exactly the structured fields presentation and routing need:
- * the command's identity, where the user started it, and the aggregate
- * counts.
- *
- * What it deliberately EXCLUDES is as much of the contract as what it
- * carries: no worktree paths, no teardown output, no raw command text, no
- * arbitrary error strings. A notification row is durable, is delivered to
- * email and webhooks, and outlives the filesystem it describes - a path in it
- * is both a leak and a lie. It is also why no retry action exists: a safe
- * retry would need exactly the paths this must not persist.
+ * `host.operation.finished` for a worktree deletion: The host no longer writes this operation; readers drop it.
  */
 export const hostNotificationWorktreeDeletionPayloadSchema = lazySchema(() =>
   z
@@ -452,23 +438,7 @@ export type HostNotificationWorktreeDeletionPayload = z.infer<
 export const HOST_OPERATION_WORKTREE_AUTO_CLEANUP = "worktree.autoCleanup";
 
 /**
- * `host.operation.finished` payload for one automatic-cleanup run.
- *
- * ONE row per run that had candidates - never one per deleted worktree, and
- * none at all for the ordinary no-op daily check. An unattended feature that
- * notifies on every quiet pass trains the user to ignore it, which is exactly
- * when the one interesting run arrives.
- *
- * `hostId` is carried because the run is host-scoped and the reader may be
- * looking at a different host: routing has to name WHICH host's cleanup history
- * to open. `runId` is the focus hint, and the row id derived from it is what
- * makes minting idempotent per run.
- *
- * Excludes, for the same reason the worktree-deletion arm does: worktree paths,
- * teardown output, and raw errors. A durable row outlives the filesystem it
- * describes. `interruptedCount` is reported alongside the other three because a
- * host that stopped mid-cleanup must say so rather than silently round the run
- * down to what it could confirm.
+ * `host.operation.finished` for an automatic cleanup run: The host no longer writes this operation; readers drop it.
  */
 export const hostNotificationWorktreeAutoCleanupPayloadSchema = lazySchema(() =>
   z
@@ -604,14 +574,8 @@ export type HostNotificationSecretExportKind =
   (typeof HOST_NOTIFICATION_SECRET_EXPORT_KINDS)[number];
 
 /**
- * `secret.export.minted` payload: an agent minted a short-lived export of a
- * secret. The export works until `expiresAt` (epoch milliseconds) wherever it
- * is copied, which is the one thing the notice has to say.
- *
- * `exportKind` rather than `kind`: `kind` is this union's discriminator. Read
- * as a string, not the closed list above, so an export kind newer than this
- * build still renders with generic wording instead of dropping the row to the
- * common-field tier.
+ * `secret.export.minted`: The server no longer writes this kind; readers drop
+ * it.
  */
 export const hostNotificationSecretExportMintedPayloadSchema = lazySchema(() =>
   z
@@ -696,12 +660,7 @@ export type HostNotificationRotationProducer = z.infer<
   typeof hostNotificationRotationProducerSchema
 >;
 
-/**
- * `secret.rotated` payload: a replaced secret's rotation reached a state its
- * owner (or a team's admins) is told about. Names and states only: no value,
- * no account identifier. `state` is read as a string so a state newer than
- * this build still renders generically.
- */
+/** `secret.rotated`: The server no longer writes this kind; readers drop it. */
 export const hostNotificationSecretRotatedPayloadSchema = lazySchema(() =>
   z
     .object({
@@ -745,11 +704,7 @@ export type HostNotificationRemovalHost = z.infer<
 >;
 
 /**
- * `team.member.removed`: a member left or was removed, with each host's facts.
- * `receiptId` is the receipt `environment.members.remove` answered for this
- * removal; absent or null on a row written without one. `toRemovedMember`
- * marks the row told to the person removed, once, when their access ends;
- * absent on the admins' rows and on rows written before it.
+ * `team.member.removed`: The server no longer writes this kind; readers drop it.
  */
 export const hostNotificationTeamMemberRemovedPayloadSchema = lazySchema(() =>
   z
@@ -769,10 +724,7 @@ export type HostNotificationTeamMemberRemovedPayload = z.infer<
 >;
 
 /**
- * `team.member.joined`: told to the admins, and to the newcomer
- * (`toNewcomer`), whose row carries the step to start working in the team.
- * `role` is the newcomer's role, read as a string so a newer role still
- * renders; absent on a row written before it.
+ * `team.member.joined`: The server no longer writes this kind; readers drop it.
  */
 export const hostNotificationTeamMemberJoinedPayloadSchema = lazySchema(() =>
   z
@@ -790,7 +742,9 @@ export type HostNotificationTeamMemberJoinedPayload = z.infer<
   typeof hostNotificationTeamMemberJoinedPayloadSchema
 >;
 
-/** `team.policy.unapplied`: no host has applied this policy version yet. */
+/**
+ * `team.policy.unapplied`: The server no longer writes this kind; readers drop it.
+ */
 export const hostNotificationTeamPolicyUnappliedPayloadSchema = lazySchema(() =>
   z
     .object({
@@ -805,7 +759,9 @@ export type HostNotificationTeamPolicyUnappliedPayload = z.infer<
   typeof hostNotificationTeamPolicyUnappliedPayloadSchema
 >;
 
-/** `team.policy.authority_expired`: a host's policy authority has lapsed. */
+/**
+ * `team.policy.authority_expired`: The server no longer writes this kind; readers drop it.
+ */
 export const hostNotificationTeamPolicyAuthorityExpiredPayloadSchema =
   lazySchema(() =>
     z
@@ -830,9 +786,7 @@ export const HOST_NOTIFICATION_INSTALLING_ADMIN_GONE_REASONS = [
 ] as const;
 
 /**
- * `team.installing_admin.gone`: the admin whose GitHub identity installed the
- * team's GitHub set left, stopped being an admin, or unlinked it. `reason` is
- * read as a string with the known values above.
+ * `team.installing_admin.gone`: The server no longer writes this kind; readers drop it.
  */
 export const hostNotificationTeamInstallingAdminGonePayloadSchema = lazySchema(
   () =>
@@ -850,7 +804,9 @@ export type HostNotificationTeamInstallingAdminGonePayload = z.infer<
   typeof hostNotificationTeamInstallingAdminGonePayloadSchema
 >;
 
-/** `team.plan.unlinked`: the plan the team runs on was unlinked. */
+/**
+ * `team.plan.unlinked`: The server no longer writes this kind; readers drop it.
+ */
 export const hostNotificationTeamPlanUnlinkedPayloadSchema = lazySchema(() =>
   z
     .object({
@@ -864,7 +820,7 @@ export type HostNotificationTeamPlanUnlinkedPayload = z.infer<
   typeof hostNotificationTeamPlanUnlinkedPayloadSchema
 >;
 
-/** `team.pods.full`: every team pod is full. */
+/** `team.pods.full`: The server no longer writes this kind; readers drop it. */
 export const hostNotificationTeamPodsFullPayloadSchema = lazySchema(() =>
   z
     .object({
@@ -880,8 +836,7 @@ export type HostNotificationTeamPodsFullPayload = z.infer<
 >;
 
 /**
- * `environment.move.stalled`: a computer's move to Personal stopped making
- * progress with `remaining` items still to upload. `reason` is an open code.
+ * `environment.move.stalled`: The server no longer writes this kind; readers drop it.
  */
 export const hostNotificationEnvironmentMoveStalledPayloadSchema = lazySchema(
   () =>
@@ -900,11 +855,7 @@ export type HostNotificationEnvironmentMoveStalledPayload = z.infer<
   typeof hostNotificationEnvironmentMoveStalledPayloadSchema
 >;
 
-/**
- * `environment.apply.failed`: a host could not apply one item of its
- * configuration. `itemKey` names the item, never its value; `reason` is an
- * open code.
- */
+/** `environment.apply.failed`: The server no longer writes this kind; readers drop it. */
 export const hostNotificationEnvironmentApplyFailedPayloadSchema = lazySchema(
   () =>
     z
@@ -935,8 +886,7 @@ export type HostNotificationEnvironmentApplyFailedPayload = z.infer<
 >;
 
 /**
- * `team.role.changed`: the reader's role in a team changed. `from` and `to`
- * are role names, read as strings so a newer role still renders.
+ * `team.role.changed`: The server no longer writes this kind; readers drop it.
  */
 export const hostNotificationTeamRoleChangedPayloadSchema = lazySchema(() =>
   z
@@ -953,7 +903,9 @@ export type HostNotificationTeamRoleChangedPayload = z.infer<
   typeof hostNotificationTeamRoleChangedPayloadSchema
 >;
 
-/** `team.host.returned`: a computer that ran a team went back to its own settings. */
+/**
+ * `team.host.returned`: The server no longer writes this kind; readers drop it.
+ */
 export const hostNotificationTeamHostReturnedPayloadSchema = lazySchema(() =>
   z
     .object({
@@ -968,11 +920,7 @@ export type HostNotificationTeamHostReturnedPayload = z.infer<
   typeof hostNotificationTeamHostReturnedPayloadSchema
 >;
 
-/**
- * `secret.removed`: a secret was removed, and how far: `revoked` at once,
- * `cleanup_requested` from the hosts that held it, or `destroyed`. Names the
- * secret only, never a value.
- */
+/** `secret.removed`: The server no longer writes this kind; readers drop it. */
 export const hostNotificationSecretRemovedPayloadSchema = lazySchema(() =>
   z
     .object({
@@ -987,27 +935,7 @@ export type HostNotificationSecretRemovedPayload = z.infer<
   typeof hostNotificationSecretRemovedPayloadSchema
 >;
 
-/**
- * What happened to a sandbox, by the control plane's notice kind. Times are
- * epoch ms, so each reader formats them in its own time zone.
- *
- * - `resting_warning`: the resting clock destroys it at `destroyAt` unless it
- *   is used; `periodMinutes` is its resting period, which a new rest starts
- *   over.
- * - `resting_destroyed`: the resting clock destroyed it.
- * - `frozen`: its payer's credits ran out, or a team row's payer left.
- * - `frozen_warning`: frozen for lack of credits, it is deleted in
- *   `daysLeft` days unless credits are added.
- * - `frozen_deleting` / `frozen_destroyed`: frozen for 30 days, it is being
- *   deleted, or was.
- * - `create_failed`, `lost`: its create failed for good; the provider no
- *   longer has it.
- * - `destroyed_by_member`: a member destroyed it (`actorName` when known).
- *   New notices include the confirmed `destroyedAt` and the recipient's own
- *   `stoppedAgentTaskTitles`, checked against their task access before send.
- * - `manual_rest`: a Suspend or Stop settled, `byYou` when the reader asked
- *   for it.
- */
+/** The `sandbox.notice` payload's notice. The server no longer writes this kind; readers drop it. */
 export const hostNotificationSandboxNoticeSchema = lazySchema(() =>
   z.discriminatedUnion("kind", [
     z.object({
@@ -1048,7 +976,7 @@ export type HostNotificationSandboxNotice = z.infer<
   typeof hostNotificationSandboxNoticeSchema
 >;
 
-/** `sandbox.notice`: one sandbox, named, and what happened to it. */
+/** `sandbox.notice`: The server no longer writes this kind; readers drop it. */
 export const hostNotificationSandboxNoticePayloadSchema = lazySchema(() =>
   z
     .object({
@@ -1063,7 +991,11 @@ export type HostNotificationSandboxNoticePayload = z.infer<
   typeof hostNotificationSandboxNoticePayloadSchema
 >;
 
-/** No hook identity, configuration, URL or header may ride a removal notice. */
+/**
+ * `notification.hooks.removed`: The server no longer writes this kind; readers
+ * drop it. No hook identity, configuration, URL or header may ride a removal
+ * notice.
+ */
 export const hostNotificationHooksRemovedPayloadSchema = lazySchema(() =>
   z
     .object({

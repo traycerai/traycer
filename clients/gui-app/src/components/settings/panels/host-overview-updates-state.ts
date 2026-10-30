@@ -219,13 +219,14 @@ export function useHostOverviewUpdates(input: {
   // the query's latest answer below.
   //
   // `installDiscovered` is STICKY: `cli-unavailable` and `externally-managed`
-  // are facts about how this host is set up, not about this attempt, and
-  // neither is knowable before we try. Once either is seen the whole region
-  // retires and says so, because for an externally-managed host there is no
-  // fallback control left to point at: it skips the update reconciler
-  // outright, so neither this list nor the auto-update switch reaches it.
-  // Leaving Check-now behind would keep offering the one action we have just
-  // been told can never lead anywhere.
+  // are facts about how this host is set up, not about this attempt. A host
+  // on `host.status@1.10` states the second up front and the page passes it
+  // in as `installDegrade`; an older host only reveals it here, by refusing.
+  // Once either is seen the whole region retires and says so, because for an
+  // externally-managed host there is no fallback control left to point at: it
+  // skips the update reconciler outright, so neither this list nor the
+  // auto-update switch reaches it. Leaving Check-now behind would keep
+  // offering the one action we have just been told can never lead anywhere.
   //
   // Sticky is not PERMANENT, though — `HostScopeGate` keeps this subtree
   // mounted across disconnect/reconnect, so a latch that nothing refutes
@@ -556,6 +557,7 @@ export function useHostOverviewUpdates(input: {
   });
   return {
     degrade,
+    awaitingAnswer: catalogAnswerOutstanding(checkQuery),
     cliFloor,
     cliFloorForVersion: (version) =>
       readCliFloorForVersion(actionableManifest, input.platformKey, version),
@@ -655,6 +657,18 @@ export function useHostOverviewUpdates(input: {
       failureDescription,
     },
   };
+}
+
+/**
+ * `isPending` alone misses a re-ask: with `keepPreviousData` a filter change
+ * or a poll keeps the retained answer, so the query is "settled" while the
+ * answer that matters is still in flight.
+ */
+function catalogAnswerOutstanding(query: {
+  readonly isPending: boolean;
+  readonly isFetching: boolean;
+}): boolean {
+  return query.isPending || query.isFetching;
 }
 
 interface RetainedHostInstallRefusal {
@@ -1046,6 +1060,19 @@ export interface BoundDispatchInput {
 
 export interface HostOverviewUpdatesState {
   readonly degrade: OverviewDegradeReason | null;
+  /**
+   * A catalog answer is outstanding: the first fetch has not landed (or the
+   * page's gate has not let it start), or a re-ask is in flight over a
+   * retained answer (the release-candidate filter changed, a poll). A failed
+   * answer clears this as a successful one does.
+   *
+   * The activation auto-open waits on it (H1): a region that is un-retired
+   * only because its answer has not arrived looks exactly like a healthy
+   * one, and a shot fired then is spent on a dialog a `cli-unavailable`
+   * answer closes. The check is a CLI spawn on the host, so it always lands
+   * after the status read that put the park on screen.
+   */
+  readonly awaitingAnswer: boolean;
   readonly summary: HostOverviewUpdatesSummary;
   readonly picker: VersionPickerProps;
   /**

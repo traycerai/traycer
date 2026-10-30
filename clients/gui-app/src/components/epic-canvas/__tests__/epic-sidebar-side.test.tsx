@@ -88,6 +88,19 @@ vi.mock("@/components/epic-canvas/renderers/browser-sessions-provider", () => ({
   ),
 }));
 
+// The task's simulator catalog, the provider beside the browser sessions one:
+// it reads `simulator.catalog` through a host query, which a mount with no
+// `QueryClientProvider` cannot serve. Its context defaults to `null`, which is
+// what every consumer below reads here.
+vi.mock(
+  "@/components/epic-canvas/renderers/simulator-catalog-provider",
+  () => ({
+    SimulatorCatalogProvider: (props: { readonly children: ReactNode }) => (
+      <>{props.children}</>
+    ),
+  }),
+);
+
 vi.mock("@/components/epic-canvas/epic-route-session-body", () => ({
   EpicRouteSessionBody: (props: { readonly tabId: string }) => (
     <div data-testid={`epic-canvas-body-${props.tabId}`} />
@@ -109,6 +122,20 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostDirectoryEntryForHostId: () => null,
   useHostClientForHostId: () => null,
 }));
+
+// Reached from that same real rail render: its presence rule asks this
+// machine's host for `simulator.status`, another host query with no client to
+// serve it here. Neither input present, so the Mobile simulators tile is
+// absent, and the rail's icon set is not what this suite reads either way.
+vi.mock(
+  "@/components/epic-canvas/sidebar/use-simulator-panel-availability",
+  () => ({
+    useSimulatorPanelAvailability: () => ({
+      localHostRunsSimulators: false,
+      hasSimulatorRecords: false,
+    }),
+  }),
+);
 
 function resetStores() {
   window.localStorage.clear();

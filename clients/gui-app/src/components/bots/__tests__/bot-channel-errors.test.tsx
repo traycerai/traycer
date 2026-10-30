@@ -29,6 +29,8 @@ interface SendCall {
   readonly variables: BotConversationSendRequest;
   readonly succeed: () => void;
   readonly fail: () => void;
+  /** Resolves once the send's outcome was handed to the sender. */
+  readonly settled: Promise<void>;
 }
 
 interface SendCallbacks {
@@ -75,7 +77,7 @@ vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
   useBotThreadListQuery: () => ({
-    data: { threads: mocks.state.threads },
+    data: { threads: mocks.state.threads, threadAnchors: null },
     isError: false,
     refetch: vi.fn(),
   }),
@@ -93,6 +95,7 @@ vi.mock("@/hooks/bots/use-bot-mutations", async () => {
         (variables: BotConversationSendRequest, callbacks: SendCallbacks) => {
           setVariables(variables);
           setPending(true);
+          const settled = Promise.withResolvers<void>();
           mocks.sends.push({
             variables,
             succeed: () => {
@@ -103,6 +106,7 @@ vi.mock("@/hooks/bots/use-bot-mutations", async () => {
                 delivery: "written",
                 threadId: null,
               });
+              settled.resolve();
             },
             fail: () => {
               setPending(false);
@@ -115,12 +119,23 @@ vi.mock("@/hooks/bots/use-bot-mutations", async () => {
                   fatalDetails: null,
                 }),
               );
+              settled.resolve();
             },
+            settled: settled.promise,
           });
         },
         [],
       );
-      return { mutate, isPending, variables };
+      // The composer settles its send through the promise; the case
+      // settles it through the callbacks the promise is built on.
+      const mutateAsync = useCallback(
+        (variables: BotConversationSendRequest) =>
+          new Promise<BotConversationSendResponse>((resolve, reject) => {
+            mutate(variables, { onSuccess: resolve, onError: reject });
+          }),
+        [mutate],
+      );
+      return { mutate, mutateAsync, isPending, variables };
     },
   };
 });
@@ -164,6 +179,7 @@ function ChoiceStub(props: {
 
 import { BotChannelView } from "@/components/bots/bot-channel-view";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
+import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -195,15 +211,17 @@ const LISTED_THREAD: BotThreadSummary = {
 const OPEN_LISTED_THREAD: BotOpenThread = {
   anchorMessageId: POST_ID,
   announcement: false,
+  anchorKind: null,
   sent: null,
 };
 const OPEN_UNOPENED_THREAD: BotOpenThread = {
   anchorMessageId: "question-1",
   announcement: true,
+  anchorKind: null,
   sent: null,
 };
 
-const onOpenUnderTheHood = vi.fn<(sessionChatId: string) => void>();
+const onOpenActivity = vi.fn<() => void>();
 
 function mount(openThread: BotOpenThread | null): void {
   render(
@@ -214,13 +232,24 @@ function mount(openThread: BotOpenThread | null): void {
             botId={BOT_ID}
             hostId={HOST_ID}
             boundHostId={HOST_ID}
+            boundHostEpoch={1}
             botTitle="Release Bot"
             directive={null}
             appConversationChatId={CHANNEL_ID}
+            trunkChatId="trunk-chat"
+            onOpenTurn={vi.fn()}
+            onOpenSession={vi.fn()}
+            landOn={null}
+            openMemory={null}
+            onOpenMemory={vi.fn()}
+            environmentId="env-1"
+            botNameOf={() => null}
             resolveMember={resolveMember}
+            tasks={[]}
+            surfaceActions={null}
             openThread={openThread}
             onOpenThread={vi.fn()}
-            onOpenUnderTheHood={onOpenUnderTheHood}
+            onOpenActivity={onOpenActivity}
           />
         </ChatExpansionTestProviders>
       </TooltipProvider>
@@ -239,10 +268,11 @@ function lastSend(): SendCall {
 }
 
 /** The host's answer to the send in flight. */
-function settle(outcome: "succeed" | "fail"): void {
+async function settle(outcome: "succeed" | "fail"): Promise<void> {
   const call = lastSend();
-  act(() => {
+  await act(async () => {
     call[outcome]();
+    await call.settled;
   });
 }
 
@@ -254,13 +284,15 @@ async function typeAndEnter(box: HTMLElement, text: string): Promise<void> {
 beforeEach(() => {
   mocks.sends.length = 0;
   mocks.toastFromHostError.mockClear();
-  onOpenUnderTheHood.mockClear();
+  onOpenActivity.mockClear();
   mocks.state.threads = [];
   mocks.state.activity = null;
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
 });
 
 afterEach(() => {
+  // What a box held unsent is kept under the bot, past its view.
+  useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
   cleanup();
   vi.restoreAllMocks();
 });
@@ -272,7 +304,7 @@ describe("<BotChannelView /> a message the host refuses", () => {
     await typeAndEnter(box, "Ship it");
     expect(mocks.sends).toHaveLength(1);
 
-    settle("fail");
+    await settle("fail");
 
     const notice = screen.getByTestId("bot-channel-composer-send-failed");
     expect(notice.getAttribute("role")).toBe("alert");
@@ -288,7 +320,7 @@ describe("<BotChannelView /> a message the host refuses", () => {
     expect(sendAt(1).variables).toEqual(sendAt(0).variables);
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
 
-    settle("succeed");
+    await settle("succeed");
 
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
     expect((box as HTMLTextAreaElement).value).toBe("");
@@ -298,7 +330,7 @@ describe("<BotChannelView /> a message the host refuses", () => {
     mount(null);
     const box = screen.getByRole("textbox", { name: "Message Release Bot" });
     await typeAndEnter(box, "Ship it");
-    settle("fail");
+    await settle("fail");
     expect(screen.getByTestId("bot-channel-composer-send-failed")).toBeTruthy();
 
     const user = userEvent.setup();
@@ -323,9 +355,10 @@ describe("<BotChannelView /> an option pick the host refuses", () => {
       announcementId: null,
       redeliver: null,
       supersedes: null,
+      answer: null,
     });
     expect(screen.queryByTestId("bot-channel-composer-send-failed")).toBeNull();
-    settle("fail");
+    await settle("fail");
 
     expect(
       screen.getByTestId("bot-channel-composer-send-failed").textContent,
@@ -360,8 +393,9 @@ describe("<BotChannelView /> a thread's reply the host refuses", () => {
       announcementId: null,
       redeliver: null,
       supersedes: null,
+      answer: null,
     });
-    settle("fail");
+    await settle("fail");
 
     expect(
       within(panel).getByTestId("bot-thread-composer-send-failed").textContent,
@@ -377,7 +411,7 @@ describe("<BotChannelView /> a thread's reply the host refuses", () => {
 
     await user.click(screen.getByTestId("stub-choose-thread"));
     expect(lastSend().variables.threadId).toBe(THREAD_ID);
-    settle("fail");
+    await settle("fail");
 
     expect(
       within(screen.getByTestId("bot-thread-panel")).getByTestId(
@@ -402,7 +436,7 @@ describe("<BotChannelView /> a thread's reply the host refuses", () => {
 
     await typeAndEnter(box, "First");
     expect(lastSend().variables.announcementId).toBe("question-1");
-    settle("fail");
+    await settle("fail");
 
     expect(
       screen.getByTestId("bot-thread-composer-send-failed").textContent,

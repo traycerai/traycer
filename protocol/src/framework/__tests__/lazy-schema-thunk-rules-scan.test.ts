@@ -88,6 +88,14 @@ const ALLOWED_UNANALYSED: ReadonlyMap<
     },
   ],
   [
+    "parse-runs-callbacks creditOfferSchema.safeParse (protocol/src/auth/credit-offers.ts)",
+    {
+      count: 1,
+      reason:
+        "the schema is a z.object of z.string, z.number, z.iso.datetime, z.enum and nullable fields with no refine or transform callback; the call sits in the list schema's transform callback, so it runs at parse time, not at build (auth/credit-offers.ts:67)",
+    },
+  ],
+  [
     "method-on-non-schema SEMVER_PATTERN.test (protocol/src/config/installation-records.ts)",
     {
       count: 1,
@@ -133,6 +141,14 @@ const ALLOWED_UNANALYSED: ReadonlyMap<
       count: 1,
       reason:
         "an element destructured at module scope from chatSubscribeClientFrameSchemaOptionsPreCanvas (an array of zod schemas); `.extend` clones",
+    },
+  ],
+  [
+    "method-on-non-schema queueSteerNowClientFrameSchemaPreSteerRestartConfirm.extend (protocol/src/host/agent/gui/subscribe.ts)",
+    {
+      count: 1,
+      reason:
+        "an element destructured at module scope from chatSubscribeClientFrameSchemaOptionsPreSteerRestartConfirm (an array of zod schemas); `.extend` clones",
     },
   ],
   [
@@ -232,6 +248,13 @@ const ALLOWED_UNANALYSED: ReadonlyMap<
   ],
   [
     "method-on-non-schema hostStatusV18.extend (protocol/src/host/status/contracts.ts)",
+    {
+      count: 1,
+      reason: "a contract object; `.responseSchema.extend` clones",
+    },
+  ],
+  [
+    "method-on-non-schema hostStatusV19.extend (protocol/src/host/status/contracts.ts)",
     {
       count: 1,
       reason: "a contract object; `.responseSchema.extend` clones",
