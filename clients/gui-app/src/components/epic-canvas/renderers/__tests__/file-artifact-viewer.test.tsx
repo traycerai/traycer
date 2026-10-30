@@ -61,6 +61,8 @@ const mocks = vi.hoisted(() => ({
     reason: "missing",
   } as EpicReadArtifactObjectResponse,
   urlRequests: [] as unknown[],
+  // The client each URL request was sent on, beside `urlRequests`.
+  urlClients: [] as unknown[],
   // Replaces `urlResponse` for a URL request that fails.
   urlAnswer: null as (() => Promise<EpicReadArtifactObjectResponse>) | null,
   hostQueryParams: [] as unknown[],
@@ -108,8 +110,9 @@ vi.mock("@/providers/use-runner-host", () => ({
 vi.mock("@/hooks/host/use-reactive-local-host-id", () => ({
   useReactiveLocalHostId: () => mocks.localHostId,
 }));
+// A stand-in client per host, so a test can tell which host a read went to.
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
+  useHostClientForHostId: (hostId: string) => ({ hostId }),
 }));
 // Backed by a real query, so `options.enabled` and the cache behave as in the
 // app; the host's answer is `urlResponse`, and each request is recorded.
@@ -117,6 +120,7 @@ vi.mock("@/hooks/host/use-host-query", async () => {
   const { useQuery } = await import("@tanstack/react-query");
   return {
     useHostQuery: (input: {
+      readonly client: unknown;
       readonly params: { readonly want: { readonly kind: string } };
       readonly options: {
         readonly enabled: boolean | undefined;
@@ -137,6 +141,7 @@ vi.mock("@/hooks/host/use-host-query", async () => {
               : mocks.probeAnswer();
           }
           mocks.urlRequests.push(input.params);
+          mocks.urlClients.push(input.client);
           return mocks.urlAnswer === null
             ? Promise.resolve(mocks.urlResponse)
             : mocks.urlAnswer();
@@ -194,6 +199,7 @@ afterEach(() => {
   mocks.urlResponse = { kind: "unavailable", reason: "missing" };
   mocks.urlRequests.length = 0;
   mocks.urlAnswer = null;
+  mocks.urlClients.length = 0;
   mocks.hostQueryParams.length = 0;
   mocks.probeResponse = {
     kind: "bytes",
@@ -408,6 +414,8 @@ describe("<FileArtifactViewer />", () => {
     expect(mocks.urlRequests).toEqual([
       { epicId: "epic-1", sha256: "a".repeat(64), want: { kind: "url" } },
     ]);
+    // Minted by the host that holds the file, not this machine's.
+    expect(mocks.urlClients).toEqual([{ hostId: "host-1" }]);
     expect(mocks.downloadBlobToDevice).not.toHaveBeenCalled();
     expect(requests).toEqual([]);
   });
