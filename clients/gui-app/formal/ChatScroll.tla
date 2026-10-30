@@ -2210,7 +2210,7 @@ MissedFollowNext ==
         row == AnchorRow(w)
         carriedLine == Present(w', row) /\ Pos(w', row) - w'.s = Pos(w, row) - w.s
         reset == newInput \/ w'.nav.k # "none" \/ w'.mounted # w.mounted \/ w'.perm
-                 \/ (w'.s # w.s /\ ~ReaderMoved(last') /\ ~carriedLine)
+                 \/ (~ReaderMoved(last') /\ ~carriedLine)
     IN missedFollow' = IF reset THEN "none"
                        ELSE IF unreadRetired THEN "unread-tail"
                        ELSE missedFollow
