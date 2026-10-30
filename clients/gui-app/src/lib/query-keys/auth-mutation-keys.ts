@@ -1,4 +1,6 @@
 export const authMutationKeys = {
+  revalidateContextAfterInvalidation: (userId: string | null) =>
+    ["auth", "revalidateContextAfterInvalidation", userId] as const,
   signIn: () => ["auth", "signIn"] as const,
   signInWithLinkCode: () => ["auth", "signInWithLinkCode"] as const,
   respondLinkLogin: () => ["auth", "respondLinkLogin"] as const,
@@ -16,6 +18,7 @@ export const authMutationKeys = {
   revokeUserSession: (familyId: string) =>
     ["auth", "revokeUserSession", familyId] as const,
   revokeAllSessions: () => ["auth", "revokeAllSessions"] as const,
+  claimCreditOffer: () => ["auth", "claimCreditOffer"] as const,
   requestStepUpChallenge: () => ["auth", "requestStepUpChallenge"] as const,
   verifyStepUpChallenge: () => ["auth", "verifyStepUpChallenge"] as const,
 };

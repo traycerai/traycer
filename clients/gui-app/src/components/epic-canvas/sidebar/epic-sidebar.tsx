@@ -268,6 +268,11 @@ import {
   BrowsersPanelActions,
   BrowsersPanelBody,
 } from "@/components/epic-canvas/sidebar/epic-browser-sidebar";
+import {
+  SimulatorsPanelActions,
+  SimulatorsPanelBody,
+} from "@/components/epic-canvas/sidebar/epic-simulators-panel";
+import { useSimulatorPanelAvailability } from "@/components/epic-canvas/sidebar/use-simulator-panel-availability";
 import { useColumnOverlayPlacement } from "@/components/layout/column-edge-context";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
 const CHATS_PANEL_SKELETON = <ChatsPanelSkeleton />;
@@ -545,6 +550,14 @@ const PANEL_SLOTS_BY_ID: Readonly<Record<LeftPanelId, LeftPanelModeSlots>> = {
     },
     loading: emptyLoadingSlots(GenericLoadingPanelBody),
   },
+  simulators: {
+    live: {
+      Body: SimulatorsPanelBody,
+      Actions: SimulatorsPanelActions,
+      Subtitle: null,
+    },
+    loading: emptyLoadingSlots(GenericLoadingPanelBody),
+  },
   artifacts: {
     live: {
       Body: ArtifactsPanelBody,
@@ -695,12 +708,16 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
     selectPrScopeHasItems(canvasHostId, epicId),
   );
   const visibilityOverrideById = usePanelVisibilityOverrides();
+  const { localHostRunsSimulators, hasSimulatorRecords } =
+    useSimulatorPanelAvailability();
   const availabilityContext = useMemo<LeftPanelAvailabilityContext>(
     () =>
       retainDisplayedPrPanel(rail, activePanelId, {
         commentsPanelRevealed,
         hasActiveCommentableArtifact,
         hasPullRequests,
+        localHostRunsSimulators,
+        hasSimulatorRecords,
         visibilityOverrideById,
       }),
     [
@@ -709,6 +726,8 @@ export function EpicLeftPanelHost(props: EpicLeftPanelHostProps) {
       commentsPanelRevealed,
       hasActiveCommentableArtifact,
       hasPullRequests,
+      localHostRunsSimulators,
+      hasSimulatorRecords,
       visibilityOverrideById,
     ],
   );
@@ -761,12 +780,16 @@ export function EpicLeftPanelLoadingHost(props: EpicLeftPanelHostProps) {
     selectPrScopeHasItems(canvasHostId, epicId),
   );
   const visibilityOverrideById = usePanelVisibilityOverrides();
+  const { localHostRunsSimulators, hasSimulatorRecords } =
+    useSimulatorPanelAvailability();
   const availabilityContext = useMemo<LeftPanelAvailabilityContext>(
     () =>
       retainDisplayedPrPanel(rail, activePanelId, {
         commentsPanelRevealed,
         hasActiveCommentableArtifact: false,
         hasPullRequests,
+        localHostRunsSimulators,
+        hasSimulatorRecords,
         visibilityOverrideById,
       }),
     [
@@ -774,6 +797,8 @@ export function EpicLeftPanelLoadingHost(props: EpicLeftPanelHostProps) {
       activePanelId,
       commentsPanelRevealed,
       hasPullRequests,
+      localHostRunsSimulators,
+      hasSimulatorRecords,
       visibilityOverrideById,
     ],
   );

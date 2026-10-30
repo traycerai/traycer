@@ -1,4 +1,3 @@
-import { consumePendingHookRemovalNotices } from "@/lib/notifications/hook-removal-notices";
 import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -40,8 +39,6 @@ import {
 import {
   classifyNotificationLifecycle,
   compareAttentionTiers,
-  isActionableNotice,
-  isRetiredNotice,
   compareFeedIdAscending,
   type NotificationAttentionTier,
 } from "@/lib/notifications/notification-lifecycle";
@@ -62,7 +59,6 @@ import {
   selectHostNotificationUnreadRecentHasLoadedOnce,
   useHostNotificationById,
   useHostNotificationIds,
-  useHostNotificationUnreadCount,
   useHostNotificationsStore,
 } from "@/stores/notifications/host-notifications-store";
 import {
@@ -95,34 +91,25 @@ import {
   type HostNotificationChatStoppedPayload,
   type HostNotificationKnownPayload,
   type HostNotificationOutcome,
-  type HostNotificationSandboxNoticePayload,
   type HostNotificationSeverity,
   type HostNotificationsAttentionCursor,
   type HostNotificationsChronologicalCursor,
   type HostNotificationsCloudFeedRowV16,
   type HostNotificationsCloudFeedEntryRequest,
   type HostNotificationsEntityRef,
+  type HostNotificationsSummary,
   HOST_NOTIFICATIONS_HOME_ORDER,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { NotificationEntry } from "@traycer/protocol/notifications/notification-entry";
 import { formatNotification } from "@traycer/protocol/notifications/notification-formatter";
 import {
-  compareProviderPackLocalFirst,
-  parseProviderPackNotificationAttribution,
-  providerPackViewingLocalityFromShell,
-  type ProviderPackNotificationAttribution,
-  type ProviderPackViewingLocalityContext,
-} from "@/lib/notifications/provider-pack-notification-attribution";
-import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
-import {
   secretsNotificationDetail,
   type SecretsNotificationDetail,
 } from "@/lib/notifications/secrets-notification-detail";
 import {
-  environmentNotificationDetail,
-  type EnvironmentNotificationDetail,
-} from "@/lib/notifications/environment-notification-detail";
-import { useRunnerHostOrNull } from "@/providers/use-runner-host";
+  isDroppedNotification,
+  notificationSummaryContribution,
+} from "@/lib/notifications/dropped-notification-kinds";
 
 export type MergedNotificationSource =
   | "host"
@@ -147,11 +134,6 @@ export interface MergedNotificationRow {
    * expiry), read from its typed payload. Absent or `null` on every other
    * row, and on a secrets row whose payload this build cannot read. */
   readonly secrets?: SecretsNotificationDetail | null;
-  /** Extra content for P2's five environment / team / secret-removed rows. */
-  readonly environmentDetail?: EnvironmentNotificationDetail | null;
-  /** A `sandbox.notice` row's sandbox and what happened to it, for its
-   * actions. Absent or `null` on every other row. */
-  readonly sandboxNotice?: HostNotificationSandboxNoticePayload | null;
   /** A bot's answer to the person: Attention's last class while unread.
    * Absent or `false` on every other row. */
   readonly botAnswer?: boolean;
@@ -171,35 +153,9 @@ export interface MergedNotificationRow {
    * relayed the feed. Feed mutations never use it - they address the entry.
    * `null` for rows with no meaningful origin. */
   readonly originHostId: string | null;
-  /**
-   * D7: parsed host-attributed provider-pack payload (update / floor / pin
-   * lifecycle), or null. Render uses this with the **local** host id (not
-   * ambient active) to caption and de-emphasise other machines' pack-store
-   * events without dropping `needs_action` evidence.
-   */
-  readonly providerPackAttribution: ProviderPackNotificationAttribution | null;
   /** Product-vocabulary category, mapped from `source` at the projection
    * boundary so consumers never branch on the internal source seam. */
   readonly category: NotificationCategory;
-}
-
-/**
- * The sandbox a sandbox row names, or `null` for any other row: a
- * `sandbox.notice` row's payload, else a push's per-occurrence entry key
- * (`sandbox-<kind>:<sandboxId>:<stage>`, and the older
- * `sandbox-day-30:<sandboxId>:<days>`). Its destination is Settings ›
- * Sandboxes with that row revealed.
- */
-export function sandboxIdOfNotificationRow(
-  row: Pick<MergedNotificationRow, "source" | "sourceId" | "sandboxNotice">,
-): string | null {
-  const notice = row.sandboxNotice ?? null;
-  if (notice !== null) return notice.sandboxId;
-  if (row.source !== "cloud" || !row.sourceId.startsWith("sandbox-")) {
-    return null;
-  }
-  const id = row.sourceId.split(":")[1] ?? "";
-  return id.length === 0 ? null : id;
 }
 
 function isHostUnsupportedError(error: unknown): boolean {
@@ -208,8 +164,6 @@ function isHostUnsupportedError(error: unknown): boolean {
 
 export interface MergedNotificationsActions {
   readonly markAsRead: (row: MergedNotificationRow | string) => void;
-  /** The notice's action succeeded or its sandbox moved on: it leaves the bell. */
-  readonly retireNotice: (row: MergedNotificationRow) => void;
   readonly clear: (row: MergedNotificationRow) => void;
   readonly clearAll: () => void;
   readonly markAllAsRead: () => void;
@@ -257,11 +211,6 @@ interface HostNotificationMutationContext {
 }
 
 interface CloudFeedMutationContext {
-  readonly hookRemovalEntries: readonly {
-    readonly entryId: string;
-    readonly id: string;
-    readonly hostId: string;
-  }[];
   readonly hostId: string | null;
   readonly sessionEpoch: number;
   /**
@@ -365,18 +314,7 @@ export function mergedUnreadCount(input: {
 /** Every merged row, newest-first across the active feed plus renderer-local
  * failures - the shared base the id/Attention/Recent projections all derive
  * from without recomputing their own source subscriptions. */
-/** Every row the bell shows: a retired notice has left it. */
 export function useMergedNotificationRows(): ReadonlyArray<MergedNotificationRow> {
-  const rows = useMergedNotificationRowsWithRetired();
-  return useMemo(() => rows.filter((row) => !isRetiredNotice(row)), [rows]);
-}
-
-/**
- * The merged rows with retired notices still in them, for the one reader
- * that must see them: the bell's count, whose relay summary may still count
- * a retired notice an older writer resolved without reading.
- */
-function useMergedNotificationRowsWithRetired(): ReadonlyArray<MergedNotificationRow> {
   const feedMode = useNotificationFeedMode();
   // The host that SERVED these rows, not whichever host is app-wide active -
   // `originHostId` routes activation and names the machine in the row, so the
@@ -407,7 +345,7 @@ function useMergedNotificationRowsWithRetired(): ReadonlyArray<MergedNotificatio
       // the `home: local` partition rows (empty while the cloud lane serves).
       const rows: MergedNotificationRow[] = [
         ...hostIds
-          .filter((id) => !isAutomaticAgentRecovery(hostById[id]))
+          .filter((id) => isShownHostEntry(hostById[id]))
           .map((id) =>
             rowFromHostEntryForOrigin(hostById[id], notificationHostId),
           ),
@@ -426,7 +364,7 @@ function useMergedNotificationRowsWithRetired(): ReadonlyArray<MergedNotificatio
     if (feedMode === "upgrade-required") return [];
     const rows: MergedNotificationRow[] = [
       ...hostIds
-        .filter((id) => !isAutomaticAgentRecovery(hostById[id]))
+        .filter((id) => isShownHostEntry(hostById[id]))
         .map((id) =>
           rowFromHostEntryForOrigin(hostById[id], notificationHostId),
         ),
@@ -491,7 +429,6 @@ export function useBlockingAttentionCount(): number {
       rows.filter((row) => {
         const classification = classifyNotificationLifecycle(row);
         return (
-          !isActionableNotice(row) &&
           classification.section === "attention" &&
           classification.tier === "blocking"
         );
@@ -507,20 +444,10 @@ interface AttentionOrderEntry {
 
 /** Attention, blocking-first, then failures, then answers, newest first
  * within each tier.
- * Never filtered - Attention is complete and filter-invariant by design.
- * Within the same tier, this machine's pack-store events sort ahead of other
- * machines' (D7 de-emphasis: listed, but local leads). */
+ * Never filtered - Attention is complete and filter-invariant by design. */
 export function useAttentionNotificationIds(): ReadonlyArray<string> {
   const rows = useMergedNotificationRows();
-  const localHost = useReactiveLocalHostEntry();
-  const runnerHost = useRunnerHostOrNull();
-  const hasLocalHost = runnerHost?.hasLocalHost ?? false;
-  const localHostId = localHost?.hostId ?? null;
   return useMemo(() => {
-    const viewing = providerPackViewingLocalityFromShell({
-      hasLocalHost,
-      localHostId,
-    });
     const attentionRows: AttentionOrderEntry[] = rows
       .map((row) => ({
         row,
@@ -538,46 +465,45 @@ export function useAttentionNotificationIds(): ReadonlyArray<string> {
         } => entry.classification.section === "attention",
       )
       .map(({ row, classification }) => ({ row, tier: classification.tier }));
-    attentionRows.sort((a, b) =>
-      comparePartitionedAttentionOrder(a, b, viewing),
-    );
+    attentionRows.sort(comparePartitionedAttentionOrder);
     return attentionRows.map((entry) => entry.row.feedId);
-  }, [rows, hasLocalHost, localHostId]);
+  }, [rows]);
 }
 
 /**
  * Attention keeps its tiers first; inside a tier, rows are newest
- * first across both planes (`createdAt` is the origin clock in each), then
- * this machine's pack-store rows lead the ones it only heard about (D7).
- * `compareProviderPackLocalFirst` carries the newest-first then `feedId` tail
- * `compareFeedCandidates` does, so the locality key is the only thing it adds;
- * the plane breaks whatever tie is left in the protocol's home order.
+ * first across both planes (`createdAt` is the origin clock in each), the
+ * plane breaks a same-instant tie in the protocol's home order, and `feedId`
+ * breaks whatever tie is left.
  */
 function comparePartitionedAttentionOrder(
   left: AttentionOrderEntry,
   right: AttentionOrderEntry,
-  viewing: ProviderPackViewingLocalityContext,
 ): number {
   const tierDelta = compareAttentionTiers(left.tier, right.tier);
   if (tierDelta !== 0) return tierDelta;
-  const createdAtDelta = right.row.createdAt - left.row.createdAt;
+  return compareRecentOrder(left.row, right.row);
+}
+
+/**
+ * Newest first across both planes, then the plane, then `feedId`. `createdAt`
+ * is the origin host's clock in each lane, so the lanes interleave by date and
+ * the plane only breaks a same-instant tie. Sorting the plane FIRST put every
+ * stale local-lane row above every fresh cloud row, which read as
+ * "notifications stopped".
+ */
+function compareRecentOrder(
+  left: MergedNotificationRow,
+  right: MergedNotificationRow,
+): number {
+  const createdAtDelta = right.createdAt - left.createdAt;
   if (createdAtDelta !== 0) return createdAtDelta;
   const planeDelta =
-    notificationPlaneOrder(left.row) - notificationPlaneOrder(right.row);
+    notificationPlaneOrder(left) - notificationPlaneOrder(right);
   if (planeDelta !== 0) return planeDelta;
-  return compareProviderPackLocalFirst(
-    {
-      attribution: left.row.providerPackAttribution,
-      createdAt: left.row.createdAt,
-      feedId: left.row.feedId,
-    },
-    {
-      attribution: right.row.providerPackAttribution,
-      createdAt: right.row.createdAt,
-      feedId: right.row.feedId,
-    },
-    viewing,
-  );
+  if (left.feedId < right.feedId) return -1;
+  if (left.feedId > right.feedId) return 1;
+  return 0;
 }
 
 /**
@@ -595,51 +521,23 @@ function notificationPlaneOrder(row: MergedNotificationRow): number {
 
 /** Every non-attention row, chronological, filtered by the open-session
  * Unread-only/category selections. Attention rows are always excluded
- * regardless of filter state. Local pack-store rows lead remote ones (D7). */
+ * regardless of filter state. */
 export function useRecentNotificationIds(): ReadonlyArray<string> {
   const rows = useMergedNotificationRows();
   const unreadOnly = useNotificationsPopoverStore((state) => state.unreadOnly);
   const categories = useNotificationsPopoverStore((state) => state.categories);
-  const localHost = useReactiveLocalHostEntry();
-  const runnerHost = useRunnerHostOrNull();
-  const hasLocalHost = runnerHost?.hasLocalHost ?? false;
-  const localHostId = localHost?.hostId ?? null;
-  return useMemo(() => {
-    const viewing = providerPackViewingLocalityFromShell({
-      hasLocalHost,
-      localHostId,
-    });
-    return rows
-      .filter((row) => classifyNotificationLifecycle(row).section === "recent")
-      .filter((row) => categories.has(row.category))
-      .filter((row) => !unreadOnly || row.readAt === null)
-      .sort((a, b) => {
-        // Newest first across both planes, exactly as Attention orders inside
-        // a tier: `createdAt` is the origin host's clock in each lane, so the
-        // lanes interleave by date and the plane only breaks a same-instant
-        // tie. Sorting the plane FIRST put every stale local-lane row above
-        // every fresh cloud row, which read as "notifications stopped".
-        const createdAtDelta = b.createdAt - a.createdAt;
-        if (createdAtDelta !== 0) return createdAtDelta;
-        const planeDelta =
-          notificationPlaneOrder(a) - notificationPlaneOrder(b);
-        if (planeDelta !== 0) return planeDelta;
-        return compareProviderPackLocalFirst(
-          {
-            attribution: a.providerPackAttribution,
-            createdAt: a.createdAt,
-            feedId: a.feedId,
-          },
-          {
-            attribution: b.providerPackAttribution,
-            createdAt: b.createdAt,
-            feedId: b.feedId,
-          },
-          viewing,
-        );
-      })
-      .map((row) => row.feedId);
-  }, [rows, unreadOnly, categories, hasLocalHost, localHostId]);
+  return useMemo(
+    () =>
+      rows
+        .filter(
+          (row) => classifyNotificationLifecycle(row).section === "recent",
+        )
+        .filter((row) => categories.has(row.category))
+        .filter((row) => !unreadOnly || row.readAt === null)
+        .sort(compareRecentOrder)
+        .map((row) => row.feedId),
+    [rows, unreadOnly, categories],
+  );
 }
 
 function rowFromLocalFeedId(input: {
@@ -657,8 +555,7 @@ function rowFromLocalFeedId(input: {
   if (input.feedMode === "upgrade-required") return null;
   switch (input.parsed.source) {
     case "host":
-      return input.hostEntry === null ||
-        isAutomaticAgentRecovery(input.hostEntry)
+      return input.hostEntry === null || !isShownHostEntry(input.hostEntry)
         ? null
         : rowFromHostEntryForOrigin(input.hostEntry, input.hostOriginId);
     case "app-local":
@@ -685,6 +582,29 @@ function rowFromCloudFeedId(input: {
   )
     return null;
   return rowFromCloudFeedRow(input.cloudRow);
+}
+
+/** A host row the merged list shows: neither an automatic recovery nor a
+ * kind the center no longer carries. */
+function isShownHostEntry(entry: HostNotificationFeedEntry): boolean {
+  return (
+    !isAutomaticAgentRecovery(entry) && !isDroppedNotification(entry, null)
+  );
+}
+
+/** What the host summary counts for held rows the merged list drops. */
+function droppedHostSummaryContribution(
+  hostById: Readonly<Record<string, HostNotificationFeedEntry>>,
+): { readonly unread: number; readonly attention: number } {
+  let unread = 0;
+  let attention = 0;
+  for (const entry of Object.values(hostById)) {
+    if (!isDroppedNotification(entry, null)) continue;
+    const counted = notificationSummaryContribution(entry);
+    unread += counted.unread;
+    attention += counted.attention;
+  }
+  return { unread, attention };
 }
 
 /** A successful non-human turn advances terminal glyph chronology but is not
@@ -735,9 +655,40 @@ export function useMergedNotificationRow(
   });
 }
 
+/**
+ * The host summary less the held rows the merged list drops: the one adjusted
+ * host summary behind the bell, the unread count and the Mark-all gate. A
+ * host whose protocol hides those kinds already leaves them out of its
+ * summary, so nothing is subtracted there; this is the fallback for an older
+ * host.
+ */
+function useShownHostNotificationSummary(): HostNotificationsSummary | null {
+  const rawHostSummary = useHostNotificationsStore(
+    selectHostNotificationSummary,
+  );
+  const hostById = useHostNotificationsStore((state) => state.byId);
+  return useMemo(() => {
+    if (rawHostSummary === null) return null;
+    const dropped = droppedHostSummaryContribution(hostById);
+    return {
+      ...rawHostSummary,
+      unreadCount: Math.max(0, rawHostSummary.unreadCount - dropped.unread),
+      attentionCount: Math.max(
+        0,
+        rawHostSummary.attentionCount - dropped.attention,
+      ),
+    };
+  }, [rawHostSummary, hostById]);
+}
+
+/** The host plane's unread count as the merged list shows it. */
+export function useShownHostNotificationUnreadCount(): number {
+  return useShownHostNotificationSummary()?.unreadCount ?? 0;
+}
+
 export function useMergedNotificationUnreadCount(): number {
   const feedMode = useNotificationFeedMode();
-  const hostUnread = useHostNotificationUnreadCount();
+  const hostUnread = useShownHostNotificationUnreadCount();
   const hostSummary = useHostNotificationsStore(selectHostNotificationSummary);
   const appLocalUnread = useAppLocalNotificationUnreadCount();
   const globalUnread = useNotificationUnreadCount();
@@ -787,36 +738,20 @@ export type NotificationBellState =
  */
 export function useNotificationBellState(): NotificationBellState {
   const feedMode = useNotificationFeedMode();
-  const hostSummary = useHostNotificationsStore(selectHostNotificationSummary);
+  // The cloud store's summary already leaves the dropped kinds out.
+  const hostSummary = useShownHostNotificationSummary();
   // App-local rows are always severity "failure" (`rowFromAppLocalEntry`
   // hardcodes it), so the app-local unread count already IS its
   // unread-failure count - no extra filter needed to fold it into attention.
   const appLocalUnread = useAppLocalNotificationUnreadCount();
   const globalUnread = useNotificationUnreadCount();
   const cloudSummary = useCloudNotificationsStore((state) => state.summary);
-  const rows = useMergedNotificationRowsWithRetired();
-  // The relay summary counts unread severities. These notices instead stay
-  // actionable after reading and leave attention only when retired. Adjust
-  // their known contribution without discarding any unseen summary rows.
-  const noticeAdjustment = rows.reduce((delta, row) => {
-    if (
-      (row.source !== "cloud" && row.source !== "host") ||
-      !isActionableNotice(row)
-    )
-      return delta;
-    const active = row.resolvedAt === null ? 1 : 0;
-    const countedBySummary = row.readAt === null ? 1 : 0;
-    return delta + active - countedBySummary;
-  }, 0);
   if (feedMode === "cloud") {
     if (hostSummary === null || cloudSummary === null) {
       return { kind: "unknown" };
     }
     const attention =
-      hostSummary.attentionCount +
-      cloudSummary.attentionCount +
-      appLocalUnread +
-      noticeAdjustment;
+      hostSummary.attentionCount + cloudSummary.attentionCount + appLocalUnread;
     if (attention > 0) {
       return { kind: "attention", count: attention };
     }
@@ -830,8 +765,7 @@ export function useNotificationBellState(): NotificationBellState {
   }
   if (feedMode === "upgrade-required") return { kind: "clear" };
   if (hostSummary === null) return { kind: "unknown" };
-  const attention =
-    hostSummary.attentionCount + appLocalUnread + noticeAdjustment;
+  const attention = hostSummary.attentionCount + appLocalUnread;
   if (attention > 0) return { kind: "attention", count: attention };
   const unread = mergedUnreadCount({
     hostUnread: hostSummary.unreadCount,
@@ -1105,19 +1039,6 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
   };
   const captureCloudMutationContext = useCallback(
     (): CloudFeedMutationContext => ({
-      hookRemovalEntries: Object.values(
-        useCloudNotificationsStore.getState().rows,
-      ).flatMap((row) =>
-        row?.entry.kind === "notification.hooks.removed"
-          ? [
-              {
-                entryId: row.entryId,
-                id: row.entry.id,
-                hostId: row.originHostId,
-              },
-            ]
-          : [],
-      ),
       hostId: client?.getActiveHostId() ?? null,
       sessionEpoch: useCloudNotificationsStore.getState().sessionEpoch,
       accountId: useAuthStore.getState().contextMetadata?.userId ?? null,
@@ -1167,63 +1088,12 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     options: {
       mutationKey: notificationsMutationKeys.cloudMarkRead(),
       onMutate: (variables) => variables.mutationContext,
-      onSuccess: (data, variables, context) => {
+      onSuccess: (data, _variables, context) => {
         if (
           context.current !== null &&
           isCurrentCloudMutation(context.current)
         ) {
           handleCloudMutationResult(data);
-          if (data.status === "applied") {
-            const row = context.current.hookRemovalEntries.find(
-              (entry) => entry.entryId === variables.entryId,
-            );
-            if (row !== undefined)
-              void consumePendingHookRemovalNotices(queryClient, row.hostId, {
-                ids: [row.id],
-              });
-          }
-        }
-      },
-      onError: (error, _variables, context) => {
-        if (error instanceof NotificationFeedChangedError) return;
-        if (context !== undefined && isCurrentCloudMutation(context.current)) {
-          markCloudUnavailable();
-        }
-      },
-    },
-  });
-  const cloudResolve = useHostMutation<
-    HostRpcRegistry,
-    "host.notifications.cloudFeed.resolve",
-    CloudFeedMutationScope,
-    CloudFeedEntryVariables
-  >({
-    client,
-    method: "host.notifications.cloudFeed.resolve",
-    mapVariables: (variables) => {
-      if (
-        !canMutateCloudEntry(
-          variables.entryId,
-          variables.mutationContext.originatingAccountId,
-        )
-      ) {
-        throw new NotificationFeedChangedError(
-          "host.notifications.cloudFeed.resolve",
-        );
-      }
-      variables.mutationContext.current = captureCloudMutationContext();
-      return { entryId: variables.entryId };
-    },
-    options: {
-      mutationKey: notificationsMutationKeys.cloudResolve(),
-      onMutate: (variables) => variables.mutationContext,
-      onSuccess: (data, variables, context) => {
-        if (!isCurrentCloudMutation(context.current)) return;
-        handleCloudMutationResult(data);
-        if (data.status === "applied") {
-          useCloudNotificationsStore
-            .getState()
-            .resolveNoticeLocally(variables.entryId, Date.now());
         }
       },
       onError: (error, _variables, context) => {
@@ -1266,11 +1136,6 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         )
           return;
         if (data.status === "applied") {
-          for (const row of context.current.hookRemovalEntries) {
-            void consumePendingHookRemovalNotices(queryClient, row.hostId, {
-              ids: [row.id],
-            });
-          }
           handleCloudMutationResult({
             status: "applied",
             version: data.version,
@@ -1315,21 +1180,12 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
     options: {
       mutationKey: notificationsMutationKeys.cloudClear(),
       onMutate: (variables) => variables.mutationContext,
-      onSuccess: (data, variables, context) => {
+      onSuccess: (data, _variables, context) => {
         if (
           context.current !== null &&
           isCurrentCloudMutation(context.current)
         ) {
           handleCloudMutationResult(data);
-          if (data.status === "applied") {
-            const row = context.current.hookRemovalEntries.find(
-              (entry) => entry.entryId === variables.entryId,
-            );
-            if (row !== undefined)
-              void consumePendingHookRemovalNotices(queryClient, row.hostId, {
-                ids: [row.id],
-              });
-          }
         }
       },
       onError: (error, _variables, context) => {
@@ -1371,13 +1227,6 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
           isCurrentCloudMutation(context.current)
         ) {
           handleCloudMutationResult(data);
-          if (data.status === "applied") {
-            for (const row of context.current.hookRemovalEntries) {
-              void consumePendingHookRemovalNotices(queryClient, row.hostId, {
-                ids: [row.id],
-              });
-            }
-          }
         }
       },
       onError: (error, _variables, context) => {
@@ -1422,9 +1271,6 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
             Date.now(),
             context.snapshotEpoch,
           );
-        void consumePendingHookRemovalNotices(queryClient, context.hostId, {
-          ids: [variables.sourceId],
-        });
         // Tab/sidebar indicators are otherwise refreshed only by this row's
         // `readStateChanged` echo on the feed stream; invalidate here too so
         // a successful mark-read clears them over the unary channel even
@@ -1499,9 +1345,6 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
             Date.now(),
             context.snapshotEpoch,
           );
-        void consumePendingHookRemovalNotices(queryClient, context.hostId, {
-          beforeUpdatedAt: variables.beforeUpdatedAt,
-        });
         // Same stream-independence rationale as the row-level mark-read; a
         // mark-all has no entity list, so the whole host scope refetches.
         if (context.hostId !== null) {
@@ -1570,9 +1413,6 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         useHostNotificationsStore
           .getState()
           .clearAllLocally(variables.beforeUpdatedAt, context.snapshotEpoch);
-        void consumePendingHookRemovalNotices(queryClient, context.hostId, {
-          beforeUpdatedAt: variables.beforeUpdatedAt,
-        });
         if (context.hostId !== null) {
           invalidateNotificationIndicators(queryClient, context.hostId, client);
         }
@@ -1770,29 +1610,6 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
 
   return useMemo(
     () => ({
-      retireNotice: (row) => {
-        if (
-          row.source !== "cloud" ||
-          !isActionableNotice(row) ||
-          !canMutateCloudEntry(row.sourceId, originatingAccountId)
-        )
-          return;
-        // Retire immediately even while an older relay omits resolvedAt or
-        // the marker writes are unavailable: a resolved notice is retired.
-        useCloudNotificationsStore
-          .getState()
-          .resolveNoticeLocally(row.sourceId, Date.now());
-        cloudResolve.mutate({
-          entryId: row.sourceId,
-          mutationContext: { originatingAccountId, current: null },
-        });
-        // The clear takes it out of every device's feed, an older client's
-        // included, which would otherwise keep a resolved notice in Recent.
-        cloudClear.mutate({
-          entryId: row.sourceId,
-          mutationContext: { originatingAccountId, current: null },
-        });
-      },
       markAsRead: (target) => {
         if (liveFeedMode.current === "upgrade-required") return;
         const feedId = typeof target === "string" ? target : target.feedId;
@@ -2196,7 +2013,6 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
       captureCloudMutationContext,
       isCurrentCloudMutation,
       cloudMarkRead,
-      cloudResolve,
       cloudMarkAllRead,
       cloudClear,
       cloudClearAll,
@@ -2269,9 +2085,6 @@ function rowFromHostEntryForOrigin(
   originHostId: string | null,
 ): MergedNotificationRow {
   const presentation = formatHostNotificationPresentation(entry);
-  const providerPackAttribution = parseProviderPackNotificationAttribution(
-    entry.payload,
-  );
   return {
     feedId: hostFeedId(entry.id),
     source: "host",
@@ -2283,8 +2096,6 @@ function rowFromHostEntryForOrigin(
     payload: payloadFromHostEntry(entry),
     agentSurface: agentSurfaceFromHostEntry(entry),
     secrets: secretsNotificationDetail(entry.kind, entry.payload),
-    environmentDetail: environmentNotificationDetail(entry.kind, entry.payload),
-    sandboxNotice: sandboxNoticeFromHostEntry(entry),
     botAnswer: isBotThreadVerdictNotification(entry),
     hostKind: entry.kind,
     appLocalKind: null,
@@ -2294,7 +2105,6 @@ function rowFromHostEntryForOrigin(
     resolvedAt: "resolvedAt" in entry ? (entry.resolvedAt ?? null) : null,
     sourceRef: entry.sourceRef,
     originHostId,
-    providerPackAttribution,
     category: categoryForNotificationSource("host"),
   };
 }
@@ -2311,7 +2121,6 @@ export function rowFromAppLocalEntry(
     title: entry.message,
     body: entry.detail ?? "Traycer notification",
     payload: entry.payload,
-    environmentDetail: null,
     hostKind: null,
     appLocalKind: entry.kind,
     globalEntry: null,
@@ -2320,7 +2129,6 @@ export function rowFromAppLocalEntry(
     resolvedAt: null,
     sourceRef: null,
     originHostId: entry.originHostId ?? null,
-    providerPackAttribution: null,
     category: categoryForNotificationSource("app-local"),
   };
 }
@@ -2337,7 +2145,6 @@ export function rowFromGlobalEntry(
     title: formatNotification(entry.event, undefined),
     body: "Collaboration",
     payload: buildPayloadFromEvent(entry.event),
-    environmentDetail: null,
     hostKind: null,
     appLocalKind: null,
     globalEntry: entry,
@@ -2346,7 +2153,6 @@ export function rowFromGlobalEntry(
     resolvedAt: null,
     sourceRef: null,
     originHostId: null,
-    providerPackAttribution: null,
     category: categoryForNotificationSource("global"),
   };
 }
@@ -2359,9 +2165,6 @@ export function rowFromCloudFeedRow(
     nonEmptyCloudPresentationTitle(row.presentation.epicTitle) ??
     nonEmptyCloudPresentationTitle(row.presentation.chatTitle) ??
     fallback.title;
-  const providerPackAttribution = parseProviderPackNotificationAttribution(
-    row.entry.payload,
-  );
   return {
     feedId: cloudNotificationFeedId(row.entryId),
     source: "cloud",
@@ -2374,11 +2177,6 @@ export function rowFromCloudFeedRow(
     payload: payloadFromHostEntry(row.entry),
     agentSurface: agentSurfaceFromHostEntry(row.entry),
     secrets: secretsNotificationDetail(row.entry.kind, row.entry.payload),
-    environmentDetail: environmentNotificationDetail(
-      row.entry.kind,
-      row.entry.payload,
-    ),
-    sandboxNotice: sandboxNoticeFromHostEntry(row.entry),
     botAnswer: isBotThreadVerdictNotification(row.entry),
     hostKind: row.entry.kind,
     appLocalKind: null,
@@ -2389,7 +2187,6 @@ export function rowFromCloudFeedRow(
       "resolvedAt" in row.entry ? (row.entry.resolvedAt ?? null) : null,
     sourceRef: row.entry.sourceRef,
     originHostId: row.originHostId,
-    providerPackAttribution,
     category: categoryForNotificationSource("cloud"),
   };
 }
@@ -2511,16 +2308,6 @@ function payloadFromHostEntry(
   return known === null ? null : navigationPayloadFromKnown(known);
 }
 
-function sandboxNoticeFromHostEntry(
-  entry: HostNotificationFeedEntry,
-): HostNotificationSandboxNoticePayload | null {
-  const known = parseKnownHostNotificationPayloadForKind(
-    entry.kind,
-    entry.payload,
-  );
-  return known?.kind === "sandbox_notice" ? known : null;
-}
-
 function agentSurfaceFromHostEntry(
   entry: HostNotificationFeedEntry,
 ): "gui" | "tui" | null {
@@ -2582,13 +2369,12 @@ function navigationPayloadFromKnown(
 ): NotificationPayload | null {
   if (isRowCompletePayload(known)) return null;
   switch (known.kind) {
+    // Never shown: readers drop these rows.
     case "notification_hooks_removed":
-      return {
-        kind: "hostSurface",
-        surface: "notificationSettings",
-        hostId: known.hostId,
-        focus: undefined,
-      };
+    case "worktree_deletion":
+    case "worktree_auto_cleanup":
+    case "secret_export_minted":
+      return null;
     case "chat":
       return navigationPayloadForChatStopped(known);
     case "agent_stalled":
@@ -2629,37 +2415,13 @@ function navigationPayloadFromKnown(
         sessionId: known.sessionId,
         tabId: known.tabId,
       };
-    // No focus hint: the deleted worktree's row is gone, and the list's saved
-    // filters are the authoritative view to return to. A row from a NEWER host
-    // whose operation payload this build cannot parse never reaches here at
-    // all - it renders with common-field copy and no deep link, which is the
-    // designed degradation rather than a guessed destination.
-    case "worktree_deletion":
-      return navigationPayloadForWorktreeDeletion(known);
-    // An automatic run DOES have something to focus: its own history entry,
-    // which survives the worktrees it removed. The run id is a hint either way -
-    // retention GC bounds history, so a row read months later may name a run
-    // that is gone, and landing on the history list is then the right answer
-    // rather than a dead end.
-    case "worktree_auto_cleanup":
-      return {
-        kind: "hostSurface",
-        surface: "worktreeSettings",
-        view: "cleanupHistory",
-        // History is host-local, so the destination is only well defined with
-        // the host named: Settings administers one host at a time and the
-        // reader may well be looking at another one.
-        hostId: known.hostId,
-        focus: { resourceId: known.runId },
-      };
     // The chat's queue is paused and its remedy lives in that chat.
     case "managed_command_delivery_parked":
       return { kind: "chat", epicId: known.epicId, chatId: known.chatId };
-    // Both secrets rows are about a sandbox agent's chat when the host could
-    // name one, and about nothing navigable otherwise: the decision and the
-    // notice are complete on the row itself.
+    // A grant request is about a sandbox agent's chat when the host could name
+    // one, and about nothing navigable otherwise: the decision is complete on
+    // the row itself.
     case "secret_grant_request":
-    case "secret_export_minted":
       return navigationPayloadForSecretsRow(known.epicId, known.chatId);
   }
 }
@@ -2690,20 +2452,6 @@ function navigationPayloadForChatStopped(
     messageId: includeTranscriptAnchor ? known.messageId : undefined,
     eventId: includeTranscriptAnchor ? known.eventId : undefined,
     ...(scrollToEnd ? { scrollToEnd: true as const } : {}),
-  };
-}
-
-function navigationPayloadForWorktreeDeletion(known: {
-  readonly source: string;
-  readonly epicId?: string;
-}): NotificationPayload {
-  if (known.source === "task_sweep" && known.epicId !== undefined) {
-    return { kind: "epic", epicId: known.epicId };
-  }
-  return {
-    kind: "hostSurface",
-    surface: "worktreeSettings",
-    focus: undefined,
   };
 }
 

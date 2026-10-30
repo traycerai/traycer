@@ -761,6 +761,20 @@ vi.mock("@/hooks/epic/use-task-hosts-view", () => ({
   useTaskHostsView: () => ({ kind: "none" }),
 }));
 
+// The Mobile simulators panel's presence rule, asked for on every render of the
+// panel host; left out for the same reason again - it reads the host binding
+// and issues a `simulator.status` host query. Neither input present, so the
+// panel is absent from the rail this suite reads.
+vi.mock(
+  "@/components/epic-canvas/sidebar/use-simulator-panel-availability",
+  () => ({
+    useSimulatorPanelAvailability: () => ({
+      localHostRunsSimulators: false,
+      hasSimulatorRecords: false,
+    }),
+  }),
+);
+
 // The agent hover card's host projection reads the sandbox list, and this
 // suite's eager hover-card mock mounts that card on every agent row; left out
 // for the same reason: its real hook reads the host binding.
@@ -1135,6 +1149,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   // LOCAL tree, and the section hides itself when the cloud list has nothing
   // to add - which, with no host client bound here, it never does.
   useEpicChatIds: () => [],
+  useEpicChatIdsNamedByCloudRows: () => [],
   useEpicArtifactStatus: (artifactId: string) =>
     testState.tree.nodeById[artifactId]?.status ?? null,
   useEpicChatHarnessId: (nodeId: string) =>

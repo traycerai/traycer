@@ -9,7 +9,7 @@ import {
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
 import { environmentStatusResponseSchemaV11 } from "@traycer/protocol/host/environment-schemas";
-import { hostStatusV19 } from "@traycer/protocol/host/status/contracts";
+import { hostStatusV110 } from "@traycer/protocol/host/status/contracts";
 import { createRequestContextFixture } from "@traycer-clients/shared/test-fixtures/request-context";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
@@ -84,6 +84,7 @@ const HOST_STATUS = {
   processMemory: null,
   crossHostMessaging: null,
   sessions: null,
+  updatesExternallyManaged: null,
 };
 
 const APPLIED = status([{ kind: "variable", status: "applied" }]);
@@ -122,7 +123,7 @@ function mount(
         const answer =
           hostStatusAnswers[Math.min(probes, hostStatusAnswers.length - 1)];
         probes += 1;
-        return hostStatusV19.responseSchema.parse(await answer());
+        return hostStatusV110.responseSchema.parse(await answer());
       },
       "environment.status": async () => {
         const answer = answers[Math.min(reads, answers.length - 1)];

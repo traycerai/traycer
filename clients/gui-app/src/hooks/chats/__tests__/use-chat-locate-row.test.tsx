@@ -1,7 +1,11 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatLocateRowResponse } from "@traycer/protocol/host/agent/gui/subscribe-windowed";
-import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
+import {
+  useChatLocateRow,
+  useChatLocateRowAnswer,
+  type ChatLocateRowAnswer,
+} from "@/hooks/chats/use-chat-locate-row";
 
 /**
  * `chat.locateRow` answers with an ORDINAL, and an ordinal means nothing
@@ -34,6 +38,11 @@ const answer = vi.hoisted<{ value: ChatLocateRowResponse | undefined }>(() => ({
 const captured = vi.hoisted<{ value: CapturedHostQuery | null }>(() => ({
   value: null,
 }));
+/** What the query reports besides its data: a request in flight, a rejection. */
+const status = vi.hoisted<{ fetching: boolean; rejected: boolean }>(() => ({
+  fetching: false,
+  rejected: false,
+}));
 
 // No directory entry and no witness: the chat stays on its own host, which
 // is what `useChatServingHostId` answers in production today.
@@ -44,7 +53,11 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 vi.mock("@/hooks/host/use-host-query", () => ({
   useHostQuery: (args: CapturedHostQuery) => {
     captured.value = args;
-    return { data: answer.value, isFetching: false, isError: false };
+    return {
+      data: answer.value,
+      isFetching: status.fetching,
+      isError: status.rejected,
+    };
   },
 }));
 
@@ -66,12 +79,16 @@ function locate(input: {
   return result.current;
 }
 
-describe("useChatLocateRow", () => {
-  beforeEach(() => {
-    answer.value = undefined;
-    captured.value = null;
-  });
+// Every case starts from a query with no answer, nothing in flight and no
+// rejection, whichever describe it is in.
+beforeEach(() => {
+  answer.value = undefined;
+  captured.value = null;
+  status.fetching = false;
+  status.rejected = false;
+});
 
+describe("useChatLocateRow", () => {
   it("takes an ordinal numbered in the epoch the caller is holding", () => {
     expect(
       locate({ epoch: 7, response: { found: true, ordinal: 42, epoch: 7 } }),
@@ -114,5 +131,47 @@ describe("useChatLocateRow", () => {
 
     expect(result.current).toBeNull();
     expect(captured.value?.options?.enabled).toBe(false);
+  });
+});
+
+describe("useChatLocateRowAnswer", () => {
+  function answerNow(epoch: number): ChatLocateRowAnswer {
+    const { result } = renderHook(() =>
+      useChatLocateRowAnswer({
+        client: null,
+        epicId: "epic-1",
+        chatId: "chat-1",
+        target: { kind: "block", blockId: "b-1" },
+        epoch,
+      }),
+    );
+    return result.current;
+  }
+
+  it("keeps the difference between a miss and no answer yet", () => {
+    answer.value = { found: false };
+    expect(answerNow(7)).toEqual({ status: "missing" });
+
+    answer.value = undefined;
+    status.rejected = true;
+    expect(answerNow(7)).toEqual({ status: "missing" });
+
+    status.rejected = false;
+    expect(answerNow(7)).toEqual({ status: "waiting" });
+  });
+
+  it("reads waiting while a new request runs over a cached miss, and missing again if it ends in one", () => {
+    answer.value = { found: false };
+    status.fetching = true;
+    expect(answerNow(7)).toEqual({ status: "waiting" });
+
+    status.fetching = false;
+    expect(answerNow(7)).toEqual({ status: "missing" });
+  });
+
+  it("reads a found row as found whether or not a request runs", () => {
+    answer.value = { found: true, ordinal: 42, epoch: 7 };
+    status.fetching = true;
+    expect(answerNow(7)).toEqual({ status: "found", ordinal: 42 });
   });
 });

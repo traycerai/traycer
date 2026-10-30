@@ -876,6 +876,10 @@ export type AuthenticatedUserEnvironments = AuthenticatedUser["environments"];
 export type AuthenticatedUserActingAs = NonNullable<
   AuthenticatedUser["actingAs"]
 >;
+/** A claimed credit campaign that has not ended, as majors 2 and 3 carry it. */
+export type AuthenticatedUserCampaignCredit = NonNullable<
+  AuthenticatedUser["campaignCredits"]
+>[number];
 export type LegacyAuthenticatedUser = RecordValue<
   AuthRecordRegistry,
   "legacy-authenticated-user-response"

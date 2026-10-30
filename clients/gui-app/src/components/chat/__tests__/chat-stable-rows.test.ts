@@ -450,6 +450,89 @@ describe("computeStableChatTimelineRows", () => {
     const afterOther = computeStableChatTimelineRows([otherPost], afterSame);
     expect(afterOther.result[0]).toBe(otherPost);
   });
+
+  // A question's settlement lands on the bot's row as a new question, the
+  // row's text and options as they were: the card must draw it.
+  it("treats a settlement landing on a bot's question as a real change, and the same question as no change at all", () => {
+    const open: ChatMessage = {
+      ...makeMessage(0, "assistant"),
+      question: {
+        requestId: "req-q",
+        questions: [
+          {
+            text: "Ship it?",
+            options: ["Yes", "No"],
+            allowFreeText: false,
+            settlement: null,
+          },
+        ],
+      },
+    };
+    const state = computeStableChatTimelineRows(
+      [open],
+      EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
+    );
+    const afterSame = computeStableChatTimelineRows([{ ...open }], state);
+    expect(afterSame).toBe(state);
+
+    const settled: ChatMessage = {
+      ...open,
+      question: {
+        requestId: "req-q",
+        questions: [
+          {
+            text: "Ship it?",
+            options: ["Yes", "No"],
+            allowFreeText: false,
+            settlement: {
+              answer: "Yes",
+              skipped: false,
+              by: { kind: "bot" },
+              at: 2,
+            },
+          },
+        ],
+      },
+    };
+    const afterSettled = computeStableChatTimelineRows([settled], afterSame);
+    expect(afterSettled.result[0]).toBe(settled);
+  });
+
+  // A surface's resolution lands on the bot's post as a new surface, the
+  // post's text as it was: the card under it must draw the resolution.
+  it("treats a resolution landing on a bot post's surface as a real change, and the same surface as no change at all", () => {
+    const open: ChatMessage = {
+      ...makeMessage(0, "assistant"),
+      surface: {
+        kind: "approval",
+        epicId: "task-1",
+        hostId: "host-task",
+        chatId: "chat-agent",
+        approvalId: "approval-1",
+        resolution: null,
+      },
+    };
+    const state = computeStableChatTimelineRows(
+      [open],
+      EMPTY_STABLE_CHAT_TIMELINE_ROWS_STATE,
+    );
+    const afterSame = computeStableChatTimelineRows([{ ...open }], state);
+    expect(afterSame).toBe(state);
+
+    const resolved: ChatMessage = {
+      ...open,
+      surface: {
+        kind: "approval",
+        epicId: "task-1",
+        hostId: "host-task",
+        chatId: "chat-agent",
+        approvalId: "approval-1",
+        resolution: { state: "allowed", by: null, at: 2 },
+      },
+    };
+    const afterResolved = computeStableChatTimelineRows([resolved], afterSame);
+    expect(afterResolved.result[0]).toBe(resolved);
+  });
 });
 
 describe("didChatTimelineKeySequenceChange", () => {

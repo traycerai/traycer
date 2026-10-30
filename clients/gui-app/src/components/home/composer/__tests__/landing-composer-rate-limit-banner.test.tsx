@@ -143,10 +143,13 @@ vi.mock("@/stores/home/landing-draft-store", () => {
     setDraftComposerMode: vi.fn(),
     setDraftSettings: vi.fn(),
   };
-  return {
-    useLandingDraftStore: (selector: (value: typeof state) => unknown) =>
-      selector(state),
-  };
+  // A store API, not just a selector hook: the landing composer also reads
+  // it through `useStoreWithEqualityFn` (its returned sandbox).
+  const useLandingDraftStore = Object.assign(
+    (selector: (value: typeof state) => unknown) => selector(state),
+    { getState: () => state, subscribe: () => () => undefined },
+  );
+  return { useLandingDraftStore };
 });
 
 vi.mock("@/stores/composer/composer-run-settings-store", () => {

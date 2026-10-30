@@ -17,8 +17,8 @@ import { appLogger } from "@/lib/logger";
 
 /**
  * One host's simulator inventory for one epic, shared by every surface that
- * reads it in this window - the tile, the Browsers panel's Mobile simulators group,
- * the open menu - the way `browser-sessions-coordinator.ts` shares the
+ * reads it in this window - the tile, the pending-open watcher, the tile's
+ * inventory - the way `browser-sessions-coordinator.ts` shares the
  * browser inventory. Keyed by {host, epic, authenticated owner} so two epics
  * on one host are two streams (the sessions and boots the host publishes are
  * epic-scoped), and consumers refcount into one coordinator rather than each
@@ -60,19 +60,6 @@ export function orderSimulators(
 }
 
 /**
- * Whether the task holds a session on `simulatorId` - whoever opened it: a
- * tile in this window, one in another, or an agent's `simulator_open`. The
- * wire does not say which; the sessions list is epic-scoped, so any entry is
- * this task's.
- */
-export function simulatorHasSession(
-  state: SimulatorState,
-  simulatorId: string,
-): boolean {
-  return state.sessions.some((session) => session.simulatorId === simulatorId);
-}
-
-/**
  * Folds a `stateChanged` into the state it patches. Each patch field is
  * present only when it moved, so an absent one keeps the previous value.
  */
@@ -90,6 +77,8 @@ export function applySimulatorStatePatch(
     simulators: patch.simulators ?? current.simulators,
     sessions: patch.sessions ?? current.sessions,
     booting: patch.booting ?? current.booting,
+    // Absent from a `@1.0` host, so it stays absent until a patch carries it.
+    opening: patch.opening ?? current.opening,
   };
 }
 

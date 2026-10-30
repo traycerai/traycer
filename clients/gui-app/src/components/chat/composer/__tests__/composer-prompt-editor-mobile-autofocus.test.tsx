@@ -14,7 +14,17 @@
  */
 import { useState } from "react";
 import { act, cleanup, render } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
+import { Transaction } from "@tiptap/pm/state";
 import { EditorView } from "@tiptap/pm/view";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 
@@ -22,6 +32,29 @@ import { setMobileApp } from "@/lib/mobile-app";
 import { ComposerPromptEditor } from "../composer-prompt-editor";
 import type { ComposerPromptEditorHandle } from "../composer-prompt-editor";
 import { createComposerPickerStore } from "../picker/composer-picker-store";
+
+// ProseMirror probes once per module whether `focus` honours `preventScroll`,
+// by passing an options object whose getter flips a flag. jsdom's native focus
+// never reads its options, so the probe would settle on "unsupported" and
+// ProseMirror would pass no options at all. A real browser reads them.
+function invoke(fn: unknown, self: object, args: readonly unknown[]): void {
+  if (typeof fn !== "function") throw new Error("not a function");
+  Reflect.apply(fn, self, args);
+}
+
+const jsdomFocus: unknown = Reflect.get(HTMLElement.prototype, "focus");
+beforeAll(() => {
+  HTMLElement.prototype.focus = function (
+    this: HTMLElement,
+    options: FocusOptions | undefined,
+  ) {
+    void options?.preventScroll;
+    invoke(jsdomFocus, this, [options]);
+  };
+});
+afterAll(() => {
+  Reflect.set(HTMLElement.prototype, "focus", jsdomFocus);
+});
 
 afterEach(() => {
   cleanup();
@@ -131,7 +164,7 @@ describe("ComposerPromptEditor autofocus vs the mobile app", () => {
     // final expectation before focusAtEnd ever ran.
     mounted.viewFocus.mockClear();
     act(() => {
-      handle.focusAtEnd();
+      handle.focusAtEnd("reveal-caret");
     });
     await settleEditor();
 
@@ -144,5 +177,71 @@ describe("ComposerPromptEditor autofocus vs the mobile app", () => {
 
     readyHandle(mounted);
     expect(mounted.viewFocus).not.toHaveBeenCalled();
+  });
+
+  describe("focusAtEnd('hold-view') under an iOS platform", () => {
+    interface HoldViewRun {
+      readonly preventScrollPerFocus: Array<boolean | undefined>;
+      readonly scrollIntoView: MockInstance;
+      readonly view: EditorView;
+    }
+
+    // Runs the request, then every animation frame it (or Tiptap) queued, so
+    // a scroll deferred to a frame has happened before the caller asserts.
+    async function holdViewOnIos(): Promise<HoldViewRun> {
+      setMobileApp(true);
+      const mounted = await mountComposer(true);
+      const handle = readyHandle(mounted);
+
+      vi.spyOn(navigator, "platform", "get").mockReturnValue("iPhone");
+      const preventScrollPerFocus: Array<boolean | undefined> = [];
+      const nativeFocus: unknown = Reflect.get(HTMLElement.prototype, "focus");
+      vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (
+        this: HTMLElement,
+        options: FocusOptions | undefined,
+      ) {
+        preventScrollPerFocus.push(options?.preventScroll);
+        invoke(nativeFocus, this, [options]);
+      });
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation(
+        (callback) => frames.push(callback),
+      );
+      const scrollIntoView = vi.spyOn(Transaction.prototype, "scrollIntoView");
+
+      act(() => {
+        handle.focusAtEnd("hold-view");
+      });
+      act(() => {
+        while (frames.length > 0) frames.shift()?.(performance.now());
+      });
+
+      const view = mounted.viewFocus.mock.contexts[0] as EditorView;
+      return { preventScrollPerFocus, scrollIntoView, view };
+    }
+
+    it("focuses the editor with preventScroll on every focus call", async () => {
+      const run = await holdViewOnIos();
+
+      expect(run.preventScrollPerFocus.length).toBeGreaterThan(0);
+      expect(run.preventScrollPerFocus.every((value) => value === true)).toBe(
+        true,
+      );
+    });
+
+    it("scrolls nothing into view, not even in a later frame", async () => {
+      const run = await holdViewOnIos();
+
+      expect(run.scrollIntoView).not.toHaveBeenCalled();
+    });
+
+    it("leaves the caret at the end of the document", async () => {
+      const run = await holdViewOnIos();
+
+      expect(run.view.state.selection.empty).toBe(true);
+      expect(run.view.state.selection.from).toBe(
+        run.view.state.doc.content.size - 1,
+      );
+    });
   });
 });

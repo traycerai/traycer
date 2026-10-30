@@ -6,6 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
+import type { HtmlArtifactVersionSelection } from "@traycer/protocol/host/epic/html-artifact-versions";
 import { convertBrowserTabToPip } from "@/lib/browser-view/pip/pip-store";
 import type { NavigateNestedFocus } from "@/lib/epic-nested-focus-navigation";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
@@ -14,7 +15,9 @@ import {
   useEpicCanvasStore,
 } from "@/stores/epics/canvas/store";
 import { makeBrowserSessionTileRef } from "@/stores/epics/canvas/tile-schema/browser-tile";
+import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import {
+  rootPane,
   SPEC_A,
   TEST_HOST_ID,
 } from "@/stores/epics/canvas/__tests__/canvas-test-fixtures";
@@ -144,6 +147,77 @@ describe("executeTileOpen", () => {
     ).toEqual(FOCUS);
     expect(spies.promotePreview).toHaveBeenCalledWith(TAB_ID, "pane-1");
     expect(trackOpenedCanvasTile).not.toHaveBeenCalled();
+  });
+
+  // The chat's inline Expand dedupes onto the artifact's one tile and must
+  // still show the version it captured; a versionless open (the sidebar row)
+  // leaves the tile's choice alone.
+  it("moves a focused html tile onto the version the intent names", () => {
+    const store = useEpicCanvasStore.getState();
+    const tabId = store.openEpicTab(EPIC_ID, "Exec");
+    const htmlVersion = (capturedAt: number): HtmlArtifactVersionSelection => ({
+      manifest: {
+        files: {
+          "index.html": {
+            sha256: "a".repeat(64),
+            byteLength: 10,
+            mediaType: "text/html",
+          },
+        },
+        capturedAt,
+      },
+      entryPath: "index.html",
+    });
+    const open: EpicNodeRef = {
+      id: "art-html",
+      instanceId: "inst-html-open",
+      type: "html",
+      name: "Page",
+      hostId: TEST_HOST_ID,
+      htmlVersion: htmlVersion(1_000),
+    };
+    store.openTileInTab(tabId, open);
+    const canvas = useEpicCanvasStore.getState().canvasByTabId[tabId];
+    if (canvas === undefined) throw new Error("Expected the tab's canvas.");
+    const pane = rootPane(canvas);
+    const plan: TileOpenPlan = {
+      kind: "focus-existing",
+      tabId,
+      paneId: pane.id,
+      instanceId: open.instanceId,
+      promote: false,
+    };
+    const focusWith = (node: EpicNodeRef) =>
+      executeTileOpen({
+        plan,
+        node,
+        source: SOURCE,
+        store: useEpicCanvasStore.getState(),
+        navigateNested,
+        epicId: EPIC_ID,
+        pipOrigin: "manual",
+      });
+    const tileVersion = () => {
+      const ref =
+        useEpicCanvasStore.getState().canvasByTabId[tabId]?.tilesByInstanceId[
+          open.instanceId
+        ];
+      return ref?.type === "html" ? ref.htmlVersion : undefined;
+    };
+
+    focusWith({
+      ...open,
+      instanceId: "inst-html-second",
+      htmlVersion: htmlVersion(2_000),
+    });
+    expect(tileVersion()).toEqual(htmlVersion(2_000));
+
+    focusWith({
+      ...open,
+      instanceId: "inst-html-third",
+      htmlVersion: undefined,
+    });
+    expect(tileVersion()).toEqual(htmlVersion(2_000));
   });
 
   // C1: a background open of an already-open tile touches nothing.

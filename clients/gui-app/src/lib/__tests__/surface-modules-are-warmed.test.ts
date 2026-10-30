@@ -1,9 +1,9 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { routeChunkWarmers } from "@/lib/warm-route-chunks";
 
 const KINDS_DIR = resolve(__dirname, "../../stores/tabs/kinds");
-const WARMER = resolve(__dirname, "../warm-route-chunks.ts");
 
 /**
  * Every top-level surface is reached through `tabSurfaceDescriptor(kind).render()`,
@@ -49,9 +49,12 @@ describe("lazy surface modules are warmed at startup", () => {
   });
 
   it("warms every lazily-mounted tab-kind surface module", () => {
-    const warmer = readFileSync(WARMER, "utf8");
+    // The desktop list, which holds every surface; the phone warms a subset.
+    const warmed = new Set(
+      routeChunkWarmers(false).map((warmer) => warmer.module),
+    );
     const missing = lazyImportSpecifiers().filter(
-      (entry) => !warmer.includes(`import("${entry.specifier}")`),
+      (entry) => !warmed.has(entry.specifier),
     );
     expect(missing).toEqual([]);
   });

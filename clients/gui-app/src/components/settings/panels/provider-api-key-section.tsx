@@ -1,5 +1,5 @@
 import { providerApiKeyRefusal } from "@traycer/protocol/host/provider-api-key-issuer";
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 import { ExternalLink } from "lucide-react";
 import {
   PROVIDER_DISPLAY_NAMES,
@@ -27,6 +27,7 @@ import {
 import { HowTraycerHandlesThis } from "@/components/settings/members/how-traycer-handles-this";
 import { dataHandlingNoticeText } from "@/components/settings/members/data-handling-notice-text";
 import { SECRET_CUSTODY_SENTENCE } from "@/lib/sandboxes/secrets-page-copy";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 type ProviderId = ProviderCliState["providerId"];
 
@@ -244,9 +245,40 @@ export function ProviderApiKeySection({
         {displayedRefusal}
       </p>
       <CredentialRefusalNote refusal={credentialRefusal} />
-      {state.apiKey.source === "env" ? (
+      <ApiKeySourceLines
+        providerId={providerId}
+        fromShell={state.apiKey.source === "env"}
+        personalSecret={personalSecret}
+        hostName={hostName}
+        principal={principal}
+      />
+    </div>
+  );
+}
+
+/**
+ * Under the key field, where the key comes from and where a saved one is
+ * kept. A build without environments (`unreleased-features.ts`) draws one
+ * line, as before them: the shell's key, or the stored one.
+ */
+function ApiKeySourceLines(props: {
+  readonly providerId: ProviderId;
+  readonly fromShell: boolean;
+  readonly personalSecret: boolean;
+  readonly hostName: string;
+  readonly principal: ProviderKeyPrincipal;
+}): ReactNode {
+  const { providerId, fromShell, personalSecret } = props;
+  const envVar = envNamePlaceholder(providerId);
+  const custody =
+    !personalSecret && (UNRELEASED_FEATURES_ENABLED || !fromShell);
+  return (
+    <>
+      {fromShell ? (
         <p className="text-ui-xs text-muted-foreground">
-          {`Using ${envNamePlaceholder(providerId)} from your shell. Save a key here to override it.`}
+          {UNRELEASED_FEATURES_ENABLED
+            ? `Using ${envVar} from your shell. Save a key here to override it.`
+            : `Using ${envVar} from your shell environment. Save a key here to override it.`}
         </p>
       ) : null}
       {personalSecret ? (
@@ -257,16 +289,16 @@ export function ProviderApiKeySection({
           <HowTraycerHandlesThis noticeText={dataHandlingNoticeText()} />
         </>
       ) : null}
-      {!personalSecret ? (
+      {custody ? (
         <p className="text-ui-xs text-muted-foreground">
           {deviceKeyCustodyLine(
-            hostName,
+            props.hostName,
             PROVIDER_DISPLAY_NAMES[providerId],
-            envNamePlaceholder(providerId),
-            hostRunsPersonal(principal),
+            envVar,
+            hostRunsPersonal(props.principal),
           )}
         </p>
       ) : null}
-    </div>
+    </>
   );
 }

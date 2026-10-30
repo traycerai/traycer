@@ -1,4 +1,5 @@
 import { usePoolTierHostClient } from "@/hooks/host/use-pool-tier";
+import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useCallback, useMemo } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -39,6 +40,12 @@ export interface EnvironmentHostLists {
  *
  * `enabled` is the capability gate the caller resolved with
  * `useHostMethodSupport` on the same client's host.
+ *
+ * Each list carries the caller's own bound hosts, so its key carries the
+ * viewer and the read waits until the viewer resolves, as
+ * `useEnvironmentListQuery` does: an account switch marks host keys stale
+ * without dropping them, and an unpartitioned entry would show the previous
+ * account's machines to the next one until its refetch lands.
  */
 export function useEnvironmentHostLists(
   client: HostClient<HostRpcRegistry> | null,
@@ -46,6 +53,7 @@ export function useEnvironmentHostLists(
   enabled: boolean,
 ): EnvironmentHostLists {
   const servingClient = usePoolTierHostClient(client);
+  const viewerUserId = useCloudChatViewerId();
   const idsKey = environmentIds.join("\n");
   const ids = useMemo(
     () => idsKey.split("\n").filter((id) => id.length > 0),
@@ -98,8 +106,11 @@ export function useEnvironmentHostLists(
   return useHostQueries<HostRpcRegistry, typeof METHOD, EnvironmentHostLists>({
     client: servingClient,
     requests,
-    cacheKeyIdentity: undefined,
-    options: { enabled, refetchOnWindowFocus: false },
+    cacheKeyIdentity: viewerUserId,
+    options: {
+      enabled: enabled && viewerUserId.length > 0,
+      refetchOnWindowFocus: false,
+    },
     combine,
   });
 }

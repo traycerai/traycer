@@ -14,6 +14,11 @@ import { useSystemTabModalActions } from "@/stores/tabs/use-system-tab-modal";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { PERMISSION_OPTIONS } from "@/components/home/data/landing-options";
 import { harnessLabel } from "@/components/settings/panels/fallback/fallback-harness-label";
+import {
+  hostLabelAtSentenceStart,
+  hostNameFromLabel,
+  UNNAMED_HOST_LABEL,
+} from "@/hooks/agent/use-host-reachability";
 
 /**
  * Lifted out of `chat-tile.tsx` (P1.2 fixup F5) so the host it targets is
@@ -123,13 +128,15 @@ export function useChatCloneOnHostSwitch(
     }
     const targetClient = cloneTargetClient;
     const targetHostId = cloneTargetHostId;
-    let targetHostLabel = targetHostId;
+    let targetHostLabel = UNNAMED_HOST_LABEL;
     try {
-      targetHostLabel =
-        binding.directory.findById(targetHostId)?.label ?? targetHostId;
+      targetHostLabel = hostNameFromLabel(
+        binding.directory.findById(targetHostId)?.label ?? null,
+        targetHostId,
+      );
     } catch {
-      // The immutable host id is still an honest recovery label when a
-      // directory implementation cannot serve its cosmetic name.
+      // "the host" when a directory implementation cannot serve its name: the
+      // id is true, but it names nothing a person can act on.
     }
     const runAttempt = (
       explicitTargetProfileId: {
@@ -173,7 +180,7 @@ export function useChatCloneOnHostSwitch(
               mode,
           );
           toast(
-            `${targetHostLabel} can't run this chat's permission mode - ${attempted.join(" or ")} ${attempted.length === 1 ? "isn't" : "aren't"} available for ${harnessLabel(resolution.harnessId)} there.`,
+            `${hostLabelAtSentenceStart(targetHostLabel)} can't run this chat's permission mode - ${attempted.join(" or ")} ${attempted.length === 1 ? "isn't" : "aren't"} available for ${harnessLabel(resolution.harnessId)} there.`,
           );
         },
         onProfileSelectionRequired: (resolution) => {

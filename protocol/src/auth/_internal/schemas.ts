@@ -295,8 +295,33 @@ export const authenticatedUserSchemaPreApple = lazySchema(() =>
   authenticatedUserBaseSchemaPreApple.extend(authenticatedUserResponseFields),
 );
 
+/**
+ * A credit campaign the caller claimed and that has not ended: what is left of
+ * its grant, spendable only on the charges the campaign covers, so it is never
+ * part of `userSubscription`'s balance.
+ */
+const campaignCreditSchema = lazySchema(() =>
+  z.object({
+    campaignId: z.string(),
+    name: z.string(),
+    description: z.string().nullable(),
+    grantCredits: z.number().nonnegative(),
+    remainingCredits: z.number().nonnegative(),
+    endsAt: z.iso.datetime({ offset: true }),
+  }),
+);
+
+/**
+ * On major 2 and up only, never `authenticatedUserResponseFields`, whose
+ * fields land on major 1 too. `.catch(undefined)` keeps a malformed list from
+ * failing the whole identity response: the reader loses the campaigns, not the
+ * session.
+ */
 export const authenticatedUserSchema = lazySchema(() =>
-  authenticatedUserBaseSchema.extend(authenticatedUserResponseFields),
+  authenticatedUserBaseSchema.extend({
+    ...authenticatedUserResponseFields,
+    campaignCredits: z.array(campaignCreditSchema).optional().catch(undefined),
+  }),
 );
 
 /**

@@ -19,16 +19,14 @@ import type {
   BotConversationSendRequest,
   BotConversationSendResponse,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import type {
-  BotOnboardingChooseRequest,
-  BotOnboardingChooseResponse,
-  BotOnboardingCompleteRequest,
-  BotOnboardingCompleteResponse,
-} from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useHostMutation } from "@/hooks/host/use-host-query";
+import {
+  BOT_CONVERSATION_ANSWER_VERSION,
+  BOT_CONVERSATION_RETRY_VERSION,
+} from "@/hooks/bots/use-bot-send-version";
 import { botMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 import { toastFromHostError } from "@/lib/host-error-toast";
 
@@ -179,20 +177,14 @@ interface BotConversationSendContext {
 }
 
 /**
- * The `bot.conversation.send` line that retries a failed message
- * (`redeliver`) and replaces one with an edit (`supersedes`): an older host
- * would drop both and take the message as a new post.
- */
-export const BOT_CONVERSATION_RETRY_VERSION = { major: 1, minor: 1 } as const;
-
-/**
  * One member's message: a post on the channel (`threadId: null`) or a reply
  * in a thread. Accepted whether or not the bound
  * host is reachable: `delivery: "queued"` means the message waits in the
  * cross-host mailbox and the row appears when the bound host drains it. No
  * toast on error - the composer states the refusal inline, under the field.
  * A retry or an edit's replacement is refused before it leaves by a host
- * below {@link BOT_CONVERSATION_RETRY_VERSION}.
+ * below {@link BOT_CONVERSATION_RETRY_VERSION}, and a question card's answer
+ * by one below {@link BOT_CONVERSATION_ANSWER_VERSION}.
  *
  * A send may change a thread, so the channel's thread list is read again on
  * the host the send went through.
@@ -213,13 +205,20 @@ export function useBotConversationSendMutation(
   >({
     client,
     method: "bot.conversation.send",
-    requiredHostMethodVersion: (variables) =>
-      variables.redeliver === null && variables.supersedes === null
+    requiredHostMethodVersion: (variables) => {
+      if (variables.answer !== null) {
+        return {
+          method: "bot.conversation.send",
+          version: BOT_CONVERSATION_ANSWER_VERSION,
+        };
+      }
+      return variables.redeliver === null && variables.supersedes === null
         ? null
         : {
             method: "bot.conversation.send",
             version: BOT_CONVERSATION_RETRY_VERSION,
-          },
+          };
+    },
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.conversationSend(),
@@ -233,76 +232,6 @@ export function useBotConversationSendMutation(
           ),
         });
       },
-    },
-  });
-}
-
-/**
- * Every host's cached onboarding read: the choice and the completion are the
- * cloud's, identical whichever host answered, as for `bot.list`.
- */
-function invalidateBotOnboarding(queryClient: QueryClient): Promise<void> {
-  return queryClient.invalidateQueries({
-    predicate: (query) =>
-      hostQueryKeys.matchesMethodOnAnyHost(
-        query.queryKey,
-        "bot.onboarding.read",
-      ),
-  });
-}
-
-/**
- * Keeps the team's choice of areas (Tracy Bots T48). The mutation stays
- * pending until the onboarding read is fetched again, so a checkbox showing
- * the sent choice never flips back to the old one in between. Any member,
- * before or after GitHub is connected.
- */
-export function useBotOnboardingChooseMutation(
-  client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  BotOnboardingChooseResponse,
-  HostRpcError,
-  BotOnboardingChooseRequest
-> {
-  const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, "bot.onboarding.choose">({
-    client,
-    method: "bot.onboarding.choose",
-    mapVariables: (variables) => variables,
-    options: {
-      mutationKey: botMutationKeys.onboardingChoose(),
-      onSuccess: () => invalidateBotOnboarding(queryClient),
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't save the bots you chose."),
-    },
-  });
-}
-
-/**
- * Creates the chosen bots on the host behind `client`, the one they will be
- * bound to, and marks the onboarding complete. Safe to repeat: a repeat
- * answers with the bots the first made.
- */
-export function useBotOnboardingCompleteMutation(
-  client: HostClient<HostRpcRegistry> | null,
-): UseMutationResult<
-  BotOnboardingCompleteResponse,
-  HostRpcError,
-  BotOnboardingCompleteRequest
-> {
-  const queryClient = useQueryClient();
-  return useHostMutation<HostRpcRegistry, "bot.onboarding.complete">({
-    client,
-    method: "bot.onboarding.complete",
-    mapVariables: (variables) => variables,
-    options: {
-      mutationKey: botMutationKeys.onboardingComplete(),
-      onSuccess: async () => {
-        invalidateBotLists(queryClient);
-        await invalidateBotOnboarding(queryClient);
-      },
-      onError: (error) =>
-        toastFromHostError(error, "Couldn't create the bots."),
     },
   });
 }

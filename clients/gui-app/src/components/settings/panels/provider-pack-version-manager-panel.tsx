@@ -779,7 +779,7 @@ function VersionManagerBanners(props: {
               {props.pinnedVersion}
             </span>
             {" · "}
-            newer versions notify only until you switch or clear the pin
+            newer versions wait until you switch or clear the pin
           </p>
           <Button
             type="button"

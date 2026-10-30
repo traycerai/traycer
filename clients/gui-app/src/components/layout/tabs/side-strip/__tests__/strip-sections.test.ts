@@ -77,7 +77,6 @@ function promptRow(
     resolvedAt: null,
     sourceRef: feedId,
     originHostId: "host-a",
-    providerPackAttribution: null,
     category: "task",
   };
 }

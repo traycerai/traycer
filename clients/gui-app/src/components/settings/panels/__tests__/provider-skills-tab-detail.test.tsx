@@ -17,6 +17,7 @@ import { EditorView } from "@uiw/react-codemirror";
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
+import { PortalConcealmentProvider } from "@/components/ui/portal-concealment-context";
 import { ProviderSkillsTab } from "@/components/settings/panels/provider-skills-tab";
 import { ProviderNativeRpcError } from "@/hooks/providers/native-response-map";
 import { fileContentRevision } from "@/lib/workspace/file-content-revision";
@@ -891,6 +892,38 @@ describe("<ProviderSkillsTab /> skill detail", () => {
     );
 
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps an unsaved draft when the dialog content un-presents and returns", async () => {
+    const user = userEvent.setup();
+    skillMocks.editScopes = ["global"];
+    const tree = (concealed: boolean) => (
+      <PortalConcealmentProvider value={concealed}>
+        <ProviderSkillsTab state={skillsState()} />
+      </PortalConcealmentProvider>
+    );
+    const view = render(tree(false));
+    await user.click(
+      screen.getByRole("button", { name: "Open find-skills (Shared)" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "When to use" }), {
+      target: { value: "Helps, and also this extra sentence." },
+    });
+
+    view.rerender(tree(true));
+    expect(screen.queryByRole("textbox", { name: "When to use" })).toBeNull();
+
+    view.rerender(tree(false));
+    const description = screen.getByRole("textbox", { name: "When to use" });
+    expect(
+      description instanceof HTMLTextAreaElement && description.value,
+    ).toBe("Helps, and also this extra sentence.");
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeDefined();
+
+    description.focus();
+    await user.keyboard("{Escape}");
+    expect(screen.getByTestId("skill-unsaved-changes-dialog")).toBeDefined();
   });
 
   it("keeps the draft open when saving fails", async () => {

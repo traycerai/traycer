@@ -54,6 +54,7 @@ import { EpicSessionGate } from "@/providers/epic-session-gate";
 import { resolveAgentReference } from "./agent-reference-resolution";
 import { knownHarnessId } from "@/lib/chat/sender-display";
 import { formatClockDuration, formatWorkedFor } from "@/lib/format-duration";
+import { formatUsd, pickElapsedVerb } from "@/lib/chat/turn-footer-format";
 import {
   formatMessageTimeWithSeconds,
   useSampledNow,
@@ -456,26 +457,11 @@ export function AssistantMessageBody({
         }
         if (item.kind === "promoted_subagent") {
           return (
-            <ChatBlockNavigationAnchor key={key} blockId={item.segment.id}>
-              <SubagentSegment
-                id={item.id}
-                cardId={item.segment.id}
-                toolImageResults={item.segment.toolImageResults}
-                name={item.segment.name}
-                agentType={item.segment.agentType}
-                task={item.segment.task}
-                progressUpdates={item.segment.progressUpdates}
-                result={item.segment.result}
-                isStreaming={item.segment.isStreaming}
-                endState={item.segment.endState}
-                stopped={item.segment.stopped}
-                startedAt={item.segment.startedAt}
-                durationMs={item.segment.durationMs}
-                workflowMeta={item.segment.workflowMeta}
-                nested={item.segment.children}
-                variant="promoted"
-              />
-            </ChatBlockNavigationAnchor>
+            <PromotedSubagentItem
+              key={key}
+              id={item.id}
+              segment={item.segment}
+            />
           );
         }
         const recovery = recoveryRoleOf(item.id, {
@@ -1229,20 +1215,6 @@ function AssistantSpeedMetaRow(props: { readonly meta: AssistantTurnMeta }) {
 }
 
 /**
- * Compact USD formatter for the cost row: sub-dollar turns show 4 decimals
- * ("$0.0123"); a positive amount too small to show at 4 decimals reads
- * "<$0.0001" rather than a misleading "$0.0000"; >= $1 shows 2 decimals.
- */
-function formatUsd(value: number): string {
-  if (value >= 1) return `$${value.toFixed(2)}`;
-  if (value < 0.0001) return "<$0.0001";
-  // A sub-dollar value that rounds up to 1 at 4 decimals (e.g. 0.99999 ->
-  // "1.0000") should read "$1.00", not the misleading "$1.0000".
-  const rounded = value.toFixed(4);
-  return Number(rounded) >= 1 ? `$${value.toFixed(2)}` : `$${rounded}`;
-}
-
-/**
  * The Profile row's value, annotated when an environment variable - not the
  * named profile - is what actually authenticated the turn:
  * `Terminal account (bypassed — env: ANTHROPIC_API_KEY)`.
@@ -1366,45 +1338,6 @@ function AssistantMetaRow({ label, value }: { label: string; value: string }) {
       <span className="font-medium">{value}</span>
     </div>
   );
-}
-
-/**
- * Past-tense verbs rotated per turn so the footer reads playfully rather than
- * mechanically (Claude Code CLI pattern). Seeded by `messageId` (stable per
- * turn AND distinct between sibling turns sharing one user-send) so the verb
- * never flips on re-render and never collides on adjacent rows.
- */
-const ELAPSED_VERBS = [
-  "Cogitated",
-  "Pondered",
-  "Crunched",
-  "Brewed",
-  "Noodled",
-  "Mulled",
-  "Schemed",
-  "Hatched",
-  "Tinkered",
-  "Conjured",
-  "Distilled",
-  "Wrangled",
-  "Marinated",
-  "Riffed",
-  "Sleuthed",
-  "Plotted",
-  "Stewed",
-  "Forged",
-  "Spelunked",
-  "Channeled",
-] as const;
-
-function pickElapsedVerb(seed: string): string {
-  // djb2 - fast, well-distributed for short strings, no allocation.
-  let hash = 5381;
-  for (let i = 0; i < seed.length; i++) {
-    hash = ((hash << 5) + hash + seed.charCodeAt(i)) | 0;
-  }
-  const index = Math.abs(hash) % ELAPSED_VERBS.length;
-  return ELAPSED_VERBS[index] ?? ELAPSED_VERBS[0];
 }
 
 function AssistantRunIndicator({
@@ -1553,6 +1486,41 @@ function ApprovalSegmentCard({
   );
 }
 
+/**
+ * A subagent the timeline lifts out of the activity group onto its own card
+ * (`promoted_subagent`), as the agent chat's turn draws it. Shared with the
+ * other surfaces that draw a turn's timeline, so the card reads the same
+ * wherever the turn is shown.
+ */
+function PromotedSubagentItem(props: {
+  readonly id: string;
+  readonly segment: Extract<MessageSegment, { kind: "subagent" }>;
+}) {
+  const { id, segment } = props;
+  return (
+    <ChatBlockNavigationAnchor blockId={segment.id}>
+      <SubagentSegment
+        id={id}
+        cardId={segment.id}
+        toolImageResults={segment.toolImageResults}
+        name={segment.name}
+        agentType={segment.agentType}
+        task={segment.task}
+        progressUpdates={segment.progressUpdates}
+        result={segment.result}
+        isStreaming={segment.isStreaming}
+        endState={segment.endState}
+        stopped={segment.stopped}
+        startedAt={segment.startedAt}
+        durationMs={segment.durationMs}
+        workflowMeta={segment.workflowMeta}
+        nested={segment.children}
+        variant="promoted"
+      />
+    </ChatBlockNavigationAnchor>
+  );
+}
+
 // Renders one of many assistant segment kinds; the branch count is the segment
 // taxonomy (one arm per kind), not reducible nesting. Exported because a
 // subagent card draws its own conversation through this same renderer
@@ -1620,6 +1588,7 @@ export function AssistantSegment({
           managedCommand={segment.managedCommand}
           agentMessageReceipt={segment.agentMessageReceipt}
           agentMessageDelivery={segment.agentMessageDelivery}
+          botSendReceipt={segment.botSendReceipt}
           isStreaming={segment.isStreaming || isBackgroundRunning}
           endState={isBackgroundRunning ? null : segment.endState}
           stopped={segment.stopped}

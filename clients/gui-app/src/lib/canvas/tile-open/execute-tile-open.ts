@@ -107,6 +107,17 @@ export function executeTileOpen(
     epicId === null ? prepare() : navigateNested(epicId, tabId, prepare);
 
   if (plan.kind === "focus-existing") {
+    // An intent that names an HTML version (the chat's inline Expand) wants
+    // THAT bundle on screen, so the tile it lands on adopts it instead of
+    // staying on whatever version it was showing. An intent with no version
+    // (the sidebar row) leaves the tile's choice alone.
+    if (node.type === "html" && node.htmlVersion !== undefined) {
+      store.updateHtmlArtifactVersionInTab(
+        tabId,
+        plan.instanceId,
+        node.htmlVersion,
+      );
+    }
     // No `<kind>Opened` here: nothing entered the canvas, and counting a
     // focus as an open inflates every open metric (R9).
     const target = commit(() =>

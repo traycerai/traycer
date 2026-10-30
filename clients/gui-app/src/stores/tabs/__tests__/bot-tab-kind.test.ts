@@ -116,17 +116,21 @@ describe("bot-tabs store", () => {
 
   it("reopens a closed bot's tab with no thread open, and leaves another bot's thread open", () => {
     const { openBotTab, closeBotTab } = useBotTabsStore.getState();
-    const { setOpenThread } = useBotOpenThreadStore.getState();
+    const { setRail } = useBotOpenThreadStore.getState();
     openBotTab({ botId: BOT_A, hostId: "host-1", title: "A" });
     openBotTab({ botId: BOT_B, hostId: "host-1", title: "B" });
-    setOpenThread(BOT_A, {
+    setRail(BOT_A, {
+      kind: "thread",
       anchorMessageId: "post-a",
       announcement: false,
+      anchorKind: null,
       sent: null,
     });
-    setOpenThread(BOT_B, {
+    setRail(BOT_B, {
+      kind: "thread",
       anchorMessageId: "post-b",
       announcement: false,
+      anchorKind: null,
       sent: null,
     });
 
@@ -135,8 +139,10 @@ describe("bot-tabs store", () => {
 
     expect(useBotOpenThreadStore.getState().byBotId).toEqual({
       [BOT_B]: {
+        kind: "thread",
         anchorMessageId: "post-b",
         announcement: false,
+        anchorKind: null,
         sent: null,
       },
     });

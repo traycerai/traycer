@@ -16,7 +16,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import {
+  UNNAMED_HOST_LABEL,
+  useHostReachability,
+} from "@/hooks/agent/use-host-reachability";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import type {
   EpicCanvasState,
@@ -164,7 +167,7 @@ describe("host binding survives restart", () => {
     const { result } = renderHook(() => useHostReachability(SOURCE_HOST));
 
     expect(result.current.status).toBe("host-starting");
-    expect(result.current.hostLabel).toBe(SOURCE_HOST);
+    expect(result.current.hostLabel).toBe(UNNAMED_HOST_LABEL);
   });
 
   it("useHostReachability reports `unreachable` when the directory only knows a different host", () => {
@@ -182,7 +185,7 @@ describe("host binding survives restart", () => {
     const { result } = renderHook(() => useHostReachability(SOURCE_HOST));
 
     expect(result.current.status).toBe("unreachable");
-    expect(result.current.hostLabel).toBe(SOURCE_HOST);
+    expect(result.current.hostLabel).toBe(UNNAMED_HOST_LABEL);
   });
 
   it("useHostReachability reports `host-starting` for this machine's not-yet-published local row", () => {

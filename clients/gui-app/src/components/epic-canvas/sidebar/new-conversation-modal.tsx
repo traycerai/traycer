@@ -252,6 +252,7 @@ import {
 } from "@/stores/worktree/worktree-intent-staging-store";
 import { useWorktreeIntentMemoryStore } from "@/stores/worktree/worktree-intent-memory-store";
 import { useTeamSandboxHarnessGate } from "@/hooks/sandboxes/use-team-sandbox-harness-blocked";
+import { useNewConversationReturnedSandbox } from "@/hooks/sandboxes/use-returned-sandbox-stage";
 import { TEAM_SANDBOX_HARNESS_UNAVAILABLE } from "@/lib/sandboxes/team-sandbox-harness";
 
 /** Nothing confirmed: below `epic.createChat@1.2`, or an upload that failed. */
@@ -791,7 +792,7 @@ export function NewConversationModalBody(props: {
   useEffect(() => {
     const owned = ownedKeyboardRef.current;
     ownedKeyboardRef.current = ownsKeyboard;
-    if (ownsKeyboard && !owned) editorRef.current?.focusAtEnd();
+    if (ownsKeyboard && !owned) editorRef.current?.focusAtEnd("reveal-caret");
     if (!ownsKeyboard && owned) editorRef.current?.dismissActiveSuggestion();
   }, [ownsKeyboard]);
   // A ref, not state: a re-render would change the send button's disabled look
@@ -1139,6 +1140,7 @@ export function NewConversationModalBody(props: {
     hostId,
     openTerminalInstead,
   );
+  useNewConversationReturnedSandbox(epicId, hostId);
   const workspaceGate = useStagedWorkspaceGate(
     stagingSurfaceKey(sandboxStaging),
     workspaceAvailability,

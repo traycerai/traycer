@@ -7,6 +7,10 @@ import type { ReactNode } from "react";
 import { useEffect, useReducer, useRef } from "react";
 import { Check, TriangleAlert } from "lucide-react";
 import {
+  AGENT_SELECTION_GUIDE_DESCRIPTION,
+  AGENT_SELECTION_GUIDE_REVERT_LABEL,
+} from "@/components/agent-selection-guide-copy";
+import {
   AGENT_SELECTION_GUIDE_TITLE,
   AgentSelectionGuideEditorSurface,
 } from "@/components/agent-selection-guide-editor-surface";
@@ -27,6 +31,7 @@ import {
 import { useConfigurationSource } from "@/components/settings/environment/configuration-source";
 import { TeamGuide } from "@/components/settings/environment/team-guide";
 import { useEnvironmentPick } from "@/stores/settings/settings-environment-pick-store";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 const SAVE_DEBOUNCE_MS = 600;
 
@@ -241,6 +246,11 @@ function AgentSelectionGuideMessage(props: { readonly children: ReactNode }) {
         >
           {AGENT_SELECTION_GUIDE_TITLE}
         </h2>
+        {AGENT_SELECTION_GUIDE_DESCRIPTION === null ? null : (
+          <p className="mt-1 text-ui-xs text-muted-foreground">
+            {AGENT_SELECTION_GUIDE_DESCRIPTION}
+          </p>
+        )}
       </div>
       {props.children}
     </section>
@@ -414,14 +424,19 @@ function AgentsGuideEditor(props: {
         onOpenChange={(open) =>
           dispatch({ type: "confirm-open-changed", open })
         }
-        title="Reset to default instructions?"
+        // "Revert" before environments renamed it (`unreleased-features.ts`).
+        title={
+          UNRELEASED_FEATURES_ENABLED
+            ? "Reset to default instructions?"
+            : "Revert to default instructions?"
+        }
         description={
           pick.kind === "personal"
             ? "This replaces your selection guide with the default on every computer and sandbox running Personal. Your changes to it are lost."
             : `This replaces your agent selection instructions with defaults based on the providers currently available on ${hostLabel}. Your custom instructions will be lost.`
         }
         cascadeSummary={null}
-        actionLabel="Reset to default"
+        actionLabel={AGENT_SELECTION_GUIDE_REVERT_LABEL}
         isPending={state.resetInFlight}
         onConfirm={onRevert}
       />

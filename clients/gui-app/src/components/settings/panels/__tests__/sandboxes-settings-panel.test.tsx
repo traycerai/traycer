@@ -1,12 +1,4 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  onTestFinished,
-  vi,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
@@ -142,6 +134,8 @@ const mocks = vi.hoisted(() => ({
   catalogue: null as SandboxCatalogue | null,
   report: { kind: "unknown" } as SandboxSessionReport,
   sessionFailed: false,
+  resumePending: false,
+  realSessions: false,
   costs: null as UserSandboxCost | null,
   /** `GET /api/sandboxes/automation`; `null` while it has not answered. */
   automation: null as SandboxAutomationResponse | null,
@@ -232,7 +226,8 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "laptop",
 }));
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
-  useHostClientForHostId: () => null,
+  useHostClientForHostId: () =>
+    mocks.realSessions ? requireTeamHostClient() : null,
 }));
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
   useHostDirectoryEntry: () => mocks.entry,
@@ -240,12 +235,31 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 vi.mock("@/hooks/sandboxes/use-sandbox-control-unavailable-reason", () => ({
   useSandboxControlUnavailableReason: () => null,
 }));
-vi.mock("@/hooks/sandboxes/use-sandbox-session-report", () => ({
-  useSandboxSessionReport: () => ({
-    report: mocks.report,
-    failed: mocks.sessionFailed,
-  }),
-}));
+vi.mock(
+  "@/hooks/sandboxes/use-sandbox-session-report",
+  async (importOriginal) => {
+    const original =
+      await importOriginal<
+        typeof import("@/hooks/sandboxes/use-sandbox-session-report")
+      >();
+    return {
+      useSandboxSessionReport: () => ({
+        report: mocks.report,
+        failed: mocks.sessionFailed,
+      }),
+      useSandboxRowSessionReport: (summary: SandboxSummary) => {
+        const real = original.useSandboxRowSessionReport(summary);
+        return mocks.realSessions
+          ? real
+          : {
+              report: mocks.report,
+              failed: mocks.sessionFailed,
+              resumePending: mocks.resumePending,
+            };
+      },
+    };
+  },
+);
 vi.mock(
   "@/hooks/sandboxes/use-sandbox-automation-query",
   async (importOriginal) => {
@@ -347,7 +361,6 @@ vi.mock(
 
 import { SandboxesSettingsPanel } from "@/components/settings/panels/sandboxes-settings-panel";
 import { useSandboxDefaultsLookup } from "@/hooks/sandboxes/use-sandbox-defaults";
-import { useOpenSandboxesPage } from "@/hooks/sandboxes/use-open-sandboxes-page";
 import { useSandboxesPageStore } from "@/stores/sandboxes/sandboxes-page-store";
 import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
 import {
@@ -426,6 +439,7 @@ function descriptor(
 
 /** What the host answers for the account's environments, item rows and rosters. */
 const host = {
+  status: vi.fn(() => new Promise<never>(() => undefined)),
   environments: [] as EnvironmentDescriptorV11[],
   items: {} as Record<string, EnvironmentConfigurationItem[]>,
   members: [] as Array<{
@@ -465,6 +479,7 @@ function defaultsItem(
 
 function hostPage(): TeamPageHarness {
   harness = mountTeamPage(poolSource("owner"), {
+    "host.status": host.status,
     "environment.list": () => ({ environments: host.environments }),
     "environment.configuration.items": (params) => ({
       items: host.items[params.environmentId] ?? [],
@@ -525,6 +540,9 @@ describe("<SandboxesSettingsPanel />", () => {
     mocks.catalogue = null;
     mocks.report = { kind: "unknown" };
     mocks.sessionFailed = false;
+    mocks.resumePending = false;
+    mocks.realSessions = false;
+    host.status.mockClear();
     mocks.costs = null;
     mocks.automation = null;
     mocks.realAutomation = false;
@@ -540,8 +558,6 @@ describe("<SandboxesSettingsPanel />", () => {
     harness = null;
     useSandboxesPageStore.setState({
       requestedConfiguration: null,
-      revealSandboxId: null,
-      revealConfigurationPending: false,
     });
     useSettingsEnvironmentPickStore.setState({
       pick: null,
@@ -942,6 +958,31 @@ describe("<SandboxesSettingsPanel />", () => {
     }
   });
 
+  it("renders the failed-create sentence and keeps Retry, Destroy and Details", async () => {
+    mocks.realActions = true;
+    renderPanel([
+      row("build-box", {
+        state: "failed",
+        failureCode: "create:kube-create-service-account",
+        lastTransitionAt: new Date(2026, 9, 25, 11, 1).getTime(),
+      }),
+    ]);
+
+    const failed = within(rowOf("build-box"));
+    expect(failed.getByTestId("sandboxes-row-clock").textContent).toBe(
+      "Couldn't start build-box at 11:01 · SBX-0412 · nothing was charged",
+    );
+    expect(
+      failed.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
+    ).toBe(false);
+    await userEvent.click(
+      failed.getByRole("button", { name: "More actions for build-box" }),
+    );
+    expect(
+      screen.getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual(["Details", "Destroy"]);
+  });
+
   it("offers an awake agent sandbox Keep instead of Suspend", () => {
     renderPanel([row("agent-1", { state: "awake", burst: true })]);
     expect(
@@ -1217,6 +1258,12 @@ describe("<SandboxesSettingsPanel />", () => {
     );
 
     it("confirms the enumerated filtered names and count without Automations, then keeps that set", async () => {
+      mocks.configurations.push({
+        kind: "team",
+        teamId: "t1",
+        teamName: "Acme",
+        environmentId: TEAM_ENV,
+      });
       const { binding, client } = mount([
         first,
         second,
@@ -1224,12 +1271,6 @@ describe("<SandboxesSettingsPanel />", () => {
         row("elsewhere", { state: "suspended", environmentId: TEAM_ENV }),
         row("awake", { state: "awake" }),
       ]);
-      mocks.configurations.push({
-        kind: "team",
-        teamId: "t1",
-        teamName: "Acme",
-        environmentId: TEAM_ENV,
-      });
       await screen.findByText("idle-a");
       await choose("state", "suspended");
       const dialog = await confirmIdle();
@@ -1504,94 +1545,6 @@ describe("<SandboxesSettingsPanel />", () => {
         [first.id, true],
       ]);
     });
-  });
-
-  it("scrolls a revealed row into view once per reveal, not again on each refetch", () => {
-    const scrolled: string[] = [];
-    const scrollIntoView = vi
-      .spyOn(Element.prototype, "scrollIntoView")
-      .mockImplementation(function record(this: Element) {
-        scrolled.push(this.getAttribute("data-sandbox-row") ?? "");
-      });
-    onTestFinished(() => scrollIntoView.mockRestore());
-    let open: (sandboxId: string) => void = () => undefined;
-    function Opener() {
-      open = useOpenSandboxesPage();
-      return null;
-    }
-    const page = (
-      <>
-        <Opener />
-        <SandboxesSettingsPanel />
-      </>
-    );
-    mocks.sandboxes = [row("box-a", { burst: false })];
-    const { rerender } = renderUi(page);
-
-    act(() => open("box-a"));
-    expect(scrolled).toEqual(["box-a"]);
-
-    // A refetch answers with a new list while the reader scrolls elsewhere.
-    mocks.sandboxes = [row("box-a", { burst: false })];
-    rerender(
-      <>
-        <Opener />
-        <SandboxesSettingsPanel />
-      </>,
-    );
-    expect(scrolled).toEqual(["box-a"]);
-
-    // Asked for again, it scrolls again.
-    act(() => open("box-a"));
-    expect(scrolled).toEqual(["box-a", "box-a"]);
-  });
-
-  it("reveals a notification's team row on its team once a list that had not answered settles", () => {
-    mocks.configurations = [
-      { kind: "personal" },
-      {
-        kind: "team",
-        teamId: "team-1",
-        teamName: "Acme",
-        environmentId: "env-acme",
-      },
-    ];
-    mocks.listed = false;
-    let open: (sandboxId: string) => void = () => undefined;
-    function Opener() {
-      open = useOpenSandboxesPage();
-      return null;
-    }
-    const { rerender } = renderUi(
-      <>
-        <Opener />
-        <SandboxesSettingsPanel />
-      </>,
-    );
-    act(() => open("team-box"));
-
-    mocks.listed = true;
-    mocks.realActions = false;
-    mocks.sandboxes = [
-      row("team-box", {
-        environmentId: "env-acme",
-        burst: false,
-        state: "suspended",
-      }),
-    ];
-    rerender(
-      <>
-        <Opener />
-        <SandboxesSettingsPanel />
-      </>,
-    );
-
-    // The page moved the Environment group's pick to the row's team.
-    expect(useSettingsEnvironmentPickStore.getState().pick).toEqual({
-      kind: "team",
-      environmentId: "env-acme",
-    });
-    expect(rowOf("team-box").className).toContain("bg-info/10");
   });
 
   it("lists the Environment group's picked configuration, with no picker of its own", () => {
@@ -1993,6 +1946,98 @@ describe("<SandboxesSettingsPanel />", () => {
       expect(screen.queryByTestId("sandboxes-row")).toBeNull();
     },
   );
+
+  it("keeps Resume pending through the awake ACK until the host reports", () => {
+    const sandbox = row("sbx-resume", { state: "resuming" });
+    mocks.sandboxes = [sandbox];
+    mocks.resumePending = true;
+    // A previous wake's count must not accompany this pending line.
+    mocks.report = { kind: "stale", count: 4, at: Date.now() };
+    const panel = renderUi(<SandboxesSettingsPanel />);
+    const clock = (): string =>
+      within(rowOf(sandbox.id)).getByTestId("sandboxes-row-clock").textContent;
+    expect(clock()).toBe("Resuming · pending");
+    expect(
+      within(rowOf(sandbox.id)).queryByTestId("sandboxes-row-sessions"),
+    ).toBeNull();
+
+    mocks.sandboxes = [{ ...sandbox, state: "awake" }];
+    mocks.sessionFailed = true;
+    panel.rerender(<SandboxesSettingsPanel />);
+    expect(clock()).toBe("Resuming · pending");
+
+    mocks.resumePending = false;
+    mocks.sessionFailed = false;
+    mocks.report = liveSessionReport({ agents: [], terminals: [] }, false);
+    panel.rerender(<SandboxesSettingsPanel />);
+    expect(clock()).toContain("Awake");
+    expect(
+      within(rowOf(sandbox.id)).getByTestId("sandboxes-row-sessions")
+        .textContent,
+    ).toBe("0 sessions running");
+
+    // Lifecycle state changes always take over from the pending wake.
+    mocks.resumePending = false;
+    mocks.sandboxes = [{ ...sandbox, state: "stopped" }];
+    panel.rerender(<SandboxesSettingsPanel />);
+    expect(clock()).toContain("Stopped");
+  });
+
+  it("yields an unanswered Resume to the lifecycle-confirmed unreachable line", async () => {
+    useAuthStore.setState({
+      status: "signed-in",
+      contextMetadata: { userId: "u-viewer", username: "viewer" },
+    });
+    mocks.realSessions = true;
+    const binding = createFakeSandboxBinding();
+    mocks.binding = binding;
+    const resuming = row("sbx-resume-unreachable", { state: "resuming" });
+    const awake = { ...resuming, state: "awake" } satisfies SandboxSummary;
+    const online = sandboxHostEntry(resuming.hostId, null);
+    mocks.entry = online;
+    const confirmation = Promise.withResolvers<SandboxListFetchResult>();
+    binding.auth.listSandboxes
+      .mockResolvedValueOnce({
+        kind: "ok",
+        response: { sandboxes: [resuming] },
+      })
+      .mockResolvedValueOnce({ kind: "ok", response: { sandboxes: [awake] } })
+      .mockReturnValue(confirmation.promise);
+    const page = hostPage();
+    const panel = renderUi(<SandboxesSettingsPanel />);
+    const clock = (): string =>
+      within(rowOf(resuming.id)).getByTestId("sandboxes-row-clock").textContent;
+    await waitFor(() => expect(host.status).toHaveBeenCalledTimes(1));
+    expect(clock()).toBe("Resuming · pending");
+
+    await act(() =>
+      page.queryClient.invalidateQueries({
+        queryKey: sandboxQueryKeys.list(binding.auth, "u-viewer"),
+      }),
+    );
+    expect(clock()).toBe("Resuming · pending");
+
+    const offline: RemoteHostDirectoryEntry = {
+      ...online,
+      transportDialability: "not-dialable",
+      remoteStatus: { ...online.remoteStatus, connectivity: "offline" },
+    };
+    mocks.entry = offline;
+    panel.rerender(<SandboxesSettingsPanel />);
+    await waitFor(() =>
+      expect(binding.auth.listSandboxes).toHaveBeenCalledTimes(3),
+    );
+    // Losing the host alone does not replace the pending lifecycle line.
+    expect(clock()).toBe("Resuming · pending");
+    await act(async () => {
+      confirmation.resolve({ kind: "ok", response: { sandboxes: [awake] } });
+      await confirmation.promise;
+    });
+    // host.status is still unanswered; the fresh lifecycle read owns this verdict.
+    await waitFor(() =>
+      expect(clock()).toBe("Running, but Traycer can't connect"),
+    );
+  });
 
   it.each(["destroying", "awake", "destroyed"] as const)(
     "checks a stale awake row's lifecycle on host loss before presenting %s",

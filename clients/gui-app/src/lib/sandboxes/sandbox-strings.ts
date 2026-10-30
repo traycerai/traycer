@@ -16,6 +16,7 @@ import {
   formatCreditsRequired,
   formatMemory,
 } from "@/lib/sandboxes/sandbox-pricing";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * The version of the consequences block's wording. A full render is recorded
@@ -110,7 +111,10 @@ export function collapsedConfigurationsLabel(
     : `Personal and ${teamsLabel}`;
 }
 
-export const SEARCH_HOSTS_PLACEHOLDER = "Search hosts";
+/** The search field above a host list; the ellipsis spelling is the older one. */
+export const SEARCH_HOSTS_PLACEHOLDER = UNRELEASED_FEATURES_ENABLED
+  ? "Search hosts"
+  : "Search hosts…";
 
 /** The chip and row title of the machine this app runs on. */
 export const THIS_COMPUTER = "This computer";
@@ -510,6 +514,7 @@ export const OPEN_TERMINAL = "Open terminal";
 
 export const STARTING_SANDBOX = "Starting sandbox";
 export const RESUMING_SANDBOX = "Resuming sandbox";
+export const SANDBOX_AWAKE = "Sandbox awake";
 export const SANDBOX_READY = "Sandbox ready";
 /** The setup line names the sandbox; a row's button passes `null`. */
 export function stoppingSandboxLine(name: string | null): string {
@@ -719,3 +724,10 @@ export function hoverSandboxIdentity(args: {
 export function hoverAgentIdentity(agent: string, payer: string): string {
   return `${AGENT_SANDBOX} · created by ${agent} for this task · paid by ${payer}`;
 }
+
+/**
+ * Why a build without sandboxes (`unreleased-features.ts`) reaches no sandbox
+ * control plane: the reason every sandbox read and write answers there.
+ */
+export const SANDBOXES_NOT_IN_THIS_BUILD =
+  "Sandboxes are not available in this build.";

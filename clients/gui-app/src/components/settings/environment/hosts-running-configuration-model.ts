@@ -2,6 +2,10 @@ import type {
   EnvironmentHostItemApply,
   EnvironmentHostRecordV12,
 } from "@traycer/protocol/host/environment/contracts";
+import {
+  hostNameFromLabel,
+  UNNAMED_HOST_LABEL,
+} from "@/hooks/agent/use-host-reachability";
 
 /**
  * One host running a configuration. Membership is the configuration's own
@@ -99,9 +103,13 @@ export function hostsRunningConfiguration(input: {
     .filter((row) => !unclaimed(row.hostId) && !keepsLocalRow(row))
     .map((row) => {
       const seen = firsthandById.get(row.hostId) ?? null;
+      const reported = hostNameFromLabel(row.hostLabel, row.hostId);
       return {
         hostId: row.hostId,
-        hostName: row.hostLabel ?? seen?.name ?? row.hostId,
+        hostName:
+          reported === UNNAMED_HOST_LABEL
+            ? hostNameFromLabel(seen?.name ?? null, row.hostId)
+            : reported,
         kind: row.kind,
         isThisComputer: seen?.isLocalMachine === true,
         lastReportedAt: row.lastReportedAt,

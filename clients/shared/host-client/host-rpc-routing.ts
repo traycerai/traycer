@@ -10,6 +10,7 @@ import {
   type PoolHostDirectoryEntry,
 } from "./host-directory";
 import { isRemoteHostDirectoryEntry } from "./remote-fetcher";
+import { UNRELEASED_FEATURES_ENABLED } from "../unreleased-features";
 
 /**
  * Which peer serves each RPC method: the routing rule as code.
@@ -154,6 +155,11 @@ export function decideHostRpcDispatch(
     case "pool-only":
       return { kind: "dispatch", entry: plan.pool ?? target };
     case "selected-host":
+      // The selected-host rule exists so that a sandbox or the pool never
+      // serves an input device; a build without them (`unreleased-features.ts`)
+      // sends the request to its target, as the release before them did.
+      if (!UNRELEASED_FEATURES_ENABLED)
+        return { kind: "dispatch", entry: target };
       if (selectedHost === null || !servesInputDevices(selectedHost)) {
         return {
           kind: "refuse",
@@ -335,8 +341,14 @@ export const HOST_UNARY_RPC_ROUTES = {
   "bot.open": "target-host",
   "bot.notificationLevel.read": "target-host",
   "bot.notificationLevel.set": "target-host",
+  "bot.notifications.stop": "target-host",
   "bot.read": "target-host",
+  "bot.surface.act": "target-host",
+  "bot.task.runNow": "target-host",
+  "bot.task.setPaused": "target-host",
+  "bot.task.stop": "target-host",
   "bot.thread.list": "target-host",
+  "bot.turn.locate": "target-host",
   "bot.updateDirective": "target-host",
   "bot.updateReplyMode": "target-host",
   "bot.updateRunSettings": "target-host",
@@ -428,9 +440,26 @@ export const HOST_UNARY_RPC_ROUTES = {
   "environment.configuration.mcpServers.put": "pool-only",
   "environment.configuration.mcpServers.setEnabled": "pool-only",
   "environment.configuration.policy.put": "pool-only",
+  // An import fetches a skill's source and writes it, which only a host
+  // serving the configuration does: the page sends it to its viewing host.
+  "environment.configuration.skills.import": "target-host",
   "environment.configuration.skills.list": "pool-only",
   "environment.configuration.skills.remove": "pool-only",
+  // A built-in's restore writes this host build's skill files, which only a
+  // host serving the configuration holds: the page sends it to its viewing
+  // host.
+  "environment.configuration.skills.restoreBundled": "target-host",
+  // A search of the public skills directory, from the host the page reads
+  // from: the directory answers no browser's cross-origin read.
+  "environment.configuration.skills.search": "target-host",
+  "environment.configuration.skills.setPolicy": "pool-only",
   "environment.configuration.skills.setProviders": "pool-only",
+  // What only the serving host knows of the skills (its build, its checks of
+  // each skill's source), beside the pool's list: its viewing host.
+  "environment.configuration.skills.state": "target-host",
+  // A skill's update writes its upstream's files, which only a host serving
+  // the configuration holds: the page sends it to its viewing host.
+  "environment.configuration.skills.update": "target-host",
   "environment.configuration.skills.upload": "pool-only",
   "environment.history": "pool-only",
   "environment.host.bind": "target-host",
@@ -704,12 +733,16 @@ export const HOST_UNARY_RPC_ROUTES = {
   "resources.listLocalServers": "target-host",
   "sessionImport.status": "target-host",
   "simulator.action": "target-host",
+  "simulator.catalog.read": "target-host",
   "simulator.close": "target-host",
   "simulator.detail": "target-host",
+  "simulator.instances": "target-host",
   "simulator.list": "target-host",
   "simulator.open": "target-host",
+  "simulator.powerOff": "target-host",
   "simulator.removeTools": "target-host",
   "simulator.screenshot": "target-host",
+  "simulator.setKeepRunning": "target-host",
   "simulator.shutdown": "target-host",
   "simulator.status": "target-host",
   "snapshots.clearLocalSnapshots": "target-host",
@@ -769,6 +802,7 @@ export const HOST_STREAM_RPC_ROUTES = {
   "agent.inbox.subscribe": "target-host",
   "artifact.subscribe": "target-host",
   "bot.listChanged": "target-host",
+  "bot.memory.subscribe": "target-host",
   "bot.subscribe": "target-host",
   "browser.screencast": "target-host",
   "browser.sessions": "target-host",

@@ -3,6 +3,9 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { HostSwitcher } from "@/components/settings/host-scope/host-switcher";
 import { NO_HOST_OPTION_REFUSALS } from "@/components/settings/host-scope/host-option-model";
 import { hostScopeOptionFixture } from "@/components/settings/host-scope/host-scope-fixture";
+import type { HostListItem } from "@traycer/protocol/host/host-status";
+import { hostListItemToDirectoryEntry } from "@traycer-clients/shared/host-client/remote-fetcher";
+import { buildHostScopeOptions } from "@/components/settings/host-scope/host-scope-model";
 
 /**
  * The switcher's empty state is the second consumer of the rule the gate
@@ -386,6 +389,83 @@ describe("<HostSwitcher /> trigger status", () => {
     expect(
       screen.getByRole("button", { name: "Host: Host A, offline" }),
     ).not.toBeNull();
+  });
+});
+
+describe("<HostSwitcher /> a host nobody named", () => {
+  // The registry hands a host with no display name to the directory labelled
+  // with its own id. Neither source names it, so Settings says "the host" -
+  // never the id, in the text or in what a screen reader is told.
+  it('reads "the host", with no id in the text or aria', () => {
+    const hostId = "53c608e1-8995-4c65-b386-3ae939d4ad32";
+    const item: HostListItem = {
+      hostId,
+      displayName: null,
+      platform: "darwin-arm64",
+      kind: "personal",
+      publicKey: "pk",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatePolicy: "manual",
+      status: {
+        connectivity: "offline",
+        viewerReachability: "unknown",
+        clientCloud: "ok",
+        updateState: "current",
+        appVersion: "1.4.2",
+        lastSeenAt: "2026-01-01T00:00:00Z",
+      },
+    };
+    const [option] = buildHostScopeOptions({
+      leases: [],
+      authorityAttached: false,
+      directory: [
+        hostListItemToDirectoryEntry(item, "wss://relay.example.test/attach"),
+      ],
+      registry: [item],
+      localHostId: null,
+      activeHostId: null,
+      localService: undefined,
+      localPlatform: null,
+      hasLiveSession: () => false,
+      localHostSettingUp: false,
+      localHostTerminalRunNote: null,
+      sandboxes: null,
+      nowMs: 0,
+    });
+    const view = render(
+      <HostSwitcher
+        refusalByHostId={NO_HOST_OPTION_REFUSALS}
+        inertExceptHostId={null}
+        hosts={[option]}
+        selected={option}
+        activeHostId={null}
+        onSelect={() => undefined}
+        action={{ kind: "manage-hosts", onSelect: () => undefined }}
+        surface="inline"
+        intent="pin"
+        disabled={false}
+        isLoading={false}
+        listsFailed={false}
+        onRetryLists={() => undefined}
+        updateViewForHost={null}
+        composer={null}
+        environmentLabelForHost={null}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Host: the host, offline" }),
+    ).not.toBeNull();
+    const readable = [
+      view.container.textContent,
+      ...Array.from(view.container.querySelectorAll("*")).flatMap((element) =>
+        element
+          .getAttributeNames()
+          .filter((name) => name.startsWith("aria-") || name === "title")
+          .map((name) => element.getAttribute(name)),
+      ),
+    ].join("\n");
+    expect(readable).not.toContain(hostId);
   });
 });
 

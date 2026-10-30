@@ -35,6 +35,7 @@ import {
   onHostScopePhrase,
 } from "./mcp-skills-copy";
 import { useConfigurationName } from "./mcp-servers-model";
+import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
 
 /** One place on the viewing host a provider keeps entries by itself. */
 interface HostPlace {
@@ -96,7 +97,9 @@ function OnHostOnlyCard(props: {
   const name = useConfigurationName();
   const host = scope.viewingHost;
   if (host === null || props.entries.length === 0) return null;
-  const heading = onHostOnlyHeading(host.hostLabel ?? host.hostId);
+  const heading = onHostOnlyHeading(
+    hostNameFromLabel(host.hostLabel, host.hostId),
+  );
   return (
     <section
       className="flex flex-col gap-2 rounded-lg border border-border/60 p-3"

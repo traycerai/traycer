@@ -61,6 +61,12 @@ import {
   fetchEnvironmentInvitations,
   acceptEnvironmentInvitation,
 } from "@traycer-clients/shared/auth/environment-invitations";
+import {
+  claimCreditOfferViaHttp,
+  listCreditOffersViaHttp,
+  type ClaimCreditOfferFetchResult,
+  type ListCreditOffersFetchResult,
+} from "@traycer-clients/shared/auth/credit-offers";
 import type {
   EnvironmentInvitationsListResponse,
   EnvironmentInvitationsAcceptResponse,
@@ -111,6 +117,8 @@ import {
 } from "@/lib/analytics";
 import { projectShareableTeams } from "@/hooks/epic/use-epic-shareable-teams";
 import { onWakeReconnect } from "@/lib/host/wake-reconnect";
+import { SANDBOXES_NOT_IN_THIS_BUILD } from "@/lib/sandboxes/sandbox-strings";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { appLogger, describeLogError } from "@/lib/logger";
 import {
   recordAuthServerTime,
@@ -659,6 +667,11 @@ export class AuthService {
   private currentRevalidation: Promise<LiveRevalidationOutcome | null> | null =
     null;
   private currentRevalidationBearer: OpenFrameBearerSource | null = null;
+  private pendingInvalidationRevalidation: {
+    readonly expected: OpenFrameBearerSource;
+    readonly generation: number;
+    readonly promise: Promise<LiveRevalidationOutcome | null>;
+  } | null = null;
   // Single-flight guard for the proactive force-refresh path so the refresh
   // scheduler can't stack overlapping `/api/v3/auth/refresh` rotations.
   private currentForceRefresh: Promise<void> | null = null;
@@ -2519,7 +2532,8 @@ export class AuthService {
    * Same as `revalidateCurrentToken` semantics from the legacy raw-token
    * surface, but operates on the active `RequestContext` boundary:
    *
-   *   - `valid` (no refresh)  → no-op; the lease keeps its bearer.
+   *   - `valid` (no refresh)  → reprojects the latest identity; the lease
+   *                             keeps its bearer.
    *   - `valid` with refresh  → rotates the existing context's credential
    *                             lease in place (observably silent on the
    *                             provider's `onChange`), persists the new
@@ -2557,6 +2571,42 @@ export class AuthService {
       return { kind: "superseded" };
     }
     return outcome;
+  }
+
+  /**
+   * An identity invalidation needs a read started after the signal. Ordinary
+   * callers still join an existing read; invalidations queue one trailing read
+   * instead. Signals share that pending read only until it starts, so a later
+   * signal can queue the next one without overlapping identity reads.
+   */
+  async revalidateCurrentContextAfterInvalidation(): Promise<LiveRevalidationOutcome | null> {
+    const expected = this.contextProvider.current()?.credentials ?? null;
+    if (expected === null || this.isDisposed()) return null;
+    const generation = this.identityGeneration;
+    const queued = this.pendingInvalidationRevalidation;
+    if (queued?.expected === expected && queued.generation === generation)
+      return queued.promise;
+    const running = this.currentRevalidation;
+    if (running === null) return this.revalidateCurrentContext();
+
+    // A failed earlier call still leaves this signal needing a fresh read.
+    const revalidation = running
+      .catch(() => undefined)
+      .then<LiveRevalidationOutcome | null>(() => {
+        if (this.pendingInvalidationRevalidation?.promise === revalidation)
+          this.pendingInvalidationRevalidation = null;
+        if (!this.isExpectedBearerLive(expected, generation))
+          return !this.isDisposed() && this.contextProvider.current() !== null
+            ? { kind: "superseded" }
+            : null;
+        return this.revalidateCurrentContext();
+      });
+    this.pendingInvalidationRevalidation = {
+      expected,
+      generation,
+      promise: revalidation,
+    };
+    return revalidation;
   }
 
   /**
@@ -3079,7 +3129,12 @@ export class AuthService {
    */
   /** `IRunnerHost.sandboxControlUnavailableReason`, for a caller to say why. */
   sandboxControlUnavailableReason(): string | null {
-    return this.runnerHost.sandboxControlUnavailableReason;
+    const reason = this.runnerHost.sandboxControlUnavailableReason;
+    // A build without sandboxes (`unreleased-features.ts`) sends no sandbox
+    // call at all, whatever the runner host could reach.
+    return UNRELEASED_FEATURES_ENABLED
+      ? reason
+      : (reason ?? SANDBOXES_NOT_IN_THIS_BUILD);
   }
 
   /**
@@ -4540,6 +4595,40 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.respondLinkLogin(bearer, code, approve);
+  }
+
+  /**
+   * Settings ▸ Credits: the credit offers the signed-in user can see. The raw
+   * bearer stays inside this auth boundary, and a refusal is a result kind
+   * the panel renders as no list, never a sign-out.
+   */
+  async listCreditOffers(
+    signal: AbortSignal,
+  ): Promise<ListCreditOffersFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return listCreditOffersViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      signal,
+    );
+  }
+
+  /** Claims one credit offer for the signed-in user. */
+  async claimCreditOffer(
+    campaignId: string,
+  ): Promise<ClaimCreditOfferFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return claimCreditOfferViaHttp(
+      this.runnerHost.authnBaseUrl,
+      bearer,
+      campaignId,
+    );
   }
 
   /**

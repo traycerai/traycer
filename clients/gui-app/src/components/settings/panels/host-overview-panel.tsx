@@ -26,6 +26,7 @@ import {
   HostOverviewNameAction,
 } from "@/components/settings/panels/host-overview-status-card";
 import { HostEnvironmentSection } from "@/components/settings/panels/host-environment-section";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { HostOverviewTabs } from "@/components/settings/panels/host-overview-tabs";
 import {
   NO_HOST_OVERVIEW_TAB_BADGES,
@@ -50,6 +51,7 @@ import {
 } from "@/components/settings/panels/host-overview-ports-tab";
 import { useHostPortForwards } from "@/components/settings/panels/host-port-forwards-state";
 import { HostOverviewSimulatorsTab } from "@/components/settings/panels/host-overview-simulators-tab";
+import { HostOverviewSimulatorsCount } from "@/components/settings/panels/host-overview-simulator-instances";
 import { HostOverviewDataTab } from "@/components/settings/panels/host-overview-data-tab";
 import { HostOverviewInstallationTab } from "@/components/settings/panels/host-overview-installation-tab";
 import { LocalPackageManagerUpgradeDot } from "@/components/settings/panels/host-settings-package-manager-upgrade-hint";
@@ -950,6 +952,13 @@ export function HostOverviewPanel(props: {
   // freeze during the accepted-to-first-progress gap, not only the rest of
   // the page.
   const updateGatePending = gatePending || updateInstallAcceptedAt !== null;
+  // Whatever deployed this host owns its version (`host.status@1.10`): the
+  // update region retires to its one-line reason before a catalog is fetched,
+  // the same retirement the first refused install used to be the only way to
+  // discover. `null` is a host that predates the field, which keeps that
+  // discovery path.
+  const updatesExternallyManaged =
+    statusQuery.data?.updatesExternallyManaged === true;
 
   // DISPATCH OWNERSHIP (D8). One token per mount, registered while this panel
   // is on screen, captured by every update dispatch at arm time.
@@ -1061,9 +1070,19 @@ export function HostOverviewPanel(props: {
     // The check reads on its own now, so this gate is load-bearing rather than
     // cosmetic: without it the page would spawn a CLI process on the host from
     // a scope that has not resolved, and cache the answer under this page's key.
-    enabled: usable,
-    checkDegrade: updateCheckDegrade,
-    installDegrade: updateInstallDegrade,
+    // It also waits for a status ANSWER: the host says there whether anything
+    // here can change its version, and a catalog fetched before that answer
+    // would put a version list on screen for the next render to retire. An
+    // answer, not merely a settled query: a failed first read leaves the query
+    // settled with no data, and a host that recovers from it would show the
+    // list for the span until its status arrived.
+    enabled: usable && statusQuery.data !== undefined,
+    checkDegrade: updatesExternallyManaged
+      ? "externally-managed"
+      : updateCheckDegrade,
+    installDegrade: updatesExternallyManaged
+      ? "externally-managed"
+      : updateInstallDegrade,
     busy: updateGatePending,
     foregroundUpdateLine: localForegroundUpdateLine,
     incarnation,
@@ -1256,12 +1275,19 @@ export function HostOverviewPanel(props: {
     // without this the one shot is spent on a dialog closed in the same pass
     // for a retirement that ends a few seconds later.
     //
+    // An outstanding catalog answer too (`awaitingAnswer`): until it lands
+    // the region is un-retired only because it has not heard back, and the
+    // check is a CLI spawn that always answers after the status read that put
+    // the park on screen - so without this the shot fires in that window and
+    // a `cli-unavailable` answer closes it, the exact sequence above.
+    //
     // A foreground run on this machine too: the rule after the restart
     // confirm's closes any offer opened under one, so firing now would spend
     // the one shot on a dialog nobody sees.
     gateArmed:
       anyPending ||
       updates.degrade !== null ||
+      updates.awaitingAnswer ||
       restartDegrade === "terminal-run",
     supported: updates.activate !== null,
     dispatch: updateDispatch,
@@ -1488,10 +1514,20 @@ export function HostOverviewPanel(props: {
   // page-wide one are the same two the legacy handlers take, for the same
   // reasons — an offer whose confirm the render-time rules would close in the
   // same commit is not a control.
+  // A manual open of the ACTIVATE offer spends the auto-open's one shot too.
+  // The auto-open can be on hold while this control is live (a catalog answer
+  // in flight, `awaitingAnswer`), and a shot still unspent when the hold ends
+  // would replace the dialog the person opened, or bring back one they had
+  // just deferred.
   const openBoundOffer =
     attemptControl === null || updates.degrade !== null || anyPending
       ? null
-      : () => setBoundOffer(attemptControl);
+      : () => {
+          if (attemptControl.intent === "activate") {
+            setAutoOpenedFor(attemptControl.attemptId);
+          }
+          setBoundOffer(attemptControl);
+        };
   // The card's force handler for a PARK, hoisted because the sentence beside
   // the button now has to know whether the button is there. It was this exact
   // expression inline; naming it is what keeps the two from disagreeing.
@@ -1995,23 +2031,29 @@ export function HostOverviewPanel(props: {
       >
         {notices}
         {/* The one-time Remote access question, on every tab like the
-            strip above it; it draws nothing once answered on this desktop. */}
-        <RemoteAccessQuestion
-          client={client}
-          hostId={scope.hostId}
-          enabled={usable}
-        />
-        {/* Which configuration this host runs, for the host the picker names. */}
-        <HostEnvironmentSection scope={scope} />
-        {/* The settings card, on every tab like the lines above it: whether
+            strip above it (it draws nothing once answered on this desktop);
+            which configuration this host runs, for the host the picker names;
+            and the settings card on every tab like the lines above it: whether
             this computer's settings are its own, moving, moved, shared by an
-            earlier version or stopped. */}
-        <HostOverviewSettingsCardSlot
-          client={client}
-          hostId={scope.hostId}
-          hostName={displayName}
-          usable={usable}
-        />
+            earlier version or stopped. None in a build without environments
+            (`unreleased-features.ts`): a host there runs its own settings,
+            has nowhere to move them, and asks no remote access question. */}
+        {UNRELEASED_FEATURES_ENABLED ? (
+          <>
+            <RemoteAccessQuestion
+              client={client}
+              hostId={scope.hostId}
+              enabled={usable}
+            />
+            <HostEnvironmentSection scope={scope} />
+            <HostOverviewSettingsCardSlot
+              client={client}
+              hostId={scope.hostId}
+              hostName={displayName}
+              usable={usable}
+            />
+          </>
+        ) : null}
         {/* The tab bar and the one body showing, pinned under the header.
             The Ports count and the Installation dot hang on `badges`. */}
         <HostOverviewTabs
@@ -2024,6 +2066,12 @@ export function HostOverviewPanel(props: {
               portForwards.count === null ? null : (
                 <HostOverviewPortsCount count={portForwards.count} />
               ),
+            simulators: (
+              <HostOverviewSimulatorsCount
+                client={client}
+                hostId={host.hostId}
+              />
+            ),
             // Same gate and same query as the Command-line tools hint on
             // the tab, so the dot and the hint come and go together.
             installation: props.hasLocalBridge ? (
@@ -2033,7 +2081,9 @@ export function HostOverviewPanel(props: {
           bodies={{
             installation: installationTab,
             updates: updatesTab,
-            access: accessTab,
+            // No Access and setup tab in a build without environments
+            // (`HOST_OVERVIEW_TABS`).
+            access: UNRELEASED_FEATURES_ENABLED ? accessTab : null,
             data: dataTab,
             ports: portsTab,
             simulators: simulatorsTab,

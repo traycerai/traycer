@@ -65,6 +65,7 @@ import { RateLimitPollProvider } from "@/providers/rate-limit-poll-provider";
 import { RunnerHostProvider } from "@/providers/runner-host-provider";
 import { SupportContextRegistryBridge } from "@/providers/support-context-registry-bridge";
 import { SupportEnvironmentBridge } from "@/providers/support-environment-bridge";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { ThemeProvider } from "@/providers/theme-provider";
 import { WindowsBridgeAuthSessionBridge } from "@/providers/windows-bridge-auth-session";
 import { WindowsBridgeProvider } from "@/providers/windows-bridge-provider";
@@ -273,7 +274,7 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
   return (
     <CommandPaletteProvider router={props.router}>
       <SupportContextRegistryBridge router={props.router} />
-      <SupportEnvironmentBridge />
+      {UNRELEASED_FEATURES_ENABLED ? <SupportEnvironmentBridge /> : null}
       <WindowsBridgeAuthSessionBridge>
         <AuthSessionExpiredToastBridge />
         <HostTrustAlertBridge />
@@ -291,7 +292,9 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                             <EpicSessionControllerBridge />
                             <EpicTabExistenceReconciler />
                             <PoolSessionMount />
-                            <PendingSandboxSendsDriver />
+                            {UNRELEASED_FEATURES_ENABLED ? (
+                              <PendingSandboxSendsDriver />
+                            ) : null}
                             <ViewReplicaLifecycleMount />
                             <HistoryLocalContributionMount />
                             <HostStreamProvider>
@@ -307,7 +310,9 @@ function TraycerAuthenticatedRuntime(props: TraycerAuthenticatedRuntimeProps) {
                                   with no run handle to call. This is the lowest node both
                                   shells share that still has the host stream. */}
                               <SessionImportRunController />
-                              <EnvironmentArmScopeMount />
+                              {UNRELEASED_FEATURES_ENABLED ? (
+                                <EnvironmentArmScopeMount />
+                              ) : null}
                               <AppLocalNotificationsPersistLifecycleBridge>
                                 <ReadingPositionPersistLifecycleBridge>
                                   <NotificationsSessionProvider

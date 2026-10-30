@@ -240,12 +240,17 @@ function bootstrapMain(config: BootstrapConfig): void {
     { passive: false },
   );
   // A swipe cannot be handed over without losing its momentum, so it chains
-  // natively and only its direction is reported.
+  // natively and only its direction is reported. The browser gives a swipe
+  // to the scroller that can take its first move, for the whole contact: one
+  // the page scrolls never reaches the transcript, and reporting it would
+  // leave the transcript waiting for a scroll that never comes.
   let touchY: number | null = null;
+  let swipeChains: boolean | null = null;
   window.addEventListener(
     "touchstart",
     (event) => {
       touchY = event.touches.item(0)?.clientY ?? null;
+      swipeChains = null;
     },
     { capture: true, passive: true },
   );
@@ -257,6 +262,8 @@ function bootstrapMain(config: BootstrapConfig): void {
       if (clientY === undefined || previous === null) return;
       touchY = clientY;
       if (clientY === previous) return;
+      swipeChains ??= !canScrollInside(event.target, true, previous - clientY);
+      if (!swipeChains) return;
       notify("traycer/notifications/scroll-gesture", {
         direction: clientY < previous ? "toward-end" : "away-from-end",
       });
@@ -274,6 +281,321 @@ function bootstrapMain(config: BootstrapConfig): void {
     capture: true,
     passive: true,
   });
+
+  // The page's own reveals stay in the frame. A native reveal scrolls every
+  // scroller holding the element, the transcript around the frame included,
+  // and only the reader's input may move the transcript. Each reveal walks
+  // this document's scrollers the way the browser does: the element's
+  // scroll-margin, each scroller's scroll-padding, the caller's alignment
+  // and behaviour. A canvas board keeps the native reveal: no transcript
+  // holds it, and a fullscreen board's stage scrolls outside the frame.
+  type Align = "start" | "center" | "end" | "nearest" | "center-if-needed";
+  type Native = (this: unknown, ...args: unknown[]) => unknown;
+  const isNative = (value: unknown): value is Native =>
+    typeof value === "function";
+  const scrollElementTo: unknown = Object.getOwnPropertyDescriptor(
+    Element.prototype,
+    "scrollTo",
+  )?.value;
+  const pixels = (value: string): number =>
+    value.endsWith("px") ? Number.parseFloat(value) || 0 : 0;
+  // Spans are `[near, far]` along one axis.
+  const nearestDelta = (
+    [near, far]: readonly [number, number],
+    [portNear, portFar]: readonly [number, number],
+  ): number => {
+    // Covering the port: already as far in view as it can be.
+    if (near < portNear && far > portFar) return 0;
+    const size = far - near;
+    const port = portFar - portNear;
+    if ((near < portNear && size < port) || (far > portFar && size > port))
+      return near - portNear;
+    if ((near < portNear && size > port) || (far > portFar && size < port))
+      return far - portFar;
+    return 0;
+  };
+  const alignDelta = (
+    align: Align,
+    target: readonly [number, number],
+    port: readonly [number, number],
+  ): number => {
+    const [near, far] = target;
+    const [portNear, portFar] = port;
+    const center = (near + far - portNear - portFar) / 2;
+    if (align === "start") return near - portNear;
+    if (align === "end") return far - portFar;
+    if (align === "center") return center;
+    // Wholly out of view: centred. Partly: brought in at the nearer edge.
+    // In view: left as it is.
+    if (align === "center-if-needed" && (far <= portNear || near >= portFar))
+      return center;
+    return nearestDelta(target, port);
+  };
+  // The flat-tree parent, so an element in a shadow root reaches the
+  // scrollers outside it.
+  const parentOf = (element: Element): Element | null => {
+    if (element.assignedSlot !== null) return element.assignedSlot;
+    if (element.parentElement !== null) return element.parentElement;
+    const root = element.getRootNode();
+    return root instanceof ShadowRoot ? root.host : null;
+  };
+  // Nothing inside skipped contents is scrolled to: an ancestor's
+  // `content-visibility: hidden` skips what is inside it, and the engine
+  // reveals nothing in there however much room the page leaves around it.
+  // A target in there still has a client rect, so the rect above cannot
+  // tell.
+  //
+  // `checkVisibility` is the engine's own answer to that, and the only one
+  // worth asking. The direction relied on is one way: wherever it is false
+  // the engine reveals nothing. It is true for some the engine declines to
+  // scroll to anyway, a `position: fixed` target among them, which this
+  // leaves exactly as it found them. Reading the ancestors' computed style
+  // cannot replace it:
+  // `content-visibility` applies only where layout containment can, and the
+  // computed `display` does not say where that is — `<svg>` and a plain
+  // `<label>` are both `inline`, and the engine skips the first and ignores
+  // the second. It is also computed over the real flat tree, so it sees a
+  // closed shadow root, `<details>` included, which no walk from here can
+  // reach: `assignedSlot` is null for a closed root.
+  //
+  // Default options are the question being asked. They answer false for a
+  // box that is not generated and for skipped contents, and leave out
+  // `visibility`, `opacity` and the off-screen skipping of a
+  // `content-visibility: auto` ancestor, each of which the engine reveals
+  // into. An element's own `hidden` skips only what is inside it, so the
+  // element itself still answers true.
+  //
+  // An engine without the method is left alone, which is how the reveal
+  // behaved before this rule: a page it would have skipped is scrolled to
+  // as any other.
+  const isSkipped = (target: Element): boolean =>
+    "checkVisibility" in target && !target.checkVisibility();
+  // Containment of any kind, on the root or on the body. `contain` names it;
+  // `container-type` and `content-visibility` apply it without naming it, and
+  // leave `contain` itself `none`.
+  //
+  // `contain` is a closed grammar, so it is read by the keywords that mean
+  // containment, and the empty string an engine answers for a property it
+  // does not know is no containment. `container-type` is an open one, grown
+  // twice already, so it is read the other way round: the values that contain
+  // nothing are named, and everything else contains.
+  //
+  // `content-visibility: hidden` contains too, and is left out because it
+  // cannot change the answer. This is asked only of the root and the body,
+  // and only to decide whether the walk treats the body as a scroller of
+  // its own — which matters only when the body is an ancestor of the
+  // target, and a target under a `hidden` root or body is skipped contents,
+  // which `isSkipped` has already turned the reveal back for. So whenever a
+  // `hidden` here would matter, the reveal is over. `auto` is containment
+  // the engine does reveal into, and counts.
+  const contains = (element: Element | null): boolean => {
+    if (element === null) return false;
+    const style = window.getComputedStyle(element);
+    return (
+      /size|layout|style|paint|content|strict/.test(style.contain) ||
+      (style.containerType !== "" &&
+        !/^(?:normal|scroll-state)$/.test(style.containerType)) ||
+      /auto/.test(style.contentVisibility)
+    );
+  };
+  // With the root's overflow `visible` and containment on neither, the body's
+  // overflow is the viewport's and the body is no scroller of its own. Any
+  // containment on either keeps that overflow the body's.
+  const bodyOverflowIsViewports = (): boolean => {
+    const rootStyle = window.getComputedStyle(document.documentElement);
+    return (
+      rootStyle.overflowX === "visible" &&
+      rootStyle.overflowY === "visible" &&
+      !contains(document.documentElement) &&
+      // The body or the frameset, whichever opens the document: the element
+      // the engine reads this overflow and containment from. `document.body`
+      // is typed non-null but is null before it parses and once it is
+      // removed.
+      !contains(document.body)
+    );
+  };
+  const scrollsItself = (
+    element: Element,
+    style: CSSStyleDeclaration,
+    bodyPropagates: boolean,
+  ): boolean =>
+    !(element === document.body && bodyPropagates) &&
+    /auto|scroll|hidden|overlay/.test(style.overflowX + style.overflowY);
+  const reveal = (
+    target: Element,
+    block: Align,
+    inline: Align,
+    behavior: ScrollBehavior,
+  ): void => {
+    // `isSkipped` first: it is a read of what the engine already knows,
+    // while `getClientRects` lays out the subtree to answer, which for
+    // skipped contents is the very work the page asked not to do.
+    if (isSkipped(target) || target.getClientRects().length === 0) return;
+    const margin = window.getComputedStyle(target);
+    const rect = target.getBoundingClientRect();
+    let top = rect.top - pixels(margin.scrollMarginTop);
+    let bottom = rect.bottom + pixels(margin.scrollMarginBottom);
+    let left = rect.left - pixels(margin.scrollMarginLeft);
+    let right = rect.right + pixels(margin.scrollMarginRight);
+    const viewport = document.scrollingElement;
+    const bodyPropagates = bodyOverflowIsViewports();
+    for (
+      let scroller = parentOf(target);
+      scroller !== null;
+      scroller = parentOf(scroller)
+    ) {
+      const style = window.getComputedStyle(scroller);
+      if (
+        scroller !== viewport &&
+        !scrollsItself(scroller, style, bodyPropagates)
+      ) {
+        continue;
+      }
+      const box =
+        scroller === viewport
+          ? { top: 0, left: 0 }
+          : scroller.getBoundingClientRect();
+      const portTop =
+        box.top + (scroller === viewport ? 0 : scroller.clientTop);
+      const portLeft =
+        box.left + (scroller === viewport ? 0 : scroller.clientLeft);
+      const deltaY = alignDelta(
+        block,
+        [top, bottom],
+        [
+          portTop + pixels(style.scrollPaddingTop),
+          portTop + scroller.clientHeight - pixels(style.scrollPaddingBottom),
+        ],
+      );
+      const deltaX = alignDelta(
+        inline,
+        [left, right],
+        [
+          portLeft + pixels(style.scrollPaddingLeft),
+          portLeft + scroller.clientWidth - pixels(style.scrollPaddingRight),
+        ],
+      );
+      const roomY = scroller.scrollHeight - scroller.clientHeight;
+      const roomX = scroller.scrollWidth - scroller.clientWidth;
+      // A right-to-left scroller's offsets run from -room to 0.
+      const minX = style.direction === "rtl" ? -roomX : 0;
+      const fromY = scroller.scrollTop;
+      const fromX = scroller.scrollLeft;
+      const toY = Math.max(0, Math.min(fromY + deltaY, roomY));
+      const toX = Math.max(minX, Math.min(fromX + deltaX, minX + roomX));
+      if ((toY === fromY && toX === fromX) || !isNative(scrollElementTo)) {
+        continue;
+      }
+      scrollElementTo.call(scroller, { top: toY, left: toX, behavior });
+      top -= toY - fromY;
+      bottom -= toY - fromY;
+      left -= toX - fromX;
+      right -= toX - fromX;
+    }
+  };
+  // Same name, length and descriptor as the native; only its source text
+  // (`Function.prototype.toString`) tells them apart.
+  const replace = (
+    owner: object,
+    name: string,
+    wrap: (native: Native) => Native,
+  ): void => {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+    const native: unknown = descriptor?.value;
+    if (descriptor === undefined || !isNative(native)) return;
+    const replacement = wrap(native);
+    Object.defineProperty(replacement, "name", { value: native.name });
+    Object.defineProperty(replacement, "length", { value: native.length });
+    Object.defineProperty(owner, name, { ...descriptor, value: replacement });
+  };
+  const alignOf = (value: unknown, fallback: Align): Align =>
+    value === "start" ||
+    value === "center" ||
+    value === "end" ||
+    value === "nearest"
+      ? value
+      : fallback;
+  if (!config.canvas) {
+    replace(
+      Element.prototype,
+      "scrollIntoView",
+      (native) =>
+        function (this: unknown, ...args: unknown[]): unknown {
+          if (!(this instanceof Element)) return native.apply(this, args);
+          const options = args[0];
+          if (!isObject(options)) {
+            reveal(
+              this,
+              options === false ? "end" : "start",
+              "nearest",
+              "auto",
+            );
+            return undefined;
+          }
+          reveal(
+            this,
+            alignOf(options.block, "start"),
+            alignOf(options.inline, "nearest"),
+            options.behavior === "smooth" || options.behavior === "instant"
+              ? options.behavior
+              : "auto",
+          );
+          return undefined;
+        },
+    );
+    replace(
+      Element.prototype,
+      "scrollIntoViewIfNeeded",
+      (native) =>
+        function (this: unknown, ...args: unknown[]): unknown {
+          if (!(this instanceof Element)) return native.apply(this, args);
+          const align = args[0] === false ? "nearest" : "center-if-needed";
+          reveal(this, align, align, "auto");
+          return undefined;
+        },
+    );
+    // A focus the caller lets scroll is revealed as the browser reveals it
+    // (centred when out of view), inside the frame only. Focus is read from
+    // the active element of the element's own document or shadow root, open
+    // or closed: `:focus` matches only while the frame itself has focus, and
+    // the reader may be typing in the app around it.
+    const isFocused = (element: Element): boolean => {
+      const root = element.getRootNode();
+      return (
+        (root instanceof Document || root instanceof ShadowRoot) &&
+        root.activeElement === element
+      );
+    };
+    const focusables: { readonly prototype: Element }[] = [
+      HTMLElement,
+      SVGElement,
+    ];
+    if ("MathMLElement" in window) focusables.push(MathMLElement);
+    for (const focusable of focusables) {
+      replace(
+        focusable.prototype,
+        "focus",
+        (native) =>
+          function (this: unknown, ...args: unknown[]): unknown {
+            const options = args[0];
+            if (
+              !(this instanceof Element) ||
+              (isObject(options) && options.preventScroll === true)
+            ) {
+              return native.apply(this, args);
+            }
+            const wasFocused = isFocused(this);
+            native.apply(this, [
+              { ...(isObject(options) ? options : {}), preventScroll: true },
+            ]);
+            if (!wasFocused && isFocused(this)) {
+              reveal(this, "center-if-needed", "center-if-needed", "auto");
+            }
+            return undefined;
+          },
+      );
+    }
+  }
 
   // Links the frame follows itself: an anchor within this page, and on a
   // served artifact page another `.html` page of the same folder, which loads

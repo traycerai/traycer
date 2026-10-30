@@ -81,10 +81,18 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 vi.mock("@/hooks/harnesses/use-gui-harness-catalog", () => ({
   useGuiHarnessCatalogForClient: () => ({ harnesses: [] }),
 }));
+// No turn receipts here: the transcript asks for none from a host this
+// suite does not stand up.
+vi.mock("@/hooks/bots/use-bot-turn-locate-query", () => ({
+  useBotTurnLocateQuery: () => ({ data: undefined }),
+}));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
-  useChatLocateRow: (args: ChatLocateRowArgs) => {
+  useChatLocateRowAnswer: (args: ChatLocateRowArgs) => {
     mocks.locateRow(args);
-    return mocks.state.locatedOrdinal;
+    const ordinal = mocks.state.locatedOrdinal;
+    return ordinal === null
+      ? { status: "waiting" }
+      : { status: "found", ordinal };
   },
 }));
 vi.mock("@/components/chat/chat-messages", async () => {
@@ -266,7 +274,11 @@ function createReplyJumpStore(
 const THREAD_SURFACE: BotTranscriptSurface = {
   kind: "thread",
   chooseOption: vi.fn(),
+  answerQuestion: null,
+  discussQuestion: null,
   failedRequest: () => null,
+  openTurn: null,
+  sessionChatId: null,
 };
 
 /** The member directory a mounted transcript reads; none by default. */
@@ -293,6 +305,7 @@ function mountTranscript(
           surface={surface}
           resolveMember={members}
           showConnecting
+          landOn={null}
         />
       </QueryClientProvider>
     </StrictMode>
@@ -464,8 +477,13 @@ describe("<BotChatTranscript /> in the channel", () => {
       threadLine: () => null,
       openThread: null,
       openAnnouncementThread,
+      threadAnchorKinds: [],
       chooseOption,
+      answerQuestion: null,
+      discussQuestion: null,
       failedRequest: () => null,
+      openTurn: null,
+      sessionChatId: null,
       intro: { botTitle: "Release Bot", directive: null },
     };
   }
@@ -482,7 +500,7 @@ describe("<BotChatTranscript /> in the channel", () => {
     await user.click(screen.getByRole("button", { name: "Reply in thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
-    expect(openAnnouncementThread).toHaveBeenCalledWith(QUESTION_ID);
+    expect(openAnnouncementThread).toHaveBeenCalledWith(QUESTION_ID, null);
   });
 
   it("draws a question's options as buttons that cannot be clicked in the channel", () => {
@@ -538,8 +556,13 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       threadLine: () => null,
       openThread: vi.fn(),
       openAnnouncementThread: vi.fn(),
+      threadAnchorKinds: [],
       chooseOption,
+      answerQuestion: null,
+      discussQuestion: null,
       failedRequest: () => null,
+      openTurn: null,
+      sessionChatId: null,
       intro: { botTitle: "Release Bot", directive: null },
     };
   }

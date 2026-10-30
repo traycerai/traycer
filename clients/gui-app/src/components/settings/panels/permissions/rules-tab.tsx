@@ -57,6 +57,7 @@ import {
 } from "@/components/settings/panels/permissions/auto-mode-host-gate";
 import { autoModeRuleDisplayName } from "@/lib/auto-mode/auto-mode-rule-copy";
 import { useRelativeTimestamp } from "@/lib/relative-time";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 type RulesSectionKey = AutoPolicySectionKey | "notes";
 
@@ -78,7 +79,9 @@ interface RulesSectionCopy {
 const RULES_SECTION_COPY: Readonly<Record<RulesSectionKey, RulesSectionCopy>> =
   {
     environment: {
-      label: "Trusted context",
+      // The section was called `Environment` until the word was needed for a
+      // configuration; without those it keeps its own name.
+      label: UNRELEASED_FEATURES_ENABLED ? "Trusted context" : "Environment",
       tagline: "What the judge should trust",
       description:
         "Your repos, hosts, buckets and internal services, in plain words.",
@@ -580,17 +583,21 @@ function RulesEditor(props: {
         onSave={commit}
         onReset={() => setResetConfirm(true)}
       />
-      <ConfirmDestructiveDialog
-        open={resetConfirm}
-        onOpenChange={setResetConfirm}
-        title="Reset the approval policy?"
-        description="This removes your custom rules and goes back to the default approval policy on every computer and sandbox."
-        cascadeSummary={null}
-        actionLabel="Reset to default"
-        isPending={saving}
-        blockedReason={resetBlockedReason}
-        onConfirm={reset}
-      />
+      {/* No reset without sandboxes: the footer is Discard and Save, as it
+          was before the policy covered more than this host. */}
+      {UNRELEASED_FEATURES_ENABLED ? (
+        <ConfirmDestructiveDialog
+          open={resetConfirm}
+          onOpenChange={setResetConfirm}
+          title="Reset the approval policy?"
+          description="This removes your custom rules and goes back to the default approval policy on every computer and sandbox."
+          cascadeSummary={null}
+          actionLabel="Reset to default"
+          isPending={saving}
+          blockedReason={resetBlockedReason}
+          onConfirm={reset}
+        />
+      ) : null}
     </div>
   );
 }
@@ -925,21 +932,24 @@ function RulesFooter(props: {
         <AutoPolicySummary record={props.record} />
       )}
       <div className="flex items-center gap-2">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          disabled={
-            saving ||
-            checking ||
-            saveBlocked ||
-            !hasCustomRules(props.record, dirty)
-          }
-          onClick={props.onReset}
-          data-testid="auto-policy-reset"
-        >
-          Reset to default
-        </Button>
+        {/* No reset without sandboxes: see the dialog above. */}
+        {UNRELEASED_FEATURES_ENABLED ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={
+              saving ||
+              checking ||
+              saveBlocked ||
+              !hasCustomRules(props.record, dirty)
+            }
+            onClick={props.onReset}
+            data-testid="auto-policy-reset"
+          >
+            Reset to default
+          </Button>
+        ) : null}
         <Button
           type="button"
           variant="outline"

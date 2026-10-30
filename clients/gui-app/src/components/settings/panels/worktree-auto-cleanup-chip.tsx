@@ -23,7 +23,10 @@ import {
 } from "@/components/ui/popover";
 import { isHostScopeUsable } from "@/components/settings/host-scope/host-scope-status";
 import type { HostScope } from "@/components/settings/host-scope/use-host-scope";
-import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import {
+  hostLabelAtSentenceStart,
+  useHostReachability,
+} from "@/hooks/agent/use-host-reachability";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import {
   resolveAutoCleanupGate,
@@ -191,7 +194,7 @@ function autoCleanupUnavailableCopy(
   if (gate === "offline") {
     return `Automatic cleanup settings are unavailable while ${hostLabel} is offline. Cleanup runs on that host, so it resumes on its own when the host is running again.`;
   }
-  return `${hostLabel} is running a version without automatic cleanup. Update the host to turn it on — nothing is scheduled from here.`;
+  return `${hostLabelAtSentenceStart(hostLabel)} is running a version without automatic cleanup. Update the host to turn it on — nothing is scheduled from here.`;
 }
 
 /** "Cleanup · On · 7d" / "Cleanup off" / "Cleanup" until the read lands. */

@@ -19,7 +19,7 @@ import {
 } from "@/lib/home-bots/bots-model";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
-import { formatWaitTime, useSampledNow } from "@/lib/relative-time";
+import type { TeamSetup } from "@/hooks/bots/use-team-setups";
 
 /**
  * The reader's own hosts, and which of them this client can dial now.
@@ -50,7 +50,7 @@ const STATE_BADGE_VARIANTS = {
 /**
  * One bot on Home. The row subscribes to its own `bot.subscribe` through the
  * app-wide host and renders whatever the snapshot says as it arrives: the
- * title, its state, the tracked tasks, the next check-in, and the
+ * title, its state, the tasks it spun and still runs, and the
  * open-request HINT. The hint is shown only when it is above zero, because
  * the conversation's rows, not this number, decide what is open.
  *
@@ -75,8 +75,6 @@ export function HomeBotRow(props: {
   readonly createdBy: string | null;
   /** Whether the bot is its environment's main bot (decision 30). */
   readonly isMain: boolean;
-  /** The team's chat is locked by its onboarding (`teamOnboardingGate`): the row does not open. */
-  readonly entryLocked: boolean;
 }): ReactNode {
   const {
     bot,
@@ -96,10 +94,8 @@ export function HomeBotRow(props: {
     () => buildHomeBotRow(bot, subscription.snapshot),
     [bot, subscription.snapshot],
   );
-  const now = useSampledNow();
   const working = botWorkingOf(liveActivityOf(subscription));
-  const navigate = useNavigate();
-  const openBotTab = useBotTabsStore((s) => s.openBotTab);
+  const openTab = useOpenHomeBotTab(hostReach);
   const reading = homeBotState({
     working: working === true,
     boundHostId: row.boundHostId,
@@ -118,20 +114,9 @@ export function HomeBotRow(props: {
       type="button"
       data-testid="home-bot-row"
       data-bot-id={row.botId}
-      disabled={hostId === null || props.entryLocked}
+      disabled={openTab === null}
       className="group flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
-      onClick={() => {
-        if (hostId === null || props.entryLocked) return;
-        rebindUnreachableBotTab(
-          row.botId,
-          hostId,
-          hostReach.connectableResolved
-            ? (id) => hostReach.connectableHostIds.has(id)
-            : null,
-        );
-        openBotTab({ botId: row.botId, hostId, title: row.title });
-        navigateToTabIntent(navigate, botTabIntent(row.botId), undefined);
-      }}
+      onClick={() => openTab?.(row.botId, row.title)}
     >
       <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-foreground/6 text-muted-foreground">
         <Bot className="size-4" aria-hidden="true" />
@@ -154,16 +139,9 @@ export function HomeBotRow(props: {
               {STATE_LABELS[state]}
             </Badge>
           )}
-          {row.tasksTracking === null ? null : (
+          {row.tasksSpun === null ? null : (
             <span data-testid="home-bot-tasks">
-              {row.tasksTracking === 1
-                ? "1 task"
-                : `${row.tasksTracking} tasks`}
-            </span>
-          )}
-          {row.nextCheckinAt === null ? null : (
-            <span data-testid="home-bot-next-checkin">
-              next check-in {formatWaitTime(row.nextCheckinAt, now)}
+              {row.tasksSpun === 1 ? "1 task" : `${row.tasksSpun} tasks`}
             </span>
           )}
           {createdBy === null ? null : (
@@ -180,4 +158,70 @@ export function HomeBotRow(props: {
       ) : null}
     </button>
   );
+}
+
+/**
+ * A team's main bot still to be set up (`useTeamSetups`), on Home where its
+ * team's card has no bot yet: the same entry as the channel sidebar's row,
+ * marked as needing a host, opening the bot's tab, which shows the channel
+ * where the team is set up.
+ */
+export function HomeSetupBotRow(props: {
+  readonly setup: TeamSetup;
+  readonly hostReach: HomeBotHostReach;
+}): ReactNode {
+  const { setup } = props;
+  const openTab = useOpenHomeBotTab(props.hostReach);
+  return (
+    <button
+      type="button"
+      data-testid="home-bot-setup-row"
+      data-bot-id={setup.botId}
+      disabled={openTab === null}
+      className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
+      onClick={() => openTab?.(setup.botId, setup.title)}
+    >
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-foreground/6 text-muted-foreground">
+        <Bot className="size-4" aria-hidden="true" />
+      </span>
+      <span className="flex min-w-0 flex-1 items-center gap-2">
+        <span className="truncate text-ui-sm text-foreground">
+          {setup.title}
+        </span>
+        <MainBotBadge testId="home-bot-setup-row-main" tone="muted" />
+      </span>
+      <Badge
+        variant="muted"
+        size="xs"
+        data-testid="home-bot-setup-row-needs-host"
+      >
+        Needs a host
+      </Badge>
+    </button>
+  );
+}
+
+/**
+ * Opens a bot's tab from Home through this window's host, first moving a tab
+ * left on a host this client can no longer dial back to it; `null` while the
+ * window has no host.
+ */
+function useOpenHomeBotTab(
+  hostReach: HomeBotHostReach,
+): ((botId: string, title: string) => void) | null {
+  const hostId = useEffectiveHostId();
+  const navigate = useNavigate();
+  const openBotTab = useBotTabsStore((s) => s.openBotTab);
+  if (hostId === null) return null;
+  return (botId, title) => {
+    rebindUnreachableBotTab(
+      botId,
+      hostId,
+      hostReach.connectableResolved
+        ? (id) => hostReach.connectableHostIds.has(id)
+        : null,
+    );
+    openBotTab({ botId, hostId, title });
+    navigateToTabIntent(navigate, botTabIntent(botId), undefined);
+  };
 }

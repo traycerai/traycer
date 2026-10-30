@@ -134,6 +134,7 @@ function hostStatusResponse() {
     processMemory: null,
     crossHostMessaging: null,
     sessions: null,
+    updatesExternallyManaged: null,
   };
 }
 

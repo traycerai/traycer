@@ -10,10 +10,8 @@ import {
   MessageSquarePlus,
   MessageSquareX,
   Shield,
-  Trash2,
   UserMinus,
   UserPlus,
-  Users,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -22,16 +20,8 @@ import {
   notificationFeedTone,
   TERMINAL_FAILURE_TONE,
 } from "@/components/notifications/notification-indicator-tones";
-import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
-import {
-  isTeamHostNotificationKind,
-  type TeamHostNotificationKind,
-} from "@traycer/protocol/host/notifications/host-notifications";
-import { EnvironmentNotificationExtra } from "@/components/notifications/environment-notification-extra";
 import { NotificationRowBotAvatar } from "@/components/notifications/notification-bots";
-import { SandboxNoticeActions } from "@/components/notifications/sandbox-notice-actions";
-import { SecretExportNoticeLine } from "@/components/notifications/secret-export-notice-line";
 import { SecretGrantRequestCard } from "@/components/notifications/secret-grant-request-card";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
@@ -41,28 +31,13 @@ import {
 } from "@traycer-clients/shared/host-client/remote-fetcher";
 import { useRemoteSessionPollReadiness } from "@/hooks/agent/use-host-reachability";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
-import { useReactiveLocalHostEntry } from "@/hooks/host/use-reactive-local-host-entry";
-import {
-  useSandboxSettingsNoticeTitle,
-  type SandboxApplyFailedDetail,
-} from "@/hooks/sandboxes/use-sandbox-settings-notice";
 import { notificationPayloadRequiresOriginHost } from "@/hooks/notifications/use-notification-activation";
 import { useIsTextTruncated } from "@/hooks/ui/use-is-text-truncated";
-import {
-  classifyProviderPackNotificationLocality,
-  presentProviderPackNotificationBody,
-  providerPackNotificationAllowsLocalAction,
-  providerPackViewingLocalityFromShell,
-  type ProviderPackNotificationLocality,
-} from "@/lib/notifications/provider-pack-notification-attribution";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
-import { useRunnerHostOrNull } from "@/providers/use-runner-host";
 import {
   type MergedNotificationRow,
-  sandboxIdOfNotificationRow,
   useMergedNotificationRow,
-  useMergedNotificationsActions,
 } from "@/stores/notifications/merged-notifications";
 import {
   type NotificationEvent,
@@ -180,11 +155,6 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
   // two origin-host subscriptions below callable for a vanished row.
   const originHostId = row?.originHostId ?? "";
   const originHost = useHostDirectoryEntry(originHostId);
-  // This machine — not the ambient active host (G8 / D7). Pack-store events
-  // are machine-local; comparing against active would mis-caption when the
-  // user has a remote host selected.
-  const localHost = useReactiveLocalHostEntry();
-  const runnerHost = useRunnerHostOrNull();
   const shouldReduceMotion = useReducedMotion() === true;
   // Subscribed, not read at render time: `originRefusal` is ready-session-
   // aware, and a readiness flip changes no value this row otherwise
@@ -193,13 +163,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
   const originHasReadySession = useRemoteSessionPollReadiness(originHostId);
   if (row === null) return null;
 
-  const packPresentation = resolvePackRowPresentation({
-    attribution: row.providerPackAttribution,
-    hasLocalHost: runnerHost?.hasLocalHost ?? false,
-    localHostId: localHost?.hostId ?? null,
-    body: row.body,
-    hasPayload: rowHasDestination(row),
-  });
+  const isNavigable = row.payload !== null;
   const isRead = row.readAt !== null;
   const originUnavailability = originRefusal({
     row,
@@ -217,8 +181,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
 
   // Same condition the navigable body button renders under, so keyboard
   // activation of a focused row and a click on that button are the same act.
-  const canActivate =
-    packPresentation.isNavigable && originUnavailability === null;
+  const canActivate = isNavigable && originUnavailability === null;
   // Only the row's OWN key events - a keydown bubbling up from one of its
   // controls has already been handled by that control (Enter on the trailing
   // tick acknowledges; it must not also activate the row).
@@ -248,19 +211,12 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       // hover-capable pointers, so without it a finger sees nothing at all for
       // the whole press.
       //
-      // Remote pack-store entries stay fully listed (needs_action evidence)
-      // but are visually de-emphasised so this machine's actionable items
-      // lead — de-emphasis, not filter-out (D7).
-      //
       // `tabIndex={-1}` makes the row itself the arrow-key landing spot
       // (see `notification-feed-keyboard-navigation.ts`) without adding a Tab
       // stop: Tab order still runs through the row's controls only.
       tabIndex={-1}
       onKeyDown={onRowKeyDown}
-      className={cn(
-        "relative flex items-start gap-2.5 border-b border-border/60 py-2.5 pr-4 pl-6 outline-none last:border-b-0 hover:bg-foreground/6 focus-visible:bg-foreground/6 focus-visible:ring-1 focus-visible:ring-ring/50 focus-visible:ring-inset has-[:focus-visible]:bg-foreground/6 active:press-scrim pointer-coarse:touch-chrome",
-        packPresentation.packRemote && "opacity-60",
-      )}
+      className="relative flex items-start gap-2.5 border-b border-border/60 py-2.5 pr-4 pl-6 outline-none last:border-b-0 hover:bg-foreground/6 focus-visible:bg-foreground/6 focus-visible:ring-1 focus-visible:ring-ring/50 focus-visible:ring-inset has-[:focus-visible]:bg-foreground/6 active:press-scrim pointer-coarse:touch-chrome"
       data-testid="notification-entry"
       data-notification-id={row.feedId}
       data-notification-read={isRead ? "true" : "false"}
@@ -268,10 +224,6 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
       data-notification-origin-state={
         originUnavailable ? "unavailable" : "available"
       }
-      data-notification-pack-remote={
-        packPresentation.packRemote ? "true" : "false"
-      }
-      data-notification-pack-locality={packPresentation.locality}
     >
       {props.highlightRelocation && !shouldReduceMotion ? (
         <m.span
@@ -299,15 +251,12 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
           fallback={<Icon className={cn("size-4", glyph.colorClassName)} />}
         />
       </span>
-      <NotificationRowWithSecrets row={row} onActivate={props.onActivate}>
+      <NotificationRowWithSecrets row={row}>
         <NotificationRowMain
           row={row}
-          displayBody={packPresentation.displayBody}
           isRead={isRead}
-          isNavigable={packPresentation.isNavigable}
+          isNavigable={isNavigable}
           originUnavailability={originUnavailability}
-          packRemote={packPresentation.packRemote}
-          remoteHostLabel={packPresentation.remoteHostLabel}
           onActivate={props.onActivate}
         />
       </NotificationRowWithSecrets>
@@ -315,7 +264,7 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
         <NotificationTimestamp createdAt={row.createdAt} />
         <NotificationRowTrailingControl
           row={row}
-          isNavigable={packPresentation.isNavigable}
+          isNavigable={isNavigable}
           isRead={isRead}
           onAcknowledge={props.onAcknowledge}
         />
@@ -325,181 +274,43 @@ export function NotificationRow(props: NotificationRowProps): ReactNode {
 }
 
 /**
- * Extra content sits UNDER the row's main area and never inside it, because
- * that area is one button when the row is navigable and the extra controls
- * are buttons of their own. Secrets (grant / export), P2's five
- * environment rows and the sandbox notices share this wrapper.
+ * A grant request's card sits UNDER the row's main area and never inside it,
+ * because that area is one button when the row is navigable and the card's
+ * controls are buttons of their own.
  *
  * Every other row gets its main area back untouched, with no wrapper.
  */
 function NotificationRowWithSecrets(props: {
   readonly row: MergedNotificationRow;
-  readonly onActivate: (row: MergedNotificationRow) => void;
   readonly children: ReactNode;
 }): ReactNode {
   const secrets = props.row.secrets ?? null;
-  const environmentDetail = props.row.environmentDetail ?? null;
-  const sandboxNotice = props.row.sandboxNotice ?? null;
-  const hooksRemoved =
-    props.row.hostKind === "notification.hooks.removed" &&
-    props.row.payload !== null;
-  if (
-    secrets === null &&
-    environmentDetail === null &&
-    sandboxNotice === null &&
-    !hooksRemoved
-  )
-    return props.children;
+  if (secrets === null) return props.children;
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-1.5">
       {props.children}
-      {hooksRemoved ? (
-        <div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              props.onActivate(props.row);
-            }}
-          >
-            Review hooks
-          </Button>
-        </div>
-      ) : null}
-      <NotificationSecretsExtra
-        secrets={secrets}
+      <SecretGrantRequestCard
+        detail={secrets}
         resolved={props.row.resolvedAt !== null}
       />
-      {environmentDetail === null ? null : (
-        <EnvironmentNoticeExtra row={props.row} detail={environmentDetail} />
-      )}
-      {sandboxNotice === null ? null : (
-        <SandboxNoticeExtra
-          row={props.row}
-          notice={sandboxNotice}
-          onActivate={props.onActivate}
-        />
-      )}
     </div>
   );
 }
 
-function EnvironmentNoticeExtra(props: {
-  readonly row: MergedNotificationRow;
-  readonly detail: NonNullable<MergedNotificationRow["environmentDetail"]>;
-}): ReactNode {
-  const actions = useMergedNotificationsActions();
-  return (
-    <EnvironmentNotificationExtra
-      detail={props.detail}
-      onSettingsApplied={() => actions.retireNotice(props.row)}
-    />
-  );
-}
-
-/** Details opens the row as activating it does; Dismiss clears it. */
-function SandboxNoticeExtra(props: {
-  readonly row: MergedNotificationRow;
-  readonly notice: NonNullable<MergedNotificationRow["sandboxNotice"]>;
-  readonly onActivate: (row: MergedNotificationRow) => void;
-}): ReactNode {
-  const actions = useMergedNotificationsActions();
-  return (
-    <SandboxNoticeActions
-      notice={props.notice}
-      onDetails={() => props.onActivate(props.row)}
-      onDismiss={() => actions.clear(props.row)}
-      active={props.row.resolvedAt === null}
-      onExtended={() => actions.retireNotice(props.row)}
-    />
-  );
-}
-
-function NotificationSecretsExtra(props: {
-  readonly secrets: MergedNotificationRow["secrets"];
-  readonly resolved: boolean;
-}): ReactNode {
-  const secrets = props.secrets ?? null;
-  if (secrets === null) return null;
-  if (secrets.kind === "grant-request") {
-    return (
-      <SecretGrantRequestCard detail={secrets} resolved={props.resolved} />
-    );
-  }
-  return <SecretExportNoticeLine detail={secrets} />;
-}
-
-/**
- * Whether activating the row goes somewhere: its payload, or for a sandbox
- * push (which has none) the Sandboxes row its key names.
- */
-function rowHasDestination(row: MergedNotificationRow): boolean {
-  return row.payload !== null || sandboxIdOfNotificationRow(row) !== null;
-}
-
-function resolvePackRowPresentation(options: {
-  readonly attribution: MergedNotificationRow["providerPackAttribution"];
-  readonly hasLocalHost: boolean;
-  readonly localHostId: string | null;
-  readonly body: string;
-  readonly hasPayload: boolean;
-}): {
-  readonly locality: ProviderPackNotificationLocality;
-  readonly packRemote: boolean;
-  readonly displayBody: string;
-  readonly isNavigable: boolean;
-  readonly remoteHostLabel: string | null;
-} {
-  const viewing = providerPackViewingLocalityFromShell({
-    hasLocalHost: options.hasLocalHost,
-    localHostId: options.localHostId,
-  });
-  const locality = classifyProviderPackNotificationLocality({
-    attribution: options.attribution,
-    viewing,
-  });
-  return {
-    locality,
-    packRemote: locality === "remote",
-    displayBody: presentProviderPackNotificationBody({
-      body: options.body,
-      attribution: options.attribution,
-      locality,
-    }),
-    isNavigable:
-      options.hasPayload && providerPackNotificationAllowsLocalAction(locality),
-    remoteHostLabel: options.attribution?.hostLabel ?? null,
-  };
-}
-
 function NotificationRowMain(props: {
   readonly row: MergedNotificationRow;
-  readonly displayBody: string;
   readonly isRead: boolean;
   readonly isNavigable: boolean;
   readonly originUnavailability: HostUnavailability | null;
-  readonly packRemote: boolean;
-  readonly remoteHostLabel: string | null;
   readonly onActivate: (row: MergedNotificationRow) => void;
 }): ReactNode {
-  const detail = props.row.environmentDetail ?? null;
-  const body =
-    detail?.kind === "environment_apply_failed" &&
-    detail.sandbox !== null &&
-    detail.sandbox !== undefined ? (
-      <SandboxSettingsFailedRowBody
-        detail={detail}
-        title={props.row.title}
-        isRead={props.isRead}
-      />
-    ) : (
-      <NotificationRowBody
-        title={props.row.title}
-        body={props.displayBody}
-        isRead={props.isRead}
-      />
-    );
+  const body = (
+    <NotificationRowBody
+      title={props.row.title}
+      body={props.row.body}
+      isRead={props.isRead}
+    />
+  );
 
   if (props.isNavigable && props.originUnavailability === null) {
     return (
@@ -513,11 +324,6 @@ function NotificationRowMain(props: {
     );
   }
 
-  const remoteHint =
-    props.remoteHostLabel === null
-      ? "Act on this from that computer — it cannot be applied here."
-      : `Act on this from ${props.remoteHostLabel} — it cannot be applied here.`;
-
   return (
     <div className="min-w-0 flex-1">
       {body}
@@ -529,14 +335,6 @@ function NotificationRowMain(props: {
           The originating host is unavailable.
         </span>
       )}
-      {props.packRemote ? (
-        <span
-          data-testid="notification-pack-remote-hint"
-          className="block text-ui-xs text-muted-foreground"
-        >
-          {remoteHint}
-        </span>
-      ) : null}
     </div>
   );
 }
@@ -599,19 +397,6 @@ function NotificationRowControlButton(
       </button>
     </TooltipWrapper>
   );
-}
-
-/**
- * A sandbox's settings failure: its line follows the sandbox's row now, and
- * its explanation is the card's alone (the body any host formats repeats it).
- */
-function SandboxSettingsFailedRowBody(props: {
-  readonly detail: SandboxApplyFailedDetail;
-  readonly title: string;
-  readonly isRead: boolean;
-}): ReactNode {
-  const title = useSandboxSettingsNoticeTitle(props.detail, props.title);
-  return <NotificationRowBody title={title} body="" isRead={props.isRead} />;
 }
 
 interface NotificationRowBodyProps {
@@ -722,17 +507,13 @@ const SECRET_GLYPH: RowGlyph = {
   icon: KeyRound,
   colorClassName: NEUTRAL_COLOR,
 };
-const TEAM_GLYPH: RowGlyph = { icon: Users, colorClassName: NEUTRAL_COLOR };
 
 /**
- * The fallback glyph of every non-team host kind. A record, so a new kind
- * cannot compile without one.
+ * The fallback glyph of every host kind. A record, so a new kind cannot
+ * compile without one.
  */
 const HOST_KIND_GLYPHS: Record<
-  Exclude<
-    NonNullable<MergedNotificationRow["hostKind"]>,
-    TeamHostNotificationKind
-  >,
+  NonNullable<MergedNotificationRow["hostKind"]>,
   RowGlyph
 > = {
   "agent.stopped": NEUTRAL_BELL,
@@ -749,20 +530,23 @@ const HOST_KIND_GLYPHS: Record<
     icon: NOTIFICATION_STATUS_TONES.browser.Icon,
     colorClassName: NOTIFICATION_STATUS_TONES.browser.className,
   },
-  // A secret is the subject of these rows, whatever the request's state.
+  // A secret is the subject of this row, whatever the request's state.
   "secret.grant.requested": SECRET_GLYPH,
-  "secret.export.minted": SECRET_GLYPH,
-  "secret.rotated": SECRET_GLYPH,
-  "secret.removed": SECRET_GLYPH,
-  // Only reachable for an `info` row: the severity branches above claim a
-  // warning and a destroy.
+  // Never rendered: the merged rows drop the kind.
+  "secret.export.minted": NEUTRAL_BELL,
+  "secret.rotated": NEUTRAL_BELL,
+  "secret.removed": NEUTRAL_BELL,
   "sandbox.notice": NEUTRAL_BELL,
   "notification.hooks.removed": NEUTRAL_BELL,
-  // A change in a team the reader belongs to.
-  "team.role.changed": TEAM_GLYPH,
-  "team.host.returned": TEAM_GLYPH,
-  // Only reachable for an `info` row: the severity branches above claim a
-  // failed move or apply.
+  "team.member.removed": NEUTRAL_BELL,
+  "team.member.joined": NEUTRAL_BELL,
+  "team.policy.unapplied": NEUTRAL_BELL,
+  "team.policy.authority_expired": NEUTRAL_BELL,
+  "team.installing_admin.gone": NEUTRAL_BELL,
+  "team.plan.unlinked": NEUTRAL_BELL,
+  "team.pods.full": NEUTRAL_BELL,
+  "team.role.changed": NEUTRAL_BELL,
+  "team.host.returned": NEUTRAL_BELL,
   "environment.move.stalled": NEUTRAL_BELL,
   "environment.apply.failed": NEUTRAL_BELL,
 };
@@ -771,27 +555,18 @@ const HOST_KIND_GLYPHS: Record<
  * declined to pick one. */
 function hostKindGlyph(hostKind: MergedNotificationRow["hostKind"]): RowGlyph {
   if (hostKind === null) return NEUTRAL_BELL;
-  // A change in a team the reader administers or just joined.
-  if (isTeamHostNotificationKind(hostKind)) return TEAM_GLYPH;
   return HOST_KIND_GLYPHS[hostKind];
 }
 
 /**
- * Host events whose subject is not an agent keep their subject-specific glyph
- * while severity continues to own color. Without this layer, the shared
- * done/failure tones turn every successful or failed host operation into a
- * chat bubble before the host-kind fallback can run.
+ * A failed workspace operation keeps its folder glyph while severity
+ * continues to own color. Without this layer, the shared failure tone turns
+ * it into a chat bubble before the host-kind fallback can run.
  */
 function hostNotificationSemanticIcon(
   row: MergedNotificationRow,
 ): LucideIcon | null {
   if (row.hostKind === "workspace.operation.failed") return FolderX;
-  if (
-    row.hostKind === "host.operation.finished" &&
-    row.payload?.kind === "hostSurface"
-  ) {
-    return Trash2;
-  }
   return null;
 }
 

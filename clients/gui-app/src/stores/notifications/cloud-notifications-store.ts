@@ -6,14 +6,15 @@ import type {
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import {
   hostNotificationsCloudFeedSubscribeServerFrameSchemaV16,
-  isBotThreadVerdictNotification,
-  parseKnownHostNotificationPayloadForKind,
   type HostNotificationsCloudFeedRowV16,
   type HostNotificationsCloudFeedSummary,
   type HostNotificationsEntityRef,
-  type HostNotificationSandboxNoticePayload,
 } from "@traycer/protocol/host/notifications/contracts";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import {
+  isDroppedNotification,
+  notificationSummaryContribution,
+} from "@/lib/notifications/dropped-notification-kinds";
 import { countsTowardEntityUnread } from "@/lib/notifications/unread-count";
 import {
   isReopenableHostStreamClose,
@@ -99,7 +100,6 @@ export interface CloudNotificationsState {
    * reconciles the row, but the common successful mutation never waits on a
    * wake or the relay's correctness poll to look read. */
   markReadLocally(entryId: string, readAt: number): void;
-  resolveNoticeLocally(entryId: string, resolvedAt: number): void;
   /** Optimistically covers the whole raw snapshot summary, including unread
    * entries omitted from `rows` because this client cannot render them. */
   markAllReadLocally(readAt: number): void;
@@ -222,184 +222,50 @@ function rowKey(
 
 /** The relay summary's `attentionCount` predicate (the seam's `needsAttention`). */
 function isUnreadAttention(row: HostNotificationsCloudFeedRowV16): boolean {
-  return (
-    (row.entry.severity === "needs_action" ||
-      row.entry.severity === "failure" ||
-      isBotThreadVerdictNotification(row.entry)) &&
-    row.entry.readAt === null
-  );
+  return notificationSummaryContribution(row.entry).attention === 1;
 }
 
-let cancelSandboxExpiry: (() => void) | null = null;
-
-function sandboxNoticeOf(
-  row: HostNotificationsCloudFeedRowV16,
-): HostNotificationSandboxNoticePayload | null {
-  if (row.entry.kind !== "sandbox.notice") return null;
-  const payload = parseKnownHostNotificationPayloadForKind(
-    row.entry.kind,
-    row.entry.payload,
-  );
-  return payload?.kind === "sandbox_notice" ? payload : null;
+function isDroppedCloudRow(row: HostNotificationsCloudFeedRowV16): boolean {
+  return isDroppedNotification(row.entry, row.entryId);
 }
 
-interface SandboxWarningSupersessionTimes {
-  readonly resting: number;
-  readonly frozen: number;
-}
-
-function sandboxNoticeSupersession(
-  notice: HostNotificationSandboxNoticePayload["notice"],
-): "resting" | "both" | null {
-  switch (notice.kind) {
-    case "manual_rest":
-      return notice.outcome === "confirmed" ? "resting" : null;
-    case "resting_warning":
-    case "frozen":
-    case "frozen_warning":
-    case "resting_destroyed":
-    case "frozen_deleting":
-    case "frozen_destroyed":
-    case "destroyed_by_member":
-    case "lost":
-    case "create_failed":
-      return "both";
-  }
-}
-
-function latestSandboxNoticeTimes(
-  rows: CloudNotificationsState["rows"],
-): ReadonlyMap<string, SandboxWarningSupersessionTimes> {
-  const latest = new Map<string, SandboxWarningSupersessionTimes>();
-  for (const row of Object.values(rows)) {
-    if (row === undefined) continue;
-    const payload = sandboxNoticeOf(row);
-    if (payload === null) continue;
-    const supersession = sandboxNoticeSupersession(payload.notice);
-    if (supersession === null) continue;
-    const previous = latest.get(payload.sandboxId) ?? { resting: 0, frozen: 0 };
-    latest.set(payload.sandboxId, {
-      resting: Math.max(previous.resting, row.entry.updatedAt),
-      frozen:
-        supersession === "both"
-          ? Math.max(previous.frozen, row.entry.updatedAt)
-          : previous.frozen,
-    });
-  }
-  return latest;
-}
-
-function noticeResolvedAt(
-  row: HostNotificationsCloudFeedRowV16 | undefined,
-): number | null {
-  if (
-    row?.entry.kind !== "sandbox.notice" &&
-    row?.entry.kind !== "environment.apply.failed"
-  )
-    return null;
-  return row.entry.resolvedAt ?? null;
-}
-
-/** A resolution is a set-once marker: preserve the earliest observed value. */
-function mergeNoticeResolution(
-  current: number | null,
-  previous: number | null,
-): number | null {
-  if (current === null) return previous;
-  if (previous === null) return current;
-  return Math.min(current, previous);
-}
-
-/** Only a distinct later entry supersedes a warning:
- * resting_warning <- resting_warning, frozen/frozen_warning, confirmed manual_rest, terminal;
- * frozen/frozen_warning <- resting_warning (thawed), frozen/frozen_warning, terminal.
- * Terminal: resting_destroyed, frozen_deleting, frozen_destroyed, destroyed_by_member, lost, create_failed.
- * Failed manual_rest and settings failures never supply supersession evidence. */
-function observedRetirementAt(
-  row: HostNotificationsCloudFeedRowV16,
-  latest: ReadonlyMap<string, SandboxWarningSupersessionTimes>,
-  now: number,
-): number | null {
-  // A later sandbox event does not prove this settings operation applied.
-  if (row.entry.kind === "environment.apply.failed") return null;
-  const payload = sandboxNoticeOf(row);
-  if (payload === null) return null;
-  const times = latest.get(payload.sandboxId);
-  let newer = 0;
-  switch (payload.notice.kind) {
-    case "resting_warning":
-      newer = times?.resting ?? 0;
-      break;
-    case "frozen":
-    case "frozen_warning":
-      newer = times?.frozen ?? 0;
-      break;
-  }
-  // This row's own time cannot pass, including a re-emission of the same id.
-  if (newer > row.entry.updatedAt) return newer;
-  return payload.notice.kind === "resting_warning" &&
-    payload.notice.destroyAt <= now
-    ? payload.notice.destroyAt
-    : null;
-}
-
-/** A later fact or an elapsed deadline retires a warning, even on an old relay
- * that omits resolvedAt. Keep observed retirement through replaying snapshots. */
-function reconcileSandboxNotices(
-  rows: CloudNotificationsState["rows"],
-  held: CloudNotificationsState["rows"],
-  now: number,
-): CloudNotificationsState["rows"] {
-  const latest = latestSandboxNoticeTimes(rows);
-  const next = { ...rows };
-  for (const [key, row] of Object.entries(rows)) {
-    if (
-      row === undefined ||
-      (row.entry.kind !== "sandbox.notice" &&
-        row.entry.kind !== "environment.apply.failed") ||
-      row.entry.severity !== "needs_action"
-    )
+/** The rows this client keeps, and the summary less what the dropped ones
+ * counted, so the bell never counts a row the center will not show. */
+function keptCloudFeed(input: {
+  readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV16>;
+  readonly summary: HostNotificationsCloudFeedSummary;
+}): {
+  readonly rows: ReadonlyArray<HostNotificationsCloudFeedRowV16>;
+  readonly summary: HostNotificationsCloudFeedSummary;
+} {
+  const rows: HostNotificationsCloudFeedRowV16[] = [];
+  let { totalCount, unreadCount, attentionCount } = input.summary;
+  for (const row of input.rows) {
+    if (!isDroppedCloudRow(row)) {
+      rows.push(row);
       continue;
-    const resolvedAt =
-      mergeNoticeResolution(
-        noticeResolvedAt(row),
-        noticeResolvedAt(held[key]),
-      ) ?? observedRetirementAt(row, latest, now);
-    if (resolvedAt !== null) {
-      next[key] = { ...row, entry: { ...row.entry, resolvedAt } };
     }
+    const counted = notificationSummaryContribution(row.entry);
+    totalCount -= 1;
+    unreadCount -= counted.unread;
+    attentionCount -= counted.attention;
   }
-  return next;
-}
-
-function scheduleSandboxNoticeExpiry(): void {
-  cancelSandboxExpiry?.();
-  cancelSandboxExpiry = null;
-  let nextDeadline = Infinity;
-  for (const row of Object.values(useCloudNotificationsStore.getState().rows)) {
-    if (
-      row === undefined ||
-      row.entry.kind !== "sandbox.notice" ||
-      row.entry.severity !== "needs_action" ||
-      (row.entry.resolvedAt ?? null) !== null
-    )
-      continue;
-    const notice = sandboxNoticeOf(row);
-    if (notice?.notice.kind === "resting_warning") {
-      nextDeadline = Math.min(nextDeadline, notice.notice.destroyAt);
-    }
-  }
-  if (!Number.isFinite(nextDeadline)) return;
-  const timer = setTimeout(
-    () => {
-      useCloudNotificationsStore.setState((state) => ({
-        rows: reconcileSandboxNotices(state.rows, state.rows, Date.now()),
-      }));
-      scheduleSandboxNoticeExpiry();
+  return {
+    rows,
+    summary: {
+      totalCount: Math.max(0, totalCount),
+      unreadCount: Math.max(0, unreadCount),
+      attentionCount: Math.max(0, attentionCount),
     },
-    Math.min(2_147_483_647, Math.max(0, nextDeadline - Date.now())),
-  );
-  cancelSandboxExpiry = () => clearTimeout(timer);
+  };
+}
+
+/** The rows a snapshot frame carries that this client keeps: what the
+ * replica remembers, so a seed from it carries the summary it was stored with. */
+function keptCloudFeedRows(
+  rows: ReadonlyArray<HostNotificationsCloudFeedRowV16>,
+): ReadonlyArray<HostNotificationsCloudFeedRowV16> {
+  return rows.filter((row) => !isDroppedCloudRow(row));
 }
 
 export const useCloudNotificationsStore = create<CloudNotificationsState>()(
@@ -420,10 +286,11 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
       if (currentVersion !== null && input.version < currentVersion)
         return null;
       const arrivals: HostNotificationsCloudFeedRowV16[] = [];
+      const kept = keptCloudFeed(input);
       set((state) => {
         const rows: Partial<Record<string, HostNotificationsCloudFeedRowV16>> =
           {};
-        for (const row of input.rows) {
+        for (const row of kept.rows) {
           const key = rowKey(row);
           rows[key] = row;
           if (state.hasSnapshot && state.rows[key] === undefined) {
@@ -431,14 +298,13 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
           }
         }
         return {
-          rows: reconcileSandboxNotices(rows, state.rows, Date.now()),
-          summary: input.summary,
+          rows,
+          summary: kept.summary,
           version: input.version,
           connectionState: "connected",
           hasSnapshot: true,
         };
       });
-      scheduleSandboxNoticeExpiry();
       return arrivals;
     },
     seedFromReplica: (input) => {
@@ -448,16 +314,16 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
           (state.accountId !== null && state.accountId !== input.accountId)
         )
           return state;
+        const kept = keptCloudFeed(input);
         const rows: Partial<Record<string, HostNotificationsCloudFeedRowV16>> =
           {};
-        for (const row of input.rows) rows[rowKey(row)] = row;
+        for (const row of kept.rows) rows[rowKey(row)] = row;
         return {
           accountId: input.accountId,
-          rows: reconcileSandboxNotices(rows, state.rows, Date.now()),
-          summary: input.summary,
+          rows,
+          summary: kept.summary,
         };
       });
-      scheduleSandboxNoticeExpiry();
     },
     revokeReplicaSeed: () => {
       set((state) =>
@@ -466,7 +332,6 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
           ? state
           : { rows: {}, summary: null },
       );
-      scheduleSandboxNoticeExpiry();
     },
     markReadLocally: (entryId, readAt) =>
       set((state) => {
@@ -511,38 +376,6 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
                 },
         };
       }),
-    resolveNoticeLocally: (entryId, resolvedAt) => {
-      const state = get();
-      const key = cloudNotificationFeedId(entryId);
-      const row = state.rows[key];
-      if (
-        row?.entry.kind !== "sandbox.notice" &&
-        row?.entry.kind !== "environment.apply.failed"
-      )
-        return;
-      state.markReadLocally(entryId, resolvedAt);
-      set((current) => {
-        const currentRow = current.rows[key];
-        if (
-          currentRow?.entry.kind !== "sandbox.notice" &&
-          currentRow?.entry.kind !== "environment.apply.failed"
-        )
-          return current;
-        return {
-          rows: {
-            ...current.rows,
-            [key]: {
-              ...currentRow,
-              entry: {
-                ...currentRow.entry,
-                resolvedAt: currentRow.entry.resolvedAt ?? resolvedAt,
-              },
-            },
-          },
-        };
-      });
-      scheduleSandboxNoticeExpiry();
-    },
     beginEntityRead: (entryIds, readAt) =>
       set((state) => {
         const retries = { ...state.entityReadRetries };
@@ -610,8 +443,6 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
             : connectionState,
       })),
     reset: () => {
-      cancelSandboxExpiry?.();
-      cancelSandboxExpiry = null;
       set((state) => ({
         rows: {},
         summary: null,
@@ -711,7 +542,7 @@ export function openCloudNotificationsStream(
             .getState()
             .applySnapshot(parsed.data);
           if (arrivals === null) return;
-          onSnapshot?.({ rows: parsed.data.rows, arrivals });
+          onSnapshot?.({ rows: keptCloudFeedRows(parsed.data.rows), arrivals });
           reopenScheduler.resetBackoff();
           return;
         }

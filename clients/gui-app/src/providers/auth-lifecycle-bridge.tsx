@@ -19,6 +19,8 @@ import { useProviderLinkDialogStore } from "@/stores/providers/provider-link-dia
 import { useWatchHostStore } from "@/stores/host-scope/watch-host-store";
 import { dismissRetainedDraftToasts } from "@/lib/toast/retained-draft-toasts";
 import { retireOnboardingReminder } from "@/lib/toast/onboarding-reminder-toast";
+import { useProfileSyncModalStore } from "@/stores/settings/profile-sync-modal-store";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { clearImagePathForIdentityTeardown } from "@/lib/attachments/image-path-identity-teardown";
 import {
   useAuthIdentityTransition,
@@ -117,9 +119,10 @@ export function EpicSessionLifecycleBridge(
       // host, profile and sign-in flag together; the tab half is separate.
       useProvidersFocusStore.getState().clearFocusHarnessId();
       useProvidersFocusStore.getState().clearFocusTab();
-      // A staged sandbox names the outgoing account's configuration, its
-      // create key and the host it made; account B would otherwise send into
-      // A's team or resubmit A's create.
+      // A composer's staged sandbox names the outgoing account's
+      // configuration, its create key and the host it made; account B would
+      // otherwise send into A's team or resubmit A's create. A send's stage
+      // stays, for its own account's driver alone, like the send below.
       useStagedSandboxStore.getState().clearAll();
       // A message sent to a sandbox is the outgoing account's. Delivered, its
       // ready line goes. Undelivered, it is the message's only copy: it stays
@@ -150,6 +153,14 @@ export function EpicSessionLifecycleBridge(
       // The move reminder survives navigation, but its host belongs to the
       // outgoing identity. Retire the toast and any retained action callback.
       retireOnboardingReminder();
+      // The Sync profiles dialog of a build without environments is mounted
+      // at the app root and survives a switch, so its module-level store is
+      // on this boundary too: left standing, account B would see A's open
+      // dialog - A's profile names and A's captured source host id, which it
+      // would then dial under B's session.
+      if (!UNRELEASED_FEATURES_ENABLED) {
+        useProfileSyncModalStore.getState().close();
+      }
       // Chat/artifact blob-cache keys omit the account. Drop in-memory
       // maps so remount grace cannot join the outgoing fetch, then drop
       // the outgoing IndexedDB partition.

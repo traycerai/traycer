@@ -67,6 +67,22 @@ function resting(
 }
 
 describe("resolveChatSandbox", () => {
+  it("says the final failed-start sentence in the chat slot", () => {
+    const sandbox = sandboxSummaryFixture({
+      displayName: "build-box",
+      state: "failed",
+      failureCode: "boot-timeout",
+      lastTransitionAt: new Date(2026, 9, 25, 11, 1).getTime(),
+    });
+    const view = resolveChatSandbox({ kind: "failed", sandbox }, ROLES[0][1]);
+
+    expect(view.line).toMatchObject({
+      place: "slot",
+      text: "Couldn't start build-box at 11:01 · SBX-0414 · nothing was charged",
+    });
+    expect(view.composer).toEqual({ kind: "line" });
+  });
+
   it.each([
     ["creating", "Starting e2e-sbx-p1 · pending"],
     ["starting", "Starting e2e-sbx-p1 · pending"],

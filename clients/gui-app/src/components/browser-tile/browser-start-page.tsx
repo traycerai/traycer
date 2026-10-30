@@ -7,6 +7,7 @@ import {
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import type { HostResourceScope } from "@traycer/protocol/host/resource-scope";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
 
 interface BrowserStartPageProps {
   readonly scope: HostResourceScope;
@@ -28,7 +29,7 @@ export function BrowserStartPage(props: BrowserStartPageProps) {
   const headingId = useId();
   const client = useHostClientForHostId(props.hostId);
   const hostEntry = useHostDirectoryEntryForHostId(props.hostId);
-  const hostLabel = hostEntry?.label ?? props.hostId;
+  const hostLabel = hostNameFromLabel(hostEntry?.label ?? null, props.hostId);
   const localServersReachable =
     client !== null && (props.browserRunsOnHost || hostEntry?.kind === "local");
   const query = useHostQuery({

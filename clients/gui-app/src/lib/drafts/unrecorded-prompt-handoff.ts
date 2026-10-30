@@ -69,6 +69,7 @@
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
+import type { ReturnedSandbox } from "@/lib/sandboxes/returned-sandbox";
 
 import { sniffImageMimeType } from "@/lib/attachments/image-mime-signature";
 import {
@@ -94,6 +95,7 @@ import { useComposerRunSettingsStore } from "@/stores/composer/composer-run-sett
 import {
   emptyLandingDraftWorkspaceSnapshot,
   useLandingDraftStore,
+  type LandingDraftDurability,
 } from "@/stores/home/landing-draft-store";
 
 /**
@@ -134,9 +136,14 @@ const DROPPED_IMAGE_CLAUSE: Readonly<Record<DroppedImageCause, string>> = {
   unprepared: "it could not be prepared for a draft",
 };
 
+/**
+ * The one draft every install of a handoff lands in. `settings` are the
+ * draft's run settings, or `null` for this window's global run settings, read
+ * at the install.
+ */
 export interface PromptHandoffRecovery {
   readonly draftId: string;
-  readonly settings: ChatRunSettings;
+  readonly settings: ChatRunSettings | null;
 }
 
 /**
@@ -189,8 +196,8 @@ type ImportOutcome =
  *
  * Resolves to the installed draft id (or `null` when the fence refused it)
  * together with `readsSettled` - see {@link PromptHandoffOutcome}. Rejects only
- * if even the text-only fallback cannot be installed, which the caller treats
- * as unrecoverable.
+ * if even the text-only fallback cannot be installed as `durability` asks,
+ * which the caller treats as unrecoverable.
  */
 export async function buildUnrecordedPromptHandoff(args: {
   readonly recovery?: PromptHandoffRecovery;
@@ -205,6 +212,17 @@ export async function buildUnrecordedPromptHandoff(args: {
   readonly reason: string;
   readonly readHashImage: HandoffImageResolver;
   readonly stillCurrent: () => boolean;
+  /**
+   * Where the draft's message goes, or `null`. The draft is created with it,
+   * on every path: a draft listed in Drafts before its image reads settle
+   * already sends there.
+   */
+  readonly returnedSandbox: ReturnedSandbox | null;
+  /**
+   * `"saved"` for a caller that keeps its own saved copy until the draft is
+   * saved; `"in-memory"` for one whose copy is already gone.
+   */
+  readonly durability: LandingDraftDurability;
 }): Promise<PromptHandoffOutcome> {
   // Started BEFORE the race and held afterwards, whichever leg wins. The race
   // bounds how long the handoff waits; it does not cancel anything, so this
@@ -249,6 +267,8 @@ export async function buildUnrecordedPromptHandoff(args: {
         recovery: args.recovery,
         content: raced.result.content,
         stillCurrent: args.stillCurrent,
+        returnedSandbox: args.returnedSandbox,
+        durability: args.durability,
         qualification: teardownQualification({
           reason: args.reason,
           // Inline images whose format the host's writer will not accept are
@@ -411,6 +431,10 @@ export interface TextOnlyPromptHandoffInput {
   readonly reason: string;
   readonly cause: DroppedImageCause;
   readonly stillCurrent: () => boolean;
+  /** Where the draft's message goes, or `null`; the draft is created with it. */
+  readonly returnedSandbox: ReturnedSandbox | null;
+  /** As {@link buildUnrecordedPromptHandoff}'s. */
+  readonly durability: LandingDraftDurability;
 }
 
 export function buildTextOnlyPromptHandoff(
@@ -442,6 +466,8 @@ function installTextOnly(
         recovery: args.recovery,
         content: stripped.content,
         stillCurrent: args.stillCurrent,
+        returnedSandbox: args.returnedSandbox,
+        durability: args.durability,
         qualification: teardownQualification({
           reason: args.reason,
           droppedImages: stripped.dropped,
@@ -472,6 +498,8 @@ function installHandoffDraft(args: {
   readonly content: JsonContent;
   readonly qualification: string;
   readonly stillCurrent: () => boolean;
+  readonly returnedSandbox: ReturnedSandbox | null;
+  readonly durability: LandingDraftDurability;
 }): string | null {
   // SYNCHRONOUS with the install, with no await between them. The fence is
   // about WHO this text belongs to, and the image reads above it are long
@@ -486,16 +514,26 @@ function installHandoffDraft(args: {
     selection: null,
     lastTouchedAt: Date.now(),
     settings:
-      args.recovery === undefined
-        ? useComposerRunSettingsStore
-            .getState()
-            .getGlobalRunSettings(readComposerHostIdSnapshot())
-        : args.recovery.settings,
+      args.recovery?.settings ??
+      useComposerRunSettingsStore
+        .getState()
+        .getGlobalRunSettings(readComposerHostIdSnapshot()),
     composerMode: "chat",
     workspace: emptyLandingDraftWorkspaceSnapshot(),
     closed: true,
+    returnedSandbox: args.returnedSandbox,
+    durability: args.durability,
   });
-  return installed ||
+  if (installed) return draftId;
+  // An existing row under this id counts as the install when it is one the
+  // caller can rely on. In memory, any row is. Saved, only a recovery id's:
+  // that id is the same on every attempt, so its row may be one an earlier
+  // attempt of this recovery installed, and that row is saved, because a
+  // saved install takes back any row storage refused before it throws. A
+  // minted id was never offered before; a false for it installed nothing.
+  const reusable =
+    args.durability === "in-memory" || args.recovery !== undefined;
+  return reusable &&
     useLandingDraftStore.getState().drafts.some((draft) => draft.id === draftId)
     ? draftId
     : null;
