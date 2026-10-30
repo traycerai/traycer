@@ -701,6 +701,9 @@ export const toolCallErroredEventSchema = lazySchema(() =>
     // terminal failure rendered as a plain error.
     terminationReason: z.enum(["error", "stopped"]).default("error"),
     agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    // The post a bot's send wrote before the call failed after it, stamped
+    // as on completion. See `botSendReceiptSchema`.
+    botSendReceipt: botSendReceiptSchema.nullable().optional(),
     backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
     // For detached background command/Monitor failure/stop, this is the SDK
     // task's own start time from BackgroundItem when available.
@@ -710,6 +713,24 @@ export const toolCallErroredEventSchema = lazySchema(() =>
   }),
 );
 export type ToolCallErroredEvent = z.infer<typeof toolCallErroredEventSchema>;
+
+// Wire-freeze copy of `toolCallErroredEventSchema` as every `chat.subscribe`
+// line through `@1.36` ships it: the live event without the `botSendReceipt`
+// stamp. Bound by every frozen runtime-event union. Hand-frozen, NOT derived
+// from the live shape.
+export const toolCallErroredEventSchemaPreBotSendReceipt = lazySchema(() =>
+  z.object({
+    ...baseRuntimeEventFields,
+    type: z.literal("tool_call.errored"),
+    toolName: z.string(),
+    error: z.string(),
+    terminationReason: z.enum(["error", "stopped"]).default("error"),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
+    backgroundStartedAt: z.number().optional(),
+    backgroundTask: z.boolean().optional(),
+  }),
+);
 
 /**
  * Intermediate human progress line for an in-flight tool call (e.g. a long MCP
@@ -2117,7 +2138,7 @@ export const runtimeEventSchemaPreDisplayFacts = lazySchema(() =>
     reasoningCompletedEventSchema,
     toolCallStartedEventSchema,
     toolCallCompletedEventSchemaPreMcpApp,
-    toolCallErroredEventSchema,
+    toolCallErroredEventSchemaPreBotSendReceipt,
     toolCallProgressEventSchema,
     approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,
@@ -2171,7 +2192,7 @@ export const runtimeEventSchemaPreMcpApp = lazySchema(() =>
     reasoningCompletedEventSchema,
     toolCallStartedEventSchema,
     toolCallCompletedEventSchemaPreMcpApp,
-    toolCallErroredEventSchema,
+    toolCallErroredEventSchemaPreBotSendReceipt,
     toolCallProgressEventSchema,
     approvalRequestedEventSchema,
     approvalResolvedEventSchema,
@@ -2224,7 +2245,7 @@ export const runtimeEventSchemaPreBrowser = lazySchema(() =>
     reasoningCompletedEventSchema,
     toolCallStartedEventSchema,
     toolCallCompletedEventSchemaPreMcpApp,
-    toolCallErroredEventSchema,
+    toolCallErroredEventSchemaPreBotSendReceipt,
     toolCallProgressEventSchema,
     approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,
@@ -2286,7 +2307,7 @@ export const runtimeEventSchemaPreImage = lazySchema(() =>
     reasoningCompletedEventSchema,
     toolCallStartedEventSchema,
     toolCallCompletedEventSchemaPreImage,
-    toolCallErroredEventSchema,
+    toolCallErroredEventSchemaPreBotSendReceipt,
     toolCallProgressEventSchema,
     approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,
@@ -2339,7 +2360,7 @@ export const runtimeEventSchemaV12PreInReplyTo = lazySchema(() =>
     reasoningCompletedEventSchema,
     toolCallStartedEventSchema,
     toolCallCompletedEventSchemaPreImage,
-    toolCallErroredEventSchema,
+    toolCallErroredEventSchemaPreBotSendReceipt,
     toolCallProgressEventSchema,
     approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,
@@ -2403,7 +2424,7 @@ export const runtimeEventSchemaPreSettlement = lazySchema(() =>
     reasoningCompletedEventSchema,
     toolCallStartedEventSchema,
     toolCallCompletedEventSchemaPreReceipt,
-    toolCallErroredEventSchema,
+    toolCallErroredEventSchemaPreBotSendReceipt,
     toolCallProgressEventSchema,
     approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,
@@ -2461,7 +2482,7 @@ export const runtimeEventSchemaPreFallback = lazySchema(() =>
     reasoningCompletedEventSchema,
     toolCallStartedEventSchema,
     toolCallCompletedEventSchemaPreMcpApp,
-    toolCallErroredEventSchema,
+    toolCallErroredEventSchemaPreBotSendReceipt,
     toolCallProgressEventSchema,
     approvalRequestedEventSchemaPreDisplayFacts,
     approvalResolvedEventSchema,

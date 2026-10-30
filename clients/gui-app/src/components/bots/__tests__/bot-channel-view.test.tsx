@@ -28,7 +28,10 @@ import type {
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-context";
-import type { BotTranscriptSurface } from "@/components/bots/bot-chat-transcript";
+import type {
+  BotTranscriptLanding,
+  BotTranscriptSurface,
+} from "@/components/bots/bot-chat-transcript";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 interface ThreadListCall {
@@ -174,12 +177,14 @@ vi.mock("@/components/bots/bot-chat-transcript", () => ({
   BotChatTranscript: (props: {
     chatId: string;
     surface: BotTranscriptSurface | null;
+    landOn: BotTranscriptLanding | null;
   }) => {
     const surface = props.surface;
     return (
       <div
         data-testid={`stub-transcript-${surface === null ? "session" : surface.kind}`}
         data-chat-id={props.chatId}
+        data-land-on={props.landOn?.messageId ?? "none"}
         data-answer-threads={
           surface !== null && surface.kind === "channel"
             ? String(surface.answerThreads)
@@ -318,7 +323,10 @@ function PostStub(props: {
   );
 }
 
-import { BotChannelView } from "@/components/bots/bot-channel-view";
+import {
+  BotChannelView,
+  type BotChannelLanding,
+} from "@/components/bots/bot-channel-view";
 import { BotSendFailedNotice } from "@/components/bots/bot-channel-notices";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
 import { threadOpenOf } from "@/lib/bots/bot-trunk-model";
@@ -392,6 +400,9 @@ const QUESTION_1: BotOpenThread = {
   sent: null,
 };
 
+/** Where the next mount lands the channel; `null` for where it opens. */
+let mountLanding: BotChannelLanding | null = null;
+
 function mount(options: MountOptions): {
   readonly onOpenThread: Mock<(open: BotOpenThread | null) => void>;
   readonly onOpenActivity: Mock<() => void>;
@@ -418,7 +429,7 @@ function mount(options: MountOptions): {
             trunkChatId="trunk-chat"
             onOpenTurn={vi.fn()}
             onOpenSession={vi.fn()}
-            landOn={null}
+            landOn={mountLanding}
             openMemory={null}
             onOpenMemory={vi.fn()}
             environmentId="env-1"
@@ -463,6 +474,7 @@ function lastThreadListCall(): ThreadListCall {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mountLanding = null;
   mocks.threadListCalls.length = 0;
   mocks.state.paneVisible = true;
   mocks.state.threadListSupported = true;
@@ -1350,6 +1362,44 @@ describe("<BotChannelView /> open thread", () => {
 
   afterEach(() => {
     useBotPaneWidthsStore.getState().resetWidth("thread");
+  });
+
+  it("lands the open thread's replies on the message of it the tab named, and leaves the channel where it opens", () => {
+    mountLanding = {
+      messageId: "reply-a9",
+      sendPostId: null,
+      threadId: "thread-a",
+      visit: 1,
+    };
+    mount({ openThreadPostId: "post-a" });
+
+    const panel = screen.getByTestId("bot-thread-panel");
+    expect(
+      within(panel)
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on"),
+    ).toBe("reply-a9");
+    expect(
+      screen
+        .getByTestId("stub-transcript-channel")
+        .getAttribute("data-land-on"),
+    ).toBe("none");
+  });
+
+  it("lands no thread on a message the tab named for another thread", () => {
+    mountLanding = {
+      messageId: "reply-b9",
+      sendPostId: null,
+      threadId: "thread-b",
+      visit: 1,
+    };
+    mount({ openThreadPostId: "post-a" });
+
+    expect(
+      within(screen.getByTestId("bot-thread-panel"))
+        .getByTestId("stub-transcript-thread")
+        .getAttribute("data-land-on"),
+    ).toBe("none");
   });
 
   it("reads the thread's chat in the panel and replies into that thread", () => {

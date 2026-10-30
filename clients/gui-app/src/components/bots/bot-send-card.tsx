@@ -217,8 +217,9 @@ function SendPlace(props: {
 
 /**
  * The link to where a send landed: the post it wrote where the host stamped
- * it, else a reply's or question's post in the channel, the thread it went
- * to, or the channel. Nothing outside a bot's session.
+ * it - in the channel, or in its thread, opened on it - else a reply's or
+ * question's post in the channel, the thread it went to, or the channel.
+ * Nothing outside a bot's session.
  */
 function SendLink(props: {
   readonly send: BotSend;
@@ -231,7 +232,8 @@ function SendLink(props: {
   const post = thread === null ? send.receipt : null;
   const go =
     thread !== null
-      ? () => access.openThread(thread.threadId)
+      ? () =>
+          access.openThread(thread.threadId, send.receipt?.messageId ?? null)
       : () => access.openChannel(post?.messageId ?? repliesTo);
   return (
     <Button

@@ -57,8 +57,8 @@ export function BotSessionView(props: {
   readonly onClose: () => void;
   /** Shows the channel, on `messageId` where one is named. */
   readonly onOpenChannel: (messageId: string | null) => void;
-  /** Shows one of the bot's threads beside its channel, by the thread's id. */
-  readonly onOpenThread: (threadId: string) => void;
+  /** Shows one of the bot's threads beside its channel, landed on `messageId` of it where one is named. */
+  readonly onOpenThread: (threadId: string, messageId: string | null) => void;
 }): ReactNode {
   const { botId, hostId, botTitle, session, threads, resolveMember } = props;
   const { onClose, onOpenChannel, onOpenThread } = props;

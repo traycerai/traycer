@@ -25,8 +25,11 @@ export interface BotSessionAccess extends BotSendNames {
   } | null;
   /** Shows the bot's channel, on `messageId` where one is named. */
   readonly openChannel: (messageId: string | null) => void;
-  /** Shows one of the bot's threads beside its channel, by the thread's id. */
-  readonly openThread: (threadId: string) => void;
+  /**
+   * Shows one of the bot's threads beside its channel, by the thread's id,
+   * landed on `messageId` of it where one is named.
+   */
+  readonly openThread: (threadId: string, messageId: string | null) => void;
   /**
    * What a question's card says of each question (T94), read from the post
    * as the channel has loaded it now, for Find; `null` while it has not.

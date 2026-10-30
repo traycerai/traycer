@@ -134,6 +134,51 @@ function channelConversation(
 }
 
 /**
+ * Where the channel lands as it opens: a message of the channel
+ * (`threadId` `null`), or of the listed thread `threadId`, in that thread's
+ * panel beside it.
+ */
+export type BotChannelLanding = BotTranscriptLanding & {
+  readonly threadId: string | null;
+};
+
+/** The landing the channel's own transcript takes: one on a message of the channel. */
+function channelLandingOf(
+  landOn: BotChannelLanding | null,
+): BotTranscriptLanding | null {
+  return landOn !== null && landOn.threadId === null ? landOn : null;
+}
+
+/**
+ * The landing the open thread's panel takes, held from the channel's mount:
+ * one on a message of the listed thread open beside it. Another thread
+ * opened there, or the panel closed (`spend`), spends it.
+ */
+function useThreadPanelLanding(
+  landOn: BotChannelLanding | null,
+  openThreadId: string | null,
+): {
+  readonly landing: BotTranscriptLanding | null;
+  readonly spend: () => void;
+} {
+  const [held, setHeld] = useState(() =>
+    landOn !== null && landOn.threadId !== null ? landOn : null,
+  );
+  if (
+    held !== null &&
+    openThreadId !== null &&
+    openThreadId !== held.threadId
+  ) {
+    setHeld(null);
+  }
+  const spend = useCallback(() => setHeld(null), []);
+  return {
+    landing: held !== null && openThreadId === held.threadId ? held : null,
+    spend,
+  };
+}
+
+/**
  * A bot's channel and its open thread, side by side as Slack lays them out
  * (Tracy Bots, decision 41): members' posts and the bot's announcements at
  * the top level, "Reply in thread" among each row's hover actions and a
@@ -201,8 +246,8 @@ export function BotChannelView(props: {
   readonly onOpenTurn: BotTurnOpen;
   /** Opens one of the bot's sessions in place of the channel: the open thread's, from its panel. */
   readonly onOpenSession: BotSessionOpen;
-  /** A message the channel lands on as it opens; `null` keeps where it opens. */
-  readonly landOn: BotTranscriptLanding | null;
+  /** A message the channel, or the thread open beside it, lands on as it opens; `null` keeps where it opens. */
+  readonly landOn: BotChannelLanding | null;
   /** The bot's memory open beside the channel in the thread's place; `null` for none. */
   readonly openMemory: BotOpenMemory | null;
   readonly onOpenMemory: (open: BotOpenMemory | null) => void;
@@ -412,8 +457,8 @@ export function BotChannelView(props: {
   // each follow a new visit, so the same link followed again lands again. The
   // channel opens where the tab asked it to: it mounts afresh each time a
   // session shown in its place closes.
-  const [landing, setLanding] = useState<BotTranscriptLanding | null>(
-    props.landOn,
+  const [landing, setLanding] = useState<BotTranscriptLanding | null>(() =>
+    channelLandingOf(props.landOn),
   );
   const memoryNavigation = useMemo(
     (): BotMemoryNavigation => ({
@@ -522,6 +567,10 @@ export function BotChannelView(props: {
     openThreadPostId === null
       ? null
       : (threadsByPost.get(openThreadPostId) ?? null);
+  const threadLanding = useThreadPanelLanding(
+    props.landOn,
+    openThread?.threadId ?? null,
+  );
   const { refetch: refetchThreads } = threadList;
   const panelThread = useMemo<BotThreadPanelThread>(() => {
     // A direct reply's thread takes a send while the bot's binding opens it.
@@ -697,7 +746,11 @@ export function BotChannelView(props: {
                 tasks={tasks}
                 anchorSenderLabel={anchorSenderLabel}
                 resolveMember={resolveMember}
-                onClose={() => onOpenThread(null)}
+                landOn={threadLanding.landing}
+                onClose={() => {
+                  threadLanding.spend();
+                  onOpenThread(null);
+                }}
                 onOpenActivity={onOpenActivity}
                 onEditPost={editPostFromThread}
                 onOpenTurn={onOpenTurn}

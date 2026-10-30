@@ -291,7 +291,7 @@ function trunkMessages(): ReadonlyArray<Message> {
 
 const opened = {
   channel: vi.fn<(messageId: string | null) => void>(),
-  thread: vi.fn<(threadId: string) => void>(),
+  thread: vi.fn<(threadId: string, messageId: string | null) => void>(),
   close: vi.fn<() => void>(),
 };
 
@@ -707,7 +707,7 @@ describe("a thread's session, read whole", () => {
       within(reply).getByRole("button", { name: "Open thread" }),
     );
 
-    expect(opened.thread).toHaveBeenCalledWith(THREAD_ID);
+    expect(opened.thread).toHaveBeenCalledWith(THREAD_ID, null);
   });
 });
 
@@ -911,6 +911,55 @@ describe("a send stamped with the post it wrote", () => {
     await user.click(within(reply).getByRole("button", { name: "Open post" }));
 
     expect(opened.channel).toHaveBeenCalledWith(REPLY_POST_ID);
+  });
+
+  it("links a thread's reply to its thread, opened on the post it wrote", async () => {
+    const user = userEvent.setup();
+    mocks.sessions[THREAD_SESSION_ID] = scriptedSession(THREAD_SESSION_ID, [
+      sessionPrompt("prompt-thread", 1_000),
+      botTurn({
+        messageId: "turn-thread-record",
+        turnId: "turn-thread",
+        at: 2_000,
+        blocks: [
+          {
+            ...sendCall({
+              blockId: "send-thread-reply",
+              toolName: "mcp__traycer_a2a__traycer_reply",
+              fields: {
+                conversationId: THREAD_ID,
+                text: REPLY_TEXT,
+                resolvesRequestIds: "[]",
+                options: "null",
+              },
+              error: null,
+              at: 2_000,
+            }),
+            botSendReceipt: {
+              conversationId: THREAD_ID,
+              messageId: REPLY_POST_ID,
+              requestId: null,
+              kind: "reply",
+            },
+          },
+        ],
+      }),
+    ]).handle;
+    mountSession({
+      chatId: THREAD_SESSION_ID,
+      threadId: THREAD_ID,
+      landOn: null,
+      threads: [postThread()],
+      resolveMember: UNRESOLVED_BOT_MEMBERS,
+    });
+    await settleLegendList();
+
+    const [reply] = sendCards();
+    await user.click(
+      within(reply).getByRole("button", { name: "Open thread" }),
+    );
+
+    expect(opened.thread).toHaveBeenCalledWith(THREAD_ID, REPLY_POST_ID);
   });
 
   it("lands on the card of the send that wrote the post it was opened from", async () => {
