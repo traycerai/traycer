@@ -3044,13 +3044,45 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                         "ask",
                                                         "announce"
                                                       ]
+                                                    },
+                                                    "slack": {
+                                                      "default": null,
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "object",
+                                                          "properties": {
+                                                            "channelId": {
+                                                              "type": "string"
+                                                            },
+                                                            "threadTs": {
+                                                              "anyOf": [
+                                                                {
+                                                                  "type": "string"
+                                                                },
+                                                                {
+                                                                  "type": "null"
+                                                                }
+                                                              ]
+                                                            }
+                                                          },
+                                                          "required": [
+                                                            "channelId",
+                                                            "threadTs"
+                                                          ],
+                                                          "additionalProperties": false
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
                                                     }
                                                   },
                                                   "required": [
                                                     "conversationId",
                                                     "messageId",
                                                     "requestId",
-                                                    "kind"
+                                                    "kind",
+                                                    "slack"
                                                   ],
                                                   "additionalProperties": false
                                                 },

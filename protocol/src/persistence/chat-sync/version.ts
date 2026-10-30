@@ -166,7 +166,8 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // on the still-unreleased-minor rule: `host-v1.5.1` ships chat-sync 1.6.
 // Defaulted `null`, so an older record parses unchanged and a block's raw
 // re-emission carries the key through an older reader. No reader floor: an
-// older reader draws the send without the post's state.
+// older reader draws the send without the post's state. The receipt's `slack`
+// (a send posted in Slack, S4b) rides the same minor, defaulted `null`.
 export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 11 } as const;
 
 export type ChatSyncSchemaVersion = typeof CHAT_SYNC_SCHEMA_VERSION;

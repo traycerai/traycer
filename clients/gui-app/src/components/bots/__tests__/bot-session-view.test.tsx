@@ -31,6 +31,8 @@ import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 
 const mocks = vi.hoisted(() => ({
   sessions: {} as Record<string, ChatSessionStoreHandle>,
+  /** The chats a card or row asked the session registry to open, in order. */
+  sessionReads: [] as string[],
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
@@ -40,8 +42,12 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   useChatSessionHandleForContainer: (
     _botId: string,
     chatId: string,
-  ): ChatSessionStoreHandle | null =>
-    Object.hasOwn(mocks.sessions, chatId) ? mocks.sessions[chatId] : null,
+  ): ChatSessionStoreHandle | null => {
+    mocks.sessionReads.push(chatId);
+    return Object.hasOwn(mocks.sessions, chatId)
+      ? mocks.sessions[chatId]
+      : null;
+  },
 }));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => null,
@@ -112,13 +118,15 @@ const BOT_SENDER = {
   inReplyTo: null,
 } as const;
 
+type ToolCallBlock = Extract<ContentBlock, { readonly type: "tool_call" }>;
+
 function sendCall(input: {
   readonly blockId: string;
   readonly toolName: string;
   readonly fields: Readonly<Record<string, string>>;
   readonly error: string | null;
   readonly at: number;
-}): Extract<ContentBlock, { readonly type: "tool_call" }> {
+}): ToolCallBlock {
   return {
     type: "tool_call",
     blockId: input.blockId,
@@ -151,6 +159,15 @@ function sendCall(input: {
     endedAt: input.at,
     imageResults: [],
   };
+}
+
+/** A block as persisted before the receipt had a `slack` member: the key is absent. */
+function withoutSlackKey(block: ToolCallBlock): ContentBlock {
+  const older = structuredClone(block);
+  if (older.botSendReceipt !== null) {
+    Reflect.deleteProperty(older.botSendReceipt, "slack");
+  }
+  return older;
 }
 
 const READ_PATH = "reports/nightly-audit.md";
@@ -370,6 +387,7 @@ function sendCards(): HTMLElement[] {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.sessionReads = [];
   installLegendListViewportMetrics();
   const scene = buildScene();
   const trunk = scriptedSession(TRUNK_ID, trunkMessages());
@@ -729,6 +747,7 @@ describe("a send stamped with the post it wrote", () => {
     messageId: ASK_POST_ID,
     requestId: ASK_REQUEST_ID,
     kind: "ask",
+    slack: null,
   };
   let releaseChannel: (() => void) | null = null;
 
@@ -772,6 +791,18 @@ describe("a send stamped with the post it wrote", () => {
     settlements: ReadonlyArray<BotQuestionSettlement | null>,
     resolveMember: BotMemberResolver,
   ): MountedSession {
+    return mountAskStampedAs(settlements, resolveMember, (call) => ({
+      ...call,
+      botSendReceipt: ASK_RECEIPT,
+    }));
+  }
+
+  /** `mountStampedAsk` with the question's block as `stamped` leaves it. */
+  function mountAskStampedAs(
+    settlements: ReadonlyArray<BotQuestionSettlement | null>,
+    resolveMember: BotMemberResolver,
+    stamped: (call: ToolCallBlock) => ContentBlock,
+  ): MountedSession {
     const channel = scriptedSession(CHANNEL_ID, [questionPost(settlements)]);
     mocks.sessions[CHANNEL_ID] = channel.handle;
     const registry = __getChatSessionRegistryForTests();
@@ -787,8 +818,8 @@ describe("a send stamped with the post it wrote", () => {
         turnId: "turn-stamped-ask",
         at: 4_000,
         blocks: [
-          {
-            ...sendCall({
+          stamped(
+            sendCall({
               blockId: "send-stamped-ask",
               toolName: "mcp__traycer_a2a__traycer_ask",
               fields: {
@@ -805,8 +836,7 @@ describe("a send stamped with the post it wrote", () => {
               error: null,
               at: 4_000,
             }),
-            botSendReceipt: ASK_RECEIPT,
-          },
+          ),
         ],
       }),
     ]).handle;
@@ -956,6 +986,30 @@ describe("a send stamped with the post it wrote", () => {
     ).toEqual(["Open in the channel"]);
   });
 
+  it("draws a question stamped before the receipt had a slack member as a Traycer question: its state read from the post, with the link to it", async () => {
+    mountAskStampedAs(
+      [{ answer: "Keep it", skipped: false, by: { kind: "bot" }, at: 6_000 }],
+      TEAMMATE,
+      (call) => withoutSlackKey({ ...call, botSendReceipt: ASK_RECEIPT }),
+    );
+    await settleLegendList();
+
+    const card = askCard();
+    await waitFor(() =>
+      expect(
+        within(card)
+          .getAllByTestId("bot-send-question-state")
+          .map((state) => state.textContent),
+      ).toEqual(["Settled by Release Bot: Keep it"]),
+    );
+    expect(
+      within(card)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Open in the channel"]);
+    expect(mocks.sessionReads).toContain(CHANNEL_ID);
+  });
+
   it("links a reply to the post it wrote, not the post it follows", async () => {
     const user = userEvent.setup();
     mountOneSend({
@@ -975,6 +1029,7 @@ describe("a send stamped with the post it wrote", () => {
         messageId: REPLY_POST_ID,
         requestId: null,
         kind: "reply",
+        slack: null,
       },
     });
     await settleLegendList();
@@ -1012,6 +1067,7 @@ describe("a send stamped with the post it wrote", () => {
               messageId: REPLY_POST_ID,
               requestId: null,
               kind: "reply",
+              slack: null,
             },
           },
         ],
@@ -1056,6 +1112,7 @@ describe("a send stamped with the post it wrote", () => {
               messageId: REPLY_POST_ID,
               requestId: null,
               kind: "reply",
+              slack: null,
             },
           },
         ],
@@ -1079,5 +1136,201 @@ describe("a send stamped with the post it wrote", () => {
         `[data-message-id="${CHECKIN_PROMPT_ID}"]`,
       )?.dataset.navigationHighlighted,
     ).toBeUndefined();
+  });
+});
+
+describe("a send posted in Slack", () => {
+  const SLACK_CHANNEL = "C0CHAN001";
+  const SLACK_THREAD_TS = "1760000000.000100";
+  const RELAY_ITEM_ID = "00000000-0000-4000-8000-0000000000c1";
+
+  afterEach(() => {
+    useTileFindStore.getState().resetForTests();
+  });
+
+  function slackReceipt(input: {
+    readonly kind: BotSendReceipt["kind"];
+    readonly conversationId: string;
+    readonly threadTs: string | null;
+  }): BotSendReceipt {
+    return {
+      conversationId: input.conversationId,
+      messageId: RELAY_ITEM_ID,
+      requestId: null,
+      kind: input.kind,
+      slack: { channelId: SLACK_CHANNEL, threadTs: input.threadTs },
+    };
+  }
+
+  /** The thread's session with one turn whose only block is `send`. */
+  function mountSlackThread(send: ContentBlock): void {
+    mocks.sessions[THREAD_SESSION_ID] = scriptedSession(THREAD_SESSION_ID, [
+      sessionPrompt("prompt-thread", 1_000),
+      botTurn({
+        messageId: "turn-slack-record",
+        turnId: "turn-slack",
+        at: 2_000,
+        blocks: [send],
+      }),
+    ]).handle;
+    mountSession({
+      chatId: THREAD_SESSION_ID,
+      threadId: THREAD_ID,
+      landOn: null,
+      threads: [postThread()],
+      resolveMember: UNRESOLVED_BOT_MEMBERS,
+    });
+  }
+
+  function slackReply(): ContentBlock {
+    return {
+      ...sendCall({
+        blockId: "send-slack-reply",
+        toolName: "mcp__traycer_a2a__traycer_reply",
+        fields: {
+          conversationId: THREAD_ID,
+          text: REPLY_TEXT,
+          resolvesRequestIds: "[]",
+          options: "null",
+        },
+        error: null,
+        at: 2_000,
+      }),
+      botSendReceipt: slackReceipt({
+        kind: "reply",
+        conversationId: THREAD_ID,
+        threadTs: SLACK_THREAD_TS,
+      }),
+    };
+  }
+
+  it("says where a thread's reply went in Slack, and links to no Traycer post", async () => {
+    mountSlackThread(slackReply());
+    await settleLegendList();
+
+    const [reply] = sendCards();
+    expect(within(reply).getByTestId("bot-send-place").textContent).toBe(
+      `Posted in Slack · in the thread · ${SLACK_CHANNEL}`,
+    );
+    expect(within(reply).getByTestId("bot-send-text").textContent).toBe(
+      REPLY_TEXT,
+    );
+    expect(within(reply).queryByTestId("bot-send-open")).toBeNull();
+    expect(within(reply).queryAllByRole("button")).toEqual([]);
+  });
+
+  it("says where an announcement went in Slack, with no thread", async () => {
+    mountOneSend({
+      ...sendCall({
+        blockId: "send-slack-announce",
+        toolName: "mcp__traycer_a2a__traycer_announce",
+        fields: { kind: "policy", text: "Weekly roster" },
+        error: null,
+        at: 2_000,
+      }),
+      botSendReceipt: slackReceipt({
+        kind: "announce",
+        conversationId: SLACK_CHANNEL,
+        threadTs: null,
+      }),
+    });
+    await settleLegendList();
+
+    const [announcement] = sendCards();
+    expect(within(announcement).getByTestId("bot-send-place").textContent).toBe(
+      `Posted in Slack · ${SLACK_CHANNEL}`,
+    );
+    expect(within(announcement).queryByTestId("bot-send-open")).toBeNull();
+  });
+
+  it("draws a question asked in Slack as its text, claiming no state, and reads no channel post for it", async () => {
+    mountSlackThread({
+      ...sendCall({
+        blockId: "send-slack-ask",
+        toolName: "mcp__traycer_a2a__traycer_ask",
+        fields: {
+          conversationId: THREAD_ID,
+          questions: JSON.stringify([
+            { text: QUESTION_TEXT, options: ["Keep it"], allowFreeText: false },
+          ]),
+        },
+        error: null,
+        at: 2_000,
+      }),
+      botSendReceipt: slackReceipt({
+        kind: "ask",
+        conversationId: THREAD_ID,
+        threadTs: SLACK_THREAD_TS,
+      }),
+    });
+    await settleLegendList();
+
+    const [ask] = sendCards();
+    expect(within(ask).getByTestId("bot-send-question").textContent).toContain(
+      QUESTION_TEXT,
+    );
+    expect(within(ask).queryByTestId("bot-send-question-state")).toBeNull();
+    expect(within(ask).queryAllByRole("button")).toEqual([]);
+    expect(mocks.sessionReads).not.toContain(THREAD_ID);
+  });
+
+  it("draws a send with no slack key, as persisted before the member, as a Traycer post with its link", async () => {
+    const user = userEvent.setup();
+    mountOneSend(
+      withoutSlackKey({
+        ...sendCall({
+          blockId: "send-older-reply",
+          toolName: "mcp__traycer_a2a__traycer_reply",
+          fields: { conversationId: CHANNEL_ID, text: REPLY_TEXT },
+          error: null,
+          at: 2_000,
+        }),
+        botSendReceipt: {
+          conversationId: CHANNEL_ID,
+          messageId: "reply-older",
+          requestId: null,
+          kind: "reply",
+          slack: null,
+        },
+      }),
+    );
+    await settleLegendList();
+
+    const [reply] = sendCards();
+    expect(within(reply).getByTestId("bot-send-place").textContent).toBe(
+      "Replied in the channel",
+    );
+    await user.click(within(reply).getByRole("button", { name: "Open post" }));
+    expect(opened.channel).toHaveBeenCalledWith("reply-older");
+  });
+
+  it("finds the place a send went and the text it posted, as the card paints them", async () => {
+    const user = userEvent.setup();
+    mountSlackThread(slackReply());
+    await settleLegendList();
+
+    // Find paints inside the card's unit, so the unit holds the place line too.
+    const [reply] = sendCards();
+    const unit = reply.closest("[data-chat-find-unit]");
+    expect(unit?.contains(within(reply).getByTestId("bot-send-place"))).toBe(
+      true,
+    );
+    expect(unit?.contains(within(reply).getByTestId("bot-send-text"))).toBe(
+      true,
+    );
+
+    act(() => {
+      useTileFindStore
+        .getState()
+        .openForTile(`bot-session:${THREAD_SESSION_ID}`);
+    });
+    const bar = await within(view()).findByTestId("tile-find-bar");
+    const input = within(bar).getByRole("textbox", { name: "Find in tile" });
+    await user.type(input, "Posted in Slack");
+    await waitFor(() => expect(bar.textContent).toContain("1 of 1"));
+
+    await user.clear(input);
+    await user.type(input, "pool image build");
+    await waitFor(() => expect(bar.textContent).toContain("1 of 1"));
   });
 });

@@ -680,6 +680,7 @@ describe("locateTranscriptRowOrdinal: receipt targets", () => {
         messageId,
         requestId: null,
         kind: "reply",
+        slack: null,
       },
     });
     const first = assistantMessageWithBlocks({
@@ -709,6 +710,104 @@ describe("locateTranscriptRowOrdinal: receipt targets", () => {
     });
 
     expect(skeleton[ordinal]?.rowId).toBe(assistantRowId("turn-reply-2"));
+  });
+
+  it("does not resolve a send posted in Slack, whose receipt names no channel post", () => {
+    const turn = assistantMessageWithBlocks({
+      messageId: "m-slack",
+      timestamp: 70,
+      turnId: "turn-slack",
+      blocks: [
+        {
+          type: "tool_call",
+          blockId: "tc-slack",
+          status: "completed",
+          timestamp: 70,
+          toolName: "mcp__traycer_a2a__traycer_reply",
+          error: null,
+          parentBlockId: null,
+          botSendReceipt: {
+            conversationId: "thread-1",
+            messageId: "relay-item-1",
+            requestId: null,
+            kind: "reply",
+            slack: { channelId: "C0CHAN001", threadTs: "1760000000.000100" },
+          },
+        },
+      ],
+    });
+    const input: TranscriptRowProjectionInput = {
+      messages: [turn],
+      events: [],
+      activeTurnId: null,
+      chatId: "chat-1",
+    };
+
+    expect(
+      locateTranscriptRowOrdinal(
+        { rows: projectTranscriptRows(input), messages: input.messages },
+        { kind: "receipt", messageId: "relay-item-1" },
+      ),
+    ).toBeNull();
+  });
+
+  it("resolves a receipt of an unparsed older block, which carries no slack key", () => {
+    // A caller holding blocks as persisted before the member existed: the
+    // receipt object has no `slack` key at all, which no parse would allow.
+    const older: Message = JSON.parse(`{
+      "role": "assistant",
+      "messageId": "m-older",
+      "sender": {
+        "type": "agent",
+        "harnessId": "claude",
+        "agentId": "agent-1",
+        "displayName": null,
+        "reply": { "expectsReply": false },
+        "inReplyTo": null
+      },
+      "blocks": [
+        {
+          "type": "tool_call",
+          "blockId": "tc-older",
+          "status": "completed",
+          "timestamp": 80,
+          "toolName": "mcp__traycer_a2a__traycer_reply",
+          "error": null,
+          "parentBlockId": null,
+          "agentMessageSend": null,
+          "agentMessageReceipt": null,
+          "imageResults": [],
+          "botSendReceipt": {
+            "conversationId": "channel-1",
+            "messageId": "post-older",
+            "requestId": null,
+            "kind": "reply"
+          }
+        }
+      ],
+      "startedAt": null,
+      "timestamp": 80,
+      "turnId": "turn-older",
+      "usage": null,
+      "reasoningEffort": null,
+      "serviceTier": null,
+      "imageResolutions": []
+    }`);
+    const input: TranscriptRowProjectionInput = {
+      messages: [older],
+      events: [],
+      activeTurnId: null,
+      chatId: "chat-1",
+    };
+    const rows = projectTranscriptRows(input);
+    const skeleton = buildRowSkeleton(input, previewText, null);
+
+    const ordinal = locateOrThrow(rows, input.messages, {
+      kind: "receipt",
+      messageId: "post-older",
+    });
+
+    expect(skeleton[ordinal]?.rowId).toBe(assistantRowId("turn-older"));
   });
 });
 

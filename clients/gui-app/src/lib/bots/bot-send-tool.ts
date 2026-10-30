@@ -124,8 +124,25 @@ export function paintedBotSendOf(call: {
 }
 
 /**
+ * Where a send posted in Slack went, as its card and Find say it (Slack for
+ * Tracy, S4b): "Posted in Slack", "in the thread" for a reply or question
+ * under a thread, and the Slack channel. `null` for a Traycer post and for a
+ * send with no stamp.
+ */
+export function slackSendPlace(send: BotSend): string | null {
+  const slack = send.receipt?.slack ?? null;
+  if (slack === null) return null;
+  return [
+    "Posted in Slack",
+    ...(slack.threadTs === null ? [] : ["in the thread"]),
+    slack.channelId,
+  ].join(" · ");
+}
+
+/**
  * The conversations the stamped questions of `messages` were asked in (T94),
- * sorted: where their states are read from.
+ * sorted: where their states are read from. A question asked in Slack has
+ * no post to read.
  */
 export function askedConversationIds(
   messages: ReadonlyArray<ChatMessage>,
@@ -133,7 +150,11 @@ export function askedConversationIds(
   const ids = new Set<string>();
   for (const message of messages) {
     for (const segment of message.segments) {
-      if (segment.kind === "tool" && segment.botSendReceipt?.kind === "ask") {
+      if (
+        segment.kind === "tool" &&
+        segment.botSendReceipt?.kind === "ask" &&
+        segment.botSendReceipt.slack === null
+      ) {
         ids.add(segment.botSendReceipt.conversationId);
       }
     }
