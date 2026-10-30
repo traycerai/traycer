@@ -412,7 +412,7 @@ function StoppedOpen(props: {
               onOpenPost({
                 anchorMessageId: anchor.messageId,
                 announcement: anchor.startsThread || open.announcement,
-                answer: open.answer,
+                anchorKind: open.anchorKind,
                 sent: null,
               })
             }

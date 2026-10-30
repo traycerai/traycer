@@ -114,7 +114,7 @@ const CHANNEL_SURFACE: BotTranscriptSurface = {
   threadLine: () => null,
   openThread: null,
   openAnnouncementThread: null,
-  answerThreads: false,
+  threadAnchorKinds: [],
   chooseOption: null,
   answerQuestion: null,
   discussQuestion: null,

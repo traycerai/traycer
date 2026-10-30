@@ -69,12 +69,12 @@ export type BotTranscriptSurface =
       readonly threadLine: (postMessageId: string) => ChatBotThreadLine | null;
       /** Opens a post's thread; `null` where threads cannot be opened. */
       readonly openThread: ((postMessageId: string) => void) | null;
-      /** Opens the thread under a question, a proposal, a direct post or, where `answer`, a direct reply; `null` where threads cannot be opened. */
+      /** Opens the thread under a question, a proposal, a direct post or another row of the bot; `null` where threads cannot be opened. */
       readonly openAnnouncementThread:
-        | ((announcementId: string, answer: boolean) => void)
+        | ((announcementId: string, anchorKind: string | null) => void)
         | null;
-      /** Whether a direct reply of the bot opens its own thread. */
-      readonly answerThreads: boolean;
+      /** The rows of the bot its host opens their own thread under. */
+      readonly threadAnchorKinds: readonly string[];
       /** Posts a direct reply's chosen option as a new post; `null` while one is being sent. */
       readonly chooseOption: ((choice: string) => void) | null;
       /** Sends a question card's answer at the channel's top level; `null` where nothing can send it. */
@@ -528,7 +528,7 @@ function BotChatTranscriptBody(props: {
         threadLine: null,
         openThread: null,
         openAnnouncementThread: null,
-        answerThreads: false,
+        threadAnchorKinds: [],
         chooseOption: surface.chooseOption,
         questions,
         failedRequest: surface.failedRequest,
@@ -544,7 +544,7 @@ function BotChatTranscriptBody(props: {
       threadLine: surface.threadLine,
       openThread: surface.openThread,
       openAnnouncementThread: surface.openAnnouncementThread,
-      answerThreads: surface.answerThreads,
+      threadAnchorKinds: surface.threadAnchorKinds,
       chooseOption: surface.chooseOption,
       questions,
       failedRequest: surface.failedRequest,

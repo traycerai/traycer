@@ -551,7 +551,7 @@ function useBotTabSession(args: {
         setOpenThread({
           anchorMessageId: anchor.messageId,
           announcement: false,
-          answer: false,
+          anchorKind: null,
           sent: null,
         });
       }
