@@ -29,7 +29,7 @@ function slackAppQueryOptions(input: {
   readonly userId: string | null;
   readonly botId: string;
   readonly enabled: boolean;
-  /** An install is pending: read on an interval and on focus. */
+  /** An install is pending: read on an interval too. */
   readonly watching: boolean;
 }) {
   const { auth, userId, botId, enabled, watching } = input;
@@ -49,12 +49,15 @@ function slackAppQueryOptions(input: {
     },
     enabled,
     retry: retryTransport,
+    // Slack or another member can change the app at any time, and nothing
+    // tells this client: every mount and every focus reads it again.
+    staleTime: 0,
+    refetchOnWindowFocus: true,
     // While an install is pending: Slack's consent page sends nothing back,
-    // and the person is in their browser, so the read runs on the link-login
-    // watch's cadence with the window in the background, and again on focus.
+    // and the person is in their browser, so the read also runs on the
+    // link-login watch's cadence with the window in the background.
     refetchInterval: watching ? LINK_LOGIN_STATUS_POLL_MS : false,
     refetchIntervalInBackground: watching,
-    refetchOnWindowFocus: watching,
   });
 }
 

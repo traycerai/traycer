@@ -12,6 +12,7 @@ import {
   SettingsGroup,
 } from "@/components/bots/bot-settings-group";
 import {
+  isSlackAccessRefused,
   isSlackNotConfigured,
   SLACK_NOT_AVAILABLE_LINE,
 } from "@/hooks/bots/bot-slack-app-error";
@@ -47,8 +48,10 @@ export function BotSlackSettings(props: { readonly botId: string }): ReactNode {
   const { botId } = props;
   const appQuery = useBotSlackAppQuery(botId);
   const app = appQuery.data;
+  const error = appQuery.error;
+  const accessRefused = isSlackAccessRefused(error);
   let body: ReactNode;
-  if (app === undefined) {
+  if (app === undefined || accessRefused) {
     body = (
       <BotSlackAppUnread
         error={appQuery.error}
@@ -62,9 +65,15 @@ export function BotSlackSettings(props: { readonly botId: string }): ReactNode {
   } else {
     body = <BotSlackRegistered app={app} />;
   }
+  // A read that failed after one succeeded keeps the app the last one read,
+  // and says so under it.
+  const staleError = app !== undefined && !accessRefused ? error : null;
   return (
     <SettingsGroup title="Slack" testId="bot-settings-slack">
       {body}
+      <BotSettingsRefusal
+        message={staleError === null ? null : staleError.message}
+      />
     </SettingsGroup>
   );
 }

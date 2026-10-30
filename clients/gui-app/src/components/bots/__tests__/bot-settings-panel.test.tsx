@@ -239,6 +239,7 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
 });
 
 import { BotChannelSettingsPanel } from "@/components/bots/bot-settings-panel";
+import { createAppQueryClient } from "@/lib/query-client";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotSlackPendingInstallStore } from "@/stores/bots/bot-slack-pending-install-store";
@@ -356,9 +357,7 @@ beforeEach(() => {
   slackOverrides.read = null;
   slackOverrides.manifest = null;
   mocks.binding = { auth: newSlackAuth(slackHost) };
-  queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+  queryClient = createAppQueryClient();
   useBotSlackPendingInstallStore.setState({ entries: {} });
   useAuthStore.setState({
     status: "signed-in",
@@ -1270,6 +1269,44 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
         name: "Install to workspace",
       }),
     ).toBeTruthy();
+  });
+
+  it("replaces a connected app with the refusal when a later read says the person is not a member", async () => {
+    await seedInstalledApp();
+    mountSlackPanel();
+    await screen.findByTestId("bot-settings-slack-connected");
+
+    slackOverrides.read = {
+      kind: "refused",
+      status: 404,
+      code: SLACK_APP_REFUSAL_BOT_NOT_FOUND,
+    };
+    await queryClient.invalidateQueries();
+
+    const refusal = await within(slackGroup()).findByTestId(
+      "bot-settings-refusal",
+    );
+    expect(refusal.textContent).toBe("You can't change this bot's Slack app.");
+    expect(screen.queryByTestId("bot-settings-slack-connected")).toBeNull();
+  });
+
+  it("keeps the last-read app and says the read failed when a later read cannot reach the server", async () => {
+    await seedInstalledApp();
+    mountSlackPanel();
+    await screen.findByTestId("bot-settings-slack-connected");
+
+    slackOverrides.read = { kind: "network-error", detail: "x" };
+    // The hook retries a transport failure twice, on the query client's own
+    // backoff (1 s, then 2 s): the failure shows once those are spent.
+    await queryClient.invalidateQueries();
+
+    const refusal = await within(slackGroup()).findByTestId(
+      "bot-settings-refusal",
+    );
+    expect(refusal.textContent).toBe(
+      "Couldn't read this bot's Slack settings.",
+    );
+    expect(screen.getByTestId("bot-settings-slack-connected")).toBeTruthy();
   });
 
   it("says only that Slack is unavailable on a server without it", async () => {

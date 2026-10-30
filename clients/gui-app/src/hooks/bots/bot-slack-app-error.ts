@@ -33,6 +33,21 @@ export function isSlackNotConfigured(error: Error | null): boolean {
   );
 }
 
+/**
+ * Whether the person can no longer act on the bot's app at all: signed out,
+ * or no longer one of the bot's members. Every control would be refused, so
+ * the panel shows the refusal instead of the app it read before.
+ */
+export function isSlackAccessRefused(error: Error | null): boolean {
+  if (!(error instanceof BotSlackAppError)) return false;
+  const failure = error.failure;
+  return (
+    failure.kind === "unauthorized" ||
+    (failure.kind === "refused" &&
+      failure.code === SLACK_APP_REFUSAL_BOT_NOT_FOUND)
+  );
+}
+
 function slackAppFailureLine(
   failure: SlackAppFailure,
   fallback: string,
