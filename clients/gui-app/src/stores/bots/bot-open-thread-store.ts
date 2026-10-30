@@ -6,24 +6,24 @@ import type {
 
 /**
  * The thread open beside a bot's channel, by the message it hangs off: a
- * member's post, one of the bot's questions or proposals, or one of its
- * direct replies.
+ * member's post, or one of the bot's own rows.
  */
 export interface BotOpenThread {
   readonly anchorMessageId: string;
   /**
    * The thread opens with the first reply under its anchor, sent with the
-   * anchor's id: the bot's question, proposal or direct reply, or a post the
-   * bot answered in the channel (reply mode `direct`). `false` for a post's
-   * own thread.
+   * anchor's id: one of the bot's rows, or a post the bot answered in the
+   * channel (reply mode `direct`). `false` for a post's own thread.
    */
   readonly announcement: boolean;
   /**
-   * The anchor is the bot's direct reply, whose own thread only a bound host
-   * that names it among its thread anchors opens: its box sends only while
-   * the bot's binding does.
+   * The thread anchor (`threadAnchors.kinds`) a bound host must name to
+   * open a thread under the anchor: `"answer"` for the bot's direct reply,
+   * `"message"` for any other row of the bot that is no question or
+   * proposal. Its box sends only while the bot's binding names it. `null`
+   * for a row every host takes a reply under.
    */
-  readonly answer: boolean;
+  readonly anchorKind: string | null;
   /**
    * The person's post that opened the thread as its send was accepted, which
    * the channel knows before the thread list or the channel's own row does.
@@ -49,25 +49,36 @@ export interface BotSentPost {
  * One of the bot's own sessions to open as a read-only chat in place of its
  * channel (Tracy Bots T93): the trunk's (`threadId` `null`) or a thread's,
  * and the message of it the view lands on (`null`: where it opens).
+ * `sendPostId` is a post the session's send wrote (T94): the view lands on
+ * that send's card where the session has one, else on `messageId`.
  */
 export interface BotSessionTarget {
   readonly chatId: string;
   readonly threadId: string | null;
   readonly messageId: string | null;
+  readonly sendPostId: string | null;
 }
 
 /** Opens one of the bot's sessions, read-only, in place of its channel. */
 export type BotSessionOpen = (target: BotSessionTarget) => void;
 
-/** Opens a turn of the bot: its session, landed on the message that started the turn. */
-export type BotTurnOpen = (ref: BotTurnRef) => void;
+/**
+ * Opens a turn of the bot: its session, landed on the message that started
+ * the turn, or on the card of the send that wrote `sendPostId` (`null` for
+ * none).
+ */
+export type BotTurnOpen = (ref: BotTurnRef, sendPostId: string | null) => void;
 
-/** Where a turn of the bot is in its session. */
-export function sessionTargetOfTurn(ref: BotTurnRef): BotSessionTarget {
+/** Where a turn of the bot is in its session, and the post of it to land on. */
+export function sessionTargetOfTurn(
+  ref: BotTurnRef,
+  sendPostId: string | null,
+): BotSessionTarget {
   return {
     chatId: ref.chatId,
     threadId: ref.threadId,
     messageId: ref.userMessageId,
+    sendPostId,
   };
 }
 

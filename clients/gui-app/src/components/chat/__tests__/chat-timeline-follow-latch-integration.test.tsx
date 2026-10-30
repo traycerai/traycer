@@ -1248,6 +1248,50 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     });
   });
 
+  describe("a reader an owned navigation detached with no scroll report", () => {
+    it("stays where the navigation landed them when the end shrinks onto them and the content regrows", async () => {
+      const rowCount = 40;
+      const fullHeight = contentHeightForRowCount(rowCount);
+      setLegendListScrollContainerScrollHeightOverride(fullHeight);
+      const messages = makeMessages(rowCount);
+      const followLatchRef = createRef<ChatTimelineFollowLatch | null>();
+      const { listRef, rerenderMessages } = renderTimeline({
+        messages,
+        followLatchRef,
+      });
+      await settleLegendList();
+
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+
+      // The landing is written without a scroll report of the reader's own.
+      const landedAt = 500;
+      act(() => {
+        followLatchRef.current?.beginOwnedFreeNavigation();
+        node.scrollTop = landedAt;
+        followLatchRef.current?.completeOwnedFreeNavigation();
+      });
+      await settleLegendList();
+
+      // The end shrinks onto the landing, and a report of the clamp follows.
+      setLegendListScrollContainerScrollHeightOverride(
+        landedAt + VIEWPORT_HEIGHT_PX,
+      );
+      fireNativeScroll(node);
+      act(() => {
+        fireAllResizeObservers(() => null);
+      });
+      await settleLegendList();
+
+      // The content regrows past them.
+      setLegendListScrollContainerScrollHeightOverride(fullHeight);
+      rerenderMessages(appendAssistantRows(messages, 2, "regrown"), undefined);
+      await settleLegendList();
+
+      expectPixelStable(node, landedAt);
+    });
+  });
+
   // -----------------------------------------------------------------------
   // 6. A recovering transcript's clamp does not reattach a detached reader
   // -----------------------------------------------------------------------
@@ -1261,7 +1305,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       return node.scrollTop;
     }
 
-    it("stays detached and unmoved through the store's recovery, then reconciles once it lifts", async () => {
+    it("stays detached and unmoved through the store's recovery and after it lifts", async () => {
       const rowCount = 40;
       setLegendListScrollContainerScrollHeightOverride(
         contentHeightForRowCount(rowCount),
@@ -1313,8 +1357,8 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
       expectPixelStable(node, clamped);
 
-      // Recovery lifts while the content still ends at the reader: the next
-      // maintain pass reconciles under the ordinary clamp contract.
+      // Recovery lifts while the content still ends at the reader: the end
+      // met them, so the next maintain pass leaves them where they are.
       recovering = false;
       setLegendListScrollContainerScrollHeightOverride(
         VIEWPORT_HEIGHT_PX + 300,
@@ -1326,7 +1370,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
             : null,
         );
       });
-      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
 
       const next = appendAssistantRows(grown, 1, "after-recovery");
       setLegendListScrollContainerScrollHeightOverride(
@@ -1334,10 +1378,10 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       );
       rerenderMessages(next, undefined);
       await settleLegendList();
-      expectAtTrueEnd(node);
+      expectPixelStable(node, clamped);
     });
 
-    it("holds a structural commit's clamp until its layout settles, then reconciles", async () => {
+    it("stays detached through a structural commit's clamp and after its layout settles", async () => {
       const rowCount = 40;
       setLegendListScrollContainerScrollHeightOverride(
         contentHeightForRowCount(rowCount),
@@ -1363,10 +1407,10 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
         contentHeightForRowCount(shortened.length),
       );
       rerenderMessages(shortened, undefined);
-      clampToEnd(node);
+      const clamped = clampToEnd(node);
 
       // Its layout keeps moving until after the list's own callbacks have
-      // gone quiet: the clamp waits for the content to hold still.
+      // gone quiet.
       const settledHeight = contentHeightForRowCount(shortened.length);
       for (let frame = 0; frame < 20; frame += 1) {
         setLegendListScrollContainerScrollHeightOverride(
@@ -1376,10 +1420,10 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       }
       expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
 
-      // Nothing else fires now; the settle itself reconciles the clamp.
+      // The settle leaves them where the clamp put them.
       setLegendListScrollContainerScrollHeightOverride(settledHeight);
       await settleLegendList();
-      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
 
       const next = appendAssistantRows(shortened, 1, "after-settle");
       setLegendListScrollContainerScrollHeightOverride(
@@ -1387,7 +1431,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       );
       rerenderMessages(next, undefined);
       await settleLegendList();
-      expectAtTrueEnd(node);
+      expectPixelStable(node, clamped);
     });
   });
   // jsdom lays nothing out: these show the patched list announces each write
@@ -1419,7 +1463,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       return { node, list, moves };
     }
 
-    it("announces a visible-content adjustment with where it started, where the end was, where it landed and where it asked for", async () => {
+    it("announces a visible-content adjustment with where it started, where the end was, where it landed, where it asked for and that it wrote the offset", async () => {
       const { node, list, moves } = await mountDetachedAt(1500);
       const end = maxScrollTop(node);
 
@@ -1427,8 +1471,11 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
         list.setVisibleContentAnchorOffset(120);
       });
 
+      // `cause: "offset"`: the list wrote the offset to hold content still as
+      // it grew, so the content came along and a content-relative reference
+      // has already netted this out.
       expect(moves).toEqual([
-        { from: 1500, fromEnd: end, to: 1620, intended: 1620 },
+        { from: 1500, fromEnd: end, to: 1620, intended: 1620, cause: "offset" },
       ]);
     });
 
@@ -1446,6 +1493,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
         fromEnd: end,
         to: end,
         intended: end,
+        cause: "offset",
       });
     });
   });

@@ -5357,6 +5357,7 @@ const BLOCK_HANDLERS: {
     managedCommand: block.managedCommand,
     agentMessageReceipt: absentAsNull(block.agentMessageReceipt),
     agentMessageDelivery: absentAsNull(block.agentMessageDelivery),
+    botSendReceipt: absentAsNull(block.botSendReceipt),
     isStreaming: block.status === "streaming",
     endState: segmentEndState(block.status),
     stopped: block.stopped,

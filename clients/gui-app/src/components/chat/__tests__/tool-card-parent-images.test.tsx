@@ -134,6 +134,7 @@ function toolBlock(
     managedCommand: null,
     agentMessageReceipt: null,
     agentMessageDelivery: null,
+    botSendReceipt: null,
     artifact: null,
     mcpApp: null,
     progress: null,
@@ -283,6 +284,7 @@ describe.each([
         hideReasoning: false,
         queuePauseReasonProtocolSupported: null,
         splitLongTurns: true,
+        botSendQuestionStates: null,
       })[0].units;
       const captionUnit = units.find(
         (unit) =>
@@ -383,6 +385,7 @@ describe.each([
       hideReasoning: false,
       queuePauseReasonProtocolSupported: null,
       splitLongTurns: true,
+      botSendQuestionStates: null,
     })[0].units;
     const captionUnits = units.filter(
       (unit) =>

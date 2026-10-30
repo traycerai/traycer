@@ -679,6 +679,7 @@ import {
   botSubscribeV13,
   botSubscribeV14,
   botSubscribeV15,
+  botSubscribeV16,
   botSurfaceActV10,
   botUpdateRunSettingsV10,
   botUpdateDirectiveV10,
@@ -15746,7 +15747,10 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
       // @1.5 carries what each task's agents wait on a person for
       // (`inputNeeded`) and the subscriber's own card actions in flight
       // (`surfaceActions`, T89); @1.4 is frozen without them.
-      latestMinor: 5,
+      // @1.6 lets a failed turn's reason offer `update-provider` (T71);
+      // @1.1-@1.5 bind activity frozen without it, and the host sends
+      // `none` in its place below 1.6.
+      latestMinor: 6,
       versions: {
         0: {
           contract: botSubscribeV10,
@@ -15765,6 +15769,9 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
         },
         5: {
           contract: botSubscribeV15,
+        },
+        6: {
+          contract: botSubscribeV16,
         },
       },
     },

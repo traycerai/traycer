@@ -113,9 +113,12 @@ vi.mock("@/hooks/bots/use-bot-turn-locate-query", () => ({
   useBotTurnLocateQuery: () => ({ data: undefined }),
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
-  useChatLocateRow: (args: ChatLocateRowArgs) => {
+  useChatLocateRowAnswer: (args: ChatLocateRowArgs) => {
     mocks.locateRow(args);
-    return mocks.state.locatedOrdinal;
+    const ordinal = mocks.state.locatedOrdinal;
+    return ordinal === null
+      ? { status: "waiting" }
+      : { status: "found", ordinal };
   },
 }));
 import {
@@ -331,7 +334,7 @@ describe("a transcript asked to land on a post", () => {
     );
     await settleLegendList();
 
-    landing = { messageId: "ask-1", visit: 1 };
+    landing = { messageId: "ask-1", sendPostId: null, visit: 1 };
     view.rerender();
     await settleLegendList();
     expect(flashing("ask-1")).toBe(true);
@@ -344,7 +347,7 @@ describe("a transcript asked to land on a post", () => {
     });
     expect(flashing("ask-1")).toBe(false);
 
-    landing = { messageId: "ask-1", visit: 2 };
+    landing = { messageId: "ask-1", sendPostId: null, visit: 2 };
     view.rerender();
     await settleLegendList();
     expect(flashing("ask-1")).toBe(true);

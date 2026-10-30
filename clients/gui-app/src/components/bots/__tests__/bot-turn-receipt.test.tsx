@@ -38,6 +38,7 @@ import {
   THREAD_ID,
   THREAD_OPEN,
   THREAD_PROMPT_ID,
+  THREAD_REPLY_ID,
   THREAD_SESSION_ID,
   TOOK,
   TRUNK_ID,
@@ -353,7 +354,12 @@ describe("a receipt opens its turn's session", () => {
     await user.click(await receiptIn(channelList()));
 
     expect(openedSessions).toEqual([
-      { chatId: TRUNK_ID, threadId: null, messageId: REPLY_PROMPT_ID },
+      {
+        chatId: TRUNK_ID,
+        threadId: null,
+        messageId: REPLY_PROMPT_ID,
+        sendPostId: REPLY_ID,
+      },
     ]);
   });
 
@@ -368,6 +374,7 @@ describe("a receipt opens its turn's session", () => {
         chatId: THREAD_SESSION_ID,
         threadId: THREAD_ID,
         messageId: THREAD_PROMPT_ID,
+        sendPostId: THREAD_REPLY_ID,
       },
     ]);
     expect(useBotOpenThreadStore.getState().byBotId[BOT_ID]).toEqual({
@@ -385,7 +392,12 @@ describe("a receipt opens its turn's session", () => {
     );
 
     expect(openedSessions).toEqual([
-      { chatId: THREAD_SESSION_ID, threadId: THREAD_ID, messageId: null },
+      {
+        chatId: THREAD_SESSION_ID,
+        threadId: THREAD_ID,
+        messageId: null,
+        sendPostId: null,
+      },
     ]);
   });
 });
@@ -419,7 +431,12 @@ describe("a long press on a bot's reply on a touch screen", () => {
     await user.click(choice);
 
     expect(openedSessions).toEqual([
-      { chatId: TRUNK_ID, threadId: null, messageId: REPLY_PROMPT_ID },
+      {
+        chatId: TRUNK_ID,
+        threadId: null,
+        messageId: REPLY_PROMPT_ID,
+        sendPostId: REPLY_ID,
+      },
     ]);
   });
 });

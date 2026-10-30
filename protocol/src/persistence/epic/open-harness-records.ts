@@ -51,6 +51,7 @@ import {
   todoBlockSchema,
   toolCallBlockSchema,
   toolCallBlockSchemaPreArtifact,
+  toolCallBlockSchemaPreBotSendReceipt,
   toolCallBlockSchemaPreDelivery,
 } from "@traycer/protocol/persistence/epic/content-blocks";
 import {
@@ -189,7 +190,7 @@ export const openContentBlockSchemaPreNotApplied = lazySchema(() =>
   z.discriminatedUnion("type", [
     openTextBlockSchema,
     reasoningBlockSchema,
-    toolCallBlockSchema,
+    toolCallBlockSchemaPreBotSendReceipt,
     fileChangeBlockSchema,
     commandBlockSchema,
     subAgentBlockSchema,

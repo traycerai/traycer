@@ -702,7 +702,7 @@ describe("the memory in the rail's one slot", () => {
       kind: "thread",
       anchorMessageId: THREAD_OPEN.anchorMessageId,
       announcement: false,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
     expect(screen.queryByTestId("bot-memory-pane")).toBeNull();

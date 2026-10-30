@@ -7,6 +7,7 @@ import type {
   AgentMessageReceipt,
   AgentMessageSend,
   BackgroundTaskOutput,
+  BotSendReceipt,
   ImageGenerationResult,
   ToolCallManagedCommand,
   ToolCallMcpAppStamp,
@@ -86,6 +87,9 @@ interface ToolSegmentProps {
   // Where a cross-host send stands. Non-null adds the offline note or turns
   // the card to not-delivered for the receiving host (`a2aSendDeliveryView`).
   agentMessageDelivery: AgentMessageDelivery | null;
+  // The post a bot's send wrote, stamped at completion. Non-null lets the
+  // send's card read the post's state.
+  botSendReceipt: BotSendReceipt | null;
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-call (else null): drives a neutral
   // "stopped"/"superseded" badge instead of a spinner.

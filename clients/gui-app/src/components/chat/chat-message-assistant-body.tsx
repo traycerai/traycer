@@ -1588,6 +1588,7 @@ export function AssistantSegment({
           managedCommand={segment.managedCommand}
           agentMessageReceipt={segment.agentMessageReceipt}
           agentMessageDelivery={segment.agentMessageDelivery}
+          botSendReceipt={segment.botSendReceipt}
           isStreaming={segment.isStreaming || isBackgroundRunning}
           endState={isBackgroundRunning ? null : segment.endState}
           stopped={segment.stopped}
