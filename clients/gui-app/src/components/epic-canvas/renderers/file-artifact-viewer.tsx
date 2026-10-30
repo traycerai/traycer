@@ -260,10 +260,13 @@ function useCloudDownload(input: {
   )
     return null;
   return async () => {
-    const { data } = await url.refetch({ throwOnError: true });
-    if (data?.kind !== "url") return false;
+    const minted = await url.refetch();
+    // A host that cannot mint a URL may still read the bytes, so the press
+    // falls through to the byte read; a failed refetch keeps an earlier
+    // press's URL in `data`, which must not be reused.
+    if (minted.isError || minted.data?.kind !== "url") return false;
     await downloadUrl({
-      url: data.url,
+      url: minted.data.url,
       name: input.name,
       type: input.object.mediaType,
     });

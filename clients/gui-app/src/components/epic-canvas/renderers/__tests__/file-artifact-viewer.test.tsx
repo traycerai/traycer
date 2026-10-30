@@ -61,6 +61,8 @@ const mocks = vi.hoisted(() => ({
     reason: "missing",
   } as EpicReadArtifactObjectResponse,
   urlRequests: [] as unknown[],
+  // Replaces `urlResponse` for a URL request that fails.
+  urlAnswer: null as (() => Promise<EpicReadArtifactObjectResponse>) | null,
   hostQueryParams: [] as unknown[],
   // What this machine's host answers when the player asks whether it holds
   // the object: a byte means it is on disk, `downloading` means not yet.
@@ -135,7 +137,9 @@ vi.mock("@/hooks/host/use-host-query", async () => {
               : mocks.probeAnswer();
           }
           mocks.urlRequests.push(input.params);
-          return Promise.resolve(mocks.urlResponse);
+          return mocks.urlAnswer === null
+            ? Promise.resolve(mocks.urlResponse)
+            : mocks.urlAnswer();
         },
         retry: false,
         enabled:
@@ -189,6 +193,7 @@ afterEach(() => {
   mocks.hostQuery = null;
   mocks.urlResponse = { kind: "unavailable", reason: "missing" };
   mocks.urlRequests.length = 0;
+  mocks.urlAnswer = null;
   mocks.hostQueryParams.length = 0;
   mocks.probeResponse = {
     kind: "bytes",
@@ -405,6 +410,72 @@ describe("<FileArtifactViewer />", () => {
     ]);
     expect(mocks.downloadBlobToDevice).not.toHaveBeenCalled();
     expect(requests).toEqual([]);
+  });
+
+  it("falls back to reading the bytes through another machine's host when that host cannot mint a URL for the press", async () => {
+    mocks.localHostId = "host-2";
+    const downloadUrl =
+      vi.fn<
+        (request: UrlDownloadRequest) => Promise<SavedFileLocation | null>
+      >();
+    mocks.fileSave = {
+      saveFile: () => Promise.resolve(null),
+      openSavedFile: null,
+      downloadFile: null,
+      saveRoute: "download",
+      downloadUrl,
+    };
+    mocks.urlAnswer = () => Promise.reject(new Error("relay down"));
+    const bytes = Uint8Array.from([6, 7, 8]);
+    const { readSpan } = servingSpan(bytes);
+
+    renderViewer(
+      "data.bin",
+      objectOf(bytes, "a".repeat(64), "application/octet-stream"),
+      readSpan,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+
+    await waitFor(() =>
+      expect(mocks.downloadBlobToDevice).toHaveBeenCalledTimes(1),
+    );
+    expect(mocks.urlRequests).toHaveLength(1);
+    expect(downloadUrl).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("reports a native download that fails after the URL was minted instead of saving the bytes a second time", async () => {
+    mocks.localHostId = "host-2";
+    const downloadUrl =
+      vi.fn<
+        (request: UrlDownloadRequest) => Promise<SavedFileLocation | null>
+      >();
+    downloadUrl.mockRejectedValue(new Error("download interrupted"));
+    mocks.fileSave = {
+      saveFile: () => Promise.resolve(null),
+      openSavedFile: null,
+      downloadFile: null,
+      saveRoute: "download",
+      downloadUrl,
+    };
+    mocks.urlResponse = {
+      kind: "url",
+      url: "https://cdn.example.test/data.bin?sig=dl",
+      expiresAt: Date.now() + 60_000,
+    };
+    const bytes = Uint8Array.from([9, 10, 11]);
+    const { readSpan } = servingSpan(bytes);
+
+    renderViewer(
+      "data.bin",
+      objectOf(bytes, "a".repeat(64), "application/octet-stream"),
+      readSpan,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Download" }));
+
+    await screen.findByRole("alert");
+    expect(downloadUrl).toHaveBeenCalledTimes(1);
+    expect(mocks.downloadBlobToDevice).not.toHaveBeenCalled();
   });
 
   it("downloads an unpublished file on another machine's host through that host, since the cloud has no copy yet", async () => {
