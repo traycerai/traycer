@@ -1053,7 +1053,8 @@ describe("useChatTimelineFollowLatch", () => {
     }
 
     it("does not follow a reader who lifted on an end clamped to them when the tail grows back", () => {
-      const { node, listRef, onFollowIntentChange } = liftedOnAnEndClampedToThem();
+      const { node, listRef, onFollowIntentChange } =
+        liftedOnAnEndClampedToThem();
 
       shim.setGeometry(node, { scrollHeight: 1500 });
       fireResizeObservers();
@@ -1063,7 +1064,8 @@ describe("useChatTimelineFollowLatch", () => {
     });
 
     it("does not follow a reader who lifted on an end clamped to them when the list then moves them", () => {
-      const { node, listRef, onFollowIntentChange } = liftedOnAnEndClampedToThem();
+      const { node, listRef, onFollowIntentChange } =
+        liftedOnAnEndClampedToThem();
 
       // The list moves the view and its end down together and says so, so
       // the lift moves with them and the reader is still standing on it.
@@ -1075,7 +1077,8 @@ describe("useChatTimelineFollowLatch", () => {
     });
 
     it("control: a reader who lifted on an end clamped to them follows the end a row growing in view moves away", () => {
-      const { node, listRef, onFollowIntentChange } = liftedOnAnEndClampedToThem();
+      const { node, listRef, onFollowIntentChange } =
+        liftedOnAnEndClampedToThem();
 
       // A row already on screen grows by 40: the end moves 40 down while
       // the view stands still, and the list writes nothing.
@@ -1094,7 +1097,8 @@ describe("useChatTimelineFollowLatch", () => {
     });
 
     it("does not follow a reader who lifted on an end clamped to them when their view jitters below a pixel", () => {
-      const { node, listRef, onFollowIntentChange } = liftedOnAnEndClampedToThem();
+      const { node, listRef, onFollowIntentChange } =
+        liftedOnAnEndClampedToThem();
 
       // A fractional device pixel ratio settles the view half a pixel on.
       shim.setGeometry(node, { scrollTop: 950.5, scrollHeight: 1500 });
