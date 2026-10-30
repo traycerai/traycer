@@ -6382,18 +6382,45 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         expect(MOCKS.getPublishedProcessIdentityVerdict).not.toHaveBeenCalled();
       });
 
-      it("waits for a host whose parent cannot be read", async () => {
+      it("does not wait for, or start beside, a host whose parent cannot be read", async () => {
+        // The host stands for Desktop's healthy host: it is never killed, so
+        // a wait on it would end only at the 32 s bound and time this test out.
         const host = await publishOrphanHost();
         const calls: RecordedCall[] = [];
-        let hostExitedAtKickstart: boolean | null = null;
         const runner = makeOrphanRunner(calls, {
           parentPid: null,
-          onBootout: () => {
-            setTimeout(() => host.kill("SIGKILL"), 600);
-          },
-          onKickstart: () => {
-            hostExitedAtKickstart = hasExited(host);
-          },
+          onBootout: () => {},
+          onKickstart: () => {},
+        });
+
+        await expect(
+          createMacosController(runner).retireCompetingRegistration(label),
+        ).resolves.toEqual({
+          kind: "removed-host-still-exiting",
+          manifestRemoved: true,
+        });
+
+        expect(calls.filter((call) => call.args[0] === "kickstart")).toEqual(
+          [],
+        );
+        expect(hasExited(host)).toBe(false);
+        expect(MOCKS.getPublishedProcessIdentityVerdict).toHaveBeenCalledTimes(
+          1,
+        );
+      });
+
+      it("retires as usual when a host whose parent cannot be read has already exited", async () => {
+        const host = await publishOrphanHost();
+        const exited = new Promise<void>((resolve) => {
+          host.once("exit", () => resolve());
+        });
+        host.kill("SIGKILL");
+        await exited;
+        const calls: RecordedCall[] = [];
+        const runner = makeOrphanRunner(calls, {
+          parentPid: null,
+          onBootout: () => {},
+          onKickstart: () => {},
         });
 
         await expect(
@@ -6405,7 +6432,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
           agentStartRequested: true,
         });
 
-        expect(hostExitedAtKickstart).toBe(true);
+        expect(calls.filter((call) => call.args[0] === "kickstart")).toHaveLength(
+          1,
+        );
       });
 
       it("does not start Desktop's agent when the host outlives the wait", async () => {

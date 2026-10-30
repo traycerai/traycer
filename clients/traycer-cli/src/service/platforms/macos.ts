@@ -8,6 +8,7 @@ import {
   readHostPidMetadataEvidence,
 } from "../../host/pid-metadata";
 import {
+  observePublishedProcess,
   waitForPublishedProcessExit,
   type PublishedProcess,
 } from "../../host/published-process-exit";
@@ -2417,11 +2418,12 @@ async function probeAgentWedge(
 /**
  * The host this CLI label's own supervisor runs, captured before the bootout.
  * `none` only on positive evidence: the label runs no process, nothing is
- * published, or the published host is another supervisor's child (Desktop's
- * agent's host, which a retirement keeps). A parent that cannot be read
- * counts as the label's: waiting on a host that is in fact gone ends at the
- * first probe. An unreadable `pid.json` leaves a host that may be running and
- * cannot be waited on.
+ * published, the published host is another supervisor's child (Desktop's
+ * agent's host, which a retirement keeps), or it has already exited. Only a
+ * host whose parent IS the job is waited on. A host whose parent cannot be
+ * read, or an unreadable `pid.json`, is `unidentified`: it may be the label's
+ * host or Desktop's, so it is neither waited on (Desktop's would never exit)
+ * nor started beside.
  */
 type RetiredCliHost =
   | { readonly kind: "none" }
@@ -2453,17 +2455,17 @@ async function readRetiredCliHost(
       return null;
     },
   );
-  if (
-    parentPid !== null &&
-    !Number.isNaN(parentPid) &&
-    parentPid !== ownership.pid
-  ) {
-    return { kind: "none" };
-  }
-  return {
-    kind: "published",
-    host: { pid, startIdentity: processStartIdentity },
-  };
+  const host = { pid, startIdentity: processStartIdentity };
+  if (parentPid === ownership.pid) return { kind: "published", host };
+  if (parentPid !== null && !Number.isNaN(parentPid)) return { kind: "none" };
+  // `ps -p` also fails for a pid that no longer runs - a stale `pid.json` -
+  // so one identity read clears a host that is already gone.
+  const seen = await observePublishedProcess(
+    getPublishedProcessIdentityVerdict,
+    host,
+    () => {},
+  );
+  return seen === "gone" ? { kind: "none" } : { kind: "unidentified" };
 }
 
 async function retireCompetingRegistration(
