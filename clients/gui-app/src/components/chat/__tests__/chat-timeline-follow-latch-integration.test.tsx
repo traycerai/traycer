@@ -1261,7 +1261,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       return node.scrollTop;
     }
 
-    it("stays detached and unmoved through the store's recovery, then reconciles once it lifts", async () => {
+    it("stays detached and unmoved through the store's recovery and after it lifts", async () => {
       const rowCount = 40;
       setLegendListScrollContainerScrollHeightOverride(
         contentHeightForRowCount(rowCount),
@@ -1313,8 +1313,8 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
       expectPixelStable(node, clamped);
 
-      // Recovery lifts while the content still ends at the reader: the next
-      // maintain pass reconciles under the ordinary clamp contract.
+      // Recovery lifts while the content still ends at the reader: the end
+      // met them, so the next maintain pass leaves them where they are.
       recovering = false;
       setLegendListScrollContainerScrollHeightOverride(
         VIEWPORT_HEIGHT_PX + 300,
@@ -1326,7 +1326,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
             : null,
         );
       });
-      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
 
       const next = appendAssistantRows(grown, 1, "after-recovery");
       setLegendListScrollContainerScrollHeightOverride(
@@ -1334,10 +1334,10 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       );
       rerenderMessages(next, undefined);
       await settleLegendList();
-      expectAtTrueEnd(node);
+      expectPixelStable(node, clamped);
     });
 
-    it("holds a structural commit's clamp until its layout settles, then reconciles", async () => {
+    it("stays detached through a structural commit's clamp and after its layout settles", async () => {
       const rowCount = 40;
       setLegendListScrollContainerScrollHeightOverride(
         contentHeightForRowCount(rowCount),
@@ -1363,10 +1363,10 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
         contentHeightForRowCount(shortened.length),
       );
       rerenderMessages(shortened, undefined);
-      clampToEnd(node);
+      const clamped = clampToEnd(node);
 
       // Its layout keeps moving until after the list's own callbacks have
-      // gone quiet: the clamp waits for the content to hold still.
+      // gone quiet.
       const settledHeight = contentHeightForRowCount(shortened.length);
       for (let frame = 0; frame < 20; frame += 1) {
         setLegendListScrollContainerScrollHeightOverride(
@@ -1376,10 +1376,10 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       }
       expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
 
-      // Nothing else fires now; the settle itself reconciles the clamp.
+      // The settle leaves them where the clamp put them.
       setLegendListScrollContainerScrollHeightOverride(settledHeight);
       await settleLegendList();
-      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
 
       const next = appendAssistantRows(shortened, 1, "after-settle");
       setLegendListScrollContainerScrollHeightOverride(
@@ -1387,7 +1387,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       );
       rerenderMessages(next, undefined);
       await settleLegendList();
-      expectAtTrueEnd(node);
+      expectPixelStable(node, clamped);
     });
   });
   // jsdom lays nothing out: these show the patched list announces each write

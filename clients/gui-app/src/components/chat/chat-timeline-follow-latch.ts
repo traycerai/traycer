@@ -355,14 +355,6 @@ interface ChatTimelineFollowLatchOptions {
    * `isCorrectionSuppressed`.
    */
   readonly isReattachSuppressed: (() => boolean) | undefined;
-  /**
-   * True while the transcript's latest turn is still running. While it is, a
-   * departed reader the end fell onto stays detached, so its later chunks do
-   * not carry them; once it finishes they follow again
-   * (`reconcileTurnAtRest`), unless a report their departure was published
-   * ahead of has not come.
-   */
-  readonly isTurnRunning: (() => boolean) | undefined;
 }
 
 function readScrollGeometry(node: HTMLElement): ChatTimelineScrollGeometry {
@@ -1012,7 +1004,6 @@ export function useChatTimelineFollowLatch(
     isCorrectionSuppressed,
     resolveSuppressedEndLanding,
     isReattachSuppressed,
-    isTurnRunning,
   } = options;
   const permissionRef = useRef(initialScrollAtEnd);
   const [scrollNode, setScrollNode] = useState<HTMLElement | null>(null);
@@ -1022,7 +1013,7 @@ export function useChatTimelineFollowLatch(
   const readerGestureGenerationRef = useRef(0);
   // Where a reader's own departure stands, until it ends: they follow again,
   // arrive at the end, gesture toward it, or the turn's rest finds them at
-  // the strict bottom. Each report of theirs off the strict bottom moves it
+  // the strict bottom with no report of theirs owed. Each report of theirs off the strict bottom moves it
   // to where they are, so the list clamping its end to meet that offset is
   // not the reader returning, while one past it is. A write the app or the
   // list announces moves it with the view: that write is not the reader
@@ -1031,10 +1022,10 @@ export function useChatTimelineFollowLatch(
   // Whether the departure was published ahead of its gesture's report (the
   // tail moving away from a wheel up no report has followed, or a read
   // seeing a pan before its scroll event), until a report arrives. Only then
-  // may a report of the reader's own still come, so only then does the end
-  // meeting them hold them whether or not the turn runs, its rest included.
-  // A wheel a nested scroller owned may never move the transcript: that
-  // scroller's `scrollend` ends the wait instead (`handleScrollEnd`).
+  // may a report of the reader's own still come, so only then does the turn's
+  // rest leave them held at the strict bottom (`reconcileTurnAtRest`). A wheel
+  // a nested scroller owned may never move the transcript: that scroller's
+  // `scrollend` ends the wait instead (`handleScrollEnd`).
   const departureAwaitsReportRef = useRef<DepartureAwaitingReport>(null);
   const armedReaderDepartureRef = useRef<ArmedReaderDeparture>(null);
   const activeCorrectionRef = useRef<ActiveEndCorrection | null>(null);
@@ -1769,42 +1760,40 @@ export function useChatTimelineFollowLatch(
     [],
   );
 
-  // Whether strict-bottom geometry is the end come to a held reader while the
-  // turn runs: at no greater offset than their departure, so they did not
-  // move toward it. Its later chunks leave them behind; at rest they follow.
-  // Any greater offset is theirs, however small the step: the browser only
-  // lowers the offset (a clamp), and an announced write carries the
-  // departure with it.
-  const endMetHeldReaderMidTurn = useCallback(
+  // Whether strict-bottom geometry is the end come to a departed reader, by
+  // shrinking onto them or clamping them: at no greater offset than their
+  // departure, so they did not move toward it. They stay detached, whether
+  // or not a turn runs: the end may grow back, and only their own scroll or
+  // the jump to the end re-attaches them. Any greater offset is theirs,
+  // however small the step: the browser only lowers the offset (a clamp), and
+  // an announced write carries the departure with it.
+  const endMetDepartedReader = useCallback(
     (geometry: ChatTimelineScrollGeometry): boolean => {
       const departure = readerDepartureScrollTopRef.current;
       return (
         departure !== null &&
         holdsDepartedReaderAtEnd() &&
-        isTurnRunning?.() === true &&
         geometry.scrollTop <= departure
       );
     },
-    [holdsDepartedReaderAtEnd, isTurnRunning],
+    [holdsDepartedReaderAtEnd],
   );
 
-  // Whether this report is the end clamping a departed reader while the turn
-  // runs, which leaves them held. A report at the strict bottom, at no
-  // greater offset than the departure stood at before it, is the end
-  // dropping under the reader (a temporary end pad reset). The departure then
-  // stands where the clamp put them, and the turn's later chunks leave them
-  // behind. Once the turn has finished nothing will, and they follow. One at
-  // a greater offset is the reader arriving, and follows. Any report off the
-  // strict bottom is the reader's own scroll, either way: the departure
-  // stands where it put them, so only an end that comes to them there is the
-  // list's.
+  // Whether this report is the end clamping a departed reader, which leaves
+  // them held. A report at the strict bottom, at no greater offset than the
+  // departure stood at before it, is the end dropping under the reader (a
+  // temporary end pad reset). The departure then stands where the clamp put
+  // them. One at a greater offset is the reader arriving, and follows. Any
+  // report off the strict bottom is the reader's own scroll, either way: the
+  // departure stands where it put them, so only an end that comes to them
+  // there is the list's.
   const noteReportAfterDeparture = useCallback(
     (geometry: ChatTimelineScrollGeometry): boolean => {
       departureAwaitsReportRef.current = null;
       if (isChatTimelineAtStrictBottom(geometry)) {
-        if (!endMetHeldReaderMidTurn(geometry)) {
-          // They arrived, or the turn has finished: they follow, though a
-          // restore may hold that off for now, and nothing holds them later.
+        if (!endMetDepartedReader(geometry)) {
+          // They arrived: they follow, though a restore may hold that off for
+          // now, and nothing holds them later.
           readerDepartureScrollTopRef.current = null;
           return false;
         }
@@ -1817,7 +1806,7 @@ export function useChatTimelineFollowLatch(
       }
       return false;
     },
-    [cancelActiveCorrection, endMetHeldReaderMidTurn],
+    [cancelActiveCorrection, endMetDepartedReader],
   );
 
   // Whether a lifted finger's momentum has reached the end the latest
@@ -1909,8 +1898,8 @@ export function useChatTimelineFollowLatch(
   // has landed: the strict bottom they reach after it, however they reach
   // it, is theirs to follow (`reconcileStrictBottom`). The report is their
   // departure from where it landed, as a following reader's is
-  // (`publishArmedDeparture`), so an end that comes up to them while the turn
-  // runs is the list's (`endMetHeldReaderMidTurn`), and at rest they follow.
+  // (`publishArmedDeparture`), so an end that comes up to them is the list's
+  // (`endMetDepartedReader`).
   const noteFreeReportAway = useCallback(
     (geometry: ChatTimelineScrollGeometry): void => {
       const armedDeparture = armedReaderDepartureRef.current;
@@ -2073,15 +2062,12 @@ export function useChatTimelineFollowLatch(
         cancelActiveCorrection();
         return;
       }
-      if (
-        departureAwaitsReportRef.current !== null
-          ? holdsDepartedReaderAtEnd()
-          : endMetHeldReaderMidTurn(geometry)
-      ) {
+      if (endMetDepartedReader(geometry)) {
         // The end meeting a departed reader (a temporary end pad dropped) is
-        // the list's, not the reader returning: until the report of a
-        // gesture they were departed ahead of, and while the turn runs,
-        // whose later chunks leave them behind. At rest, they follow.
+        // the list's, not the reader returning. The departure stands where
+        // it put them, as at the report of it (`noteReportAfterDeparture`):
+        // that report may come after a write has carried the view on.
+        readerDepartureScrollTopRef.current = geometry.scrollTop;
         cancelActiveCorrection();
         return;
       }
@@ -2106,8 +2092,7 @@ export function useChatTimelineFollowLatch(
     },
     [
       cancelActiveCorrection,
-      endMetHeldReaderMidTurn,
-      holdsDepartedReaderAtEnd,
+      endMetDepartedReader,
       isCorrectionSuppressed,
       isReattachSuppressed,
       reconcileStrictBottom,
