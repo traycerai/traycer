@@ -773,25 +773,30 @@ function readerEndCandidateFor(input: {
  *  so a read is the only observation the arrival has, and a tail growing past
  *  it afterwards would otherwise leave the reader free at an end they
  *  reached. */
+/** Whether the view has reached the end a toward-end gesture was thrown at.
+ *  `unreadable` is not `short`: the end moved by an amount nothing can read
+ *  back, so it can never be judged again and the caller retires it. Keeping
+ *  it would let a row that returns to the size it was - a block collapsed
+ *  and reopened - read as an arrival on the next observation. */
 function readerEndCandidateMet(
   candidate: ReaderEndCandidate | null,
   geometry: ChatTimelineScrollGeometry,
   list: LegendListRef | null,
   readerGestureGeneration: number,
-): boolean {
+): "met" | "short" | "unreadable" {
   if (
     candidate === null ||
     candidate.readerGestureGeneration !== readerGestureGeneration
   ) {
-    return false;
+    return "short";
   }
   const shift = readerEndShift(list, candidate);
-  return (
-    shift !== null &&
-    geometry.scrollTop >=
-      endScrollTopOf(candidate.targetContentEnd, geometry, shift) -
-        CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
-  );
+  if (shift === null) return "unreadable";
+  return geometry.scrollTop >=
+    endScrollTopOf(candidate.targetContentEnd, geometry, shift) -
+      CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
+    ? "met"
+    : "short";
 }
 
 /** The current gesture's end candidate, marked as reached; none for an
@@ -943,18 +948,17 @@ function lastRowSizeOf(
   const state = list.getState();
   const last = state.data.length - 1;
   if (last < 0) return null;
-  // The row the lift recorded, named as `listRowShift` names it: by its
-  // key, or as the row still standing last when the list has re-keyed a
-  // turn in place. A row appended since ends the transcript with content
-  // this gesture was never thrown at, and its size says nothing about the
-  // end that was.
-  if (
-    state.keyAtIndex(last) !== row.key &&
-    state.data.length !== row.rowCount
-  ) {
-    return null;
-  }
-  return state.sizeAtIndex(last);
+  // The row the lift recorded, named as `listRowShift` names it and in the
+  // same order: by its key, and only where the key is gone entirely by the
+  // row standing last under an unchanged count, which is a turn re-keyed in
+  // place. A key still present but no longer last means the transcript ends
+  // below the end this gesture was thrown at, and the row standing there is
+  // not the one to size.
+  if (state.keyAtIndex(last) === row.key) return state.sizeAtIndex(last);
+  const reKeyedInPlace =
+    state.positionByKey(row.key) === undefined &&
+    state.data.length === row.rowCount;
+  return reKeyedInPlace ? state.sizeAtIndex(last) : null;
 }
 
 /** How far the end a gesture was thrown at has moved, and null when that
@@ -1931,15 +1935,14 @@ export function useChatTimelineFollowLatch(
 
   const tryReattachReader = useCallback(
     (node: HTMLElement, geometry: ChatTimelineScrollGeometry): boolean => {
-      if (
-        !readerEndCandidateMet(
-          readerEndCandidateRef.current,
-          geometry,
-          listRef.current,
-          readerGestureGenerationRef.current,
-        ) ||
-        isCorrectionSuppressed?.() === true
-      ) {
+      const met = readerEndCandidateMet(
+        readerEndCandidateRef.current,
+        geometry,
+        listRef.current,
+        readerGestureGenerationRef.current,
+      );
+      if (met === "unreadable") readerEndCandidateRef.current = null;
+      if (met !== "met" || isCorrectionSuppressed?.() === true) {
         return false;
       }
       readerEndCandidateRef.current = null;
@@ -2235,7 +2238,13 @@ export function useChatTimelineFollowLatch(
       // to be here rather than at either caller.
       if (liftAwaitsLandingRef.current) return false;
       const shift = readerEndShift(listRef.current, momentum);
-      if (shift === null) return false;
+      // Unreadable once is unreadable for the rest of the gesture, as the
+      // candidate's `unreadable` is: an end nothing can place does not
+      // become placeable because the row went back to the size it was.
+      if (shift === null) {
+        readerMomentumEndRef.current = null;
+        return false;
+      }
       return (
         geometry.scrollTop >=
           endScrollTopOf(momentum.targetContentEnd, geometry, shift) -
@@ -2451,16 +2460,14 @@ export function useChatTimelineFollowLatch(
    *  the settle that lifts the hold follows it. */
   const followReaderEndArrivalOnRead = useCallback(
     (node: HTMLElement, geometry: ChatTimelineScrollGeometry): boolean => {
-      if (
-        !readerEndCandidateMet(
-          readerEndCandidateRef.current,
-          geometry,
-          listRef.current,
-          readerGestureGenerationRef.current,
-        )
-      ) {
-        return false;
-      }
+      const met = readerEndCandidateMet(
+        readerEndCandidateRef.current,
+        geometry,
+        listRef.current,
+        readerGestureGenerationRef.current,
+      );
+      if (met === "unreadable") readerEndCandidateRef.current = null;
+      if (met !== "met") return false;
       if (!permissionRef.current && isReattachSuppressed?.() === true) {
         readerEndCandidateRef.current = reachedReaderEnd(
           readerEndCandidateRef.current,

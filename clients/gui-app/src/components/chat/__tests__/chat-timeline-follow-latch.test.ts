@@ -3550,6 +3550,49 @@ describe("useChatTimelineFollowLatch", () => {
       expect(listRef.scrollToEnd).not.toHaveBeenCalled();
     });
 
+    it("does not follow when the row the lift read is still there but no longer last", () => {
+      // The list drops a row above and appends one below, so the count is
+      // what it was and the row the lift read is still present - but the
+      // transcript now ends past it. Sizing whichever row stands last
+      // would size a row this gesture was never thrown at, and the two
+      // being the same size is a coincidence, not an answer.
+      const { node, listRef, onFollowIntentChange } =
+        liftedBelowTheEnd("measured");
+
+      listRef.removeRow(FAKE_LAST_ROW_KEY);
+      listRef.setRowTop("appended-row", 1900);
+      listRef.setRowSize("appended-row", 300);
+      shim.setGeometry(node, { scrollTop: 1100, scrollHeight: 2200 });
+      fireResizeObservers();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    it("does not follow a row that goes back to the size the lift read", () => {
+      // A block collapsed and reopened. The end moved by an amount nothing
+      // could read back while it was away, and it does not become readable
+      // again because the number returned: once this gesture's end cannot
+      // be placed, it is not placed again.
+      const { node, listRef, onFollowIntentChange } =
+        liftedBelowTheEnd("measured");
+
+      listRef.setRowSize("unrendered-last-row", 360);
+      shim.setGeometry(node, { scrollTop: 1040, scrollHeight: 1760 });
+      fireResizeObservers();
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      listRef.setRowSize("unrendered-last-row", 300);
+      shim.setGeometry(node, { scrollTop: 1100, scrollHeight: 1700 });
+      fireResizeObservers();
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
     it("control: a reader whose last row the lift did render is not held by its size", () => {
       // The near reader. Their end is tracked by its own block, so a row
       // growing below the tail - the reply streaming on - never reaches
@@ -6533,6 +6576,10 @@ describe("useChatTimelineFollowLatch", () => {
           onFollowIntentChange,
         }),
       );
+      // The list has measured the last row, so the gesture records a size
+      // to compare against; it has rendered no element for it, so the end
+      // is tracked by the row rather than by a tail block.
+      listRef.setRowSize(FAKE_LAST_ROW_KEY, 300);
       node.dispatchEvent(new WheelEvent("wheel", { deltaY: 180 }));
       return { node, listRef, onFollowIntentChange, result };
     }
@@ -6591,14 +6638,35 @@ describe("useChatTimelineFollowLatch", () => {
       const { node, listRef, onFollowIntentChange } = mountDetachedReader();
 
       // The turn takes the server's id in place of its optimistic one: the
-      // same turn, standing where it stood, so the end it recorded is
-      // still an end the reader can be said to reach.
+      // same turn, standing where it stood and as tall as it was, so the
+      // end it recorded is still an end the reader can be said to reach.
       listRef.removeRow(FAKE_LAST_ROW_KEY);
       listRef.setRowTop("server-keyed-last-row", FAKE_LAST_ROW_TOP_PX);
+      listRef.setRowSize("server-keyed-last-row", 300);
       shim.setGeometry(node, { scrollTop: 1000, scrollHeight: 1540 });
       fireNativeScroll(node);
 
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("does not reattach once the end went unreadable, though the row's size came back", () => {
+      // The reattach twin of the momentum case: a block in the last row
+      // collapsed and reopened while the wheel's reader was short of the
+      // end. The end moved by an amount nothing could read back, and the
+      // size returning does not make it readable again.
+      const { node, listRef, onFollowIntentChange } = mountDetachedReader();
+
+      listRef.setRowSize(FAKE_LAST_ROW_KEY, 360);
+      shim.setGeometry(node, { scrollTop: 900, scrollHeight: 1560 });
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+
+      listRef.setRowSize(FAKE_LAST_ROW_KEY, 300);
+      shim.setGeometry(node, { scrollTop: 1000, scrollHeight: 1700 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
     });
 
     it("still reattaches at the old end when only the tail grew", () => {
