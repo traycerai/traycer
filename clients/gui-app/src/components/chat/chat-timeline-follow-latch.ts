@@ -290,6 +290,22 @@ interface ListRowTop {
   readonly rowCount: number;
 }
 
+/** What the list can say about the size of the row a lift recorded. Three
+ *  answers, and `readerEndShift` compares them for equality, so they must
+ *  stay distinct:
+ *
+ *  - a number: the list has measured that row, and this is its size;
+ *  - `undefined`: the list has never measured it, so it has none to give.
+ *    `sizeAtIndex` reads `sizesKnown`, which holds measured rows only, and
+ *    does not fall back to the estimate the row is laid out with;
+ *  - `null`: the row the lift recorded is neither the row standing last nor
+ *    a turn re-keyed in place, so no row here is the one to size.
+ *
+ *  Collapsing `undefined` into `null` would make a lift whose row was never
+ *  measured compare equal once the transcript grows past it, admitting an
+ *  arrival at an end that may have moved. */
+type UnreadRowSize = number | null | undefined;
+
 /** What a gesture's end is tracked by: the block of the content it was
  *  thrown at, or the row that content sits in. Shared by the momentum a
  *  lift records and the candidate a toward-end gesture arms, which read it
@@ -300,7 +316,7 @@ interface ReaderEndTracking {
   /** How tall the list held `lastRow` when there was no tail block to
    *  capture, and null when there was one. A row that is no longer this
    *  tall has moved the end by an amount nothing can read back. */
-  readonly unreadRowSize: number | null;
+  readonly unreadRowSize: UnreadRowSize;
 }
 
 interface ReaderEndCandidate {
@@ -310,7 +326,7 @@ interface ReaderEndCandidate {
   /** As `ReaderMomentumEnd.tailBlock`, for the gesture's end. */
   readonly tailBlock: TailBlock | null;
   /** As `ReaderMomentumEnd.unreadRowSize`, for the gesture's end. */
-  readonly unreadRowSize: number | null;
+  readonly unreadRowSize: UnreadRowSize;
   /** The list's last row when the gesture began, read only when the tail
    *  block cannot be (`tailBlockShift`). Rows above the reader that the list
    *  remeasures since move it, and the list moves the reader with them, so
@@ -340,7 +356,7 @@ interface ReaderMomentumEnd {
   readonly lastRow: ListRowTop | null;
   /** How tall the list held that row at the lift, when it had rendered no
    *  tail block to capture; null when it had. See `readerEndShift`. */
-  readonly unreadRowSize: number | null;
+  readonly unreadRowSize: UnreadRowSize;
   /** Where the view stood at the lift, carried with every announced write
    *  since (`noteScrollerMoved`), so it stays an offset this view can be
    *  read against. Momentum travels from the lift toward the end: a view
@@ -943,7 +959,7 @@ function tailBlockShift(
 function lastRowSizeOf(
   list: LegendListRef | null,
   row: ListRowTop | null,
-): number | null {
+): UnreadRowSize {
   if (list === null || row === null) return null;
   const state = list.getState();
   const last = state.data.length - 1;
@@ -1063,7 +1079,7 @@ function touchReferenceRow(
     index += 1
   ) {
     const top = state.positionAtIndex(index);
-    if (top > geometry.scrollTop) {
+    if (top !== undefined && top > geometry.scrollTop) {
       return {
         key: state.keyAtIndex(index),
         top,
