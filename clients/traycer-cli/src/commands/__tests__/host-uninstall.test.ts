@@ -452,6 +452,40 @@ describe("runHostUninstall", () => {
 
     // The identity probe reads liveness, then the start identity: an exit
     // between the two reads answers `indeterminate` for a dead process.
+    it("keeps waiting for the whole budget when the identity stays indeterminate, then refuses and keeps the install", async () => {
+      const receivedOptions: UninstallHostOptions[] = [];
+      const { deps } = exitingHostDeps({
+        receivedOptions,
+        polls: Array.from({ length: 1_000 }, () => "indeterminate" as const),
+      });
+      let outcome: unknown = null;
+      void runHostUninstallCommand(
+        { all: true, force: false },
+        COMMAND_CONTEXT,
+        deps,
+        testActuators(deps),
+      ).then(
+        () => {
+          outcome = "resolved";
+        },
+        (error: unknown) => {
+          outcome = error;
+        },
+      );
+
+      // Still waiting just before the budget runs out: no early refusal.
+      await vi.advanceTimersByTimeAsync(HOST_EXIT_WAIT_MS - 1);
+      expect(outcome).toBeNull();
+      expect(receivedOptions).toEqual([]);
+
+      // Refused within one poll of the deadline, the install kept.
+      await vi.advanceTimersByTimeAsync(200);
+      expect(outcome).toMatchObject({
+        code: CLI_ERROR_CODES.HOST_UNINSTALL_HOST_RUNNING,
+      });
+      expect(receivedOptions).toEqual([]);
+    });
+
     it("keeps waiting through an indeterminate poll and removes the install once the host is gone", async () => {
       const receivedOptions: UninstallHostOptions[] = [];
       const { deps, probes } = exitingHostDeps({
