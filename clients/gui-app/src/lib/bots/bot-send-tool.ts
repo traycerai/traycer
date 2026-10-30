@@ -2,6 +2,7 @@ import type {
   BotSendReceipt,
   ToolInputDetail,
 } from "@traycer/protocol/persistence/epic/content-blocks";
+import { botSendSlackPlace } from "@traycer/protocol/persistence/epic/bot-send-slack-place";
 import type { BotSurfaceKind } from "@traycer/protocol/persistence/epic/messages";
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
 import {
@@ -124,19 +125,13 @@ export function paintedBotSendOf(call: {
 }
 
 /**
- * Where a send posted in Slack went, as its card and Find say it (Slack for
- * Tracy, S4b): "Posted in Slack", "in the thread" for a reply or question
- * under a thread, and the Slack channel. `null` for a Traycer post and for a
- * send with no stamp.
+ * Where a send posted in Slack went, as its card and Find say it (S4b; see
+ * `botSendSlackPlace`). `null` for a Traycer post and for a send with no
+ * stamp.
  */
 export function slackSendPlace(send: BotSend): string | null {
   const slack = send.receipt?.slack ?? null;
-  if (slack === null) return null;
-  return [
-    "Posted in Slack",
-    ...(slack.threadTs === null ? [] : ["in the thread"]),
-    slack.channelId,
-  ].join(" · ");
+  return slack === null ? null : botSendSlackPlace(slack);
 }
 
 /**
