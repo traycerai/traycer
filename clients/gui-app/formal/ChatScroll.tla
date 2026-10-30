@@ -78,6 +78,7 @@ CONSTANTS
     Minimaps, PhonePicks, Pills, Hides, Remounts, Jumps,
     NestedWheels,       \* wheels over a nested scroller that takes them
     UnscrolledWheels,   \* wheels noted as the transcript's that never scroll it
+    IdleClamp,          \* idle shrink clamps one unit below the view
     Cycles,             \* atomic pad reset/clamp/reopen task
     Pads,               \* the list's one-frame end pad
     TurnEnds,           \* the streaming turn finishing
@@ -176,7 +177,7 @@ ListSaw(x, t) == IF DeferAdjust THEN [x EXCEPT !.ls = t] ELSE x
 \* Fixed ("translate"): the offset a reader's departure was published at
 \* moves with every write the list or the app makes to the view, by as much,
 \* so an anchored adjust cannot make a held reader look returned.
-Tr(x, t) == IF "translate" \in Fixes /\ x.depAt # -1 THEN x.depAt + t - x.s ELSE x.depAt
+Tr(x, t) == IF "translate" \in Fixes /\ x.depAt # -1 THEN x.depAt + t - Clamp(x, x.s) ELSE x.depAt
 
 \* A finger's step is measured net of the list moving the rows with the view
 \* (`rowAtStep`, `edgeAtStep`): where a compensation the list makes moves the
@@ -641,7 +642,7 @@ ReconcileAt(x, native, top, landing) ==
        \* Fixed ("fallen"): while the turn streams, a strict bottom at or under
        \* the offset a reader left the tail at is the end come up to them: they
        \* stay free, re-based there. Above it, they went there and follow.
-       ELSE IF /\ "fallen" \in Fixes /\ x.turn /\ ~x2.perm /\ ~landing
+       ELSE IF /\ "fallen" \in Fixes /\ (x.turn \/ "idlehold" \in Fixes) /\ ~x2.perm /\ ~landing
                /\ x2.depAt # -1 /\ x2.s <= x2.depAt
             THEN [x2 EXCEPT !.depAt = x2.s]
        \* A gesture that cannot move releases its arm here. Before the fix
@@ -704,7 +705,7 @@ Unexplained(x) ==
 \* departure: at or under it mid-turn, the end came to them; above it, they
 \* arrived, and the hold ends before strict-bottom reconciliation follows.
 ReportAfterDeparture(x) ==
-    IF x.depAt = -1 \/ (x.turn /\ AtBottom(x) /\ x.s <= x.depAt) THEN x
+    IF x.depAt = -1 \/ ((x.turn \/ "idlehold" \in Fixes) /\ AtBottom(x) /\ x.s <= x.depAt) THEN x
     \* An arrival forgets the held position even when reattach is suppressed.
     ELSE IF "deprebase" \in Fixes /\ AtBottom(x)
          THEN [x EXCEPT !.depAt = -1, !.depMoved = FALSE]
@@ -751,7 +752,7 @@ ObserveLiveGeometry(x0) ==
     \* #3062's report returns before press/momentum reconciliation when the
     \* streaming end met the held reader. The report still ends its await.
     ELSE IF /\ "deprebase" \in Fixes /\ "fallen" \in Fixes
-            /\ reported.turn /\ ~reported.perm /\ reported.depAt # -1
+            /\ (reported.turn \/ "idlehold" \in Fixes) /\ ~reported.perm /\ reported.depAt # -1
             /\ AtBottom(reported) /\ reported.s <= reported.depAt
          THEN [CancelCorr(reported) EXCEPT !.depAt = reported.s]
     ELSE LET arrived == MomArrived(reported)
@@ -813,8 +814,10 @@ FollowEndIfPermitted(x0) ==
               \* Fixed ("heldgap"): only a departure published ahead of its
               \* gesture's report (`armDepartsOnGrowth`) is held so.
               ELSE IF /\ ~x.perm /\ x.depAt # -1
-                      /\ IF "heldgap" \in Fixes THEN x.depAhead \/ (x.turn /\ x.s <= x.depAt) ELSE ~x.depMoved
-                   THEN CancelCorr(x)
+                      /\ IF "idlehold" \in Fixes THEN x.s <= x.depAt
+                         ELSE IF "heldgap" \in Fixes THEN x.depAhead \/ (x.turn /\ x.s <= x.depAt) ELSE ~x.depMoved
+                   THEN IF "deprebase" \in Fixes /\ "idlehold" \in Fixes
+                        THEN [CancelCorr(x) EXCEPT !.depAt = x.s] ELSE CancelCorr(x)
               ELSE IF ~x.perm /\ ReattachSuppressed(x)
                    THEN [CancelCorr(x) EXCEPT !.cand = Arrived(x)]
               ELSE ReconcileStrictBottom(x, FALSE, x.s)
@@ -1077,7 +1080,7 @@ MountState(store, reg, lo, hi, real, rowsVer, tok) ==
             concealed |-> NoGeo, hydFx |-> TRUE, rowsVer |-> rowsVer, raw |-> raw,
             store |-> store, reg |-> reg,
             known |-> {}, est |-> EST, pend |-> 0, ls |-> 0, jump |-> FALSE, wheelPend |-> 0,
-            pad |-> 0, turn |-> TRUE, depAt |-> -1, depMoved |-> FALSE, depAhead |-> FALSE, depWheel |-> FALSE,
+            idleRestore |-> 0, pad |-> 0, turn |-> TRUE, depAt |-> -1, depMoved |-> FALSE, depAhead |-> FALSE, depWheel |-> FALSE,
             boot |-> IF InitialEnd /\ follow THEN "settling" ELSE "none", runner |-> TRUE]
         s0 == IF follow THEN MaxS(base)
               ELSE IF pendMeas.on THEN Clamp(base, Pos(base, pendMeas.row) - pendMeas.off)
@@ -1188,13 +1191,24 @@ Grow ==
 \* so the browser dispatches no scroll event to decide the departure hold.
 IdleTailShrink ==
     /\ w.mounted /\ ~w.turn /\ Measurable(w) /\ Can("idleShrink")
-    /\ ~w.dragging /\ ~w.finger /\ ~w.dirty /\ w.pad = 0
+    /\ ~w.dragging /\ ~w.finger /\ w.pad = 0
     /\ LET d == MaxS(w) - w.s
-       IN /\ d > 0 /\ w.sz[w.hi] > d /\ InWindow(w, w.hi)
-          /\ w' = FollowEndIfPermitted([w EXCEPT !.real[w.hi] = w.sz[w.hi] - d,
+       IN /\ d > 0 /\ w.sz[w.hi] > d + (IF IdleClamp THEN 1 ELSE 0) /\ InWindow(w, w.hi)
+          /\ w' = FollowEndIfPermitted([w EXCEPT !.real[w.hi] = w.sz[w.hi] - d - (IF IdleClamp THEN 1 ELSE 0),
+                                                 !.idleRestore = w.sz[w.hi],
                                                  !.rowsVer = @ + 1, !.hydFx = TRUE])
     /\ Spend("idleShrink") /\ last' = "IdleTailShrink"
     /\ UNCHANGED <<intent, flags>>
+
+\* The idle row grows back only after its shrink has been measured.
+IdleTailRegrow ==
+    /\ w.mounted /\ ~w.turn /\ Measurable(w)
+    /\ w.idleRestore > 0 /\ w.sz[w.hi] = w.real[w.hi]
+    /\ w' = FollowEndIfPermitted([w EXCEPT !.real[w.hi] = w.idleRestore,
+                                                !.idleRestore = 0,
+                                                !.rowsVer = @ + 1, !.hydFx = TRUE])
+    /\ last' = "IdleTailRegrow"
+    /\ UNCHANGED <<intent, flags, budget>>
 
 \* A new row at the end: a key-sequence change (MVCP data channel, and the
 \* timeline's structural settle holds reattach until layout is still).
@@ -1263,8 +1277,7 @@ Measure(i) ==
           \* A request for the end the latch sees met here is the tail.
           /\ intent' = IF xf.cand.arr /\ ~w.cand.arr THEN Intent("tail", 0, 0)
                        ELSE IF intent.k = "at" /\ AtBottom(x2) /\ (~AtBottom(w) \/ t # want)
-                       THEN IF ~ArmBlocks(w.armed) /\ ~w.turn THEN Intent("tail", 0, 0)
-                            ELSE IF t # want
+                       THEN IF t # want
                             THEN Intent("at", AnchorRow(x2), Pos(x2, AnchorRow(x2)) - t)
                             ELSE intent
                        \* A free reader's landing on the end that the latch has not
@@ -1373,9 +1386,7 @@ PadReset ==
           \* It is the tail only once the turn has finished, and not under a
           \* departure still to report (as for a shrink, in Measure).
           /\ intent' = IF intent.k = "at" /\ t # w.s
-                       THEN IF w.turn \/ ArmBlocks(w.armed)
-                            THEN Intent("at", AnchorRow(x2), Pos(x2, AnchorRow(x2)) - t)
-                            ELSE Intent("tail", 0, 0)
+                       THEN Intent("at", AnchorRow(x2), Pos(x2, AnchorRow(x2)) - t)
                        ELSE intent
     /\ last' = "PadReset"
     /\ UNCHANGED <<flags, budget>>
@@ -1957,7 +1968,7 @@ LedgerNext ==
            ELSE (IF AtBottom(w) THEN w.s ELSE led) + w'.s - w.s
 
 Steps ==
-    \/ Grow \/ IdleTailShrink \/ AppendRow \/ PrependRow \/ \E i \in Rows : Measure(i) \/ AverageJump
+    \/ Grow \/ IdleTailShrink \/ IdleTailRegrow \/ AppendRow \/ PrependRow \/ \E i \in Rows : Measure(i) \/ AverageJump
     \/ SettleFrames \/ StructSettle \/ HydrationEffect \/ ResizeObserved
     \/ PadOpen \/ PadReset \/ PadCycle \/ TurnEnd \/ BootSettle \/ Relayout
     \/ LibReady \/ LibReadyTimeout \/ LibFinish \/ SmoothStep
@@ -2070,9 +2081,15 @@ AbsorbedWheel(x) ==
 \* the end coming up to a reader who held still: held, with the pill, until
 \* the turn rests (M2's price).
 SilentReturn(x) == x.turn /\ silent
+\* The owner's deliberate idle price: the end came to a departed reader,
+\* who keeps their place if it grows back, even with the pill at the end.
+EndCameIdle(x) ==
+    /\ "idlehold" \in Fixes /\ "rawidle" \notin Fixes
+    /\ ~x.turn /\ intent.k = "at" /\ x.depAt # -1 /\ x.s <= x.depAt
+
 EndCameToFree(x) ==
     /\ ~x.perm /\ x.mode = "free" /\ x.pill /\ AtBottom(x)
-    /\ (x.turn /\ intent.k # "tail") \/ AbsorbedWheel(x) \/ SilentReturn(x)
+    /\ (x.turn /\ intent.k # "tail") \/ AbsorbedWheel(x) \/ SilentReturn(x) \/ EndCameIdle(x)
 I_ModeMatchesGeometry ==
     Quiescent(w) => (((w.mode = "follow") = AtBottom(w)) \/ EndCameToFree(w))
 I_PillHonest == Quiescent(w) => ((w.pill = ~AtBottom(w)) \/ EndCameToFree(w))

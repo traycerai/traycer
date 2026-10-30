@@ -13,7 +13,7 @@ BASE = dict(
     Fixes="{}", REST=4, DataAnchored="TRUE", InitialEnd="FALSE", DeferAdjust="FALSE",
     Grows=0, Appends=0, Prepends=0, Wheels=0, Drags=0, Clicks=0, Touches=0,
     Flings=0, Minimaps=0, PhonePicks=0, Pills=0, Hides=0, Remounts=0, Jumps=0, NestedWheels=0,
-    UnscrolledWheels=0, Pads=0, TurnEnds=0, Relayouts=0, IdleShrinks=0, Cycles=0,
+    UnscrolledWheels=0, Pads=0, TurnEnds=0, Relayouts=0, IdleShrinks=0, IdleClamp="FALSE", Cycles=0,
     WheelDirs='{"toward-end", "away-from-end"}', WheelsApart="FALSE", ReportBeforeGrowth="FALSE",
 )
 
@@ -150,6 +150,8 @@ CONFIGS = {
                         dict(Grows=1, Pads=1, TurnEnds=1, Cycles=1, Drags=1)),
     "idle_gap": ("An idle departed reader whom a last-row shrink meets exactly, with no scroll event.",
                  dict(Drags=1, TurnEnds=1, IdleShrinks=1)),
+    "idle_clamp": ("An idle departed reader is clamped, may report there, then the end regrows.",
+                   dict(Grows=1, Drags=1, TurnEnds=1, IdleShrinks=1, IdleClamp="TRUE")),
     "idle_absorbed": ("An absorbed wheel report, growth publishes a departure, then an idle shrink meets the reader without another report.",
                       dict(Grows=1, UnscrolledWheels=1, TurnEnds=1, IdleShrinks=1, ReportBeforeGrowth="TRUE",
                            WheelDirs='{"away-from-end"}')),
@@ -169,7 +171,7 @@ SHIPPED = ["nav", "toward", "restore", "pill", "cancel", "paint", "supersede", "
            "arrive", "live", "hold-init", "fling", "evidence", "nested", "fallen", "depart",
            "keep", "padend", "turnguard", "ledger", "ledgermaint", "translate", "followguard",
            "liftledger", "obsarm", "momstill", "freeland", "freelanddep", "armcarry", "restspend",
-           "deprebase", "heldgap", "pressland", "pressstep", "padannounce"]
+           "deprebase", "heldgap", "pressland", "pressstep", "padannounce", "idlehold"]
 FIXED = "{" + ", ".join(f'"{f}"' for f in SHIPPED) + "}"
 
 # Configs also run with one shipped fix taken out (`_fixed_no<fix>`;
@@ -205,7 +207,8 @@ VARIANTS = {
                  "nodeprebase_nopressland", "noheldgap"],
     "drag_pad": ["nopadannounce", "nodeprebase", "nopressland", "nopressstep", "noarmcarry", "noheldgap"],
     "drag_idle": ["nodeprebase", "nopressland", "nopressstep", "noarmcarry", "noheldgap"],
-    "idle_gap": ["noheldgap"],
+    "idle_gap": ["noheldgap", "noidlehold", "withrawidle"],
+    "idle_clamp": ["noheldgap", "noidlehold", "withrawidle"],
     "idle_absorbed": ["withalwaysawait"],
     "unscrolled_wheel": ["nodepart"],
     "pill": ["noevidence", "nokeep"],

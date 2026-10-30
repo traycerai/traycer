@@ -8,21 +8,31 @@ within small budgets and checks what a reader would notice.
 
 ## Current scope and CI status
 
-`SHIPPED` in `gen-configs.py` models OSS main at `861c57419` (#3081), retaining #3053 row-shift momentum.
-The generated set contains 165 exploration configs. The initial CI run selects
-19 bounded configs explicitly in `expected.py`; it does not claim the final
+`SHIPPED` in `gen-configs.py` models OSS main at `0c9863c3c` (#3079), retaining #3053 row-shift momentum.
+The generated set contains 172 exploration configs. The initial CI run selects
+23 bounded configs explicitly in `expected.py`; it does not claim the final
 full generated matrix has completed. It includes passing shipped configurations
 and failing controls whose invariant sets must remain reproducible.
 
-Pending production changes are deliberately separate: #3079's stay-detached
-idle rule and #3071's tail-block momentum.
-The idle clamp+regrow scenario stays out of CI until #3079 lands. Its accepted
-`EndCameIdle` residue is pending (13-state exact-meet and 17-state clamp
-witnesses), rather than an exception already applied to main. The now-announced pad clamp carries the ledger, departure and press reference
+#3079's `idlehold` keeps a departed reader held when the end meets them,
+exactly or by clamp, at idle as well as mid-turn. A maintenance hold re-bases
+`depAt` under `deprebase`; `depAhead` remains the turn-end guard, and is no
+longer an independent maintenance hold. The idle clamp+regrow scenario is
+now in CI. `EndCameIdle` is the owner's accepted idle geometry/pill price;
+raw controls retain the 13-state exact-meet and 17-state clamp witnesses.
+`noidlehold` preserves the previous idle-follow rule for comparison.
+
+#3081's announced pad clamp carries the ledger, departure and press reference
 by its actual delta before any observer can see regrowth. `PadCycle` represents
-a reset, browser clamp and pad reopen before observation. Stationary-press and
-following controls hold; `drag_pad_fixed_nopadannounce` preserves the prior
-13-state unmoved-press witness.
+an atomic reset, clamp and reopen. Fixed following/press cases hold;
+`drag_pad_fixed_nopadannounce` keeps the prior 13-state unmoved-press witness.
+
+Pending work stays separate: #3071's tail-block momentum and the newer
+contact-reference and owed-departure rules. The model currently seeds a
+changed-to-free mode directly in `LatchSetIntent`, a stronger abstraction
+than main's incomplete navigation/restore publications. That coverage will
+be split into explicit publication and owed state with the pending fix;
+these bounded checks are not evidence that main already handles those paths.
 
 ## What is modelled
 
@@ -84,7 +94,7 @@ the rows the list has mounted (a blank frame) cannot be seen.
 
 `Fixes` switches the client's fixes on. `gen-configs.py` writes every config
 twice: `<name>` is the code before them (`Fixes = {}`), `<name>_fixed` the set
-the client ships (`{"nav", "toward", "restore", "pill", "cancel", "paint", "supersede", "reach", "arrive", "live", "hold-init", "fling", "evidence", "nested", "fallen", "depart", "keep", "padend", "turnguard", "ledger", "ledgermaint", "translate", "followguard", "liftledger", "obsarm", "momstill", "freeland", "freelanddep", "armcarry", "restspend", "deprebase", "heldgap", "pressland", "pressstep", "padannounce"}`).
+the client ships (`{"nav", "toward", "restore", "pill", "cancel", "paint", "supersede", "reach", "arrive", "live", "hold-init", "fling", "evidence", "nested", "fallen", "depart", "keep", "padend", "turnguard", "ledger", "ledgermaint", "translate", "followguard", "liftledger", "obsarm", "momstill", "freeland", "freelanddep", "armcarry", "restspend", "deprebase", "heldgap", "pressland", "pressstep", "padannounce", "idlehold"}`).
 Some configs also run with one of them taken out (`<name>_fixed_no<fix>`;
 `_fixed_nohold` takes out the estimate hold), with a rejected rule added
 (`<name>_fixed_with<rule>`), and the estimate configs with `"hold-init"`
@@ -134,8 +144,9 @@ no arm, and its scroll is corrected back to the end. The shipped turn's end
 keeps an arm no report has followed; `"restspend"` spends one that has
 reported. An awaiting departure also survives after its arm is consumed.
 
-`"heldgap"` follows an idle reader whom the end meets on a maintenance
-read. If their wheel continues, its next report publishes a new departure
+`"idlehold"` (#3079) replaces that idle follow with a hold at or below
+the recorded departure on both paths, rebasing a maintenance hold. The
+turn-end pending-report guard remains `"heldgap"`. If their wheel continues, its next report publishes a new departure
 through the ledger (`publishUnannouncedDeparture`), before any correction.
 A growth publication awaits its gesture's report only while the ledger is
 null; free readers' gestures clear that ledger too. A maintenance or
@@ -317,11 +328,12 @@ change above the anchor, and the next report of a following reader is
 corrected to the end; what made the latch take it for the reader leaving is
 not modelled.
 
-The turn streams from the start: rows grow and arrive only while it does.
-`IdleTailShrink` alone changes content after `TurnEnd`: it shrinks the last
+The turn streams from the start: ordinary rows grow and arrive while it does.
+`IdleTailShrink` and `IdleTailRegrow` also change content after `TurnEnd`: it shrinks the last
 row so its later `Measure` meets an idle reader exactly, with no offset
-change and therefore no scroll event. `idle_gap_fixed_noheldgap` exposes
-the maintenance hold; `idle_gap_fixed` follows from that read.
+change and therefore no scroll event. `idle_gap_fixed` and `noheldgap` both retain that reading position.
+`IdleClamp` takes the shrink one unit lower, then `IdleTailRegrow` permits
+regrowth after measurement; reports may interleave before the regrowth.
 It ends (`TurnEnd`) only at rest, so the last chunk is measured and settled
 by then; a turn that ends mid-flight is left out. Then a free reader at the
 strict bottom is at the tail. While it streams, a free reader the end comes
@@ -377,8 +389,9 @@ around the initial scroll to the end, then the viewport resizes (B6).
 `phone_read_turn` is `phone_read` with the turn's end. `pad_land` checks a
 free reader's landed wheel, the end pad's reset and the turn's end. The
 `drag_pad` and `drag_idle` configs exercise scrollbar departure, repeated
-reports farther away, return drags and end movement. `idle_gap` adds the
-idle exact-meeting shrink; its `noheldgap` variant keeps the old hold.
+reports farther away, return drags and end movement. `idle_gap` adds the idle exact-meeting shrink; `idle_clamp` adds a moving
+clamp and regrowth. Both hold the reading position under `idlehold`;
+`withrawidle` exposes the accepted Mode/Pill price without its exception.
 `idle_absorbed` also supplies an absorbed bottom report before the growth
 publication and idle shrink. Its `ReportBeforeGrowth` constraint requires
 that report before the last row's growth measurement; `withalwaysawait`

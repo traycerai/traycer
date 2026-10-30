@@ -1,4 +1,4 @@
-"""Measured CI subset: main 575a4525e plus #3081 at 861c57419.
+"""Measured CI subset: main 575a4525e plus landed #3081 and #3079 (0c9863c3c).
 
 The remaining generated configs are exploration inputs, pending the full
 matrix after the open latch PRs land. Depth counts states including Init.
@@ -6,6 +6,10 @@ A reason records each expected failing invariant; passing entries omit it.
 """
 
 DEPTH = {
+    "ChatScroll_idle_clamp_fixed": 22,
+    "ChatScroll_idle_clamp_fixed_noheldgap": 22,
+    "ChatScroll_idle_gap_fixed_withrawidle": 18,
+    "ChatScroll_idle_clamp_fixed_withrawidle": 22,
     "ChatScroll_pad_cycle_follow_fixed": 18,
     "ChatScroll_pad_cycle_press_fixed": 18,
     "ChatScroll_drag_pad_fixed": 18,
@@ -39,9 +43,13 @@ VIOLATIONS = {
     "ChatScroll_drag_idle_fixed_nopressstep": {
         "I_IntentHeld": "Without pressstep, a return drag is hidden by its original press offset and corrected (18-state witness; earlier run 17).",
     },
-    "ChatScroll_idle_gap_fixed_noheldgap": {
-        "I_ModeMatchesGeometry": "The old maintenance hold strands an idle reader the end meets exactly (13-state witness).",
-        "I_PillHonest": "The same exact idle meet leaves the pill at the bottom (13-state witness).",
+    "ChatScroll_idle_gap_fixed_withrawidle": {
+        "I_ModeMatchesGeometry": "EndCameIdle exact-meet price: detached at the bottom (13-state raw witness).",
+        "I_PillHonest": "EndCameIdle exact-meet price: the pill remains at the bottom (13-state raw witness).",
+    },
+    "ChatScroll_idle_clamp_fixed_withrawidle": {
+        "I_ModeMatchesGeometry": "EndCameIdle clamp price: detached at the bottom (17-state raw witness).",
+        "I_PillHonest": "EndCameIdle clamp price: the pill remains at the bottom (17-state raw witness).",
     },
     "ChatScroll_turn_wheel_fixed_withturnclear": {
         "I_IntentHeld": "Clearing a pending wheel arm at TurnEnd lets the later wheel be corrected (14-state witness).",
