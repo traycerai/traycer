@@ -182,15 +182,21 @@ function scrollerMoveOf(event: Event): ChatTimelineScrollerMove | null {
  * clamp's offset - below it scrolling away, above it scrolling toward the end -
  * so their movement still counts as theirs.
  *
- * A taller viewport is not tested for: an offset that fitted the range it was
- * read in can only stop fitting when the viewport grows, so the clamp coming
- * out below the reference says the viewport grew.
+ * The viewport is tested for growth even though the clamp coming out below the
+ * reference nearly implies it, because iOS WebKit's rubber-band breaks the
+ * premise that implication rests on: during an overscroll bounce `scrollTop`
+ * reads PAST the end, so a reference taken mid-bounce is already outside its
+ * own range, and the bounce settling back onto the end would read here as a
+ * clamp with no viewport change at all. The bounce is not this function's to
+ * absorb - the contact machinery owns it, and a settle lands on the strict
+ * end, where both observation paths reconcile before any of this is consulted.
  */
 function viewportGrowthClamp(
   reference: ChatTimelineScrollGeometry,
   geometry: ChatTimelineScrollGeometry,
 ): number | null {
   const epsilon = CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX;
+  if (geometry.clientHeight <= reference.clientHeight + epsilon) return null;
   const clamped = Math.min(
     reference.scrollTop,
     Math.max(0, reference.scrollHeight - geometry.clientHeight),
