@@ -14,10 +14,6 @@ import type { TeamSetup } from "@/hooks/bots/use-team-setups";
 import type { BotOnboardingArrival } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { TeamSetupHistory } from "@/hooks/bots/use-team-setup-history";
 
-/** What the team's main bot is, the static post's first line. */
-const TEAM_MAIN_BOT_INTRO =
-  "I'm this team's main bot. Tell me here what the team wants done and I'll set up bots for each area: a channel per bot, with the work and its reports in it.";
-
 /**
  * A team's main bot's channel while the bot is still to be set up (Tracy Bots
  * T67): the team has no host its bots can run on, so no model runs and the
@@ -77,14 +73,7 @@ export function TeamSetupChannel(props: {
           >
             <div className="mt-auto min-w-0" data-testid="team-setup-post-slot">
               <ChatBotAppPost name={setup.title} testId="team-setup-post">
-                <div className="flex min-w-0 flex-col gap-2 text-ui-sm text-foreground">
-                  <p>{TEAM_MAIN_BOT_INTRO}</p>
-                  <p>
-                    Before I can run, the team needs a host: a machine where its
-                    bots execute.
-                  </p>
-                  <TeamHostOptionsCard />
-                </div>
+                <TeamSetupPostBody actions />
               </ChatBotAppPost>
             </div>
           </div>
@@ -101,11 +90,34 @@ export function TeamSetupChannel(props: {
 }
 
 /**
+ * The setup post: what the team's main bot is, that the team needs a host,
+ * and the ways to get one. `actions` draws each way's button; the post kept
+ * as a live channel's history has none.
+ */
+function TeamSetupPostBody(props: { readonly actions: boolean }): ReactNode {
+  return (
+    <div className="flex min-w-0 flex-col gap-2 text-ui-sm text-foreground">
+      <p>
+        I'm this team's main bot. Tell me here what the team wants done and I'll
+        set up bots for each area: a channel per bot, with the work and its
+        reports in it.
+      </p>
+      <p>
+        Before I can run, the team needs a host: a machine where its bots
+        execute.
+      </p>
+      <TeamHostOptionsCard actions={props.actions} />
+    </div>
+  );
+}
+
+/**
  * The ways a team gets a host its bots can run on (decision 127): cloud for
  * the team, or a team host on a machine. Neither can run a team's bots yet,
- * so each option's button is drawn and does nothing, with a line saying so.
+ * so with `actions` each option's button is drawn and does nothing, with a
+ * line saying so.
  */
-function TeamHostOptionsCard(): ReactNode {
+function TeamHostOptionsCard(props: { readonly actions: boolean }): ReactNode {
   return (
     <div
       className="flex min-w-0 flex-col gap-3 rounded-lg border border-border/60 bg-card p-3"
@@ -118,12 +130,14 @@ function TeamHostOptionsCard(): ReactNode {
         title="Enable cloud for the team"
         description="Bots run on sandboxes started for each job."
         action="Enable cloud"
+        actions={props.actions}
         testId="team-host-option-cloud"
       />
       <TeamHostOption
         title="Create a team host on a machine"
         description="A machine the team keeps running, signed in as the team."
         action="Create team host"
+        actions={props.actions}
         testId="team-host-option-machine"
       />
     </div>
@@ -134,10 +148,10 @@ function TeamHostOption(props: {
   readonly title: string;
   readonly description: string;
   readonly action: string;
+  readonly actions: boolean;
   readonly testId: string;
 }): ReactNode {
   const { testId } = props;
-  const noteId = useId();
   return (
     <div className="flex min-w-0 flex-col gap-1.5" data-testid={testId}>
       <div className="flex min-w-0 flex-col gap-0.5">
@@ -146,33 +160,47 @@ function TeamHostOption(props: {
         </h3>
         <p className="text-ui-xs text-muted-foreground">{props.description}</p>
       </div>
-      <div className="flex min-w-0 flex-col items-start gap-1">
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled
-          aria-describedby={noteId}
-          data-testid={`${testId}-action`}
-        >
-          {props.action}
-        </Button>
-        <p
-          id={noteId}
-          className="text-ui-xs text-muted-foreground"
-          data-testid={`${testId}-unavailable`}
-        >
-          Not available yet.
-        </p>
-      </div>
+      {props.actions ? (
+        <TeamHostOptionAction action={props.action} testId={testId} />
+      ) : null}
+    </div>
+  );
+}
+
+function TeamHostOptionAction(props: {
+  readonly action: string;
+  readonly testId: string;
+}): ReactNode {
+  const { testId } = props;
+  const noteId = useId();
+  return (
+    <div className="flex min-w-0 flex-col items-start gap-1">
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled
+        aria-describedby={noteId}
+        data-testid={`${testId}-action`}
+      >
+        {props.action}
+      </Button>
+      <p
+        id={noteId}
+        className="text-ui-xs text-muted-foreground"
+        data-testid={`${testId}-unavailable`}
+      >
+        Not available yet.
+      </p>
     </div>
   );
 }
 
 /**
  * The top of a live team main bot's channel (T67b): the post the channel
- * showed before the team had a host, kept as history, and a line saying how
- * the host came. The bot's own posts follow it.
+ * showed before the team had a host, kept whole as history with its buttons
+ * retired, and a line saying how the host came. The bot's own posts follow
+ * it.
  */
 export function TeamSetupHistoryRows(props: {
   readonly botTitle: string;
@@ -185,7 +213,7 @@ export function TeamSetupHistoryRows(props: {
       data-testid="team-setup-history"
     >
       <ChatBotAppPost name={props.botTitle} testId="team-setup-history-post">
-        <p className="text-ui-sm text-foreground">{TEAM_MAIN_BOT_INTRO}</p>
+        <TeamSetupPostBody actions={false} />
       </ChatBotAppPost>
       <p
         className="px-3 text-center text-ui-xs text-muted-foreground"

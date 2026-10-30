@@ -1284,12 +1284,27 @@ describe("<BotTabSurface /> a team's main bot once it is live", () => {
     expect(mocks.open).toHaveBeenCalledWith({ botId: BOT_ID });
     expect(screen.queryByTestId("team-setup-channel")).toBeNull();
     const channel = screen.getByTestId("stub-channel");
+    // The setup post is kept whole, with its buttons retired.
     const post = within(channel).getByTestId("team-setup-history-post");
     expect(within(post).getByText("Release Bot")).toBeTruthy();
+    expect(post.textContent).toContain("I'm this team's main bot.");
+    expect(post.textContent).toContain(
+      "Before I can run, the team needs a host",
+    );
+    expect(
+      within(within(post).getByTestId("team-host-options"))
+        .getAllByRole("heading")
+        .map((heading) => heading.textContent),
+    ).toEqual([
+      "Give the team a host",
+      "Enable cloud for the team",
+      "Create a team host on a machine",
+    ]);
+    expect(within(post).queryAllByRole("button")).toEqual([]);
+    expect(post.textContent).not.toContain("Not available yet.");
     expect(within(channel).getByTestId("team-setup-arrival").textContent).toBe(
       "Cloud enabled for Acme · bots run on sandboxes",
     );
-    expect(within(channel).queryByTestId("team-host-options")).toBeNull();
   });
 
   it.each<readonly [string, () => void]>([
