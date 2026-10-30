@@ -889,6 +889,63 @@ describe("<FileArtifactViewer /> media in the native shell", () => {
     expect(mocks.probeRequests).toHaveLength(2);
   });
 
+  it("asks afresh for a second viewing instead of joining the first viewing's probe that is still in flight", async () => {
+    const bridge = mediaBridge(false);
+    mocks.runnerHost = nativeHostWith(bridge);
+    mocks.hostQuery = {
+      data: {
+        kind: "url",
+        url: "https://cdn.example.test/clip.mp4?sig=in-flight",
+        expiresAt: Date.now() + 60_000,
+      },
+      isPending: false,
+      refetch: vi.fn<(...args: unknown[]) => unknown>(),
+    };
+    const queryClient = new QueryClient();
+    const { readSpan } = recordedMediaSpans();
+    const firstProbe = Promise.withResolvers<EpicReadArtifactObjectResponse>();
+    mocks.probeAnswer = () => firstProbe.promise;
+    const first = renderViewerWith(
+      queryClient,
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+    await waitFor(() => expect(mocks.probeRequests).toHaveLength(1));
+    first.unmount();
+
+    // The file is on disk by the time the second viewing asks.
+    mocks.probeAnswer = null;
+    const second = renderViewerWith(
+      queryClient,
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+    const hostSource = () =>
+      `traycer-sandbox://artifact-media-${MEDIA_SHA}--${bridge.registered[0]}/media`;
+    await waitFor(() =>
+      expect(second.container.querySelector("video")?.getAttribute("src")).toBe(
+        hostSource(),
+      ),
+    );
+    expect(mocks.probeRequests).toHaveLength(2);
+
+    // The first viewing's stale answer lands late and moves nothing.
+    await act(async () => {
+      firstProbe.resolve({
+        kind: "downloading",
+        receivedBytes: 10,
+        totalBytes: HUGE_MEDIA_BYTES,
+      });
+      await firstProbe.promise;
+    });
+    expect(second.container.querySelector("video")?.getAttribute("src")).toBe(
+      hostSource(),
+    );
+    expect(bridge.registered).toHaveLength(1);
+  });
+
   it("shows the player only after the shell has registered the mount", async () => {
     const bridge = mediaBridge(true);
     mocks.runnerHost = nativeHostWith(bridge);
