@@ -992,7 +992,16 @@ describe("RemoteSession relink on an own-leg loss", () => {
           return Promise.resolve();
         },
         closedWith: null,
-        prev: "1006:",
+        prev: "1006:net",
+      },
+      {
+        name: "a relay close whose reason is outside the old mirror",
+        trigger: (fixture) => {
+          fixture.relay.dropLeg(1012, "Session Superseded!");
+          return Promise.resolve();
+        },
+        closedWith: null,
+        prev: "1012:session-superseded",
       },
       {
         name: "a socket error",

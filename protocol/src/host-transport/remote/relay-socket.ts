@@ -68,21 +68,30 @@ const RELAY_SOCKET_ERROR_CLOSE_REASON = "relay-socket-error";
 const RELAY_MISSED_PONGS_CLOSE_REASON = "relay-missed-pongs";
 const RELAY_PING_SEND_FAILED_CLOSE_REASON = "relay-ping-send-failed";
 
+/** The relay Worker's bound on the whole `prev` value. */
+const RELAY_PREV_MAX_CHARS = 64;
+
 /**
- * The close reasons `prev` may name: the fixed set the relay records, this
- * socket's own plus the host's `shutdown`. Anything else would be counted as
- * `other` at best, and refused outright if it fails the Worker's shape check,
- * which would lose the close code the measurement needs.
+ * The `prev=<code>:<reason>` value for a leg that closed with `code` and
+ * `reason`, in the shape the relay Worker accepts: the reason lowercased,
+ * each run of characters outside `[a-z0-9]` one `-`, trimmed of `-`, and cut
+ * so the whole value fits the Worker's 64 characters. The relay closes legs
+ * with spaced reasons ("host superseded", "rate limit"), and a value outside
+ * that shape is dropped whole, close code included, while the code is the
+ * measurement. Which reasons count is the Worker's call alone: one it does
+ * not know is recorded as `<code>:other`. The host builds its `prev` with
+ * this function too.
  */
-const PREV_REASONS: ReadonlySet<string> = new Set([
-  RELAY_DIAL_TIMEOUT_CLOSE_REASON,
-  RELAY_SOCKET_ERROR_CLOSE_REASON,
-  RELAY_MISSED_PONGS_CLOSE_REASON,
-  RELAY_PING_SEND_FAILED_CLOSE_REASON,
-  RELAY_WAKE_PROBE_TIMEOUT_CLOSE_REASON,
-  RELAY_RELINK_CLOSE_REASON,
-  "shutdown",
-]);
+export function relayPrevQueryValue(code: number, reason: string): string {
+  const head = `${code}:`;
+  const slug = reason
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, Math.max(0, RELAY_PREV_MAX_CHARS - head.length))
+    .replace(/-+$/, "");
+  return `${head}${slug}`;
+}
 
 /**
  * Relay session-kill / peer-death reasons (mirror relay-do `KillReason`).
@@ -773,8 +782,7 @@ function withAttachQuery(
   if (previousLeg === null) {
     return url;
   }
-  const reason = PREV_REASONS.has(previousLeg.reason) ? previousLeg.reason : "";
-  return `${url}&prev=${encodeURIComponent(`${previousLeg.code}:${reason}`)}`;
+  return `${url}&prev=${encodeURIComponent(relayPrevQueryValue(previousLeg.code, previousLeg.reason))}`;
 }
 
 // -----------------------------------------------------------------------------
