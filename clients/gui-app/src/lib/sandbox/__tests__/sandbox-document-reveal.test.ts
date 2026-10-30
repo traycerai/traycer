@@ -33,6 +33,11 @@ interface Layout {
    * only `checkVisibility({ contentVisibilityAuto: true })` answers false.
    */
   readonly autoSkipped?: boolean;
+  /**
+   * Under a `visibility: hidden` or `opacity: 0` ancestor, so only the
+   * options that ask about CSS visibility or opacity answer false.
+   */
+  readonly cssHidden?: boolean;
 }
 
 interface ScrollCall {
@@ -148,12 +153,26 @@ function startFrame(canvas: boolean): Frame {
   // held to a real engine; here it is the input.
   define(proto, "checkVisibility", function (this: Element, options: unknown) {
     const layout = layouts.get(this) ?? {};
-    const asksAuto =
+    const asked = (name: string): boolean =>
       typeof options === "object" &&
       options !== null &&
-      "contentVisibilityAuto" in options &&
-      options.contentVisibilityAuto === true;
-    if (asksAuto && layout.autoSkipped === true) return false;
+      name in options &&
+      Reflect.get(options, name) === true;
+    // Only the default answer is the engine's reveal decision. Every other
+    // option asks a different question, and these are the pages that tell
+    // them apart: each answers false where the engine reveals.
+    if (layout.autoSkipped === true && asked("contentVisibilityAuto")) {
+      return false;
+    }
+    if (
+      layout.cssHidden === true &&
+      (asked("checkVisibilityCSS") ||
+        asked("visibilityProperty") ||
+        asked("checkOpacity") ||
+        asked("opacityProperty"))
+    ) {
+      return false;
+    }
     return layout.visible ?? true;
   });
   define(proto, "scrollTo", function (this: Element, options: unknown) {
@@ -672,13 +691,12 @@ describe("body overflow inside a frame", () => {
     ]);
   });
 
-  // A page the engine will not reveal into. Every scroller here has room,
-  // which is the point: the reveal must still not happen, and a page that
-  // happened to leave no room would pass whether the rule is there or not.
-  function unrevealable(
+  // A page with room to scroll in every scroller, so what the walk does is
+  // decided by the answer declared for the target and nothing else. A page
+  // that happened to leave no room would behave the same either way.
+  function pageDeclaring(
     frame: Frame,
-    visible: boolean,
-    autoSkipped: boolean,
+    answers: { visible: boolean; autoSkipped: boolean; cssHidden: boolean },
   ): { html: HTMLElement; target: HTMLElement } {
     const doc = frame.window.document;
     const target = doc.createElement("button");
@@ -691,19 +709,24 @@ describe("body overflow inside a frame", () => {
     frame.place(doc.body, { ...roomy, style: VISIBLE });
     frame.place(target, {
       rect: { top: 300, bottom: 340, left: 20, right: 60 },
-      visible,
-      autoSkipped,
+      ...answers,
     });
     return { html: doc.documentElement, target };
   }
 
-  // `checkVisibility()` is false exactly when the engine reveals nothing:
-  // the target is inside contents an ancestor skips, or has no box at all.
-  // Which pages those are is held to the engine in
-  // `browser-tests/sandbox-frame-scroll.spec.ts`.
+  const REVEALS = { visible: true, autoSkipped: false, cssHidden: false };
+  const REVEALED = [
+    { scroller: null, top: 300, left: 0, behavior: "auto" },
+  ] as const;
+  const revealedBy = (html: HTMLElement): unknown[] =>
+    REVEALED.map((call) => ({ ...call, scroller: html }));
+
+  // Wherever `checkVisibility()` is false the engine reveals nothing, which
+  // is the one direction the rule relies on. Which pages those are is held
+  // to a real engine in `browser-tests/sandbox-frame-scroll.spec.ts`.
   it("scrolls nothing into view when the engine would reveal nothing", () => {
     const frame = startFrame(false);
-    const { target } = unrevealable(frame, false, false);
+    const { target } = pageDeclaring(frame, { ...REVEALS, visible: false });
 
     scrollIntoView(target, { block: "start" });
 
@@ -712,20 +735,17 @@ describe("body overflow inside a frame", () => {
 
   it("reveals a target the engine would reveal", () => {
     const frame = startFrame(false);
-    const { html, target } = unrevealable(frame, true, false);
+    const { html, target } = pageDeclaring(frame, REVEALS);
 
     scrollIntoView(target, { block: "start" });
 
-    expect(frame.scrolls).toEqual([
-      { scroller: html, top: 300, left: 0, behavior: "auto" },
-    ]);
+    expect(frame.scrolls).toEqual(revealedBy(html));
   });
 
-  // `scrollIntoViewIfNeeded` and `focus` reveal through the same walk, so
-  // the rule has to hold for them too.
+  // `focus` reveals through the same walk, so the rule holds for it too.
   it("skips the reveal of an unrevealable target through focus", () => {
     const frame = startFrame(false);
-    const { target } = unrevealable(frame, false, false);
+    const { target } = pageDeclaring(frame, { ...REVEALS, visible: false });
 
     target.focus();
 
@@ -733,33 +753,36 @@ describe("body overflow inside a frame", () => {
     expect(frame.scrolls).toEqual([]);
   });
 
-  // A target inside an off-screen `content-visibility: auto` ancestor is
-  // skipped contents the engine reveals into anyway. Measured in Chrome:
-  // the default answer is true and the reveal scrolls, while asking with
-  // `contentVisibilityAuto` answers false, which would swallow it.
-  it("reveals into an off-screen content-visibility: auto ancestor", () => {
+  // The default answer is the question. Each of these pages is one the
+  // engine reveals into while some other option set calls it invisible: an
+  // off-screen `content-visibility: auto` ancestor, and a `visibility:
+  // hidden` or `opacity: 0` one. Asking with those options would swallow
+  // the reveal.
+  it.each([
+    { ...REVEALS, autoSkipped: true },
+    { ...REVEALS, cssHidden: true },
+  ])("reveals a target only another option set hides: %o", (answers) => {
     const frame = startFrame(false);
-    const { html, target } = unrevealable(frame, true, true);
+    const { html, target } = pageDeclaring(frame, answers);
 
     scrollIntoView(target, { block: "start" });
 
-    expect(frame.scrolls).toEqual([
-      { scroller: html, top: 300, left: 0, behavior: "auto" },
-    ]);
+    expect(frame.scrolls).toEqual(revealedBy(html));
   });
 
   // An engine with no `checkVisibility` is left alone: the reveal behaves as
   // it did before the rule rather than skipping every page.
   it("reveals as before on an engine without checkVisibility", () => {
     const frame = startFrame(false);
-    const { html, target } = unrevealable(frame, false, false);
+    const { html, target } = pageDeclaring(frame, {
+      ...REVEALS,
+      visible: false,
+    });
     Reflect.deleteProperty(frame.window.Element.prototype, "checkVisibility");
 
     scrollIntoView(target, { block: "start" });
 
-    expect(frame.scrolls).toEqual([
-      { scroller: html, top: 300, left: 0, behavior: "auto" },
-    ]);
+    expect(frame.scrolls).toEqual(revealedBy(html));
   });
 });
 

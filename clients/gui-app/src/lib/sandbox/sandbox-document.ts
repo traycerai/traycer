@@ -346,7 +346,11 @@ function bootstrapMain(config: BootstrapConfig): void {
   // tell.
   //
   // `checkVisibility` is the engine's own answer to that, and the only one
-  // worth asking. Reading the ancestors' computed style cannot replace it:
+  // worth asking. The direction relied on is one way: wherever it is false
+  // the engine reveals nothing. It is true for some the engine declines to
+  // scroll to anyway, a `position: fixed` target among them, which this
+  // leaves exactly as it found them. Reading the ancestors' computed style
+  // cannot replace it:
   // `content-visibility` applies only where layout containment can, and the
   // computed `display` does not say where that is — `<svg>` and a plain
   // `<label>` are both `inline`, and the engine skips the first and ignores
@@ -381,7 +385,7 @@ function bootstrapMain(config: BootstrapConfig): void {
   // and only to decide whether the walk treats the body as a scroller of
   // its own — which matters only when the body is an ancestor of the
   // target, and a target under a `hidden` root or body is skipped contents,
-  // which `isSkipped` has already turned the reveal back on. So whenever a
+  // which `isSkipped` has already turned the reveal back for. So whenever a
   // `hidden` here would matter, the reveal is over. `auto` is containment
   // the engine does reveal into, and counts.
   const contains = (element: Element | null): boolean => {
@@ -423,7 +427,10 @@ function bootstrapMain(config: BootstrapConfig): void {
     inline: Align,
     behavior: ScrollBehavior,
   ): void => {
-    if (target.getClientRects().length === 0 || isSkipped(target)) return;
+    // `isSkipped` first: it is a read of what the engine already knows,
+    // while `getClientRects` lays out the subtree to answer, which for
+    // skipped contents is the very work the page asked not to do.
+    if (isSkipped(target) || target.getClientRects().length === 0) return;
     const margin = window.getComputedStyle(target);
     const rect = target.getBoundingClientRect();
     let top = rect.top - pixels(margin.scrollMarginTop);
