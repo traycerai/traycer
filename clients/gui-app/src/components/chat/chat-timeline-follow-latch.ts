@@ -170,7 +170,9 @@ export interface ChatTimelineFollowLatch {
   /** Routes every native or library scroll report through this authority. */
   readonly observeLiveGeometry: () => void;
   /** The latest turn finished: a reader the end fell onto while it ran, and
-   *  who still sits at the strict bottom, follows again. */
+   *  who still sits at the strict bottom, follows again - unless their
+   *  departure was published ahead of a report of theirs that has not come,
+   *  which still holds them. */
   readonly reconcileTurnAtRest: () => void;
 }
 
@@ -287,7 +289,8 @@ interface ChatTimelineFollowLatchOptions {
    * True while the transcript's latest turn is still running. While it is, a
    * departed reader the end fell onto stays detached, so its later chunks do
    * not carry them; once it finishes they follow again
-   * (`reconcileTurnAtRest`).
+   * (`reconcileTurnAtRest`), unless a report their departure was published
+   * ahead of has not come.
    */
   readonly isTurnRunning: (() => boolean) | undefined;
 }
@@ -792,17 +795,19 @@ export function useChatTimelineFollowLatch(
   const onReaderGestureRef = useRef(onReaderGesture);
   const correctionGenerationRef = useRef(0);
   const readerGestureGenerationRef = useRef(0);
-  // Where a reader's own departure stands, until they follow again. Each
-  // report of theirs off the strict bottom moves it to where they are, so
-  // the list clamping its end to meet that offset is not the reader
-  // returning, while one past it is. A write the app or the list announces
-  // moves it with the view: that write is not the reader moving either.
+  // Where a reader's own departure stands, until it ends: they follow again,
+  // arrive at the end, gesture toward it, or the turn's rest finds them at
+  // the strict bottom. Each report of theirs off the strict bottom moves it
+  // to where they are, so the list clamping its end to meet that offset is
+  // not the reader returning, while one past it is. A write the app or the
+  // list announces moves it with the view: that write is not the reader
+  // moving either.
   const readerDepartureScrollTopRef = useRef<number | null>(null);
   // Whether the departure was published ahead of its gesture's report (the
   // tail moving away from a wheel up no report has followed, or a read
-  // seeing a pan before its scroll event), until a report arrives. Only then is a
-  // report of the reader's own still to come, so only then does the end
-  // meeting them hold them whether or not the turn runs.
+  // seeing a pan before its scroll event), until a report arrives. Only then
+  // may a report of the reader's own still come, so only then does the end
+  // meeting them hold them whether or not the turn runs, its rest included.
   const departureAwaitsReportRef = useRef(false);
   const armedReaderDepartureRef = useRef<ArmedReaderDeparture>(null);
   const activeCorrectionRef = useRef<ActiveEndCorrection | null>(null);
@@ -1429,8 +1434,9 @@ export function useChatTimelineFollowLatch(
 
   // A detached reader whose departure is published. Whether the strict
   // bottom under them is the list's end meeting them rather than the reader
-  // returning is the maintenance hold's to decide
-  // (`reconcileMaintenanceAtStrictBottom`).
+  // returning is decided at a report (`noteReportAfterDeparture`), at a read
+  // (`reconcileMaintenanceAtStrictBottom`) and at the turn's rest
+  // (`reconcileTurnAtRest`).
   const holdsDepartedReaderAtEnd = useCallback(
     (): boolean =>
       !permissionRef.current && readerDepartureScrollTopRef.current !== null,
@@ -1794,7 +1800,8 @@ export function useChatTimelineFollowLatch(
     // bottom with it stays held, as at any follow the latch starts itself
     // (`reconcileStrictBottom`). That is so whether the wheel's arm still
     // waits for it or the tail's growth already published the departure
-    // ahead of it (`departureAwaitsReportRef`); the report ends either.
+    // ahead of it, as it is for a pan a read published ahead of its scroll
+    // event (`departureAwaitsReportRef`); the report ends either.
     // An arm a report has followed is spent here: nothing grows past the
     // reader now to start a correction that would mask what is left of it,
     // and that report restarted the ledger, so a later frame reads as their

@@ -3198,8 +3198,9 @@ describe("useChatTimelineFollowLatch", () => {
 
     // A read sees the pan before its scroll event: the departure is published
     // ahead of that event, which the view's move makes sure comes. The end
-    // meeting them until then is the list's, and the event leaves them free.
-    it("a pan a read published ahead of its scroll event stays held when the end meets them idle, and its event leaves them free", () => {
+    // meeting them until then is the list's, so rows that grow before the
+    // event do not pull them, and the event leaves them free.
+    it("a pan a read published ahead of its scroll event stays held when the end meets them idle, is not pulled, and its event leaves them free", () => {
       const { node, listRef, onFollowIntentChange, result, turnRunning } =
         followingWithTurn();
       turnRunning.current = false;
@@ -3210,6 +3211,10 @@ describe("useChatTimelineFollowLatch", () => {
 
       shim.setGeometry(node, { scrollHeight: 1460 });
       result.current.followEndIfPermitted();
+      shim.setGeometry(node, { scrollHeight: 1560 });
+      result.current.followEndIfPermitted();
+      flushAnimationFrame();
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
       shim.setGeometry(node, { scrollTop: 920 });
       fireNativeScroll(node);
 
@@ -3236,9 +3241,9 @@ describe("useChatTimelineFollowLatch", () => {
     });
 
     // Their arrival ends the hold even while a restore holds the follow off:
-    // the restore's announced write that then carries the view to the end is
-    // not the end coming to a held reader.
-    it("a held reader's arrival a restore holds off still ends the hold, so the restore's write to the end leaves them to follow", () => {
+    // the end then dropping under them mid-turn is not the end coming to a
+    // held reader, and they follow once the restore lets them.
+    it("a held reader's arrival a restore holds off still ends the hold, so a clamp mid-turn after it leaves them to follow", () => {
       const turnRunning = { current: true };
       let restoreHolds = false;
       const node = shim.makeNode({
@@ -3263,10 +3268,10 @@ describe("useChatTimelineFollowLatch", () => {
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
 
       restoreHolds = true;
-      moveChatTimelineScroller(node, 1000, () => {
-        shim.setGeometry(node, { scrollTop: 1000 });
-        fireNativeScroll(node);
-      });
+      shim.setGeometry(node, { scrollTop: 1000 });
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollHeight: 1440, scrollTop: 940 });
+      fireNativeScroll(node);
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
 
       restoreHolds = false;
