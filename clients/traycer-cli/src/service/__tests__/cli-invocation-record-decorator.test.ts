@@ -290,6 +290,7 @@ describe("withCliInvocationRecord retireCompetingRegistration wiring", () => {
         bootedOut: false,
         bootoutIndeterminate: false,
         manifestRemoved: true,
+        retiredHostStillExiting: false,
       }),
     ).toBe(true);
     // The other half: evicted, but the manifest could not be removed.
@@ -301,6 +302,7 @@ describe("withCliInvocationRecord retireCompetingRegistration wiring", () => {
         bootedOut: true,
         bootoutIndeterminate: false,
         manifestRemoved: false,
+        retiredHostStillExiting: false,
       }),
     ).toBe(true);
     // Attempted and unconfirmed: a `bootout --wait` timeout kills the waiter
@@ -314,6 +316,7 @@ describe("withCliInvocationRecord retireCompetingRegistration wiring", () => {
         bootedOut: false,
         bootoutIndeterminate: true,
         manifestRemoved: false,
+        retiredHostStillExiting: false,
       }),
     ).toBe(true);
     // Nothing happened: no bootout was attempted (the owner could not be
@@ -327,6 +330,7 @@ describe("withCliInvocationRecord retireCompetingRegistration wiring", () => {
         bootedOut: false,
         bootoutIndeterminate: false,
         manifestRemoved: false,
+        retiredHostStillExiting: false,
       }),
     ).toBe(false);
     expect(removed({ kind: "not-applicable" })).toBe(false);

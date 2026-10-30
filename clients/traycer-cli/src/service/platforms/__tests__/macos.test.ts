@@ -12,6 +12,7 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { setTimeout as realSleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import {
   buildLaunchAgentPlist,
@@ -47,6 +48,7 @@ import {
   smAppServiceAgentLabelId,
 } from "../../label";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
+import { HOST_EXIT_WAIT_MS } from "../../../host/published-process-exit";
 import {
   isServiceMutationAuthorityError,
   ServiceMutationAuthorityError,
@@ -5896,6 +5898,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         bootedOut: false,
         bootoutIndeterminate: true,
         manifestRemoved: false,
+        retiredHostStillExiting: false,
       });
 
       // The competing host is STILL RUNNING (its bootout failed), so starting
@@ -5942,6 +5945,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         bootedOut: false,
         bootoutIndeterminate: false,
         manifestRemoved: false,
+        retiredHostStillExiting: false,
       });
     });
 
@@ -6033,6 +6037,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         bootedOut: false,
         bootoutIndeterminate: true,
         manifestRemoved: true,
+        retiredHostStillExiting: false,
       });
 
       expect(MOCKS.cliLoggerWarn).toHaveBeenCalled();
@@ -6081,6 +6086,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         bootedOut: false,
         bootoutIndeterminate: false,
         manifestRemoved: true,
+        retiredHostStillExiting: false,
       });
 
       // Never bootout an owner we could not identify: the CLI label may BE
@@ -6130,6 +6136,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
             bootedOut: false,
             bootoutIndeterminate: false,
             manifestRemoved: false,
+            retiredHostStillExiting: false,
           });
         });
 
@@ -6161,6 +6168,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
             bootedOut: true,
             bootoutIndeterminate: false,
             manifestRemoved: false,
+            retiredHostStillExiting: false,
           });
         });
 
@@ -6258,6 +6266,39 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         orphan = null;
       });
 
+      // Retires with a host that never exits. Only the clock is fake: the
+      // manifest removal and the identity probe run on real I/O. Gives up
+      // after the host's whole exit wait plus a margin of poll intervals, with
+      // `result` null: a wait that outlasts its bound fails the caller's
+      // assertion instead of hanging the suite.
+      async function retireOnFakeClock(calls: RecordedCall[]) {
+        vi.useFakeTimers({
+          toFake: ["setTimeout", "clearTimeout", "Date", "performance"],
+        });
+        const runner = makeOrphanRunner(calls, {
+          parentPid: CLI_JOB_PID,
+          onBootout: () => {},
+          onKickstart: () => {},
+        });
+        const sliceMs = 500;
+        const limitMs = HOST_EXIT_WAIT_MS + 4 * sliceMs;
+        let settled = false;
+        const outcome = createMacosController(runner)
+          .retireCompetingRegistration(label)
+          .finally(() => {
+            settled = true;
+          });
+        let elapsedMs = 0;
+        // Real I/O progresses during a real sleep between slices of the fake
+        // clock.
+        while (!settled && elapsedMs < limitMs) {
+          await realSleep(5);
+          await vi.advanceTimersByTimeAsync(sliceMs);
+          elapsedMs += sliceMs;
+        }
+        return { elapsedMs, result: settled ? await outcome : null };
+      }
+
       it("starts Desktop's agent only after the host has exited", async () => {
         const host = await publishOrphanHost();
         const calls: RecordedCall[] = [];
@@ -6288,30 +6329,9 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       it("does not start Desktop's agent when the host outlives the wait", async () => {
         const host = await publishOrphanHost();
         const calls: RecordedCall[] = [];
-        // Only the clock: the manifest removal and the identity probe run on
-        // real I/O.
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-        const runner = makeOrphanRunner(calls, {
-          parentPid: CLI_JOB_PID,
-          onBootout: () => {},
-          onKickstart: () => {},
-        });
+        const { result } = await retireOnFakeClock(calls);
 
-        let settled = false;
-        const outcome = createMacosController(runner)
-          .retireCompetingRegistration(label)
-          .finally(() => {
-            settled = true;
-          });
-        // Let real I/O progress between slices of the fake clock.
-        while (!settled) {
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
-          });
-          await vi.advanceTimersByTimeAsync(500);
-        }
-
-        await expect(outcome).resolves.toEqual({
+        expect(result).toEqual({
           kind: "removed-host-still-exiting",
           manifestRemoved: true,
         });
@@ -6324,6 +6344,75 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
           readFile(join(tempPlistDir, `${label.id}.plist`), "utf8"),
         ).rejects.toThrow();
       });
+
+      it("ends at its bound when the wall clock steps backward", async () => {
+        await publishOrphanHost();
+        // Every probe answers live and rewinds the wall clock an hour: a
+        // deadline read from Date.now() would never arrive.
+        MOCKS.getPublishedProcessIdentityVerdict.mockImplementation(
+          async () => {
+            vi.setSystemTime(Date.now() - 3_600_000);
+            return "current";
+          },
+        );
+        const calls: RecordedCall[] = [];
+
+        const { elapsedMs, result } = await retireOnFakeClock(calls);
+
+        expect(result).toEqual({
+          kind: "removed-host-still-exiting",
+          manifestRemoved: true,
+        });
+        expect(elapsedMs).toBeLessThanOrEqual(HOST_EXIT_WAIT_MS + 2_000);
+        expect(calls.filter((call) => call.args[0] === "kickstart")).toEqual(
+          [],
+        );
+      });
+
+      it("ends at its bound when the host probe never answers", async () => {
+        await publishOrphanHost();
+        MOCKS.getPublishedProcessIdentityVerdict.mockImplementation(
+          () => new Promise<never>(() => {}),
+        );
+        const calls: RecordedCall[] = [];
+
+        const { elapsedMs, result } = await retireOnFakeClock(calls);
+
+        expect(result).toEqual({
+          kind: "removed-host-still-exiting",
+          manifestRemoved: true,
+        });
+        expect(elapsedMs).toBeLessThanOrEqual(HOST_EXIT_WAIT_MS + 2_000);
+        expect(calls.filter((call) => call.args[0] === "kickstart")).toEqual(
+          [],
+        );
+      });
+
+      itUnlessRoot(
+        "keeps the still-exiting fact when the host outlives the wait and the manifest cannot be removed",
+        async () => {
+          await publishOrphanHost();
+          const calls: RecordedCall[] = [];
+
+          await withUnreadableLaunchAgentsDir(async () => {
+            const { result } = await retireOnFakeClock(calls);
+            expect(result).toEqual({
+              kind: "retire-failed",
+              bootoutFailed: false,
+              manifestRemovalFailed: true,
+              bootedOut: true,
+              bootoutIndeterminate: false,
+              manifestRemoved: false,
+              retiredHostStillExiting: true,
+            });
+          });
+
+          expect(bootoutTargets(calls)).toHaveLength(1);
+          expect(calls.filter((call) => call.args[0] === "kickstart")).toEqual(
+            [],
+          );
+        },
+      );
 
       it("does not wait for a host that Desktop's agent runs", async () => {
         const host = await publishOrphanHost();

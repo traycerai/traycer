@@ -146,7 +146,9 @@ export type CompetingRegistrationRetirement =
   // launchd may already have accepted the eviction. So a bootout that was
   // attempted and did not confirm is `bootoutIndeterminate`, and counts as
   // a possible removal; one never attempted, beside a manifest that was
-  // already absent, provably removed nothing.
+  // already absent, provably removed nothing. `retiredHostStillExiting` is
+  // the `removed-host-still-exiting` fact beside a failed manifest removal:
+  // the bootout succeeded, so nothing may start the host yet either.
   | {
       readonly kind: "retire-failed";
       readonly bootoutFailed: boolean;
@@ -154,6 +156,7 @@ export type CompetingRegistrationRetirement =
       readonly bootedOut: boolean;
       readonly bootoutIndeterminate: boolean;
       readonly manifestRemoved: boolean;
+      readonly retiredHostStillExiting: boolean;
     };
 
 // Outcome of `ServiceController.takeoverDesktopRegistration`.

@@ -796,11 +796,64 @@ describe("service install lifecycle re-registration", () => {
 
   // Starting the agent beside a host that is still shutting down would only
   // have that host decline and stay down.
-  it("does not start the host when the retired CLI host is still shutting down, and says so", async () => {
+  const STILL_EXITING_RETIREMENTS: ReadonlyArray<
+    readonly [string, CompetingRegistrationRetirement]
+  > = [
+    [
+      "removed-host-still-exiting",
+      { kind: "removed-host-still-exiting", manifestRemoved: true },
+    ],
+    [
+      "a failed manifest removal beside it",
+      {
+        kind: "retire-failed",
+        bootoutFailed: false,
+        manifestRemovalFailed: true,
+        bootedOut: true,
+        bootoutIndeterminate: false,
+        manifestRemoved: false,
+        retiredHostStillExiting: true,
+      },
+    ],
+  ];
+
+  it.each(STILL_EXITING_RETIREMENTS)(
+    "does not start the host when the retired CLI host is still shutting down, and says so (%s)",
+    async (_name, retirement) => {
+      const harness = makeController("externally-managed");
+      harness.retireCompetingRegistration.mockResolvedValue(retirement);
+      mocks.createServiceControllerMock.mockReturnValue(harness.controller);
+      const handle = createServiceInstallLifecycle({
+        environment: "production",
+        bootstrap,
+        force: false,
+        onWillStopHost: null,
+        hooks: NO_INSTALL_PHASE_HOOKS,
+      });
+
+      await withPlatformAsync("darwin", async () => {
+        await handle.lifecycle.beforeSwap();
+        await handle.lifecycle.afterSwap();
+      });
+
+      expect(handle.state.postSwapError).toBe(
+        "the previous CLI-registered host was still shutting down, so the host was not started",
+      );
+      expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
+      expect(harness.start).not.toHaveBeenCalled();
+    },
+  );
+
+  it("starts the host as before when the retirement failed without a host still exiting", async () => {
     const harness = makeController("externally-managed");
     harness.retireCompetingRegistration.mockResolvedValue({
-      kind: "removed-host-still-exiting",
-      manifestRemoved: true,
+      kind: "retire-failed",
+      bootoutFailed: false,
+      manifestRemovalFailed: true,
+      bootedOut: true,
+      bootoutIndeterminate: false,
+      manifestRemoved: false,
+      retiredHostStillExiting: false,
     });
     mocks.createServiceControllerMock.mockReturnValue(harness.controller);
     const handle = createServiceInstallLifecycle({
@@ -816,11 +869,8 @@ describe("service install lifecycle re-registration", () => {
       await handle.lifecycle.afterSwap();
     });
 
-    expect(handle.state.postSwapError).toBe(
-      "the previous CLI-registered host was still shutting down, so the host was not started",
-    );
-    expect(harness.relaunchAfterRestart).not.toHaveBeenCalled();
-    expect(harness.start).not.toHaveBeenCalled();
+    expect(handle.state.postSwapError).toBeNull();
+    expect(harness.relaunchAfterRestart).toHaveBeenCalledTimes(1);
   });
 
   it("starts the host as before when the competing registration was retired", async () => {

@@ -467,8 +467,13 @@ export function createServiceInstallLifecycle(
           // The retired CLI-label host outlived the wait for it. Starting the
           // agent now would only have its host decline beside the old one and
           // stay down, so nothing starts here; Desktop brings its host up once
-          // the old one is gone.
-          if (retirement?.kind === "removed-host-still-exiting") {
+          // the old one is gone. A failed manifest removal beside it does not
+          // change that.
+          if (
+            retirement?.kind === "removed-host-still-exiting" ||
+            (retirement?.kind === "retire-failed" &&
+              retirement.retiredHostStillExiting)
+          ) {
             state.postSwapError =
               "the previous CLI-registered host was still shutting down, so the host was not started";
             return;

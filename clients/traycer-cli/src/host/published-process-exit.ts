@@ -74,6 +74,10 @@ export async function observePublishedProcess(
  * out; the host child lives on as an orphan through its own graceful shutdown,
  * and has already deleted `pid.json`. Only a pid captured before the stop can
  * still be waited on.
+ *
+ * The bound is hard: the deadline is monotonic, so a wall-clock correction
+ * cannot stretch it, and a probe still running at the deadline is abandoned as
+ * `unknown`.
  */
 export async function waitForPublishedProcessExit(
   probe: ProbeProcessExited,
@@ -81,21 +85,29 @@ export async function waitForPublishedProcessExit(
   onWaiting: () => void,
   onProbeError: (err: unknown) => void,
 ): Promise<LivenessObservation> {
-  const deadline = Date.now() + HOST_EXIT_WAIT_MS;
+  const deadline = performance.now() + HOST_EXIT_WAIT_MS;
   let waiting = false;
   for (;;) {
-    const verdict = await observePublishedProcess(
-      probe,
-      published,
-      onProbeError,
-    );
-    if (verdict === "gone" || Date.now() >= deadline) return verdict;
+    let budgetTimer: NodeJS.Timeout | undefined;
+    const verdict = await Promise.race([
+      observePublishedProcess(probe, published, onProbeError),
+      new Promise<LivenessObservation>((resolve) => {
+        budgetTimer = setTimeout(
+          () => resolve("unknown"),
+          Math.max(0, deadline - performance.now()),
+        );
+      }),
+    ]).finally(() => clearTimeout(budgetTimer));
+    if (verdict === "gone" || performance.now() >= deadline) return verdict;
     if (!waiting) {
       waiting = true;
       onWaiting();
     }
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, HOST_EXIT_POLL_MS);
+      setTimeout(
+        resolve,
+        Math.min(HOST_EXIT_POLL_MS, Math.max(0, deadline - performance.now())),
+      );
     });
   }
 }

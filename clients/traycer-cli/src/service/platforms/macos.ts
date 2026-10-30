@@ -2718,6 +2718,7 @@ async function retireCompetingRegistration(
       bootedOut,
       bootoutIndeterminate,
       manifestRemoved,
+      retiredHostStillExiting,
     };
   }
   if (!bootedOut && !manifestRemoved) {
