@@ -325,6 +325,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: () => null,
   useEpicArtifactRecords: () => [],
   useEpicArtifactStatus: () => null,
+  useEpicFileArtifactViewer: () => null,
   useEpicConnectionStatus: () => "open",
   useEpicNodeHostId: () => "host-1",
   useEpicNodeOwnerKind: () => "chat",

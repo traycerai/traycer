@@ -21,7 +21,10 @@ import {
   DEFAULT_ACCOUNT_CONTEXT,
   type AccountContext,
 } from "@traycer/protocol/common/schemas";
-import type { ProviderRateLimits } from "@traycer/protocol/host";
+import type {
+  ProviderRateLimits,
+  RateLimitChatCredential,
+} from "@traycer/protocol/host";
 import type { ProvidersConsumeRateLimitResetCreditRequest } from "@traycer/protocol/host/rate-limit";
 import type { ProviderProfile } from "@traycer/protocol/host/provider-schemas";
 import type {
@@ -637,6 +640,83 @@ function readyAuthUser(data: AuthenticatedUser): MockAuthUser {
 
 function traycerUsageQueryKey(accountContext: AccountContext) {
   return queryKeys.hostTraycerRateLimitUsage("host-1", accountContext);
+}
+
+const CHAT_CREDENTIAL_COPY: ReadonlyArray<
+  readonly [string, RateLimitChatCredential, string, string | null]
+> = [
+  [
+    "an API key variable",
+    { kind: "api-key", source: "ANTHROPIC_API_KEY" },
+    "Chats here are billed to ANTHROPIC_API_KEY, not your Claude plan, so there are no plan limits to show.",
+    "ANTHROPIC_API_KEY",
+  ],
+  [
+    "an apiKeyHelper",
+    { kind: "api-key", source: "apiKeyHelper" },
+    "Chats here are billed to the key from your apiKeyHelper, not your Claude plan, so there are no plan limits to show.",
+    "apiKeyHelper",
+  ],
+  [
+    "the Console managed key",
+    { kind: "api-key", source: "/login managed key" },
+    "Chats here are billed to your Anthropic Console key, not your Claude plan, so there are no plan limits to show.",
+    null,
+  ],
+  [
+    "another api-key source",
+    { kind: "api-key", source: "user" },
+    "Chats here are billed to user, not your Claude plan, so there are no plan limits to show.",
+    "user",
+  ],
+  [
+    "a token",
+    { kind: "token", source: "CLAUDE_CODE_OAUTH_TOKEN" },
+    "Chats here sign in with CLAUDE_CODE_OAUTH_TOKEN instead of your Claude login.",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+  ],
+  [
+    "Bedrock",
+    { kind: "cloud-provider", source: "bedrock" },
+    "Chats here run on Amazon Bedrock, so there are no plan limits to show.",
+    null,
+  ],
+  [
+    "Vertex",
+    { kind: "cloud-provider", source: "vertex" },
+    "Chats here run on Google Vertex AI, so there are no plan limits to show.",
+    null,
+  ],
+  [
+    "Foundry",
+    { kind: "cloud-provider", source: "foundry" },
+    "Chats here run on Microsoft Foundry, so there are no plan limits to show.",
+    null,
+  ],
+  [
+    "an unknown cloud provider",
+    { kind: "cloud-provider", source: "gateway" },
+    "Chats here run on gateway, so there are no plan limits to show.",
+    null,
+  ],
+];
+
+function chatCredentialEnvelope(
+  chatCredential: RateLimitChatCredential,
+): ProviderRateLimitEnvelope {
+  return {
+    latest: {
+      provider: "claude-code",
+      available: false,
+      reason: "rate_limits_not_available",
+      chatCredential,
+    },
+    lastGood: null,
+    lastGoodAt: null,
+    lastFailureAt: NOW,
+    credentialGeneration: null,
+    episode: NO_EPISODE,
+  };
 }
 
 let onClose: () => void;
@@ -2699,6 +2779,40 @@ describe("<RateLimitPopover /> per-provider states", () => {
     expect(document.querySelectorAll(".opacity-60").length).toBe(0);
   });
 
+  it.each(CHAT_CREDENTIAL_COPY)(
+    "says %s, not 'Usage limits unavailable', when the host names the chat credential",
+    (_name, credential, text, codeText) => {
+      mocks.configured = [
+        {
+          providerId: "claude-code",
+          lane: "ephemeralProcess",
+          profiles: undefined,
+        },
+      ];
+      mocks.results = {
+        "claude-code": {
+          data: chatCredentialEnvelope(credential),
+          isPending: false,
+          isFetching: false,
+          isError: false,
+          dataUpdatedAt: NOW - 90_000,
+          refetch: vi.fn(() => Promise.resolve({})),
+        },
+      };
+      renderPopover();
+      const notice = screen.getByText(
+        (_content, element) =>
+          element?.tagName === "P" && element.textContent === text,
+      );
+      expect(
+        Array.from(notice.querySelectorAll("code")).map(
+          (node) => node.textContent,
+        ),
+      ).toEqual(codeText === null ? [] : [codeText]);
+      expect(screen.queryByText(/Usage limits unavailable/)).toBeNull();
+    },
+  );
+
   it("shows Refreshing instead of an updated timestamp while this target is fetching", () => {
     // The label's `refreshing` state is this exact target's own
     // `query.isFetching` - the same TanStack query key `fetchProviderRateLimits`
@@ -4024,6 +4138,7 @@ describe("<RateLimitPopover /> limited profiles", () => {
       hidden: false,
       state: "live",
       reason: null,
+      chatCredential: null,
       fetching: false,
       retryOffered: false,
       windows: [window],

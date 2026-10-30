@@ -7,7 +7,10 @@ import type {
   MarkdownArtifactKind,
 } from "@traycer/protocol/common/registry";
 import type { ArtifactOperationAction } from "@traycer/protocol/persistence/epic/content-blocks";
-import { StaticEpicNodeIcon } from "@/components/epic-canvas/epic-node-tab-icon";
+import {
+  FileArtifactIcon,
+  StaticEpicNodeIcon,
+} from "@/components/epic-canvas/epic-node-tab-icon";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { STATUS_LABELS } from "@/components/epic-canvas/sidebar/epic-sidebar-tree-shared";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
@@ -24,8 +27,10 @@ import {
 import {
   useArtifactById,
   useEpicDeletedArtifact,
+  useEpicFileArtifactViewer,
   useOpenEpicId,
 } from "@/lib/epic-selectors";
+import type { ArtifactFileViewer } from "@/lib/files/artifact-file-viewer";
 import { artifactDiffRenderable } from "@/lib/chat/artifact-diff-renderable";
 import { artifactOperationVerb } from "@/lib/chat/artifact-operation-verb";
 import { cn } from "@/lib/utils";
@@ -504,7 +509,11 @@ export function ArtifactCardSegment(props: ArtifactCardSegmentProps) {
     return (
       <EpicSessionGate
         fallback={
-          <ObjectArtifactCardLabel {...props} artifactKind={artifactKind} />
+          <ObjectArtifactCardLabel
+            {...props}
+            artifactKind={artifactKind}
+            fileViewer={null}
+          />
         }
       >
         <ObjectArtifactCard {...props} artifactKind={artifactKind} />
@@ -531,13 +540,24 @@ type ObjectArtifactCardProps = ArtifactCardSegmentProps & {
   readonly artifactKind: EpicArtifactKind;
 };
 
-function ObjectArtifactCardLabel(props: ObjectArtifactCardProps) {
+function ObjectArtifactCardLabel(
+  props: ObjectArtifactCardProps & {
+    readonly fileViewer: ArtifactFileViewer | null;
+  },
+) {
   return (
     <span className="flex min-w-0 items-center gap-2">
-      <StaticEpicNodeIcon
-        type={props.artifactKind}
-        className="size-4 shrink-0"
-      />
+      {props.artifactKind === "file" ? (
+        <FileArtifactIcon
+          viewer={props.fileViewer}
+          className="size-4 shrink-0"
+        />
+      ) : (
+        <StaticEpicNodeIcon
+          type={props.artifactKind}
+          className="size-4 shrink-0"
+        />
+      )}
       <span className="min-w-0 flex-1 truncate">
         {props.title || EPIC_NODE_LABELS[props.artifactKind]}
       </span>
@@ -634,6 +654,7 @@ function FileArtifactCardShell(props: {
 function ObjectArtifactCard(props: ObjectArtifactCardProps) {
   const live = useArtifactById(props.artifactId);
   const tombstone = useEpicDeletedArtifact(props.artifactId);
+  const fileViewer = useEpicFileArtifactViewer(props.artifactId);
   const epicId = useOpenEpicId();
   const hostId = useTabHostId();
   const viewTabId = useEpicViewTabId();
@@ -689,7 +710,11 @@ function ObjectArtifactCard(props: ObjectArtifactCardProps) {
         dragListeners={dragListeners}
         isDragging={isDragging}
       >
-        <ObjectArtifactCardLabel {...props} title={title} />
+        <ObjectArtifactCardLabel
+          {...props}
+          title={title}
+          fileViewer={fileViewer}
+        />
       </FileArtifactCardShell>
     );
   const content = (

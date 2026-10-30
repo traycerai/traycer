@@ -122,6 +122,7 @@ vi.mock("@/hooks/host/use-host-query", async () => {
     useHostQuery: (input: {
       readonly client: unknown;
       readonly params: { readonly want: { readonly kind: string } };
+      readonly cacheKeyIdentity: ReadonlyArray<unknown> | undefined;
       readonly options: {
         readonly enabled: boolean | undefined;
         readonly staleTime: number | undefined;
@@ -132,7 +133,12 @@ vi.mock("@/hooks/host/use-host-query", async () => {
       const isProbe = input.params.want.kind === "range";
       if (!isProbe) mocks.hostQueryParams.push(input.params);
       const real = useQuery({
-        queryKey: [isProbe ? "media-probe" : "media-url", input.params],
+        // Keyed as the real hook keys it, identity included.
+        queryKey: [
+          isProbe ? "media-probe" : "media-url",
+          input.params,
+          ...(input.cacheKeyIdentity ?? []),
+        ],
         queryFn: () => {
           if (isProbe) {
             mocks.probeRequests.push(input.params);
@@ -262,7 +268,16 @@ function renderViewer(
   object: ArtifactObjectRef,
   readSpan: ArtifactReadSpan,
 ) {
-  const queryClient = new QueryClient();
+  return renderViewerWith(new QueryClient(), name, object, readSpan);
+}
+
+// A second viewing in the same window shares the first one's query cache.
+function renderViewerWith(
+  queryClient: QueryClient,
+  name: string,
+  object: ArtifactObjectRef,
+  readSpan: ArtifactReadSpan,
+) {
   const wrap = (children: ReactNode) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
@@ -879,6 +894,215 @@ describe("<FileArtifactViewer /> media in the native shell", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // Before the binding resolves nothing is known about this machine's host,
+  // which is not the same as the file living on another machine.
+  it("asks no host for a byte while this machine's host id is still unknown, and falls back to the cloud on the same deadline", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const bridge = mediaBridge(false);
+      mocks.runnerHost = nativeHostWith(bridge);
+      mocks.localHostId = null;
+      const signed = "https://cdn.example.test/clip.mp4?sig=unknown-local";
+      mocks.hostQuery = {
+        data: { kind: "url", url: signed, expiresAt: Date.now() + 60_000 },
+        isPending: false,
+        refetch: vi.fn<(...args: unknown[]) => unknown>(),
+      };
+      const { readSpan } = recordedMediaSpans();
+
+      const { container } = renderViewer(
+        "clip.mp4",
+        mediaObject("published", "video/mp4"),
+        readSpan,
+      );
+
+      expect(container.querySelector("video")).toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(1_100);
+      });
+
+      expect(container.querySelector("video")?.getAttribute("src")).toBe(
+        signed,
+      );
+      expect(mocks.probeRequests).toEqual([]);
+      expect(bridge.registered).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts the byte probe once this machine's host id resolves under a mounted viewer, and plays from the host it names", async () => {
+    const bridge = mediaBridge(false);
+    mocks.runnerHost = nativeHostWith(bridge);
+    mocks.localHostId = null;
+    const { readSpan } = recordedMediaSpans();
+    const object = mediaObject("published", "video/mp4");
+    const view = renderViewer("clip.mp4", object, readSpan);
+    expect(mocks.probeRequests).toEqual([]);
+
+    mocks.localHostId = "host-1";
+    view.rerenderWith("clip.mp4", object, readSpan);
+
+    await waitFor(() =>
+      expect(view.container.querySelector("video")?.getAttribute("src")).toBe(
+        `traycer-sandbox://artifact-media-${MEDIA_SHA}--${bridge.registered[0]}/media`,
+      ),
+    );
+    expect(mocks.probeRequests).toHaveLength(1);
+  });
+
+  it("plays a second viewing from the cloud when its own probe fails, even though the first viewing's byte is still cached", async () => {
+    const bridge = mediaBridge(false);
+    mocks.runnerHost = nativeHostWith(bridge);
+    const signed = "https://cdn.example.test/clip.mp4?sig=probe-failed";
+    mocks.hostQuery = {
+      data: { kind: "url", url: signed, expiresAt: Date.now() + 60_000 },
+      isPending: false,
+      refetch: vi.fn<(...args: unknown[]) => unknown>(),
+    };
+    const queryClient = new QueryClient();
+    const { readSpan } = recordedMediaSpans();
+    const first = renderViewerWith(
+      queryClient,
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+    await waitFor(() => expect(bridge.registered).toHaveLength(1));
+    first.unmount();
+
+    mocks.probeAnswer = () => Promise.reject(new Error("socket"));
+    // Held clocks keep the one-second deadline from choosing the cloud, so
+    // only the failed probe can.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const second = renderViewerWith(
+        queryClient,
+        "clip.mp4",
+        mediaObject("published", "video/mp4"),
+        readSpan,
+      );
+      await act(() => vi.advanceTimersByTimeAsync(100));
+
+      expect(mocks.probeRequests).toHaveLength(2);
+      expect(second.container.querySelector("video")?.getAttribute("src")).toBe(
+        signed,
+      );
+      expect(bridge.registered).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("plays a second viewing from this machine's host once it holds the file, not from the first viewing's cached `downloading`", async () => {
+    const bridge = mediaBridge(false);
+    mocks.runnerHost = nativeHostWith(bridge);
+    mocks.probeResponse = {
+      kind: "downloading",
+      receivedBytes: 10,
+      totalBytes: HUGE_MEDIA_BYTES,
+    };
+    const signed = "https://cdn.example.test/clip.mp4?sig=first-viewing";
+    mocks.hostQuery = {
+      data: { kind: "url", url: signed, expiresAt: Date.now() + 60_000 },
+      isPending: false,
+      refetch: vi.fn<(...args: unknown[]) => unknown>(),
+    };
+    const queryClient = new QueryClient();
+    const { readSpan } = recordedMediaSpans();
+    const first = renderViewerWith(
+      queryClient,
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+    await waitFor(() =>
+      expect(first.container.querySelector("video")?.getAttribute("src")).toBe(
+        signed,
+      ),
+    );
+    first.unmount();
+
+    // The host finished mirroring the file between the two viewings.
+    mocks.probeResponse = {
+      kind: "bytes",
+      bytesBase64: "",
+      offset: 0,
+      totalBytes: 0,
+      mediaType: "video/mp4",
+    };
+    const second = renderViewerWith(
+      queryClient,
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+
+    await waitFor(() =>
+      expect(second.container.querySelector("video")?.getAttribute("src")).toBe(
+        `traycer-sandbox://artifact-media-${MEDIA_SHA}--${bridge.registered[0]}/media`,
+      ),
+    );
+    expect(mocks.probeRequests).toHaveLength(2);
+  });
+
+  it("asks afresh for a second viewing instead of joining the first viewing's probe that is still in flight", async () => {
+    const bridge = mediaBridge(false);
+    mocks.runnerHost = nativeHostWith(bridge);
+    mocks.hostQuery = {
+      data: {
+        kind: "url",
+        url: "https://cdn.example.test/clip.mp4?sig=in-flight",
+        expiresAt: Date.now() + 60_000,
+      },
+      isPending: false,
+      refetch: vi.fn<(...args: unknown[]) => unknown>(),
+    };
+    const queryClient = new QueryClient();
+    const { readSpan } = recordedMediaSpans();
+    const firstProbe = Promise.withResolvers<EpicReadArtifactObjectResponse>();
+    mocks.probeAnswer = () => firstProbe.promise;
+    const first = renderViewerWith(
+      queryClient,
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+    await waitFor(() => expect(mocks.probeRequests).toHaveLength(1));
+    first.unmount();
+
+    // The file is on disk by the time the second viewing asks.
+    mocks.probeAnswer = null;
+    const second = renderViewerWith(
+      queryClient,
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+    const hostSource = () =>
+      `traycer-sandbox://artifact-media-${MEDIA_SHA}--${bridge.registered[0]}/media`;
+    await waitFor(() =>
+      expect(second.container.querySelector("video")?.getAttribute("src")).toBe(
+        hostSource(),
+      ),
+    );
+    expect(mocks.probeRequests).toHaveLength(2);
+
+    // The first viewing's stale answer lands late and moves nothing.
+    await act(async () => {
+      firstProbe.resolve({
+        kind: "downloading",
+        receivedBytes: 10,
+        totalBytes: HUGE_MEDIA_BYTES,
+      });
+      await firstProbe.promise;
+    });
+    expect(second.container.querySelector("video")?.getAttribute("src")).toBe(
+      hostSource(),
+    );
+    expect(bridge.registered).toHaveLength(1);
   });
 
   it("shows the player only after the shell has registered the mount", async () => {

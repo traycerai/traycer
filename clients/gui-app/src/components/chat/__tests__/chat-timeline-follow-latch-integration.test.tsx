@@ -1248,6 +1248,50 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
     });
   });
 
+  describe("a reader an owned navigation detached with no scroll report", () => {
+    it("stays where the navigation landed them when the end shrinks onto them and the content regrows", async () => {
+      const rowCount = 40;
+      const fullHeight = contentHeightForRowCount(rowCount);
+      setLegendListScrollContainerScrollHeightOverride(fullHeight);
+      const messages = makeMessages(rowCount);
+      const followLatchRef = createRef<ChatTimelineFollowLatch | null>();
+      const { listRef, rerenderMessages } = renderTimeline({
+        messages,
+        followLatchRef,
+      });
+      await settleLegendList();
+
+      const node = requireScrollNode(listRef);
+      parkAtStrictBottom(node);
+
+      // The landing is written without a scroll report of the reader's own.
+      const landedAt = 500;
+      act(() => {
+        followLatchRef.current?.beginOwnedFreeNavigation();
+        node.scrollTop = landedAt;
+        followLatchRef.current?.completeOwnedFreeNavigation();
+      });
+      await settleLegendList();
+
+      // The end shrinks onto the landing, and a report of the clamp follows.
+      setLegendListScrollContainerScrollHeightOverride(
+        landedAt + VIEWPORT_HEIGHT_PX,
+      );
+      fireNativeScroll(node);
+      act(() => {
+        fireAllResizeObservers(() => null);
+      });
+      await settleLegendList();
+
+      // The content regrows past them.
+      setLegendListScrollContainerScrollHeightOverride(fullHeight);
+      rerenderMessages(appendAssistantRows(messages, 2, "regrown"), undefined);
+      await settleLegendList();
+
+      expectPixelStable(node, landedAt);
+    });
+  });
+
   // -----------------------------------------------------------------------
   // 6. A recovering transcript's clamp does not reattach a detached reader
   // -----------------------------------------------------------------------
@@ -1419,7 +1463,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       return { node, list, moves };
     }
 
-    it("announces a visible-content adjustment with where it started, where the end was, where it landed and where it asked for", async () => {
+    it("announces a visible-content adjustment with where it started, where the end was, where it landed, where it asked for and that it wrote the offset", async () => {
       const { node, list, moves } = await mountDetachedAt(1500);
       const end = maxScrollTop(node);
 
@@ -1427,8 +1471,11 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
         list.setVisibleContentAnchorOffset(120);
       });
 
+      // `cause: "offset"`: the list wrote the offset to hold content still as
+      // it grew, so the content came along and a content-relative reference
+      // has already netted this out.
       expect(moves).toEqual([
-        { from: 1500, fromEnd: end, to: 1620, intended: 1620 },
+        { from: 1500, fromEnd: end, to: 1620, intended: 1620, cause: "offset" },
       ]);
     });
 
@@ -1446,6 +1493,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
         fromEnd: end,
         to: end,
         intended: end,
+        cause: "offset",
       });
     });
   });

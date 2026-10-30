@@ -73,13 +73,18 @@ function useMediaSource(
   },
   hasBridge: boolean,
 ): MediaSource | null {
+  // `null` until the binding resolves, which is not yet "another machine".
   const localHostId = useReactiveLocalHostId();
+  const isLocalHost = localHostId !== null && props.hostId === localHostId;
   const [source, setSource] = useState<MediaSource | null>(() => {
     if (!hasBridge) return "cloud";
     if (props.object.status !== "published") return "host";
-    return props.hostId === localHostId ? null : "cloud";
+    return localHostId !== null && !isLocalHost ? "cloud" : null;
   });
   const client = useHostClientForHostId(props.hostId);
+  // Each viewing asks afresh: an earlier viewing's cached answer, or its probe
+  // still in flight, says nothing about whether the file is on disk now.
+  const [probeViewing] = useState(() => crypto.randomUUID());
   const probe = useHostQuery({
     client,
     method: "epic.readArtifactObject",
@@ -88,20 +93,24 @@ function useMediaSource(
       sha256: props.object.sha256,
       want: { kind: "range", offset: 0, length: 1 },
     },
-    cacheKeyIdentity: undefined,
-    options: { enabled: source === null, staleTime: 0 },
+    cacheKeyIdentity: [probeViewing],
+    options: { enabled: source === null && isLocalHost, staleTime: 0 },
   });
   useEffect(() => {
     if (source !== null) return;
     const timer = setTimeout(() => setSource("cloud"), PROBE_DEADLINE_MS);
     return () => clearTimeout(timer);
   }, [source]);
-  // Latched from the first answer during render: the method's policy keeps
+  // Latched during render from the first answer: the method's policy keeps
   // polling a `downloading` answer, and a later "bytes" must not move a
   // playing element off the cloud.
   const answer = probe.data?.kind;
-  if (source === null && (answer !== undefined || probe.isError)) {
-    setSource(answer === "bytes" ? "host" : "cloud");
+  if (source === null) {
+    if (localHostId !== null && !isLocalHost) {
+      setSource("cloud");
+    } else if (isLocalHost && (answer !== undefined || probe.isError)) {
+      setSource(answer === "bytes" ? "host" : "cloud");
+    }
   }
   return source;
 }

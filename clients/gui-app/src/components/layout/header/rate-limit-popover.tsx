@@ -40,6 +40,7 @@ import {
   profileEnablementTooltipText,
 } from "@/components/providers/provider-profile-model";
 import {
+  ChatCredentialNotice,
   ProviderRateLimitDetail,
   type ProviderRateLimitQueryState,
 } from "@/components/settings/panels/provider-rate-limit-views";
@@ -2702,6 +2703,9 @@ function RateLimitProviderBody({
         />
       );
     case "unavailable":
+      if (state.chatCredential !== null) {
+        return <ChatCredentialNotice credential={state.chatCredential} />;
+      }
       return (
         <div className="flex flex-col items-start gap-1.5">
           <RateLimitErrorMessage

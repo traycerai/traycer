@@ -275,6 +275,7 @@ vi.mock("@/lib/epic-selectors", () => ({
   useMaybeEpicTuiAgentHarnessId: () => null,
   useRegisteredEpicActiveAgentIds: () => new Set<string>(),
   useRegisteredEpicNodeArchived: () => false,
+  useRegisteredEpicFileArtifactViewer: () => null,
   // Chat tab strip icons (ChatProgressIcon) need activity tiers when a chat
   // tile is the active tab - not exercised by the older spec/terminal-only
   // fixtures in this file. The icon reads the REGISTERED (keyed,
