@@ -63,9 +63,11 @@ import "@/index.css";
  * `body[data-app-scroll-y]` (its body's on `body[data-app-body-scroll-top]`).
  * `closed-shadow-focus` focuses a field in a closed shadow root at the
  * bottom. `body-overflow`, `contained-body-overflow`,
- * `container-body-overflow`, `skipped-block`, `skipped-details` and
- * `covering-nearest` first shape the page into a case the native reveal is
- * compared on.
+ * `container-body-overflow`, `skipped-block`, `skipped-details`,
+ * `closed-shadow-scroller` and `covering-nearest` first shape the page into
+ * a case the native reveal is compared on. The scroller the comparison
+ * reads, where the case has one, is reported on
+ * `body[data-app-outer-scroll-top]`.
  * `browser-tests/sandbox-frame-scroll.spec.ts` drives it.
  */
 const HOSTILE_APP = `<main style="height:240px;padding:16px">hostile app</main>
@@ -203,6 +205,37 @@ setInterval(async () => {
     scrollTo(0, 0);
     mid.scrollIntoView({ block: "start" });
   }
+  if (command === "closed-shadow-scroller") {
+    // A scroller inside a closed root, between the slot and the host. The
+    // flat-tree parent of slotted content is the slot, so this one moves
+    // first and the outer one only by what it leaves. The root is
+    // serializable so the native comparison can rebuild the same page.
+    const outer = document.createElement("div");
+    outer.id = "outer";
+    outer.style.cssText = "height:200px;overflow:auto";
+    const lead = document.createElement("div");
+    lead.style.height = "400px";
+    const host = document.createElement("div");
+    const trail = document.createElement("div");
+    trail.style.height = "2000px";
+    outer.append(lead, host, trail);
+    const mid = document.createElement("p");
+    mid.id = "mid";
+    mid.textContent = "mid";
+    host.append(mid);
+    const inner = document.createElement("div");
+    inner.id = "inner";
+    inner.style.cssText = "height:150px;overflow:auto";
+    const innerLead = document.createElement("div");
+    innerLead.style.height = "300px";
+    const innerTrail = document.createElement("div");
+    innerTrail.style.height = "900px";
+    inner.append(innerLead, document.createElement("slot"), innerTrail);
+    host.attachShadow({ mode: "closed", serializable: true }).append(inner);
+    document.querySelector("main").append(outer);
+    scrollTo(0, 0);
+    mid.scrollIntoView({ block: "start" });
+  }
   if (command === "covering-nearest") {
     // Taller than the frame's view, and covering it from 800.
     const cover = document.createElement("div");
@@ -212,10 +245,12 @@ setInterval(async () => {
     scrollTo(0, 800);
     cover.scrollIntoView({ block: "nearest" });
   }
+  const reported = document.getElementById("outer");
   void ask("resources/read", {
     uri:
       "ui://did/" + command + "/" + Math.round(scrollY) + "/" +
-      Math.round(document.body.scrollTop),
+      Math.round(document.body.scrollTop) + "/" +
+      Math.round(reported === null ? 0 : reported.scrollTop),
   });
 }, 30);
 </script>`;
@@ -302,12 +337,13 @@ const mcpRpc: McpAppRpc = {
     }
     if (params.uri === "ui://fullscreen") body.dataset.appFullscreen = "true";
     if (params.uri.startsWith("ui://did/")) {
-      const [did, scrollY, bodyScrollTop] = params.uri
+      const [did, scrollY, bodyScrollTop, outerScrollTop] = params.uri
         .slice("ui://did/".length)
         .split("/");
       body.dataset.did = did;
       body.dataset.appScrollY = scrollY;
       body.dataset.appBodyScrollTop = bodyScrollTop;
+      body.dataset.appOuterScrollTop = outerScrollTop;
     }
     body.dataset.reads = String(Number(body.dataset.reads ?? "0") + 1);
     return Promise.resolve({

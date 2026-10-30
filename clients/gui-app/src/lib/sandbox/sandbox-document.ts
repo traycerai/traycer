@@ -297,6 +297,10 @@ function bootstrapMain(config: BootstrapConfig): void {
     Element.prototype,
     "scrollTo",
   )?.value;
+  const shadowMode: unknown = Reflect.get(
+    Object.getOwnPropertyDescriptor(ShadowRoot.prototype, "mode") ?? {},
+    "get",
+  );
   const pixels = (value: string): number =>
     value.endsWith("px") ? Number.parseFloat(value) || 0 : 0;
   // Spans are `[near, far]` along one axis.
@@ -331,11 +335,32 @@ function bootstrapMain(config: BootstrapConfig): void {
       return center;
     return nearestDelta(target, port);
   };
+  // Closed roots, kept at creation. A closed root is unreachable from its
+  // host afterwards, and `assignedSlot` is null for the content slotted
+  // into one, so without this the walk below cannot see the slot and misses
+  // every scroller between it and the host.
+  const closedRoots = new WeakMap<Element, ShadowRoot>();
+  // The slot the engine assigned this element to inside its parent's closed
+  // root, read from the slot's side, which a closed root does not hide.
+  const slotInClosedRoot = (
+    element: Element,
+    parent: Element,
+  ): Element | null => {
+    const root = closedRoots.get(parent);
+    if (root === undefined) return null;
+    const slots = root.querySelectorAll<HTMLSlotElement>("slot");
+    for (let i = 0; i < slots.length; i += 1) {
+      if (slots[i].assignedNodes().includes(element)) return slots[i];
+    }
+    return null;
+  };
   // The flat-tree parent, so an element in a shadow root reaches the
-  // scrollers outside it.
+  // scrollers outside it, and one slotted into a shadow root reaches the
+  // scrollers inside it.
   const parentOf = (element: Element): Element | null => {
     if (element.assignedSlot !== null) return element.assignedSlot;
-    if (element.parentElement !== null) return element.parentElement;
+    const parent = element.parentElement;
+    if (parent !== null) return slotInClosedRoot(element, parent) ?? parent;
     const root = element.getRootNode();
     return root instanceof ShadowRoot ? root.host : null;
   };
@@ -355,8 +380,9 @@ function bootstrapMain(config: BootstrapConfig): void {
   // computed `display` does not say where that is — `<svg>` and a plain
   // `<label>` are both `inline`, and the engine skips the first and ignores
   // the second. It is also computed over the real flat tree, so it sees a
-  // closed shadow root, `<details>` included, which no walk from here can
-  // reach: `assignedSlot` is null for a closed root.
+  // root no walk from here can reach, a `<details>` among them: the walk
+  // enters a closed root only where the page created it through
+  // `attachShadow`, and a UA root is never created that way.
   //
   // Default options are the question being asked. They answer false for a
   // box that is not generated and for skipped contents, and leave out
@@ -516,6 +542,39 @@ function bootstrapMain(config: BootstrapConfig): void {
       ? value
       : fallback;
   if (!config.canvas) {
+    // Kept at creation, the only moment a closed root is in reach. The page
+    // gets the engine's own root back and `shadowRoot` stays null for it,
+    // so nothing it can read about its own roots changes.
+    //
+    // Nothing the capture does may reach the page. The root is attached by
+    // the time it runs, so anything of the page's it called could answer
+    // differently or throw, and a throw there would fail an `attachShadow`
+    // that had already succeeded. So the mode comes from the getter taken
+    // above, before the page ran, and never from the dictionary the engine
+    // has already converted or from an accessor the page can replace; and
+    // whatever else goes wrong, the page still gets its root.
+    replace(
+      Element.prototype,
+      "attachShadow",
+      (native) =>
+        function (this: unknown, ...args: unknown[]): unknown {
+          const root: unknown = native.apply(this, args);
+          try {
+            if (
+              this instanceof Element &&
+              root instanceof ShadowRoot &&
+              isNative(shadowMode) &&
+              shadowMode.call(root) === "closed"
+            ) {
+              closedRoots.set(this, root);
+            }
+          } catch {
+            // Not kept, so the walk reaches this root's slots no better
+            // than it did before any of this. The page is none the wiser.
+          }
+          return root;
+        },
+    );
     replace(
       Element.prototype,
       "scrollIntoView",
