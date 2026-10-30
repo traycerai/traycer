@@ -602,6 +602,7 @@ function mountRow(scroller: HTMLElement, message: ChatMessageModel): string {
     hideReasoning: false,
     queuePauseReasonProtocolSupported: null,
     splitLongTurns: true,
+    botSendQuestionStates: null,
   });
   const element = document.createElement("div");
   element.dataset.messageId = message.id;

@@ -87,9 +87,12 @@ vi.mock("@/hooks/bots/use-bot-turn-locate-query", () => ({
   useBotTurnLocateQuery: () => ({ data: undefined }),
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
-  useChatLocateRow: (args: ChatLocateRowArgs) => {
+  useChatLocateRowAnswer: (args: ChatLocateRowArgs) => {
     mocks.locateRow(args);
-    return mocks.state.locatedOrdinal;
+    const ordinal = mocks.state.locatedOrdinal;
+    return ordinal === null
+      ? { status: "waiting" }
+      : { status: "found", ordinal };
   },
 }));
 vi.mock("@/components/chat/chat-messages", async () => {

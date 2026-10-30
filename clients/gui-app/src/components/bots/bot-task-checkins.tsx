@@ -143,7 +143,7 @@ function CheckinRow(props: {
           variant="link"
           size="xs"
           data-testid="bot-task-checkin-turn"
-          onClick={() => onOpenTurn(turnRef)}
+          onClick={() => onOpenTurn(turnRef, null)}
         >
           {(turnRef.summary === null ? null : turnReceiptLabel(turnRef)) ??
             "Open the turn"}

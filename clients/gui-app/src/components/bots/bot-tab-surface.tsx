@@ -476,7 +476,11 @@ function useBotTabSession(args: {
           landOn:
             target.messageId === null
               ? null
-              : { messageId: target.messageId, visit },
+              : {
+                  messageId: target.messageId,
+                  sendPostId: target.sendPostId,
+                  visit,
+                },
         },
         channelLanding: null,
         visits: visit,
@@ -484,7 +488,7 @@ function useBotTabSession(args: {
     });
   }, []);
   const openTurn = useCallback<BotTurnOpen>(
-    (ref) => openSession(sessionTargetOfTurn(ref)),
+    (ref, sendPostId) => openSession(sessionTargetOfTurn(ref, sendPostId)),
     [openSession],
   );
   const closeSession = useCallback(
@@ -497,7 +501,8 @@ function useBotTabSession(args: {
         const visit = previous.visits + 1;
         return {
           session: null,
-          channelLanding: messageId === null ? null : { messageId, visit },
+          channelLanding:
+            messageId === null ? null : { messageId, sendPostId: null, visit },
           visits: visit,
         };
       });

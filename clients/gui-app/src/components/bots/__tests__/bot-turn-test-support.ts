@@ -185,6 +185,7 @@ function toolCallBlock(input: ToolCallInput): ContentBlock {
     managedCommand: null,
     agentMessageReceipt: null,
     agentMessageDelivery: null,
+    botSendReceipt: null,
     artifact: null,
     mcpApp: null,
     progress: null,

@@ -32,6 +32,7 @@ import {
   agentMessageSendSchema,
   artifactOperationActionSchema,
   backgroundTaskOutputSchema,
+  botSendReceiptSchema,
   browserSessionReferenceSchema,
   diffSourceSchema,
   fileEditReasonSchema,
@@ -569,6 +570,9 @@ export const toolCallCompletedEventSchema = lazySchema(() =>
     // cannot erase a stamp the first completion carried. Not on the
     // hand-frozen `toolCallCompletedEventSchemaPreDelivery` below.
     agentMessageDelivery: agentMessageDeliverySchema.nullable().optional(),
+    // The post a bot's send wrote, host-stamped like `artifact` below. See
+    // `botSendReceiptSchema`.
+    botSendReceipt: botSendReceiptSchema.nullable().optional(),
     backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
     // For detached background command/Monitor completion, this is the SDK task's
     // own start time from BackgroundItem, not the short foreground spawn call.

@@ -1,3 +1,5 @@
+import type { BotQuestionSettlement } from "@traycer/protocol/persistence/epic/messages";
+
 /**
  * How a question was settled: a person's answer or Skip, by the name the
  * card shows for them and whether they are the person viewing it, or the
@@ -28,6 +30,27 @@ export interface QuestionCardDraft {
     readonly text: string;
     readonly skipped: boolean;
   } | null;
+}
+
+/** A bot's question's settlement as the card names it; `null` while it is open. */
+export function botQuestionCardSettlement(
+  settlement: BotQuestionSettlement | null,
+  memberName: (userId: string) => string,
+  viewerUserId: string | null,
+): QuestionCardSettlement | null {
+  if (settlement === null) return null;
+  return {
+    answer: settlement.answer,
+    skipped: settlement.skipped,
+    by:
+      settlement.by.kind === "bot"
+        ? { kind: "asker" }
+        : {
+            kind: "person",
+            name: memberName(settlement.by.userId),
+            viewer: settlement.by.userId === viewerUserId,
+          },
+  };
 }
 
 /** A question nobody has answered here yet. */
@@ -79,4 +102,20 @@ export function questionCardView(
   const own = draftText(draft);
   if (theirs || own === null) return { kind: "settled", settlement };
   return { kind: "overtaken", settlement, draft: own };
+}
+
+/** The line a Skip sends as the person's message. */
+export const QUESTION_SKIPPED_TEXT = "Skipped";
+
+/** What a settled question says: what it was settled with, and by whom. */
+export function questionSettledLine(
+  settlement: QuestionCardSettlement,
+  asker: string,
+): string {
+  if (settlement.by.kind === "asker") {
+    return `Settled by ${asker}: ${settlement.answer ?? QUESTION_SKIPPED_TEXT}`;
+  }
+  return settlement.skipped || settlement.answer === null
+    ? QUESTION_SKIPPED_TEXT
+    : `Answered by ${settlement.by.name}: ${settlement.answer}`;
 }

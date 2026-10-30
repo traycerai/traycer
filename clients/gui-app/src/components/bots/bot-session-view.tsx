@@ -13,7 +13,13 @@ import {
   type BotSessionAccess,
 } from "@/components/bots/bot-session-context";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
-import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
+import {
+  botMemberName,
+  type BotMemberResolver,
+} from "@/lib/bots/bot-member-names";
+import { sendQuestionStates } from "@/lib/bots/bot-send-tool";
+import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
+import { useAuthStore } from "@/stores/auth/auth-store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
 /**
@@ -64,8 +70,16 @@ export function BotSessionView(props: {
       : (threads?.find((thread) => thread.threadId === session.threadId) ??
         null);
   const anchor = listed?.anchor ?? null;
-  const access = useMemo(
-    (): BotSessionAccess => ({
+  const profile = useAuthStore((s) => s.profile);
+  const access = useMemo((): BotSessionAccess => {
+    const names = {
+      botTitle,
+      memberName: (userId: string) =>
+        botMemberName(userId, profile, resolveMember),
+      viewerUserId: profile?.userId ?? null,
+    };
+    return {
+      ...names,
       botId,
       hostId,
       thread:
@@ -83,17 +97,29 @@ export function BotSessionView(props: {
             },
       openChannel: onOpenChannel,
       openThread: onOpenThread,
-    }),
-    [
-      anchor,
-      botId,
-      hostId,
-      listed,
-      onOpenChannel,
-      onOpenThread,
-      session.threadId,
-    ],
-  );
+      questionStatesOf: (receipt) =>
+        sendQuestionStates(
+          getChatSessionRegistry()
+            .peek(botId, receipt.conversationId, hostId)
+            ?.store.getState()
+            .messages.find(
+              (message) => message.messageId === receipt.messageId,
+            ) ?? null,
+          names,
+        ),
+    };
+  }, [
+    anchor,
+    botId,
+    botTitle,
+    hostId,
+    listed,
+    onOpenChannel,
+    onOpenThread,
+    profile,
+    resolveMember,
+    session.threadId,
+  ]);
   // Find is scoped to the session as it is to a chat tile.
   const tile = useMemo(
     (): Pick<EpicCanvasTileRef, "instanceId" | "id" | "type"> => ({

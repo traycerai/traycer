@@ -12,6 +12,7 @@ import {
   type ChatFindRevealTarget,
 } from "@/components/chat/chat-find";
 import { subagentCardPath } from "@/components/chat/segments/subagent-display";
+import { BotSessionContext } from "@/components/bots/bot-session-context";
 import {
   CHAT_FIND_INDEX_ABSENT,
   ChatFindIndexDemandSource,
@@ -222,6 +223,13 @@ export function useChatFindController(
   useLayoutEffect(() => {
     queuePauseReasonSupportRef.current = queuePauseReasonSupport;
   }, [queuePauseReasonSupport]);
+  // A bot's session's send cards read their posts' state (Tracy Bots T94);
+  // read through a ref for the same reason.
+  const botSession = use(BotSessionContext);
+  const botSessionRef = useRef(botSession);
+  useLayoutEffect(() => {
+    botSessionRef.current = botSession;
+  }, [botSession]);
 
   const chatFindAdapterRef = useRef<ChatFindAdapter | null>(null);
   const activeFindRevealRef = useRef<ChatFindRevealTarget | null>(null);
@@ -607,6 +615,8 @@ export function useChatFindController(
             queuePauseReasonProtocolSupported:
               queuePauseReasonSupportRef.current,
             splitLongTurns,
+            botSendQuestionStates:
+              botSessionRef.current?.questionStatesOf ?? null,
           },
         );
       },

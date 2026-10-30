@@ -499,6 +499,23 @@ export const agentMessageReceiptSchema = lazySchema(() =>
 );
 export type AgentMessageReceipt = z.infer<typeof agentMessageReceiptSchema>;
 
+// The channel post a bot's `traycer_reply`, `traycer_ask` or
+// `traycer_announce` call wrote (Tracy Bots T94): the conversation it went to
+// (the bot's channel or the session's thread), the post's message id, and for
+// a question the request it opened. The host stamps it at
+// `tool_call.completed` from the post it committed while serving the call,
+// so the session view's card can read the post's state. Null for every other
+// tool call and for every block persisted before this field.
+export const botSendReceiptSchema = lazySchema(() =>
+  z.object({
+    conversationId: z.string(),
+    messageId: z.string(),
+    requestId: z.string().nullable(),
+    kind: z.enum(["reply", "ask", "announce"]),
+  }),
+);
+export type BotSendReceipt = z.infer<typeof botSendReceiptSchema>;
+
 // Where a cross-host `traycer_send_message` call stands. A send to an agent on
 // another host is queued through the cloud rather than delivered while the
 // call runs, and the sending host learns only of a failure (traycer#2421):
@@ -927,6 +944,9 @@ export const toolCallBlockSchema = lazySchema(() =>
     // hand-frozen `toolCallBlockSchemaPreDelivery` below, so `1.28` and older
     // never see it.
     agentMessageDelivery: agentMessageDeliverySchema.nullable().default(null),
+    // The post a bot's send wrote - see `botSendReceiptSchema`. Null for every
+    // other tool call and for blocks persisted before this field.
+    botSendReceipt: botSendReceiptSchema.nullable().default(null),
     // The shell a `traycer_run_shell` call created - see
     // `toolCallManagedCommandSchema`. Null for every other tool call.
     managedCommand: toolCallManagedCommandSchema.nullable().default(null),

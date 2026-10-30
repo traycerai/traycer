@@ -429,6 +429,7 @@ export function BotChannelView(props: {
         if (messageId === null) return;
         setLanding((previous) => ({
           messageId,
+          sendPostId: null,
           visit: (previous?.visit ?? 0) + 1,
         }));
       },

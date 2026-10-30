@@ -346,7 +346,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
       <button
         type="button"
         data-testid="stub-channel-open-turn"
-        onClick={() => props.onOpenTurn(REPLY_TURN)}
+        onClick={() => props.onOpenTurn(REPLY_TURN, null)}
       />
       <button
         type="button"
@@ -356,6 +356,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
             chatId: "session-thread-1",
             threadId: "thread-1",
             messageId: null,
+            sendPostId: null,
           })
         }
       />
@@ -430,17 +431,20 @@ vi.mock("@/components/bots/bot-activity-page", () => ({
         type="button"
         data-testid="stub-activity-open-turn"
         onClick={() =>
-          props.onOpenTurn({
-            chatId: "trunk-1",
-            turnIds: ["turn-checkin"],
-            userMessageId: "prompt-checkin",
-            threadId: null,
-            startedAt: 1_000,
-            endedAt: 2_000,
-            summary: null,
-            messageIds: [],
-            requestIds: [],
-          })
+          props.onOpenTurn(
+            {
+              chatId: "trunk-1",
+              turnIds: ["turn-checkin"],
+              userMessageId: "prompt-checkin",
+              threadId: null,
+              startedAt: 1_000,
+              endedAt: 2_000,
+              summary: null,
+              messageIds: [],
+              requestIds: [],
+            },
+            null,
+          )
         }
       />
     </div>

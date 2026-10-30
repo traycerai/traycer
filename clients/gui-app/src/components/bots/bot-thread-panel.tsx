@@ -193,6 +193,7 @@ export function BotThreadPanel(props: {
                 chatId: thread.sessionChatId,
                 threadId: thread.threadId,
                 messageId: null,
+                sendPostId: null,
               })
             }
           >
@@ -322,7 +323,7 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
         summary: ref.summary,
         startedAt: ref.startedAt,
         endedAt: ref.endedAt,
-        open: () => onOpenTurn(ref),
+        open: () => onOpenTurn(ref, null),
       };
     },
     [onOpenTurn, turnOfRequest],

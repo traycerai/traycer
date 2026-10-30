@@ -84,7 +84,7 @@ vi.mock("@/hooks/bots/use-bot-turn-locate-query", () => ({
   useBotTurnLocateQuery: () => ({ data: undefined }),
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
-  useChatLocateRow: () => null,
+  useChatLocateRowAnswer: () => ({ status: "waiting" }),
 }));
 vi.mock("@/components/chat/chat-messages", () => ({
   ChatMessages: (props: { messages: ReadonlyArray<unknown> }) => (

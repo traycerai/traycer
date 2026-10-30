@@ -49,25 +49,36 @@ export interface BotSentPost {
  * One of the bot's own sessions to open as a read-only chat in place of its
  * channel (Tracy Bots T93): the trunk's (`threadId` `null`) or a thread's,
  * and the message of it the view lands on (`null`: where it opens).
+ * `sendPostId` is a post the session's send wrote (T94): the view lands on
+ * that send's card where the session has one, else on `messageId`.
  */
 export interface BotSessionTarget {
   readonly chatId: string;
   readonly threadId: string | null;
   readonly messageId: string | null;
+  readonly sendPostId: string | null;
 }
 
 /** Opens one of the bot's sessions, read-only, in place of its channel. */
 export type BotSessionOpen = (target: BotSessionTarget) => void;
 
-/** Opens a turn of the bot: its session, landed on the message that started the turn. */
-export type BotTurnOpen = (ref: BotTurnRef) => void;
+/**
+ * Opens a turn of the bot: its session, landed on the message that started
+ * the turn, or on the card of the send that wrote `sendPostId` (`null` for
+ * none).
+ */
+export type BotTurnOpen = (ref: BotTurnRef, sendPostId: string | null) => void;
 
-/** Where a turn of the bot is in its session. */
-export function sessionTargetOfTurn(ref: BotTurnRef): BotSessionTarget {
+/** Where a turn of the bot is in its session, and the post of it to land on. */
+export function sessionTargetOfTurn(
+  ref: BotTurnRef,
+  sendPostId: string | null,
+): BotSessionTarget {
   return {
     chatId: ref.chatId,
     threadId: ref.threadId,
     messageId: ref.userMessageId,
+    sendPostId,
   };
 }
 

@@ -202,6 +202,7 @@ function renderSend(error: string, variant: "card" | "row"): void {
         mcpApp={null}
         agentMessageReceipt={null}
         agentMessageDelivery={null}
+        botSendReceipt={null}
         isStreaming={false}
         endState={null}
         stopped={false}

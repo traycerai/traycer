@@ -22,9 +22,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
+  BotQuestionSettlement,
   ContentBlock,
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
+import type { BotSendReceipt } from "@traycer/protocol/persistence/epic/content-blocks";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 
 const mocks = vi.hoisted(() => ({
@@ -65,6 +67,7 @@ import {
   BOT_ID,
   CHANNEL_ID,
   HOST_ID,
+  botReply,
   POST_FIRST_LINE,
   POST_ID,
   REPLY_PROMPT_ID,
@@ -82,7 +85,11 @@ import {
 } from "@/components/chat/__tests__/legend-list-test-environment";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { BotTranscriptLanding } from "@/components/bots/bot-chat-transcript";
-import { UNRESOLVED_BOT_MEMBERS } from "@/lib/bots/bot-member-names";
+import {
+  UNRESOLVED_BOT_MEMBERS,
+  type BotMemberResolver,
+} from "@/lib/bots/bot-member-names";
+import { __getChatSessionRegistryForTests } from "@/lib/registries/chat-session-registry";
 import { useTileFindStore } from "@/stores/tile-find";
 
 const IDENTITY: BotIdentity = {
@@ -131,6 +138,7 @@ function sendCall(input: {
     managedCommand: null,
     agentMessageReceipt: null,
     agentMessageDelivery: null,
+    botSendReceipt: null,
     artifact: null,
     mcpApp: null,
     progress: null,
@@ -292,6 +300,7 @@ function mountSession(input: {
   readonly threadId: string | null;
   readonly landOn: BotTranscriptLanding | null;
   readonly threads: ReadonlyArray<BotThreadSummary>;
+  readonly resolveMember: BotMemberResolver;
 }): void {
   const tree = (): ReactNode => (
     <StrictMode>
@@ -308,7 +317,7 @@ function mountSession(input: {
                 landOn: input.landOn,
               }}
               threads={input.threads}
-              resolveMember={UNRESOLVED_BOT_MEMBERS}
+              resolveMember={input.resolveMember}
               onClose={opened.close}
               onOpenChannel={opened.channel}
               onOpenThread={opened.thread}
@@ -322,7 +331,13 @@ function mountSession(input: {
 }
 
 function mountTrunk(landOn: BotTranscriptLanding | null): void {
-  mountSession({ chatId: TRUNK_ID, threadId: null, landOn, threads: [] });
+  mountSession({
+    chatId: TRUNK_ID,
+    threadId: null,
+    landOn,
+    threads: [],
+    resolveMember: UNRESOLVED_BOT_MEMBERS,
+  });
 }
 
 /** The trunk with one check-in turn whose only block is `send`. */
@@ -473,7 +488,7 @@ describe("a bot's trunk session, read whole", () => {
   });
 
   it("lands on the turn it was opened on", async () => {
-    mountTrunk({ messageId: REPLY_PROMPT_ID, visit: 1 });
+    mountTrunk({ messageId: REPLY_PROMPT_ID, sendPostId: null, visit: 1 });
     await settleLegendList();
 
     await waitFor(() => {
@@ -675,6 +690,7 @@ describe("a thread's session, read whole", () => {
       threadId: THREAD_ID,
       landOn: null,
       threads: [postThread()],
+      resolveMember: UNRESOLVED_BOT_MEMBERS,
     });
     await settleLegendList();
 
@@ -692,5 +708,255 @@ describe("a thread's session, read whole", () => {
     );
 
     expect(opened.thread).toHaveBeenCalledWith(THREAD_ID);
+  });
+});
+
+describe("a send stamped with the post it wrote", () => {
+  const ASK_POST_ID = "bot-question-req-ask";
+  const ASK_REQUEST_ID = "req-ask";
+  const REPLY_POST_ID = "reply-stamped";
+  const TEAMMATE_ID = "teammate-1";
+  const TEAMMATE: BotMemberResolver = (userId) =>
+    userId === TEAMMATE_ID ? { displayName: "Dana", avatarUrl: null } : null;
+  const ASK_RECEIPT: BotSendReceipt = {
+    conversationId: CHANNEL_ID,
+    messageId: ASK_POST_ID,
+    requestId: ASK_REQUEST_ID,
+    kind: "ask",
+  };
+  let releaseChannel: (() => void) | null = null;
+
+  afterEach(() => {
+    releaseChannel?.();
+    releaseChannel = null;
+  });
+
+  /** The bot's question post in the channel, each question settled as given. */
+  function questionPost(
+    settlements: ReadonlyArray<BotQuestionSettlement | null>,
+  ): Message {
+    return {
+      ...botReply({
+        messageId: ASK_POST_ID,
+        text: QUESTION_TEXT,
+        timestamp: 4_000,
+      }),
+      question: {
+        requestId: ASK_REQUEST_ID,
+        questions: settlements.map((settlement, index) => ({
+          text: `${QUESTION_TEXT} (${index + 1})`,
+          options: ["Keep it", "Bump now"],
+          allowFreeText: false,
+          settlement,
+        })),
+      },
+    };
+  }
+
+  /**
+   * The channel holding the bot's question as `settlements` leave it, open
+   * in the tab's session registry as the card's post read holds it, and the
+   * trunk whose session asked it with the post stamped on the call.
+   */
+  function mountStampedAsk(
+    settlements: ReadonlyArray<BotQuestionSettlement | null>,
+  ): void {
+    const channel = scriptedSession(CHANNEL_ID, [questionPost(settlements)]);
+    mocks.sessions[CHANNEL_ID] = channel.handle;
+    const registry = __getChatSessionRegistryForTests();
+    registry.acquire(
+      { epicId: BOT_ID, chatId: CHANNEL_ID, hostId: HOST_ID, scopeKey: "test" },
+      () => channel.handle,
+    );
+    releaseChannel = () => registry.release(BOT_ID, CHANNEL_ID, HOST_ID);
+    mocks.sessions[TRUNK_ID] = scriptedSession(TRUNK_ID, [
+      checkinPrompt(),
+      botTurn({
+        messageId: "turn-stamped-ask-record",
+        turnId: "turn-stamped-ask",
+        at: 4_000,
+        blocks: [
+          {
+            ...sendCall({
+              blockId: "send-stamped-ask",
+              toolName: "mcp__traycer_a2a__traycer_ask",
+              fields: {
+                conversationId: CHANNEL_ID,
+                questions: JSON.stringify(
+                  settlements.map((_, index) => ({
+                    text: `${QUESTION_TEXT} (${index + 1})`,
+                    options: ["Keep it", "Bump now"],
+                    allowFreeText: false,
+                  })),
+                ),
+                repliesTo: POST_ID,
+              },
+              error: null,
+              at: 4_000,
+            }),
+            botSendReceipt: ASK_RECEIPT,
+          },
+        ],
+      }),
+    ]).handle;
+    mountSession({
+      chatId: TRUNK_ID,
+      threadId: null,
+      landOn: null,
+      threads: [],
+      resolveMember: TEAMMATE,
+    });
+  }
+
+  function askCard(): HTMLElement {
+    const card = sendCards().find((each) => each.dataset.kind === "ask");
+    if (card === undefined) throw new Error("no question card");
+    return card;
+  }
+
+  it("shows a question a member answered in the channel as answered by them, with nothing to press but the link to the post, which Find matches", async () => {
+    const user = userEvent.setup();
+    mountStampedAsk([
+      {
+        answer: "Bump now",
+        skipped: false,
+        by: { kind: "person", userId: TEAMMATE_ID },
+        at: 5_000,
+      },
+    ]);
+    await settleLegendList();
+
+    const card = askCard();
+    await waitFor(() =>
+      expect(
+        within(card)
+          .getAllByTestId("bot-send-question-state")
+          .map((state) => state.textContent),
+      ).toEqual(["Answered by Dana: Bump now"]),
+    );
+    expect(
+      within(card)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Open in the channel"]);
+
+    await user.click(
+      within(card).getByRole("button", { name: "Open in the channel" }),
+    );
+    expect(opened.channel).toHaveBeenCalledWith(ASK_POST_ID);
+
+    act(() => {
+      useTileFindStore.getState().openForTile(`bot-session:${TRUNK_ID}`);
+    });
+    const bar = await within(view()).findByTestId("tile-find-bar");
+    const input = within(bar).getByRole("textbox", { name: "Find in tile" });
+    await user.type(input, "Answered by Dana");
+    await waitFor(() => expect(bar.textContent).toContain("1 of 1"));
+  });
+
+  it("shows a skipped question, one the bot settled with its default, and one still open, each as the channel's card does", async () => {
+    mountStampedAsk([
+      {
+        answer: null,
+        skipped: true,
+        by: { kind: "person", userId: TEAMMATE_ID },
+        at: 5_000,
+      },
+      { answer: "Keep it", skipped: false, by: { kind: "bot" }, at: 6_000 },
+      null,
+    ]);
+    await settleLegendList();
+
+    const card = askCard();
+    await waitFor(() =>
+      expect(
+        within(card)
+          .getAllByTestId("bot-send-question-state")
+          .map((state) => state.textContent),
+      ).toEqual(["Skipped", "Settled by Release Bot: Keep it"]),
+    );
+    const [, , open] = within(card).getAllByTestId("bot-send-question");
+    expect(within(open).queryByTestId("bot-send-question-state")).toBeNull();
+    expect(
+      within(card)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Open in the channel"]);
+  });
+
+  it("links a reply to the post it wrote, not the post it follows", async () => {
+    const user = userEvent.setup();
+    mountOneSend({
+      ...sendCall({
+        blockId: "send-stamped-reply",
+        toolName: "mcp__traycer_a2a__traycer_reply",
+        fields: {
+          conversationId: CHANNEL_ID,
+          text: REPLY_TEXT,
+          repliesTo: POST_ID,
+        },
+        error: null,
+        at: 2_000,
+      }),
+      botSendReceipt: {
+        conversationId: CHANNEL_ID,
+        messageId: REPLY_POST_ID,
+        requestId: null,
+        kind: "reply",
+      },
+    });
+    await settleLegendList();
+
+    const [reply] = sendCards();
+    await user.click(within(reply).getByRole("button", { name: "Open post" }));
+
+    expect(opened.channel).toHaveBeenCalledWith(REPLY_POST_ID);
+  });
+
+  it("lands on the card of the send that wrote the post it was opened from", async () => {
+    mocks.sessions[TRUNK_ID] = scriptedSession(TRUNK_ID, [
+      checkinPrompt(),
+      botTurn({
+        messageId: "turn-landing-record",
+        turnId: "turn-landing",
+        at: 2_000,
+        blocks: [
+          readCall(1_500),
+          {
+            ...sendCall({
+              blockId: "send-landed",
+              toolName: "mcp__traycer_a2a__traycer_reply",
+              fields: { conversationId: CHANNEL_ID, text: REPLY_TEXT },
+              error: null,
+              at: 2_000,
+            }),
+            botSendReceipt: {
+              conversationId: CHANNEL_ID,
+              messageId: REPLY_POST_ID,
+              requestId: null,
+              kind: "reply",
+            },
+          },
+        ],
+      }),
+    ]).handle;
+    mountTrunk({
+      messageId: CHECKIN_PROMPT_ID,
+      sendPostId: REPLY_POST_ID,
+      visit: 1,
+    });
+    await settleLegendList();
+
+    await waitFor(() => {
+      const anchor = document.querySelector<HTMLElement>(
+        '[data-block-id="send-landed"][data-navigation-highlighted="true"]',
+      );
+      expect(anchor).not.toBeNull();
+    });
+    expect(
+      document.querySelector<HTMLElement>(
+        `[data-message-id="${CHECKIN_PROMPT_ID}"]`,
+      )?.dataset.navigationHighlighted,
+    ).toBeUndefined();
   });
 });
