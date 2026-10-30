@@ -416,8 +416,9 @@ function mount(options: MountOptions): {
             directive={null}
             appConversationChatId={mocks.state.appConversationChatId}
             trunkChatId="trunk-chat"
-            openTurn={null}
             onOpenTurn={vi.fn()}
+            onOpenSession={vi.fn()}
+            landOn={null}
             openMemory={null}
             onOpenMemory={vi.fn()}
             environmentId="env-1"

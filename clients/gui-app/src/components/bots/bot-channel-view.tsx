@@ -27,11 +27,9 @@ import {
   BotChatTranscript,
   type BotTranscriptLanding,
   type BotTranscriptSurface,
-  type BotTurnOpen,
   type QuestionAnswerSend,
 } from "@/components/bots/bot-chat-transcript";
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
-import { BotTurnPanel } from "@/components/bots/bot-turn-panel";
 import {
   BotMemoryPanel,
   type BotMemoryNavigation,
@@ -83,7 +81,8 @@ import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import type {
   BotOpenMemory,
   BotOpenThread,
-  BotOpenTurn,
+  BotSessionOpen,
+  BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
 import { useAuthStore, type AuthProfile } from "@/stores/auth/auth-store";
 import type { StackedIdentity } from "@/components/bots/bot-avatars";
@@ -152,10 +151,10 @@ function channelConversation(
  * on its line; it is marked read once its panel is in front of the person,
  * which a verdict landing while they are elsewhere waits for.
  *
- * The rail beside the channel is one slot: a thread, or one turn of the bot
- * - "How Tracy answered", opened from a reply's receipt in the channel or in
- * the thread (Tracy Bots T86) - which takes the thread's place and brings it
- * back from its header. The trunk's routing card sits above the channel's
+ * The rail beside the channel is one slot: a thread, or the bot's memory,
+ * which takes the thread's place and brings it back from its header. A
+ * reply's receipt, in the channel or in the thread (Tracy Bots T86), opens
+ * the turn's session in place of the channel (T93). The trunk's routing card sits above the channel's
  * box, as the agent chat's sits above its composer.
  */
 export function BotChannelView(props: {
@@ -198,9 +197,12 @@ export function BotChannelView(props: {
   /** The thread open beside the channel; `null` for none. */
   readonly openThread: BotOpenThread | null;
   readonly onOpenThread: (open: BotOpenThread | null) => void;
-  /** The turn open beside the channel in the thread's place; `null` for none. */
-  readonly openTurn: BotOpenTurn | null;
-  readonly onOpenTurn: (open: BotOpenTurn | null) => void;
+  /** Opens a reply's turn: its session, in place of the channel. */
+  readonly onOpenTurn: BotTurnOpen;
+  /** Opens one of the bot's sessions in place of the channel: the open thread's, from its panel. */
+  readonly onOpenSession: BotSessionOpen;
+  /** A message the channel lands on as it opens; `null` keeps where it opens. */
+  readonly landOn: BotTranscriptLanding | null;
   /** The bot's memory open beside the channel in the thread's place; `null` for none. */
   readonly openMemory: BotOpenMemory | null;
   readonly onOpenMemory: (open: BotOpenMemory | null) => void;
@@ -225,8 +227,8 @@ export function BotChannelView(props: {
     surfaceActions,
     openThread: open,
     onOpenThread,
-    openTurn,
     onOpenTurn,
+    onOpenSession,
     openMemory,
     onOpenMemory,
     environmentId,
@@ -406,15 +408,13 @@ export function BotChannelView(props: {
     [onOpenThread, threadListSupported, viewer],
   );
 
-  const { openTurnFromChannel, openTurnFromThread } = useRailTurnOpeners({
-    open,
-    openTurn,
-    openMemory,
-    onOpenTurn,
-  });
   // A memory's link to the post it was learned from shows the channel there,
-  // each follow a new visit, so the same link followed again lands again.
-  const [landing, setLanding] = useState<BotTranscriptLanding | null>(null);
+  // each follow a new visit, so the same link followed again lands again. The
+  // channel opens where the tab asked it to: it mounts afresh each time a
+  // session shown in its place closes.
+  const [landing, setLanding] = useState<BotTranscriptLanding | null>(
+    props.landOn,
+  );
   const memoryNavigation = useMemo(
     (): BotMemoryNavigation => ({
       openThread: (anchorMessageId) =>
@@ -471,7 +471,7 @@ export function BotChannelView(props: {
       answerQuestion: answersTaken ? answerQuestion : null,
       discussQuestion,
       failedRequest,
-      openTurn: openTurnFromChannel,
+      openTurn: onOpenTurn,
       sessionChatId: trunkChatId,
       intro: { botTitle, directive },
     }),
@@ -490,7 +490,7 @@ export function BotChannelView(props: {
       onOpenThread,
       openAnnouncementThread,
       openThreadPostId,
-      openTurnFromChannel,
+      onOpenTurn,
       resolveMember,
       sending,
       threadListSupported,
@@ -512,11 +512,11 @@ export function BotChannelView(props: {
 
   const trunkReply = channelTrunkReply(activity);
 
-  // The rail holds one of a thread, a turn or the memory: a turn or the
-  // memory open leaves no thread open (`open` is `null`).
+  // The rail holds one of a thread or the memory: the memory open leaves no
+  // thread open (`open` is `null`).
   const railThreadPostId = threadListSupported ? openThreadPostId : null;
   const threadOpen = railThreadPostId !== null;
-  const railOpen = threadOpen || openTurn !== null || openMemory !== null;
+  const railOpen = threadOpen || openMemory !== null;
   const openThread =
     openThreadPostId === null
       ? null
@@ -659,16 +659,6 @@ export function BotChannelView(props: {
               onSent={openPostedThread}
             />
           </section>
-          <ChannelTurnPane
-            botId={botId}
-            hostId={hostId}
-            botTitle={botTitle}
-            channelId={channel.conversationId}
-            turn={openTurn}
-            resolveMember={resolveMember}
-            onOpenThread={onOpenThread}
-            onOpenTurn={onOpenTurn}
-          />
           <ChannelMemoryPane
             memory={openMemory}
             render={(memory) => (
@@ -709,7 +699,8 @@ export function BotChannelView(props: {
                 onClose={() => onOpenThread(null)}
                 onOpenActivity={onOpenActivity}
                 onEditPost={editPostFromThread}
-                onOpenTurn={openTurnFromThread}
+                onOpenTurn={onOpenTurn}
+                onOpenSession={onOpenSession}
               />
             )}
           />
@@ -772,40 +763,6 @@ function useSurfaceCards(args: {
   );
 }
 
-/**
- * How a receipt opens its turn in the rail's one slot: in place of the
- * thread open there, which the turn's header brings back. A turn opened from
- * the channel over a turn or the memory keeps the thread the first
- * displaced; one opened from the thread's panel displaces that thread.
- */
-function useRailTurnOpeners(args: {
-  readonly open: BotOpenThread | null;
-  readonly openTurn: BotOpenTurn | null;
-  readonly openMemory: BotOpenMemory | null;
-  readonly onOpenTurn: (open: BotOpenTurn | null) => void;
-}): {
-  readonly openTurnFromChannel: BotTurnOpen;
-  readonly openTurnFromThread: BotTurnOpen;
-} {
-  const { open, openTurn, openMemory, onOpenTurn } = args;
-  const displaced = openTurn?.back ?? openMemory?.back ?? open;
-  const openTurnOver = useCallback(
-    (back: BotOpenThread | null): BotTurnOpen =>
-      (ref, question) =>
-        onOpenTurn({ ref, question, back }),
-    [onOpenTurn],
-  );
-  const openTurnFromChannel = useMemo(
-    () => openTurnOver(displaced),
-    [displaced, openTurnOver],
-  );
-  const openTurnFromThread = useMemo(
-    () => openTurnOver(open),
-    [open, openTurnOver],
-  );
-  return { openTurnFromChannel, openTurnFromThread };
-}
-
 /** The bot's memory open in the rail; nothing for none (`null`). */
 function ChannelMemoryPane(props: {
   readonly memory: BotOpenMemory | null;
@@ -844,47 +801,6 @@ function ChannelThreadPane(props: {
       testId="bot-thread-pane"
     >
       {render(postId)}
-    </BotResizablePane>
-  );
-}
-
-/**
- * The turn open in the rail, in the pane the thread's panel takes; nothing
- * for none (`null`).
- */
-function ChannelTurnPane(props: {
-  readonly botId: string;
-  readonly hostId: string;
-  readonly botTitle: string;
-  readonly channelId: string;
-  readonly turn: BotOpenTurn | null;
-  readonly resolveMember: BotMemberResolver;
-  readonly onOpenThread: (open: BotOpenThread | null) => void;
-  readonly onOpenTurn: (open: BotOpenTurn | null) => void;
-}): ReactNode {
-  const { turn, onOpenThread, onOpenTurn } = props;
-  if (turn === null) return null;
-  const back = turn.back;
-  return (
-    <BotResizablePane
-      pane="thread"
-      edge="left"
-      label="Resize panel"
-      className="flex min-h-0 min-w-0 flex-1 flex-col @3xl:w-(--bot-pane-width) @3xl:max-w-[60%] @3xl:flex-none @3xl:border-l @3xl:border-border/60"
-      handleClassName="hidden @3xl:block"
-      testId="bot-turn-pane"
-    >
-      <BotTurnPanel
-        key={`${turn.ref.chatId}:${turn.ref.turnIds[0]}`}
-        botId={props.botId}
-        hostId={props.hostId}
-        botTitle={props.botTitle}
-        channelId={props.channelId}
-        turn={turn}
-        resolveMember={props.resolveMember}
-        onBack={back === null ? null : () => onOpenThread(back)}
-        onClose={() => onOpenTurn(null)}
-      />
     </BotResizablePane>
   );
 }

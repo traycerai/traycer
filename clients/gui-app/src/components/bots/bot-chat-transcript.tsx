@@ -15,17 +15,13 @@ import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
 import { replyFollowsPost, replyRowIdFor } from "@/lib/bots/reply-row";
-import {
-  botTurnIndexOf,
-  turnOfMessages,
-  type BotTurnIndex,
-} from "@/lib/bots/bot-turn-receipt";
+import { botTurnIndexOf, turnOfMessages } from "@/lib/bots/bot-turn-receipt";
 import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useBotTurnLocateQuery } from "@/hooks/bots/use-bot-turn-locate-query";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
-import type { BotChatMessageRef } from "@/stores/bots/bot-open-thread-store";
+import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 import {
   botMemberName,
@@ -88,7 +84,7 @@ export type BotTranscriptSurface =
         requestId: string,
         senderUserId: string | null,
       ) => ChatBotFailedRequest | null;
-      /** Opens a turn of the bot beside the channel; `null` where nothing can show one. */
+      /** Opens a turn of the bot, its session landed on it; `null` where nothing can show one. */
       readonly openTurn: BotTurnOpen | null;
       /** The session that answers the channel (the trunk), whose failed turn the agent chat's actions recover. */
       readonly sessionChatId: string | null;
@@ -113,22 +109,11 @@ export type BotTranscriptSurface =
         requestId: string,
         senderUserId: string | null,
       ) => ChatBotFailedRequest | null;
-      /** Opens a turn of the bot in the rail, in place of the thread; `null` where nothing can show one. */
+      /** Opens a turn of the bot, its session landed on it; `null` where nothing can show one. */
       readonly openTurn: BotTurnOpen | null;
       /** The thread's session, whose failed turn the agent chat's actions recover; `null` while not known. */
       readonly sessionChatId: string | null;
-      /** The post the thread opens on, which a reply with no message above it in the thread answers. */
-      readonly originPost: BotChatMessageRef;
     };
-
-/**
- * Opens one turn of the bot, "How Tracy answered", with the member's message
- * it answered (`null` for none).
- */
-export type BotTurnOpen = (
-  ref: BotTurnRef,
-  question: BotChatMessageRef | null,
-) => void;
 
 /**
  * Sends a question card's answer or Skip to the question on the row
@@ -278,7 +263,8 @@ function useResubscribeOnNextSend(input: {
  * A channel or thread draws, under each reply of the bot and under a post it
  * failed to answer, the receipt of the turn behind it (Tracy Bots T86), as
  * the bound host names the turns (`bot.turn.locate`); the receipt opens the
- * turn through the surface. A post its session failed on, where that session
+ * turn's session, read-only and landed on the turn (T93), through the
+ * surface. A post its session failed on, where that session
  * names the post's turn as its last failed attempt, says so with the agent
  * chat's reason and actions.
  */
@@ -486,7 +472,6 @@ function BotChatTranscriptBody(props: {
     client: tabClient,
     hostId,
     botId,
-    chatId,
     messages,
     surface,
   });
@@ -670,19 +655,18 @@ const NO_TURNS: TranscriptTurns = {
  * The turns behind a channel's or thread's rows: one `bot.turn.locate` for
  * the replies it renders and the posts it draws as not answered, read again
  * as those change and as the bot's turns settle; and the receipt each row
- * draws, which opens the turn with the member's message it answered. Where
- * the surface's session names a post's turn as its last failed attempt, the
- * agent chat's reason and actions.
+ * draws, which opens the turn's session landed on it. Where the surface's
+ * session names a post's turn as its last failed attempt, the agent chat's
+ * reason and actions.
  */
 function useTranscriptTurns(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string;
   readonly botId: string;
-  readonly chatId: string;
   readonly messages: ReadonlyArray<ChatMessage>;
   readonly surface: BotTranscriptSurface | null;
 }): TranscriptTurns {
-  const { client, hostId, botId, chatId, messages, surface } = input;
+  const { client, hostId, botId, messages, surface } = input;
   const failedRequest = surface?.failedRequest ?? null;
   const keys = useMemo(
     () => turnLocateKeysOf(messages, failedRequest),
@@ -710,48 +694,27 @@ function useTranscriptTurns(input: {
     sessionChatId: surface?.sessionChatId ?? null,
     turnOfRequest,
   });
-  const rows = useMemo(() => transcriptRowsOf(messages), [messages]);
   const openTurn = surface?.openTurn ?? null;
-  const originPost = surface?.kind === "thread" ? surface.originPost : null;
   return useMemo((): TranscriptTurns => {
     if (surface === null) return NO_TURNS;
     return {
       replyReceipt:
         openTurn === null
           ? null
-          : (messageIds) =>
-              replyReceiptOf({
-                index,
-                messages,
-                rows,
-                messageIds,
-                chatId,
-                originPost,
-                openTurn,
-              }),
+          : (messageIds) => {
+              const ref = turnOfMessages(index, messageIds);
+              return ref === null ? null : receiptOf(ref, openTurn);
+            },
       requestReceipt:
         openTurn === null
           ? null
           : (requestId) => {
               const ref = index.byRequestId.get(requestId);
-              if (ref === undefined) return null;
-              const postId = rows.postIdByRequestId.get(requestId) ?? null;
-              const question =
-                postId === null ? null : { chatId, messageId: postId };
-              return receiptOf(ref, () => openTurn(ref, question));
+              return ref === undefined ? null : receiptOf(ref, openTurn);
             },
       failedRecovery,
     };
-  }, [
-    chatId,
-    failedRecovery,
-    index,
-    messages,
-    openTurn,
-    originPost,
-    rows,
-    surface,
-  ]);
+  }, [failedRecovery, index, openTurn, surface]);
 }
 
 const NO_TURN_KEYS: ReadonlyArray<{ chatId: string; turnId: string }> = [];
@@ -790,87 +753,11 @@ function turnLocateKeysOf(
   return { messageIds, requestIds };
 }
 
-/**
- * Where each row of the list is, read once per list rather than once per
- * row's receipt: a record's row by every record it carries (its own and
- * its turn's), and a member's post by its request.
- */
-type TranscriptRows = {
-  readonly rowByMessageId: ReadonlyMap<string, number>;
-  readonly postIdByRequestId: ReadonlyMap<string, string | null>;
-};
-
-function transcriptRowsOf(
-  messages: ReadonlyArray<ChatMessage>,
-): TranscriptRows {
-  const rowByMessageId = new Map<string, number>();
-  const postIdByRequestId = new Map<string, string | null>();
-  messages.forEach((message, at) => {
-    const ids = [
-      message.persistentMessageId,
-      ...(message.turnMessageIds ?? []),
-    ];
-    for (const id of ids) {
-      if (id !== null && !rowByMessageId.has(id)) rowByMessageId.set(id, at);
-    }
-    const requestId = message.conversationRequest?.requestId;
-    if (requestId !== undefined && !postIdByRequestId.has(requestId)) {
-      postIdByRequestId.set(requestId, message.persistentMessageId);
-    }
-  });
-  return { rowByMessageId, postIdByRequestId };
-}
-
-function receiptOf(ref: BotTurnRef, open: () => void): ChatBotTurnReceipt {
+function receiptOf(ref: BotTurnRef, openTurn: BotTurnOpen): ChatBotTurnReceipt {
   return {
     summary: ref.summary,
     startedAt: ref.startedAt,
     endedAt: ref.endedAt,
-    open,
+    open: () => openTurn(ref),
   };
-}
-
-/**
- * A reply's receipt, which opens its turn with the member's message it
- * answered: the post a direct reply names, else the nearest member's message
- * above it in the list, else, in a thread, the post the thread opens on.
- */
-function replyReceiptOf(input: {
-  readonly index: BotTurnIndex;
-  readonly messages: ReadonlyArray<ChatMessage>;
-  readonly rows: TranscriptRows;
-  readonly messageIds: ReadonlyArray<string>;
-  readonly chatId: string;
-  readonly originPost: BotChatMessageRef | null;
-  readonly openTurn: BotTurnOpen;
-}): ChatBotTurnReceipt | null {
-  const { index, messages, rows, messageIds, chatId, originPost, openTurn } =
-    input;
-  const ref = turnOfMessages(index, messageIds);
-  if (ref === null) return null;
-  // The first row carrying any of the reply's records, as a scan would find.
-  let at = -1;
-  for (const id of messageIds) {
-    const row = rows.rowByMessageId.get(id);
-    if (row !== undefined && (at === -1 || row < at)) at = row;
-  }
-  const question = questionAbove(messages, at, chatId) ?? originPost;
-  return receiptOf(ref, () => openTurn(ref, question));
-}
-
-function questionAbove(
-  messages: ReadonlyArray<ChatMessage>,
-  at: number,
-  chatId: string,
-): BotChatMessageRef | null {
-  if (at === -1) return null;
-  const repliesTo = messages[at].repliesTo;
-  if (repliesTo !== undefined) return { chatId, messageId: repliesTo };
-  for (let i = at - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (message.role !== "user") continue;
-    if (message.persistentMessageId === null) continue;
-    return { chatId, messageId: message.persistentMessageId };
-  }
-  return null;
 }
