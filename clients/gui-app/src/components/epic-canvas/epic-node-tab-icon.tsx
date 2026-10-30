@@ -13,6 +13,7 @@ import {
   type EpicNodeKind,
 } from "@/lib/artifacts/node-display";
 import type { ArtifactFileViewer } from "@/lib/files/artifact-file-viewer";
+import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import {
   useMaybeEpicTuiAgentHarnessId,
   useRegisteredEpicActiveAgentIds,
@@ -154,9 +155,9 @@ function EpicNodeTabIconContent(props: {
   }
   if (props.node.type === "file") {
     return (
-      <FileArtifactTabIcon
+      <RegisteredFileArtifactIcon
         epicId={props.epicId}
-        nodeId={props.node.id}
+        artifactId={props.node.id}
         className={props.className}
       />
     );
@@ -166,15 +167,18 @@ function EpicNodeTabIconContent(props: {
   );
 }
 
-/** A file tab shows the same viewer glyph as the file's sidebar row. */
-function FileArtifactTabIcon(props: {
+/**
+ * A file's viewer glyph read through the session registry, so a tab, a drag
+ * preview or a mention of a file shows the glyph its sidebar row shows.
+ */
+function RegisteredFileArtifactIcon(props: {
   readonly epicId: string;
-  readonly nodeId: string;
+  readonly artifactId: string | null;
   readonly className: string;
 }) {
   const viewer = useRegisteredEpicFileArtifactViewer(
     props.epicId,
-    props.nodeId,
+    props.artifactId,
   );
   return <FileArtifactIcon viewer={viewer} className={props.className} />;
 }
@@ -310,4 +314,30 @@ export function FileArtifactIcon(props: {
   return (
     <Icon className={cn(props.className, tone.className)} style={tone.style} />
   );
+}
+
+/**
+ * An artifact's glyph on any surface that names one - mentions, chips, the
+ * palette, search, child lists: the kind's glyph in its Settings tint, and for
+ * a file the glyph of the viewer it opens in. The regression it guards against
+ * is the one {@link useEpicNodeIconTone} names: an icon whose colour or shape
+ * encodes which surface drew it rather than what the artifact is. A null
+ * `artifactId` is an artifact the surface cannot name.
+ */
+export function EpicArtifactIcon(props: {
+  readonly epicId: string;
+  readonly artifactId: string | null;
+  readonly kind: EpicArtifactKind;
+  readonly className: string;
+}) {
+  if (props.kind === "file") {
+    return (
+      <RegisteredFileArtifactIcon
+        epicId={props.epicId}
+        artifactId={props.artifactId}
+        className={props.className}
+      />
+    );
+  }
+  return <StaticEpicNodeIcon type={props.kind} className={props.className} />;
 }
