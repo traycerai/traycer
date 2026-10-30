@@ -54,7 +54,7 @@ export class FakeStreamSession implements IStreamSession {
    */
   onStatusChange(handler: StatusChangeHandler): void {
     this.statusHandler = handler;
-    if (this.status === "open") handler("open", null, null);
+    if (this.status === "open") handler("open", null, null, null);
   }
 
   requestReconnect(): void {}
@@ -69,7 +69,7 @@ export class FakeStreamSession implements IStreamSession {
 
   emitStatus(status: StreamStatus): void {
     this.status = status;
-    this.statusHandler?.(status, null, null);
+    this.statusHandler?.(status, null, null, null);
   }
 
   /** The terminal close a host's bearer-expiry disconnect produces. */
@@ -86,6 +86,7 @@ export class FakeStreamSession implements IStreamSession {
           upgradeGuidance: null,
         },
       },
+      null,
       null,
     );
   }

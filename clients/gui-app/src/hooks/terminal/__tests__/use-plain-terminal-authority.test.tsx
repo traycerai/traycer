@@ -173,14 +173,14 @@ class ControlledSession implements IStreamSession {
 
   close(): void {
     this.closeCount += 1;
-    this.statusHandler?.("closed", { kind: "caller" }, null);
+    this.statusHandler?.("closed", { kind: "caller" }, null, null);
   }
 
   emitStatus(
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
   ): void {
-    this.statusHandler?.(status, reason, null);
+    this.statusHandler?.(status, reason, null, null);
   }
 
   emitFrame(

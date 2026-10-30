@@ -237,7 +237,7 @@ function fakeHostStreamClient(): {
       onServerFrame?.(envelope, binaryPayload);
     },
     emitStatus: (status, reason) => {
-      onStatusChange?.(status, reason, null);
+      onStatusChange?.(status, reason, null, null);
     },
     get closed() {
       return state.closed;

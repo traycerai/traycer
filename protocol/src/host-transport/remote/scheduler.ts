@@ -68,6 +68,14 @@ export class PriorityScheduler {
   private paused = false;
   private paceResumeTimer: TimerHandle | null = null;
   private paceResumeAtMs: number | null = null;
+  /** The resume gap still draining; see {@link resumeAfterResend}. */
+  private resend: {
+    readonly frames: readonly Uint8Array[];
+    readonly write: (muxFrame: Uint8Array) => Promise<void>;
+    next: number;
+  } | null = null;
+  /** The one write in flight, for {@link writeSettled}. */
+  private inFlightWrite: Promise<void> | null = null;
   /**
    * Invoked after each frame's write settles, with that frame's stream id.
    * Assigned after construction by the owning session (the same shape as
@@ -131,43 +139,66 @@ export class PriorityScheduler {
   }
 
   /**
-   * Stops draining WITHOUT dropping what is queued — its one production caller
-   * is `onHostDetached`, for the window where the relay leg is up but has no
-   * host behind it. Frames enqueued while paused are held rather than handed
-   * to a relay with nobody to deliver them to.
+   * Stops draining WITHOUT dropping what is queued, for the window where the
+   * relay leg has no host behind it, or a resume exchange owns the wire.
+   * Frames enqueued while paused are held rather than handed to a relay with
+   * nobody to deliver them to, and a half-sent chunk source stays where it is.
+   * A resend in progress ends here too: the ledger still holds its frames, and
+   * the next exchange recomputes the gap.
    *
-   * WHAT ENDS THE PAUSE IS A TEARDOWN, NOT A RESUME, and the difference is the
-   * whole contract. `host_attached` does not resume this scheduler: it is PROOF
-   * the responder this session was built against is gone (the host discards all
-   * Noise state on any uplink close), so `onHostAttached` forces a full redial —
-   * `handleConnectionLost` → `dropConnection` → `teardownConnection`, which
-   * calls {@link stop}, closes the relay socket and wipes the Noise channel.
-   * Nothing here survives that: the queue is discarded, and the redial builds a
-   * fresh connection with a fresh scheduler.
-   *
-   * So the held frames are never flushed — they are dropped, and the higher
-   * layer re-drives those streams after the handshake (the openAck replay
-   * re-subscribes every stream), which is the same contract {@link stop}
-   * states. Holding them is still what the pause buys: it keeps the pump from
-   * spending pacing budget and credits on sends that cannot land, and keeps a
-   * half-sent chunk source from advancing into a channel about to be wiped.
-   *
-   * {@link resume} has NO production caller — `scheduler.test.ts` is the only
-   * one — precisely because no edge exists that ends a pause with the session
-   * intact. Treat it as the unit-test seam it is; a caller for it would need a
-   * reattach path that preserves the Noise session, and there is none.
+   * WHAT ENDS THE PAUSE DEPENDS ON WHETHER THE SESSION NEGOTIATED RESUME. With
+   * it, the session keeps its Noise channel and {@link resumeAfterResend} ends
+   * the pause. Without it, `host_attached` is proof the responder is gone:
+   * `onHostAttached` rebuilds through `handleConnectionLost`, which calls
+   * {@link stop}, and the held frames are dropped for the higher layer to
+   * re-drive after the handshake, the contract {@link stop} states.
    */
   pause(): void {
     this.paused = true;
+    this.resend = null;
   }
 
-  /** See {@link pause}: test-only today; no production edge resumes a pause. */
+  /** Ends a pause with nothing to resend. Test seam: see {@link pause}. */
   resume(): void {
     if (!this.paused) {
       return;
     }
     this.paused = false;
     void this.pump();
+  }
+
+  /**
+   * Resends a resume gap, then ends the pause.
+   *
+   * The gap goes ahead of both queues, so a frame queued during the outage
+   * cannot overtake it, and `write` is the serialized seal-and-send without
+   * the ledger append. Each frame spends pacing budget, because the relay
+   * kills a session over its frame rate whatever the frames are, and no bulk
+   * credit, because the peer grants credit once per unique frame and the
+   * first send of each already spent one.
+   */
+  resumeAfterResend(
+    frames: readonly Uint8Array[],
+    write: (muxFrame: Uint8Array) => Promise<void>,
+  ): void {
+    if (this.stopped) {
+      return;
+    }
+    this.resend = { frames, write, next: 0 };
+    void this.pump();
+  }
+
+  /**
+   * Resolves when the write in flight, if any, has settled. A resume exchange
+   * waits on it: sealing is not serialized once a Noise counter is reserved,
+   * so a frame still sealing could otherwise reach the peer after RESUME and
+   * be counted ahead of the gap. Never rejects; a failed write reports through
+   * `onWriteError`.
+   */
+  writeSettled(): Promise<void> {
+    return this.inFlightWrite === null
+      ? Promise.resolve()
+      : this.inFlightWrite.catch(() => undefined);
   }
 
   /**
@@ -225,6 +256,7 @@ export class PriorityScheduler {
     this.stopped = true;
     this.interactive.length = 0;
     this.bulk.length = 0;
+    this.resend = null;
     if (this.paceResumeTimer !== null) {
       clearTimeout(this.paceResumeTimer);
       this.paceResumeTimer = null;
@@ -306,7 +338,7 @@ export class PriorityScheduler {
     if (
       resumeAt === null ||
       this.stopped ||
-      this.paused ||
+      (this.paused && this.resend === null) ||
       this.paceResumeTimer !== null
     ) {
       return;
@@ -318,14 +350,58 @@ export class PriorityScheduler {
     }, delay);
   }
 
+  /**
+   * One step of the resend. Returns whether the pump goes on: `false` means
+   * paced out, with the refill armed.
+   */
+  private async pumpResend(resend: {
+    readonly frames: readonly Uint8Array[];
+    readonly write: (muxFrame: Uint8Array) => Promise<void>;
+    next: number;
+  }): Promise<boolean> {
+    const frame = resend.frames[resend.next];
+    if (frame === undefined) {
+      this.resend = null;
+      this.paused = false;
+      return true;
+    }
+    this.paceResumeAtMs = null;
+    if (!this.pacer.tryConsume(frame.byteLength)) {
+      this.notePaceWait(this.pacer.msUntilAvailable(frame.byteLength));
+      this.armPaceResume();
+      return false;
+    }
+    resend.next += 1;
+    await this.trackWrite(resend.write(frame));
+    return true;
+  }
+
+  private async trackWrite(write: Promise<void>): Promise<void> {
+    this.inFlightWrite = write;
+    try {
+      await write;
+    } finally {
+      this.inFlightWrite = null;
+    }
+  }
+
   private async pump(): Promise<void> {
-    if (this.pumping || this.stopped || this.paused) {
+    if (this.pumping || this.stopped || (this.paused && this.resend === null)) {
       return;
     }
     this.pumping = true;
     try {
       for (;;) {
-        if (this.stopped || this.paused) {
+        if (this.stopped) {
+          return;
+        }
+        if (this.resend !== null) {
+          if (!(await this.pumpResend(this.resend))) {
+            return;
+          }
+          continue;
+        }
+        if (this.paused) {
           return;
         }
         this.paceResumeAtMs = null;
@@ -334,7 +410,7 @@ export class PriorityScheduler {
           this.armPaceResume();
           return;
         }
-        await this.options.write(frame);
+        await this.trackWrite(this.options.write(frame));
         try {
           this.onFrameWritten?.(frame.streamId);
         } catch {

@@ -284,6 +284,7 @@ class ArmSession extends FakeStreamSession {
         },
       },
       null,
+      null,
     );
   }
 }

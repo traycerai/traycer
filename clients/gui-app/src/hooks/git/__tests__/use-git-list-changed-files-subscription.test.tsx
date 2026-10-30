@@ -78,7 +78,7 @@ class MockStreamSession implements IStreamSession {
 
   close(): void {
     this.closed = true;
-    this.statusChangeHandler?.("closed", { kind: "caller" }, null);
+    this.statusChangeHandler?.("closed", { kind: "caller" }, null, null);
   }
 
   emitFrame(
@@ -102,7 +102,7 @@ class MockStreamSession implements IStreamSession {
     reason: StreamCloseReason | null,
   ): void {
     if (this.statusChangeHandler !== null) {
-      this.statusChangeHandler(status, reason, null);
+      this.statusChangeHandler(status, reason, null, null);
     }
   }
 }

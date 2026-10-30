@@ -33,14 +33,14 @@ class ArmSession extends FakeStreamSession {
   }
 
   closeWith(reason: StreamCloseReason): void {
-    this.closeHandler?.("closed", reason, null);
+    this.closeHandler?.("closed", reason, null, null);
   }
 
   /** Closes as a real logical stream does: the caller's close is reported at once. */
   override close(): void {
     if (this.closed) return;
     super.close();
-    this.closeHandler?.("closed", { kind: "caller" }, null);
+    this.closeHandler?.("closed", { kind: "caller" }, null, null);
   }
 }
 

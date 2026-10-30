@@ -161,7 +161,7 @@ export function createWorkerStreamClient(
         frameHandler?.(envelope, binaryPayload);
       },
       deliverStatus: (status, reason, retryCause) => {
-        statusHandler?.(status, reason, retryCause);
+        statusHandler?.(status, reason, retryCause, null);
       },
       setVersion: (version) => {
         negotiated = version;
@@ -231,7 +231,7 @@ export function createWorkerStreamClient(
     deliverStatus(streamId, status, reason, retryCause): void {
       const entry = sessions.get(streamId);
       if (entry === undefined) return;
-      entry.deliverStatus(status, reason, retryCause);
+      entry.deliverStatus(status, reason, retryCause, null);
       // A status transition is when a re-declare becomes imminent, so it is
       // where a params provider is re-read. Pushed AFTER the handler runs: the
       // handler is what applies the state the provider reads, so reading first

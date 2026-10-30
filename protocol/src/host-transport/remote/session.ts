@@ -88,6 +88,9 @@ import {
   RELAY_WAKE_PROBE_TIMEOUT_MS,
   RESTORE_STALL_LOG_AFTER_MS,
   REASSEMBLY_PROGRESS_TIMEOUT_MS,
+  RESUME_ACK_MS,
+  RESUME_HOLD_MS,
+  RESUME_MASK_MS,
   SESSION_LIVENESS_PROBE_TIMEOUT_MS,
   SESSION_SILENCE_TIMEOUT_MS,
 } from "./config";
@@ -107,6 +110,7 @@ import {
   SESSION_CAPABILITY_CLOUD_VERDICT_UPDATE,
   SESSION_CAPABILITY_FINE_CREDITS,
   SESSION_CAPABILITY_MEMBER_CREDENTIAL,
+  SESSION_CAPABILITY_RESUME,
   SESSION_CAPABILITY_TUNNEL_STREAMS,
   creditPayloadSchema,
   decodeMuxFrame,
@@ -121,6 +125,12 @@ import {
   type SessionManifests,
   type SessionOpenPayload,
 } from "@traycer/protocol/host-transport/mux";
+import {
+  encodeResumeFrame,
+  parseResumeFrame,
+  ResumeLedger,
+  type ResumeGapReport,
+} from "@traycer/protocol/host-transport/resume-ledger";
 import {
   toClientHandshakeIdentity,
   type ClientHandshakeIdentity,
@@ -143,6 +153,7 @@ import { PLAIN_MUX_CHANNEL, type MuxChannel } from "./mux-channel";
 import {
   RelaySocket,
   type RelayKillReason,
+  type RelayLegEnd,
   type RelaySocketHandlers,
 } from "./relay-socket";
 import type { AttachGrant, AttachGrantProvider } from "./grant";
@@ -211,12 +222,22 @@ function qosForStreamMethod(method: string): QosClassValue {
  * forever.
  *
  * Host blip: `host_detached` PAUSES (the scheduler holds its frames rather
- * than losing them to a host-less relay) and `host_attached` REBUILDS. The
- * re-attach is not a resume and never was one - the host discards every client
- * Noise session on any uplink close, so the frame is proof this session's
- * responder is gone, whether or not the matching detach was ever delivered
- * here. A socket drop, a `peer_gone` and a proven session silence all reach
- * the same full attach.
+ * than losing them to a host-less relay). What `host_attached` does depends on
+ * the open. A host that advertised `SESSION_CAPABILITY_RESUME` held this
+ * session through its uplink loss, so the client sends RESUME on the same Noise
+ * session and both peers resend what the other missed (see
+ * {@link ResumeExchange}). Any other host discarded its Noise state, so the
+ * frame is proof this session's responder is gone, whether or not the matching
+ * detach was ever delivered here, and the session REBUILDS. A socket drop, a
+ * `peer_gone`, a proven session silence and a failed resume all reach the same
+ * full attach.
+ *
+ * The states of a session that negotiated resume, read off the connection:
+ *   live:     `hostAttached`, no exchange.
+ *   masked:   `masked`. Readiness holds for `RESUME_MASK_MS` from the detach,
+ *             so a heal inside it is not an outage to anyone above.
+ *   down:     neither. The mask expired and today's down edge ran.
+ *   resuming: a {@link ResumeExchange}. Readiness stays what it was.
  */
 
 /**
@@ -870,6 +891,27 @@ interface PendingUnary {
   readonly resolve: (result: unknown) => void;
   readonly reject: (error: HostRpcError) => void;
   timer: TimerHandle | null;
+  /**
+   * Whether any frame of this request has been sealed. While false the request
+   * is still in the queue and a drop can prove the host never saw it.
+   */
+  sealed: boolean;
+}
+
+/**
+ * One RESUME round on the existing Noise session: drain, send `received`, wait
+ * for the host's answer to this attempt. Replaced, never reused, so a restart
+ * strands whatever the last round left in flight.
+ */
+interface ResumeExchange {
+  /**
+   * The attempt this round's RESUME carries and the host echoes:
+   * `ActiveConnection.startedExchanges` when the round began. Two rounds can
+   * both reach the host, so the echo is what tells their answers apart: the
+   * replay behind a stale one falls to the inbound gate, and only the awaited
+   * one's replay is counted, from the `received` that round stated.
+   */
+  readonly id: number;
 }
 
 interface ActiveConnection {
@@ -908,7 +950,47 @@ interface ActiveConnection {
    * is minted. A second ack on the same connection is ignored meanwhile.
    */
   memberCredentialPending: boolean;
+  /**
+   * The relay's last word on the host leg. A session that negotiated resume
+   * sets it back only when an exchange completes: until then the host has not
+   * spoken, so `host_attached` alone is not the host being back.
+   */
   hostAttached: boolean;
+  /**
+   * The send ring and received count, running from this connection's first
+   * transport frame because `open` goes out before the ack that decides
+   * whether either end needs them. Dropped at that ack when resume was not
+   * negotiated.
+   */
+  readonly ledger: ResumeLedger;
+  /** Both peers advertised `SESSION_CAPABILITY_RESUME`; set at `openAck`. */
+  resumeNegotiated: boolean;
+  /** Readiness is being held through a detach; see `RESUME_MASK_MS`. */
+  masked: boolean;
+  /** When the mask ends; read when a cancelled exchange falls back to it. */
+  maskDeadlineAt: number;
+  /** When the current outage's first `host_detached` landed, or `null`. */
+  detachedAt: number | null;
+  resumeExchange: ResumeExchange | null;
+  /**
+   * The two counters that gate inbound frames across an exchange. A frame is
+   * stamped with `startedExchanges` on ARRIVAL, because a frame already on the
+   * socket when `host_attached` landed belongs to the old count and one after
+   * it does not, whichever order their decrypts finish in. It is judged against
+   * `admittedExchanges` in its continuation, which runs in arrival order, so
+   * the host's RESUME admits exactly the frames behind it. A frame stamped past
+   * `admittedExchanges` is decrypted and discarded without counting: the host
+   * resends it from the count this client gave it.
+   */
+  startedExchanges: number;
+  admittedExchanges: number;
+  /**
+   * The newest inbound frame's continuation. Continuations resume in arrival
+   * order and never reject, so awaiting the last one drains them all.
+   */
+  inboundTail: Promise<void>;
+  /** How this leg's socket ended, when it ended on its own. */
+  legEnd: RelayLegEnd | null;
   /**
    * When this connection last received a frame THROUGH THE NOISE CHANNEL -
    * the host's own voice, as opposed to the relay's.
@@ -1254,6 +1336,13 @@ export class RemoteSession<
    * phase timer) cannot strand the session on its old rung either way.
    */
   private pendingForceGeneration: number | null = null;
+  /** How the leg the next dial replaces ended; sent as `prev`. */
+  private replacedLeg: RelayLegEnd | null = null;
+  /** Numbers the resumed edges of one generation; see `takeResumedEdge`. */
+  private resumedEdges = 0;
+  private maskTimer: TimerHandle | null = null;
+  private holdTimer: TimerHandle | null = null;
+  private resumeAckTimer: TimerHandle | null = null;
   private reauthTimer: TimerHandle | null = null;
   private standingTimer: TimerHandle | null = null;
   /** Re-reports the no-host refusal while parked before ready; see `reportParkedRefusal`. */
@@ -1441,24 +1530,34 @@ export class RemoteSession<
    * reads that stream's own status, which stays `reconnecting` until its
    * completed frame lands. Those two answers differ on purpose, and a surface
    * that states "the connection is interrupted" must read this one.
+   *
+   * `masked` is the one exception, and it is bounded: for `RESUME_MASK_MS` from
+   * a detach on a session that can resume, the host is expected back and this
+   * keeps answering true, so a heal inside the mask is not an outage. A host
+   * that stays away reaches the down edge when the mask ends.
    */
   isReady(): boolean {
     return (
       this.phase === "ready" &&
       this.readyBoundaryGeneration === this.connectGeneration &&
       this.connection !== null &&
-      this.connection.hostAttached
+      (this.connection.hostAttached || this.connection.masked)
     );
   }
 
   /** See {@link IRemoteSession.isSilentFor}. */
   isSilentFor(ms: number): boolean {
     const connection = this.connection;
-    if (connection === null || !this.isReady()) {
+    if (
+      connection === null ||
+      !this.isReady() ||
+      this.awaitingHostBack(connection)
+    ) {
       // Not ready is not silent. A detached host, a dial in flight and a
       // closed session are all states with their own recovery; reporting them
       // as silence would let a Retry force a redial at exactly the moments a
-      // redial is wrong.
+      // redial is wrong. A mask or a resume exchange is the same case: no
+      // frames are expected, so their absence says nothing.
       return false;
     }
     return Date.now() - connection.lastInChannelInboundAt >= ms;
@@ -1652,13 +1751,13 @@ export class RemoteSession<
       // host-originated failure.
       throw this.notReadyRejection(requestId, method);
     }
-    if (!connection.hostAttached) {
+    if (!connection.hostAttached && !connection.masked) {
       // Relay said `host_detached`: the scheduler is paused and nothing will
-      // drain it (host re-attach forces a full re-dial — see
-      // `onHostAttached`). Enqueueing here would park the frame until the
-      // 30s unary timeout kills it as a NON-retryable `HostRpcError`.
-      // Pre-send and provably undeliverable ⇒ retryable, same as any other
-      // not-ready-yet state.
+      // drain it in time to be worth waiting for. Enqueueing here would park
+      // the frame until the 30s unary timeout kills it as a NON-retryable
+      // `HostRpcError`. Pre-send and provably undeliverable ⇒ retryable, same
+      // as any other not-ready-yet state. A mask queues instead: the host is
+      // expected back, and the call stays unsealed if it is not.
       return Promise.reject(this.hostDetachedRejection(requestId, method));
     }
     const hostManifest = connection.hostManifest;
@@ -2015,6 +2114,7 @@ export class RemoteSession<
           resolve,
           reject,
           timer,
+          sealed: false,
         });
         try {
           this.enqueueMessage(connection, {
@@ -2542,6 +2642,7 @@ export class RemoteSession<
     const relaySocket: RelaySocket = new RelaySocket({
       attachBaseUrl: dial.attachBaseUrl,
       grantJws: grant.grant,
+      previousLeg: this.replacedLeg,
       webSocketFactory: this.options.webSocketFactory,
       handlers: this.socketHandlers(generation, (): RelaySocket => relaySocket),
     });
@@ -2592,6 +2693,9 @@ export class RemoteSession<
         // cannot leak across dials.
         const immediateRedialEarned =
           socket().hasUnansweredImmediateRedialProbe();
+        if (this.isCurrent(generation) && this.connection !== null) {
+          this.connection.legEnd = { code: info.code, reason: info.reason };
+        }
         this.handleConnectionLost(
           generation,
           describeSocketClose(this.phase, info),
@@ -2642,6 +2746,16 @@ export class RemoteSession<
       tunnelStreamsSupported: false,
       memberCredentialPending: false,
       hostAttached: true,
+      ledger: new ResumeLedger((report) => this.logResumeGap(report)),
+      resumeNegotiated: false,
+      masked: false,
+      maskDeadlineAt: 0,
+      detachedAt: null,
+      resumeExchange: null,
+      startedExchanges: 0,
+      admittedExchanges: 0,
+      inboundTail: Promise.resolve(),
+      legEnd: null,
       lastInChannelInboundAt: Date.now(),
       inChannelFrames: 0,
       refusedMethods: new Map(),
@@ -2741,10 +2855,18 @@ export class RemoteSession<
     // still proves the host is sending. It is also what keeps the silence
     // verdict honest about an error envelope or a FATAL - both are frames.
     this.noteInChannelEvidence(connection);
-    void (async () => {
+    const arrivalExchange = connection.startedExchanges;
+    connection.inboundTail = (async () => {
       const muxBytes = await connection.channel.decrypt(bytes);
       if (!this.isCurrent(generation)) {
         return;
+      }
+      // Here, before anything can drop the frame: the count is of frames that
+      // passed the AEAD check, or a frame lost to a tombstone below would be
+      // resent forever.
+      const discarded = arrivalExchange > connection.admittedExchanges;
+      if (!discarded) {
+        connection.ledger.receive(muxBytes);
       }
       const frame = decodeMuxFrame(muxBytes);
       this.traffic?.classifyMux(
@@ -2753,6 +2875,14 @@ export class RemoteSession<
         muxBytes.byteLength,
         receivedAtMs,
       );
+      if (frame.type === MuxFrameType.RESUME) {
+        this.onHostResume(generation, connection, frame);
+        return;
+      }
+      if (discarded) {
+        this.onDiscardedFrame(generation, connection, frame);
+        return;
+      }
       // Bulk credit accounting is PER FRAME at receipt, symmetric with the
       // host's spend-per-frame-sent — counting per completed message would
       // deadlock any transfer longer than the initial credit window at
@@ -3016,15 +3146,16 @@ export class RemoteSession<
       manifest: this.clientManifests,
       authz: openAuth.authz,
       resume: null,
-      // Advertised UNCONDITIONALLY: both entries describe what this client can
+      // Advertised UNCONDITIONALLY: every entry describes what this client can
       // COPE with, never what it demands, so a host that has never heard of
-      // either simply strips the key (zod objects are non-strict) and keeps
+      // one simply strips the key (zod objects are non-strict) and keeps
       // behaving exactly as it does today. There is deliberately no version
       // branch here — a capability the peer ignores must be indistinguishable
       // from one it never received.
       capabilities: [
         SESSION_CAPABILITY_BODY_COMPRESSION,
         SESSION_CAPABILITY_FINE_CREDITS,
+        SESSION_CAPABILITY_RESUME,
         CLIENT_CAPABILITY_EPIC_WRITE_PATH_V1,
       ],
       clientIdentity: this.clientIdentity,
@@ -3386,6 +3517,12 @@ export class RemoteSession<
     connection.tunnelStreamsSupported = parsed.data.capabilities.includes(
       SESSION_CAPABILITY_TUNNEL_STREAMS,
     );
+    connection.resumeNegotiated = parsed.data.capabilities.includes(
+      SESSION_CAPABILITY_RESUME,
+    );
+    if (!connection.resumeNegotiated) {
+      connection.ledger.drop();
+    }
     if (
       parsed.data.capabilities.includes(SESSION_CAPABILITY_FINE_CREDITS) &&
       FINE_INITIAL_BULK_SEND_CREDITS < INITIAL_BULK_SEND_CREDITS
@@ -3637,7 +3774,7 @@ export class RemoteSession<
         return;
       }
       const connection = this.connection;
-      if (connection === null || !connection.hostAttached) {
+      if (connection === null || this.awaitingHostBack(connection)) {
         this.armReassemblyWatchdog(generation, streamId);
         return;
       }
@@ -3961,6 +4098,22 @@ export class RemoteSession<
         return;
       }
       const connection = this.connection;
+      if (
+        connection !== null &&
+        connection.resumeNegotiated &&
+        this.awaitingHostBack(connection)
+      ) {
+        // A resume keeps this subscribe, so its deadline has to outlive the
+        // wait or a host that never answers it has no bound left afterwards.
+        // Retires with the connection if the wait ends in a rebuild.
+        this.armFirstFrameDeadline(
+          generation,
+          streamId,
+          method,
+          SESSION_SILENCE_TIMEOUT_MS,
+        );
+        return;
+      }
       const remainingMs =
         connection === null
           ? 0
@@ -4353,12 +4506,23 @@ export class RemoteSession<
    *    from the detach. Retracting here is what lets the authority see the
    *    host as it is; the next ready boundary re-announces under the new
    *    connect generation, exactly as it does after any redial.
+   *
+   * A session that negotiated resume takes {@link onResumableHostDetached}
+   * instead: the same retraction, but only once the mask has expired.
    */
   private onHostDetached(generation: number): void {
     if (!this.isCurrent(generation)) {
       return;
     }
     const connection = this.connection;
+    if (
+      connection !== null &&
+      connection.resumeNegotiated &&
+      this.phase === "ready"
+    ) {
+      this.onResumableHostDetached(connection);
+      return;
+    }
     if (connection === null || !connection.hostAttached) {
       // Already parked. The relay answers every frame sent while it has no
       // host with another `host_detached` (the Noise initiator this session
@@ -4429,6 +4593,15 @@ export class RemoteSession<
       }
     }
     this.markStreamsReconnecting(null);
+    this.takeHostDownEdge();
+  }
+
+  /**
+   * The session half of a detach: everything the host leaving means for the
+   * session, whichever path got here. The streams are the caller's call (see
+   * {@link onResumableHostDetached}).
+   */
+  private takeHostDownEdge(): void {
     this.retractSession();
     // A detach is a DOWN edge even though the socket survives, so the two
     // things every other loss edge does through `handleConnectionLost` have to
@@ -4452,11 +4625,314 @@ export class RemoteSession<
     this.syncReadinessLatch();
   }
 
+  /**
+   * A `host_detached` on a session that negotiated resume, in any of its
+   * states. A second detach during a resume cancels the exchange and lands
+   * back where the first one left the session: inside the original mask, or
+   * down. A session that never saw a detach starts both clocks here.
+   */
+  private onResumableHostDetached(connection: ActiveConnection): void {
+    if (connection.detachedAt === null) {
+      connection.detachedAt = Date.now();
+      this.armHoldTimer(connection);
+    }
+    this.cancelResumeExchange(connection);
+    if (!connection.hostAttached) {
+      return;
+    }
+    connection.hostAttached = false;
+    connection.scheduler.pause();
+    connection.masked = true;
+    connection.maskDeadlineAt = Date.now() + RESUME_MASK_MS;
+    this.armMaskTimer(connection);
+    // The silence verdict reads a mute host as a dead session, and this one
+    // has been declared absent. The stall line would blame the streams.
+    this.clearSilenceProbe();
+    this.clearRestoreStallTimer();
+  }
+
+  /**
+   * Ends the mask. A resume exchange in progress keeps readiness as it was, so
+   * the timer does nothing then and the deadline is read again if the exchange
+   * is cancelled; the exchange is bounded by `RESUME_ACK_MS` either way.
+   */
+  private armMaskTimer(connection: ActiveConnection): void {
+    this.clearMaskTimer();
+    this.maskTimer = setTimeout(() => {
+      this.maskTimer = null;
+      if (
+        this.connection === connection &&
+        connection.resumeExchange === null
+      ) {
+        this.expireMask(connection);
+      }
+    }, RESUME_MASK_MS);
+  }
+
+  /**
+   * The down edge of a session that can still resume: retraction, the corpse
+   * ceiling, readiness false. Status tells the truth here, so streams turn
+   * `reconnecting`, but as `"held"`, because nothing about the subscription is
+   * lost: the host keeps it and its frames continue in order after a resume. A
+   * plain `reconnecting` would tell a consumer to reset for a snapshot that
+   * would never come. Held ends in `"continued"` on the resumed edge, or in a
+   * plain `reconnecting` when the session is really going to rebuild: the
+   * rebuild itself, or the hold passing ({@link armHoldTimer}).
+   */
+  private expireMask(connection: ActiveConnection): void {
+    connection.masked = false;
+    for (const stream of this.subscriptions.values()) {
+      stream.notifyHeld();
+    }
+    this.takeHostDownEdge();
+  }
+
+  /**
+   * The bound on `"held"`: past `RESUME_HOLD_MS` the host has discarded its
+   * side, so the only way back is a rebuild, and a stream must stop claiming
+   * otherwise even if the host never returns to trigger one. An exchange in
+   * progress may still prove otherwise, so the timer leaves it alone and
+   * {@link cancelResumeExchange} reads the deadline if the exchange does not
+   * complete.
+   */
+  private armHoldTimer(connection: ActiveConnection): void {
+    this.clearHoldTimer();
+    this.holdTimer = setTimeout(() => {
+      this.holdTimer = null;
+      if (
+        this.connection === connection &&
+        connection.resumeExchange === null
+      ) {
+        this.markStreamsReconnecting(null);
+      }
+    }, RESUME_HOLD_MS);
+  }
+
+  private holdHasPassed(connection: ActiveConnection): boolean {
+    return (
+      connection.detachedAt !== null &&
+      Date.now() - connection.detachedAt >= RESUME_HOLD_MS
+    );
+  }
+
+  /**
+   * Starts a resume exchange: stop sealing, let what is already moving finish,
+   * then state this side's count. Nothing inbound is read past the drain, so
+   * the count cannot miss a frame still decrypting, which the host would then
+   * resend and this side would dispatch twice. Frames arriving from here on
+   * are not counted at all (see `startedExchanges`).
+   */
+  private beginResumeExchange(
+    generation: number,
+    connection: ActiveConnection,
+  ): void {
+    connection.scheduler.pause();
+    this.clearSilenceProbe();
+    this.clearResumeAckTimer();
+    connection.startedExchanges += 1;
+    const exchange: ResumeExchange = {
+      id: connection.startedExchanges,
+    };
+    connection.resumeExchange = exchange;
+    void Promise.all([
+      connection.inboundTail,
+      connection.scheduler.writeSettled(),
+    ])
+      .then(() => this.sendResume(generation, connection, exchange))
+      .catch(() =>
+        this.handleConnectionLost(
+          generation,
+          "resume-send-failed",
+          "host-transport-plane",
+        ),
+      );
+  }
+
+  private async sendResume(
+    generation: number,
+    connection: ActiveConnection,
+    exchange: ResumeExchange,
+  ): Promise<void> {
+    if (!this.isCurrent(generation) || connection.resumeExchange !== exchange) {
+      return;
+    }
+    const sealed = await connection.channel.encrypt(
+      encodeResumeFrame(connection.ledger.received, exchange.id),
+    );
+    if (!this.isCurrent(generation) || connection.resumeExchange !== exchange) {
+      return;
+    }
+    if (!connection.socket.sendData(sealed)) {
+      throw new Error("relay socket send failed");
+    }
+    this.resumeAckTimer = setTimeout(() => {
+      this.resumeAckTimer = null;
+      this.handleConnectionLost(
+        generation,
+        "resume-ack-timeout",
+        "host-transport-plane",
+      );
+    }, RESUME_ACK_MS);
+  }
+
+  /**
+   * Leaves the exchange without completing it. Inbound stays gated: anything
+   * the host sent for the cancelled round is resent for the next one.
+   */
+  private cancelResumeExchange(connection: ActiveConnection): void {
+    if (connection.resumeExchange === null) {
+      return;
+    }
+    connection.resumeExchange = null;
+    this.clearResumeAckTimer();
+    if (connection.masked && Date.now() >= connection.maskDeadlineAt) {
+      this.expireMask(connection);
+    }
+    if (this.holdHasPassed(connection)) {
+      this.markStreamsReconnecting(null);
+    }
+  }
+
+  /**
+   * The host's RESUME. An answer to any other attempt is ignored: a restart or
+   * a cancel stranded it, and whatever follows it is still discarded.
+   */
+  private onHostResume(
+    generation: number,
+    connection: ActiveConnection,
+    frame: MuxFrame,
+  ): void {
+    const exchange = connection.resumeExchange;
+    if (exchange === null) {
+      return;
+    }
+    const resume = parseResumeFrame(frame);
+    if (resume === null) {
+      this.handleConnectionLost(
+        generation,
+        "malformed-resume",
+        "host-transport-plane",
+      );
+      return;
+    }
+    if (resume.attempt !== exchange.id) {
+      return;
+    }
+    const { received } = resume;
+    const gap = connection.ledger.gapFrom(received);
+    if (gap.kind === "unrecoverable") {
+      this.handleConnectionLost(
+        generation,
+        "resume-gap-unrecoverable",
+        "not-host-evidence",
+      );
+      return;
+    }
+    connection.ledger.trimReceived(received);
+    const resumedFromDown = !connection.hostAttached && !connection.masked;
+    this.clearResumeAckTimer();
+    this.clearMaskTimer();
+    this.clearHoldTimer();
+    connection.resumeExchange = null;
+    connection.admittedExchanges = exchange.id;
+    connection.masked = false;
+    connection.detachedAt = null;
+    connection.hostAttached = true;
+    // The RESUME itself was stamped while the host still read as away.
+    this.armStandingTimer();
+    connection.scheduler.resumeAfterResend(gap.frames, (muxFrame) =>
+      this.writeResentFrame(generation, muxFrame),
+    );
+    console.info(
+      `[remote-session] remote session (host ${this.options.hostId}) resumed ` +
+        `(${gap.frames.length} frame(s) to resend${resumedFromDown ? ", from down" : ""})`,
+    );
+    if (resumedFromDown) {
+      this.takeResumedEdge();
+    }
+  }
+
+  /**
+   * The way back to ready from `down`: the work `maybeReachReadyBoundary` does,
+   * on the same generation, with held streams told the subscription went on
+   * rather than re-subscribed (see {@link expireMask}).
+   *
+   * A fresh attempt id and session id per edge, because the authority
+   * de-duplicates by both, and a reused id would swallow the success that
+   * clears this host's death streak.
+   */
+  private takeResumedEdge(): void {
+    this.resumedEdges += 1;
+    const edge = `${this.connectGeneration}-resumed-${this.resumedEdges}`;
+    this.armStableResetTimer();
+    this.connectionLostAt = 0;
+    this.reportEvidenceOutcome(`${this.evidenceScope}#${edge}`, "success");
+    this.announceSession(`${this.evidenceScope}:s${edge}`);
+    for (const stream of this.subscriptions.values()) {
+      stream.notifyContinued();
+    }
+    this.emitAvailabilityRecovered();
+  }
+
+  /**
+   * A frame the gate discarded. The one kind still read is a session FATAL:
+   * a host that refuses the resume says so here, in place of its RESUME, and
+   * waiting out the ack timer would only delay the rebuild. Any fatal becomes
+   * a rebuild rather than today's verdict, because a verdict that still stands
+   * is repeated on the fresh session.
+   */
+  private onDiscardedFrame(
+    generation: number,
+    connection: ActiveConnection,
+    frame: MuxFrame,
+  ): void {
+    if (
+      frame.type !== MuxFrameType.FATAL ||
+      frame.streamId !== SESSION_CONTROL_STREAM_ID
+    ) {
+      return;
+    }
+    const parsed = fatalPayloadSchema.safeParse(
+      connection.reassembler.accept(frame)?.json,
+    );
+    if (parsed.success) {
+      this.reportRestartIntentIfPresent(parsed.data.details);
+    }
+    this.handleConnectionLost(
+      generation,
+      "resume-refused",
+      parsed.success
+        ? sessionFatalProvenance(parsed.data.details)
+        : "host-transport-plane",
+    );
+  }
+
+  /**
+   * True while nothing should be expected from the host: it has left, or a
+   * resume exchange owns the wire. Every liveness verdict stands down for it.
+   */
+  private awaitingHostBack(connection: ActiveConnection): boolean {
+    return !connection.hostAttached || connection.resumeExchange !== null;
+  }
+
+  private logResumeGap(report: ResumeGapReport): void {
+    // Console on purpose, as the dial-failure log: shared transport code with
+    // no logger seam. Counts only.
+    console.info(
+      `[remote-session] remote session (host ${this.options.hostId}) resume gap: ` +
+        `received=${report.received} sent=${report.sent} oldest=${report.oldest} ` +
+        `gapFrames=${report.gapFrames} gapBytes=${report.gapBytes} ` +
+        `ringFrames=${report.ringFrames} ringBytes=${report.ringBytes} ` +
+        `recoverable=${report.recoverable}`,
+    );
+  }
+
   private onHostAttached(generation: number): void {
     if (!this.isCurrent(generation)) {
       return;
     }
-    if (this.connection === null) {
+    const connection = this.connection;
+    if (connection === null) {
       return;
     }
     if (this.phase === "connecting") {
@@ -4466,10 +4942,21 @@ export class RemoteSession<
       // this branch is a guard rather than a case.
       return;
     }
-    // A `host_attached` is PROOF the responder this session was built against
-    // no longer exists. The host discards ALL Noise state on any uplink close
-    // (`teardownAllSessions`, host-side) and the relay emits this frame from
-    // exactly one site, the host's re-attach, precisely so a client re-runs
+    // Resume needs a host that said it holds sessions, and a detach young
+    // enough that it still does. Past the hold a RESUME could only fail, so
+    // the rebuild below is the shorter way there.
+    if (
+      connection.resumeNegotiated &&
+      this.phase === "ready" &&
+      !this.holdHasPassed(connection)
+    ) {
+      this.beginResumeExchange(generation, connection);
+      return;
+    }
+    // Otherwise a `host_attached` is PROOF the responder this session was built
+    // against no longer exists. The host discards ALL Noise state on any uplink
+    // close (`teardownAllSessions`, host-side) and the relay emits this frame
+    // from exactly one site, the host's re-attach, precisely so a client re-runs
     // its E2E handshake. That is true whether or not this client ever saw the
     // matching `host_detached`: a client that missed it is left holding a
     // channel whose responder is gone, and its only exit today is the 15-min
@@ -4641,6 +5128,7 @@ export class RemoteSession<
     this.noteConnectionLost();
     this.phase = "reconnecting";
     this.restoredStreamIds.clear();
+    const resumeNegotiated = this.connection?.resumeNegotiated === true;
     this.teardownConnection(cause);
     // A pending per-stream reopen's job transfers to the next handshake: the
     // openAck replay re-subscribes every stream in `subscriptions`, so a timer
@@ -4651,7 +5139,7 @@ export class RemoteSession<
     this.clearAllStreamReopens();
     // Only requests carrying a key this connection negotiated are replayable.
     // Unkeyed calls retain the old ambiguous-outcome failure on first drop.
-    this.rejectPendingOnConnectionDrop();
+    this.rejectPendingOnConnectionDrop(resumeNegotiated);
     // Callers parked awaiting THIS attach are still pre-send, so they keep
     // their retry license - but they must be released rather than left to
     // ride an unbounded number of further attempts inside one call.
@@ -5665,7 +6153,35 @@ export class RemoteSession<
       return;
     }
     const plaintext = encodeMuxFrame(frame);
-    const sealed = await connection.channel.encrypt(plaintext);
+    // Appended before the seal, in pull order: the scheduler runs one write at
+    // a time, so ring order is wire order, and a write that fails below leaves
+    // the frame in the gap rather than nowhere.
+    connection.ledger.append(plaintext);
+    const pending = this.pendingUnary.get(frame.streamId);
+    if (pending !== undefined) {
+      pending.sealed = true;
+    }
+    await this.sealAndSend(generation, connection, plaintext);
+  }
+
+  /** One gap frame: re-sealed under a fresh Noise counter, never re-counted. */
+  private async writeResentFrame(
+    generation: number,
+    muxFrame: Uint8Array,
+  ): Promise<void> {
+    const connection = this.connection;
+    if (!this.isCurrent(generation) || connection === null) {
+      return;
+    }
+    await this.sealAndSend(generation, connection, muxFrame);
+  }
+
+  private async sealAndSend(
+    generation: number,
+    connection: ActiveConnection,
+    muxFrame: Uint8Array,
+  ): Promise<void> {
+    const sealed = await connection.channel.encrypt(muxFrame);
     if (!this.isCurrent(generation)) {
       return;
     }
@@ -5794,7 +6310,12 @@ export class RemoteSession<
     }
   }
 
-  private rejectPendingOnConnectionDrop(): void {
+  /**
+   * `resumeNegotiated` is what makes a queued call common enough to name: a
+   * mask queues calls behind a paused scheduler, and one that was never sealed
+   * provably never reached the host, so it keeps its pre-send retry license.
+   */
+  private rejectPendingOnConnectionDrop(resumeNegotiated: boolean): void {
     for (const [streamId, entry] of Array.from(this.pendingUnary)) {
       this.traffic?.end(streamId, true);
       if (entry.timer !== null) {
@@ -5802,6 +6323,10 @@ export class RemoteSession<
       }
       this.pendingUnary.delete(streamId);
       this.outboundSeq.delete(streamId);
+      if (resumeNegotiated && !entry.sealed) {
+        entry.reject(this.notReadyRejection(entry.requestId, entry.method));
+        continue;
+      }
       entry.reject(
         entry.replaySafe
           ? retryableUnaryFailure(
@@ -6113,6 +6638,9 @@ export class RemoteSession<
     this.clearParkTimer();
     this.clearReauthTimer();
     this.clearStandingTimer();
+    this.clearMaskTimer();
+    this.clearHoldTimer();
+    this.clearResumeAckTimer();
     // A drop from ANY other cause - a relay close, a `host_attached` rebuild,
     // a person's Retry - leaves no silence timer to fire against the next
     // generation. Both also re-check `isCurrent` when they fire, so these are
@@ -6128,10 +6656,12 @@ export class RemoteSession<
     if (connection === null) {
       return;
     }
+    this.replacedLeg = connection.legEnd ?? { code: 1000, reason };
     connection.scheduler.stop();
     connection.reassembler.reset();
     connection.socket.close(1000, reason);
     connection.channel.wipe();
+    connection.ledger.drop();
   }
 
   private armPhaseTimer(
@@ -6211,6 +6741,27 @@ export class RemoteSession<
       }
       this.reportParkedRefusal(generation);
     }, NOISE_HANDSHAKE_TIMEOUT_MS);
+  }
+
+  private clearMaskTimer(): void {
+    if (this.maskTimer !== null) {
+      clearTimeout(this.maskTimer);
+      this.maskTimer = null;
+    }
+  }
+
+  private clearHoldTimer(): void {
+    if (this.holdTimer !== null) {
+      clearTimeout(this.holdTimer);
+      this.holdTimer = null;
+    }
+  }
+
+  private clearResumeAckTimer(): void {
+    if (this.resumeAckTimer !== null) {
+      clearTimeout(this.resumeAckTimer);
+      this.resumeAckTimer = null;
+    }
   }
 
   private clearParkTimer(): void {
@@ -6321,6 +6872,9 @@ export class RemoteSession<
     this.clearParkTimer();
     this.clearReauthTimer();
     this.clearStandingTimer();
+    this.clearMaskTimer();
+    this.clearHoldTimer();
+    this.clearResumeAckTimer();
     this.clearStableResetTimer();
     this.clearRestoreStallTimer();
     this.clearAllReassemblyWatchdogs();

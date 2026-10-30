@@ -84,6 +84,7 @@ describe("RelaySocket.pokeKeepalive", () => {
     const relaySocket = new RelaySocket({
       attachBaseUrl: "wss://relay.test/attach",
       grantJws: "grant-jws",
+      previousLeg: null,
       webSocketFactory: factory,
       handlers,
     });
@@ -100,6 +101,7 @@ describe("RelaySocket.pokeKeepalive", () => {
     const relaySocket = new RelaySocket({
       attachBaseUrl: "wss://relay.test/attach",
       grantJws: "grant-jws",
+      previousLeg: null,
       webSocketFactory: factory,
       handlers,
     });
@@ -120,6 +122,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       const relaySocket = new RelaySocket({
         attachBaseUrl: "wss://relay.test/attach",
         grantJws: "grant-jws",
+        previousLeg: null,
         webSocketFactory: factory,
         handlers,
       });
@@ -152,6 +155,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       const relaySocket = new RelaySocket({
         attachBaseUrl: "wss://relay.test/attach",
         grantJws: "grant-jws",
+        previousLeg: null,
         webSocketFactory: factory,
         handlers,
       });
@@ -177,6 +181,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       const relaySocket = new RelaySocket({
         attachBaseUrl: "wss://relay.test/attach",
         grantJws: "grant-jws",
+        previousLeg: null,
         webSocketFactory: factory,
         handlers,
       });
@@ -203,6 +208,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       const relaySocket = new RelaySocket({
         attachBaseUrl: "wss://relay.test/attach",
         grantJws: "grant-jws",
+        previousLeg: null,
         webSocketFactory: factory,
         handlers,
       });
@@ -241,6 +247,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       const relaySocket = new RelaySocket({
         attachBaseUrl: "wss://relay.test/attach",
         grantJws: "grant-jws",
+        previousLeg: null,
         webSocketFactory: factory,
         handlers,
       });
@@ -286,6 +293,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       const relaySocket = new RelaySocket({
         attachBaseUrl: "wss://relay.test/attach",
         grantJws: "grant-jws",
+        previousLeg: null,
         webSocketFactory: factory,
         handlers,
       });
@@ -322,6 +330,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       const relaySocket = new RelaySocket({
         attachBaseUrl: "wss://relay.test/attach",
         grantJws: "grant-jws",
+        previousLeg: null,
         webSocketFactory: factory,
         handlers,
       });
@@ -353,6 +362,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       const relaySocket = new RelaySocket({
         attachBaseUrl: "wss://relay.test/attach",
         grantJws: "grant-jws",
+        previousLeg: null,
         webSocketFactory: factory,
         handlers,
       });
@@ -462,6 +472,7 @@ function openSocket(handlers: RelaySocketHandlers): {
   const socket = new RelaySocket({
     attachBaseUrl: "wss://relay.test/attach",
     grantJws: "grant",
+    previousLeg: null,
     webSocketFactory: factory,
     handlers,
   });
@@ -853,6 +864,7 @@ describe("RelaySocket (client leg) attach-URL scheme gate", () => {
         new RelaySocket({
           attachBaseUrl: "ws://relay.test/attach",
           grantJws: "grant-jws",
+          previousLeg: null,
           webSocketFactory: factory,
           handlers: buildHandlers(),
         }),
@@ -870,6 +882,7 @@ describe("RelaySocket (client leg) attach-URL scheme gate", () => {
       const relaySocket = new RelaySocket({
         attachBaseUrl,
         grantJws: "grant-jws",
+        previousLeg: null,
         webSocketFactory: { create: () => socket },
         handlers: buildHandlers(),
       });

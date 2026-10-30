@@ -114,10 +114,10 @@ export function createRecordingStreamClient(): RecordingStreamClient {
         frameHandler?.(envelope, binaryPayload);
       },
       emitStatus: (status, reason) => {
-        statusHandler?.(status, reason, null);
+        statusHandler?.(status, reason, null, null);
       },
       emitRetryableReconnect: (retryCause) => {
-        statusHandler?.("reconnecting", null, retryCause);
+        statusHandler?.("reconnecting", null, retryCause, null);
       },
       setNegotiatedVersion: (version) => {
         negotiated = version;

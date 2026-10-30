@@ -349,7 +349,7 @@ class ProtocolMockStreamSession implements IStreamSession {
   }
 
   close(): void {
-    this.statusChangeHandler?.("closed", { kind: "caller" }, null);
+    this.statusChangeHandler?.("closed", { kind: "caller" }, null, null);
   }
 
   emitStatus(
@@ -357,7 +357,7 @@ class ProtocolMockStreamSession implements IStreamSession {
     reason: StreamCloseReason | null,
   ): void {
     if (this.statusChangeHandler !== null) {
-      this.statusChangeHandler(status, reason, null);
+      this.statusChangeHandler(status, reason, null, null);
     }
   }
 }

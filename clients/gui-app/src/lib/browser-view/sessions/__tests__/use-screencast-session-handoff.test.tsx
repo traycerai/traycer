@@ -59,7 +59,7 @@ function createSubscribingClientHarness(): {
         sendClientFrame(_envelope: StreamFrameEnvelope) {},
         onServerFrame() {},
         onStatusChange(handler) {
-          handler("connecting", null, null);
+          handler("connecting", null, null, null);
         },
         getNegotiatedSchemaVersion: () => null,
         requestReconnect() {},

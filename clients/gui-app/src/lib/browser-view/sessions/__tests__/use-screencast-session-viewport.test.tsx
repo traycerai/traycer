@@ -51,7 +51,7 @@ function createScreencastClientHarness(id: string): {
     onServerFrame() {},
     onStatusChange(handler) {
       statusHandler = handler;
-      handler(status, null, null);
+      handler(status, null, null, null);
     },
     getNegotiatedSchemaVersion: () => null,
     requestReconnect() {},
@@ -92,7 +92,7 @@ function createScreencastClientHarness(id: string): {
     sentClientFrames,
     setStatus: (next) => {
       status = next;
-      statusHandler?.(next, null, null);
+      statusHandler?.(next, null, null, null);
     },
   };
 }

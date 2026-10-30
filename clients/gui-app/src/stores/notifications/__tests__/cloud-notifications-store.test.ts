@@ -185,7 +185,7 @@ class ControlledSession implements IStreamSession {
   }
 
   emitClosed(reason: StreamCloseReason): void {
-    this.statusChangeHandler?.("closed", reason, null);
+    this.statusChangeHandler?.("closed", reason, null, null);
   }
 
   emitServerFrame(envelope: StreamFrameEnvelope): void {

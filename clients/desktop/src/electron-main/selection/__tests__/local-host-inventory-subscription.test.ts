@@ -72,7 +72,7 @@ class FakeInventorySession implements IStreamSession {
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
   ): void {
-    this.statusHandler?.(status, reason, null);
+    this.statusHandler?.(status, reason, null, null);
   }
 
   /** Drives `IStreamSession.onServerFrame`'s handler with one snapshot frame. */

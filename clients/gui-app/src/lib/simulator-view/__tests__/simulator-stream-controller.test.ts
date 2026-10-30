@@ -67,6 +67,7 @@ class CodedStreamSession extends FakeStreamSession {
         },
       },
       null,
+      null,
     );
   }
 }

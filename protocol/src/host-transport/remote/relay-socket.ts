@@ -106,9 +106,17 @@ export interface RelaySocketHandlers {
   }) => void;
 }
 
+/** How a leg's socket ended: the close code and reason it reported. */
+export interface RelayLegEnd {
+  readonly code: number;
+  readonly reason: string;
+}
+
 interface RelayLegOptions {
   readonly attachBaseUrl: string;
   readonly grantJws: string;
+  /** The leg this dial replaces, or `null` on a first dial. Telemetry only. */
+  readonly previousLeg: RelayLegEnd | null;
   readonly webSocketFactory: IStreamWebSocketFactory;
   readonly handlers: RelaySocketHandlers;
 }
@@ -193,7 +201,11 @@ export class RelaySocket {
       dialUrl = options.directUrl;
     } else {
       assertRelayAttachUrlSecure(options.attachBaseUrl);
-      dialUrl = withGrantQuery(options.attachBaseUrl, options.grantJws);
+      dialUrl = withAttachQuery(
+        options.attachBaseUrl,
+        options.grantJws,
+        options.previousLeg,
+      );
     }
     // Not a host method, and not classifiable as one: this is the single
     // durable leg that MULTIPLEXES every unary call and every stream for a
@@ -702,10 +714,28 @@ export class RelaySocket {
   }
 }
 
-/** Appends the attach grant as a `?grant=` query param (fallback presentation). */
-function withGrantQuery(attachBaseUrl: string, grantJws: string): string {
+/** The relay's Worker drops a longer `prev` rather than truncating it. */
+const PREV_MAX_CHARS = 64;
+
+/**
+ * Appends the attach grant as a `?grant=` query param (fallback presentation),
+ * and `prev=<code>:<reason>` for the leg this dial replaces.
+ */
+function withAttachQuery(
+  attachBaseUrl: string,
+  grantJws: string,
+  previousLeg: RelayLegEnd | null,
+): string {
   const separator = attachBaseUrl.includes("?") ? "&" : "?";
-  return `${attachBaseUrl}${separator}grant=${encodeURIComponent(grantJws)}`;
+  const url = `${attachBaseUrl}${separator}grant=${encodeURIComponent(grantJws)}`;
+  if (previousLeg === null) {
+    return url;
+  }
+  const prev = `${previousLeg.code}:${previousLeg.reason}`.slice(
+    0,
+    PREV_MAX_CHARS,
+  );
+  return `${url}&prev=${encodeURIComponent(prev)}`;
 }
 
 // -----------------------------------------------------------------------------
