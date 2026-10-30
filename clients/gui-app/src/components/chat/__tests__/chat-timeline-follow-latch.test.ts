@@ -3858,9 +3858,11 @@ describe("useChatTimelineFollowLatch", () => {
   // the end (which reports) and then back off it (which reports) to the very
   // offset they pressed at: "up from where it started" never holds, so they
   // read as still following although they dragged away from where they last
-  // stood. `pressArmSteppedTowardEnd` + `notePressStep` re-base the arm's
-  // carried offset on every report that steps toward the end, so the final
-  // drag is measured from the end it reached, not the press's own start.
+  // stood. `pressArmReferenceAfter` moves the offset the press is measured
+  // from to each view that steps toward the end - on every report AND every
+  // maintain read, since one of those can be what observes the step - so the
+  // final drag is measured from the end it reached, not the press's own
+  // start.
   it("departs a following reader whose press drags to the end and back off it, to the very offset it pressed at", () => {
     // Starts at the strict bottom (matching `initialScrollAtEnd`) so mount's
     // own `followEndIfPermitted()` call is a no-op.
@@ -3960,8 +3962,10 @@ describe("useChatTimelineFollowLatch", () => {
   });
 
   // Invariant of the press change, not a re-test of #3048's wheel behaviour:
-  // `pressArmSteppedTowardEnd`'s `direction === "indeterminate"` clause keeps
-  // the press-step rule off a wheel's `away-from-end` arm. Without it, a
+  // `notePressView`'s `direction === "indeterminate"` guard keeps the press
+  // rule off a wheel's `away-from-end` arm. That one call site is where the
+  // guard lives - `pressArmReferenceAfter` takes a gesture arm and does not
+  // re-check it - so it is the place to look if this ever reddens. Without it, a
   // report that moves the view toward the end would re-base the wheel arm's
   // carried offset the same way a press's is re-based, and a later report
   // that moves back up - but only to above the ORIGINAL armed offset, so the
