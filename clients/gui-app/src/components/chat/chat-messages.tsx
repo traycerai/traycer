@@ -4523,15 +4523,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const turnRunning =
     lastAssistantMessage !== undefined &&
     lastAssistantMessage.completedAt === null;
-  // Read through a ref by the latch's scroll and layout callbacks, which no
-  // render accompanies. The turn finishing releases a reader the end fell
-  // onto while it ran.
-  const turnRunningRef = useRef(turnRunning);
+  // The turn finishing releases a reader the end fell onto while it ran.
   useLayoutEffect(() => {
-    turnRunningRef.current = turnRunning;
     if (!turnRunning) followLatchRef.current?.reconcileTurnAtRest();
   }, [turnRunning]);
-  const isTurnRunning = useCallback((): boolean => turnRunningRef.current, []);
   useStopReadingOnNewReply(instanceId, lastAssistantMessage?.id ?? null);
   const contextWorkingVerb = use(WorkingVerbContext);
   const workingVerb =
@@ -4609,7 +4604,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                   isFollowCorrectionSuppressed={isFollowCorrectionSuppressed}
                   resolveSuppressedEndLanding={resolveSuppressedEndLanding}
                   isReattachSuppressed={isReattachSuppressed}
-                  isTurnRunning={isTurnRunning}
                   navigationHighlightedMessageId={
                     navigationHighlight?.messageId ?? null
                   }
