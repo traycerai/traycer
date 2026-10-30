@@ -3030,124 +3030,118 @@ export class RemoteSession<
     // verdict honest about an error envelope or a FATAL - both are frames.
     this.noteInChannelEvidence(connection);
     const arrivalExchange = connection.startedExchanges;
-    const leg = connection.socket;
     connection.inboundTail = (async () => {
-      let muxBytes: Uint8Array;
       try {
-        muxBytes = await connection.channel.decrypt(bytes);
-      } catch (cause) {
-        // A frame whose leg has gone is not counted, so the host resends it. A
-        // channel that really is broken fails again on the leg it reaches.
-        if (!this.isLegCurrent(connection, leg)) {
+        const muxBytes = await connection.channel.decrypt(bytes);
+        if (!this.isCurrent(generation)) {
           return;
         }
-        throw cause;
-      }
-      if (!this.isCurrent(generation)) {
-        return;
-      }
-      // Here, before anything can drop the frame: the count is of frames that
-      // passed the AEAD check, or a frame lost to a tombstone below would be
-      // resent forever.
-      const discarded = arrivalExchange > connection.admittedExchanges;
-      if (!discarded) {
-        connection.ledger.receive(muxBytes);
-      }
-      const frame = decodeMuxFrame(muxBytes);
-      this.traffic?.classifyMux(
-        frame,
-        bytes.byteLength,
-        muxBytes.byteLength,
-        receivedAtMs,
-      );
-      if (frame.type === MuxFrameType.RESUME) {
-        this.onHostResume(generation, connection, frame);
-        return;
-      }
-      if (discarded) {
-        this.onDiscardedFrame(generation, connection, frame);
-        return;
-      }
-      // Bulk credit accounting is PER FRAME at receipt, symmetric with the
-      // host's spend-per-frame-sent — counting per completed message would
-      // deadlock any transfer longer than the initial credit window at
-      // exactly `INITIAL_BULK_SEND_CREDITS` frames (critique C1).
-      if (frame.qos === QosClass.BULK) {
-        const grant = connection.inboundCredits.onBulkFrameConsumed();
-        if (grant > 0) {
-          this.enqueueMessage(connection, {
-            type: MuxFrameType.CREDIT,
-            streamId: SESSION_CONTROL_STREAM_ID,
-            qos: QosClass.INTERACTIVE,
-            json: { credits: grant },
-            binary: null,
-          });
+        // Here, before anything can drop the frame: the count is of frames that
+        // passed the AEAD check, or a frame lost to a tombstone below would be
+        // resent forever.
+        const discarded = arrivalExchange > connection.admittedExchanges;
+        if (!discarded) {
+          connection.ledger.receive(muxBytes);
         }
-      }
-      if (this.terminalStreamIds.has(frame.streamId)) {
-        // Client mirror of the host's R-2 tombstone check: every terminal
-        // path forgets the reassembler entry for its stream, but a relay can
-        // still deliver a withheld genuine frame for that streamId afterward
-        // — and since `accept()` starts a FRESH accumulator for any
-        // unrecognized stream, letting it through would resurrect an
-        // uncollectable accumulator that lingers to connection teardown.
-        // Runs AFTER credit accounting (the frame was still delivered, so
-        // the grant stays symmetric with the host's per-frame spend).
-        return;
-      }
-      let message: ReassembledMessage | null;
-      try {
-        // BEFORE the reassembler, and for EVERY mux type on the stream (a
-        // chunked CLOSE accumulates as readily as chunked data): a stream
-        // whose method never chunks (a tunnel) must not be able to accumulate
-        // toward the generic message cap, or pin a frame-sized buffer behind
-        // a one-byte payload.
-        const subscribed = this.subscriptions.get(frame.streamId);
-        const violation =
-          subscribed !== undefined &&
-          streamMethodForbidsChunking(subscribed.method)
-            ? unchunkedStreamFrameViolation(frame, muxBytes.length)
-            : null;
-        if (violation !== null) {
-          throw new StreamFrameNotAllowedError(violation);
-        }
-        message = connection.reassembler.accept(frame);
-      } catch (error) {
-        if (this.failStreamOnInboundError(generation, frame, error)) {
-          // The reassembly this watchdog was pacing just ended in a verdict.
-          this.clearReassemblyWatchdog(frame.streamId);
+        const frame = decodeMuxFrame(muxBytes);
+        this.traffic?.classifyMux(
+          frame,
+          bytes.byteLength,
+          muxBytes.byteLength,
+          receivedAtMs,
+        );
+        if (frame.type === MuxFrameType.RESUME) {
+          this.onHostResume(generation, connection, frame);
           return;
         }
-        throw error;
-      }
-      if (message === null) {
-        // A chunk was accepted for a message still in flight. For a stream
-        // subscription that is all the proof "restored" asks for: the host
-        // accepted the subscribe and its data is arriving on the mux, so a
-        // transfer that runs for minutes is not a stream that has gone quiet
-        // and the stall diagnostic must not name it as one. The stream's own
-        // consumer still waits for the completed message. Per-stream reopen
-        // escalation is deliberately NOT reset here - a delivered frame
-        // remains its only proof (see the dispatch path).
-        if (frame.type === MuxFrameType.STREAM_FRAME) {
-          this.markStreamRestored(frame.streamId);
-          // Early evidence needs its own progress bound: completion used to
-          // be the implicit one. Reset on every accepted chunk.
-          this.armReassemblyWatchdog(generation, frame.streamId);
+        if (discarded) {
+          this.onDiscardedFrame(generation, connection, frame);
+          return;
         }
-        return;
+        // Bulk credit accounting is PER FRAME at receipt, symmetric with the
+        // host's spend-per-frame-sent — counting per completed message would
+        // deadlock any transfer longer than the initial credit window at
+        // exactly `INITIAL_BULK_SEND_CREDITS` frames (critique C1).
+        if (frame.qos === QosClass.BULK) {
+          const grant = connection.inboundCredits.onBulkFrameConsumed();
+          if (grant > 0) {
+            this.enqueueMessage(connection, {
+              type: MuxFrameType.CREDIT,
+              streamId: SESSION_CONTROL_STREAM_ID,
+              qos: QosClass.INTERACTIVE,
+              json: { credits: grant },
+              binary: null,
+            });
+          }
+        }
+        if (this.terminalStreamIds.has(frame.streamId)) {
+          // Client mirror of the host's R-2 tombstone check: every terminal
+          // path forgets the reassembler entry for its stream, but a relay can
+          // still deliver a withheld genuine frame for that streamId afterward
+          // — and since `accept()` starts a FRESH accumulator for any
+          // unrecognized stream, letting it through would resurrect an
+          // uncollectable accumulator that lingers to connection teardown.
+          // Runs AFTER credit accounting (the frame was still delivered, so
+          // the grant stays symmetric with the host's per-frame spend).
+          return;
+        }
+        let message: ReassembledMessage | null;
+        try {
+          // BEFORE the reassembler, and for EVERY mux type on the stream (a
+          // chunked CLOSE accumulates as readily as chunked data): a stream
+          // whose method never chunks (a tunnel) must not be able to accumulate
+          // toward the generic message cap, or pin a frame-sized buffer behind
+          // a one-byte payload.
+          const subscribed = this.subscriptions.get(frame.streamId);
+          const violation =
+            subscribed !== undefined &&
+            streamMethodForbidsChunking(subscribed.method)
+              ? unchunkedStreamFrameViolation(frame, muxBytes.length)
+              : null;
+          if (violation !== null) {
+            throw new StreamFrameNotAllowedError(violation);
+          }
+          message = connection.reassembler.accept(frame);
+        } catch (error) {
+          if (this.failStreamOnInboundError(generation, frame, error)) {
+            // The reassembly this watchdog was pacing just ended in a verdict.
+            this.clearReassemblyWatchdog(frame.streamId);
+            return;
+          }
+          throw error;
+        }
+        if (message === null) {
+          // A chunk was accepted for a message still in flight. For a stream
+          // subscription that is all the proof "restored" asks for: the host
+          // accepted the subscribe and its data is arriving on the mux, so a
+          // transfer that runs for minutes is not a stream that has gone quiet
+          // and the stall diagnostic must not name it as one. The stream's own
+          // consumer still waits for the completed message. Per-stream reopen
+          // escalation is deliberately NOT reset here - a delivered frame
+          // remains its only proof (see the dispatch path).
+          if (frame.type === MuxFrameType.STREAM_FRAME) {
+            this.markStreamRestored(frame.streamId);
+            // Early evidence needs its own progress bound: completion used to
+            // be the implicit one. Reset on every accepted chunk.
+            this.armReassemblyWatchdog(generation, frame.streamId);
+          }
+          return;
+        }
+        // A completed message closes its stream's in-flight sequence; the
+        // watchdog pacing it is retired (no-op for streams with none armed).
+        this.clearReassemblyWatchdog(message.streamId);
+        this.dispatchInbound(generation, connection, message);
+      } catch {
+        // In this frame's own turn, because the frames behind it resume next:
+        // the drop is what stops them being counted past a frame that never
+        // was. This session's channel failed, whichever leg carried the frame.
+        this.handleConnectionLost(
+          generation,
+          "inbound-decode-failed",
+          "host-transport-plane",
+        );
       }
-      // A completed message closes its stream's in-flight sequence; the
-      // watchdog pacing it is retired (no-op for streams with none armed).
-      this.clearReassemblyWatchdog(message.streamId);
-      this.dispatchInbound(generation, connection, message);
-    })().catch(() =>
-      this.handleConnectionLost(
-        generation,
-        "inbound-decode-failed",
-        "host-transport-plane",
-      ),
-    );
+    })();
   }
 
   /**
@@ -5279,11 +5273,6 @@ export class RemoteSession<
     if (!this.isCurrent(generation) || this.phase === "closed") {
       return;
     }
-    const connection = this.connection;
-    if (connection?.relinking === true) {
-      this.onClaimDialFailed(generation, connection, cause, provenance);
-      return;
-    }
     const lostAttempt = `${this.dialAttemptId(generation)}-lost`;
     this.dropConnection(cause, retryCause, false);
     this.syncReadinessLatch();
@@ -5330,8 +5319,10 @@ export class RemoteSession<
 
   /**
    * This client's own leg went: a socket close or error, a failed send, a
-   * caller's reconnect. With a claim to make the session outlives it; without
-   * one this is any other loss.
+   * caller's reconnect, a claim dial's timeout. With a claim to make the session
+   * outlives it; without one this is any other loss. Only these claim again: a
+   * failure of the session itself takes {@link handleConnectionLost}, which
+   * ends a relink too, because resuming past it would lose or repeat frames.
    */
   private handleLegLost(
     generation: number,
@@ -5339,13 +5330,15 @@ export class RemoteSession<
     provenance: ConnectionLossProvenance,
   ): void {
     const connection = this.connection;
-    if (
-      this.isCurrent(generation) &&
-      connection !== null &&
-      this.canRelink(connection)
-    ) {
-      this.enterRelinking(generation, connection, cause, provenance);
-      return;
+    if (this.isCurrent(generation) && connection !== null) {
+      if (connection.relinking) {
+        this.onClaimDialFailed(generation, connection, cause, provenance);
+        return;
+      }
+      if (this.canRelink(connection)) {
+        this.enterRelinking(generation, connection, cause, provenance);
+        return;
+      }
     }
     this.handleConnectionLost(generation, cause, provenance);
   }
@@ -5354,8 +5347,7 @@ export class RemoteSession<
     return (
       this.phase === "ready" &&
       connection.resumeNegotiated &&
-      connection.relayClaim !== null &&
-      !connection.relinking
+      connection.relayClaim !== null
     );
   }
 
@@ -5670,6 +5662,12 @@ export class RemoteSession<
     // DIFFERENT token (progress) or the same rejected one (no progress).
     const rejectedBearer = this.openFrameBearer;
     this.dropConnection("session-fatal-unauthorized", null, false);
+    // A claim dial waiting out its rung went with the session. The redial below
+    // has to wait for the credential.
+    if (this.backoffTimer !== null) {
+      clearTimeout(this.backoffTimer);
+      this.backoffTimer = null;
+    }
     void this.revalidateThenReconnect(
       generation,
       auth,
@@ -7132,7 +7130,7 @@ export class RemoteSession<
     this.clearPhaseTimer();
     this.phaseTimer = setTimeout(() => {
       this.phaseTimer = null;
-      this.handleConnectionLost(generation, cause, "host-transport-plane");
+      this.handleLegLost(generation, cause, "host-transport-plane");
     }, timeoutMs);
   }
 

@@ -65,7 +65,10 @@ import type {
   WebSocketErrorEvent,
   WebSocketOpenEvent,
 } from "../../websocket";
-import type { RemoteSessionAuth } from "../auth";
+import type {
+  RemoteSessionAuth,
+  RemoteSessionAuthRecoveryOutcome,
+} from "../auth";
 import {
   ATTACH_ACK_TIMEOUT_MS,
   CLIENT_REAUTH_INTERVAL_MS,
@@ -414,22 +417,27 @@ class FakeRelay {
   }
 
   /** A host-sent session FATAL on stream 0, sealed in order like any host frame. */
-  async sendSessionFatal(): Promise<void> {
+  async sendSessionFatal(code: string, retryable: boolean): Promise<void> {
     await this.sendMux(this.host(), {
       type: MuxFrameType.FATAL,
       streamId: SESSION_CONTROL_STREAM_ID,
       qos: QosClass.INTERACTIVE,
       json: {
         details: {
-          code: "INTERNAL_ERROR",
-          reason: "the host hit a transient fault",
+          code,
+          reason: "the host said so",
           incompatibleMethods: null,
           upgradeGuidance: null,
-          retryable: true,
+          retryable,
         },
       },
       binary: null,
     });
+  }
+
+  /** A frame that passes the AEAD check and that the mux decoder refuses. */
+  async sendUndecodable(): Promise<void> {
+    await this.sealAndDeliver(this.host(), new Uint8Array([0xff]));
   }
 
   /** The host's RESUME for `resume`, then the client's gap, resealed. */
@@ -683,7 +691,7 @@ function buildEvidence(relay: FakeRelay): EvidenceSpies {
   };
 }
 
-function hostAuth(): RemoteSessionAuth {
+function hostAuth(revalidate: FixtureConfig["revalidate"]): RemoteSessionAuth {
   return {
     missingOpenAuthCause: "missing-host-credential",
     readOpenAuth: () => ({
@@ -693,7 +701,7 @@ function hostAuth(): RemoteSessionAuth {
     }),
     readCredentialUpdateBearer: () => "relink-bearer",
     currentFingerprint: () => "relink-bearer",
-    revalidateForReconnect: null,
+    revalidateForReconnect: revalidate,
   };
 }
 
@@ -759,6 +767,8 @@ async function advanceUntil(
 
 interface FixtureConfig {
   readonly issueKeys: boolean;
+  /** The credential revalidation an UNAUTHORIZED session fatal runs, or none. */
+  readonly revalidate: (() => Promise<RemoteSessionAuthRecoveryOutcome>) | null;
 }
 
 async function readyFixture(config: FixtureConfig): Promise<Fixture> {
@@ -777,7 +787,7 @@ async function readyFixture(config: FixtureConfig): Promise<Fixture> {
     attachBaseUrl: ATTACH_URL,
     hostStaticPublicKey: relay.publicKey,
     grantProvider: grants,
-    auth: hostAuth(),
+    auth: hostAuth(config.revalidate),
     clock: null,
     rpcRegistry,
     streamRegistry,
@@ -824,7 +834,7 @@ async function readyFixture(config: FixtureConfig): Promise<Fixture> {
   };
 }
 
-const LIVE: FixtureConfig = { issueKeys: true };
+const LIVE: FixtureConfig = { issueKeys: true, revalidate: null };
 
 function callStatus(session: Session): Promise<unknown> {
   return session.sendUnary(
@@ -1427,7 +1437,7 @@ describe("RemoteSession relink on an own-leg loss", () => {
 
   describe("an older relay that issues no key", () => {
     it("rebuilds as today on an own-leg loss: a full attach, 1000 on the client-closed leg, no claim", async () => {
-      const fixture = await readyFixture({ issueKeys: false });
+      const fixture = await readyFixture({ ...LIVE, issueKeys: false });
       const { relay, session } = fixture;
       expect(relay.legs[0]?.params.get("park")).toBe("1");
       expect(relay.legs[0]?.params.has("resume")).toBe(false);
@@ -1497,18 +1507,21 @@ describe("RemoteSession relink on an own-leg loss", () => {
 
   describe("a claim dial's late completions", () => {
     /**
-     * An old inbound decrypt is held with a host-sent retryable session FATAL
-     * in it; claim mint #1 is outstanding after `forceReconnect`; the decrypt
-     * then lets the frame through. It is authentic and in order, so it
-     * dispatches to the loss funnel while relinking, which retires dial #1 and
-     * schedules #2 on the same generation. Returns the controls.
+     * Claim mint #1 is outstanding after `forceReconnect` when an old inbound
+     * frame, a retryable host FATAL whose decrypt was held, goes through. That
+     * is a failure of the session itself: it ends the relink and rebuilds, and
+     * the dial goes with the connection it was made for. (No leg-plane loss can
+     * reach a dial whose mint is outstanding: the old leg is closed and its
+     * handlers detached, and no claim socket exists until the mint is done.)
+     * Returns the controls and the legs dialled by then.
      */
-    async function retireFirstClaimMint(fixture: Fixture): Promise<{
+    async function rebuildDuringFirstClaimMint(fixture: Fixture): Promise<{
       readonly mint1: Deferred<AttachGrantProvision>;
+      readonly legsAtRebuild: number;
     }> {
       const { relay, session, grants } = fixture;
       const held = holdNextDecrypt();
-      await relay.sendSessionFatal();
+      await relay.sendSessionFatal("INTERNAL_ERROR", true);
       await until(() => held.spy.mock.calls.length === 1);
       const mint1 = deferred<AttachGrantProvision>();
       grants.mockImplementationOnce(() => mint1.promise);
@@ -1519,34 +1532,40 @@ describe("RemoteSession relink on an own-leg loss", () => {
 
       held.release();
       await step(0);
-      // Dial #1 is retired; #2 waits on its backoff.
-      expect(grants).toHaveBeenCalledTimes(2);
-      return { mint1 };
+      expect(relay.resumes).toEqual([]);
+      return { mint1, legsAtRebuild: relay.legs.length };
     }
 
-    it("ignores a retired mint that completes ok before the next dial starts: one claim leg, and the session recovers", async () => {
+    /** The rebuild finishes: a second handshake, and no leg ever claims again. */
+    async function untilRebuilt(fixture: Fixture): Promise<void> {
+      const { relay, session } = fixture;
+      await advanceUntil(() => relay.handshakes === 2, 30_000);
+      await until(() => session.isReady());
+      for (const leg of relay.legs.slice(1)) {
+        expect(leg.claim).toBeNull();
+      }
+      expect(relay.sessions).toHaveLength(2);
+    }
+
+    it("ignores a retired mint that completes ok before the rebuild dials: no claim leg, and the session rebuilds", async () => {
       const fixture = await readyFixture(LIVE);
-      const { relay, grants } = fixture;
-      const { mint1 } = await retireFirstClaimMint(fixture);
+      const { relay } = fixture;
+      const { mint1, legsAtRebuild } =
+        await rebuildDuringFirstClaimMint(fixture);
 
       mint1.resolve(OK_GRANT);
       await step(0);
-      expect(relay.legs).toHaveLength(1);
+      expect(relay.legs).toHaveLength(legsAtRebuild);
 
-      await advanceUntil(() => grants.mock.calls.length === 3, 5_000);
-      await untilResumed(fixture, 1);
-
+      await untilRebuilt(fixture);
       expect(relay.legs).toHaveLength(2);
-      expect(relay.legs[1]?.claim).toBe(claimOf(relay.host()));
-      expect(relay.handshakes).toBe(1);
     });
 
-    it("ignores a retired mint that completes ok after the next dial resumed: no third socket", async () => {
+    it("ignores a retired mint that completes ok after the rebuild: no extra socket", async () => {
       const fixture = await readyFixture(LIVE);
-      const { relay, grants } = fixture;
-      const { mint1 } = await retireFirstClaimMint(fixture);
-      await advanceUntil(() => grants.mock.calls.length === 3, 5_000);
-      await untilResumed(fixture, 1);
+      const { relay } = fixture;
+      const { mint1 } = await rebuildDuringFirstClaimMint(fixture);
+      await untilRebuilt(fixture);
 
       mint1.resolve(OK_GRANT);
       await step(30_000);
@@ -1555,12 +1574,11 @@ describe("RemoteSession relink on an own-leg loss", () => {
       expect(fixture.session.isReady()).toBe(true);
     });
 
-    it("ignores a retired mint that completes unavailable: no fresh attach, no new backoff, no evidence", async () => {
+    it("ignores a retired mint that completes unavailable: no new backoff, no evidence", async () => {
       const fixture = await readyFixture(LIVE);
-      const { relay, grants, spies } = fixture;
-      const { mint1 } = await retireFirstClaimMint(fixture);
-      await advanceUntil(() => grants.mock.calls.length === 3, 5_000);
-      await untilResumed(fixture, 1);
+      const { relay, spies } = fixture;
+      const { mint1 } = await rebuildDuringFirstClaimMint(fixture);
+      await untilRebuilt(fixture);
       const indeterminate = spies.reportDialIndeterminate.mock.calls.length;
 
       mint1.resolve({
@@ -1571,35 +1589,33 @@ describe("RemoteSession relink on an own-leg loss", () => {
       await step(60_000);
 
       expect(relay.legs).toHaveLength(2);
-      expect(relay.handshakes).toBe(1);
+      expect(relay.handshakes).toBe(2);
       expect(fixture.session.isReady()).toBe(true);
       expect(spies.reportDialIndeterminate.mock.calls).toHaveLength(
         indeterminate,
       );
     });
 
-    it("ignores a retired mint that rejects: the session and its leg are untouched", async () => {
+    it("ignores a retired mint that rejects: the rebuilt session and its leg are untouched", async () => {
       const fixture = await readyFixture(LIVE);
-      const { relay, grants } = fixture;
-      const { mint1 } = await retireFirstClaimMint(fixture);
-      await advanceUntil(() => grants.mock.calls.length === 3, 5_000);
-      await untilResumed(fixture, 1);
+      const { relay } = fixture;
+      const { mint1 } = await rebuildDuringFirstClaimMint(fixture);
+      await untilRebuilt(fixture);
 
       mint1.reject(new Error("the mint failed late"));
       await step(60_000);
 
       expect(relay.legs).toHaveLength(2);
       expect(relay.legs[1]?.closes).toEqual([]);
-      expect(relay.handshakes).toBe(1);
+      expect(relay.handshakes).toBe(2);
       expect(fixture.session.isReady()).toBe(true);
     });
 
     it("ignores a retired mint that is refused: the session does not go terminal", async () => {
       const fixture = await readyFixture(LIVE);
-      const { relay, grants, session } = fixture;
-      const { mint1 } = await retireFirstClaimMint(fixture);
-      await advanceUntil(() => grants.mock.calls.length === 3, 5_000);
-      await untilResumed(fixture, 1);
+      const { relay, session } = fixture;
+      const { mint1 } = await rebuildDuringFirstClaimMint(fixture);
+      await untilRebuilt(fixture);
 
       mint1.resolve({
         kind: "refused",
@@ -1748,30 +1764,6 @@ describe("RemoteSession relink on an own-leg loss", () => {
 
       expect(relay.legs[1]?.textSends).toEqual([]);
     });
-
-    it("does not restart a claim when an inbound decrypt rejects after the leg went", async () => {
-      const fixture = await readyFixture(LIVE);
-      const { relay, session, grants } = fixture;
-      const held = holdNextDecrypt();
-      await relay.tick(5);
-      await until(() => held.spy.mock.calls.length === 1);
-      const mint1 = deferred<AttachGrantProvision>();
-      grants.mockImplementationOnce(() => mint1.promise);
-      session.forceReconnect("test");
-      await step(0);
-      expect(grants).toHaveBeenCalledTimes(2);
-
-      held.fail(new Error("the old leg's frame did not decode"));
-      await step(5_000);
-
-      // Mint #1 is still the only claim dial: no second mint, no new socket.
-      expect(grants).toHaveBeenCalledTimes(2);
-      expect(relay.legs).toHaveLength(1);
-      mint1.resolve(OK_GRANT);
-      await untilResumed(fixture, 1);
-      expect(relay.legs).toHaveLength(2);
-      expect(relay.handshakes).toBe(1);
-    });
   });
 
   describe("completions that land after the new leg's same-session ack", () => {
@@ -1868,31 +1860,137 @@ describe("RemoteSession relink on an own-leg loss", () => {
         expect(relay.legs).toHaveLength(2);
       },
     );
+  });
 
-    it("lets an inbound decrypt on the old leg reject without rebuilding: the frame comes through the host's resend, once", async () => {
-      const fixture = await readyFixture(LIVE);
-      const { relay, session, ticks } = fixture;
-      relay.holdUnary = true;
-      const call = track(callStatus(session));
-      await until(() => relay.pendingRequests.length === 1);
-      const held = holdNextDecrypt();
+  describe("a failure of the session itself ends a relink", () => {
+    /** Two ticks reach the client and wait in its decrypt: frames n and n+1. */
+    async function holdTwoFrames(
+      relay: FakeRelay,
+    ): Promise<{ readonly n: HeldDecrypt; readonly next: HeldDecrypt }> {
+      const n = holdNextDecrypt();
+      const next = holdNextDecrypt();
       await relay.tick(5);
-      await until(() => held.spy.mock.calls.length === 1);
+      await relay.tick(6);
+      await until(() => n.spy.mock.calls.length === 2);
+      return { n, next };
+    }
 
+    async function untilRebuilt(fixture: Fixture): Promise<void> {
+      const { relay, session } = fixture;
+      await advanceUntil(() => relay.handshakes === 2, 30_000);
+      await until(() => session.isReady());
+      await until(() => fixture.ticks.length === 2);
+    }
+
+    it("rebuilds when frame n fails to decrypt while relinking: no RESUME, and the frame behind it is never dispatched", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { relay, session } = fixture;
+      const { n, next } = await holdTwoFrames(relay);
+      session.forceReconnect("test");
+      await step(0);
+
+      n.fail(new Error("frame n did not decode"));
+      next.release();
+      await untilRebuilt(fixture);
+
+      // The one claim dial forceReconnect made, and then the rebuild's attach.
+      expect(relay.resumes).toEqual([]);
+      expect(fixture.ticks).toEqual([0, 0]);
+      expect(relay.legs).toHaveLength(3);
+      expect(relay.legs[2]?.claim).toBeNull();
+      expect(relay.sessions).toHaveLength(2);
+    });
+
+    it("rebuilds when frame n fails to decrypt after a same-session ack: no frame behind it is dispatched", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { relay, session } = fixture;
+      const { n, next } = await holdTwoFrames(relay);
       session.forceReconnect("test");
       await advanceUntil(() => relay.legs.length === 2, 5_000);
       await step(0);
-      held.fail(new Error("the old leg's frame did not decode"));
-      await untilResumed(fixture, 1);
-      await until(() => ticks.length === 2);
+
+      n.fail(new Error("frame n did not decode"));
+      next.release();
+      await untilRebuilt(fixture);
+
+      expect(relay.legs[1]?.closes.map((close) => close.code)).toEqual([1000]);
+      expect(fixture.ticks).toEqual([0, 0]);
+      expect(relay.legs[2]?.claim).toBeNull();
+      expect(relay.sessions).toHaveLength(2);
+    });
+
+    it("rebuilds, not claims again, when a counted frame fails to decode while relinking", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { relay, session } = fixture;
+      const held = holdNextDecrypt();
+      await relay.sendUndecodable();
+      await until(() => held.spy.mock.calls.length === 1);
+      session.forceReconnect("test");
+      await step(0);
+
+      held.release();
+      await untilRebuilt(fixture);
+
+      expect(relay.resumes).toEqual([]);
+      expect(relay.legs).toHaveLength(3);
+      expect(relay.legs[2]?.claim).toBeNull();
+      expect(relay.sessions).toHaveLength(2);
+    });
+
+    it("rebuilds on a retryable FATAL while relinking: no claim dial follows", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { relay, session, grants } = fixture;
+      const held = holdNextDecrypt();
+      await relay.sendSessionFatal("INTERNAL_ERROR", true);
+      await until(() => held.spy.mock.calls.length === 1);
+      const mint1 = deferred<AttachGrantProvision>();
+      grants.mockImplementationOnce(() => mint1.promise);
+      session.forceReconnect("test");
+      await step(0);
+      const legsBefore = relay.legs.length;
+
+      held.release();
+      await untilRebuilt(fixture);
+
+      expect(relay.legs.length).toBeGreaterThan(legsBefore);
+      for (const leg of relay.legs.slice(1)) {
+        expect(leg.claim).toBeNull();
+        expect(leg.url).not.toContain("resume=");
+      }
+      expect(relay.resumes).toEqual([]);
+    });
+
+    it("lets an UNAUTHORIZED FATAL while relinking cancel the claim dial waiting on its rung: the next dial follows the revalidation", async () => {
+      const revalidation = deferred<RemoteSessionAuthRecoveryOutcome>();
+      const revalidate = vi.fn(() => revalidation.promise);
+      const fixture = await readyFixture({ ...LIVE, revalidate });
+      const { relay, session, grants } = fixture;
+      const held = holdNextDecrypt();
+      await relay.sendSessionFatal("UNAUTHORIZED", false);
+      await until(() => held.spy.mock.calls.length === 1);
+      const mint1 = deferred<AttachGrantProvision>();
+      grants.mockImplementationOnce(() => mint1.promise);
+      session.forceReconnect("test");
+      await step(0);
+      mint1.reject(new Error("authn unreachable"));
+      await step(0);
+      // Dial #2 waits on its rung.
+      expect(grants).toHaveBeenCalledTimes(2);
+
+      held.release();
+      await until(() => revalidate.mock.calls.length === 1);
+      await step(3_000);
+
+      // The rung passed and nothing dialled: the revalidation is still out.
+      expect(grants).toHaveBeenCalledTimes(2);
+      expect(relay.legs).toHaveLength(1);
+      revalidation.resolve("rotated");
+      await advanceUntil(() => relay.handshakes === 2, 30_000);
+      await until(() => session.isReady());
 
       expect(relay.legs).toHaveLength(2);
-      expect(relay.legs[1]?.closes).toEqual([]);
-      expect(relay.handshakes).toBe(1);
-      expect(relay.sessions).toHaveLength(1);
-      expect(session.isReady()).toBe(true);
-      expect(ticks).toEqual([0, 5]);
-      expect(call.settled).toBe(false);
+      expect(relay.legs[1]?.claim).toBeNull();
+      expect(relay.sessions).toHaveLength(2);
     });
   });
 

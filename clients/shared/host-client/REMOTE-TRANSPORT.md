@@ -452,6 +452,10 @@ sequenceDiagram
 - The dial is today's immediate recovery rung. A dial that fails or never acks
   walks the ordinary ladder and claims again with the same key: the relay may have
   moved the `sid` to a leg whose ack was lost, and only the key takes it back.
+- Only a failure of the leg claims again: a socket close or error, a failed send,
+  a claim dial's failure, a caller's reconnect. A failure of the session itself
+  rebuilds, whichever leg or state it lands in: a frame that will not decrypt or
+  decode, or a session `FATAL`. Resuming past one would lose or repeat frames.
 - The client always claims. The hold does not apply to its own loss, because
   only the relay's answer can say whether the session is still there. Past the
   relay's 60 s the ack carries a fresh `sid`, which is what a phone back from a
