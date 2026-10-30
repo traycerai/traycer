@@ -148,9 +148,7 @@ function craftPlist(
     .map((arg) => `    <string>${escapeXml(arg)}</string>`)
     .join("\n");
   const exitTimeOutXml =
-    exitTimeOut === null
-      ? ""
-      : `  <key>ExitTimeOut</key>\n  ${exitTimeOut}\n`;
+    exitTimeOut === null ? "" : `  <key>ExitTimeOut</key>\n  ${exitTimeOut}\n`;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -403,10 +401,7 @@ describe("a stop budget below today's ExitTimeOut: patch ONLY the plist", () => 
     expect(processRunnerCalls).toEqual([]);
   });
 
-  it.each([
-    LAUNCHD_EXIT_TIMEOUT_SECONDS,
-    LAUNCHD_EXIT_TIMEOUT_SECONDS + 100,
-  ])(
+  it.each([LAUNCHD_EXIT_TIMEOUT_SECONDS, LAUNCHD_EXIT_TIMEOUT_SECONDS + 100])(
     "an ExitTimeOut of %i with a current launcher is current: no writes",
     async (seconds) => {
       const label = labelFor(`exit-timeout-current-${seconds}`);
