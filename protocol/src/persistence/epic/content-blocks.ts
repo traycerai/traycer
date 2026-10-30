@@ -1025,6 +1025,36 @@ export const toolCallBlockSchemaPreArtifact = lazySchema(() =>
 );
 export type ToolCallBlock = z.infer<typeof toolCallBlockSchema>;
 
+// Wire-freeze copy of `toolCallBlockSchema` as the stream lines bound to
+// `openContentBlockSchemaPreNotApplied` (from `chat.subscribe@1.31`) ship it:
+// the live block without the `botSendReceipt` stamp. Hand-frozen, NOT
+// `.omit()`-derived; keys keep the live order.
+export const toolCallBlockSchemaPreBotSendReceipt = lazySchema(() =>
+  z.object({
+    ...baseBlockFields,
+    status: actionBlockStatus,
+    type: z.literal("tool_call"),
+    toolName: z.string(),
+    inputSummary: z.string().nullable().default(null),
+    inputDetail: toolInputDetailSchema.nullable().default(null),
+    taskTodoItems: z.array(parsedTaskTodoSchema).nullable().default(null),
+    error: z.string().nullable(),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    agentMessageReceipt: agentMessageReceiptSchema.nullable().default(null),
+    agentMessageDelivery: agentMessageDeliverySchema.nullable().default(null),
+    managedCommand: toolCallManagedCommandSchema.nullable().default(null),
+    progress: z.string().nullable().default(null),
+    backgroundOutput: backgroundTaskOutputSchema.nullable().default(null),
+    startedAt: z.number().nullable().default(null),
+    endedAt: z.number().nullable().default(null),
+    backgroundTask: z.boolean().nullable().default(false),
+    stopped: z.boolean().default(false),
+    imageResults: z.array(imageGenerationResultSchema).default([]),
+    artifact: toolCallArtifactStampSchema.nullable().default(null),
+    mcpApp: toolCallMcpAppStampSchema.nullable().default(null),
+  }),
+);
+
 // Wire-freeze copy of `toolCallBlockSchema` as `chat.subscribe@1.23` through
 // `@1.28` ship it: the live block without the `agentMessageDelivery` stamp
 // `1.29` added. Bound by the content-block unions those lines decode.

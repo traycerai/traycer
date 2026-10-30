@@ -614,6 +614,28 @@ export type ToolCallCompletedEvent = z.infer<
   typeof toolCallCompletedEventSchema
 >;
 
+// Wire-freeze copy of `toolCallCompletedEventSchema` as the stream lines
+// bound to `openRuntimeEventSchemaPreNotApplied` (from `chat.subscribe@1.31`)
+// ship it: the live event without the `botSendReceipt` stamp. Hand-frozen,
+// NOT derived from the live shape; keys keep the live order.
+export const toolCallCompletedEventSchemaPreBotSendReceipt = lazySchema(() =>
+  z.object({
+    ...baseRuntimeEventFields,
+    type: z.literal("tool_call.completed"),
+    toolName: z.string(),
+    agentMessageSend: agentMessageSendSchema.nullable().default(null),
+    managedCommand: toolCallManagedCommandSchema.nullable().optional(),
+    agentMessageReceipt: agentMessageReceiptSchema.nullable().optional(),
+    agentMessageDelivery: agentMessageDeliverySchema.nullable().optional(),
+    backgroundOutput: backgroundTaskOutputSchema.nullable().optional(),
+    backgroundStartedAt: z.number().optional(),
+    backgroundTask: z.boolean().optional(),
+    imageResults: z.array(imageGenerationResultSchema).default([]),
+    artifact: toolCallArtifactStampSchema.nullable().optional(),
+    mcpApp: toolCallMcpAppStampSchema.nullable().optional(),
+  }),
+);
+
 // Wire-freeze copy of `toolCallCompletedEventSchema` as `chat.subscribe@1.23`
 // through `@1.28` ship it: the live event without the `agentMessageDelivery`
 // stamp `1.29` added. Bound by the runtime-event union those lines decode.
