@@ -6961,6 +6961,446 @@ describe("useChatTimelineFollowLatch", () => {
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
   });
 
+  describe("a detached reader with no scroll report of their own", () => {
+    const VIEW_HEIGHT_PX = 500;
+    const DETACHED_TOP_PX = 900;
+
+    function mountDetached(options: {
+      readonly initialScrollAtEnd: boolean;
+      readonly scrollTop: number;
+      readonly isCorrectionSuppressed: (() => boolean) | undefined;
+    }) {
+      const node = shim.makeNode({
+        scrollTop: options.scrollTop,
+        scrollHeight: 1500,
+        clientHeight: VIEW_HEIGHT_PX,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, options.initialScrollAtEnd, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+          isCorrectionSuppressed: options.isCorrectionSuppressed,
+        }),
+      );
+      return { node, listRef, onFollowIntentChange, result };
+    }
+
+    /** The end shrinks onto the reader at `offset`, then regrows past them. */
+    function expectHeldThroughShrinkAndRegrowth(
+      mounted: {
+        readonly node: HTMLDivElement;
+        readonly listRef: FakeListRef;
+        readonly onFollowIntentChange: Mock<(follow: boolean) => void>;
+        readonly result: { readonly current: ChatTimelineFollowLatch };
+      },
+      offset: number,
+    ): void {
+      const { node, listRef, onFollowIntentChange, result } = mounted;
+
+      shim.setGeometry(node, { scrollHeight: offset + VIEW_HEIGHT_PX });
+      result.current.followEndIfPermitted();
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollHeight: offset + VIEW_HEIGHT_PX + 200 });
+      result.current.followEndIfPermitted();
+      fireNativeScroll(node);
+      flushAnimationFrame();
+
+      expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
+      expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      expect(node.scrollTop).toBe(offset);
+    }
+
+    it("stays detached when the end shrinks onto an owned free navigation's landing and regrows", () => {
+      const mounted = mountDetached({
+        initialScrollAtEnd: true,
+        scrollTop: 1000,
+        isCorrectionSuppressed: undefined,
+      });
+      const { node, result } = mounted;
+
+      result.current.beginOwnedFreeNavigation();
+      shim.setGeometry(node, { scrollTop: DETACHED_TOP_PX });
+      result.current.completeOwnedFreeNavigation();
+
+      expectHeldThroughShrinkAndRegrowth(mounted, DETACHED_TOP_PX);
+    });
+
+    it("stays detached when the end shrinks onto an explicit detach at a view off the end and regrows", () => {
+      const mounted = mountDetached({
+        initialScrollAtEnd: true,
+        scrollTop: 1000,
+        isCorrectionSuppressed: undefined,
+      });
+
+      // A validated restore lands the view off the end, then detaches.
+      shim.setGeometry(mounted.node, { scrollTop: DETACHED_TOP_PX });
+      mounted.result.current.setFollowIntent(false);
+
+      expectHeldThroughShrinkAndRegrowth(mounted, DETACHED_TOP_PX);
+    });
+
+    it("stays detached when the end shrinks onto a mount off the end, once a report takes the departure, and regrows", () => {
+      let restoreHolds = true;
+      const mounted = mountDetached({
+        initialScrollAtEnd: false,
+        scrollTop: DETACHED_TOP_PX,
+        isCorrectionSuppressed: () => restoreHolds,
+      });
+      const { node } = mounted;
+
+      // Nothing reads the view after the restore lifts: the report is the
+      // first thing to see a view that is theirs.
+      restoreHolds = false;
+      shim.setGeometry(node, { scrollTop: 950 });
+      fireNativeScroll(node);
+
+      expectHeldThroughShrinkAndRegrowth(mounted, 950);
+    });
+
+    it("stays detached when the end shrinks onto a mount off the end, once a read takes the departure, and regrows", () => {
+      const mounted = mountDetached({
+        initialScrollAtEnd: false,
+        scrollTop: DETACHED_TOP_PX,
+        isCorrectionSuppressed: undefined,
+      });
+
+      mounted.result.current.followEndIfPermitted();
+
+      expectHeldThroughShrinkAndRegrowth(mounted, DETACHED_TOP_PX);
+    });
+
+    it("stays detached when the end shrinks onto an owned end navigation that landed off the end, and regrows", () => {
+      const mounted = mountDetached({
+        initialScrollAtEnd: true,
+        scrollTop: 1000,
+        isCorrectionSuppressed: undefined,
+      });
+      const { node, result } = mounted;
+
+      result.current.beginOwnedEndNavigation();
+      shim.setGeometry(node, { scrollTop: DETACHED_TOP_PX });
+      result.current.completeOwnedEndNavigation(false);
+
+      expectHeldThroughShrinkAndRegrowth(mounted, DETACHED_TOP_PX);
+    });
+
+    it("takes no departure at a partial offset while a restore suppresses correction, and holds the reader at the validated landing", () => {
+      let restoreHolds = true;
+      const mounted = mountDetached({
+        initialScrollAtEnd: false,
+        scrollTop: 300,
+        isCorrectionSuppressed: () => restoreHolds,
+      });
+      const { node, result } = mounted;
+
+      // The restore is still moving the view: a read and a report at its
+      // partial offset are not a departure.
+      result.current.followEndIfPermitted();
+      fireNativeScroll(node);
+
+      // It lands higher up the end's reach, then validates and detaches.
+      restoreHolds = false;
+      shim.setGeometry(node, { scrollTop: DETACHED_TOP_PX });
+      result.current.setFollowIntent(false);
+
+      // The end meets the landing, not the partial offset the restore passed.
+      expectHeldThroughShrinkAndRegrowth(mounted, DETACHED_TOP_PX);
+    });
+
+    it("takes nothing from an explicit detach on the strict bottom, then holds the reader a read finds off the end", () => {
+      const mounted = mountDetached({
+        initialScrollAtEnd: true,
+        scrollTop: 1000,
+        isCorrectionSuppressed: undefined,
+      });
+      const { node, result } = mounted;
+
+      result.current.setFollowIntent(false);
+      shim.setGeometry(node, { scrollTop: DETACHED_TOP_PX });
+      result.current.followEndIfPermitted();
+
+      expectHeldThroughShrinkAndRegrowth(mounted, DETACHED_TOP_PX);
+    });
+
+    it("carries an owed-then-taken departure through an announced write, so the end meeting the carried offset holds them", () => {
+      const mounted = mountDetached({
+        initialScrollAtEnd: false,
+        scrollTop: DETACHED_TOP_PX,
+        isCorrectionSuppressed: undefined,
+      });
+      const { node, result } = mounted;
+
+      result.current.followEndIfPermitted();
+      // The list inserts 400px above the reader and compensates.
+      shim.setGeometry(node, { scrollHeight: 1900 });
+      moveChatTimelineScroller(node, 1300, () => {
+        shim.setGeometry(node, { scrollTop: 1300 });
+      });
+
+      expectHeldThroughShrinkAndRegrowth(mounted, 1300);
+    });
+
+    /** A reader whose strict-bottom reports a suppressed restore refuses to
+     *  follow: it detaches them with no departure recorded. */
+    function mountUnderRefusedRestore(options: {
+      readonly initialScrollAtEnd: boolean;
+      readonly scrollTop: number;
+    }) {
+      const node = shim.makeNode({
+        scrollTop: options.scrollTop,
+        scrollHeight: 1500,
+        clientHeight: VIEW_HEIGHT_PX,
+      });
+      const listRef = makeFakeListRef(node);
+      const onFollowIntentChange = vi.fn<(follow: boolean) => void>();
+      const restore = { holds: false };
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(listRef, options.initialScrollAtEnd, true, {
+          ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+          onFollowIntentChange,
+          isCorrectionSuppressed: () => restore.holds,
+          resolveSuppressedEndLanding: () => false,
+        }),
+      );
+      return { node, listRef, onFollowIntentChange, result, restore };
+    }
+
+    it("stays detached when a refused restore's strict-bottom report detached them, the view then left the end, and the end shrinks onto them and regrows", () => {
+      const mounted = mountUnderRefusedRestore({
+        initialScrollAtEnd: true,
+        scrollTop: 1000,
+      });
+      const { node, onFollowIntentChange, result, restore } = mounted;
+
+      restore.holds = true;
+      fireNativeScroll(node);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+      restore.holds = false;
+      shim.setGeometry(node, { scrollTop: DETACHED_TOP_PX });
+      result.current.followEndIfPermitted();
+
+      expectHeldThroughShrinkAndRegrowth(mounted, DETACHED_TOP_PX);
+    });
+
+    /** A reader following with a stale `owed` has nothing to take: the first
+     *  view off the end that a read or report sees outside a suppressed
+     *  restore would take it, so their wheel departs them at 900 inside one.
+     *  The view then moves on to 950 unreported, and the end shrinks onto it.
+     *  A departure at 900 makes 950 their arrival, which follows. */
+    function followingReaderDepartedAndArrived(options: {
+      readonly initialScrollAtEnd: boolean;
+      readonly followBeforeDeparture: (result: {
+        readonly current: ChatTimelineFollowLatch;
+      }) => void;
+    }): void {
+      const restore = { holds: false };
+      const mounted = mountDetached({
+        initialScrollAtEnd: options.initialScrollAtEnd,
+        scrollTop: 1000,
+        isCorrectionSuppressed: () => restore.holds,
+      });
+      const { node, onFollowIntentChange, result } = mounted;
+      options.followBeforeDeparture(result);
+
+      restore.holds = true;
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+      shim.setGeometry(node, { scrollTop: DETACHED_TOP_PX });
+      fireNativeScroll(node);
+      restore.holds = false;
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+      shim.setGeometry(node, { scrollTop: 950 });
+      result.current.followEndIfPermitted();
+      shim.setGeometry(node, { scrollHeight: 950 + VIEW_HEIGHT_PX });
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    }
+
+    it("owes nothing once follow is granted, so a later reader's published departure is not re-taken", () => {
+      followingReaderDepartedAndArrived({
+        initialScrollAtEnd: false,
+        // Maintenance heals the strict-bottom mount into following.
+        followBeforeDeparture: (result) =>
+          result.current.followEndIfPermitted(),
+      });
+    });
+
+    it("owes nothing from an owned end navigation that lands them following", () => {
+      followingReaderDepartedAndArrived({
+        initialScrollAtEnd: true,
+        followBeforeDeparture: (result) => {
+          result.current.beginOwnedEndNavigation();
+          result.current.completeOwnedEndNavigation(true);
+        },
+      });
+    });
+
+    it("owes nothing from an explicit follow intent while following", () => {
+      followingReaderDepartedAndArrived({
+        initialScrollAtEnd: true,
+        followBeforeDeparture: (result) => result.current.setFollowIntent(true),
+      });
+    });
+
+    it("takes no partial offset from a read while a restore suppresses correction, so the view they settle on is taken", () => {
+      let restoreHolds = true;
+      const mounted = mountDetached({
+        initialScrollAtEnd: false,
+        scrollTop: 700,
+        isCorrectionSuppressed: () => restoreHolds,
+      });
+      const { node, result } = mounted;
+
+      result.current.followEndIfPermitted();
+      // The restore carries the view to 900 without a report, then lifts with
+      // no transition after it.
+      shim.setGeometry(node, { scrollTop: DETACHED_TOP_PX });
+      restoreHolds = false;
+      result.current.followEndIfPermitted();
+
+      expectHeldThroughShrinkAndRegrowth(mounted, DETACHED_TOP_PX);
+    });
+
+    it("replaces an older departure with the view a navigation settles them on", () => {
+      const mounted = mountDetached({
+        initialScrollAtEnd: true,
+        scrollTop: 1000,
+        isCorrectionSuppressed: undefined,
+      });
+      const { node, result } = mounted;
+
+      // Their wheel departs them at 900.
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+      shim.setGeometry(node, { scrollTop: DETACHED_TOP_PX });
+      fireNativeScroll(node);
+
+      // A navigation lands them 50px farther on, unreported.
+      result.current.beginOwnedFreeNavigation();
+      shim.setGeometry(node, { scrollTop: 950 });
+      result.current.completeOwnedFreeNavigation();
+
+      expectHeldThroughShrinkAndRegrowth(mounted, 950);
+    });
+
+    it("takes a departure once, so a view they later reach unreported reads as their arrival", () => {
+      const mounted = mountDetached({
+        initialScrollAtEnd: true,
+        scrollTop: 1000,
+        isCorrectionSuppressed: undefined,
+      });
+      const { node, onFollowIntentChange, result } = mounted;
+
+      result.current.beginOwnedFreeNavigation();
+      shim.setGeometry(node, { scrollTop: DETACHED_TOP_PX });
+      result.current.completeOwnedFreeNavigation();
+
+      shim.setGeometry(node, { scrollTop: 950 });
+      result.current.followEndIfPermitted();
+      shim.setGeometry(node, { scrollHeight: 950 + VIEW_HEIGHT_PX });
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("heals a stale detach on the strict bottom at the next maintenance read", () => {
+      const mounted = mountDetached({
+        initialScrollAtEnd: true,
+        scrollTop: 1000,
+        isCorrectionSuppressed: undefined,
+      });
+      const { onFollowIntentChange, result } = mounted;
+
+      result.current.setFollowIntent(false);
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+      result.current.followEndIfPermitted();
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
+    it("takes no departure from a view that cannot be measured, so the first measurable view is theirs", () => {
+      const mounted = mountDetached({
+        initialScrollAtEnd: true,
+        scrollTop: 1000,
+        isCorrectionSuppressed: undefined,
+      });
+      const { node, result } = mounted;
+
+      // A hidden pane reports no height, with the view at 900.
+      shim.setGeometry(node, { scrollTop: DETACHED_TOP_PX, clientHeight: 0 });
+      result.current.setFollowIntent(false);
+
+      shim.setGeometry(node, { scrollTop: 950, clientHeight: VIEW_HEIGHT_PX });
+      result.current.followEndIfPermitted();
+
+      expectHeldThroughShrinkAndRegrowth(mounted, 950);
+    });
+
+    describe("controls", () => {
+      it("follows a navigated reader whose own scroll reaches the end past their departure", () => {
+        const mounted = mountDetached({
+          initialScrollAtEnd: true,
+          scrollTop: 1000,
+          isCorrectionSuppressed: undefined,
+        });
+        const { node, onFollowIntentChange, result } = mounted;
+        result.current.beginOwnedFreeNavigation();
+        shim.setGeometry(node, { scrollTop: DETACHED_TOP_PX });
+        result.current.completeOwnedFreeNavigation();
+
+        node.dispatchEvent(new WheelEvent("wheel", { deltaY: 40 }));
+        shim.setGeometry(node, { scrollTop: 1000 });
+        fireNativeScroll(node);
+
+        expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      });
+
+      it("follows a navigated reader the end met at the turn's rest", () => {
+        const mounted = mountDetached({
+          initialScrollAtEnd: true,
+          scrollTop: 1000,
+          isCorrectionSuppressed: undefined,
+        });
+        const { node, onFollowIntentChange, result } = mounted;
+        result.current.beginOwnedFreeNavigation();
+        shim.setGeometry(node, { scrollTop: DETACHED_TOP_PX });
+        result.current.completeOwnedFreeNavigation();
+        shim.setGeometry(node, {
+          scrollHeight: DETACHED_TOP_PX + VIEW_HEIGHT_PX,
+        });
+        result.current.followEndIfPermitted();
+        fireNativeScroll(node);
+
+        result.current.reconcileTurnAtRest();
+
+        expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      });
+
+      it("takes no departure at a wheel down's own read, so the end coming to them follows", () => {
+        let restoreHolds = true;
+        const mounted = mountDetached({
+          initialScrollAtEnd: false,
+          scrollTop: DETACHED_TOP_PX,
+          isCorrectionSuppressed: () => restoreHolds,
+        });
+        const { node, onFollowIntentChange, result } = mounted;
+
+        // Neither the mount's read nor a report took what the mount owes.
+        restoreHolds = false;
+        node.dispatchEvent(new WheelEvent("wheel", { deltaY: 40 }));
+        shim.setGeometry(node, {
+          scrollHeight: DETACHED_TOP_PX + VIEW_HEIGHT_PX,
+        });
+        result.current.followEndIfPermitted();
+
+        expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+      });
+    });
+  });
+
   describe("completeOwnedFreeNavigation", () => {
     it("follows a strict-bottom landing even while reattach is suppressed", () => {
       const node = shim.makeNode({
