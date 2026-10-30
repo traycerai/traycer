@@ -1089,7 +1089,9 @@ export function CanvasArtifactEditor({
     if (!canvasToolAllowed(next, frameEvents)) return;
     event.preventDefault();
     event.stopPropagation();
-    chooseTool(next);
+    // C toggles comment mode, so a held key's repeats would flip it back and forth.
+    if (next === "comment" && event.repeat) return;
+    chooseTool(next === "comment" && commenting ? "select" : next);
   };
   return (
     <CanvasNodeContext.Provider value={actions}>
@@ -1116,7 +1118,11 @@ export function CanvasArtifactEditor({
                 setSpaceHeld(false);
             }}
             onKeyDownCapture={(event) => {
-              if (activeFullscreen !== null || commenting) return;
+              if (
+                activeFullscreen !== null ||
+                (commenting && event.code !== "KeyC")
+              )
+                return;
               if (isCanvasTextInput(event.target, event.currentTarget)) return;
               if (event.code === "Escape") {
                 escapeCanvas(event);
@@ -1318,9 +1324,6 @@ export function CanvasArtifactEditor({
                         {toolsHidden ? null : (
                           <CanvasToolbar
                             viewOnly={readOnly}
-                            commentsEnabled={
-                              frameEvents?.commentsEnabled === true
-                            }
                             tool={tool}
                             onTool={chooseTool}
                             pages={
