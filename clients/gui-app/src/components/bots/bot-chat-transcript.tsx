@@ -328,11 +328,6 @@ export function BotChatTranscript(props: {
 
 type ChannelIntro = Extract<BotTranscriptSurface, { kind: "channel" }>["intro"];
 
-/**
- * A channel nobody has written in opens with what it is for, as Slack's
- * does; a windowed one is empty only when the host counts no row. `null`
- * on a thread, before the snapshot, and once the channel has a row.
- */
 /** The setup history a channel surface keeps at its top; `null` elsewhere. */
 function channelHistoryOf(surface: BotTranscriptSurface | null): ReactNode {
   return surface?.kind === "channel" ? surface.history : null;
@@ -353,6 +348,11 @@ function BotChannelOpening(props: {
   );
 }
 
+/**
+ * A channel nobody has written in opens with what it is for, as Slack's
+ * does; a windowed one is empty only when the host counts no row. `null`
+ * on a thread, before the snapshot, and once the channel has a row.
+ */
 function channelIntro(
   surface: BotTranscriptSurface | null,
   snapshotLoaded: boolean,
