@@ -294,11 +294,6 @@ interface ChatTimelineFollowLatchOptions {
    * `isCorrectionSuppressed`.
    */
   readonly isReattachSuppressed: (() => boolean) | undefined;
-  /**
-   * True while the transcript's latest turn is still running. Unread: a
-   * reader the end met stays detached either way.
-   */
-  readonly isTurnRunning: (() => boolean) | undefined;
 }
 
 function readScrollGeometry(node: HTMLElement): ChatTimelineScrollGeometry {
@@ -1890,19 +1885,9 @@ export function useChatTimelineFollowLatch(
         cancelActiveCorrection();
         return;
       }
-      const momentum = readerMomentumEndRef.current;
-      if (
-        endMetDepartedReader(geometry) ||
-        (holdsDepartedReaderAtEnd() &&
-          momentum !== null &&
-          geometry.scrollTop <=
-            momentum.liftScrollTop + CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX)
-      ) {
+      if (endMetDepartedReader(geometry)) {
         // The end meeting a departed reader (a temporary end pad dropped) is
-        // the list's, not the reader returning. So is a view past their
-        // departure that still stands at their finger's lift: the list moved
-        // it with rows above, and a read cannot tell that from their own
-        // scroll any other way. A report of theirs still decides.
+        // the list's, not the reader returning.
         cancelActiveCorrection();
         return;
       }
@@ -1928,7 +1913,6 @@ export function useChatTimelineFollowLatch(
     [
       cancelActiveCorrection,
       endMetDepartedReader,
-      holdsDepartedReaderAtEnd,
       isCorrectionSuppressed,
       isReattachSuppressed,
       reconcileStrictBottom,

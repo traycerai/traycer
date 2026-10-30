@@ -196,7 +196,6 @@ export interface ChatTimelineProps {
    */
   readonly isReattachSuppressed?: () => boolean;
   /** True while the transcript's latest turn is still running. */
-  readonly isTurnRunning?: () => boolean;
   /** Message row receiving the temporary external-navigation highlight. */
   readonly navigationHighlightedMessageId?: string | null;
   /**
@@ -259,7 +258,6 @@ export const ChatTimeline = memo(function ChatTimeline({
   isFollowCorrectionSuppressed,
   resolveSuppressedEndLanding,
   isReattachSuppressed,
-  isTurnRunning,
   navigationHighlightedMessageId,
   navigationHighlightedBlockId,
   rowHeightMemory = null,
@@ -294,7 +292,6 @@ export const ChatTimeline = memo(function ChatTimeline({
       isCorrectionSuppressed: isFollowCorrectionSuppressed,
       resolveSuppressedEndLanding,
       isReattachSuppressed: isLatchReattachSuppressed,
-      isTurnRunning,
     },
   );
 
