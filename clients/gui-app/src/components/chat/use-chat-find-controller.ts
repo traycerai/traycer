@@ -573,10 +573,12 @@ export function useChatFindController(
   );
 
   // A question settled, or its post read, while Find is open changes what
-  // the card says: the rows are read again once the card has drawn it.
+  // the card says: the rows are read again once the card has drawn it. Only
+  // a bot's session has questions to watch, so no other chat scans for them.
   const askedInKey = useMemo(
-    () => askedConversationIds(messages).join("\n"),
-    [messages],
+    () =>
+      botSession === null ? "" : askedConversationIds(messages).join("\n"),
+    [botSession, messages],
   );
   const [questionStatesRevision, noteQuestionStates] = useReducer(
     (revision: number) => revision + 1,
