@@ -10,7 +10,10 @@ import {
   questionCardView,
   questionSettledLine,
 } from "@/components/chat/question-card-view";
-import type { SegmentEndState } from "@/stores/composer/chat-store";
+import type {
+  ChatMessage,
+  SegmentEndState,
+} from "@/stores/composer/chat-store";
 
 /** One question of a `traycer_ask` call, as the person reads it. */
 export interface BotSendQuestion {
@@ -118,6 +121,24 @@ export function paintedBotSendOf(call: {
     options: stringsOf(parsed(fields.get("options"))),
     surface,
   };
+}
+
+/**
+ * The conversations the stamped questions of `messages` were asked in (T94),
+ * sorted: where their states are read from.
+ */
+export function askedConversationIds(
+  messages: ReadonlyArray<ChatMessage>,
+): readonly string[] {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    for (const segment of message.segments) {
+      if (segment.kind === "tool" && segment.botSendReceipt?.kind === "ask") {
+        ids.add(segment.botSendReceipt.conversationId);
+      }
+    }
+  }
+  return [...ids].sort();
 }
 
 /** Whom a session's send cards name: the bot, as the asker, and the channel's members. */

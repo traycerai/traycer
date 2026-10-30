@@ -19,6 +19,7 @@ import {
 } from "@/lib/bots/bot-member-names";
 import { sendQuestionStates } from "@/lib/bots/bot-send-tool";
 import { getChatSessionRegistry } from "@/lib/registries/chat-session-registry";
+import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { EpicCanvasTileRef } from "@/stores/epics/canvas/types";
 
@@ -31,6 +32,64 @@ export interface BotOpenSession {
   readonly chatId: string;
   readonly threadId: string | null;
   readonly landOn: BotTranscriptLanding | null;
+}
+
+/**
+ * Calls `onChange` when the messages an open session of one of
+ * `conversationIds` holds change, or a session there opens or closes: the
+ * registry relays only the opening and closing, each session's store the
+ * rest. Returns the unsubscribe.
+ */
+function watchConversationMessages(
+  botId: string,
+  hostId: string,
+  conversationIds: readonly string[],
+  onChange: () => void,
+): () => void {
+  const registry = getChatSessionRegistry();
+  type Watch = {
+    readonly handle: ChatSessionStoreHandle;
+    readonly unsubscribe: () => void;
+  };
+  let watched = new Map<string, Watch>();
+  const bind = (): boolean => {
+    let changed = false;
+    const next = new Map<string, Watch>();
+    for (const conversationId of conversationIds) {
+      const handle = registry.peek(botId, conversationId, hostId);
+      if (handle === null) continue;
+      const kept = watched.get(conversationId);
+      if (kept?.handle === handle) {
+        next.set(conversationId, kept);
+        continue;
+      }
+      changed = true;
+      let seen = handle.store.getState().messages;
+      next.set(conversationId, {
+        handle,
+        unsubscribe: handle.store.subscribe((state) => {
+          if (state.messages === seen) return;
+          seen = state.messages;
+          onChange();
+        }),
+      });
+    }
+    for (const [conversationId, watch] of watched) {
+      if (next.get(conversationId) === watch) continue;
+      watch.unsubscribe();
+      changed = true;
+    }
+    watched = next;
+    return changed;
+  };
+  bind();
+  const stopRegistry = registry.subscribe(() => {
+    if (bind()) onChange();
+  });
+  return () => {
+    stopRegistry();
+    for (const watch of watched.values()) watch.unsubscribe();
+  };
 }
 
 /**
@@ -107,6 +166,8 @@ export function BotSessionView(props: {
             ) ?? null,
           names,
         ),
+      watchQuestionStates: (conversationIds, onChange) =>
+        watchConversationMessages(botId, hostId, conversationIds, onChange),
     };
   }, [
     anchor,

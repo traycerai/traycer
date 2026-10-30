@@ -13,6 +13,7 @@ import {
 } from "@/components/chat/chat-find";
 import { subagentCardPath } from "@/components/chat/segments/subagent-display";
 import { BotSessionContext } from "@/components/bots/bot-session-context";
+import { askedConversationIds } from "@/lib/bots/bot-send-tool";
 import {
   CHAT_FIND_INDEX_ABSENT,
   ChatFindIndexDemandSource,
@@ -46,6 +47,8 @@ import {
   use,
   useCallback,
   useLayoutEffect,
+  useMemo,
+  useReducer,
   useRef,
   useState,
   type RefObject,
@@ -569,14 +572,33 @@ export function useChatFindController(
     [applyFindOpenedTarget],
   );
 
+  // A question settled, or its post read, while Find is open changes what
+  // the card says: the rows are read again once the card has drawn it.
+  const askedInKey = useMemo(
+    () => askedConversationIds(messages).join("\n"),
+    [messages],
+  );
+  const [questionStatesRevision, noteQuestionStates] = useReducer(
+    (revision: number) => revision + 1,
+    0,
+  );
+  useLayoutEffect(() => {
+    if (botSession === null || askedInKey.length === 0) return undefined;
+    return botSession.watchQuestionStates(
+      askedInKey.split("\n"),
+      noteQuestionStates,
+    );
+  }, [askedInKey, botSession]);
   // Thinking's Shown regroups runs as surely as promotion does.
   const thinkingShown = useRegionShown("thinking");
   useLayoutEffect(() => {
     chatFindAdapterRef.current?.notifyRowsChanged();
   }, [
     backgroundToolBlockIds,
+    botSession,
     messages,
     queuePauseReasonSupport,
+    questionStatesRevision,
     thinkingShown,
   ]);
 

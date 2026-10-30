@@ -37,6 +37,15 @@ export interface BotSessionAccess extends BotSendNames {
   readonly questionStatesOf: (
     receipt: BotSendReceipt,
   ) => ReadonlyArray<string | null> | null;
+  /**
+   * Calls `onChange` whenever what `questionStatesOf` reads in one of
+   * `conversationIds` may have changed: a session there opening or closing,
+   * or the messages it holds changing. Returns the unsubscribe.
+   */
+  readonly watchQuestionStates: (
+    conversationIds: readonly string[],
+    onChange: () => void,
+  ) => () => void;
 }
 
 export const BotSessionContext = createContext<BotSessionAccess | null>(null);

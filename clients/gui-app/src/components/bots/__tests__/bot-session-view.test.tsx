@@ -295,14 +295,19 @@ const opened = {
   close: vi.fn<() => void>(),
 };
 
+interface MountedSession {
+  /** Renders the session again under the bot's title `botTitle`. */
+  readonly renameBot: (botTitle: string) => void;
+}
+
 function mountSession(input: {
   readonly chatId: string;
   readonly threadId: string | null;
   readonly landOn: BotTranscriptLanding | null;
   readonly threads: ReadonlyArray<BotThreadSummary>;
   readonly resolveMember: BotMemberResolver;
-}): void {
-  const tree = (): ReactNode => (
+}): MountedSession {
+  const tree = (botTitle: string): ReactNode => (
     <StrictMode>
       <QueryClientProvider client={new QueryClient()}>
         <TooltipProvider>
@@ -310,7 +315,7 @@ function mountSession(input: {
             <BotSessionView
               botId={BOT_ID}
               hostId={HOST_ID}
-              botTitle="Release Bot"
+              botTitle={botTitle}
               session={{
                 chatId: input.chatId,
                 threadId: input.threadId,
@@ -327,7 +332,8 @@ function mountSession(input: {
       </QueryClientProvider>
     </StrictMode>
   );
-  render(tree());
+  const view = render(tree("Release Bot"));
+  return { renameBot: (botTitle) => view.rerender(tree(botTitle)) };
 }
 
 function mountTrunk(landOn: BotTranscriptLanding | null): void {
@@ -729,6 +735,10 @@ describe("a send stamped with the post it wrote", () => {
   afterEach(() => {
     releaseChannel?.();
     releaseChannel = null;
+    // A released session stays in the registry: the next case's channel
+    // must be its own.
+    __getChatSessionRegistryForTests().disposeAll();
+    useTileFindStore.getState().resetForTests();
   });
 
   /** The bot's question post in the channel, each question settled as given. */
@@ -760,7 +770,8 @@ describe("a send stamped with the post it wrote", () => {
    */
   function mountStampedAsk(
     settlements: ReadonlyArray<BotQuestionSettlement | null>,
-  ): void {
+    resolveMember: BotMemberResolver,
+  ): MountedSession {
     const channel = scriptedSession(CHANNEL_ID, [questionPost(settlements)]);
     mocks.sessions[CHANNEL_ID] = channel.handle;
     const registry = __getChatSessionRegistryForTests();
@@ -799,12 +810,12 @@ describe("a send stamped with the post it wrote", () => {
         ],
       }),
     ]).handle;
-    mountSession({
+    return mountSession({
       chatId: TRUNK_ID,
       threadId: null,
       landOn: null,
       threads: [],
-      resolveMember: TEAMMATE,
+      resolveMember,
     });
   }
 
@@ -816,14 +827,17 @@ describe("a send stamped with the post it wrote", () => {
 
   it("shows a question a member answered in the channel as answered by them, with nothing to press but the link to the post, which Find matches", async () => {
     const user = userEvent.setup();
-    mountStampedAsk([
-      {
-        answer: "Bump now",
-        skipped: false,
-        by: { kind: "person", userId: TEAMMATE_ID },
-        at: 5_000,
-      },
-    ]);
+    mountStampedAsk(
+      [
+        {
+          answer: "Bump now",
+          skipped: false,
+          by: { kind: "person", userId: TEAMMATE_ID },
+          at: 5_000,
+        },
+      ],
+      TEAMMATE,
+    );
     await settleLegendList();
 
     const card = askCard();
@@ -854,17 +868,75 @@ describe("a send stamped with the post it wrote", () => {
     await waitFor(() => expect(bar.textContent).toContain("1 of 1"));
   });
 
+  it("finds a question as the channel settles it while Find is open, with no new search", async () => {
+    const user = userEvent.setup();
+    mountStampedAsk([null], TEAMMATE);
+    await settleLegendList();
+
+    act(() => {
+      useTileFindStore.getState().openForTile(`bot-session:${TRUNK_ID}`);
+    });
+    const bar = await within(view()).findByTestId("tile-find-bar");
+    await user.type(
+      within(bar).getByRole("textbox", { name: "Find in tile" }),
+      "Answered by Dana",
+    );
+    await waitFor(() => expect(bar.textContent).toContain("No matches"));
+
+    act(() => {
+      mocks.sessions[CHANNEL_ID]?.store.setState({
+        messages: [
+          questionPost([
+            {
+              answer: "Bump now",
+              skipped: false,
+              by: { kind: "person", userId: TEAMMATE_ID },
+              at: 5_000,
+            },
+          ]),
+        ],
+      });
+    });
+
+    await waitFor(() => expect(bar.textContent).toContain("1 of 1"));
+  });
+
+  it("finds a question the bot settled by the bot's name as it reads now, once the bot is renamed while Find is open", async () => {
+    const user = userEvent.setup();
+    const session = mountStampedAsk(
+      [{ answer: "Keep it", skipped: false, by: { kind: "bot" }, at: 6_000 }],
+      TEAMMATE,
+    );
+    await settleLegendList();
+    act(() => {
+      useTileFindStore.getState().openForTile(`bot-session:${TRUNK_ID}`);
+    });
+    const bar = await within(view()).findByTestId("tile-find-bar");
+    await user.type(
+      within(bar).getByRole("textbox", { name: "Find in tile" }),
+      "Settled by Ship Bot",
+    );
+    await waitFor(() => expect(bar.textContent).toContain("No matches"));
+
+    session.renameBot("Ship Bot");
+
+    await waitFor(() => expect(bar.textContent).toContain("1 of 1"));
+  });
+
   it("shows a skipped question, one the bot settled with its default, and one still open, each as the channel's card does", async () => {
-    mountStampedAsk([
-      {
-        answer: null,
-        skipped: true,
-        by: { kind: "person", userId: TEAMMATE_ID },
-        at: 5_000,
-      },
-      { answer: "Keep it", skipped: false, by: { kind: "bot" }, at: 6_000 },
-      null,
-    ]);
+    mountStampedAsk(
+      [
+        {
+          answer: null,
+          skipped: true,
+          by: { kind: "person", userId: TEAMMATE_ID },
+          at: 5_000,
+        },
+        { answer: "Keep it", skipped: false, by: { kind: "bot" }, at: 6_000 },
+        null,
+      ],
+      TEAMMATE,
+    );
     await settleLegendList();
 
     const card = askCard();
