@@ -524,8 +524,9 @@ function mountChannel(input: {
               surfaceActions={surfaceActions}
               openThread={null}
               onOpenThread={vi.fn()}
-              openTurn={null}
               onOpenTurn={vi.fn()}
+              onOpenSession={vi.fn()}
+              landOn={null}
               openMemory={null}
               onOpenMemory={vi.fn()}
               environmentId="env-1"

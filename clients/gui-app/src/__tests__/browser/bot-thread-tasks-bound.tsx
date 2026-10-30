@@ -194,6 +194,7 @@ export function Pane(): ReactElement {
                   onOpenActivity={noop}
                   onEditPost={noop}
                   onOpenTurn={noop}
+                  onOpenSession={noop}
                 />
               </ChatFindForceStoreProvider>
             </A2AOpenStoreProvider>

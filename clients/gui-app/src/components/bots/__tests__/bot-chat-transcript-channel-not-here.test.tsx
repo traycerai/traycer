@@ -344,7 +344,6 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
       failedRequest: () => null,
       openTurn: null,
       sessionChatId: null,
-      originPost: { chatId: "conversation-app", messageId: "origin-post" },
     });
 
     expect(screen.queryByRole("status")).toBeNull();

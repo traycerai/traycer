@@ -39,12 +39,20 @@ import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { BotChannelView } from "@/components/bots/bot-channel-view";
 import {
   memoryRailOver,
+  sessionTargetOfTurn,
   useBotOpenThreadStore,
   useBotRail,
   type BotOpenMemory,
   type BotOpenThread,
-  type BotOpenTurn,
+  type BotSessionOpen,
+  type BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
+import type { BotTranscriptLanding } from "@/components/bots/bot-chat-transcript";
+import {
+  BotSessionView,
+  type BotOpenSession,
+} from "@/components/bots/bot-session-view";
+import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import { BotChannelSidebar } from "@/components/bots/bot-channel-sidebar";
 import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
 import { BotActivityPage } from "@/components/bots/bot-activity-page";
@@ -311,29 +319,25 @@ function BotTabBody(props: {
 }
 
 /**
- * The rail's one slot - a thread, one turn or the bot's memory - held in its
- * store, above the views, so it survives a switch between the channel's
- * tabs; and the ways Activity, Threads and the bot's profile card open it
- * beside the channel, switching to Messages.
+ * The rail's one slot - a thread or the bot's memory - held in its store,
+ * above the views, so it survives a switch between the channel's tabs; and
+ * the ways Activity, Threads and the bot's profile card open it beside the
+ * channel, switching to Messages.
  */
 function useBotTabRail(
   botId: string,
   onViewChange: (view: BotTabView) => void,
 ): {
   readonly openThread: BotOpenThread | null;
-  readonly openTurn: BotOpenTurn | null;
   readonly openMemory: BotOpenMemory | null;
   readonly setOpenThread: (open: BotOpenThread | null) => void;
-  readonly setOpenTurn: (open: BotOpenTurn | null) => void;
   readonly setOpenMemory: (open: BotOpenMemory | null) => void;
   readonly openPostInChannel: (open: BotOpenThread) => void;
-  readonly openTurnInChannel: (open: BotOpenTurn) => void;
   readonly openMemoryInChannel: () => void;
 } {
   const rail = useBotRail(botId);
   const setRail = useBotOpenThreadStore((s) => s.setRail);
   const openThread = rail?.kind === "thread" ? rail : null;
-  const openTurn = rail?.kind === "turn" ? rail : null;
   const openMemory = rail?.kind === "memory" ? rail : null;
   const setOpenMemory = useCallback(
     (open: BotOpenMemory | null) =>
@@ -350,11 +354,6 @@ function useBotTabRail(
       setRail(botId, open === null ? null : { kind: "thread", ...open }),
     [botId, setRail],
   );
-  const setOpenTurn = useCallback(
-    (open: BotOpenTurn | null) =>
-      setRail(botId, open === null ? null : { kind: "turn", ...open }),
-    [botId, setRail],
-  );
   // A post or a thread, from Activity or Threads: its thread opens beside the
   // channel.
   const openPostInChannel = useCallback(
@@ -364,25 +363,126 @@ function useBotTabRail(
     },
     [onViewChange, setOpenThread],
   );
-  // A check-in's turn, from Activity: it opens beside the channel, in place
-  // of whatever the rail held, with nothing to go back to.
-  const openTurnInChannel = useCallback(
-    (open: BotOpenTurn) => {
-      setOpenTurn(open);
-      onViewChange("messages");
-    },
-    [onViewChange, setOpenTurn],
-  );
   return {
     openThread,
-    openTurn,
     openMemory,
     setOpenThread,
-    setOpenTurn,
     setOpenMemory,
     openPostInChannel,
-    openTurnInChannel,
     openMemoryInChannel,
+  };
+}
+
+/**
+ * The bot's session shown in place of the channel's views (Tracy Bots T93),
+ * and where the channel lands once it is back. A receipt, a check-in's link
+ * or a thread's "Thread session" opens a session; each open is a new visit,
+ * so the same turn opened again lands again. The session's links show the
+ * channel - on a post, or with a thread beside it - in Messages; its back
+ * button returns to the view it was opened from, the channel where it was.
+ * The channel lands on a post once: leaving Messages drops the landing.
+ */
+function useBotTabSession(args: {
+  readonly threads: ReadonlyArray<BotThreadSummary> | null;
+  readonly onViewChange: (view: BotTabView) => void;
+  readonly setOpenThread: (open: BotOpenThread | null) => void;
+}): {
+  readonly session: BotOpenSession | null;
+  readonly channelLanding: BotTranscriptLanding | null;
+  readonly openSession: BotSessionOpen;
+  readonly openTurn: BotTurnOpen;
+  readonly closeSession: () => void;
+  readonly changeView: (view: BotTabView) => void;
+  readonly showChannel: (messageId: string | null) => void;
+  readonly showThread: (threadId: string) => void;
+} {
+  const { threads, onViewChange, setOpenThread } = args;
+  const [shown, setShown] = useState<{
+    readonly session: BotOpenSession | null;
+    readonly channelLanding: BotTranscriptLanding | null;
+    readonly visits: number;
+  }>({ session: null, channelLanding: null, visits: 0 });
+  const openSession = useCallback<BotSessionOpen>((target) => {
+    setShown((previous) => {
+      const visit = previous.visits + 1;
+      return {
+        session: {
+          chatId: target.chatId,
+          threadId: target.threadId,
+          landOn:
+            target.messageId === null
+              ? null
+              : { messageId: target.messageId, visit },
+        },
+        channelLanding: null,
+        visits: visit,
+      };
+    });
+  }, []);
+  const openTurn = useCallback<BotTurnOpen>(
+    (ref) => openSession(sessionTargetOfTurn(ref)),
+    [openSession],
+  );
+  const closeSession = useCallback(
+    () => setShown((previous) => ({ ...previous, session: null })),
+    [],
+  );
+  const showChannel = useCallback(
+    (messageId: string | null) => {
+      setShown((previous) => {
+        const visit = previous.visits + 1;
+        return {
+          session: null,
+          channelLanding: messageId === null ? null : { messageId, visit },
+          visits: visit,
+        };
+      });
+      onViewChange("messages");
+    },
+    [onViewChange],
+  );
+  // Leaving Messages spends the channel's landing: the channel mounts again
+  // when Messages shows, and must not land on that post a second time.
+  const changeView = useCallback(
+    (view: BotTabView) => {
+      if (view !== "messages") {
+        setShown((previous) =>
+          previous.channelLanding === null
+            ? previous
+            : { ...previous, channelLanding: null },
+        );
+      }
+      onViewChange(view);
+    },
+    [onViewChange],
+  );
+  // A thread the list does not name has no post to open it by: the channel
+  // shows instead.
+  const showThread = useCallback(
+    (threadId: string) => {
+      const anchor =
+        threads?.find((thread) => thread.threadId === threadId)?.anchor ?? null;
+      showChannel(null);
+      if (anchor !== null) {
+        setOpenThread({
+          anchorMessageId: anchor.messageId,
+          announcement: false,
+          answer: false,
+          sent: null,
+        });
+      }
+    },
+    [setOpenThread, showChannel, threads],
+  );
+  return {
+    session: shown.session,
+    channelLanding: shown.channelLanding,
+    openSession,
+    openTurn,
+    closeSession,
+    changeView,
+    showChannel,
+    showThread,
   };
 }
 
@@ -446,13 +546,10 @@ function BotTabContent(props: {
   const resolveMember = directory.resolve;
   const {
     openThread,
-    openTurn,
     openMemory,
     setOpenThread,
-    setOpenTurn,
     setOpenMemory,
     openPostInChannel,
-    openTurnInChannel,
     openMemoryInChannel,
   } = useBotTabRail(botId, onViewChange);
   const memoryAccess = useMemo(
@@ -470,10 +567,6 @@ function BotTabContent(props: {
       environmentBots?.find((bot) => bot.botId === otherBotId)?.title ?? null,
     [environmentBots],
   );
-  const openActivity = useCallback(
-    () => onViewChange("activity"),
-    [onViewChange],
-  );
   // Any host with the list lists the threads; Activity names a thread's work
   // by it, and the label tells a thread's session from the bot's other chats.
   const threadListSupported =
@@ -482,6 +575,17 @@ function BotTabContent(props: {
     enabled: threadListSupported,
   });
   const threads = threadListSupported ? (threadList.data?.threads ?? null) : [];
+  const {
+    session,
+    channelLanding,
+    openSession,
+    openTurn,
+    closeSession,
+    changeView,
+    showChannel,
+    showThread,
+  } = useBotTabSession({ threads, onViewChange, setOpenThread });
+  const openActivity = useCallback(() => changeView("activity"), [changeView]);
   const activitySummary = useBotActivitySummary({
     botId,
     trunkChatId: snapshot.bot.trunkChatId,
@@ -540,107 +644,125 @@ function BotTabContent(props: {
             <BotChannelSidebar activeBotId={botId} hostId={hostId} />
           </BotResizablePane>
           <div className="relative flex min-h-0 min-w-0 flex-1">
-            <Tabs
-              value={view}
-              onValueChange={(next) => {
-                if (isBotTabView(next)) onViewChange(next);
-              }}
-              className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
-            >
-              <BotChannelHeader
-                title={snapshot.bot.title}
-                isMain={isMain === true}
-                settingsOpen={settingsOpen}
-                onToggleSettings={toggleSettings}
-                activityLabel={activityLabelParts({
-                  stopped: activitySummary.stopped.length,
-                  running: activitySummary.running.length,
-                  tasks: activitySummary.tasks,
-                })}
+            {session !== null ? (
+              <BotSessionView
+                key={session.chatId}
+                botId={botId}
+                hostId={hostId}
+                botTitle={snapshot.bot.title}
+                session={session}
+                threads={threads}
+                resolveMember={resolveMember}
+                onClose={closeSession}
+                onOpenChannel={showChannel}
+                onOpenThread={showThread}
               />
-              {streamError === null ? null : (
-                // A fatal close AFTER a snapshot: the last reading stays on
-                // screen, marked as such, and the retry sits on top of it.
-                <ErrorNotice
-                  text={`Couldn't reach this bot: ${streamError}`}
-                  onRetry={onRetry}
-                  className="mx-4 mt-2"
-                />
-              )}
-              {reopenError === null ? null : (
-                <ErrorNotice
-                  text={`Couldn't open this bot: ${reopenError}`}
-                  onRetry={onReopen}
-                  className="mx-4 mt-2"
-                />
-              )}
-              {pausedReason === null ? null : (
-                <PausedBanner
-                  reason={pausedReason}
-                  environmentLabel={environmentLabel}
-                  onRetry={onReopen}
-                />
-              )}
-              <TabsContent
-                value="messages"
-                className="flex min-h-0 flex-1 flex-col"
+            ) : (
+              <Tabs
+                value={view}
+                onValueChange={(next) => {
+                  if (isBotTabView(next)) changeView(next);
+                }}
+                className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
               >
-                <BotChannelView
-                  botId={botId}
-                  hostId={hostId}
-                  boundHostId={snapshot.boundHost.hostId}
-                  boundHostEpoch={snapshot.boundHost.epoch}
-                  botTitle={snapshot.bot.title}
-                  directive={snapshot.bot.directive}
-                  appConversationChatId={snapshot.bot.appConversationChatId}
-                  trunkChatId={snapshot.bot.trunkChatId}
-                  resolveMember={resolveMember}
-                  tasks={snapshot.tasks}
-                  surfaceActions={snapshot.surfaceActions}
-                  openThread={openThread}
-                  onOpenThread={setOpenThread}
-                  openTurn={openTurn}
-                  onOpenTurn={setOpenTurn}
-                  openMemory={openMemory}
-                  onOpenMemory={setOpenMemory}
-                  environmentId={snapshot.bot.environmentId}
-                  botNameOf={botNameOf}
-                  onOpenActivity={openActivity}
+                <BotChannelHeader
+                  title={snapshot.bot.title}
+                  isMain={isMain === true}
+                  settingsOpen={settingsOpen}
+                  onToggleSettings={toggleSettings}
+                  activityLabel={activityLabelParts({
+                    stopped: activitySummary.stopped.length,
+                    running: activitySummary.running.length,
+                    tasks: activitySummary.tasks,
+                  })}
                 />
-              </TabsContent>
-              <TabsContent
-                value="activity"
-                className="flex min-h-0 flex-1 flex-col"
-              >
-                <BotActivityPage
-                  botId={botId}
-                  hostId={hostId}
-                  boundHost={snapshot.boundHost}
-                  channelId={snapshot.bot.appConversationChatId}
-                  tasks={snapshot.tasks}
-                  notificationSubscriptions={snapshot.notificationSubscriptions}
-                  stoppedNotificationWatches={
-                    snapshot.stoppedNotificationWatches
-                  }
-                  resolveMember={resolveMember}
-                  summary={activitySummary}
-                  threads={threads}
-                  onOpenPost={openPostInChannel}
-                  onOpenTurn={openTurnInChannel}
-                />
-              </TabsContent>
-              <TabsContent
-                value="threads"
-                className="flex min-h-0 flex-1 flex-col"
-              >
-                <BotThreadsPage
-                  botId={botId}
-                  hostId={hostId}
-                  threadList={threadListSupported ? threadList : null}
-                  onOpenPost={openPostInChannel}
-                />
-              </TabsContent>
-            </Tabs>
+                {streamError === null ? null : (
+                  // A fatal close AFTER a snapshot: the last reading stays on
+                  // screen, marked as such, and the retry sits on top of it.
+                  <ErrorNotice
+                    text={`Couldn't reach this bot: ${streamError}`}
+                    onRetry={onRetry}
+                    className="mx-4 mt-2"
+                  />
+                )}
+                {reopenError === null ? null : (
+                  <ErrorNotice
+                    text={`Couldn't open this bot: ${reopenError}`}
+                    onRetry={onReopen}
+                    className="mx-4 mt-2"
+                  />
+                )}
+                {pausedReason === null ? null : (
+                  <PausedBanner
+                    reason={pausedReason}
+                    environmentLabel={environmentLabel}
+                    onRetry={onReopen}
+                  />
+                )}
+                <TabsContent
+                  value="messages"
+                  className="flex min-h-0 flex-1 flex-col"
+                >
+                  <BotChannelView
+                    botId={botId}
+                    hostId={hostId}
+                    boundHostId={snapshot.boundHost.hostId}
+                    boundHostEpoch={snapshot.boundHost.epoch}
+                    botTitle={snapshot.bot.title}
+                    directive={snapshot.bot.directive}
+                    appConversationChatId={snapshot.bot.appConversationChatId}
+                    trunkChatId={snapshot.bot.trunkChatId}
+                    resolveMember={resolveMember}
+                    tasks={snapshot.tasks}
+                    surfaceActions={snapshot.surfaceActions}
+                    openThread={openThread}
+                    onOpenThread={setOpenThread}
+                    onOpenTurn={openTurn}
+                    onOpenSession={openSession}
+                    landOn={channelLanding}
+                    openMemory={openMemory}
+                    onOpenMemory={setOpenMemory}
+                    environmentId={snapshot.bot.environmentId}
+                    botNameOf={botNameOf}
+                    onOpenActivity={openActivity}
+                  />
+                </TabsContent>
+                <TabsContent
+                  value="activity"
+                  className="flex min-h-0 flex-1 flex-col"
+                >
+                  <BotActivityPage
+                    botId={botId}
+                    hostId={hostId}
+                    boundHost={snapshot.boundHost}
+                    channelId={snapshot.bot.appConversationChatId}
+                    tasks={snapshot.tasks}
+                    notificationSubscriptions={
+                      snapshot.notificationSubscriptions
+                    }
+                    stoppedNotificationWatches={
+                      snapshot.stoppedNotificationWatches
+                    }
+                    resolveMember={resolveMember}
+                    summary={activitySummary}
+                    threads={threads}
+                    onOpenPost={openPostInChannel}
+                    onOpenTurn={openTurn}
+                  />
+                </TabsContent>
+                <TabsContent
+                  value="threads"
+                  className="flex min-h-0 flex-1 flex-col"
+                >
+                  <BotThreadsPage
+                    botId={botId}
+                    hostId={hostId}
+                    threadList={threadListSupported ? threadList : null}
+                    onOpenPost={openPostInChannel}
+                  />
+                </TabsContent>
+              </Tabs>
+            )}
             {settingsOpen ? (
               <BotChannelSettingsPanel
                 bot={snapshot.bot}
