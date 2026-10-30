@@ -2,6 +2,7 @@ import {
   EPIC_READ_ARTIFACT_OBJECT_RANGE_MAX_BYTES,
   EPIC_READ_ARTIFACT_OBJECT_TEXT_MAX_BYTES,
 } from "@traycer/protocol/host/epic/artifact-objects";
+import { ARTIFACT_OBJECT_SPAN_BYTES } from "@traycer-clients/shared/platform/sandbox-artifacts";
 import { isArtifactPath } from "./artifact-address";
 import {
   buildArtifactDocument,
@@ -83,7 +84,14 @@ type ReadResult = CachedBytes | Unavailable;
 const CACHE_MAX_BYTES = 64 * 1024 * 1024;
 // Empty and tiny objects still retain map entries, keys and byte-array objects.
 const CACHE_MAX_ENTRIES = 1024;
-const BLOCK_BYTES = EPIC_READ_ARTIFACT_OBJECT_RANGE_MAX_BYTES;
+/** One host read; a reply to the shell is assembled from as many as it spans. */
+const BLOCK_BYTES = ARTIFACT_OBJECT_SPAN_BYTES;
+/**
+ * The most one reply carries. The phone shells still ask for spans this
+ * large and reject a shorter one, so the cap stays at the host's range
+ * ceiling even though each underlying read is a smaller block.
+ */
+const REPLY_MAX_BYTES = EPIC_READ_ARTIFACT_OBJECT_RANGE_MAX_BYTES;
 /** Captured versions must not fill missing paths from the live artifacts tree. */
 export const NO_OUTSIDE_REFERENCE: ArtifactOutsideReferenceResolver = () =>
   null;
@@ -188,7 +196,7 @@ export class ArtifactServer {
     if (!Number.isSafeInteger(entry.byteLength) || entry.byteLength < 0) {
       return unavailable("invalid-size", 503);
     }
-    const length = Math.min(request.length, BLOCK_BYTES);
+    const length = Math.min(request.length, REPLY_MAX_BYTES);
     if (resolved.compose) {
       const document = await waitForRead(
         this.documentBytes(path, entry),
@@ -238,7 +246,7 @@ export class ArtifactServer {
     if (offset > bytes.length) return unavailable("invalid-range", 404);
     return {
       kind: "bytes",
-      bytes: bytes.slice(offset, offset + Math.min(length, BLOCK_BYTES)),
+      bytes: bytes.slice(offset, offset + Math.min(length, REPLY_MAX_BYTES)),
       offset,
       totalBytes: bytes.length,
       mediaType: "text/html; charset=utf-8",
