@@ -50,8 +50,21 @@ describe("macOS service uninstall - foreground-leave field is inert", () => {
       readonly command: string;
       readonly args: readonly string[];
     }> = [];
+    // The uninstall boots each loaded job out, then polls `launchctl print`
+    // until launchd says it is gone; the print after a bootout answers
+    // not-found.
+    let bootedOut = false;
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
+      if (args[0] === "bootout") bootedOut = true;
+      else if (args[0] === "print" && bootedOut) {
+        bootedOut = false;
+        return {
+          stdout: "",
+          stderr: 'Could not find service "x" in domain for user gui: 501\n',
+          exitCode: 113,
+        };
+      }
       return { stdout: "", stderr: "", exitCode: 0 };
     };
     const controller = createMacosController(runner);
@@ -72,7 +85,14 @@ describe("macOS service uninstall - foreground-leave field is inert", () => {
       expect(["print", "bootout"]).toContain(call.args[0]);
     }
     const verbs = calls.map((call) => call.args[0]);
-    expect(verbs).toEqual(["print", "print", "bootout", "bootout"]);
+    expect(verbs).toEqual([
+      "print",
+      "print",
+      "bootout",
+      "print",
+      "bootout",
+      "print",
+    ]);
 
     // pid.json is untouched: exists, byte-identical to what was there before
     // the call. `leaveForegroundRun` is not read by macOS's uninstall at all.
