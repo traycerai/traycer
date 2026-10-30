@@ -5274,6 +5274,174 @@ describe("useChatTimelineFollowLatch", () => {
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
   });
 
+  // N1 - a reader who really scrolled through the same unobserved window must
+  // still be departed: absorption is refused whenever the observed offset
+  // does not land exactly on the clamp `viewportGrowthClamp` predicts, so a
+  // real scroll alongside the growth is never swallowed.
+  it("departs an armless reader whose own scroll landed off the clamp's predicted offset, observed by a native scroll report", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    // Primes the ledger at the strict bottom.
+    fireNativeScroll(node);
+
+    // The viewport grows (a pure clamp would land at 900) and the tail
+    // regrows, but the reader's own scroll lands them at 960 - more than the
+    // epsilon away from 900, so none of the drop is the clamp's to absorb.
+    shim.setGeometry(node, {
+      clientHeight: 600,
+      scrollHeight: 1700,
+      scrollTop: 960,
+    });
+
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).toHaveBeenCalledWith(false);
+  });
+
+  it("departs an armless reader whose own scroll landed off the clamp's predicted offset, observed by a maintenance read", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireNativeScroll(node);
+
+    shim.setGeometry(node, {
+      clientHeight: 600,
+      scrollHeight: 1700,
+      scrollTop: 960,
+    });
+
+    result.current.followEndIfPermitted();
+
+    expect(onFollowIntentChange).toHaveBeenCalledWith(false);
+  });
+
+  // N2 - a finger's own unreported pixel, still theirs, must survive an
+  // announced range clamp landing on top of it. Carried field-wise by the
+  // write's own delta, the step keeps the pixel; re-armed at the live
+  // geometry (the write already landed when the announcement fires, as
+  // `moveChatTimelineScroller` lands its write before dispatching), it is
+  // erased and no departure fires.
+  it("departs a resting finger whose own unreported pixel survives an announced range clamp", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 400);
+    // The finger's own drag moves the view up 50px, with no scroll report of
+    // it yet.
+    shim.setGeometry(node, { scrollTop: 950 });
+    // The list's pad-reset clamps the view and announces the write after it
+    // lands, as the real write-then-announce order does.
+    shim.setGeometry(node, { scrollTop: 900, scrollHeight: 1400 });
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: {
+          from: 950,
+          fromEnd: 950,
+          to: 900,
+          intended: 900,
+          cause: "range",
+        },
+      }),
+    );
+    // The tail regrows before anything is read.
+    shim.setGeometry(node, { scrollHeight: 1450 });
+
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).toHaveBeenCalledWith(false);
+    fireTouch(node, "touchend", 400);
+  });
+
+  // N3 - the touch reference is NOT carried on an offset write. jsdom gives
+  // `touchStep` no real edge mark (there is no laid-out content under the
+  // node, so `edgeMarkOf` is always null), so `rise` is always null and
+  // `touchStep` can never net a content-relative row shift against a
+  // same-sized scrollTop write the way a real layout would - there is no
+  // drag magnitude where carrying the compensation both (a) still departs a
+  // reader who really dragged away by it and (b) does not, which is what a
+  // faithful "drags away by about the same amount" witness would need. The
+  // same invariant - an offset write must not be folded into the touch
+  // step's baseline - is provable without a real layout by its mirror case
+  // instead: a finger that returns to EXACTLY where it started after the
+  // compensation has made no real movement at all, and carrying the
+  // compensation onto the step would misread that net-zero return as a
+  // departure.
+  it("does not depart a resting finger who returns to where they started across an announced offset write", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+
+    fireTouch(node, "touchstart", 400);
+    // Content grows 40px above the view; the list writes the offset to hold
+    // the view's content still, and announces the write as an offset cause -
+    // the content moved with it, so a content-relative reference has already
+    // netted it out.
+    shim.setGeometry(node, { scrollTop: 1040, scrollHeight: 1540 });
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: {
+          from: 1000,
+          fromEnd: 1000,
+          to: 1040,
+          intended: 1040,
+          cause: "offset",
+        },
+      }),
+    );
+    // The finger's own drag returns the view to exactly where the step
+    // began - no real movement at all - with no scroll report of it yet.
+    shim.setGeometry(node, { scrollTop: 1000 });
+
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    fireTouch(node, "touchend", 400);
+  });
+
   it("departs a following reader whose press stepped to an end only a maintain read saw", () => {
     const node = shim.makeNode({
       scrollTop: 1000,

@@ -1822,22 +1822,22 @@ export function useChatTimelineFollowLatch(
         liftScrollTop: momentum.liftScrollTop + delta,
       };
     }
-    // The geometry a later clamp is recognised against stands where this write
-    // leaves it: a compensation between the last observation and a viewport
-    // growing moved the view and the content it grew for, and measured from
-    // where they were before it, the clamp that growth then forces reads as an
-    // offset no clamp explains. A range move leaves the view on the new end,
-    // which is what `to` is.
+    // The geometry a later clamp is recognised against moves by what this write
+    // moved the view, whichever kind of write it was. It is not where the view
+    // IS - it is where the view would be from everything this latch knows
+    // about, so that a movement it does not know about is still there to be
+    // found as the difference between the two. Snapping it onto `to` would
+    // assert the whole of the view's offset as accounted for, and an unobserved
+    // viewport clamp before this write - whose growth this remembered
+    // `clientHeight` has not even seen - would be swallowed by that assertion
+    // and charged to the reader at the next read. The same reasoning the other
+    // way for an offset write: a compensation that landed since the last
+    // observation moved the view and the content it grew for, and measured from
+    // where they stood before it, the clamp a later growth forces reads as an
+    // offset no clamp explains.
     const lastObserved = lastObservedGeometryRef.current;
     if (lastObserved !== null) {
-      lastObservedGeometryRef.current =
-        move.cause === "range"
-          ? {
-              ...lastObserved,
-              scrollTop: move.to,
-              scrollHeight: move.to + lastObserved.clientHeight,
-            }
-          : geometryMovedBy(lastObserved, delta);
+      lastObservedGeometryRef.current = geometryMovedBy(lastObserved, delta);
     }
     const expected = expectedScrollTopRef.current;
     if (expected === null) return;
