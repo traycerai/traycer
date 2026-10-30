@@ -1,3 +1,5 @@
+import { platform as osPlatform } from "node:os";
+import type { ILogger } from "../logger";
 import type { CommandFn, CommandResult } from "../runner/runner";
 import type { Environment } from "../runner/environment";
 import { serviceLabelFor, type ServiceLabel } from "../service";
@@ -24,11 +26,61 @@ export interface ServiceDefinitionRefreshOutcome {
 export async function refreshServiceDefinitionUnderContender(
   environment: Environment,
 ): Promise<ServiceDefinitionRefreshOutcome> {
+  return refreshUnderContender(environment, 30_000);
+}
+
+/**
+ * A supervisor its service manager started brings its own CLI job's
+ * definition to the current form before anything else, so a job registered
+ * by an older CLI (a launcher form, or a stop budget - launchd `ExitTimeOut`,
+ * systemd `TimeoutStopSec` - below today's) does not wait for a person or a
+ * re-registration. The same definition-only write as `host service refresh`:
+ * nothing is started, stopped, loaded or unloaded.
+ *
+ * macOS and Linux only, and only the CLI's own label: Desktop's registration
+ * ships in its bundle. Never waits for the update contender - a held one
+ * means an update or another service mutation is running, which writes the
+ * definition itself, and this start must not stall behind it - and never
+ * throws: a failed refresh must not cost the host its start.
+ */
+export async function refreshServiceDefinitionAtSupervisorStart(
+  environment: Environment,
+  serviceLabel: string,
+  logger: ILogger,
+): Promise<void> {
+  if (serviceLabel !== serviceLabelFor(environment).id) return;
+  const platform = osPlatform();
+  if (platform !== "darwin" && platform !== "linux") return;
+  try {
+    const outcome = await refreshUnderContender(environment, 0);
+    if (outcome.result.kind === "refreshed") {
+      logger.info("Host service definition refreshed at supervisor start", {
+        environment,
+        label: outcome.label.id,
+        form: outcome.result.form,
+        appliesAt: outcome.result.appliesAt,
+      });
+    }
+  } catch (cause) {
+    logger.warn(
+      "Host service definition was not refreshed at supervisor start; the next start tries again",
+      {
+        environment,
+        cause: cause instanceof Error ? cause.message : String(cause),
+      },
+    );
+  }
+}
+
+async function refreshUnderContender(
+  environment: Environment,
+  waitMs: number,
+): Promise<ServiceDefinitionRefreshOutcome> {
   // ONE options value for acquisition and every in-attempt revalidation.
   const contenderOptions: WithCliUpdateContenderOptions = {
     environment,
     reason: "service-refresh",
-    waitMs: 30_000,
+    waitMs,
     pollIntervalMs: 100,
     admission: "service-maintenance",
   };

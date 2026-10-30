@@ -268,6 +268,41 @@ describe("refreshLinuxServiceDefinition: stale fixtures rewrite to the current u
   );
 });
 
+describe("a unit that differs only in TimeoutStopSec", () => {
+  it("is stale; refresh rewrites it to the current text and runs exactly one daemon-reload, no start|restart|stop", async () => {
+    const label = labelFor("old-timeout-stop-sec");
+    const currentText = buildSystemdUnit({ label, cli: CLI });
+    const oldText = currentText.replace(
+      /^TimeoutStopSec=.*$/m,
+      "TimeoutStopSec=5",
+    );
+    expect(oldText).not.toBe(currentText);
+    await writeUnit(label, oldText, 0o644);
+
+    expect(await inspectLinuxServiceDefinition(label)).toEqual({
+      kind: "stale",
+      form: "inline-script",
+      appliesAt: "next-start",
+    });
+    const calls: RecordedCall[] = [];
+    const result = await refreshLinuxServiceDefinition(
+      label,
+      recordingRunner(calls),
+    );
+
+    expect(result).toEqual({
+      kind: "refreshed",
+      form: "inline-script",
+      appliesAt: "next-start",
+    });
+    expect(await readFile(manifestPath(label), "utf8")).toBe(currentText);
+    expect(calls).toEqual([
+      { command: "systemctl", args: ["--user", "daemon-reload"] },
+    ]);
+    assertNoForbiddenVerb(calls);
+  });
+});
+
 describe("current unit: the positive controls above's negative counterpart", () => {
   it("a unit already at buildSystemdUnit's current output: zero runner calls, bytes+mtime unchanged, no leftover .*.tmp file", async () => {
     const label = labelFor("current-unit");
