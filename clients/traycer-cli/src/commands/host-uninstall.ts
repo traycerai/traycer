@@ -43,15 +43,11 @@ import {
   type PublishedProcessIdentityVerdict,
 } from "../store/process-identity";
 import {
-  SHUTDOWN_FORCE_EXIT_MS,
-  STOP_EXIT_GRACE_MARGIN_MS,
-} from "@traycer/protocol/host/lifecycle-constants";
-
-// How long the captured host gets to finish exiting after the stop: the
-// host's own force-exit watchdog plus the stop margin, the same derivation as
-// the platform stop paths' exit timeout.
-const HOST_EXIT_WAIT_MS = SHUTDOWN_FORCE_EXIT_MS + STOP_EXIT_GRACE_MARGIN_MS;
-const HOST_EXIT_POLL_MS = 150;
+  observePublishedProcess,
+  waitForPublishedProcessExit,
+  type LivenessObservation,
+  type PublishedProcess,
+} from "../host/published-process-exit";
 
 // `traycer host uninstall [--all]`:
 //   default → cooperatively stop a running host, then remove the installed +
@@ -98,12 +94,6 @@ export interface HostUninstallServiceController extends RuntimePurgeStopControll
   status(label: ServiceLabel): Promise<ServiceStatus>;
 }
 
-/** The host process an environment last published, as pid.json recorded it. */
-type PublishedHost = {
-  readonly pid: number;
-  readonly startIdentity: string | null;
-};
-
 export interface RunHostUninstallDeps {
   createServiceController(): HostUninstallServiceController;
   uninstallHost(options: UninstallHostOptions): Promise<UninstallHostResult>;
@@ -113,7 +103,7 @@ export interface RunHostUninstallDeps {
    * removes pid metadata once its confirming process scan finds the slot
    * empty, so a probe that runs afterwards has nothing left to look at.
    */
-  readPublishedHost(environment: Environment): Promise<PublishedHost | null>;
+  readPublishedHost(environment: Environment): Promise<PublishedProcess | null>;
   /**
    * Did THAT process exit? Compares the OS process against the start identity
    * pid.json published, so a recycled pid reads as gone rather than alive.
@@ -131,9 +121,6 @@ export interface RunHostUninstallDeps {
     startIdentity: string | null,
   ): Promise<PublishedProcessIdentityVerdict>;
 }
-
-/** What the post-stop probe established, kept distinct from "it threw". */
-type LivenessObservation = "gone" | "live" | "unknown";
 
 export interface RunHostUninstallContext {
   readonly environment: Environment;
@@ -731,7 +718,7 @@ async function readPublishedHostReadOutcome(
   ctx: RunHostUninstallContext,
 ): Promise<{
   readonly answered: boolean;
-  readonly host: PublishedHost | null;
+  readonly host: PublishedProcess | null;
 }> {
   try {
     return {
@@ -749,7 +736,7 @@ async function readPublishedHostReadOutcome(
 }
 
 /** One published process: its pid and the start identity it was published with. */
-function publishedProcessKey(host: PublishedHost): string {
+function publishedProcessKey(host: PublishedProcess): string {
   return `${String(host.pid)} ${host.startIdentity ?? ""}`;
 }
 
@@ -772,80 +759,38 @@ function foldObservedLiveness(
 }
 
 /**
- * Is the process this environment published still alive?
- *
- * Every arm defaults toward `"unknown"`, because `"gone"` is the only answer
- * that licenses deleting another process's runtime files. In particular
- * "nothing was published" is NOT death: a host that started moments ago and
- * has not written pid.json yet is indistinguishable from a machine with no
- * host, and it is actively writing the log this would rotate.
- *
- * `indeterminate` (the OS probe could not answer) stays unknown for the same
- * reason. Only a verdict that positively places the recorded process in the
- * past - `dead`, or `mismatch` meaning its pid now belongs to something else -
- * counts as gone.
+ * Is the process this environment published still alive? `"gone"` is the only
+ * answer that licenses deleting another process's runtime files; the rules
+ * that keep every other arm `"unknown"` live in `observePublishedProcess`.
  */
-async function observeLiveness(
+function observeLiveness(
   deps: RunHostUninstallDeps,
   ctx: RunHostUninstallContext,
-  published: PublishedHost | null,
+  published: PublishedProcess | null,
 ): Promise<LivenessObservation> {
-  if (published === null) return "unknown";
-  // `readHostPidMetadata` accepts any JSON number, while the identity helper
-  // answers `dead` for anything non-integral or <= 0. A record carrying
-  // `pid: -5` would otherwise read as proof the host exited and license the
-  // purge. A pid that cannot name a process is unknown, not death. Validated
-  // HERE rather than in the reader, so the successor check at the purge
-  // boundary still sees that something published.
-  if (!Number.isInteger(published.pid) || published.pid <= 0) return "unknown";
-  try {
-    const verdict = await deps.probeProcessExited(
-      published.pid,
-      published.startIdentity,
-    );
-    if (verdict === "dead" || verdict === "mismatch") return "gone";
-    if (verdict === "current") return "live";
-    return "unknown";
-  } catch (err) {
-    ctx.logger.warn("Host uninstall could not probe the published process", {
-      environment: ctx.environment,
-      pid: published.pid,
-      errorName: err instanceof Error ? err.name : "Error",
-      errorMessage: err instanceof Error ? err.message : String(err),
-    });
-    return "unknown";
-  }
+  return observePublishedProcess(
+    deps.probeProcessExited,
+    published,
+    probeErrorLogger(ctx, published),
+  );
 }
 
 /**
- * `observeLiveness` that gives a process not yet proven gone until it exits,
- * bounded by the host's own shutdown budget.
- *
- * Only `gone` ends the wait early. `unknown` keeps polling too: the identity
- * probe reads liveness and then the start identity, so a normal exit between the
- * two reads answers `indeterminate` for a process that is dead. Persistent
- * `unknown` still ends at the deadline as `unknown`, which keeps the install.
- *
- * The stop above cannot be trusted to have waited. On macOS `--all` deregisters
- * the job first, and `launchctl bootout --wait` returns after launchd's 5 s
- * `ExitTimeOut` has SIGKILLed only the supervisor; the host child lives on as
- * an orphan through its own graceful shutdown, and has already deleted
- * `pid.json`. The stop then reads no record, has no pid to wait on, and
- * resolves at once. This is the one place that still holds the pid captured
- * before the teardown.
+ * `observeLiveness` that waits for the captured host to finish exiting. The
+ * stop cannot be trusted to have waited: on a job still on launchd's 5 s
+ * `ExitTimeOut` the host outlives its SIGKILLed supervisor and has already
+ * deleted `pid.json`, so this is the one place that still holds the pid
+ * captured before the teardown. A persistent `unknown` keeps the install.
  */
-async function observeLivenessUntilExit(
+function observeLivenessUntilExit(
   deps: RunHostUninstallDeps,
   ctx: RunHostUninstallContext,
-  published: PublishedHost,
+  published: PublishedProcess,
 ): Promise<LivenessObservation> {
-  const deadline = Date.now() + HOST_EXIT_WAIT_MS;
-  let waiting = false;
-  for (;;) {
-    const verdict = await observeLiveness(deps, ctx, published);
-    if (verdict === "gone" || Date.now() >= deadline) return verdict;
-    if (!waiting) {
-      waiting = true;
+  return waitForPublishedProcessExit(
+    deps.probeProcessExited,
+    published,
+    () => {
       ctx.progress({
         stage: "service-stop",
         message: `waiting for the ${ctx.environment} host to finish shutting down`,
@@ -854,11 +799,23 @@ async function observeLivenessUntilExit(
         totalBytes: null,
         workUnits: null,
       });
-    }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, HOST_EXIT_POLL_MS);
+    },
+    probeErrorLogger(ctx, published),
+  );
+}
+
+function probeErrorLogger(
+  ctx: RunHostUninstallContext,
+  published: PublishedProcess | null,
+): (err: unknown) => void {
+  return (err) => {
+    ctx.logger.warn("Host uninstall could not probe the published process", {
+      environment: ctx.environment,
+      pid: published === null ? null : published.pid,
+      errorName: err instanceof Error ? err.name : "Error",
+      errorMessage: err instanceof Error ? err.message : String(err),
     });
-  }
+  };
 }
 
 // Never fails the uninstall: this read exists to DESCRIBE the end state, and

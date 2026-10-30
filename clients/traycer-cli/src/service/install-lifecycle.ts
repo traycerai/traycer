@@ -15,6 +15,7 @@ import { isSelfNamingCliInvocation } from "./cli-invocation-shape";
 import {
   createServiceController,
   serviceLabelFor,
+  type CompetingRegistrationRetirement,
   type ServiceController,
   type ServiceLabel,
   type ServiceState,
@@ -447,9 +448,11 @@ export function createServiceInstallLifecycle(
           // must consume the exact same live verifier as the swap itself; do
           // not catch-and-log a lost capability and continue into a later
           // registration edge.
+          let retirement: CompetingRegistrationRetirement | null = null;
           try {
-            await withServiceMutationAuthority(verifyMutationCapability, () =>
-              controller.retireCompetingRegistration(label),
+            retirement = await withServiceMutationAuthority(
+              verifyMutationCapability,
+              () => controller.retireCompetingRegistration(label),
             );
           } catch (cause) {
             // An unexpected best-effort repair error keeps the historical
@@ -460,6 +463,20 @@ export function createServiceInstallLifecycle(
               "Competing-registration repair threw unexpectedly; the host install itself was unaffected.",
               { cause: cause instanceof Error ? cause.message : String(cause) },
             );
+          }
+          // The retired CLI-label host may still be running (it outlived the
+          // wait, or could not be identified). Starting the agent now would
+          // only have its host decline beside the old one and stay down, so
+          // nothing starts here; Desktop brings its host up once the old one
+          // is gone. A failed manifest removal beside it does not change that.
+          if (
+            retirement?.kind === "removed-host-still-exiting" ||
+            (retirement?.kind === "retire-failed" &&
+              retirement.retiredHostStillExiting)
+          ) {
+            state.postSwapError =
+              "the previous CLI-registered host may still be running, so the host was not started";
+            return;
           }
           if (process.platform === "darwin") {
             // Bring the host up on the NEW bytes now instead of leaving the

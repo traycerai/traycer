@@ -7,11 +7,12 @@ import {
   it,
   vi,
 } from "vitest";
-import { execFile } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync } from "node:fs";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { setTimeout as realSleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import {
   buildLaunchAgentPlist,
@@ -47,6 +48,7 @@ import {
   smAppServiceAgentLabelId,
 } from "../../label";
 import { CLI_ERROR_CODES } from "../../../runner/errors";
+import { HOST_EXIT_WAIT_MS } from "../../../host/published-process-exit";
 import {
   isServiceMutationAuthorityError,
   ServiceMutationAuthorityError,
@@ -56,7 +58,11 @@ import { didServiceRegistrationCommit } from "../../cli-invocation-record";
 import { runWithLeaseAtServiceSpawnEdge } from "../../spawn-edge";
 import { withStopTarget } from "../../stop-target";
 import { createVerifyRace } from "../../__tests__/fixtures/verify-race";
-import { ownProcessStartIdentity } from "@traycer-clients/shared/host-lock/process-identity";
+import {
+  getPublishedProcessIdentityVerdict,
+  ownProcessStartIdentity,
+  readProcessStartIdentity,
+} from "@traycer-clients/shared/host-lock/process-identity";
 
 const execFileAsync = promisify(execFile);
 
@@ -5892,6 +5898,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         bootedOut: false,
         bootoutIndeterminate: true,
         manifestRemoved: false,
+        retiredHostStillExiting: false,
       });
 
       // The competing host is STILL RUNNING (its bootout failed), so starting
@@ -5938,6 +5945,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         bootedOut: false,
         bootoutIndeterminate: false,
         manifestRemoved: false,
+        retiredHostStillExiting: false,
       });
     });
 
@@ -6029,6 +6037,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         bootedOut: false,
         bootoutIndeterminate: true,
         manifestRemoved: true,
+        retiredHostStillExiting: false,
       });
 
       expect(MOCKS.cliLoggerWarn).toHaveBeenCalled();
@@ -6077,6 +6086,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         bootedOut: false,
         bootoutIndeterminate: false,
         manifestRemoved: true,
+        retiredHostStillExiting: false,
       });
 
       // Never bootout an owner we could not identify: the CLI label may BE
@@ -6126,6 +6136,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
             bootedOut: false,
             bootoutIndeterminate: false,
             manifestRemoved: false,
+            retiredHostStillExiting: false,
           });
         });
 
@@ -6157,6 +6168,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
             bootedOut: true,
             bootoutIndeterminate: false,
             manifestRemoved: false,
+            retiredHostStillExiting: false,
           });
         });
 
@@ -6174,6 +6186,420 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         ).toBe(true);
       },
     );
+
+    // A bootout of a job still on launchd's `ExitTimeOut` SIGKILLs only the
+    // supervisor; the host it ran lives on through its own shutdown. These
+    // use a REAL child process as that orphaned host.
+    describe("a CLI-label host that outlives its supervisor", () => {
+      const CLI_JOB_PID = 5150;
+      const LOADED_CLI_PRINT = `${CLI_PRINT}\n\tpid = ${CLI_JOB_PID}`;
+      let orphan: ChildProcess | null = null;
+
+      function hasExited(child: ChildProcess): boolean {
+        return child.exitCode !== null || child.signalCode !== null;
+      }
+
+      // Publishes the child as the slot's host. `pid.json` is read through
+      // the module-level seam this suite already mocks.
+      async function publishOrphanHost(): Promise<ChildProcess> {
+        const child = spawn(
+          process.execPath,
+          ["-e", "setInterval(() => {}, 1000)"],
+          { stdio: "ignore" },
+        );
+        orphan = child;
+        await new Promise<void>((resolve, reject) => {
+          child.once("spawn", resolve);
+          child.once("error", reject);
+        });
+        const pid = child.pid;
+        if (pid === undefined) throw new Error("the orphan host has no pid");
+        MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+          kind: "read",
+          metadata: {
+            ...HOST_PID_METADATA,
+            pid,
+            processStartIdentity: readProcessStartIdentity(pid),
+          },
+        });
+        MOCKS.getPublishedProcessIdentityVerdict.mockImplementation(
+          getPublishedProcessIdentityVerdict,
+        );
+        return child;
+      }
+
+      interface OrphanRunnerHooks {
+        readonly parentPid: number | null;
+        readonly onBootout: () => void;
+        readonly onKickstart: () => void;
+      }
+
+      // `ps -o ppid=` answers with the given parent, or fails when it is
+      // null; everything else is the plain launchctl fake with a loaded CLI
+      // job that has a pid.
+      function makeOrphanRunner(
+        calls: RecordedCall[],
+        hooks: OrphanRunnerHooks,
+      ): ProcessRunner {
+        const launchctl = makeRunner(
+          { [agentLabelId]: SMAPPSERVICE_PRINT, [label.id]: LOADED_CLI_PRINT },
+          calls,
+        );
+        return drainingBootouts(async (command, args, options) => {
+          if (command === "ps") {
+            calls.push({ command, args });
+            if (hooks.parentPid === null) throw new Error("ps is unavailable");
+            return {
+              stdout: `${hooks.parentPid}\n`,
+              stderr: "",
+              exitCode: 0,
+            };
+          }
+          if (args[0] === "bootout") hooks.onBootout();
+          if (args[0] === "kickstart") hooks.onKickstart();
+          return launchctl(command, args, options);
+        });
+      }
+
+      beforeEach(async () => {
+        createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+        await writeFile(createdPlistPath, "<plist/>", "utf8");
+      });
+
+      afterEach(() => {
+        orphan?.kill("SIGKILL");
+        orphan = null;
+      });
+
+      // Retires with a host that never exits. Only the clock is fake: the
+      // manifest removal and the identity probe run on real I/O. Gives up
+      // after the host's whole exit wait plus a margin of poll intervals, with
+      // `result` null: a wait that outlasts its bound fails the caller's
+      // assertion instead of hanging the suite.
+      async function retireOnFakeClock(calls: RecordedCall[]) {
+        vi.useFakeTimers({
+          toFake: ["setTimeout", "clearTimeout", "Date", "performance"],
+        });
+        const runner = makeOrphanRunner(calls, {
+          parentPid: CLI_JOB_PID,
+          onBootout: () => {},
+          onKickstart: () => {},
+        });
+        const sliceMs = 500;
+        const limitMs = HOST_EXIT_WAIT_MS + 4 * sliceMs;
+        let settled = false;
+        const outcome = createMacosController(runner)
+          .retireCompetingRegistration(label)
+          .finally(() => {
+            settled = true;
+          });
+        let elapsedMs = 0;
+        // Real I/O progresses during a real sleep between slices of the fake
+        // clock.
+        while (!settled && elapsedMs < limitMs) {
+          await realSleep(5);
+          await vi.advanceTimersByTimeAsync(sliceMs);
+          elapsedMs += sliceMs;
+        }
+        return { elapsedMs, result: settled ? await outcome : null };
+      }
+
+      it("starts Desktop's agent only after the host has exited", async () => {
+        const host = await publishOrphanHost();
+        const calls: RecordedCall[] = [];
+        let hostExitedAtKickstart: boolean | null = null;
+        const runner = makeOrphanRunner(calls, {
+          parentPid: CLI_JOB_PID,
+          // The host is still shutting down well after the label is gone.
+          onBootout: () => {
+            setTimeout(() => host.kill("SIGKILL"), 600);
+          },
+          onKickstart: () => {
+            hostExitedAtKickstart = hasExited(host);
+          },
+        });
+
+        await expect(
+          createMacosController(runner).retireCompetingRegistration(label),
+        ).resolves.toEqual({
+          kind: "retired",
+          bootedOut: true,
+          manifestRemoved: true,
+          agentStartRequested: true,
+        });
+
+        expect(hostExitedAtKickstart).toBe(true);
+      });
+
+      it("removes the manifest before waiting for the host", async () => {
+        const host = await publishOrphanHost();
+        let manifestPresentAtFirstProbe: boolean | null = null;
+        MOCKS.getPublishedProcessIdentityVerdict.mockImplementation(
+          async (pid: number, startIdentity: string | null) => {
+            manifestPresentAtFirstProbe ??= existsSync(
+              join(tempPlistDir, `${label.id}.plist`),
+            );
+            return getPublishedProcessIdentityVerdict(pid, startIdentity);
+          },
+        );
+        const runner = makeOrphanRunner([], {
+          parentPid: CLI_JOB_PID,
+          onBootout: () => {
+            setTimeout(() => host.kill("SIGKILL"), 600);
+          },
+          onKickstart: () => {},
+        });
+
+        await createMacosController(runner).retireCompetingRegistration(label);
+
+        expect(manifestPresentAtFirstProbe).toBe(false);
+      });
+
+      it("does not start Desktop's agent when the retired host's pid.json is unreadable", async () => {
+        await publishOrphanHost();
+        MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+          kind: "unreadable",
+          cause: "not valid JSON",
+        });
+        const calls: RecordedCall[] = [];
+        const runner = makeOrphanRunner(calls, {
+          parentPid: CLI_JOB_PID,
+          onBootout: () => {},
+          onKickstart: () => {},
+        });
+
+        await expect(
+          createMacosController(runner).retireCompetingRegistration(label),
+        ).resolves.toEqual({
+          kind: "removed-host-still-exiting",
+          manifestRemoved: true,
+        });
+
+        expect(bootoutTargets(calls)).toHaveLength(1);
+        expect(calls.filter((call) => call.args[0] === "kickstart")).toEqual(
+          [],
+        );
+        expect(MOCKS.getPublishedProcessIdentityVerdict).not.toHaveBeenCalled();
+      });
+
+      it("does not wait for, or start beside, a host whose parent cannot be read", async () => {
+        // The host stands for Desktop's healthy host: it is never killed, so
+        // a wait on it would end only at the 32 s bound and time this test out.
+        const host = await publishOrphanHost();
+        const calls: RecordedCall[] = [];
+        const runner = makeOrphanRunner(calls, {
+          parentPid: null,
+          onBootout: () => {},
+          onKickstart: () => {},
+        });
+
+        await expect(
+          createMacosController(runner).retireCompetingRegistration(label),
+        ).resolves.toEqual({
+          kind: "removed-host-still-exiting",
+          manifestRemoved: true,
+        });
+
+        expect(calls.filter((call) => call.args[0] === "kickstart")).toEqual(
+          [],
+        );
+        expect(hasExited(host)).toBe(false);
+        expect(MOCKS.getPublishedProcessIdentityVerdict).toHaveBeenCalledTimes(
+          1,
+        );
+      });
+
+      it("retires as usual when a host whose parent cannot be read has already exited", async () => {
+        const host = await publishOrphanHost();
+        const exited = new Promise<void>((resolve) => {
+          host.once("exit", () => resolve());
+        });
+        host.kill("SIGKILL");
+        await exited;
+        const calls: RecordedCall[] = [];
+        const runner = makeOrphanRunner(calls, {
+          parentPid: null,
+          onBootout: () => {},
+          onKickstart: () => {},
+        });
+
+        await expect(
+          createMacosController(runner).retireCompetingRegistration(label),
+        ).resolves.toEqual({
+          kind: "retired",
+          bootedOut: true,
+          manifestRemoved: true,
+          agentStartRequested: true,
+        });
+
+        expect(calls.filter((call) => call.args[0] === "kickstart")).toHaveLength(
+          1,
+        );
+      });
+
+      it("does not start Desktop's agent when the host outlives the wait", async () => {
+        const host = await publishOrphanHost();
+        const calls: RecordedCall[] = [];
+        const { result } = await retireOnFakeClock(calls);
+
+        expect(result).toEqual({
+          kind: "removed-host-still-exiting",
+          manifestRemoved: true,
+        });
+        expect(bootoutTargets(calls)).toHaveLength(1);
+        expect(calls.filter((call) => call.args[0] === "kickstart")).toEqual(
+          [],
+        );
+        expect(hasExited(host)).toBe(false);
+        await expect(
+          readFile(join(tempPlistDir, `${label.id}.plist`), "utf8"),
+        ).rejects.toThrow();
+      });
+
+      it("ends at its bound when the wall clock steps backward", async () => {
+        await publishOrphanHost();
+        // Every probe answers live and rewinds the wall clock an hour: a
+        // deadline read from Date.now() would never arrive.
+        MOCKS.getPublishedProcessIdentityVerdict.mockImplementation(
+          async () => {
+            vi.setSystemTime(Date.now() - 3_600_000);
+            return "current";
+          },
+        );
+        const calls: RecordedCall[] = [];
+
+        const { elapsedMs, result } = await retireOnFakeClock(calls);
+
+        expect(result).toEqual({
+          kind: "removed-host-still-exiting",
+          manifestRemoved: true,
+        });
+        expect(elapsedMs).toBeLessThanOrEqual(HOST_EXIT_WAIT_MS + 2_000);
+        expect(calls.filter((call) => call.args[0] === "kickstart")).toEqual(
+          [],
+        );
+      });
+
+      it("ends at its bound when the host probe never answers", async () => {
+        await publishOrphanHost();
+        MOCKS.getPublishedProcessIdentityVerdict.mockImplementation(
+          () => new Promise<never>(() => {}),
+        );
+        const calls: RecordedCall[] = [];
+
+        const { elapsedMs, result } = await retireOnFakeClock(calls);
+
+        expect(result).toEqual({
+          kind: "removed-host-still-exiting",
+          manifestRemoved: true,
+        });
+        expect(elapsedMs).toBeLessThanOrEqual(HOST_EXIT_WAIT_MS + 2_000);
+        expect(calls.filter((call) => call.args[0] === "kickstart")).toEqual(
+          [],
+        );
+      });
+
+      itUnlessRoot(
+        "keeps the still-exiting fact when the host outlives the wait and the manifest cannot be removed",
+        async () => {
+          await publishOrphanHost();
+          const calls: RecordedCall[] = [];
+
+          await withUnreadableLaunchAgentsDir(async () => {
+            const { result } = await retireOnFakeClock(calls);
+            expect(result).toEqual({
+              kind: "retire-failed",
+              bootoutFailed: false,
+              manifestRemovalFailed: true,
+              bootedOut: true,
+              bootoutIndeterminate: false,
+              manifestRemoved: false,
+              retiredHostStillExiting: true,
+            });
+          });
+
+          expect(bootoutTargets(calls)).toHaveLength(1);
+          expect(calls.filter((call) => call.args[0] === "kickstart")).toEqual(
+            [],
+          );
+        },
+      );
+
+      it("does not wait for a host that Desktop's agent runs", async () => {
+        const host = await publishOrphanHost();
+        const calls: RecordedCall[] = [];
+        let hostExitedAtKickstart: boolean | null = null;
+        const runner = makeOrphanRunner(calls, {
+          parentPid: CLI_JOB_PID + 1,
+          onBootout: () => {},
+          onKickstart: () => {
+            hostExitedAtKickstart = hasExited(host);
+          },
+        });
+
+        await expect(
+          createMacosController(runner).retireCompetingRegistration(label),
+        ).resolves.toEqual({
+          kind: "retired",
+          bootedOut: true,
+          manifestRemoved: true,
+          agentStartRequested: true,
+        });
+
+        expect(hostExitedAtKickstart).toBe(false);
+        expect(MOCKS.getPublishedProcessIdentityVerdict).not.toHaveBeenCalled();
+      });
+
+      it("propagates a lost mutation authority at the parent-pid read as itself, before any bootout", async () => {
+        await publishOrphanHost();
+        const hooks: OrphanRunnerHooks = {
+          parentPid: CLI_JOB_PID + 1,
+          onBootout: () => {},
+          onKickstart: () => {},
+        };
+        // Which verifier call precedes the `ps` is a fact about the runner's
+        // shape: derive it with a dry run instead of hardcoding a count.
+        const order: string[] = [];
+        const dryRunner = makeOrphanRunner([], hooks);
+        await withServiceMutationAuthority(
+          async () => {
+            order.push("verify");
+          },
+          () =>
+            createMacosController(async (command, args, options) => {
+              order.push(command);
+              return dryRunner(command, args, options);
+            }).retireCompetingRegistration(label),
+        );
+        const verifiesBeforePs = order
+          .slice(0, order.indexOf("ps"))
+          .filter((entry) => entry === "verify").length;
+        await writeFile(join(tempPlistDir, `${label.id}.plist`), "<plist/>");
+
+        const calls: RecordedCall[] = [];
+        const authorityError = new Error("mutation authority was lost");
+        let verifyCalls = 0;
+        const verify = async (): Promise<void> => {
+          verifyCalls += 1;
+          if (verifyCalls === verifiesBeforePs) throw authorityError;
+        };
+
+        const rejection: unknown = await withServiceMutationAuthority(
+          verify,
+          () =>
+            createMacosController(
+              makeOrphanRunner(calls, hooks),
+            ).retireCompetingRegistration(label),
+        ).catch((cause: unknown) => cause);
+
+        expect(rejection).toBe(authorityError);
+        expect(isServiceMutationAuthorityError(rejection)).toBe(true);
+        expect(bootoutTargets(calls)).toEqual([]);
+        await expect(
+          readFile(join(tempPlistDir, `${label.id}.plist`), "utf8"),
+        ).resolves.toBe("<plist/>");
+      });
+    });
   });
 
   describe("readRegisteredCliInvocation (host update's no-repoint contract)", () => {
