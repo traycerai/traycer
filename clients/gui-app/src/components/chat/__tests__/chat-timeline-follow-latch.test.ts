@@ -779,6 +779,46 @@ describe("useChatTimelineFollowLatch", () => {
     expect(listRef.scrollToEnd).toHaveBeenCalled();
   });
 
+  it("does not follow a reader a write the contact held back moves after the lift", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn<(isFollowing: boolean) => void>();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onFollowIntentChange,
+      }),
+    );
+    fireNativeScroll(node);
+    // The finger drags away from the end and rests there.
+    fireTouch(node, "touchstart", 300);
+    fireTouch(node, "touchmove", 400);
+    shim.setGeometry(node, { scrollTop: 900 });
+    fireNativeScroll(node);
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    // The app writes the view to the end. The contact holds the write back,
+    // so the view does not move, and the write says so: `to` is `from`.
+    moveChatTimelineScroller(node, 1000, () => {});
+    fireTouch(node, "touchend", 400);
+    flushAnimationFrame();
+    flushAnimationFrame();
+    listRef.scrollToEnd.mockClear();
+    // The held-back write lands now, unannounced, putting the view on the
+    // end; a chunk grows the tail past it before the report. Every pixel of
+    // that is the app's, and none of it is the reader's momentum.
+    shim.setGeometry(node, { scrollTop: 1000 });
+    shim.setGeometry(node, { scrollHeight: 1540 });
+    fireResizeObservers();
+    fireNativeScroll(node);
+
+    expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+  });
+
   it("control: a fling the list remeasures rows above mid-flight still arrives at the end it put them", () => {
     const { node, listRef, onFollowIntentChange } = flingTowardEnd();
 

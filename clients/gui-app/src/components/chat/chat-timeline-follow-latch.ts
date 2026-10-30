@@ -1550,13 +1550,26 @@ export function useChatTimelineFollowLatch(
 
   // The first report after a lift that a held-back write may land after: a
   // published departure stands where the view now is. The ledger, left null
-  // at the lift, re-bases at this report too (`noteReportMovement`).
+  // at the lift, re-bases at this report too (`noteReportMovement`), and so
+  // does the lift a momentum travels from: that write moved the view and is
+  // the one write `noteScrollerMoved` cannot carry it by, because it was
+  // announced as moving nothing and lands after the lift reads the view.
+  // Credited as travel it would arrive a reader the app moved. Momentum the
+  // finger did leave is not lost, only uncredited for this interval: it
+  // travels from where this report leaves them.
   const noteReportAfterLiftLanding = useCallback(
     (geometry: ChatTimelineScrollGeometry): void => {
       if (!liftAwaitsLandingRef.current) return;
       liftAwaitsLandingRef.current = false;
       if (readerDepartureScrollTopRef.current !== null) {
         readerDepartureScrollTopRef.current = geometry.scrollTop;
+      }
+      const momentum = readerMomentumEndRef.current;
+      if (momentum !== null) {
+        readerMomentumEndRef.current = {
+          ...momentum,
+          liftScrollTop: geometry.scrollTop,
+        };
       }
     },
     [],
@@ -1672,6 +1685,12 @@ export function useChatTimelineFollowLatch(
       ) {
         return false;
       }
+      // A write the contact held back has not landed yet: the view the lift
+      // read is not where it will rest, so nothing here is travel. Both the
+      // maintain read and the report reach this, and only the report
+      // re-bases the lift (`noteReportAfterLiftLanding`), so the guard has
+      // to be here rather than at either caller.
+      if (liftAwaitsLandingRef.current) return false;
       const shift = listRowShift(listRef.current, momentum.lastRow);
       if (shift === null) return false;
       return (
