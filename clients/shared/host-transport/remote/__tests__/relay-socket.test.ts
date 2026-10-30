@@ -85,6 +85,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       attachBaseUrl: "wss://relay.test/attach",
       grantJws: "grant-jws",
       previousLeg: null,
+      resumeClaim: null,
       webSocketFactory: factory,
       handlers,
     });
@@ -102,6 +103,7 @@ describe("RelaySocket.pokeKeepalive", () => {
       attachBaseUrl: "wss://relay.test/attach",
       grantJws: "grant-jws",
       previousLeg: null,
+      resumeClaim: null,
       webSocketFactory: factory,
       handlers,
     });
@@ -123,6 +125,7 @@ describe("RelaySocket.pokeKeepalive", () => {
         attachBaseUrl: "wss://relay.test/attach",
         grantJws: "grant-jws",
         previousLeg: null,
+        resumeClaim: null,
         webSocketFactory: factory,
         handlers,
       });
@@ -156,6 +159,7 @@ describe("RelaySocket.pokeKeepalive", () => {
         attachBaseUrl: "wss://relay.test/attach",
         grantJws: "grant-jws",
         previousLeg: null,
+        resumeClaim: null,
         webSocketFactory: factory,
         handlers,
       });
@@ -182,6 +186,7 @@ describe("RelaySocket.pokeKeepalive", () => {
         attachBaseUrl: "wss://relay.test/attach",
         grantJws: "grant-jws",
         previousLeg: null,
+        resumeClaim: null,
         webSocketFactory: factory,
         handlers,
       });
@@ -209,6 +214,7 @@ describe("RelaySocket.pokeKeepalive", () => {
         attachBaseUrl: "wss://relay.test/attach",
         grantJws: "grant-jws",
         previousLeg: null,
+        resumeClaim: null,
         webSocketFactory: factory,
         handlers,
       });
@@ -248,6 +254,7 @@ describe("RelaySocket.pokeKeepalive", () => {
         attachBaseUrl: "wss://relay.test/attach",
         grantJws: "grant-jws",
         previousLeg: null,
+        resumeClaim: null,
         webSocketFactory: factory,
         handlers,
       });
@@ -294,6 +301,7 @@ describe("RelaySocket.pokeKeepalive", () => {
         attachBaseUrl: "wss://relay.test/attach",
         grantJws: "grant-jws",
         previousLeg: null,
+        resumeClaim: null,
         webSocketFactory: factory,
         handlers,
       });
@@ -331,6 +339,7 @@ describe("RelaySocket.pokeKeepalive", () => {
         attachBaseUrl: "wss://relay.test/attach",
         grantJws: "grant-jws",
         previousLeg: null,
+        resumeClaim: null,
         webSocketFactory: factory,
         handlers,
       });
@@ -363,6 +372,7 @@ describe("RelaySocket.pokeKeepalive", () => {
         attachBaseUrl: "wss://relay.test/attach",
         grantJws: "grant-jws",
         previousLeg: null,
+        resumeClaim: null,
         webSocketFactory: factory,
         handlers,
       });
@@ -473,6 +483,7 @@ function openSocket(handlers: RelaySocketHandlers): {
     attachBaseUrl: "wss://relay.test/attach",
     grantJws: "grant",
     previousLeg: null,
+    resumeClaim: null,
     webSocketFactory: factory,
     handlers,
   });
@@ -865,6 +876,7 @@ describe("RelaySocket (client leg) attach-URL scheme gate", () => {
           attachBaseUrl: "ws://relay.test/attach",
           grantJws: "grant-jws",
           previousLeg: null,
+          resumeClaim: null,
           webSocketFactory: factory,
           handlers: buildHandlers(),
         }),
@@ -883,6 +895,7 @@ describe("RelaySocket (client leg) attach-URL scheme gate", () => {
         attachBaseUrl,
         grantJws: "grant-jws",
         previousLeg: null,
+        resumeClaim: null,
         webSocketFactory: { create: () => socket },
         handlers: buildHandlers(),
       });

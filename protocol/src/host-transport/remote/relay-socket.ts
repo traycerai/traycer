@@ -57,6 +57,12 @@ import {
  */
 export const RELAY_WAKE_PROBE_TIMEOUT_CLOSE_CODE = 4006;
 export const RELAY_WAKE_PROBE_TIMEOUT_CLOSE_REASON = "relay-wake-probe-timeout";
+/**
+ * The one code for a leg this client gives up while it keeps the session. The
+ * relay parks a session on it; 1000 would close the session for good.
+ */
+export const RELAY_RELINK_CLOSE_CODE = 4007;
+export const RELAY_RELINK_CLOSE_REASON = "relay-relink";
 
 /**
  * Relay session-kill / peer-death reasons (mirror relay-do `KillReason`).
@@ -83,8 +89,12 @@ export type RelayKillReason =
   | (string & {});
 
 export interface RelaySocketHandlers {
-  /** The relay assigned this client session its `sid`; bridging is live. */
-  readonly onAttachAck: (sid: number) => void;
+  /**
+   * The relay assigned this client session its `sid`; bridging is live.
+   * `resumeKey` is the key that claims `sid` back after this leg is lost, or
+   * `null` from a relay that cannot park. A secret: never log it.
+   */
+  readonly onAttachAck: (sid: number, resumeKey: string | null) => void;
   /** An opaque inbound DATA frame (Noise transport bytes for the layer above). */
   readonly onData: (ciphertext: Uint8Array) => void;
   /** Optional diagnostic: exact UTF-8 payload size, never the control text. */
@@ -112,11 +122,19 @@ export interface RelayLegEnd {
   readonly reason: string;
 }
 
+/** Claims a parked relay session back onto a new leg. The key is a secret. */
+export interface RelayResumeClaim {
+  readonly sid: number;
+  readonly key: string;
+}
+
 interface RelayLegOptions {
   readonly attachBaseUrl: string;
   readonly grantJws: string;
   /** The leg this dial replaces, or `null` on a first dial. Telemetry only. */
   readonly previousLeg: RelayLegEnd | null;
+  /** The session this dial claims back, or `null` for a fresh attach. */
+  readonly resumeClaim: RelayResumeClaim | null;
   readonly webSocketFactory: IStreamWebSocketFactory;
   readonly handlers: RelaySocketHandlers;
 }
@@ -205,6 +223,7 @@ export class RelaySocket {
         options.attachBaseUrl,
         options.grantJws,
         options.previousLeg,
+        options.resumeClaim,
       );
     }
     // Not a host method, and not classifiable as one: this is the single
@@ -431,7 +450,7 @@ export class RelaySocket {
       this.lastPingSentAt = now;
       this.startKeepalive();
       if (this.direct) {
-        this.handlers.onAttachAck(0);
+        this.handlers.onAttachAck(0, null);
       }
     };
     socket.onmessage = (event: StreamWebSocketMessageEvent) => {
@@ -500,7 +519,7 @@ export class RelaySocket {
   private dispatchControl(control: RelayControlInbound): void {
     switch (control.type) {
       case "attach_ack":
-        this.handlers.onAttachAck(control.sid);
+        this.handlers.onAttachAck(control.sid, control.resumeKey);
         return;
       case "host_detached":
         this.handlers.onHostDetached();
@@ -719,15 +738,21 @@ const PREV_MAX_CHARS = 64;
 
 /**
  * Appends the attach grant as a `?grant=` query param (fallback presentation),
- * and `prev=<code>:<reason>` for the leg this dial replaces.
+ * `park=1` so the relay parks this leg's loss, `resume=<sid>:<key>` for a
+ * claim, and `prev=<code>:<reason>` for the leg this dial replaces.
  */
 function withAttachQuery(
   attachBaseUrl: string,
   grantJws: string,
   previousLeg: RelayLegEnd | null,
+  resumeClaim: RelayResumeClaim | null,
 ): string {
   const separator = attachBaseUrl.includes("?") ? "&" : "?";
-  const url = `${attachBaseUrl}${separator}grant=${encodeURIComponent(grantJws)}`;
+  const attach = `${attachBaseUrl}${separator}grant=${encodeURIComponent(grantJws)}&park=1`;
+  const url =
+    resumeClaim === null
+      ? attach
+      : `${attach}&resume=${encodeURIComponent(`${resumeClaim.sid}:${resumeClaim.key}`)}`;
   if (previousLeg === null) {
     return url;
   }
@@ -743,7 +768,7 @@ function withAttachQuery(
 // -----------------------------------------------------------------------------
 
 type RelayControlInbound =
-  | { type: "attach_ack"; sid: number }
+  | { type: "attach_ack"; sid: number; resumeKey: string | null }
   | { type: "host_detached" }
   | { type: "host_attached" }
   | { type: "reauth_ack" }
@@ -765,7 +790,12 @@ function parseRelayControl(raw: string): RelayControlInbound | null {
   const type = record.type;
   if (type === "attach_ack" && record.role === "client") {
     return typeof record.sid === "number"
-      ? { type: "attach_ack", sid: record.sid }
+      ? {
+          type: "attach_ack",
+          sid: record.sid,
+          resumeKey:
+            typeof record.resumeKey === "string" ? record.resumeKey : null,
+        }
       : null;
   }
   if (type === "host_detached") {

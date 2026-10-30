@@ -153,7 +153,10 @@ import { PLAIN_MUX_CHANNEL, type MuxChannel } from "./mux-channel";
 import {
   RelaySocket,
   type RelayKillReason,
+  RELAY_RELINK_CLOSE_CODE,
+  RELAY_RELINK_CLOSE_REASON,
   type RelayLegEnd,
+  type RelayResumeClaim,
   type RelaySocketHandlers,
 } from "./relay-socket";
 import type { AttachGrant, AttachGrantProvider } from "./grant";
@@ -220,6 +223,12 @@ function qosForStreamMethod(method: string): QosClassValue {
  * never on the boundary alone, and never on a wake — a connection that opens
  * and dies repeatedly must escalate, not present itself as a first failure
  * forever.
+ *
+ * Own-leg loss: a session with a relay claim outlives its socket. The mask
+ * starts or continues, the next dial mints a grant as ever and presents
+ * `resume=<sid>:<key>`, and no Noise runs: the same sid in the ack goes on
+ * through a resume, any other sid rebuilds on that leg. Without a claim, or
+ * before ready, a loss is a full attach as above.
  *
  * Host blip: `host_detached` PAUSES (the scheduler holds its frames rather
  * than losing them to a host-less relay). What `host_attached` does depends on
@@ -777,7 +786,9 @@ export interface IRemoteSession<
    * path change under a socket that cannot have survived it, a mobile resume
    * after a background long enough that iOS has torn the socket down.
    *
-   * Same skip-not-pardon stance as `wake`: the redial is pulled to now, but
+   * A session that can claim itself back keeps everything but its leg, whose
+   * close asks the relay to park it. Same skip-not-pardon stance as `wake`:
+   * the redial is pulled to now, but
    * the escalation counter is untouched, so a host that is genuinely gone
    * keeps climbing the ladder between forced attempts instead of being pinned
    * at the fastest tier. An attach already in flight is left alone - its own
@@ -898,6 +909,13 @@ interface PendingUnary {
   sealed: boolean;
 }
 
+/** See {@link RemoteSession.adoptFreshLeg}. */
+interface AdoptingLeg {
+  readonly socket: RelaySocket;
+  /** What the leg delivered while waiting, in arrival order. */
+  readonly events: (() => void)[];
+}
+
 /**
  * One RESUME round on the existing Noise session: drain, send `received`, wait
  * for the host's answer to this attempt. Replaced, never reused, so a restart
@@ -919,9 +937,14 @@ interface ResumeExchange {
 interface ActiveConnection {
   readonly generation: number;
   /** The grant this relay attach presented; `null` on a direct pool leg. */
-  readonly attachGrant: AttachGrant | null;
-  /** The relay leg, or the direct leg to the pool. */
-  readonly socket: RelaySocket;
+  attachGrant: AttachGrant | null;
+  /**
+   * The relay leg, or the direct leg to the pool. The one thing that outlives
+   * nothing: a relink replaces it and keeps the rest of this record, which is
+   * the session. While {@link relinking} it is the failed leg until the claim
+   * dial is made, and closed legs refuse every send.
+   */
+  socket: RelaySocket;
   readonly channel: MuxChannel;
   readonly scheduler: PriorityScheduler;
   readonly reassembler: ChunkReassembler;
@@ -967,6 +990,19 @@ interface ActiveConnection {
   readonly ledger: ResumeLedger;
   /** Both peers advertised `SESSION_CAPABILITY_RESUME`; set at `openAck`. */
   resumeNegotiated: boolean;
+  /**
+   * What claims this session back after its leg is lost, from the first ack
+   * and kept for the session's life. `null` means no claim is ever made: a
+   * direct leg, or a relay that cannot park. Holds a secret: never log it.
+   */
+  relayClaim: RelayResumeClaim | null;
+  /**
+   * The client's own leg is gone and the session outlives it: from the loss
+   * until a claim dial's ack. No leg carries traffic meanwhile.
+   */
+  relinking: boolean;
+  /** Claim dials made so far. Keeps each dial's evidence id its own. */
+  relinkDials: number;
   /** Readiness is being held through a detach; see `RESUME_MASK_MS`. */
   masked: boolean;
   /** When the mask ends; read when a cancelled exchange falls back to it. */
@@ -1340,6 +1376,8 @@ export class RemoteSession<
   private pendingForceGeneration: number | null = null;
   /** How the leg the next dial replaces ended; sent as `prev`. */
   private replacedLeg: RelayLegEnd | null = null;
+  /** A fresh relay leg waiting on a rebuild's Noise channel, or `null`. */
+  private adoptingLeg: AdoptingLeg | null = null;
   /** Numbers the resumed edges of one generation; see `takeResumedEdge`. */
   private resumedEdges = 0;
   private maskTimer: TimerHandle | null = null;
@@ -2323,6 +2361,7 @@ export class RemoteSession<
     const connection = this.connection;
     if (
       connection !== null &&
+      !connection.relinking &&
       (this.phase === "ready" || this.isParkedBeforeReady())
     ) {
       // A client-initiated teardown says nothing about the host - the durable
@@ -2336,7 +2375,7 @@ export class RemoteSession<
       // until an unrelated `host_attached`. Dropping it and redialling now is
       // what the caller asked for; the redial parks again if the host is
       // still away.
-      this.handleConnectionLost(
+      this.handleLegLost(
         connection.generation,
         `forced-reconnect:${reason}`,
         "not-host-evidence",
@@ -2411,7 +2450,7 @@ export class RemoteSession<
     // a closed session the next time somebody's clock came right.
     this.clearClockPark();
     this.clearAllTimers();
-    this.teardownConnection("closed-by-caller");
+    this.teardownConnection("closed-by-caller", false);
     for (const stream of this.subscriptions.values()) {
       this.traffic?.end(stream.streamId, true);
       stream.notifyStatus("closed", { kind: "caller" }, null);
@@ -2508,14 +2547,14 @@ export class RemoteSession<
    * its VERDICT is not.
    */
   requestSessionReconnect(reason: string): void {
-    if (this.phase === "closed" || this.phase === "idle") {
+    if (
+      this.phase === "closed" ||
+      this.phase === "idle" ||
+      this.connection?.relinking === true
+    ) {
       return;
     }
-    this.handleConnectionLost(
-      this.connectGeneration,
-      reason,
-      "not-host-evidence",
-    );
+    this.handleLegLost(this.connectGeneration, reason, "not-host-evidence");
   }
 
   streamOutboundDebtBytes(streamId: number): number {
@@ -2566,13 +2605,20 @@ export class RemoteSession<
     // from the recovery edge or from any path that armed a backoff straight
     // through a park. Idempotent.
     this.clearClockPark();
-    const generation = ++this.connectGeneration;
+    const relink = this.connection?.relinking === true ? this.connection : null;
+    const generation =
+      relink === null ? ++this.connectGeneration : relink.generation;
+    const claimDial = relink === null ? 0 : relink.relinkDials + 1;
     // Any intent recorded against an earlier generation is stale by
     // construction: that dial ended (its failure spent the intent, or a path
     // that never consults it retired the attempt), and this fresh dial must
     // not inherit a demand nobody made of it.
     this.pendingForceGeneration = null;
-    this.phase = "connecting";
+    if (relink === null) {
+      this.phase = "connecting";
+    } else {
+      relink.relinkDials = claimDial;
+    }
     this.clearPhaseTimer();
     this.reattachMarks = {
       ...emptyReattachMarks(),
@@ -2636,6 +2682,15 @@ export class RemoteSession<
     }
     const grant = provision.grant;
 
+    if (relink !== null) {
+      // Generations cannot say this: a claim dial keeps the session's, and one
+      // that failed under this mint has already armed its successor.
+      if (this.connection === relink && relink.relinkDials === claimDial) {
+        this.dialClaim(generation, relink, dial.attachBaseUrl, grant);
+      }
+      return;
+    }
+
     const noise = await NoiseChannel.begin(dial.hostStaticPublicKey);
     if (generation !== this.connectGeneration || this.isClosed()) {
       return;
@@ -2645,10 +2700,36 @@ export class RemoteSession<
       attachBaseUrl: dial.attachBaseUrl,
       grantJws: grant.grant,
       previousLeg: this.replacedLeg,
+      resumeClaim: null,
       webSocketFactory: this.options.webSocketFactory,
-      handlers: this.socketHandlers(generation, (): RelaySocket => relaySocket),
+      handlers: this.socketHandlers((): RelaySocket => relaySocket),
     });
     this.installConnection(generation, grant, relaySocket, noise);
+  }
+
+  /**
+   * The relink's dial: a fresh grant and a new leg under the same session, with
+   * no Noise begin. The phase stays `ready`, so the ack lands in
+   * {@link onRelinkAck} rather than starting a handshake.
+   */
+  private dialClaim(
+    generation: number,
+    connection: ActiveConnection,
+    attachBaseUrl: string,
+    grant: AttachGrant,
+  ): void {
+    const relaySocket: RelaySocket = new RelaySocket({
+      attachBaseUrl,
+      grantJws: grant.grant,
+      previousLeg: this.replacedLeg,
+      resumeClaim: connection.relayClaim,
+      webSocketFactory: this.options.webSocketFactory,
+      handlers: this.socketHandlers((): RelaySocket => relaySocket),
+    });
+    connection.socket = relaySocket;
+    connection.attachGrant = grant;
+    connection.legEnd = null;
+    this.armPhaseTimer(generation, ATTACH_ACK_TIMEOUT_MS, "attach-ack-timeout");
   }
 
   /**
@@ -2660,55 +2741,78 @@ export class RemoteSession<
     const socket: RelaySocket = new RelaySocket({
       directUrl: poolUrl,
       webSocketFactory: this.options.webSocketFactory,
-      handlers: this.socketHandlers(generation, (): RelaySocket => socket),
+      handlers: this.socketHandlers((): RelaySocket => socket),
     });
     this.installConnection(generation, null, socket, PLAIN_MUX_CHANNEL);
   }
 
   /**
-   * One generation's socket callbacks. `socket` is read lazily: the handlers
-   * are built before the socket they belong to exists.
+   * One leg's socket callbacks. `socket` is read lazily: the handlers are built
+   * before the socket they belong to exists.
+   *
+   * Everything goes through the leg's identity rather than a generation, because
+   * a relink keeps the generation and replaces the socket: a late event from a
+   * superseded leg does nothing, and a leg a rebuild adopted
+   * ({@link adoptFreshLeg}) keeps working under its new generation.
    */
-  private socketHandlers(
-    generation: number,
-    socket: () => RelaySocket,
-  ): RelaySocketHandlers {
+  private socketHandlers(socket: () => RelaySocket): RelaySocketHandlers {
+    const deliver = (event: (generation: number) => void): void => {
+      const adopted = this.adoptingLeg;
+      if (adopted?.socket === socket()) {
+        adopted.events.push(() => deliver(event));
+        return;
+      }
+      const connection = this.connection;
+      if (connection?.socket === socket()) {
+        event(connection.generation);
+      }
+    };
     return {
-      onAttachAck: () => this.onAttachAck(generation),
-      onData: (bytes) => this.onData(generation, bytes),
+      onAttachAck: (sid, resumeKey) =>
+        deliver((generation) => this.onAttachAck(generation, sid, resumeKey)),
+      onData: (bytes) => {
+        // Count delivery before any filtering: a late socket frame still
+        // consumed incoming bytes, even when it cannot enter the current mux.
+        const receivedAtMs = this.traffic?.receiveBinary(bytes.byteLength) ?? 0;
+        deliver((generation) => this.onData(generation, bytes, receivedAtMs));
+      },
       onTextBytes:
         this.traffic === null
           ? undefined
           : (bytes) => this.traffic?.receiveText(bytes),
-      onHostDetached: () => this.onHostDetached(generation),
-      onHostAttached: () => this.onHostAttached(generation),
+      onHostDetached: () =>
+        deliver((generation) => this.onHostDetached(generation)),
+      onHostAttached: () =>
+        deliver((generation) => this.onHostAttached(generation)),
       onReauthAck: () => undefined,
-      onPeerGone: (reason) => this.onPeerGone(generation, reason),
+      onPeerGone: (reason) =>
+        deliver((generation) => this.onPeerGone(generation, reason)),
       onError: () => undefined,
-      onClose: (info) => {
-        // The socket's own verdict on the current wake-probe arm, read at
-        // the one moment it matters: this close IS the arm's negative
-        // ending, whatever delivered it - the arm's own deadline, an
-        // OS-delivered error close, missed pongs. An answered arm reads
-        // false here forever, so a loss after proven liveness stays an
-        // ordinary loss. Each connection owns its socket object, so this
-        // cannot leak across dials.
-        const immediateRedialEarned =
-          socket().hasUnansweredImmediateRedialProbe();
-        if (this.isCurrent(generation) && this.connection !== null) {
-          this.connection.legEnd = { code: info.code, reason: info.reason };
-        }
-        this.handleConnectionLost(
-          generation,
-          describeSocketClose(this.phase, info),
-          "host-transport-plane",
-        );
-        if (immediateRedialEarned) {
-          // A user is watching this recovery happen; sleeping out the
-          // backoff rung the funnel armed would be pure added outage.
-          this.pullRedialToNow("wake-probe-failed");
-        }
-      },
+      onClose: (info) =>
+        deliver((generation) => {
+          // The socket's own verdict on the current wake-probe arm, read at
+          // the one moment it matters: this close IS the arm's negative
+          // ending, whatever delivered it - the arm's own deadline, an
+          // OS-delivered error close, missed pongs. An answered arm reads
+          // false here forever, so a loss after proven liveness stays an
+          // ordinary loss. Each connection owns its socket object, so this
+          // cannot leak across dials.
+          const immediateRedialEarned =
+            socket().hasUnansweredImmediateRedialProbe();
+          if (this.connection !== null) {
+            this.connection.legEnd = { code: info.code, reason: info.reason };
+          }
+          this.handleLegLost(
+            generation,
+            describeSocketClose(this.phase, info),
+            "host-transport-plane",
+          );
+          if (immediateRedialEarned) {
+            // A user is watching this recovery happen; sleeping out the
+            // backoff rung the funnel armed would be pure added outage.
+            this.pullRedialToNow("wake-probe-failed");
+          }
+        }),
     };
   }
 
@@ -2750,6 +2854,9 @@ export class RemoteSession<
       hostAttached: true,
       ledger: new ResumeLedger((report) => this.logResumeGap(report)),
       resumeNegotiated: false,
+      relayClaim: null,
+      relinking: false,
+      relinkDials: 0,
       masked: false,
       maskDeadlineAt: 0,
       detachedAt: null,
@@ -2766,14 +2873,26 @@ export class RemoteSession<
     this.armPhaseTimer(generation, ATTACH_ACK_TIMEOUT_MS, "attach-ack-timeout");
   }
 
-  private onAttachAck(generation: number): void {
-    if (!this.isCurrent(generation) || this.phase !== "connecting") {
+  private onAttachAck(
+    generation: number,
+    sid: number,
+    resumeKey: string | null,
+  ): void {
+    if (!this.isCurrent(generation)) {
       return;
     }
     const connection = this.connection;
     if (connection === null) {
       return;
     }
+    if (connection.relinking) {
+      this.onRelinkAck(generation, connection, sid, resumeKey);
+      return;
+    }
+    if (this.phase !== "connecting") {
+      return;
+    }
+    connection.relayClaim = resumeKey === null ? null : { sid, key: resumeKey };
     this.reattachMarks.attachAckAt = Date.now();
     const handshake = connection.channel.handshake;
     if (handshake === null) {
@@ -2803,15 +2922,18 @@ export class RemoteSession<
     })();
   }
 
-  private onData(generation: number, bytes: Uint8Array): void {
-    // Count delivery before generation filtering: a late socket frame still
-    // consumed incoming bytes, even when it cannot enter the current mux.
-    const receivedAtMs = this.traffic?.receiveBinary(bytes.byteLength) ?? 0;
+  private onData(
+    generation: number,
+    bytes: Uint8Array,
+    receivedAtMs: number,
+  ): void {
     if (!this.isCurrent(generation)) {
       return;
     }
     const connection = this.connection;
-    if (connection === null) {
+    // A claim's leg speaks only after its ack, which says whose frames these
+    // are. Nothing is counted before that.
+    if (connection === null || connection.relinking) {
       return;
     }
     if (this.phase === "handshaking") {
@@ -4639,6 +4761,15 @@ export class RemoteSession<
       this.armHoldTimer(connection);
     }
     this.cancelResumeExchange(connection);
+    this.holdForHostBack(connection);
+  }
+
+  /**
+   * Starts the mask on a live session: the same state whichever leg went,
+   * because either way nothing crosses until an exchange completes. A session
+   * already held keeps the deadlines it has.
+   */
+  private holdForHostBack(connection: ActiveConnection): void {
     if (!connection.hostAttached) {
       return;
     }
@@ -4693,9 +4824,10 @@ export class RemoteSession<
    * The bound on `"held"`: past `RESUME_HOLD_MS` the host has discarded its
    * side, so the only way back is a rebuild, and a stream must stop claiming
    * otherwise even if the host never returns to trigger one. An exchange in
-   * progress may still prove otherwise, so the timer leaves it alone and
-   * {@link cancelResumeExchange} reads the deadline if the exchange does not
-   * complete.
+   * progress may still prove otherwise, and so may a claim still being dialed,
+   * so the timer leaves both alone. {@link cancelResumeExchange} reads the
+   * deadline if an exchange does not complete, and a claim that fails to find
+   * the session rebuilds, which turns the streams itself.
    */
   private armHoldTimer(connection: ActiveConnection): void {
     this.clearHoldTimer();
@@ -4703,7 +4835,8 @@ export class RemoteSession<
       this.holdTimer = null;
       if (
         this.connection === connection &&
-        connection.resumeExchange === null
+        connection.resumeExchange === null &&
+        !connection.relinking
       ) {
         this.markStreamsReconnecting(null);
       }
@@ -4766,7 +4899,12 @@ export class RemoteSession<
       return;
     }
     if (!connection.socket.sendData(sealed)) {
-      throw new Error("relay socket send failed");
+      this.handleLegLost(
+        generation,
+        "resume-send-failed",
+        "host-transport-plane",
+      );
+      return;
     }
     this.resumeAckTimer = setTimeout(() => {
       this.resumeAckTimer = null;
@@ -4793,7 +4931,7 @@ export class RemoteSession<
     if (connection.masked && Date.now() >= connection.maskDeadlineAt) {
       this.expireMask(connection);
     }
-    if (this.holdHasPassed(connection)) {
+    if (this.holdHasPassed(connection) && !connection.relinking) {
       this.markStreamsReconnecting(null);
     }
   }
@@ -4868,6 +5006,9 @@ export class RemoteSession<
     );
     if (resumedFromDown) {
       this.takeResumedEdge();
+    } else if (this.stableResetTimer === null) {
+      // A relink stood the probation down without the session going down.
+      this.armStableResetTimer();
     }
   }
 
@@ -4954,7 +5095,7 @@ export class RemoteSession<
     if (connection === null) {
       return;
     }
-    if (this.phase === "connecting") {
+    if (this.phase === "connecting" || connection.relinking) {
       // This socket's own `attach_ack` has not landed yet, so there is no
       // Noise session to be stale - and the relay sends `attach_ack` for a
       // client leg synchronously before any `host_attached` reaches it, so
@@ -5075,8 +5216,24 @@ export class RemoteSession<
     if (!this.isCurrent(generation) || this.phase === "closed") {
       return;
     }
-    this.dropConnection(cause, retryCause);
+    const connection = this.connection;
+    if (connection?.relinking === true) {
+      this.onClaimDialFailed(generation, connection, cause, provenance);
+      return;
+    }
+    const lostAttempt = `${this.dialAttemptId(generation)}-lost`;
+    this.dropConnection(cause, retryCause, false);
     this.syncReadinessLatch();
+    this.redialAfterLoss(generation, lostAttempt, cause, provenance);
+  }
+
+  /** Arms the next dial and says what the loss meant for the host. */
+  private redialAfterLoss(
+    generation: number,
+    lostAttempt: string,
+    cause: string,
+    provenance: ConnectionLossProvenance,
+  ): void {
     const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
     this.dialFailures.recordFailure({ cause, context: "", retryInMs });
     // THE host-plane funnel: every relay-socket close, Noise/handshake
@@ -5103,9 +5260,179 @@ export class RemoteSession<
     // `dropConnection` nulls the connection), so the suffixed id stays a
     // faithful one-attempt-one-outcome report.
     this.reportEvidenceOutcome(
-      `${this.evidenceScope}#${generation}-lost`,
+      lostAttempt,
       provenance === "host-transport-plane" ? "refusal" : "indeterminate",
     );
+  }
+
+  /**
+   * This client's own leg went: a socket close or error, a failed send, a
+   * caller's reconnect. With a claim to make the session outlives it; without
+   * one this is any other loss.
+   */
+  private handleLegLost(
+    generation: number,
+    cause: string,
+    provenance: ConnectionLossProvenance,
+  ): void {
+    const connection = this.connection;
+    if (
+      this.isCurrent(generation) &&
+      connection !== null &&
+      this.canRelink(connection)
+    ) {
+      this.enterRelinking(generation, connection, cause, provenance);
+      return;
+    }
+    this.handleConnectionLost(generation, cause, provenance);
+  }
+
+  private canRelink(connection: ActiveConnection): boolean {
+    return (
+      this.phase === "ready" &&
+      connection.resumeNegotiated &&
+      connection.relayClaim !== null &&
+      !connection.relinking
+    );
+  }
+
+  /**
+   * Keeps the session and leaves the leg: the mask starts or continues, and
+   * the next dial claims the session back. No hold applies, because only the
+   * claim can tell whether the session is still there. Nothing is retracted
+   * here: inside the mask the session has not gone down, and past it the down
+   * edge has already run.
+   */
+  private enterRelinking(
+    generation: number,
+    connection: ActiveConnection,
+    cause: string,
+    provenance: ConnectionLossProvenance,
+  ): void {
+    connection.relinking = true;
+    if (this.traffic !== null && connection.socket.hasOpened()) {
+      this.traffic.connectionLost();
+    }
+    this.leaveLeg(connection);
+    this.clearReauthTimer();
+    this.clearStandingTimer();
+    this.clearStableResetTimer();
+    this.cancelResumeExchange(connection);
+    this.holdForHostBack(connection);
+    this.redialAfterLoss(
+      generation,
+      `${this.dialAttemptId(generation)}-lost`,
+      cause,
+      provenance,
+    );
+  }
+
+  /** Gives a leg up without giving the session up; see the close code. */
+  private leaveLeg(connection: ActiveConnection): void {
+    this.replacedLeg = connection.legEnd ?? {
+      code: RELAY_RELINK_CLOSE_CODE,
+      reason: RELAY_RELINK_CLOSE_REASON,
+    };
+    connection.socket.close(RELAY_RELINK_CLOSE_CODE, RELAY_RELINK_CLOSE_REASON);
+  }
+
+  /**
+   * A claim dial that did not reach its ack walks the ladder and claims again
+   * with the same key: the relay may have spent the row on a leg this client
+   * never heard from, and the key is what claims it back from that leg.
+   */
+  private onClaimDialFailed(
+    generation: number,
+    connection: ActiveConnection,
+    cause: string,
+    provenance: ConnectionLossProvenance,
+  ): void {
+    this.clearPhaseTimer();
+    this.leaveLeg(connection);
+    this.redialAfterLoss(
+      generation,
+      `${this.dialAttemptId(generation)}-lost`,
+      cause,
+      provenance,
+    );
+  }
+
+  /**
+   * The claim's answer. The same sid means the relay kept the session, so it
+   * goes on through a resume exactly as after `host_attached`. Any other sid is
+   * a fresh attach: the session is gone, and the leg just opened carries its
+   * rebuild.
+   */
+  private onRelinkAck(
+    generation: number,
+    connection: ActiveConnection,
+    sid: number,
+    resumeKey: string | null,
+  ): void {
+    this.clearPhaseTimer();
+    connection.relinking = false;
+    if (sid !== connection.relayClaim?.sid) {
+      this.adoptFreshLeg(generation, connection, sid, resumeKey);
+      return;
+    }
+    this.reattachMarks.attachAckAt = Date.now();
+    this.pendingForceGeneration = null;
+    this.startReauthLoop();
+    this.beginResumeExchange(generation, connection);
+  }
+
+  /**
+   * Today's rebuild, on the leg that is already attached rather than a second
+   * one: the old session is discarded here, in the ack's own turn, and the leg
+   * goes into a new connection once its Noise channel exists. An ordinary
+   * attach has no such gap, its channel being ready before the dial, so
+   * whatever the relay says meanwhile is held in arrival order and delivered
+   * after the ack it follows.
+   */
+  private adoptFreshLeg(
+    generation: number,
+    connection: ActiveConnection,
+    sid: number,
+    resumeKey: string | null,
+  ): void {
+    const dial = this.dial;
+    if (dial.kind !== "relay") {
+      return;
+    }
+    const { socket, attachGrant } = connection;
+    const lostAttempt = `${this.dialAttemptId(generation)}-lost`;
+    console.info(
+      `[remote-session] remote session (host ${this.options.hostId}) rebuilding: the relay no longer holds this session`,
+    );
+    this.dropConnection("relink-fresh-session", null, true);
+    // The rejections and status changes above reach consumers, who may close.
+    if (this.isClosed()) {
+      socket.close(1000, "closed-by-caller");
+      return;
+    }
+    const adopted: AdoptingLeg = { socket, events: [] };
+    this.adoptingLeg = adopted;
+    const nextGeneration = ++this.connectGeneration;
+    this.pendingForceGeneration = null;
+    this.phase = "connecting";
+    const attempt = NoiseChannel.begin(dial.hostStaticPublicKey).then(
+      (noise) => {
+        if (this.adoptingLeg !== adopted) {
+          return;
+        }
+        this.adoptingLeg = null;
+        this.installConnection(nextGeneration, attachGrant, socket, noise);
+        this.onAttachAck(nextGeneration, sid, resumeKey);
+        for (const event of adopted.events) {
+          event();
+        }
+      },
+    );
+    void attempt.catch((cause: unknown) =>
+      this.onConnectPathThrew(nextGeneration, cause),
+    );
+    // Last: the authority's answer can close this session.
+    this.reportEvidenceOutcome(lostAttempt, "indeterminate");
   }
 
   /**
@@ -5130,8 +5457,13 @@ export class RemoteSession<
   private dropConnection(
     cause: string,
     retryCause: FatalErrorDetails | null,
+    keepLeg: boolean,
   ): void {
-    if (this.traffic !== null && this.connection?.socket.hasOpened()) {
+    if (
+      !keepLeg &&
+      this.traffic !== null &&
+      this.connection?.socket.hasOpened()
+    ) {
       this.traffic.connectionLost();
     }
     // Before anything else: a connection that is being lost never earned its
@@ -5148,7 +5480,7 @@ export class RemoteSession<
     this.phase = "reconnecting";
     this.restoredStreamIds.clear();
     const resumeNegotiated = this.connection?.resumeNegotiated === true;
-    this.teardownConnection(cause);
+    this.teardownConnection(cause, keepLeg);
     // A pending per-stream reopen's job transfers to the next handshake: the
     // openAck replay re-subscribes every stream in `subscriptions`, so a timer
     // that survived the drop would only issue a DUPLICATE subscribe for a
@@ -5270,7 +5602,7 @@ export class RemoteSession<
     // after revalidation we can tell whether the next attach would present a
     // DIFFERENT token (progress) or the same rejected one (no progress).
     const rejectedBearer = this.openFrameBearer;
-    this.dropConnection("session-fatal-unauthorized", null);
+    this.dropConnection("session-fatal-unauthorized", null, false);
     void this.revalidateThenReconnect(
       generation,
       auth,
@@ -5573,7 +5905,7 @@ export class RemoteSession<
     // See `close()`: not a timer, so not reachable by `clearAllTimers`.
     this.clearClockPark();
     this.clearAllTimers();
-    this.teardownConnection("session-fatal");
+    this.teardownConnection("session-fatal", false);
     for (const stream of this.subscriptions.values()) {
       this.traffic?.end(stream.streamId, true);
       stream.goFatal(details);
@@ -5958,37 +6290,38 @@ export class RemoteSession<
     // someone else's generation.
     const attempt = this.beginConnect();
     const generation = this.connectGeneration;
-    void attempt.catch((cause: unknown) => {
-      // The same generation guard every other callback here takes, and it is
-      // deliberately NOT load-bearing today: a rejection can only arrive while
-      // this attempt is still pre-connection, `dropConnection` nulls
-      // `this.connection`, and `isCurrent` requires a non-null one - so
-      // `requestSessionReconnect` and every `handleConnectionLost` caller are
-      // no-ops for exactly as long as an attempt is parked, and no newer
-      // generation can exist to be dropped. That safety is incidental to
-      // another method's null check, one refactor deep (a force-redial that
-      // does not tear down first, or an `isCurrent` that stops requiring a
-      // connection, reintroduces it). Stated here so a superseded attempt
-      // owning nothing is a property of THIS code rather than a coincidence.
-      if (this.phase === "closed" || generation !== this.connectGeneration) {
-        return;
-      }
-      this.dropConnection("connect-path-threw", null);
-      const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
-      this.dialFailures.recordFailure({
-        cause: `the connect path threw before dialing: ${
-          cause instanceof Error ? cause.message : String(cause)
-        }`,
-        context: "",
-        retryInMs,
-      });
-      // Threw BEFORE dialing (a key decode, a factory, an await that rejected)
-      // - our own connect path failed, so the host was never asked anything.
-      this.reportEvidenceOutcome(
-        this.dialAttemptId(generation),
-        "indeterminate",
-      );
+    void attempt.catch((cause: unknown) =>
+      this.onConnectPathThrew(generation, cause),
+    );
+  }
+
+  private onConnectPathThrew(generation: number, cause: unknown): void {
+    // The same generation guard every other callback here takes, and it is
+    // deliberately NOT load-bearing today: a rejection can only arrive while
+    // this attempt is still pre-connection, `dropConnection` nulls
+    // `this.connection`, and `isCurrent` requires a non-null one - so
+    // `requestSessionReconnect` and every `handleConnectionLost` caller are
+    // no-ops for exactly as long as an attempt is parked, and no newer
+    // generation can exist to be dropped. That safety is incidental to
+    // another method's null check, one refactor deep (a force-redial that
+    // does not tear down first, or an `isCurrent` that stops requiring a
+    // connection, reintroduces it). Stated here so a superseded attempt
+    // owning nothing is a property of THIS code rather than a coincidence.
+    if (this.phase === "closed" || generation !== this.connectGeneration) {
+      return;
+    }
+    this.dropConnection("connect-path-threw", null, false);
+    const retryInMs = this.scheduleReconnectForFailedGeneration(generation);
+    this.dialFailures.recordFailure({
+      cause: `the connect path threw before dialing: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+      context: "",
+      retryInMs,
     });
+    // Threw BEFORE dialing (a key decode, a factory, an await that rejected)
+    // - our own connect path failed, so the host was never asked anything.
+    this.reportEvidenceOutcome(this.dialAttemptId(generation), "indeterminate");
   }
 
   // ---- Re-auth loop + host-standing watchdog (R4-D2) --------------------- //
@@ -6200,12 +6533,19 @@ export class RemoteSession<
     connection: ActiveConnection,
     muxFrame: Uint8Array,
   ): Promise<void> {
+    const leg = connection.socket;
     const sealed = await connection.channel.encrypt(muxFrame);
-    if (!this.isCurrent(generation)) {
+    // A frame whose leg went while it sealed is in the ledger: the next
+    // exchange resends it.
+    if (
+      !this.isCurrent(generation) ||
+      connection.socket !== leg ||
+      connection.relinking
+    ) {
       return;
     }
     if (!connection.socket.sendData(sealed)) {
-      throw new Error("relay socket send failed");
+      this.handleLegLost(generation, "write-failed", "host-transport-plane");
     }
   }
 
@@ -6474,7 +6814,14 @@ export class RemoteSession<
 
   /** One dial attempt per connect generation (the contract's attempt identity). */
   private dialAttemptId(generation: number): string {
-    return `${this.evidenceScope}#${generation}`;
+    // A relink dials again on the same generation.
+    const relinks =
+      this.connection?.generation === generation
+        ? this.connection.relinkDials
+        : 0;
+    return relinks === 0
+      ? `${this.evidenceScope}#${generation}`
+      : `${this.evidenceScope}#${generation}-relink-${relinks}`;
   }
 
   /**
@@ -6630,7 +6977,7 @@ export class RemoteSession<
     }
   }
 
-  private teardownConnection(reason: string): void {
+  private teardownConnection(reason: string, keepLeg: boolean): void {
     // THE retraction funnel. All three teardown paths pass through here -
     // `dropConnection` (a transport loss), `goTerminalFatal` (a revoked
     // credential, a mid-session plan downgrade, an incompatible handshake) and
@@ -6672,13 +7019,17 @@ export class RemoteSession<
     // fatal and caller close routes through here - which is what keeps the
     // survival test honest without a clear() at each call site.
     this.clearStableResetTimer();
+    this.adoptingLeg?.socket.close(1000, reason);
+    this.adoptingLeg = null;
     if (connection === null) {
       return;
     }
     this.replacedLeg = connection.legEnd ?? { code: 1000, reason };
     connection.scheduler.stop();
     connection.reassembler.reset();
-    connection.socket.close(1000, reason);
+    if (!keepLeg) {
+      connection.socket.close(1000, reason);
+    }
     connection.channel.wipe();
     connection.ledger.drop();
   }
