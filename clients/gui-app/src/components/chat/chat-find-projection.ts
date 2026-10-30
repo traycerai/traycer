@@ -1,4 +1,5 @@
 import { lexer, type MarkedToken, type Token, type Tokens } from "marked";
+import { paintedBotSendOf, type BotSend } from "@/lib/bots/bot-send-tool";
 import { segmentsShownInTranscript } from "@/stores/chats/hidden-transcript-notices";
 import {
   buildChatActivityTimeline,
@@ -159,6 +160,37 @@ export function buildChatFindRows(
       units,
     };
   });
+}
+
+/**
+ * What a bot's send card paints of what it posted: a question's text and
+ * options, or a reply's or announcement's text as its `TextSegment` paints
+ * it and a reply's choices.
+ */
+function botSendSearchText(send: BotSend): string {
+  if (send.kind === "ask") {
+    return normalizeSearchableText(
+      send.questions
+        .flatMap((question) => [question.text, ...question.options])
+        .join("\n"),
+    );
+  }
+  const choices = send.kind === "reply" ? send.options : [];
+  return normalizeSearchableText(
+    [...textSegmentSearchText(send.text, false), ...choices].join("\n"),
+  );
+}
+
+/** What `TextSegment` paints of Markdown: its next-step blocks' prose, and the rest as rendered. */
+function textSegmentSearchText(
+  markdown: string,
+  isStreaming: boolean,
+): ReadonlyArray<string> {
+  return parseTraycerNextStepsMarkdown(markdown, isStreaming).map((part) =>
+    markdownToChatSearchText(
+      part.kind === "markdown" ? part.markdown : part.prose,
+    ),
+  );
 }
 
 export function markdownToChatSearchText(markdown: string): string {
@@ -642,15 +674,7 @@ function interviewSearchUnits(
 function segmentSearchText(segment: MessageSegment): ReadonlyArray<string> {
   switch (segment.kind) {
     case "text":
-      return parseTraycerNextStepsMarkdown(
-        segment.markdown,
-        segment.isStreaming,
-      ).flatMap((part) => {
-        if (part.kind === "markdown") {
-          return [markdownToChatSearchText(part.markdown)];
-        }
-        return [markdownToChatSearchText(part.prose)];
-      });
+      return textSegmentSearchText(segment.markdown, segment.isStreaming);
     case "reasoning":
       return reasoningSegmentSearchText(segment);
     case "tool":
@@ -809,6 +833,12 @@ function toolSegmentSearchText(segment: ToolSegment): ReadonlyArray<string> {
   if (segment.artifact !== null) return [];
   // The same for an app row: the app is a sandboxed document too.
   if (isMcpAppToolCall(segment)) return [];
+  const send = paintedBotSendOf(segment);
+  if (send !== null) {
+    // A bot's send card paints what it posted; its destination line names
+    // where, which is not the transcript's text.
+    return [botSendSearchText(send)];
+  }
   if (segment.agentMessageSend !== null) {
     // The header's "Sent message" label is screen-reader-only, so it is not
     // indexed: a find hit on it would highlight nothing. The collapsed

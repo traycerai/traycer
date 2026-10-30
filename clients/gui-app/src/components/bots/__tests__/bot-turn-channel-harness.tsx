@@ -9,6 +9,7 @@ import {
   OTHER_BOT_ID,
   OTHER_BOT_TITLE,
   TRUNK_ID,
+  openedSessions,
 } from "@/components/bots/__tests__/bot-turn-test-support";
 import {
   BotIdentityContext,
@@ -23,9 +24,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import {
   memoryRailOver,
+  sessionTargetOfTurn,
   useBotOpenThreadStore,
   useBotRail,
-  type BotOpenTurn,
 } from "@/stores/bots/bot-open-thread-store";
 
 const resolveMember: BotMemberResolver = () => null;
@@ -38,13 +39,13 @@ const IDENTITY: BotIdentity = {
 
 /**
  * The channel as the bot tab holds it: the rail's one slot is the real store,
- * and a thread or a turn is set in it the way the tab's setters do.
+ * and a thread or the memory is set in it the way the tab's setters do; a
+ * session it opens is recorded (`openedSessions`).
  */
 function Channel(): ReactNode {
   const rail = useBotRail(BOT_ID);
   const setRail = useBotOpenThreadStore((s) => s.setRail);
   const openThread = rail?.kind === "thread" ? rail : null;
-  const openTurn = rail?.kind === "turn" ? rail : null;
   const openMemory = rail?.kind === "memory" ? rail : null;
   return (
     <BotChannelView
@@ -63,10 +64,13 @@ function Channel(): ReactNode {
       onOpenThread={(open) =>
         setRail(BOT_ID, open === null ? null : { kind: "thread", ...open })
       }
-      openTurn={openTurn}
-      onOpenTurn={(open: BotOpenTurn | null) =>
-        setRail(BOT_ID, open === null ? null : { kind: "turn", ...open })
-      }
+      onOpenTurn={(ref) => {
+        openedSessions.push(sessionTargetOfTurn(ref));
+      }}
+      onOpenSession={(target) => {
+        openedSessions.push(target);
+      }}
+      landOn={null}
       openMemory={openMemory}
       onOpenMemory={(open) =>
         setRail(BOT_ID, open === null ? null : { kind: "memory", ...open })

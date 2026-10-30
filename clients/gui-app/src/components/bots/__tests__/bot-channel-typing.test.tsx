@@ -503,8 +503,9 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
       directive={props.directive}
       appConversationChatId={CHANNEL_ID}
       trunkChatId="trunk-chat"
-      openTurn={null}
       onOpenTurn={vi.fn()}
+      onOpenSession={vi.fn()}
+      landOn={null}
       openMemory={null}
       onOpenMemory={vi.fn()}
       environmentId="env-1"

@@ -38,8 +38,8 @@ import {
 const NO_COLLABORATORS: SenderDisplayContext["collaborators"] = [];
 const EMPTY_SETUP_CARD_WINDOWS: ReadonlyArray<SetupCardWindowIdentity> = [];
 
-/** The slice of a bot session's state its transcript and the rail's turn read. */
-export type BotSessionState = Pick<
+/** The slice of a bot session's state its transcript reads. */
+type BotSessionState = Pick<
   ChatSessionState,
   | "snapshotLoaded"
   | "messages"
@@ -71,9 +71,7 @@ export type BotSessionState = Pick<
 /**
  * One of a bot's chats as the transcript renders its rows: the session's
  * state and its rendered messages, named and pictured as the bot's surfaces
- * name its members and labelled with the tab host's model catalog. Shared by
- * the transcript and the turn the rail shows, which reads one turn's rows
- * of the same session.
+ * name its members and labelled with the tab host's model catalog.
  */
 export function useBotSessionMessages(input: {
   readonly handle: ChatSessionStoreHandle;

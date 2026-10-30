@@ -26,7 +26,7 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
-import type { BotOpenTurn } from "@/stores/bots/bot-open-thread-store";
+import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
 import {
   __resetAgentActivityStoreForTests,
   __setAgentActivityStateForTests,
@@ -42,7 +42,7 @@ const mocks = vi.hoisted(() => {
     navigateToTabIntent: vi.fn<(...args: unknown[]) => void>(),
     openPost: vi.fn<(open: unknown) => void>(),
     sendMutate: vi.fn<(variables: unknown, options: unknown) => void>(),
-    openTurn: vi.fn<(open: BotOpenTurn) => void>(),
+    openTurn: vi.fn<BotTurnOpen>(),
     /** Each set of check-in turns the page asked the host to locate. */
     locateAsked: [] as Array<ReadonlyArray<BotCheckinTurn>>,
     /** Each member action the page sent, by method. */
@@ -685,7 +685,7 @@ describe("<BotActivityPage /> a check-in's turn", () => {
     return within(taskRow("task-auto")).getByTestId("bot-task-checkin-turn");
   }
 
-  it("links a received check-in to the turn the host names, by the turn's receipt, and opens it with nothing to go back to", async () => {
+  it("links a received check-in to the turn the host names, by the turn's receipt, and opens that turn", async () => {
     const user = userEvent.setup();
     mocks.state.locatedTurns = [located({})];
     mount({
@@ -699,11 +699,7 @@ describe("<BotActivityPage /> a check-in's turn", () => {
     expect(checkinLink().textContent).toBe("Read 2 files · 1m 20s");
     await user.click(checkinLink());
 
-    expect(mocks.openTurn).toHaveBeenCalledWith({
-      ref: located({}),
-      question: null,
-      back: null,
-    });
+    expect(mocks.openTurn).toHaveBeenCalledWith(located({}));
   });
 
   it("reads Open the turn for a turn with no summary yet", () => {

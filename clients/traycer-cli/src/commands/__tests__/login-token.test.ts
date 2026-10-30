@@ -139,6 +139,8 @@ describe("buildLoginCommand with --token", () => {
     expect(result.data).toEqual({
       user: { id: "u1", email: "ada@traycer.ai", name: "Ada" },
       bootstrap: null,
+      // No host runs in the test's isolated home, so nothing is dialed.
+      credentialProvision: null,
     });
   });
 
