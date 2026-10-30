@@ -25,7 +25,10 @@ import {
 import { importedChatMarkerLabel } from "@/components/chat/segments/imported-chat-marker-display";
 import { autoJudgeUnattendedDenialText } from "@/components/chat/segments/auto-judge-unattended-denial-display";
 import { genericToolImageCaption } from "@/components/chat/segments/image-result-presentation";
-import type { ImageGenerationResult } from "@traycer/protocol/persistence/epic/content-blocks";
+import type {
+  BotSendReceipt,
+  ImageGenerationResult,
+} from "@traycer/protocol/persistence/epic/content-blocks";
 import { singleSpecialSegment } from "@/components/chat/chat-special-segment";
 import { assistantTurnPartIndexes } from "@/components/chat/chat-turn-parts";
 import {
@@ -128,6 +131,14 @@ interface ChatFindRendering {
    * carrying a part key there would send a hit to a row the list never built.
    */
   readonly splitLongTurns: boolean;
+  /**
+   * In a bot's session (Tracy Bots T94), what a question's send card says of
+   * each question, read from the post the send wrote as the card reads it;
+   * `null` outside a session.
+   */
+  readonly botSendQuestionStates:
+    | ((receipt: BotSendReceipt) => ReadonlyArray<string | null> | null)
+    | null;
 }
 
 const NO_PART_CUTS: readonly string[] = [];
@@ -163,15 +174,50 @@ export function buildChatFindRows(
 }
 
 /**
- * What a bot's send card paints of what it posted: a question's text and
- * options, or a reply's or announcement's text as its `TextSegment` paints
- * it and a reply's choices.
+ * A question's send card in a bot's session whose post is read (T94): what
+ * it posted, and under each settled question what the card says of it.
+ * `null` for every other item, which indexes as any tool row does.
  */
-function botSendSearchText(send: BotSend): string {
+function botQuestionSendSearchUnits(
+  item: ChatActivityTimelineItem,
+  statesOf: ChatFindRendering["botSendQuestionStates"],
+): ReadonlyArray<ChatFindUnit> | null {
+  if (statesOf === null || item.kind !== "segment") return null;
+  if (item.segment.kind !== "tool") return null;
+  const send = paintedBotSendOf(item.segment);
+  if (send?.kind !== "ask" || send.receipt === null) return null;
+  const states = statesOf(send.receipt);
+  if (states === null) return null;
+  return compactUnits([
+    chatFindUnit({
+      unitId: chatFindSegmentUnitId(item.segment.id),
+      text: botSendSearchText(send, states),
+      owningChain: [],
+    }),
+  ]);
+}
+
+/**
+ * What a bot's send card paints of what it posted: a question's text and
+ * options, with each settled question's state where `states` names it, or a
+ * reply's or announcement's text as its `TextSegment` paints it and a
+ * reply's choices.
+ */
+function botSendSearchText(
+  send: BotSend,
+  states: ReadonlyArray<string | null> | null,
+): string {
   if (send.kind === "ask") {
     return normalizeSearchableText(
       send.questions
-        .flatMap((question) => [question.text, ...question.options])
+        .flatMap((question, index) => {
+          const state = states?.[index] ?? null;
+          return [
+            question.text,
+            ...question.options,
+            ...(state === null ? [] : [state]),
+          ];
+        })
         .join("\n"),
     );
   }
@@ -323,9 +369,10 @@ function chatFindUnitsForMessage(
     const unitsOf = (
       item: ChatActivityTimelineItem,
     ): ReadonlyArray<ChatFindUnit> =>
-      settled !== null && item.kind === "segment"
+      botQuestionSendSearchUnits(item, rendering.botSendQuestionStates) ??
+      (settled !== null && item.kind === "segment"
         ? settledCardSearchUnits(item.segment, settled, tileInstanceId)
-        : timelineItemSearchUnits(item, tileInstanceId);
+        : timelineItemSearchUnits(item, tileInstanceId));
     const cuts = rendering.splitLongTurns
       ? assistantTurnPartCuts(message.segments)
       : NO_PART_CUTS;
@@ -837,7 +884,7 @@ function toolSegmentSearchText(segment: ToolSegment): ReadonlyArray<string> {
   if (send !== null) {
     // A bot's send card paints what it posted; its destination line names
     // where, which is not the transcript's text.
-    return [botSendSearchText(send)];
+    return [botSendSearchText(send, null)];
   }
   if (segment.agentMessageSend !== null) {
     // The header's "Sent message" label is screen-reader-only, so it is not

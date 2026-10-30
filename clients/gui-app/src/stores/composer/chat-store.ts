@@ -32,6 +32,7 @@ import type {
   AgentMessageSend,
   ArtifactOperationAction,
   BackgroundTaskOutput,
+  BotSendReceipt,
   BrowserSessionReference,
   DiffSource,
   FileEditReason,
@@ -167,6 +168,10 @@ export interface ToolSegment {
   // expired or refused. Null for every other tool call, for a send delivered
   // on the same host, and for sends persisted before the host carried this.
   agentMessageDelivery: AgentMessageDelivery | null;
+  // The channel post a bot's send wrote, stamped on the block at completion
+  // (Tracy Bots T94). Null for every other tool call and for sends persisted
+  // before the host carried this.
+  botSendReceipt: BotSendReceipt | null;
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-flight (else null). See SegmentEndState.
   endState: SegmentEndState;

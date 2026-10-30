@@ -44,7 +44,10 @@ import {
   useBotActivity,
 } from "@/hooks/bots/use-bot-activity";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
-import type { QuestionAnswerSend } from "@/components/bots/bot-chat-transcript";
+import type {
+  BotTranscriptLanding,
+  QuestionAnswerSend,
+} from "@/components/bots/bot-chat-transcript";
 import type {
   ChatBotPresentation,
   ChatBotQuestions,
@@ -153,6 +156,8 @@ export function BotThreadPanel(props: {
   readonly onOpenTurn: BotTurnOpen;
   /** Opens the thread's session in place of the channel. */
   readonly onOpenSession: BotSessionOpen;
+  /** A message of the thread its replies land on as they open; `null` keeps where they open. */
+  readonly landOn: BotTranscriptLanding | null;
 }): ReactNode {
   const { botTitle, onClose, onOpenActivity, onOpenSession } = props;
   const thread = props.thread.kind === "listed" ? props.thread.thread : null;
@@ -193,6 +198,7 @@ export function BotThreadPanel(props: {
                 chatId: thread.sessionChatId,
                 threadId: thread.threadId,
                 messageId: null,
+                sendPostId: null,
               })
             }
           >
@@ -247,6 +253,7 @@ type ThreadPanelBodyProps = {
   readonly resolveMember: BotMemberResolver;
   readonly onEditPost: (edit: BotComposerEdit) => void;
   readonly onOpenTurn: BotTurnOpen;
+  readonly landOn: BotTranscriptLanding | null;
   readonly sendFailure: BotSendFailure;
 };
 
@@ -322,7 +329,7 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
         summary: ref.summary,
         startedAt: ref.startedAt,
         endedAt: ref.endedAt,
-        open: () => onOpenTurn(ref),
+        open: () => onOpenTurn(ref, null),
       };
     },
     [onOpenTurn, turnOfRequest],
@@ -720,6 +727,7 @@ function KnownThread(
     onEdit,
     onDiscuss,
     onOpenTurn,
+    landOn,
   } = props;
   const client = useTabHostClient();
   const {
@@ -871,7 +879,7 @@ function KnownThread(
             surface={surface}
             resolveMember={resolveMember}
             showConnecting={hasReplies}
-            landOn={null}
+            landOn={landOn}
           />
         </div>
       )}

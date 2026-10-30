@@ -71,8 +71,8 @@ import {
 import { QuestionCard, type QuestionCardQuestion } from "./question-card";
 import {
   EMPTY_QUESTION_CARD_DRAFT,
+  botQuestionCardSettlement,
   questionCardView,
-  type QuestionCardSettlement,
 } from "./question-card-view";
 import { TextSegment } from "./segments/text-segment";
 
@@ -507,7 +507,11 @@ function BotQuestionCard(props: {
       text: item.text,
       options: item.options,
       allowFreeText: item.allowFreeText,
-      settlement: cardSettlement(item.settlement, memberName, viewerUserId),
+      settlement: botQuestionCardSettlement(
+        item.settlement,
+        memberName,
+        viewerUserId,
+      ),
       draft:
         messageId === null
           ? EMPTY_QUESTION_CARD_DRAFT
@@ -564,27 +568,6 @@ function BotQuestionCard(props: {
       }
     />
   );
-}
-
-/** A question's settlement as the card names it. */
-function cardSettlement(
-  settlement: BotQuestion["questions"][number]["settlement"],
-  memberName: (userId: string) => string,
-  viewerUserId: string | null,
-): QuestionCardSettlement | null {
-  if (settlement === null) return null;
-  return {
-    answer: settlement.answer,
-    skipped: settlement.skipped,
-    by:
-      settlement.by.kind === "bot"
-        ? { kind: "asker" }
-        : {
-            kind: "person",
-            name: memberName(settlement.by.userId),
-            viewer: settlement.by.userId === viewerUserId,
-          },
-  };
 }
 
 /**

@@ -125,6 +125,7 @@ function startCallElement(input: {
       }
       agentMessageReceipt={null}
       agentMessageDelivery={null}
+      botSendReceipt={null}
       isStreaming={false}
       endState={null}
       stopped={false}
@@ -474,6 +475,7 @@ describe("the run_shell start card", () => {
           }}
           agentMessageReceipt={null}
           agentMessageDelivery={null}
+          botSendReceipt={null}
           isStreaming={false}
           endState={null}
           stopped={false}

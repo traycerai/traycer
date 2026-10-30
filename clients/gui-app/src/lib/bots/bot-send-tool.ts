@@ -1,6 +1,19 @@
-import type { ToolInputDetail } from "@traycer/protocol/persistence/epic/content-blocks";
+import type {
+  BotSendReceipt,
+  ToolInputDetail,
+} from "@traycer/protocol/persistence/epic/content-blocks";
 import type { BotSurfaceKind } from "@traycer/protocol/persistence/epic/messages";
-import type { SegmentEndState } from "@/stores/composer/chat-store";
+import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
+import {
+  EMPTY_QUESTION_CARD_DRAFT,
+  botQuestionCardSettlement,
+  questionCardView,
+  questionSettledLine,
+} from "@/components/chat/question-card-view";
+import type {
+  ChatMessage,
+  SegmentEndState,
+} from "@/stores/composer/chat-store";
 
 /** One question of a `traycer_ask` call, as the person reads it. */
 export interface BotSendQuestion {
@@ -15,9 +28,10 @@ export interface BotSendQuestion {
  * session's thread - and `repliesTo` the channel post a trunk's reply or
  * question follows. An announcement always posts at the channel's top level.
  * `surface` is what in a task a reply or announcement pointed at (T89), by
- * kind; `null` for none.
+ * kind; `null` for none. `receipt` is the post the send wrote, as the host
+ * stamped it on the call (T94); `null` for a call from before it did.
  */
-export type BotSend =
+export type BotSend = { readonly receipt: BotSendReceipt | null } & (
   | {
       readonly kind: "reply";
       readonly conversationId: string | null;
@@ -36,7 +50,8 @@ export type BotSend =
       readonly kind: "announce";
       readonly text: string;
       readonly surface: BotSurfaceKind | null;
-    };
+    }
+);
 
 type BotSendKind = BotSend["kind"];
 
@@ -76,6 +91,7 @@ export function paintedBotSendOf(call: {
   readonly error: string | null;
   readonly isStreaming: boolean;
   readonly endState: SegmentEndState;
+  readonly botSendReceipt: BotSendReceipt | null;
 }): BotSend | null {
   const kind = sendKindOf(call.toolName);
   if (kind === null || call.inputDetail?.kind !== "fields") return null;
@@ -86,23 +102,77 @@ export function paintedBotSendOf(call: {
   );
   const conversationId = present(fields.get("conversationId"));
   const repliesTo = present(fields.get("repliesTo"));
+  const receipt = call.botSendReceipt;
   if (kind === "ask") {
     const questions = questionsOf(fields.get("questions"));
     if (questions.length === 0) return null;
-    return { kind, conversationId, repliesTo, questions };
+    return { kind, receipt, conversationId, repliesTo, questions };
   }
   const text = present(fields.get("text"));
   if (text === null) return null;
   const surface = surfaceKindOf(parsed(fields.get("surface")));
-  if (kind === "announce") return { kind, text, surface };
+  if (kind === "announce") return { kind, receipt, text, surface };
   return {
     kind,
+    receipt,
     conversationId,
     repliesTo,
     text,
     options: stringsOf(parsed(fields.get("options"))),
     surface,
   };
+}
+
+/**
+ * The conversations the stamped questions of `messages` were asked in (T94),
+ * sorted: where their states are read from.
+ */
+export function askedConversationIds(
+  messages: ReadonlyArray<ChatMessage>,
+): readonly string[] {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    for (const segment of message.segments) {
+      if (segment.kind === "tool" && segment.botSendReceipt?.kind === "ask") {
+        ids.add(segment.botSendReceipt.conversationId);
+      }
+    }
+  }
+  return [...ids].sort();
+}
+
+/** Whom a session's send cards name: the bot, as the asker, and the channel's members. */
+export interface BotSendNames {
+  readonly botTitle: string;
+  readonly memberName: (userId: string) => string;
+  readonly viewerUserId: string | null;
+}
+
+/**
+ * What a question's card says of each question once the post it wrote is
+ * read (T94): the line the channel's card shows for a settled one - answered
+ * by whom, skipped, or settled by the bot - and `null` for one still open.
+ * `null` while the post is not read, or names no question.
+ */
+export function sendQuestionStates(
+  post: OpenMessage | null,
+  names: BotSendNames,
+): ReadonlyArray<string | null> | null {
+  const question = post?.role === "assistant" ? post.question : undefined;
+  if (question === undefined) return null;
+  return question.questions.map((item) => {
+    const view = questionCardView(
+      botQuestionCardSettlement(
+        item.settlement,
+        names.memberName,
+        names.viewerUserId,
+      ),
+      EMPTY_QUESTION_CARD_DRAFT,
+    );
+    return view.kind === "settled"
+      ? questionSettledLine(view.settlement, names.botTitle)
+      : null;
+  });
 }
 
 /** A field's value, or `null` for a field left out or sent as `null`. */

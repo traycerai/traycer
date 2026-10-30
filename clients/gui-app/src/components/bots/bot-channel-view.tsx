@@ -136,6 +136,73 @@ function channelConversation(
 }
 
 /**
+ * Where the channel lands as it opens: a message of the channel
+ * (`threadId` `null`), or of the listed thread `threadId`, in that thread's
+ * panel beside it.
+ */
+export type BotChannelLanding = BotTranscriptLanding & {
+  readonly threadId: string | null;
+};
+
+/** The landing the channel's own transcript takes: one on a message of the channel. */
+function channelLandingOf(
+  landOn: BotChannelLanding | null,
+): BotTranscriptLanding | null {
+  return landOn !== null && landOn.threadId === null ? landOn : null;
+}
+
+/**
+ * The listed thread whose panel is drawn: none while the channel's own read
+ * failed, loads, or found no channel, which draw no panel, or while no
+ * thread is open beside it.
+ */
+function drawnPanelThreadId(args: {
+  readonly channelReadFailed: boolean;
+  readonly channel: BotConversationRecord | null;
+  readonly threadOpen: boolean;
+  readonly openThread: BotThreadSummary | null;
+}): string | null {
+  if (args.channelReadFailed || args.channel === null || !args.threadOpen) {
+    return null;
+  }
+  return args.openThread?.threadId ?? null;
+}
+
+/**
+ * The landing the open thread's panel takes, held from the channel's mount:
+ * one on a message of the listed thread whose panel is drawn
+ * (`drawnThreadId`). It waits through the first loads that draw no panel;
+ * once handed to that thread's panel it lands there once, so the panel
+ * going - another thread, the memory in its place, the panel closed, the
+ * channel's read failing - spends it, and so does `spend`.
+ */
+function useThreadPanelLanding(
+  landOn: BotChannelLanding | null,
+  drawnThreadId: string | null,
+): {
+  readonly landing: BotTranscriptLanding | null;
+  readonly spend: () => void;
+} {
+  const [held, setHeld] = useState(() =>
+    landOn !== null && landOn.threadId !== null
+      ? { landing: landOn, handed: false }
+      : null,
+  );
+  const showing = held !== null && drawnThreadId === held.landing.threadId;
+  if (held !== null && showing && !held.handed) {
+    setHeld({ landing: held.landing, handed: true });
+  } else if (
+    held !== null &&
+    !showing &&
+    (held.handed || drawnThreadId !== null)
+  ) {
+    setHeld(null);
+  }
+  const spend = useCallback(() => setHeld(null), []);
+  return { landing: showing ? held.landing : null, spend };
+}
+
+/**
  * A bot's channel and its open thread, side by side as Slack lays them out
  * (Tracy Bots, decision 41): members' posts and the bot's announcements at
  * the top level, "Reply in thread" among each row's hover actions and a
@@ -203,8 +270,8 @@ export function BotChannelView(props: {
   readonly onOpenTurn: BotTurnOpen;
   /** Opens one of the bot's sessions in place of the channel: the open thread's, from its panel. */
   readonly onOpenSession: BotSessionOpen;
-  /** A message the channel lands on as it opens; `null` keeps where it opens. */
-  readonly landOn: BotTranscriptLanding | null;
+  /** A message the channel, or the thread open beside it, lands on as it opens; `null` keeps where it opens. */
+  readonly landOn: BotChannelLanding | null;
   /** The bot's memory open beside the channel in the thread's place; `null` for none. */
   readonly openMemory: BotOpenMemory | null;
   readonly onOpenMemory: (open: BotOpenMemory | null) => void;
@@ -414,8 +481,8 @@ export function BotChannelView(props: {
   // each follow a new visit, so the same link followed again lands again. The
   // channel opens where the tab asked it to: it mounts afresh each time a
   // session shown in its place closes.
-  const [landing, setLanding] = useState<BotTranscriptLanding | null>(
-    props.landOn,
+  const [landing, setLanding] = useState<BotTranscriptLanding | null>(() =>
+    channelLandingOf(props.landOn),
   );
   const memoryNavigation = useMemo(
     (): BotMemoryNavigation => ({
@@ -431,6 +498,7 @@ export function BotChannelView(props: {
         if (messageId === null) return;
         setLanding((previous) => ({
           messageId,
+          sendPostId: null,
           visit: (previous?.visit ?? 0) + 1,
         }));
       },
@@ -523,6 +591,15 @@ export function BotChannelView(props: {
     openThreadPostId === null
       ? null
       : (threadsByPost.get(openThreadPostId) ?? null);
+  const threadLanding = useThreadPanelLanding(
+    props.landOn,
+    drawnPanelThreadId({
+      channelReadFailed: conversations.isError,
+      channel,
+      threadOpen,
+      openThread,
+    }),
+  );
   const { refetch: refetchThreads } = threadList;
   // The row the open thread hangs off, as the channel's session has it: the
   // panel's own read of it fetches it when cold. Read beside the panel, not
@@ -718,7 +795,11 @@ export function BotChannelView(props: {
                 tasks={tasks}
                 anchorSenderLabel={anchorSenderLabel}
                 resolveMember={resolveMember}
-                onClose={() => onOpenThread(null)}
+                landOn={threadLanding.landing}
+                onClose={() => {
+                  threadLanding.spend();
+                  onOpenThread(null);
+                }}
                 onOpenActivity={onOpenActivity}
                 onEditPost={editPostFromThread}
                 onOpenTurn={onOpenTurn}

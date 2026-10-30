@@ -707,7 +707,7 @@ describe("<BotActivityPage /> a check-in's turn", () => {
     expect(checkinLink().textContent).toBe("Read 2 files · 1m 20s");
     await user.click(checkinLink());
 
-    expect(mocks.openTurn).toHaveBeenCalledWith(located({}));
+    expect(mocks.openTurn).toHaveBeenCalledWith(located({}), null);
   });
 
   it("reads Open the turn for a turn with no summary yet", () => {

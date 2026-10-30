@@ -64,8 +64,8 @@ function Channel(): ReactNode {
       onOpenThread={(open) =>
         setRail(BOT_ID, open === null ? null : { kind: "thread", ...open })
       }
-      onOpenTurn={(ref) => {
-        openedSessions.push(sessionTargetOfTurn(ref));
+      onOpenTurn={(ref, sendPostId) => {
+        openedSessions.push(sessionTargetOfTurn(ref, sendPostId));
       }}
       onOpenSession={(target) => {
         openedSessions.push(target);

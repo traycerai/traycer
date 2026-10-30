@@ -665,6 +665,51 @@ describe("locateTranscriptRowOrdinal: receipt targets", () => {
       ),
     ).toBeNull();
   });
+
+  it("resolves a bot's channel post to the send call in its session that wrote it", () => {
+    const reply = (blockId: string, messageId: string, timestamp: number) => ({
+      type: "tool_call",
+      blockId,
+      status: "completed",
+      timestamp,
+      toolName: "mcp__traycer_a2a__traycer_reply",
+      error: null,
+      parentBlockId: null,
+      botSendReceipt: {
+        conversationId: "channel-1",
+        messageId,
+        requestId: null,
+        kind: "reply",
+      },
+    });
+    const first = assistantMessageWithBlocks({
+      messageId: "m-reply-1",
+      timestamp: 50,
+      turnId: "turn-reply-1",
+      blocks: [reply("tc-reply-1", "post-1", 50)],
+    });
+    const second = assistantMessageWithBlocks({
+      messageId: "m-reply-2",
+      timestamp: 60,
+      turnId: "turn-reply-2",
+      blocks: [reply("tc-reply-2", "post-2", 60)],
+    });
+    const input: TranscriptRowProjectionInput = {
+      messages: [first, second],
+      events: [],
+      activeTurnId: null,
+      chatId: "chat-1",
+    };
+    const rows = projectTranscriptRows(input);
+    const skeleton = buildRowSkeleton(input, previewText, null);
+
+    const ordinal = locateOrThrow(rows, input.messages, {
+      kind: "receipt",
+      messageId: "post-2",
+    });
+
+    expect(skeleton[ordinal]?.rowId).toBe(assistantRowId("turn-reply-2"));
+  });
 });
 
 describe("locateTranscriptRowOrdinal: message targets", () => {
