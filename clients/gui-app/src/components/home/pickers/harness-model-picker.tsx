@@ -402,7 +402,9 @@ function useUltracodePickerControls(
   const ultracode = useStore(store, (state) => state.ultracode);
   const carried = useStore(store, (state) => state.catalog.ultracodeCarried);
   const offered = useStore(store, (state) =>
-    state.catalog.modelsLoaded
+    state.catalog.modelsLoaded &&
+    !state.selectionHealedForDisplay &&
+    state.selection.harnessId === state.values.selection.harnessId
       ? modelUltracodeOffered(state.selectedModel)
       : undefined,
   );
