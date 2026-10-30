@@ -15,7 +15,7 @@ import {
 } from "@/lib/bots/bot-activity-model";
 import { turnReceiptLabel } from "@/lib/bots/bot-turn-receipt";
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
-import type { BotOpenTurn } from "@/stores/bots/bot-open-thread-store";
+import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
 
 const NO_IDS: ReadonlyArray<string> = [];
 
@@ -25,15 +25,15 @@ const NO_IDS: ReadonlyArray<string> = [];
  * it said; a stretch no host reported is an amber row with why and when it
  * caught up, and one a member's Run now asked for names them. The newest few show, and "All N check-ins" the rest of the
  * week the host keeps. A check-in whose turn the bot's host still keeps
- * links to it: the turn opens beside the channel, in Messages. Nothing for a
- * task with none.
+ * links to it: the turn's session opens in place of the channel, landed on
+ * the check-in (T93). Nothing for a task with none.
  */
 export function BotTaskCheckins(props: {
   readonly botId: string;
   readonly hostId: string;
   readonly task: BotTaskEntry;
-  /** Opens a check-in's turn beside the channel. */
-  readonly onOpenTurn: (open: BotOpenTurn) => void;
+  /** Opens a check-in's turn: its session, in place of the channel. */
+  readonly onOpenTurn: BotTurnOpen;
   /** A member's name, for a check-in that answered their Run now. */
   readonly nameOf: (userId: string) => string;
 }): ReactNode {
@@ -104,7 +104,7 @@ function CheckinRow(props: {
   readonly row: BotCheckinRow;
   /** The check-in's turn as the bot's host keeps it; `null` for none. */
   readonly turnRef: BotTurnRef | null;
-  readonly onOpenTurn: (open: BotOpenTurn) => void;
+  readonly onOpenTurn: BotTurnOpen;
   readonly nameOf: (userId: string) => string;
 }): ReactNode {
   const { row, turnRef, onOpenTurn, nameOf } = props;
@@ -143,9 +143,7 @@ function CheckinRow(props: {
           variant="link"
           size="xs"
           data-testid="bot-task-checkin-turn"
-          onClick={() =>
-            onOpenTurn({ ref: turnRef, question: null, back: null })
-          }
+          onClick={() => onOpenTurn(turnRef, null)}
         >
           {(turnRef.summary === null ? null : turnReceiptLabel(turnRef)) ??
             "Open the turn"}

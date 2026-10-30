@@ -793,7 +793,7 @@ export function NewConversationModalBody(props: {
   useEffect(() => {
     const owned = ownedKeyboardRef.current;
     ownedKeyboardRef.current = ownsKeyboard;
-    if (ownsKeyboard && !owned) editorRef.current?.focusAtEnd();
+    if (ownsKeyboard && !owned) editorRef.current?.focusAtEnd("reveal-caret");
     if (!ownsKeyboard && owned) editorRef.current?.dismissActiveSuggestion();
   }, [ownsKeyboard]);
   // A ref, not state: a re-render would change the send button's disabled look

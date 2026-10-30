@@ -63,6 +63,7 @@ import { emptyTranscriptWindow } from "@/stores/chats/transcript-window";
 import type { BotActivity } from "@/hooks/bots/use-bot-activity";
 import type { BotComposerEdit } from "@/components/bots/bot-message-composer";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
+import type { BotTranscriptLanding } from "@/components/bots/bot-chat-transcript";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
 
@@ -345,6 +346,8 @@ const channelRelease = vi.fn<() => void>();
 let sent: ReadonlyArray<BotConversationSendRequest>;
 /** The post as its send opened the thread; `null` for a thread opened from a row. */
 let panelSent: BotSentPost | null;
+/** The message of the thread the panel's replies land on; `null` for none. */
+let panelLanding: BotTranscriptLanding | null;
 /** The bot's task list the panel is handed. */
 let panelTasks: ReadonlyArray<BotTaskEntry>;
 const onEditPost = vi.fn<(edit: BotComposerEdit) => void>();
@@ -405,11 +408,14 @@ function stageSessions(messages: ReadonlyArray<Message>): void {
   } as ChatSessionStoreHandle;
 }
 
+/** The case's query cache: one per case, so a re-render keeps its queries. */
+let panelQueryClient: QueryClient;
+
 /** The panel on `thread`, over the sessions the last mount made. */
 function panelTree(thread: BotThreadPanelThread): ReactNode {
   return (
     <StrictMode>
-      <QueryClientProvider client={new QueryClient()}>
+      <QueryClientProvider client={panelQueryClient}>
         <TooltipProvider>
           <ChatExpansionTestProviders tileInstanceId="tile-1">
             <BotThreadPanel
@@ -430,6 +436,8 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
               onOpenActivity={vi.fn()}
               onEditPost={onEditPost}
               onOpenTurn={vi.fn()}
+              onOpenSession={vi.fn()}
+              landOn={panelLanding}
             />
           </ChatExpansionTestProviders>
         </TooltipProvider>
@@ -448,8 +456,10 @@ function listed(anchorSenderUserId: string | null): BotThreadPanelThread {
 }
 
 beforeEach(() => {
+  panelQueryClient = new QueryClient();
   sent = [];
   panelSent = null;
+  panelLanding = null;
   panelTasks = [];
   panelOrigin = null;
   mocks.threadHandle.held = false;
@@ -1269,6 +1279,21 @@ describe("<BotThreadPanel /> the anchor", () => {
     expect(liveHolds()).toBe(0);
   });
 
+  it("opens on a message of the thread it has not loaded, asking the host where it is and holding that ordinal hydrated", () => {
+    channelMessages = [announcement("anchor-1", "Ship the release today?")];
+    panelLanding = { messageId: "reply-cold", sendPostId: null, visit: 1 };
+    mocks.locatedOrdinal = 12;
+    mountPanel(listed("user-teammate"), [botReply(null)]);
+
+    expect(mocks.locateTargets).toContainEqual({
+      kind: "message",
+      messageId: "reply-cold",
+    });
+    expect(
+      mocks.handle?.store.getState().requestTranscriptOrdinal,
+    ).toHaveBeenCalledWith(12);
+  });
+
   it("does not locate or hold anything when the channel already has the anchor's row", () => {
     channelMessages = [announcement("anchor-1", "Ship the release today?")];
     mocks.locatedOrdinal = 7;
@@ -1950,6 +1975,7 @@ describe("<BotThreadPanel /> the thread's tasks", () => {
       originRequestId: null,
       createdByChatId: THREAD_ID,
       checkins: null,
+      inputNeeded: null,
       pause: null,
       stop: null,
       runRequest: null,

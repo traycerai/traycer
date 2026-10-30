@@ -679,9 +679,12 @@ import {
   botOnboardingChooseV10,
   botOnboardingCompleteV10,
   botOnboardingReadV10,
+  botOnboardingReadV11,
+  botOnboardingReadUpgradeV10ToV11,
   botCreateV10,
   botDeleteV10,
   botListChangedV10,
+  botMemorySubscribeV10,
   botListV10,
   botListV11,
   botListUpgradeV10ToV11,
@@ -692,6 +695,9 @@ import {
   botSubscribeV12,
   botSubscribeV13,
   botSubscribeV14,
+  botSubscribeV15,
+  botSubscribeV16,
+  botSurfaceActV10,
   botUpdateRunSettingsV10,
   botUpdateDirectiveV10,
   botUpdateReplyModeV10,
@@ -9375,6 +9381,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // A member's answer or decision from a bot's surface card (T89), settled
+  // by the host that runs the task's chat.
+  "bot.surface.act": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botSurfaceActV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   // The threads of a bot's channel (T41), answered by its bound host.
   "bot.thread.list": {
     degrade: { kind: "unsupported" },
@@ -9467,11 +9488,17 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.onboarding.read": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: botOnboardingReadV10,
           upgradeFromPreviousVersion: null,
+        },
+        // @1.1 names the team's main bot while it is still to be set up
+        // (`setup`, T67).
+        1: {
+          contract: botOnboardingReadV11,
+          upgradeFromPreviousVersion: botOnboardingReadUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -15751,7 +15778,13 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
       // @1.4 carries each task's check-in history (`checkins`) and when each
       // notification subscription started (`since`, T86); @1.3 is frozen
       // without them.
-      latestMinor: 4,
+      // @1.5 carries what each task's agents wait on a person for
+      // (`inputNeeded`) and the subscriber's own card actions in flight
+      // (`surfaceActions`, T89); @1.4 is frozen without them.
+      // @1.6 lets a failed turn's reason offer `update-provider` (T71);
+      // @1.1-@1.5 bind activity frozen without it, and the host sends
+      // `none` in its place below 1.6.
+      latestMinor: 6,
       versions: {
         0: {
           contract: botSubscribeV10,
@@ -15768,6 +15801,12 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
         4: {
           contract: botSubscribeV14,
         },
+        5: {
+          contract: botSubscribeV15,
+        },
+        6: {
+          contract: botSubscribeV16,
+        },
       },
     },
   },
@@ -15779,6 +15818,18 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
       versions: {
         0: {
           contract: botListChangedV10,
+        },
+      },
+    },
+  },
+  // `bot.memory.subscribe` (Tracy Bots T87): a new name on `/stream`, so no
+  // baseline moves; a host without it shows no memory.
+  "bot.memory.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botMemorySubscribeV10,
         },
       },
     },

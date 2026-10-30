@@ -3024,6 +3024,50 @@ export const chatSyncSchemaSurfaceBaseline = {
                                                 }
                                               ]
                                             },
+                                            "botSendReceipt": {
+                                              "default": null,
+                                              "anyOf": [
+                                                {
+                                                  "type": "object",
+                                                  "properties": {
+                                                    "conversationId": {
+                                                      "type": "string"
+                                                    },
+                                                    "messageId": {
+                                                      "type": "string"
+                                                    },
+                                                    "requestId": {
+                                                      "anyOf": [
+                                                        {
+                                                          "type": "string"
+                                                        },
+                                                        {
+                                                          "type": "null"
+                                                        }
+                                                      ]
+                                                    },
+                                                    "kind": {
+                                                      "type": "string",
+                                                      "enum": [
+                                                        "reply",
+                                                        "ask",
+                                                        "announce"
+                                                      ]
+                                                    }
+                                                  },
+                                                  "required": [
+                                                    "conversationId",
+                                                    "messageId",
+                                                    "requestId",
+                                                    "kind"
+                                                  ],
+                                                  "additionalProperties": false
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ]
+                                            },
                                             "managedCommand": {
                                               "default": null,
                                               "anyOf": [
@@ -3675,6 +3719,7 @@ export const chatSyncSchemaSurfaceBaseline = {
                                             "agentMessageSend",
                                             "agentMessageReceipt",
                                             "agentMessageDelivery",
+                                            "botSendReceipt",
                                             "managedCommand",
                                             "progress",
                                             "backgroundOutput",
@@ -6311,6 +6356,356 @@ export const chatSyncSchemaSurfaceBaseline = {
                               "questions"
                             ],
                             "additionalProperties": false
+                          },
+                          "surface": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "question"
+                                  },
+                                  "epicId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  },
+                                  "hostId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  },
+                                  "chatId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  },
+                                  "blockId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  },
+                                  "resolution": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "state": {
+                                            "type": "string",
+                                            "enum": [
+                                              "answered",
+                                              "skipped",
+                                              "allowed",
+                                              "denied",
+                                              "resumed",
+                                              "ended"
+                                            ]
+                                          },
+                                          "by": {
+                                            "anyOf": [
+                                              {
+                                                "type": "object",
+                                                "properties": {
+                                                  "kind": {
+                                                    "type": "string",
+                                                    "const": "person"
+                                                  },
+                                                  "userId": {
+                                                    "type": "string",
+                                                    "minLength": 1
+                                                  }
+                                                },
+                                                "required": [
+                                                  "kind",
+                                                  "userId"
+                                                ],
+                                                "additionalProperties": false
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "at": {
+                                            "type": "number"
+                                          }
+                                        },
+                                        "required": [
+                                          "state",
+                                          "by",
+                                          "at"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "epicId",
+                                  "hostId",
+                                  "chatId",
+                                  "blockId",
+                                  "resolution"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "approval"
+                                  },
+                                  "epicId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  },
+                                  "hostId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  },
+                                  "chatId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  },
+                                  "approvalId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  },
+                                  "resolution": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "state": {
+                                            "type": "string",
+                                            "enum": [
+                                              "answered",
+                                              "skipped",
+                                              "allowed",
+                                              "denied",
+                                              "resumed",
+                                              "ended"
+                                            ]
+                                          },
+                                          "by": {
+                                            "anyOf": [
+                                              {
+                                                "type": "object",
+                                                "properties": {
+                                                  "kind": {
+                                                    "type": "string",
+                                                    "const": "person"
+                                                  },
+                                                  "userId": {
+                                                    "type": "string",
+                                                    "minLength": 1
+                                                  }
+                                                },
+                                                "required": [
+                                                  "kind",
+                                                  "userId"
+                                                ],
+                                                "additionalProperties": false
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "at": {
+                                            "type": "number"
+                                          }
+                                        },
+                                        "required": [
+                                          "state",
+                                          "by",
+                                          "at"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "epicId",
+                                  "hostId",
+                                  "chatId",
+                                  "approvalId",
+                                  "resolution"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "browser"
+                                  },
+                                  "epicId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  },
+                                  "hostId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  },
+                                  "chatId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 255
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "sessionId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  },
+                                  "parkId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  },
+                                  "tabId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 255
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "resolution": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "state": {
+                                            "type": "string",
+                                            "enum": [
+                                              "answered",
+                                              "skipped",
+                                              "allowed",
+                                              "denied",
+                                              "resumed",
+                                              "ended"
+                                            ]
+                                          },
+                                          "by": {
+                                            "anyOf": [
+                                              {
+                                                "type": "object",
+                                                "properties": {
+                                                  "kind": {
+                                                    "type": "string",
+                                                    "const": "person"
+                                                  },
+                                                  "userId": {
+                                                    "type": "string",
+                                                    "minLength": 1
+                                                  }
+                                                },
+                                                "required": [
+                                                  "kind",
+                                                  "userId"
+                                                ],
+                                                "additionalProperties": false
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "at": {
+                                            "type": "number"
+                                          }
+                                        },
+                                        "required": [
+                                          "state",
+                                          "by",
+                                          "at"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "epicId",
+                                  "hostId",
+                                  "chatId",
+                                  "sessionId",
+                                  "parkId",
+                                  "tabId",
+                                  "resolution"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "const": "artifact"
+                                  },
+                                  "epicId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  },
+                                  "hostId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 255
+                                  },
+                                  "artifactPath": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 4096
+                                  },
+                                  "resolution": {
+                                    "type": "null"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "epicId",
+                                  "hostId",
+                                  "artifactPath",
+                                  "resolution"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
                           }
                         },
                         "required": [

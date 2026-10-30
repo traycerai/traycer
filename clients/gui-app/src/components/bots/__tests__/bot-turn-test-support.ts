@@ -19,7 +19,10 @@ import type {
   Message,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
-import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
+import type {
+  BotOpenThread,
+  BotSessionTarget,
+} from "@/stores/bots/bot-open-thread-store";
 import { createHostQueryInvalidator } from "@/lib/host/query-invalidator";
 import {
   createChatSessionStore,
@@ -39,6 +42,11 @@ import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-st
 export const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 /** The host serving the tab. */
 export const HOST_ID = "host-tab";
+/** The bot's environment, whose room keeps its memory (T87). */
+export const ENVIRONMENT_ID = "env-1";
+/** Another bot of the environment, a shared memory's writer. */
+export const OTHER_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
+export const OTHER_BOT_TITLE = "Audit Bot";
 /** The bot's channel chat, where members post. */
 export const CHANNEL_ID = "conversation-channel";
 /** The bot's trunk session, which answers the channel's posts. */
@@ -177,6 +185,7 @@ function toolCallBlock(input: ToolCallInput): ContentBlock {
     managedCommand: null,
     agentMessageReceipt: null,
     agentMessageDelivery: null,
+    botSendReceipt: null,
     artifact: null,
     mcpApp: null,
     progress: null,
@@ -483,11 +492,18 @@ export const THREAD_REPLY_TURN: BotTurnRef = turnRef({
   requestIds: [],
 });
 
+/**
+ * The sessions the channel harness asked the tab to open in the channel's
+ * place, oldest first: a receipt's turn, or a thread's session from its
+ * panel. A suite empties it before each case.
+ */
+export const openedSessions: BotSessionTarget[] = [];
+
 /** The rail's thread: the one the member's post opened. */
 export const THREAD_OPEN: BotOpenThread = {
   anchorMessageId: POST_ID,
   announcement: false,
-  answer: false,
+  anchorKind: null,
   sent: null,
 };
 

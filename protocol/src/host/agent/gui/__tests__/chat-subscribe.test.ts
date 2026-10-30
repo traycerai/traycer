@@ -1922,6 +1922,7 @@ describe("chat.subscribe@1.6 (image generation)", () => {
     managedCommand: null,
     agentMessageReceipt: null,
     agentMessageDelivery: null,
+    botSendReceipt: null,
     progress: null,
     backgroundOutput: null,
     startedAt: 4900,

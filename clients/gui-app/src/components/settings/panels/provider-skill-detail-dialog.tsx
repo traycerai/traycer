@@ -1,5 +1,18 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useForm } from "@tanstack/react-form";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
+import {
+  useForm,
+  useSelector,
+  type FormAsyncValidateOrFn,
+  type FormValidateOrFn,
+  type ReactFormExtendedApi,
+} from "@tanstack/react-form";
 import type { ProviderSkill } from "@traycer/protocol/host/provider-native-schemas";
 import {
   AlertTriangle,
@@ -52,6 +65,89 @@ import {
 
 type EditExitIntent = "detail" | "closed";
 type SkillEditValues = Pick<SkillEditTarget, "name" | "description" | "body">;
+// `useForm` with no form-level validators and no submit meta, as it infers.
+type SkillEditForm = ReactFormExtendedApi<
+  SkillEditValues,
+  FormValidateOrFn<SkillEditValues> | undefined,
+  FormValidateOrFn<SkillEditValues> | undefined,
+  FormAsyncValidateOrFn<SkillEditValues> | undefined,
+  FormValidateOrFn<SkillEditValues> | undefined,
+  FormAsyncValidateOrFn<SkillEditValues> | undefined,
+  FormValidateOrFn<SkillEditValues> | undefined,
+  FormAsyncValidateOrFn<SkillEditValues> | undefined,
+  FormValidateOrFn<SkillEditValues> | undefined,
+  FormAsyncValidateOrFn<SkillEditValues> | undefined,
+  FormAsyncValidateOrFn<SkillEditValues> | undefined,
+  unknown
+>;
+
+/** What the editor's content does for the state above it: scroll one pane to the other's place, focus the first invalid field. */
+type SkillEditorSurface = {
+  readonly syncBodyScroll: (destination: "edit" | "preview") => void;
+  readonly focusInvalid: () => void;
+};
+
+/**
+ * The editor's state, held by the dialog above its content: the content
+ * un-presents while its pane is unfocused or its region concealed
+ * (`DialogContent` returns null), and a draft held here survives that
+ * instead of starting over from the file when the content returns.
+ */
+type SkillEditor = {
+  readonly form: SkillEditForm;
+  readonly editing: boolean;
+  readonly setEditing: (editing: boolean) => void;
+  readonly exitIntent: EditExitIntent | null;
+  readonly setExitIntent: (intent: EditExitIntent | null) => void;
+  /** The file content the draft started from, which a save quotes. */
+  readonly baselineRef: RefObject<string>;
+  /** The mounted content's surface, `null` while it is un-presented. */
+  readonly surfaceRef: RefObject<SkillEditorSurface | null>;
+};
+
+function useSkillEditor(args: {
+  readonly skill: ProviderSkill;
+  readonly raw: string | null;
+  readonly locked: boolean;
+  readonly onSave: (target: SkillEditTarget) => Promise<boolean>;
+}): SkillEditor {
+  // The real values land through the content's reset once the file is read;
+  // these are the form's first defaults, before any content mounted.
+  const initial = skillEditPrefill(args.skill, args.raw ?? "");
+  const baselineRef = useRef(initial.baseline);
+  const surfaceRef = useRef<SkillEditorSurface | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [exitIntent, setExitIntent] = useState<EditExitIntent | null>(null);
+  const form = useForm({
+    defaultValues: editValues(initial),
+    onSubmit: async ({ value }) => {
+      if (args.locked) return;
+      const normalized = normalizeEditValues(value);
+      const saved = await args.onSave({
+        path: args.skill.path,
+        baseline: baselineRef.current,
+        ...normalized,
+      });
+      if (!saved) return;
+      baselineRef.current = previewSkillMd(normalized);
+      form.reset(normalized);
+      surfaceRef.current?.syncBodyScroll("preview");
+      setEditing(false);
+    },
+    onSubmitInvalid: () => {
+      surfaceRef.current?.focusInvalid();
+    },
+  });
+  return {
+    form,
+    editing,
+    setEditing,
+    exitIntent,
+    setExitIntent,
+    baselineRef,
+    surfaceRef,
+  };
+}
 
 export function ProviderSkillDetailDialog(props: {
   readonly skill: ProviderSkill;
@@ -67,6 +163,16 @@ export function ProviderSkillDetailDialog(props: {
    */
   readonly lockedNote: string | null;
   readonly canEdit: boolean;
+  /**
+   * What an open draft shows once Edit is taken away under it (the skill
+   * became read-only while it was being edited), or `null` for no line.
+   */
+  readonly editRevokedNote: string | null;
+  /**
+   * Told whether the dialog holds unsaved changes, as that changes, so a
+   * caller can keep it open through what would close it; `null` to not ask.
+   */
+  readonly onDraftHeldChange: ((held: boolean) => void) | null;
   readonly canUpdate: boolean;
   readonly origin: string | null;
   readonly updatePending: boolean;
@@ -77,8 +183,21 @@ export function ProviderSkillDetailDialog(props: {
   readonly onRequestRemove: () => void;
   readonly onClose: () => void;
   readonly fileEpoch: number;
+  /**
+   * What the caller lists of the skill's content (its version, policy and
+   * edited flag, say), or `null` when it lists none: the files are read
+   * again when it changes under the open detail, which is another editor's
+   * update or restore, or a switch back to auto-update that replaced an
+   * edit while the version stayed. A held draft is kept through the reread.
+   */
+  readonly contentKey: string | null;
 }): ReactNode {
   const client = useHostClient();
+  // The content an editor holding unsaved changes opened on: it stays
+  // mounted on it whatever the skill turns into meanwhile, so the draft is
+  // never dropped without its discard confirm.
+  const [heldRaw, setHeldRaw] = useState<string | null>(null);
+  useDraftHeldReport(heldRaw !== null, props.onDraftHeldChange);
   const guardedClose = useRef<(() => void) | null>(null);
   function registerGuardedClose(request: (() => void) | null): void {
     guardedClose.current = request;
@@ -87,7 +206,7 @@ export function ProviderSkillDetailDialog(props: {
     client,
     props.skill.path,
     SKILL_ENTRY_FILE,
-    [props.fileEpoch],
+    [props.fileEpoch, props.contentKey],
   );
   const content = fileQuery.data?.content ?? null;
   const [optimisticContent, setOptimisticContent] = useState<string | null>(
@@ -103,6 +222,17 @@ export function ProviderSkillDetailDialog(props: {
     props.canEdit && readError === null && stableContent !== null && !truncated
       ? stableContent
       : null;
+  const editorRaw = editableContent ?? heldRaw;
+  const editor = useSkillEditor({
+    skill: props.skill,
+    raw: editorRaw,
+    locked: !props.canEdit,
+    onSave: async (target) => {
+      const saved = await props.onSave(target);
+      if (saved) setOptimisticContent(previewSkillMd(target));
+      return saved;
+    },
+  });
 
   return (
     <Dialog
@@ -118,7 +248,7 @@ export function ProviderSkillDetailDialog(props: {
         layout="banded"
         className="grid h-[min(86dvh,calc(100dvh-2rem))] w-[min(92vw,52rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden sm:max-w-[min(92vw,52rem)]"
       >
-        {editableContent === null ? (
+        {editorRaw === null ? (
           <ReadOnlySkillDetail
             skill={props.skill}
             sourceLabel={props.sourceLabel}
@@ -139,10 +269,14 @@ export function ProviderSkillDetailDialog(props: {
           />
         ) : (
           <EditableSkillDetail
+            editor={editor}
             onCloseRequestChange={registerGuardedClose}
             skill={props.skill}
             sourceLabel={props.sourceLabel}
-            raw={editableContent}
+            raw={editorRaw}
+            locked={!props.canEdit}
+            lockedNote={props.editRevokedNote}
+            onDraftChange={setHeldRaw}
             removal={props.removal}
             removePending={props.removePending}
             actionsDisabled={props.removeDisabled}
@@ -152,11 +286,6 @@ export function ProviderSkillDetailDialog(props: {
             updatePending={props.updatePending}
             editPending={props.editPending}
             onStartEdit={props.onStartEdit}
-            onSave={async (target) => {
-              const saved = await props.onSave(target);
-              if (saved) setOptimisticContent(previewSkillMd(target));
-              return saved;
-            }}
             onRequestUpdate={props.onRequestUpdate}
             onRequestRemove={props.onRequestRemove}
             onClose={props.onClose}
@@ -167,11 +296,29 @@ export function ProviderSkillDetailDialog(props: {
   );
 }
 
+/** Tells `report` whether a draft is held, as that changes, and not held once unmounted. */
+function useDraftHeldReport(
+  held: boolean,
+  report: ((held: boolean) => void) | null,
+): void {
+  useEffect(() => {
+    report?.(held);
+    return () => report?.(false);
+  }, [held, report]);
+}
+
 function EditableSkillDetail(props: {
+  readonly editor: SkillEditor;
   readonly onCloseRequestChange: (request: (() => void) | null) => void;
   readonly skill: ProviderSkill;
   readonly sourceLabel: string;
   readonly raw: string;
+  /** Edit was taken away under an open draft: it can be discarded, not saved. */
+  readonly locked: boolean;
+  /** What a locked draft shows; `null` for no line. */
+  readonly lockedNote: string | null;
+  /** The content this editor opened on while it holds unsaved changes; `null` once it holds none. */
+  readonly onDraftChange: (raw: string | null) => void;
   readonly removal: SkillRemovability;
   readonly removePending: boolean;
   readonly actionsDisabled: boolean;
@@ -181,44 +328,30 @@ function EditableSkillDetail(props: {
   readonly updatePending: boolean;
   readonly editPending: boolean;
   readonly onStartEdit: () => void;
-  readonly onSave: (target: SkillEditTarget) => Promise<boolean>;
   readonly onRequestUpdate: () => void;
   readonly onRequestRemove: () => void;
   readonly onClose: () => void;
 }): ReactNode {
-  const initial = skillEditPrefill(props.skill, props.raw);
-  const baseline = useRef(initial.baseline);
-  const lastRaw = useRef(props.raw);
+  const { form, editing, setEditing, exitIntent, setExitIntent, baselineRef } =
+    props.editor;
+  // What the form last reset from: nothing yet on mount, so a content that
+  // mounts over a draft (the pane focused again) leaves the draft alone,
+  // and one that mounts with no draft takes the file as it is now.
+  const lastRaw = useRef<string | null>(null);
   const formNode = useRef<HTMLFormElement>(null);
   const nameInput = useRef<HTMLInputElement>(null);
   const editButton = useRef<HTMLButtonElement>(null);
   const bodyPreview = useRef<HTMLDivElement>(null);
   const bodyEditor = useRef<HTMLDivElement>(null);
-  const previousEditing = useRef(false);
-  const [editing, setEditing] = useState(false);
-  const [exitIntent, setExitIntent] = useState<EditExitIntent | null>(null);
+  const previousEditing = useRef(editing);
   const { editPending, onClose, onCloseRequestChange } = props;
-  const form = useForm({
-    defaultValues: editValues(initial),
-    onSubmit: async ({ value }) => {
-      const normalized = normalizeEditValues(value);
-      const saved = await props.onSave({
-        path: props.skill.path,
-        baseline: baseline.current,
-        ...normalized,
-      });
-      if (!saved) return;
-      baseline.current = previewSkillMd(normalized);
-      form.reset(normalized);
-      syncBodyScroll("preview");
-      setEditing(false);
-    },
-    onSubmitInvalid: () => {
-      formNode.current
-        ?.querySelector<HTMLElement>('[aria-invalid="true"]')
-        ?.focus();
-    },
-  });
+
+  const dirty = useSelector(form.store, (state) => !state.isDefaultValue);
+  const holding = editing && dirty;
+  const { onDraftChange, raw } = props;
+  useEffect(() => {
+    onDraftChange(holding ? raw : null);
+  }, [holding, raw, onDraftChange]);
 
   function syncBodyScroll(destination: "edit" | "preview"): void {
     const editorScroller =
@@ -230,13 +363,30 @@ function EditableSkillDetail(props: {
     if (source !== null && target !== null) target.scrollTop = source.scrollTop;
   }
 
+  const { surfaceRef } = props.editor;
   useEffect(() => {
+    surfaceRef.current = {
+      syncBodyScroll,
+      focusInvalid: () => {
+        formNode.current
+          ?.querySelector<HTMLElement>('[aria-invalid="true"]')
+          ?.focus();
+      },
+    };
+    return () => {
+      surfaceRef.current = null;
+    };
+  });
+
+  // Before paint, so a content that mounts on a file never shows the form's
+  // first defaults for a frame.
+  useLayoutEffect(() => {
     if (props.raw === lastRaw.current || editing) return;
     lastRaw.current = props.raw;
     const next = skillEditPrefill(props.skill, props.raw);
-    baseline.current = next.baseline;
+    baselineRef.current = next.baseline;
     form.reset(editValues(next));
-  }, [editing, form, props.raw, props.skill]);
+  }, [baselineRef, editing, form, props.raw, props.skill]);
 
   useEffect(() => {
     if (editing === previousEditing.current) return;
@@ -289,7 +439,14 @@ function EditableSkillDetail(props: {
     return () => {
       onCloseRequestChange(null);
     };
-  }, [editing, form, editPending, onClose, onCloseRequestChange]);
+  }, [
+    editing,
+    form,
+    editPending,
+    onClose,
+    onCloseRequestChange,
+    setExitIntent,
+  ]);
 
   return (
     <>
@@ -445,6 +602,14 @@ function EditableSkillDetail(props: {
               {props.actionError}
             </div>
           )}
+          {!props.locked || props.lockedNote === null ? null : (
+            <div
+              role="status"
+              className="mb-3 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-ui-sm text-warning-foreground"
+            >
+              {props.lockedNote}
+            </div>
+          )}
           <form.Field name="body">
             {(field) => (
               <div className="flex min-h-0 flex-1 flex-col gap-2">
@@ -522,7 +687,9 @@ function EditableSkillDetail(props: {
                     <Button
                       type="submit"
                       size="sm"
-                      disabled={props.editPending || isSubmitting}
+                      disabled={
+                        props.editPending || isSubmitting || props.locked
+                      }
                     >
                       {props.editPending || isSubmitting ? (
                         <MutedAgentSpinner />

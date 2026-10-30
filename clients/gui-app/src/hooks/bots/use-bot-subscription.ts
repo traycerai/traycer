@@ -11,6 +11,7 @@ import {
   type BotStoppedNotificationWatch,
   type BotRecord,
   type BotSubscribeServerFrame,
+  type BotSurfaceActionState,
   type BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
@@ -68,6 +69,12 @@ export interface BotSubscriptionSnapshot {
    * the serving host does not run the bot, or predates them.
    */
   readonly notificationSubscriptions: ReadonlyArray<BotNotificationSubscription> | null;
+  /**
+   * The viewer's own answers and decisions from a bot's surface cards still
+   * on their way to a task on another machine, or refused there (T89).
+   * `null` from a host that predates them.
+   */
+  readonly surfaceActions: ReadonlyArray<BotSurfaceActionState> | null;
   /**
    * The watches members stopped from the Activity page (T92), with who and
    * when. `null` like `notificationSubscriptions`.
@@ -255,6 +262,7 @@ function toSnapshot(
     boundHost: frame.boundHost,
     activity: frame.activity,
     notificationSubscriptions: frame.notificationSubscriptions,
+    surfaceActions: frame.surfaceActions,
     stoppedNotificationWatches: frame.stoppedNotificationWatches,
   };
 }

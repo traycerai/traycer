@@ -107,7 +107,7 @@ Common issues:
 | **Host stops at logout (lingering disabled)** | Linux only. Run `loginctl enable-linger <user>` so the host keeps running after you log out. |
 | **Host service is failing to start** | Linux only. The card gives a `journalctl` command that prints why the service failed. |
 | **Host rejected the stored credentials** | Run `traycer login`. |
-| **Host credential needs re-authorization** | Open Traycer Desktop, signed in as the host's owner, and let it connect. It replaces the credential on its own. Signing in again doesn't fix this. |
+| **Host credential needs re-authorization** | While the host is running, run `traycer login` as the host's owner, or open Traycer Desktop signed in as the host's owner and let it connect. Either replaces the credential. |
 | **Service managed by Traycer Desktop** | Not a problem. Traycer Desktop manages this host's startup on macOS. |
 
 ## Logs
@@ -208,6 +208,12 @@ When an agent runs in a new worktree, its chat shows a setup card. See [Setup an
 The agent's first message waits for setup, but still runs if setup fails. With several folders, the card reads "Setting up N worktrees", "N of M done" or "Worktree setup failed".
 
 If a workspace folder no longer exists or can't be reached, choose an available folder and try again.
+
+## Mobile Simulator Platform Still Unavailable
+
+If Traycer still reports a missing simulator platform after you install its tools, open [Settings › Host](/settings/host) for that machine, then **Mobile simulators**. Click **Check again** beside **Use mobile simulators** when simulators are off, or on the **Platforms** row when they are on.
+
+The button appears when a platform is unavailable. It asks that host to look again and is disabled while the check runs. An unavailable simulator tile also offers **Check again**.
 
 ## Provider Auth
 

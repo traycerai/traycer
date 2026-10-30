@@ -16,6 +16,7 @@ import type {
   SubagentSegment,
   ToolSegment,
 } from "@/stores/composer/chat-store";
+import { isBotSendToolName } from "@/lib/bots/bot-send-tool";
 import {
   deriveActivityGroupRenderId,
   derivePromotedSubagentRenderId,
@@ -29,6 +30,7 @@ import {
 } from "@traycer/protocol/host/agent/gui/activity-step-label";
 import {
   activitySummaryOf,
+  isMemoryUpdateToolCall,
   thoughtClockDuration,
   type ActivitySummaryStep,
 } from "@traycer/protocol/host/agent/gui/activity-summary";
@@ -309,11 +311,17 @@ function activitySummaryStepsOf(
       ];
     case "tool":
       return [
-        {
-          kind: "tool",
-          toolName: segment.toolName,
-          editKey: filePathFromInputDetail(segment.inputDetail) ?? segment.id,
-        },
+        isMemoryUpdateToolCall({
+          ...segment,
+          completed: !segment.isStreaming && segment.endState === null,
+        })
+          ? { kind: "memory_update" }
+          : {
+              kind: "tool",
+              toolName: segment.toolName,
+              editKey:
+                filePathFromInputDetail(segment.inputDetail) ?? segment.id,
+            },
       ];
   }
 }
@@ -466,6 +474,11 @@ function shouldPromoteToolSegment(
   // An app is the call's result, rendered where the call was made.
   if (isMcpAppToolCall(segment)) return true;
   if (segment.agentMessageSend !== null) return true;
+  // A bot's reply, question or announcement (Tracy Bots T93) is what its
+  // session said to people: a send, drawn as its own card. Keyed on the name,
+  // which the call has for its whole life, so a send whose input is still
+  // streaming or that failed stands on its own as well.
+  if (isBotSendToolName(segment.toolName)) return true;
   // A shell the agent ran or restarted (`traycer_run_shell` /
   // `traycer_restart_shell`, host-stamped) is a background process that
   // outlives the turn, exactly what the backgrounded-command rule below is for:

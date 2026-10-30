@@ -84,7 +84,7 @@ vi.mock("@/hooks/bots/use-bot-turn-locate-query", () => ({
   useBotTurnLocateQuery: () => ({ data: undefined }),
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
-  useChatLocateRow: () => null,
+  useChatLocateRowAnswer: () => ({ status: "waiting" }),
 }));
 vi.mock("@/components/chat/chat-messages", () => ({
   ChatMessages: (props: { messages: ReadonlyArray<unknown> }) => (
@@ -114,7 +114,7 @@ const CHANNEL_SURFACE: BotTranscriptSurface = {
   threadLine: () => null,
   openThread: null,
   openAnnouncementThread: null,
-  answerThreads: false,
+  threadAnchorKinds: [],
   chooseOption: null,
   answerQuestion: null,
   discussQuestion: null,
@@ -176,7 +176,7 @@ function mountTranscript(surface: BotTranscriptSurface): {
         surface={surface}
         resolveMember={UNRESOLVED_BOT_MEMBERS}
         showConnecting
-        landOnMessageId={null}
+        landOn={null}
       />
     </QueryClientProvider>
   );
@@ -344,7 +344,6 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
       failedRequest: () => null,
       openTurn: null,
       sessionChatId: null,
-      originPost: { chatId: "conversation-app", messageId: "origin-post" },
     });
 
     expect(screen.queryByRole("status")).toBeNull();

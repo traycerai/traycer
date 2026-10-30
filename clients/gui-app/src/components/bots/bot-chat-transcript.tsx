@@ -13,19 +13,19 @@ import {
 } from "@tanstack/react-query";
 import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
-import { useChatLocateRow } from "@/hooks/chats/use-chat-locate-row";
-import { replyFollowsPost, replyRowIdFor } from "@/lib/bots/reply-row";
+import { useChatLocateRowAnswer } from "@/hooks/chats/use-chat-locate-row";
 import {
-  botTurnIndexOf,
-  turnOfMessages,
-  type BotTurnIndex,
-} from "@/lib/bots/bot-turn-receipt";
+  replyFollowsPost,
+  replyRowIdFor,
+  sendCardFor,
+} from "@/lib/bots/reply-row";
+import { botTurnIndexOf, turnOfMessages } from "@/lib/bots/bot-turn-receipt";
 import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcRegistry } from "@/lib/host";
 import { useBotTurnLocateQuery } from "@/hooks/bots/use-bot-turn-locate-query";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
-import type { BotChatMessageRef } from "@/stores/bots/bot-open-thread-store";
+import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
 import type { ChatMessage } from "@/stores/composer/chat-store";
 import {
   botMemberName,
@@ -46,6 +46,7 @@ import {
 } from "@/components/chat/chat-bot-presentation-context";
 import type { QuestionCardAnswer } from "@/components/chat/question-card";
 import { ChatContainerContext } from "@/components/chat/chat-container-context";
+import { TasklessMarkdownLinkProvider } from "@/components/chat/chat-markdown-link-provider";
 import { useSubagentDrillIn } from "@/components/chat/segments/subagent-open-as-chat";
 import { TileErrorBoundary } from "@/components/epic-canvas/renderers/tile-error-boundary";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
@@ -68,12 +69,12 @@ export type BotTranscriptSurface =
       readonly threadLine: (postMessageId: string) => ChatBotThreadLine | null;
       /** Opens a post's thread; `null` where threads cannot be opened. */
       readonly openThread: ((postMessageId: string) => void) | null;
-      /** Opens the thread under a question, a proposal, a direct post or, where `answer`, a direct reply; `null` where threads cannot be opened. */
+      /** Opens the thread under a question, a proposal, a direct post or another row of the bot; `null` where threads cannot be opened. */
       readonly openAnnouncementThread:
-        | ((announcementId: string, answer: boolean) => void)
+        | ((announcementId: string, anchorKind: string | null) => void)
         | null;
-      /** Whether a direct reply of the bot opens its own thread. */
-      readonly answerThreads: boolean;
+      /** The rows of the bot its host opens their own thread under. */
+      readonly threadAnchorKinds: readonly string[];
       /** Posts a direct reply's chosen option as a new post; `null` while one is being sent. */
       readonly chooseOption: ((choice: string) => void) | null;
       /** Sends a question card's answer at the channel's top level; `null` where nothing can send it. */
@@ -87,7 +88,7 @@ export type BotTranscriptSurface =
         requestId: string,
         senderUserId: string | null,
       ) => ChatBotFailedRequest | null;
-      /** Opens a turn of the bot beside the channel; `null` where nothing can show one. */
+      /** Opens a turn of the bot, its session landed on it; `null` where nothing can show one. */
       readonly openTurn: BotTurnOpen | null;
       /** The session that answers the channel (the trunk), whose failed turn the agent chat's actions recover. */
       readonly sessionChatId: string | null;
@@ -112,22 +113,11 @@ export type BotTranscriptSurface =
         requestId: string,
         senderUserId: string | null,
       ) => ChatBotFailedRequest | null;
-      /** Opens a turn of the bot in the rail, in place of the thread; `null` where nothing can show one. */
+      /** Opens a turn of the bot, its session landed on it; `null` where nothing can show one. */
       readonly openTurn: BotTurnOpen | null;
       /** The thread's session, whose failed turn the agent chat's actions recover; `null` while not known. */
       readonly sessionChatId: string | null;
-      /** The post the thread opens on, which a reply with no message above it in the thread answers. */
-      readonly originPost: BotChatMessageRef;
     };
-
-/**
- * Opens one turn of the bot, "How Tracy answered", with the member's message
- * it answered (`null` for none).
- */
-export type BotTurnOpen = (
-  ref: BotTurnRef,
-  question: BotChatMessageRef | null,
-) => void;
 
 /**
  * Sends a question card's answer or Skip to the question on the row
@@ -277,7 +267,8 @@ function useResubscribeOnNextSend(input: {
  * A channel or thread draws, under each reply of the bot and under a post it
  * failed to answer, the receipt of the turn behind it (Tracy Bots T86), as
  * the bound host names the turns (`bot.turn.locate`); the receipt opens the
- * turn through the surface. A post its session failed on, where that session
+ * turn's session, read-only and landed on the turn (T93), through the
+ * surface. A post its session failed on, where that session
  * names the post's turn as its last failed attempt, says so with the agent
  * chat's reason and actions.
  */
@@ -291,7 +282,7 @@ export function BotChatTranscript(props: {
   readonly resolveMember: BotMemberResolver;
   readonly showConnecting: boolean;
   /** A message the list lands on once it loads; `null` keeps where it opens. */
-  readonly landOnMessageId: string | null;
+  readonly landOn: BotTranscriptLanding | null;
 }): ReactNode {
   const { botId, chatId, hostId, title, instanceId, surface, resolveMember } =
     props;
@@ -323,7 +314,7 @@ export function BotChatTranscript(props: {
         instanceId={instanceId}
         surface={surface}
         resolveMember={resolveMember}
-        landOnMessageId={props.landOnMessageId}
+        landOn={props.landOn}
       />
     </TileErrorBoundary>
   );
@@ -357,7 +348,7 @@ function BotChatTranscriptBody(props: {
   readonly instanceId: string;
   readonly surface: BotTranscriptSurface | null;
   readonly resolveMember: BotMemberResolver;
-  readonly landOnMessageId: string | null;
+  readonly landOn: BotTranscriptLanding | null;
 }): ReactNode {
   const {
     handle,
@@ -368,7 +359,7 @@ function BotChatTranscriptBody(props: {
     instanceId,
     surface,
     resolveMember,
-    landOnMessageId,
+    landOn,
   } = props;
   const { state, messages } = useBotSessionMessages({
     handle,
@@ -400,63 +391,101 @@ function BotChatTranscriptBody(props: {
   // id is held as pending, the host locates its ordinal, the store hydrates
   // around it (`requestTranscriptOrdinal`), and the scroll is issued the
   // moment the row renders.
-  const [scrollRequest, setScrollRequest] =
-    useState<ChatMessageScrollRequest | null>(null);
-  const [pendingReplyId, setPendingReplyId] = useState<string | null>(null);
-  const issueScroll = useCallback((rowId: string) => {
-    setScrollRequest((previous) => ({
-      kind: "message",
-      messageId: rowId,
-      blockId: null,
-      requestId: (previous?.requestId ?? 0) + 1,
-    }));
-  }, []);
-  const scrollToMessage = useCallback(
-    (messageId: string) => {
-      const rowId = replyRowIdFor(messages, messageId);
-      if (rowId !== null) {
-        setPendingReplyId(null);
-        issueScroll(rowId);
+  // Requests are numbered past every one issued, settled ones included: the
+  // list drops a request whose id it has handled, and a settled request is
+  // cleared.
+  const [scroll, setScroll] = useState<{
+    readonly request: ChatMessageScrollRequest | null;
+    readonly issued: number;
+  }>({ request: null, issued: 0 });
+  const scrollRequest = scroll.request;
+  const [pendingJump, setPendingJump] = useState<PendingJump | null>(null);
+  const issueScroll = useCallback(
+    (target: { readonly rowId: string; readonly blockId: string | null }) => {
+      setScroll((previous) => ({
+        request: {
+          kind: "message",
+          messageId: target.rowId,
+          blockId: target.blockId,
+          requestId: previous.issued + 1,
+        },
+        issued: previous.issued + 1,
+      }));
+    },
+    [],
+  );
+  const jumpTo = useCallback(
+    (jump: PendingJump) => {
+      const target = jumpTargetIn(messages, jump);
+      if (target !== null) {
+        setPendingJump(null);
+        issueScroll(target);
         return;
       }
-      setPendingReplyId(messageId);
+      setPendingJump(jump);
     },
     [issueScroll, messages],
+  );
+  const scrollToMessage = useCallback(
+    (messageId: string) => jumpTo({ kind: "message", messageId }),
+    [jumpTo],
+  );
+  const land = useCallback(
+    (landing: BotTranscriptLanding) =>
+      jumpTo(
+        landing.sendPostId === null
+          ? { kind: "message", messageId: landing.messageId }
+          : {
+              kind: "send",
+              postId: landing.sendPostId,
+              fallbackMessageId: landing.messageId,
+            },
+      ),
+    [jumpTo],
   );
   // The row a pending jump waited on has rendered: settle it during render
   // (the adjust-state-on-prop-change pattern), so the scroll is issued in the
   // same pass the row appears in and no effect sets state.
-  const pendingRowId =
-    pendingReplyId === null ? null : replyRowIdFor(messages, pendingReplyId);
-  if (pendingRowId !== null) {
-    setPendingReplyId(null);
-    issueScroll(pendingRowId);
+  const pendingTarget =
+    pendingJump === null ? null : jumpTargetIn(messages, pendingJump);
+  if (pendingTarget !== null) {
+    setPendingJump(null);
+    issueScroll(pendingTarget);
   }
-  const pendingTarget = useMemo<TranscriptRowLocator | null>(
-    () =>
-      pendingReplyId === null
-        ? null
-        : { kind: "message", messageId: pendingReplyId },
-    [pendingReplyId],
-  );
-  const locatedOrdinal = useChatLocateRow({
+  // A send's card is located by the post its call wrote; a message by its id.
+  const pendingLocator = useMemo<TranscriptRowLocator | null>(() => {
+    if (pendingJump === null) return null;
+    return pendingJump.kind === "message"
+      ? { kind: "message", messageId: pendingJump.messageId }
+      : { kind: "receipt", messageId: pendingJump.postId };
+  }, [pendingJump]);
+  const located = useChatLocateRowAnswer({
     client: tabClient,
     epicId: botId,
     chatId,
-    target: pendingTarget,
+    target: pendingLocator,
     epoch: state.transcriptWindow.epoch,
   });
+  // A session with no card for the post (a send from before the host stamped
+  // its post, or a host that does not locate one) lands on the turn instead.
+  if (pendingJump?.kind === "send" && located.status === "missing") {
+    setPendingJump({
+      kind: "message",
+      messageId: pendingJump.fallbackMessageId,
+    });
+  }
+  const locatedOrdinal = located.status === "found" ? located.ordinal : null;
   const { requestTranscriptOrdinal } = state;
-  // The store's pending-jump ordinal follows the pending reply: named while
+  // The store's pending-jump ordinal follows the pending jump: named while
   // the host has located it and the row is still missing, cleared the moment
   // the jump settles (or the transcript goes away).
   useEffect(() => {
-    if (pendingReplyId === null || locatedOrdinal === null) {
+    if (pendingJump === null || locatedOrdinal === null) {
       requestTranscriptOrdinal(null);
       return;
     }
     requestTranscriptOrdinal(locatedOrdinal);
-  }, [locatedOrdinal, pendingReplyId, requestTranscriptOrdinal]);
+  }, [locatedOrdinal, pendingJump, requestTranscriptOrdinal]);
   useEffect(
     () => () => {
       requestTranscriptOrdinal(null);
@@ -464,17 +493,18 @@ function BotChatTranscriptBody(props: {
     [requestTranscriptOrdinal],
   );
   const onScrollRequestSettled = useCallback((requestId: number) => {
-    setScrollRequest((current) =>
-      current !== null && current.requestId === requestId ? null : current,
+    setScroll((current) =>
+      current.request !== null && current.request.requestId === requestId
+        ? { request: null, issued: current.issued }
+        : current,
     );
   }, []);
-  useLandOnMessage(landOnMessageId, state.snapshotLoaded, scrollToMessage);
+  useLandOnMessage(landOn, state.snapshotLoaded, land);
   const getMessageActions = useCallback(() => null, []);
   const turns = useTranscriptTurns({
     client: tabClient,
     hostId,
     botId,
-    chatId,
     messages,
     surface,
   });
@@ -498,7 +528,7 @@ function BotChatTranscriptBody(props: {
         threadLine: null,
         openThread: null,
         openAnnouncementThread: null,
-        answerThreads: false,
+        threadAnchorKinds: [],
         chooseOption: surface.chooseOption,
         questions,
         failedRequest: surface.failedRequest,
@@ -514,7 +544,7 @@ function BotChatTranscriptBody(props: {
       threadLine: surface.threadLine,
       openThread: surface.openThread,
       openAnnouncementThread: surface.openAnnouncementThread,
-      answerThreads: surface.answerThreads,
+      threadAnchorKinds: surface.threadAnchorKinds,
       chooseOption: surface.chooseOption,
       questions,
       failedRequest: surface.failedRequest,
@@ -572,29 +602,31 @@ function BotChatTranscriptBody(props: {
               directive={intro.directive}
             />
           ) : (
-            <ChatMessages
-              taskTitle={title}
-              taskId={chatId}
-              epicId={botId}
-              hostId={hostId}
-              messages={messages}
-              transcriptWindow={transcriptWindow}
-              onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
-              onFindReadOrdinalChange={state.requestFindReadOrdinal}
-              baselineEpoch={state.transcriptBaselineEpoch}
-              hydrationSequence={state.transcriptHydrationSequence}
-              coldRewrittenMessageIds={state.coldRewrittenMessageIds}
-              backgroundItems={state.backgroundItems}
-              getMessageActions={getMessageActions}
-              nextStepActions={null}
-              instanceId={instanceId}
-              visible
-              systemOverlayActive={false}
-              scrollRequest={scrollRequest}
-              onScrollRequestSettled={onScrollRequestSettled}
-              composerOverlayHeight={0}
-              subagentDrillIn={subagentDrillIn}
-            />
+            <TasklessMarkdownLinkProvider tabId={instanceId} tabHostId={hostId}>
+              <ChatMessages
+                taskTitle={title}
+                taskId={chatId}
+                epicId={botId}
+                hostId={hostId}
+                messages={messages}
+                transcriptWindow={transcriptWindow}
+                onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
+                onFindReadOrdinalChange={state.requestFindReadOrdinal}
+                baselineEpoch={state.transcriptBaselineEpoch}
+                hydrationSequence={state.transcriptHydrationSequence}
+                coldRewrittenMessageIds={state.coldRewrittenMessageIds}
+                backgroundItems={state.backgroundItems}
+                getMessageActions={getMessageActions}
+                nextStepActions={null}
+                instanceId={instanceId}
+                visible
+                systemOverlayActive={false}
+                scrollRequest={scrollRequest}
+                onScrollRequestSettled={onScrollRequestSettled}
+                composerOverlayHeight={0}
+                subagentDrillIn={subagentDrillIn}
+              />
+            </TasklessMarkdownLinkProvider>
           )}
         </div>
       </ChatBotPresentationContext.Provider>
@@ -603,20 +635,67 @@ function BotChatTranscriptBody(props: {
 }
 
 /**
- * A list opened to show one turn lands on its message once the snapshot is
- * in, once per message: settled during render (the adjust-state-on-prop-change
+ * A message the list lands on, and the visit that asks it to: a request to
+ * land on the message the list last landed on is a new visit, and lands
+ * again. `sendPostId` names a post one of the session's sends wrote (Tracy
+ * Bots T94): the list lands on that send's card instead, and on `messageId`
+ * where the session has no such card.
+ */
+export interface BotTranscriptLanding {
+  readonly messageId: string;
+  readonly sendPostId: string | null;
+  readonly visit: number;
+}
+
+/**
+ * A list opened to show one message lands on it once the snapshot is in,
+ * once per visit: settled during render (the adjust-state-on-prop-change
  * pattern), as a pending jump is, so no effect sets state.
  */
 function useLandOnMessage(
-  messageId: string | null,
+  landing: BotTranscriptLanding | null,
   ready: boolean,
-  scrollToMessage: (messageId: string) => void,
+  land: (landing: BotTranscriptLanding) => void,
 ): void {
-  const [landedOn, setLandedOn] = useState<string | null>(null);
-  if (messageId !== null && ready && landedOn !== messageId) {
-    setLandedOn(messageId);
-    scrollToMessage(messageId);
+  const [landed, setLanded] = useState<BotTranscriptLanding | null>(null);
+  if (landing !== null && ready && !sameLanding(landed, landing)) {
+    setLanded(landing);
+    land(landing);
   }
+}
+
+/**
+ * A jump waiting on its row: to a message, or to the card of the send that
+ * wrote a post, landing on `fallbackMessageId` where the session has none.
+ */
+type PendingJump =
+  | { readonly kind: "message"; readonly messageId: string }
+  | {
+      readonly kind: "send";
+      readonly postId: string;
+      readonly fallbackMessageId: string;
+    };
+
+/** Where a jump lands among the rendered rows; `null` while no row carries it. */
+function jumpTargetIn(
+  messages: ReadonlyArray<ChatMessage>,
+  jump: PendingJump,
+): { readonly rowId: string; readonly blockId: string | null } | null {
+  if (jump.kind === "send") return sendCardFor(messages, jump.postId);
+  const rowId = replyRowIdFor(messages, jump.messageId);
+  return rowId === null ? null : { rowId, blockId: null };
+}
+
+function sameLanding(
+  landed: BotTranscriptLanding | null,
+  landing: BotTranscriptLanding,
+): boolean {
+  return (
+    landed !== null &&
+    landed.messageId === landing.messageId &&
+    landed.sendPostId === landing.sendPostId &&
+    landed.visit === landing.visit
+  );
 }
 
 /** The turn receipts and failed-turn recovery a channel or thread draws, for its presentation. */
@@ -635,19 +714,18 @@ const NO_TURNS: TranscriptTurns = {
  * The turns behind a channel's or thread's rows: one `bot.turn.locate` for
  * the replies it renders and the posts it draws as not answered, read again
  * as those change and as the bot's turns settle; and the receipt each row
- * draws, which opens the turn with the member's message it answered. Where
- * the surface's session names a post's turn as its last failed attempt, the
- * agent chat's reason and actions.
+ * draws, which opens the turn's session landed on it. Where the surface's
+ * session names a post's turn as its last failed attempt, the agent chat's
+ * reason and actions.
  */
 function useTranscriptTurns(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly hostId: string;
   readonly botId: string;
-  readonly chatId: string;
   readonly messages: ReadonlyArray<ChatMessage>;
   readonly surface: BotTranscriptSurface | null;
 }): TranscriptTurns {
-  const { client, hostId, botId, chatId, messages, surface } = input;
+  const { client, hostId, botId, messages, surface } = input;
   const failedRequest = surface?.failedRequest ?? null;
   const keys = useMemo(
     () => turnLocateKeysOf(messages, failedRequest),
@@ -675,48 +753,31 @@ function useTranscriptTurns(input: {
     sessionChatId: surface?.sessionChatId ?? null,
     turnOfRequest,
   });
-  const rows = useMemo(() => transcriptRowsOf(messages), [messages]);
   const openTurn = surface?.openTurn ?? null;
-  const originPost = surface?.kind === "thread" ? surface.originPost : null;
   return useMemo((): TranscriptTurns => {
     if (surface === null) return NO_TURNS;
     return {
       replyReceipt:
         openTurn === null
           ? null
-          : (messageIds) =>
-              replyReceiptOf({
-                index,
-                messages,
-                rows,
-                messageIds,
-                chatId,
-                originPost,
-                openTurn,
-              }),
+          : (messageIds) => {
+              const ref = turnOfMessages(index, messageIds);
+              // The reply's own post leads its ids: the session lands on the
+              // card of the send that wrote it.
+              return ref === null
+                ? null
+                : receiptOf(ref, openTurn, messageIds[0] ?? null);
+            },
       requestReceipt:
         openTurn === null
           ? null
           : (requestId) => {
               const ref = index.byRequestId.get(requestId);
-              if (ref === undefined) return null;
-              const postId = rows.postIdByRequestId.get(requestId) ?? null;
-              const question =
-                postId === null ? null : { chatId, messageId: postId };
-              return receiptOf(ref, () => openTurn(ref, question));
+              return ref === undefined ? null : receiptOf(ref, openTurn, null);
             },
       failedRecovery,
     };
-  }, [
-    chatId,
-    failedRecovery,
-    index,
-    messages,
-    openTurn,
-    originPost,
-    rows,
-    surface,
-  ]);
+  }, [failedRecovery, index, openTurn, surface]);
 }
 
 const NO_TURN_KEYS: ReadonlyArray<{ chatId: string; turnId: string }> = [];
@@ -755,87 +816,15 @@ function turnLocateKeysOf(
   return { messageIds, requestIds };
 }
 
-/**
- * Where each row of the list is, read once per list rather than once per
- * row's receipt: a record's row by every record it carries (its own and
- * its turn's), and a member's post by its request.
- */
-type TranscriptRows = {
-  readonly rowByMessageId: ReadonlyMap<string, number>;
-  readonly postIdByRequestId: ReadonlyMap<string, string | null>;
-};
-
-function transcriptRowsOf(
-  messages: ReadonlyArray<ChatMessage>,
-): TranscriptRows {
-  const rowByMessageId = new Map<string, number>();
-  const postIdByRequestId = new Map<string, string | null>();
-  messages.forEach((message, at) => {
-    const ids = [
-      message.persistentMessageId,
-      ...(message.turnMessageIds ?? []),
-    ];
-    for (const id of ids) {
-      if (id !== null && !rowByMessageId.has(id)) rowByMessageId.set(id, at);
-    }
-    const requestId = message.conversationRequest?.requestId;
-    if (requestId !== undefined && !postIdByRequestId.has(requestId)) {
-      postIdByRequestId.set(requestId, message.persistentMessageId);
-    }
-  });
-  return { rowByMessageId, postIdByRequestId };
-}
-
-function receiptOf(ref: BotTurnRef, open: () => void): ChatBotTurnReceipt {
+function receiptOf(
+  ref: BotTurnRef,
+  openTurn: BotTurnOpen,
+  sendPostId: string | null,
+): ChatBotTurnReceipt {
   return {
     summary: ref.summary,
     startedAt: ref.startedAt,
     endedAt: ref.endedAt,
-    open,
+    open: () => openTurn(ref, sendPostId),
   };
-}
-
-/**
- * A reply's receipt, which opens its turn with the member's message it
- * answered: the post a direct reply names, else the nearest member's message
- * above it in the list, else, in a thread, the post the thread opens on.
- */
-function replyReceiptOf(input: {
-  readonly index: BotTurnIndex;
-  readonly messages: ReadonlyArray<ChatMessage>;
-  readonly rows: TranscriptRows;
-  readonly messageIds: ReadonlyArray<string>;
-  readonly chatId: string;
-  readonly originPost: BotChatMessageRef | null;
-  readonly openTurn: BotTurnOpen;
-}): ChatBotTurnReceipt | null {
-  const { index, messages, rows, messageIds, chatId, originPost, openTurn } =
-    input;
-  const ref = turnOfMessages(index, messageIds);
-  if (ref === null) return null;
-  // The first row carrying any of the reply's records, as a scan would find.
-  let at = -1;
-  for (const id of messageIds) {
-    const row = rows.rowByMessageId.get(id);
-    if (row !== undefined && (at === -1 || row < at)) at = row;
-  }
-  const question = questionAbove(messages, at, chatId) ?? originPost;
-  return receiptOf(ref, () => openTurn(ref, question));
-}
-
-function questionAbove(
-  messages: ReadonlyArray<ChatMessage>,
-  at: number,
-  chatId: string,
-): BotChatMessageRef | null {
-  if (at === -1) return null;
-  const repliesTo = messages[at].repliesTo;
-  if (repliesTo !== undefined) return { chatId, messageId: repliesTo };
-  for (let i = at - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (message.role !== "user") continue;
-    if (message.persistentMessageId === null) continue;
-    return { chatId, messageId: message.persistentMessageId };
-  }
-  return null;
 }

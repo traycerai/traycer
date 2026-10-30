@@ -1687,6 +1687,13 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A member's answer or decision from a surface card: each action is the
+  // person's own, sent in order and never joined with another.
+  "bot.surface.act": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   // A read of the bound host's thread records, never polled: the bot's
   // `bot.subscribe` snapshot moves `conversationsRevision` on every row
   // written there, and the subscription reads the listing again then.
@@ -2583,6 +2590,16 @@ export const HOST_METHOD_POLL_TABLE = {
     ...LATEST_SCHEDULING,
     poll: CONFIGURATION_READ_POLL,
   },
+  // Read beside the list it overlays, on the same cadence, so another
+  // editor's update or restore reaches this page's versions and Restore.
+  "environment.configuration.skills.state": {
+    ...LATEST_SCHEDULING,
+    poll: CONFIGURATION_READ_POLL,
+  },
+  "environment.configuration.skills.search": {
+    ...LATEST_SCHEDULING,
+    poll: null,
+  },
   "environment.move.accept": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
@@ -2629,6 +2646,26 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: null,
   },
   "environment.configuration.skills.setProviders": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.setPolicy": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.update": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.restoreBundled": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
+  "environment.configuration.skills.import": {
     mode: "fifo",
     joinResponseTimeoutMs: null,
     poll: null,

@@ -175,18 +175,16 @@ describe("runDoctor host credential needs-reauth", () => {
       "a freshly refreshed credential was itself rejected",
     );
     expect(issue?.message).toContain("2026-08-21T15:12:00.000Z");
-    // NEITHER, and the terminal command especially: Desktop renders "Open in
-    // Terminal" for any non-null `terminalCommand`, and `traycer login` signs
-    // the HUMAN in - it cannot provision the HOST's credential, so the button
-    // could only ever look like it had failed.
+    // `traycer login` hands a RUNNING host a fresh credential, so it is the
+    // terminal command - and the only recovery on a machine without Desktop.
+    // The message names the running-host condition and the Desktop route,
+    // asserted rather than left to the prose: it once ruled out signing in
+    // again without saying what does work, a dead end no test noticed.
     expect(issue?.fixAction).toBeNull();
-    expect(issue?.terminalCommand).toBeNull();
-    // ...which is exactly why the message has to carry the repair itself, and
-    // why that is asserted rather than left to the prose. With both action
-    // fields null this text is the whole recovery path the CLI report and
-    // Desktop's card can show, and it once ruled out signing in again without
-    // ever saying what does work - a dead end that no test noticed, because
-    // only a comment claimed the instruction was there.
+    expect(issue?.terminalCommand).toBe("traycer login");
+    expect(issue?.message).toContain(
+      "while the host is running: run `traycer login` on this machine",
+    );
     expect(issue?.message).toContain("open the Traycer desktop app");
     expect(issue?.message).toContain("provisions a new credential");
     expect(issue?.details).toMatchObject({

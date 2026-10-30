@@ -131,6 +131,7 @@ const RATE_LIMIT_UNAVAILABLE_REASON_LABELS: Record<
   connection_failed: "couldn't connect to the provider",
   sdk_incompatible: "this SDK version doesn't support usage limits",
   rate_limits_not_available: "not available for this account",
+  not_signed_in: "the CLI isn't signed in",
   insufficient_permissions:
     "this account doesn't have permission to view usage",
   // Transient - the CLI's own usage-HTTP fetch failed (timeout, a 401 with a

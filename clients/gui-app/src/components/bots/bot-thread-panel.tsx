@@ -12,10 +12,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { ChatBotMessage } from "@/components/chat/chat-bot-message";
 import { BotAvatar } from "@/components/bots/bot-avatars";
-import {
-  BotChatTranscript,
-  type BotTurnOpen,
-} from "@/components/bots/bot-chat-transcript";
+import { BotChatTranscript } from "@/components/bots/bot-chat-transcript";
 import { useBotFailedRecovery } from "@/components/bots/bot-failed-recovery";
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
 import { useBotTurnLocateQuery } from "@/hooks/bots/use-bot-turn-locate-query";
@@ -47,7 +44,10 @@ import {
   useBotActivity,
 } from "@/hooks/bots/use-bot-activity";
 import { useBotFailedRequest } from "@/hooks/bots/use-bot-failed-request";
-import type { QuestionAnswerSend } from "@/components/bots/bot-chat-transcript";
+import type {
+  BotTranscriptLanding,
+  QuestionAnswerSend,
+} from "@/components/bots/bot-chat-transcript";
 import type {
   ChatBotPresentation,
   ChatBotQuestions,
@@ -58,6 +58,10 @@ import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { threadOriginRow } from "@/lib/bots/reply-row";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
+import type {
+  BotSessionOpen,
+  BotTurnOpen,
+} from "@/stores/bots/bot-open-thread-store";
 import type { BotSentPost } from "@/stores/bots/bot-open-thread-store";
 import { cn } from "@/lib/utils";
 
@@ -70,9 +74,9 @@ import { cn } from "@/lib/utils";
  * failed.
  *
  * `sendable` says whether a thread with a box takes a send - a reply, a
- * picked option, a retry or an edit: `false` while its post is the bot's
- * direct reply and the bot's binding does not open a thread under one. The
- * box and its draft stay.
+ * picked option, a retry or an edit: `false` while its post is a row of the
+ * bot the bot's binding does not open a thread under, or one not read yet.
+ * The box and its draft stay.
  */
 export type BotThreadPanelThread =
   | {
@@ -115,9 +119,10 @@ export type BotThreadPanelThread =
  * edited in the thread's box; the post the thread opens on is edited in the
  * channel's box (`onEditPost`), since its replacement is a new post.
  *
- * A reply's receipt, and a failed post's, opens its turn in the rail in the
- * thread's place (`onOpenTurn`), whose header brings the thread back. The
- * thread session's routing card sits above the panel's box.
+ * A reply's receipt, and a failed post's, opens its turn's session in place
+ * of the channel (`onOpenTurn`), and "Thread session" in the header opens the
+ * thread's session there (`onOpenSession`), read-only (T93). The thread
+ * session's routing card sits above the panel's box.
  *
  * A question card in the thread answers in the thread. A member whose answer
  * someone else's overtook takes it to the discussion: the thread's box, with
@@ -147,10 +152,14 @@ export function BotThreadPanel(props: {
   readonly onClose: () => void;
   readonly onOpenActivity: () => void;
   readonly onEditPost: (edit: BotComposerEdit) => void;
-  /** Opens a turn of the bot in the rail, in the thread's place. */
+  /** Opens a turn of the bot: its session, in place of the channel. */
   readonly onOpenTurn: BotTurnOpen;
+  /** Opens the thread's session in place of the channel. */
+  readonly onOpenSession: BotSessionOpen;
+  /** A message of the thread its replies land on as they open; `null` keeps where they open. */
+  readonly landOn: BotTranscriptLanding | null;
 }): ReactNode {
-  const { botTitle, onClose, onOpenActivity } = props;
+  const { botTitle, onClose, onOpenActivity, onOpenSession } = props;
   const thread = props.thread.kind === "listed" ? props.thread.thread : null;
   const threadId =
     props.thread.kind === "posted"
@@ -178,6 +187,24 @@ export function BotThreadPanel(props: {
             <span className="truncate">{botTitle}</span>
           </span>
         </div>
+        {thread === null ? null : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            data-testid="bot-thread-session"
+            onClick={() =>
+              onOpenSession({
+                chatId: thread.sessionChatId,
+                threadId: thread.threadId,
+                messageId: null,
+                sendPostId: null,
+              })
+            }
+          >
+            Thread session
+          </Button>
+        )}
         <Button
           type="button"
           variant="ghost"
@@ -226,6 +253,7 @@ type ThreadPanelBodyProps = {
   readonly resolveMember: BotMemberResolver;
   readonly onEditPost: (edit: BotComposerEdit) => void;
   readonly onOpenTurn: BotTurnOpen;
+  readonly landOn: BotTranscriptLanding | null;
   readonly sendFailure: BotSendFailure;
 };
 
@@ -301,14 +329,10 @@ function ThreadOrigin(props: ThreadPanelBodyProps): ReactNode {
         summary: ref.summary,
         startedAt: ref.startedAt,
         endedAt: ref.endedAt,
-        open: () =>
-          onOpenTurn(ref, {
-            chatId: conversationId,
-            messageId: originMessageId,
-          }),
+        open: () => onOpenTurn(ref, null),
       };
     },
-    [conversationId, onOpenTurn, originMessageId, turnOfRequest],
+    [onOpenTurn, turnOfRequest],
   );
   const failedRequest = useBotFailedRequest({
     client,
@@ -496,7 +520,7 @@ function originPresentation(
     threadLine: null,
     openThread: null,
     openAnnouncementThread: null,
-    answerThreads: false,
+    threadAnchorKinds: [],
     chooseOption: null,
     questions,
     failedRequest,
@@ -703,7 +727,7 @@ function KnownThread(
     onEdit,
     onDiscuss,
     onOpenTurn,
-    originMessageId,
+    landOn,
   } = props;
   const client = useTabHostClient();
   const {
@@ -803,7 +827,6 @@ function KnownThread(
       failedRequest: failedRequestShown,
       openTurn: onOpenTurn,
       sessionChatId: listed?.sessionChatId ?? null,
-      originPost: { chatId: conversationId, messageId: originMessageId },
     }),
     [
       answerQuestion,
@@ -816,7 +839,6 @@ function KnownThread(
       listed?.sessionChatId,
       onDiscuss,
       onOpenTurn,
-      originMessageId,
       send,
       sendable,
       sending,
@@ -857,7 +879,7 @@ function KnownThread(
             surface={surface}
             resolveMember={resolveMember}
             showConnecting={hasReplies}
-            landOnMessageId={null}
+            landOn={landOn}
           />
         </div>
       )}

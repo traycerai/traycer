@@ -16,6 +16,9 @@ import {
   botListRequestSchema,
   botListResponseSchema,
   botListResponseSchemaV10,
+  botMemorySubscribeClientFrameSchema,
+  botMemorySubscribeOpenRequestSchema,
+  botMemorySubscribeServerFrameSchema,
   botOpenRequestSchema,
   botOpenResponseSchema,
   botReadRequestSchema,
@@ -27,6 +30,8 @@ import {
   botSubscribeServerFrameSchemaV11,
   botSubscribeServerFrameSchemaV12,
   botSubscribeServerFrameSchemaV13,
+  botSubscribeServerFrameSchemaV14,
+  botSubscribeServerFrameSchemaV15,
   botUpdateResponseSchema,
   botUpdateRunSettingsRequestSchema,
   botUpdateDirectiveRequestSchema,
@@ -57,7 +62,12 @@ import {
   botOnboardingCompleteResponseSchema,
   botOnboardingReadRequestSchema,
   botOnboardingReadResponseSchema,
+  botOnboardingReadResponseSchemaV10,
 } from "./onboarding-schemas";
+import {
+  botSurfaceActRequestSchema,
+  botSurfaceActResponseSchema,
+} from "./surface-schemas";
 import {
   botNotificationsStopRequestSchema,
   botNotificationsStopResponseSchema,
@@ -351,7 +361,27 @@ export const botOnboardingReadV10 = defineRpcContract({
   method: "bot.onboarding.read",
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botOnboardingReadRequestSchema,
+  responseSchema: botOnboardingReadResponseSchemaV10,
+});
+
+/**
+ * `bot.onboarding.read@1.1` (T67): the team's main bot while it is still to
+ * be set up. A `1.0` host offers no setup.
+ */
+export const botOnboardingReadV11 = defineRpcContract({
+  method: "bot.onboarding.read",
+  schemaVersion: { major: 1, minor: 1 } as const,
+  requestSchema: botOnboardingReadRequestSchema,
   responseSchema: botOnboardingReadResponseSchema,
+});
+export const botOnboardingReadUpgradeV10ToV11 = defineUpgradePath<
+  typeof botOnboardingReadV10,
+  typeof botOnboardingReadV11
+>({
+  from: botOnboardingReadV10.schemaVersion,
+  to: botOnboardingReadV11.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({ ...response, setup: null }),
 });
 
 export const botOnboardingChooseV10 = defineRpcContract({
@@ -433,8 +463,47 @@ export const botSubscribeV14 = defineStreamRpcContract({
   method: "bot.subscribe",
   schemaVersion: { major: 1, minor: 4 } as const,
   openRequestSchema: botSubscribeOpenRequestSchema,
+  serverFrameSchema: botSubscribeServerFrameSchemaV14,
+  clientFrameSchema: botSubscribeClientFrameSchema,
+});
+
+/**
+ * `bot.subscribe@1.5` (T89): each task entry carries what its agents wait on
+ * a person for (`inputNeeded`), and the snapshot this subscriber's own
+ * answers and decisions still on their way to a task's host
+ * (`surfaceActions`). A 1.4 subscriber's snapshot carries neither.
+ */
+export const botSubscribeV15 = defineStreamRpcContract({
+  method: "bot.subscribe",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  openRequestSchema: botSubscribeOpenRequestSchema,
+  serverFrameSchema: botSubscribeServerFrameSchemaV15,
+  clientFrameSchema: botSubscribeClientFrameSchema,
+});
+
+/**
+ * `bot.subscribe@1.6` (T71): a failed turn's reason may offer
+ * `update-provider`, which updates the provider's command-line tool on the
+ * bot's host. A 1.5 subscriber's frames carry `none` in its place.
+ */
+export const botSubscribeV16 = defineStreamRpcContract({
+  method: "bot.subscribe",
+  schemaVersion: { major: 1, minor: 6 } as const,
+  openRequestSchema: botSubscribeOpenRequestSchema,
   serverFrameSchema: botSubscribeServerFrameSchema,
   clientFrameSchema: botSubscribeClientFrameSchema,
+});
+
+/**
+ * `bot.surface.act@1.0` (T89): a member answers a task agent's question, or
+ * decides its tool approval, from the card under a bot's post. Optional: a
+ * host that predates it advertises nothing and the card offers Open.
+ */
+export const botSurfaceActV10 = defineRpcContract({
+  method: "bot.surface.act",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botSurfaceActRequestSchema,
+  responseSchema: botSurfaceActResponseSchema,
 });
 
 /**
@@ -450,4 +519,18 @@ export const botListChangedV10 = defineStreamRpcContract({
   openRequestSchema: botListChangedOpenRequestSchema,
   serverFrameSchema: botListChangedServerFrameSchema,
   clientFrameSchema: botListChangedClientFrameSchema,
+});
+
+/**
+ * `bot.memory.subscribe@1.0` (T87) - what a bot knows: the entries of the
+ * environment's memory pool tagged the bot or `all`, whole, on open and
+ * after every change to the pool. Read-only: nothing on the stream changes
+ * an entry; the bot writes them through its memory tool.
+ */
+export const botMemorySubscribeV10 = defineStreamRpcContract({
+  method: "bot.memory.subscribe",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  openRequestSchema: botMemorySubscribeOpenRequestSchema,
+  serverFrameSchema: botMemorySubscribeServerFrameSchema,
+  clientFrameSchema: botMemorySubscribeClientFrameSchema,
 });

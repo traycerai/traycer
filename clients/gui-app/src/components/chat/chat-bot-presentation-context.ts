@@ -22,7 +22,8 @@ export interface ChatBotThreadLine {
  * A message the bot failed to answer, or whose answer is held: why, and what
  * a member can do about it: send it to the bot again as it is, on their own
  * message put its text back in the box to edit and send as a new message
- * that replaces it, and sign in where that is the fix.
+ * that replaces it, sign in where that is the fix, and update the provider's
+ * command-line tool where that is.
  */
 export interface ChatBotFailedRequest {
   /** `failed`: the answer errored; `parked`: it is held and has not started. */
@@ -31,6 +32,15 @@ export interface ChatBotFailedRequest {
   readonly summary: string | null;
   /** Opens the provider's sign-in on the bot's host; `null` unless signing in is the fix. */
   readonly signIn: (() => void) | null;
+  /**
+   * Updates the provider's command-line tool on the bot's host; `null`
+   * unless an out-of-date tool is the fix and that host can update it.
+   */
+  readonly update: (() => void) | null;
+  /** `true` from the press until the host's install of the update settles. */
+  readonly updating: boolean;
+  /** Why the last update did not take; `null` otherwise. */
+  readonly updateFailure: string | null;
   /**
    * Sends it again; `text` is the message's own. `null` where it cannot be
    * sent again: a host that cannot re-deliver, or a message whose text is not
@@ -59,7 +69,7 @@ export interface ChatBotTurnReceipt {
   readonly startedAt: number;
   /** When the turn ended; `null` while it runs. */
   readonly endedAt: number | null;
-  /** Opens the turn beside the channel, "How Tracy answered". */
+  /** Opens the turn's session, read-only and landed on the turn. */
   readonly open: () => void;
 }
 
@@ -143,21 +153,24 @@ export interface ChatBotPresentation {
   /** Opens the thread of a channel post; `null` in a thread. */
   readonly openThread: ((postMessageId: string) => void) | null;
   /**
-   * Opens the thread under a question, a proposal, a direct post or, where
-   * `answer`, the bot's direct reply, by the row's message id: its thread
-   * when it has one, else a box whose first reply opens it. `null` in a
-   * thread.
+   * Opens the thread under a question, a proposal, a direct post or another
+   * row of the bot, by the row's message id: its thread when it has one,
+   * else a box whose first reply opens it. `anchorKind` is the thread
+   * anchor the bot's host must name for that box to send (`"answer"` for
+   * its direct reply, `"message"` for any other row of it), `null` for a
+   * row every host takes a reply under. `null` in a thread.
    */
   readonly openAnnouncementThread:
-    | ((announcementId: string, answer: boolean) => void)
+    | ((announcementId: string, anchorKind: string | null) => void)
     | null;
   /**
-   * Whether the bot's host opens a thread under a direct reply of the bot
-   * (decision 114), so the reply opens its own thread and carries its line;
-   * `false` where it does not say, and a direct reply then opens the thread
-   * under the post it answers.
+   * The rows beyond a post, a question, a proposal and a direct post that
+   * the bot's host opens a thread under (`threadAnchors.kinds`, decision 114
+   * and T68): a row it names opens its own thread and carries its line.
+   * Empty where it does not say: a direct reply then opens the thread under
+   * the post it answers, and any other row of the bot opens none.
    */
-  readonly answerThreads: boolean;
+  readonly threadAnchorKinds: readonly string[];
   /**
    * Posts one of a bot reply's options as the person's next message: in the
    * thread, or a new post in the channel for a direct reply's; `null` where

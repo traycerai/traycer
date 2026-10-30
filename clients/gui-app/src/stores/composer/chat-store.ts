@@ -4,6 +4,7 @@ import type { AutoJudgeNoticeMarker } from "@traycer/protocol/persistence/chat-t
 import type {
   BotAnnouncement,
   BotQuestion,
+  BotSurfaceReference,
   ConversationRequest,
 } from "@traycer/protocol/persistence/epic/messages";
 import type {
@@ -31,6 +32,7 @@ import type {
   AgentMessageSend,
   ArtifactOperationAction,
   BackgroundTaskOutput,
+  BotSendReceipt,
   BrowserSessionReference,
   DiffSource,
   FileEditReason,
@@ -166,6 +168,10 @@ export interface ToolSegment {
   // expired or refused. Null for every other tool call, for a send delivered
   // on the same host, and for sends persisted before the host carried this.
   agentMessageDelivery: AgentMessageDelivery | null;
+  // The channel post a bot's send wrote, stamped on the block at completion
+  // (Tracy Bots T94). Null for every other tool call and for sends persisted
+  // before the host carried this.
+  botSendReceipt: BotSendReceipt | null;
   isStreaming: boolean;
   // Terminal outcome when the turn ended mid-flight (else null). See SegmentEndState.
   endState: SegmentEndState;
@@ -788,6 +794,13 @@ export interface ChatMessage {
    * Absent on every other row.
    */
   question?: BotQuestion;
+  /**
+   * What in a task a bot's post points at (Tracy Bots T89) - a question, an
+   * approval, a browser session or an artifact - with how it was settled:
+   * drawn as a card under the row's text, which stands alone for an older
+   * client. Absent on every other row.
+   */
+  surface?: BotSurfaceReference;
   /**
    * The member's post a bot's direct reply answers, by its message id (Tracy
    * Bots, reply mode `direct`), on the bot's row in its channel. Absent on

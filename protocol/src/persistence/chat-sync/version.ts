@@ -162,6 +162,11 @@ import { lazySchema } from "@traycer/protocol/framework/lazy-schema";
 // 1.11 carries compaction.notApplied, defaulted false for older input.
 // Older readers conservatively show failed and preserve the canonical raw field.
 // No reader floor: this changes presentation, not an action the reader takes.
+// 1.11 also carries `tool_call.botSendReceipt` (the post a bot's send wrote),
+// on the still-unreleased-minor rule: `host-v1.5.1` ships chat-sync 1.6.
+// Defaulted `null`, so an older record parses unchanged and a block's raw
+// re-emission carries the key through an older reader. No reader floor: an
+// older reader draws the send without the post's state.
 // 1.12 adds the per-chat Ultracode request to core.settings.
 export const CHAT_SYNC_SCHEMA_VERSION = { major: 1, minor: 12 } as const;
 

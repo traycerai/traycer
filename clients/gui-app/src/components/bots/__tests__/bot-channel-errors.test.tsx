@@ -211,13 +211,13 @@ const LISTED_THREAD: BotThreadSummary = {
 const OPEN_LISTED_THREAD: BotOpenThread = {
   anchorMessageId: POST_ID,
   announcement: false,
-  answer: false,
+  anchorKind: null,
   sent: null,
 };
 const OPEN_UNOPENED_THREAD: BotOpenThread = {
   anchorMessageId: "question-1",
   announcement: true,
-  answer: false,
+  anchorKind: null,
   sent: null,
 };
 
@@ -237,10 +237,16 @@ function mount(openThread: BotOpenThread | null): void {
             directive={null}
             appConversationChatId={CHANNEL_ID}
             trunkChatId="trunk-chat"
-            openTurn={null}
             onOpenTurn={vi.fn()}
+            onOpenSession={vi.fn()}
+            landOn={null}
+            openMemory={null}
+            onOpenMemory={vi.fn()}
+            environmentId="env-1"
+            botNameOf={() => null}
             resolveMember={resolveMember}
             tasks={[]}
+            surfaceActions={null}
             openThread={openThread}
             onOpenThread={vi.fn()}
             onOpenActivity={onOpenActivity}

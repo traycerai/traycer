@@ -1,4 +1,11 @@
-import { useState, type ReactElement, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { Slot } from "radix-ui";
 import { HoverCard } from "@/components/ui/hover-card";
 import {
@@ -7,7 +14,12 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { WorkingShimmerText } from "@/components/ui/working-shimmer-text";
+import { Button } from "@/components/ui/button";
 import { BotAvatar } from "@/components/bots/bot-avatars";
+import {
+  useBotMemoryAccess,
+  type BotMemoryAccess,
+} from "@/components/bots/bot-memory-context";
 import {
   botAccessLine,
   useBotIdentity,
@@ -17,8 +29,12 @@ import {
   useBotActivity,
   type BotActivity,
 } from "@/hooks/bots/use-bot-activity";
+import { useBotMemory } from "@/hooks/bots/use-bot-memory";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { formatClockDuration } from "@/lib/format-duration";
+
+/** Shuts the full card, for a row that opens something else. */
+const CloseCardContext = createContext<() => void>(() => undefined);
 
 /**
  * A trigger that previews a card on hover (after the hover card's intent
@@ -34,6 +50,7 @@ function HoverThenClickCard(props: {
 }): ReactElement {
   const { trigger, preview, full, label, testId } = props;
   const [open, setOpen] = useState(false);
+  const close = useCallback(() => setOpen(false), []);
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <HoverCard
@@ -57,7 +74,7 @@ function HoverThenClickCard(props: {
         className="w-[min(90vw,18rem)]"
         data-testid={testId}
       >
-        {full}
+        <CloseCardContext value={close}>{full}</CloseCardContext>
       </PopoverContent>
     </Popover>
   );
@@ -86,7 +103,8 @@ export function BotIdentityTrigger(props: {
 
 /**
  * The bot's card: its picture, name and owner, what it is doing now, and in
- * the full card who may message it.
+ * the full card who may message it and what it knows, which opens beside
+ * the channel.
  */
 function BotCard(props: {
   readonly identity: BotIdentity;
@@ -120,6 +138,48 @@ function BotCard(props: {
           </span>
         </div>
       ) : null}
+      {full ? <BotMemoryRow /> : null}
+    </div>
+  );
+}
+
+/**
+ * "What it knows · 9 memories ›": how many entries the bot reads before
+ * every reply, its own and those shared with every bot; the row opens them
+ * beside the channel. Nothing outside a bot tab, or on a host that cannot
+ * serve them.
+ */
+function BotMemoryRow(): ReactNode {
+  const access = useBotMemoryAccess();
+  if (access === null) return null;
+  return <BotMemoryCount access={access} />;
+}
+
+function BotMemoryCount(props: {
+  readonly access: BotMemoryAccess;
+}): ReactNode {
+  const { access } = props;
+  const closeCard = useContext(CloseCardContext);
+  const reading = useBotMemory({ ...access, enabled: true });
+  if (reading.kind === "unsupported") return null;
+  const count = reading.kind === "ready" ? reading.memory.entries.length : null;
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="text-ui-xs text-muted-foreground">What it knows</span>
+      <Button
+        type="button"
+        variant="link"
+        size="xs"
+        data-testid="bot-profile-memory"
+        onClick={() => {
+          closeCard();
+          access.open();
+        }}
+      >
+        {count === null
+          ? "Memories ›"
+          : `${count} ${count === 1 ? "memory" : "memories"} ›`}
+      </Button>
     </div>
   );
 }

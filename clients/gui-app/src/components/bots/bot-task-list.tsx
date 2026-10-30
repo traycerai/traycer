@@ -26,7 +26,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicAgentActivity } from "@/stores/agent-activity-store";
 import type {
   BotOpenThread,
-  BotOpenTurn,
+  BotTurnOpen,
 } from "@/stores/bots/bot-open-thread-store";
 import { cn } from "@/lib/utils";
 
@@ -43,8 +43,8 @@ export type BotTaskListPlace =
       /** The bot's channel; `null` from a host that does not name it. */
       readonly channelId: string | null;
       readonly onOpenPost: (open: BotOpenThread) => void;
-      /** Opens a check-in's turn beside the channel. */
-      readonly onOpenTurn: (open: BotOpenTurn) => void;
+      /** Opens a check-in's turn: its session, in place of the channel. */
+      readonly onOpenTurn: BotTurnOpen;
       /** Whether the tab's host is the one running the bot. */
       readonly boundHere: boolean;
       /** A member's name, as the environment's directory knows it. */
@@ -359,7 +359,7 @@ function BotViewOriginLines(props: {
                     anchorMessageId: post.messageId,
                     announcement:
                       post.thread === null || open?.announcement === true,
-                    answer: open?.answer ?? false,
+                    anchorKind: open?.anchorKind ?? null,
                     sent: null,
                   })
                 }
@@ -468,7 +468,7 @@ function CreatorLink(props: {
         place.onOpenPost({
           anchorMessageId,
           announcement: open.announcement,
-          answer: open.answer,
+          anchorKind: open.anchorKind,
           sent: null,
         })
       }

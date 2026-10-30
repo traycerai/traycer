@@ -369,6 +369,7 @@ function emitActivity(activity: BotActivity): void {
       openRequestCount: null,
       conversationsRevision: null,
       notificationSubscriptions: null,
+      surfaceActions: null,
       stoppedNotificationWatches: null,
       boundHost: { hostId: HOST_ID, epoch: 0, isThisHost: true },
       activity,
@@ -502,10 +503,16 @@ function ChannelHarness(props: { readonly directive: string }): ReactNode {
       directive={props.directive}
       appConversationChatId={CHANNEL_ID}
       trunkChatId="trunk-chat"
-      openTurn={null}
       onOpenTurn={vi.fn()}
+      onOpenSession={vi.fn()}
+      landOn={null}
+      openMemory={null}
+      onOpenMemory={vi.fn()}
+      environmentId="env-1"
+      botNameOf={() => null}
       resolveMember={resolveMember}
       tasks={[]}
+      surfaceActions={null}
       openThread={openThread}
       onOpenThread={(open) =>
         useBotOpenThreadStore

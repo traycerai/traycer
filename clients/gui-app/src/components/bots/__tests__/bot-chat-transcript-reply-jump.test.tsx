@@ -87,9 +87,12 @@ vi.mock("@/hooks/bots/use-bot-turn-locate-query", () => ({
   useBotTurnLocateQuery: () => ({ data: undefined }),
 }));
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
-  useChatLocateRow: (args: ChatLocateRowArgs) => {
+  useChatLocateRowAnswer: (args: ChatLocateRowArgs) => {
     mocks.locateRow(args);
-    return mocks.state.locatedOrdinal;
+    const ordinal = mocks.state.locatedOrdinal;
+    return ordinal === null
+      ? { status: "waiting" }
+      : { status: "found", ordinal };
   },
 }));
 vi.mock("@/components/chat/chat-messages", async () => {
@@ -276,7 +279,6 @@ const THREAD_SURFACE: BotTranscriptSurface = {
   failedRequest: () => null,
   openTurn: null,
   sessionChatId: null,
-  originPost: { chatId: "conversation-app", messageId: "origin-post" },
 };
 
 /** The member directory a mounted transcript reads; none by default. */
@@ -303,7 +305,7 @@ function mountTranscript(
           surface={surface}
           resolveMember={members}
           showConnecting
-          landOnMessageId={null}
+          landOn={null}
         />
       </QueryClientProvider>
     </StrictMode>
@@ -475,7 +477,7 @@ describe("<BotChatTranscript /> in the channel", () => {
       threadLine: () => null,
       openThread: null,
       openAnnouncementThread,
-      answerThreads: false,
+      threadAnchorKinds: [],
       chooseOption,
       answerQuestion: null,
       discussQuestion: null,
@@ -498,7 +500,7 @@ describe("<BotChatTranscript /> in the channel", () => {
     await user.click(screen.getByRole("button", { name: "Reply in thread" }));
 
     expect(openAnnouncementThread).toHaveBeenCalledTimes(1);
-    expect(openAnnouncementThread).toHaveBeenCalledWith(QUESTION_ID, false);
+    expect(openAnnouncementThread).toHaveBeenCalledWith(QUESTION_ID, null);
   });
 
   it("draws a question's options as buttons that cannot be clicked in the channel", () => {
@@ -554,7 +556,7 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       threadLine: () => null,
       openThread: vi.fn(),
       openAnnouncementThread: vi.fn(),
-      answerThreads: false,
+      threadAnchorKinds: [],
       chooseOption,
       answerQuestion: null,
       discussQuestion: null,

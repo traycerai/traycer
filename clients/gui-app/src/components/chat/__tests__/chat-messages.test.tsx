@@ -232,6 +232,14 @@ const legendListRefHolder = vi.hoisted(() => ({
   current: null as import("@legendapp/list/react").LegendListRef | null,
 }));
 
+// Every scroll command the list's ref has returned and not yet settled. The
+// tee below fills it so a test can wait for the list to hold no command,
+// instead of guessing how many frames that takes on a loaded runner.
+const pendingListCommands = vi.hoisted(() => new Set<Promise<void>>());
+const trackedListInstances = vi.hoisted(
+  () => new WeakSet<import("@legendapp/list/react").LegendListRef>(),
+);
+
 vi.mock("@legendapp/list/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@legendapp/list/react")>();
   const TeedLegendList: typeof actual.LegendList = (props) => {
@@ -240,6 +248,28 @@ vi.mock("@legendapp/list/react", async (importOriginal) => {
     const teeRef = useCallback(
       (instance: import("@legendapp/list/react").LegendListRef | null) => {
         legendListRefHolder.current = instance;
+        if (instance !== null && !trackedListInstances.has(instance)) {
+          trackedListInstances.add(instance);
+          const track = (command: Promise<void>) => {
+            pendingListCommands.add(command);
+            const forget = () => {
+              pendingListCommands.delete(command);
+            };
+            command.then(forget, forget);
+            return command;
+          };
+          const { scrollToEnd, scrollToIndex, scrollToOffset, scrollToItem } =
+            instance;
+          const { scrollIndexIntoView, scrollItemIntoView } = instance;
+          instance.scrollToEnd = (options) => track(scrollToEnd(options));
+          instance.scrollToIndex = (params) => track(scrollToIndex(params));
+          instance.scrollToOffset = (params) => track(scrollToOffset(params));
+          instance.scrollToItem = (params) => track(scrollToItem(params));
+          instance.scrollIndexIntoView = (params) =>
+            track(scrollIndexIntoView(params));
+          instance.scrollItemIntoView = (params) =>
+            track(scrollItemIntoView(params));
+        }
         if (typeof ref === "function") {
           ref(instance);
         } else if (ref) {
@@ -1144,8 +1174,21 @@ function installChatFindHighlights(): void {
   });
 }
 
+// Resolves once the list holds no scroll command. The follow latch's `.then`
+// and the tracking `.then` are both registered when a command is issued,
+// before this `allSettled`, so by the time the set is empty the latch has
+// dropped its record of the command.
+async function settleListCommands(): Promise<void> {
+  while (pendingListCommands.size > 0) {
+    await act(async () => {
+      await Promise.allSettled([...pendingListCommands]);
+    });
+  }
+}
+
 describe("ChatMessages scroll policy", () => {
   beforeEach(() => {
+    pendingListCommands.clear();
     activityGroupOpenIds.lastOpenIds = new Set();
     activityGroupOpenIds.setOpenCalls = [];
     platformMock.isMac = true;
@@ -4147,12 +4190,22 @@ describe("ChatMessages scroll policy", () => {
         view.unmount();
       });
 
+      // The scroll box gets the transcript's real height so a following reader
+      // rests at the strict bottom; under the shim's larger height the latch
+      // keeps correcting toward an end it never reaches. The wheel waits for
+      // the list to hold no command, since a correction issued just before it
+      // is in flight and the wheel would rightly cancel it.
       it("leaves the list alone when a wheel finds no restore or navigation in flight", async () => {
+        const messages = makeCompletedTranscript(20);
+        setLegendListScrollContainerScrollHeightOverride(
+          LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+        );
         const view = renderChatMessages({
-          messages: makeCompletedTranscript(20),
+          messages,
           scrollStateKey: "t5-cancel-pending-idle",
         });
         await settleLegendList();
+        await settleListCommands();
         const cancel = spyCancelPendingScroll();
 
         fireEvent.wheel(getScrollNode(), { deltaY: -40 });
@@ -4260,9 +4313,32 @@ describe("ChatMessages scroll policy", () => {
         view.unmount();
       });
 
+      // Virtual time: the component's navigation claim lasts until its settle
+      // loop ends, which waits on `scrollend` or a 750 ms fallback with
+      // retries and can outlast the loop's last command. Nothing outside the
+      // component can observe it, so the test runs the clock past every wait.
       it("leaves the list's commands alone when a wheel follows a settled end navigation", async () => {
-        const view = await mountAndClickScrollToEnd();
-        await waitForNavigationSettle();
+        installLegendListTestClock();
+        const messages = makeCompletedTranscript(20);
+        setLegendListScrollContainerScrollHeightOverride(
+          LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+        );
+        const view = renderChatMessages({
+          messages,
+          scrollStateKey: `t5-settled-end-${Math.random().toString(36).slice(2)}`,
+        });
+        await advanceLegendListTime(5 * CHAT_ANCHOR_SETTLE_FALLBACK_MS);
+        const scrollNode = getScrollNode();
+        fireEvent.wheel(scrollNode, { deltaY: -80 });
+        act(() => {
+          scrollNode.scrollTop = 0;
+          fireEvent.scroll(scrollNode);
+        });
+        await advanceLegendListFrames(2);
+        const pill = queryScrollToEndPill();
+        if (pill === null) throw new Error("scroll-to-end pill is not mounted");
+        fireEvent.click(pill);
+        await advanceLegendListTime(5 * CHAT_ANCHOR_SETTLE_FALLBACK_MS);
         expect(getScrollNode().dataset.scrollMode).toBe("following-end");
         const cancel = spyCancelPendingScroll();
 
@@ -4274,14 +4350,22 @@ describe("ChatMessages scroll policy", () => {
         view.unmount();
       });
 
+      // Virtual time, for the same reason as the navigation test above: the
+      // aborted restore's claim ends with its settle loop, which no frame
+      // count on a loaded runner reliably outlasts.
       it("leaves the list's commands alone once a restore that reader input aborted has settled", async () => {
+        installLegendListTestClock();
         const view = mountWithSavedFreePosition();
         const cancel = spyCancelPendingScroll();
         fireEvent.wheel(getScrollNode(), { deltaY: 40 });
         expect(cancel).toHaveBeenCalledTimes(1);
-        await settleLegendList();
-        await settleLegendList();
-        await fireScrollTopAndFlush(maxScrollTopFor(getScrollNode()));
+        await advanceLegendListTime(5 * CHAT_ANCHOR_SETTLE_FALLBACK_MS);
+        const scrollNode = getScrollNode();
+        act(() => {
+          scrollNode.scrollTop = maxScrollTopFor(scrollNode);
+          fireEvent.scroll(scrollNode);
+        });
+        await advanceLegendListFrames(2);
         expect(getScrollNode().dataset.scrollMode).toBe("following-end");
         cancel.mockClear();
 
