@@ -170,7 +170,9 @@ export interface ChatTimelineFollowLatch {
   /** Routes every native or library scroll report through this authority. */
   readonly observeLiveGeometry: () => void;
   /** The latest turn finished: a reader the end fell onto while it ran, and
-   *  who still sits at the strict bottom, follows again. */
+   *  who still sits at the strict bottom, follows again - unless their
+   *  departure was published ahead of a report of theirs that has not come,
+   *  which still holds them. */
   readonly reconcileTurnAtRest: () => void;
 }
 
@@ -301,7 +303,8 @@ interface ChatTimelineFollowLatchOptions {
    * True while the transcript's latest turn is still running. While it is, a
    * departed reader the end fell onto stays detached, so its later chunks do
    * not carry them; once it finishes they follow again
-   * (`reconcileTurnAtRest`).
+   * (`reconcileTurnAtRest`), unless a report their departure was published
+   * ahead of has not come.
    */
   readonly isTurnRunning: (() => boolean) | undefined;
 }
@@ -531,14 +534,28 @@ function gestureScrollEndUnblocks(
   if (arm?.source !== "gesture" || !arm.blocksAutomaticCorrection) {
     return false;
   }
+  return nestedScrollEndHoldsWheel(target, scrollNode, arm.wheelTarget);
+}
+
+/** Whether a `scrollend` is a nested scroller's that holds the element a
+ *  wheel was over: that scroller owned the wheel's sequence, and it is over. */
+function nestedScrollEndHoldsWheel(
+  target: EventTarget | null,
+  scrollNode: HTMLElement,
+  wheelTarget: Element | null,
+): boolean {
   return (
     target !== scrollNode &&
     target instanceof Element &&
-    arm.wheelTarget !== null &&
+    wheelTarget !== null &&
     scrollNode.contains(target) &&
-    target.contains(arm.wheelTarget)
+    target.contains(wheelTarget)
   );
 }
+
+/** A departure published ahead of the report of the gesture that made it,
+ *  with the element a wheel was over when a wheel made it. */
+type DepartureAwaitingReport = { readonly wheelTarget: Element | null } | null;
 
 /** Whether a nested scroller between the wheel's target and the transcript
  *  takes it: the browser scrolls that element, and the transcript does not
@@ -797,19 +814,6 @@ function touchStep(
   return "away";
 }
 
-/** Whether a report is at an offset other than the one a reader departure
- *  was published at: the departing gesture's own scroll, or anything after. */
-function reportMovedFromDeparture(
-  departedAtScrollTop: number | null,
-  scrollTop: number,
-): boolean {
-  return (
-    departedAtScrollTop !== null &&
-    Math.abs(scrollTop - departedAtScrollTop) >
-      CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
-  );
-}
-
 function canReaderGestureMove(
   geometry: ChatTimelineScrollGeometry,
   direction: ChatTimelineReaderScrollDirection,
@@ -911,13 +915,22 @@ export function useChatTimelineFollowLatch(
   const onReaderGestureRef = useRef(onReaderGesture);
   const correctionGenerationRef = useRef(0);
   const readerGestureGenerationRef = useRef(0);
-  // Where a reader's own departure was published, until a report at another
-  // offset arrives. The report that published it may be the first of a
-  // scroll still moving the view (a smooth wheel scroll lands over several
-  // frames); until the next one, the list clamping its end to meet that
-  // offset is not the reader returning. A write the app or the list announces
-  // moves it with the view: that write is not the reader moving either.
+  // Where a reader's own departure stands, until it ends: they follow again,
+  // arrive at the end, gesture toward it, or the turn's rest finds them at
+  // the strict bottom. Each report of theirs off the strict bottom moves it
+  // to where they are, so the list clamping its end to meet that offset is
+  // not the reader returning, while one past it is. A write the app or the
+  // list announces moves it with the view: that write is not the reader
+  // moving either.
   const readerDepartureScrollTopRef = useRef<number | null>(null);
+  // Whether the departure was published ahead of its gesture's report (the
+  // tail moving away from a wheel up no report has followed, or a read
+  // seeing a pan before its scroll event), until a report arrives. Only then
+  // may a report of the reader's own still come, so only then does the end
+  // meeting them hold them whether or not the turn runs, its rest included.
+  // A wheel a nested scroller owned may never move the transcript: that
+  // scroller's `scrollend` ends the wait instead (`handleScrollEnd`).
+  const departureAwaitsReportRef = useRef<DepartureAwaitingReport>(null);
   const armedReaderDepartureRef = useRef<ArmedReaderDeparture>(null);
   const activeCorrectionRef = useRef<ActiveEndCorrection | null>(null);
   const pendingEndCorrectionScrollRef = useRef<Promise<void> | null>(null);
@@ -1109,6 +1122,7 @@ export function useChatTimelineFollowLatch(
         return false;
       }
       readerDepartureScrollTopRef.current = geometry.scrollTop;
+      departureAwaitsReportRef.current = null;
       supersedePendingEndCorrection();
       onReaderGestureRef.current?.({
         direction: "away-from-end",
@@ -1158,8 +1172,12 @@ export function useChatTimelineFollowLatch(
           return;
         }
         // A scroll the reader made between the frames, not yet reported: the
-        // reissue would write the end over it.
-        if (publishUnannouncedDeparture(liveGeometry, movedAway)) return;
+        // reissue would write the end over it. The view moved, so that report
+        // is coming.
+        if (publishUnannouncedDeparture(liveGeometry, movedAway)) {
+          departureAwaitsReportRef.current = { wheelTarget: null };
+          return;
+        }
         issue();
       };
 
@@ -1438,6 +1456,7 @@ export function useChatTimelineFollowLatch(
         // The finger moved the view: this is the published reader position a
         // delivered `touchmove` would have reported.
         readerDepartureScrollTopRef.current = geometry.scrollTop;
+        departureAwaitsReportRef.current = null;
         supersedePendingEndCorrection();
         onReaderGestureRef.current?.({
           direction: "indeterminate",
@@ -1451,6 +1470,7 @@ export function useChatTimelineFollowLatch(
         // Backstop if arm-time geometry was unmeasurable or a later native
         // report is the first moment the reader's offset is known.
         readerDepartureScrollTopRef.current = geometry.scrollTop;
+        departureAwaitsReportRef.current = null;
         supersedePendingEndCorrection();
       }
       return true;
@@ -1495,7 +1515,9 @@ export function useChatTimelineFollowLatch(
     }
     const departure = readerDepartureScrollTopRef.current;
     if (departure !== null) {
-      readerDepartureScrollTopRef.current = departure + move.to - move.from;
+      // Exactly `to` for a departure at `from`: a reader held on the end
+      // stays at no greater offset than the write's own report.
+      readerDepartureScrollTopRef.current = move.to - (move.from - departure);
     }
     const armedDeparture = armedReaderDepartureRef.current;
     if (
@@ -1556,44 +1578,66 @@ export function useChatTimelineFollowLatch(
     [],
   );
 
-  // A detached reader whose departure is published and not yet followed by a
-  // report of their own: the strict bottom under them is the list's end
-  // meeting them, not the reader returning.
+  // A detached reader whose departure is published. Whether the strict
+  // bottom under them is the list's end meeting them rather than the reader
+  // returning is decided at a report (`noteReportAfterDeparture`), at a read
+  // (`reconcileMaintenanceAtStrictBottom`) and at the turn's rest
+  // (`reconcileTurnAtRest`).
   const holdsDepartedReaderAtEnd = useCallback(
     (): boolean =>
       !permissionRef.current && readerDepartureScrollTopRef.current !== null,
     [],
   );
 
-  // Whether this report is the end clamping a departed reader while the turn
-  // runs, which leaves them held. A report at the strict bottom, at no
-  // greater offset than the one the departure was published at, is the end
-  // dropping under the reader (a temporary end pad reset): their own scroll
-  // from there moves them away from the end, and one toward it ends the hold.
-  // The departure then stands where the clamp put them, and the turn's later
-  // chunks leave them behind. Once the turn has finished nothing will, and
-  // they follow. Any other report at another offset is the reader's own
-  // scroll, and ends the hold.
-  const noteReportAfterDeparture = useCallback(
+  // Whether strict-bottom geometry is the end come to a held reader while the
+  // turn runs: at no greater offset than their departure, so they did not
+  // move toward it. Its later chunks leave them behind; at rest they follow.
+  // Any greater offset is theirs, however small the step: the browser only
+  // lowers the offset (a clamp), and an announced write carries the
+  // departure with it.
+  const endMetHeldReaderMidTurn = useCallback(
     (geometry: ChatTimelineScrollGeometry): boolean => {
       const departure = readerDepartureScrollTopRef.current;
-      if (
+      return (
         departure !== null &&
         holdsDepartedReaderAtEnd() &&
         isTurnRunning?.() === true &&
-        isChatTimelineAtStrictBottom(geometry) &&
-        geometry.scrollTop <= departure + CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
-      ) {
+        geometry.scrollTop <= departure
+      );
+    },
+    [holdsDepartedReaderAtEnd, isTurnRunning],
+  );
+
+  // Whether this report is the end clamping a departed reader while the turn
+  // runs, which leaves them held. A report at the strict bottom, at no
+  // greater offset than the departure stood at before it, is the end
+  // dropping under the reader (a temporary end pad reset). The departure then
+  // stands where the clamp put them, and the turn's later chunks leave them
+  // behind. Once the turn has finished nothing will, and they follow. One at
+  // a greater offset is the reader arriving, and follows. Any report off the
+  // strict bottom is the reader's own scroll, either way: the departure
+  // stands where it put them, so only an end that comes to them there is the
+  // list's.
+  const noteReportAfterDeparture = useCallback(
+    (geometry: ChatTimelineScrollGeometry): boolean => {
+      departureAwaitsReportRef.current = null;
+      if (isChatTimelineAtStrictBottom(geometry)) {
+        if (!endMetHeldReaderMidTurn(geometry)) {
+          // They arrived, or the turn has finished: they follow, though a
+          // restore may hold that off for now, and nothing holds them later.
+          readerDepartureScrollTopRef.current = null;
+          return false;
+        }
         readerDepartureScrollTopRef.current = geometry.scrollTop;
         cancelActiveCorrection();
         return true;
       }
-      if (reportMovedFromDeparture(departure, geometry.scrollTop)) {
-        readerDepartureScrollTopRef.current = null;
+      if (readerDepartureScrollTopRef.current !== null) {
+        readerDepartureScrollTopRef.current = geometry.scrollTop;
       }
       return false;
     },
-    [cancelActiveCorrection, holdsDepartedReaderAtEnd, isTurnRunning],
+    [cancelActiveCorrection, endMetHeldReaderMidTurn],
   );
 
   // Whether a lifted finger's momentum has reached the end it was heading
@@ -1680,8 +1724,8 @@ export function useChatTimelineFollowLatch(
   // has landed: the strict bottom they reach after it, however they reach
   // it, is theirs to follow (`reconcileStrictBottom`). The report is their
   // departure from where it landed, as a following reader's is
-  // (`publishArmedDeparture`), so an end that comes up to them before that
-  // gesture's later frames is the list's (`noteReportAfterDeparture`).
+  // (`publishArmedDeparture`), so an end that comes up to them while the turn
+  // runs is the list's (`endMetHeldReaderMidTurn`), and at rest they follow.
   const noteFreeReportAway = useCallback(
     (geometry: ChatTimelineScrollGeometry): void => {
       const armedDeparture = armedReaderDepartureRef.current;
@@ -1689,6 +1733,7 @@ export function useChatTimelineFollowLatch(
       if (!gestureScrollLanded(armedDeparture, geometry)) return;
       armedReaderDepartureRef.current = null;
       readerDepartureScrollTopRef.current = geometry.scrollTop;
+      departureAwaitsReportRef.current = null;
     },
     [],
   );
@@ -1838,10 +1883,15 @@ export function useChatTimelineFollowLatch(
         cancelActiveCorrection();
         return;
       }
-      if (holdsDepartedReaderAtEnd()) {
-        // The reader's departure is published but their gesture's own scroll
-        // has not reported yet: the end clamped to meet the offset it was
-        // published at (a temporary end pad dropped) is the list's.
+      if (
+        departureAwaitsReportRef.current !== null
+          ? holdsDepartedReaderAtEnd()
+          : endMetHeldReaderMidTurn(geometry)
+      ) {
+        // The end meeting a departed reader (a temporary end pad dropped) is
+        // the list's, not the reader returning: until the report of a
+        // gesture they were departed ahead of, and while the turn runs,
+        // whose later chunks leave them behind. At rest, they follow.
         cancelActiveCorrection();
         return;
       }
@@ -1866,6 +1916,7 @@ export function useChatTimelineFollowLatch(
     },
     [
       cancelActiveCorrection,
+      endMetHeldReaderMidTurn,
       holdsDepartedReaderAtEnd,
       isCorrectionSuppressed,
       isReattachSuppressed,
@@ -1889,8 +1940,12 @@ export function useChatTimelineFollowLatch(
       reconcileMaintenanceAtStrictBottom(geometry);
       return;
     }
-    // A scroll applied ahead of its report: correcting it would undo it.
-    if (publishUnannouncedDeparture(geometry, movedAway)) return;
+    // A scroll applied ahead of its report: correcting it would undo it. The
+    // view moved, so that report is coming.
+    if (publishUnannouncedDeparture(geometry, movedAway)) {
+      departureAwaitsReportRef.current = { wheelTarget: null };
+      return;
+    }
     if (followReachedReaderEnd(list, node)) return;
     if (followReaderMomentumArrival(node, momentumArrived)) return;
     if (!permissionRef.current) return;
@@ -1907,6 +1962,13 @@ export function useChatTimelineFollowLatch(
       // end came up to absorb it, and no report tells the two apart. Their
       // scroll-up holds; the tail does not drag them.
       publishArmedDeparture(armedDeparture, geometry);
+      // With no report since the wheel, its scroll is still to come, and
+      // would read as layout. After one, the ledger reads a later frame as
+      // theirs, so no report is owed.
+      departureAwaitsReportRef.current =
+        expectedScrollTopRef.current === null
+          ? { wheelTarget: armedDeparture.wheelTarget }
+          : null;
       armedReaderDepartureRef.current = null;
       setFollowIntent(false);
       return;
@@ -1935,10 +1997,15 @@ export function useChatTimelineFollowLatch(
     // departure when it lands. One no report has followed may still be
     // coming, and would read as the list's: a reader held at the strict
     // bottom with it stays held, as at any follow the latch starts itself
-    // (`reconcileStrictBottom`). One a report has followed is spent here:
-    // nothing grows past the reader now to start a correction that would
-    // mask what is left of it, and that report restarted the ledger, so a
-    // later frame reads as their own (`publishUnannouncedDeparture`).
+    // (`reconcileStrictBottom`). That is so whether the wheel's arm still
+    // waits for it or the tail's growth already published the departure
+    // ahead of it, as it is for a pan a read published ahead of its scroll
+    // event (`departureAwaitsReportRef`); the report ends either.
+    // An arm a report has followed is spent here: nothing grows past the
+    // reader now to start a correction that would mask what is left of it,
+    // and that report restarted the ledger, so a later frame reads as their
+    // own (`publishUnannouncedDeparture`).
+    if (departureAwaitsReportRef.current !== null) return;
     if (armAwaitsScrollAway(armedReaderDepartureRef.current)) {
       if (expectedScrollTopRef.current === null) return;
       armedReaderDepartureRef.current = null;
@@ -2040,22 +2107,27 @@ export function useChatTimelineFollowLatch(
       followEndIfPermitted();
     };
     const handleScrollEnd = (event: Event): void => {
-      if (
-        !gestureScrollEndUnblocks(
-          armedReaderDepartureRef.current,
-          event.target,
-          node,
-        )
-      ) {
-        return;
-      }
+      // A wheel whose departure the tail published ahead of its report, and
+      // whose nested scroller owned its whole sequence: no report of the
+      // transcript's will come, so the wait for one is over. The same
+      // gesture's later wheels may have armed again since; that arm's wait
+      // is over too.
+      const awaiting = departureAwaitsReportRef.current;
+      const endsWait =
+        awaiting !== null &&
+        nestedScrollEndHoldsWheel(event.target, node, awaiting.wheelTarget);
+      if (endsWait) departureAwaitsReportRef.current = null;
       const arm = armedReaderDepartureRef.current;
-      if (arm?.source !== "gesture") return;
-      armedReaderDepartureRef.current = {
-        ...arm,
-        blocksAutomaticCorrection: false,
-      };
-      followEndIfPermitted();
+      const unblocksArm =
+        arm?.source === "gesture" &&
+        gestureScrollEndUnblocks(arm, event.target, node);
+      if (unblocksArm) {
+        armedReaderDepartureRef.current = {
+          ...arm,
+          blocksAutomaticCorrection: false,
+        };
+      }
+      if (endsWait || unblocksArm) followEndIfPermitted();
     };
     // A wheel or swipe over an agent page or MCP App happens in the frame's
     // document, so the listeners above never see it, yet it chains to this

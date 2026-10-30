@@ -96,6 +96,7 @@ const HOST_LOG_FILENAME = "host.log";
 const HOST_LOG_BACKUP_FILENAME = "host.log.1";
 const HOST_LOG_OLDEST_BACKUP_FILENAME = "host.log.2";
 const HOST_PID_FILENAME = "pid.json";
+const HOST_DOCTOR_LEASE_FILENAME = "doctor.lock";
 // The host's delegated-credential store, under the host runtime root. Spelled
 // out here rather than imported: the host owns these names, and this repo has
 // no import path to it - the same arrangement as every other host-written
@@ -250,6 +251,14 @@ export function hostPidMetadataPath(
  */
 export function hostPidMetadataPathIn(hostHome: string): string {
   return join(hostHome, HOST_PID_FILENAME);
+}
+/**
+ * Held by `traycer host doctor` only while it asks the running host for its
+ * verdict. Beside `pid.json`, so it is scoped to the same environment and run
+ * slot as the host it guards.
+ */
+export function hostDoctorLeasePath(environment: Environment): string {
+  return join(hostHomeDir(environment), HOST_DOCTOR_LEASE_FILENAME);
 }
 export function hostLogPath(environment: Environment | undefined): string {
   return join(hostHomeDir(environment), HOST_LOG_FILENAME);
