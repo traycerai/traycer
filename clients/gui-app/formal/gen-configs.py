@@ -24,7 +24,7 @@ PHONE = dict(HasWheel="FALSE", TouchInput="TRUE", TouchMoveDelivered="TRUE",
              HasScrollEnd="FALSE", DeferUnderFinger="FALSE")
 
 INVARIANTS = ["TypeOK", "I_IntentHeld", "I_SavingLive", "I_SavedIsView",
-              "I_ModeMatchesGeometry", "I_PillHonest", "I_NoJump"]
+              "I_ModeMatchesGeometry", "I_PillHonest", "I_NoJump", "I_MissedFollowPrice"]
 
 CONFIGS = {
     # Desktop: a minimap pick while following a live reply.

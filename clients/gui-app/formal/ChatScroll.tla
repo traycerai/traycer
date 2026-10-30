@@ -145,9 +145,9 @@ VARIABLES
 
     \* (silent) GHOST: a finger landed on a fling with no touch event, and no
     \*   report has since seen the reader away from where they departed
-VARIABLE silent, liftEnd, nestedInput
+VARIABLE silent, liftEnd, nestedInput, missedFollow
 
-vars == <<w, intent, flags, budget, last, led, silent, liftEnd, nestedInput>>
+vars == <<w, intent, flags, budget, last, led, silent, liftEnd, nestedInput, missedFollow>>
 
 (***************************************************************************)
 (* Geometry over the list's believed sizes.                                *)
@@ -763,7 +763,9 @@ ReadCandidate(x) ==
     LET c == x.cand
         shift == EndShift(x, c)
         met == c.on /\ c.rgen = x.rgen /\ shift.known
-               /\ x.s >= EndOffset(x, c.target, shift.shift)
+               /\ x.s >= (IF "momhybrid" \in Fixes
+                          THEN EndOffset(x, c.target, shift.shift)
+                          ELSE c.target + shift.shift)
     IN IF "viewcarry" \notin Fixes THEN [w |-> x, r |-> FALSE]
        ELSE IF "unreadsize" \in Fixes /\ c.on /\ c.rgen = x.rgen /\ ~shift.known
             THEN [w |-> [x EXCEPT !.cand = NoCand], r |-> FALSE]
@@ -1277,6 +1279,7 @@ Init ==
     /\ silent = FALSE
     /\ liftEnd = NoLiftEnd
     /\ nestedInput = [gen |-> -1, prior |-> intent, endMoved |-> FALSE]
+    /\ missedFollow = "none"
     /\ budget = [grow |-> Grows, append |-> Appends, prepend |-> Prepends,
                  wheel |-> Wheels, drag |-> Drags, click |-> Clicks, touch |-> Touches,
                  fling |-> Flings, minimap |-> Minimaps, pick |-> PhonePicks,
@@ -2194,6 +2197,24 @@ LiftEndNext ==
                      lastPos |-> TailBlockTop(w', w'.hi)]
                ELSE IF w'.flingDir # 1 THEN NoLiftEnd ELSE liftEnd
 
+\* GHOST: provenance for the accepted missed re-follow prices. This never
+\* changes intent or permits an action. New input/navigation or content
+\* moving under the reading line ends it; a compensation preserves it.
+MissedFollowNext ==
+    LET unreadRetired == "unreadsize" \in Fixes
+                         /\ ((w.mom.on /\ ~w'.mom.on /\ ~EndShift(w', w.mom).known)
+                             \/ (w.cand.on /\ ~w'.cand.on /\ ~EndShift(w', w.cand).known))
+        newInput == last' \in {"TouchStart", "TouchOnFling", "DragStart", "Click", "Minimap", "PhonePick", "Pill"}
+                    \/ \E d \in Dirs2 : last' \in {"Wheel(" \o d \o ")", "UnscrolledWheel(" \o d \o ")",
+                                                         "NestedWheel(" \o d \o ")"}
+        row == AnchorRow(w)
+        carriedLine == Present(w', row) /\ Pos(w', row) - w'.s = Pos(w, row) - w.s
+        reset == newInput \/ w'.nav.k # "none" \/ w'.mounted # w.mounted \/ w'.perm
+                 \/ (w'.s # w.s /\ ~ReaderMoved(last') /\ ~carriedLine)
+    IN missedFollow' = IF reset THEN "none"
+                       ELSE IF unreadRetired THEN "unread-tail"
+                       ELSE missedFollow
+
 SilentNext ==
     silent' = IF last' = "TouchOnFling" /\ w'.armed.src # "touch" THEN TRUE
               ELSE IF w'.perm \/ ~w'.turn \/ (last' = "DeliverScroll" /\ w.s # w.depAt)
@@ -2224,7 +2245,7 @@ SilentMomentumFrame ==
       /\ ~AtBottom(w) /\ w'.perm)
 
 Next == Steps /\ LedgerNext /\ NestedInputNext /\ LiftEndNext /\ SilentNext /\ SilentFrame /\ DragFrame
-        /\ SilentMomentumFrame
+        /\ SilentMomentumFrame /\ MissedFollowNext
 
 Spec == Init /\ [][Next]_vars
 
@@ -2233,6 +2254,7 @@ Spec == Init /\ [][Next]_vars
 (***************************************************************************)
 TypeOK ==
     /\ w.s >= 0
+    /\ missedFollow \in {"none", "unread-tail"}
     /\ w.depWheel \in BOOLEAN
     /\ w.inputMove \in {"none", "drag", "finger"}
     /\ w.depOwed \in BOOLEAN
@@ -2251,7 +2273,14 @@ TypeOK ==
 
 \* "It does not stay where I put it": at rest, the transcript shows the tail
 \* the reader asked for, the row they scrolled to, or the row they picked.
-I_IntentHeld == Quiescent(w) => IntentHeld(w)
+\* Only a tagged unread-end retirement may miss the tail. Reading-position
+\* and navigation failures, and tail failures without this history, still
+\* fail I_IntentHeld. The separate price invariant keeps the witnesses live.
+KnownMissedFollow(x) ==
+    /\ missedFollow = "unread-tail"
+    /\ intent.k = "tail" /\ ~x.perm /\ x.mode = "free" /\ x.pill /\ ~AtBottom(x)
+I_IntentHeld == Quiescent(w) => (IntentHeld(w) \/ KnownMissedFollow(w))
+I_MissedFollowPrice == ~(Quiescent(w) /\ KnownMissedFollow(w))
 
 \* "It does not keep my place": at rest with the whole transcript loaded, the
 \* reading position is being saved (neither restore gate is stuck armed).

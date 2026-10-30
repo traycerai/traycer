@@ -10,7 +10,7 @@ within small budgets and checks what a reader would notice.
 
 `SHIPPED` models pinned OSS main `66529da1c`, including #3086, #3088,
 #3089 and #3085. The generator contains 189 exploration configs. CI selects
-26 bounded configs explicitly in `expected.py`; it does not claim a full
+25 bounded configs explicitly in `expected.py`; it does not claim a full
 matrix verdict. Passing cases and known failing controls remain distinct.
 The scope is promotions and known exceptions; no new environment scenarios
 were added in this round.
@@ -22,12 +22,15 @@ were added in this round.
 | `restoreanswer` (#3089) | A publishing gesture that the viewport cannot answer preserves the restore loop and hydration target, while still cancelling its pending command.                                                                                                                                                                                                                  |
 | `viewcarry` (#3085)     | Offset announcements carry remembered geometry by their delta. Range announcements subtract the exact range loss from remembered height and carry touch references too. Report, maintenance and correction reads absorb a recognisable viewport-growth clamp before judging movement. Both arrival paths judge the content candidate against live viewport height. |
 
-The four existing viewport-family witnesses now have fixed configurations:
+The four existing viewport-family witnesses have source-aligned configurations:
 `armless_viewport_fixed`, `phone_viewport_fixed`, `phone_pad_range_fixed`
 and `wheel_viewport_fixed`. Their removed-`viewcarry` controls stay generated.
+`phone_pad_range_fixed` remains outside CI because its 16-state clamp/lift
+yank is also present in 1.5.1; it is not accepted as safe behavior.
 `phone_above_tail_fixed` returns to CI with `unreadsize` and its explicit
 missed-re-follow price. Older row-only, initial navigation/send and removed
-pad-announcement controls remain available outside this CI26 selection.
+pad-announcement controls remain generated. The original `nav_follow` and
+`send` controls return at their recorded 14-state bounds, keeping CI at25.
 
 `idlehold` (#3079) still holds a departed reader when the end meets them,
 rebasing at a maintenance hold. `depAhead` remains the turn-end guard.
@@ -51,6 +54,31 @@ correction moves it. CI retains this known invariant outcome explicitly.
 The other two decline orders have the same declared price and were not
 separately re-measured. The old 19-state yank is a removed-`unreadsize`
 control, not a permitted yank. Lazy capture was rejected and is not modeled.
+
+### Other retained exceptions
+
+`phone_viewport_fixed` (11 states) and `wheel_viewport_fixed` (12 states)
+reach 5/5 with their own movement before a report; the viewport then shrinks
+from 2 to 1, moving the end to 6. Report and lift/scrollend leave the reader
+at 5/6 with the pill. No subsequent write moves the view. These pill-only missed re-follows remain outside CI. A later 14-state wheel
+witness reaches its content endpoint before a measurement moves it on,
+with the same pill-only price; none of these grants a general viewport
+exception in `I_IntentHeld`.
+
+`I_IntentHeld` remains active in all selected cases. A separate
+`I_MissedFollowPrice` records only a tagged unread-end retirement, with Tail
+intent, free mode, the pill and an off-bottom view. New input/navigation, follow, or a non-reader movement of content under
+the reading line clears the history; an announced compensation that keeps
+that content still preserves it. Thus accepting these prices does not drop
+`I_IntentHeld` and hide another reading-position or navigation failure.
+
+`phone_pad_range_fixed`, outside CI, retains the 16-state content-moving
+clamp/lift witness: 70/70/ref70 → own away move to60 → announced range60→50
+carries ref to60 → lift at50/50 → tail +10 → correction to60. The view is
+carried 10 past a reader holding at50. `clearTouch`'s
+`!isChatTimelineAtStrictBottom(liveGeometry)` conjunct vetoes catch-up before
+clearing the touch arm. The 1.5.1 strict-bottom report path also re-follows
+this reader, so this is pre-existing; the positive returns to CI when fixed.
 
 ## What is modelled
 
@@ -451,6 +479,7 @@ press offset.
 | `I_SavedIsView`         | Hiding or leaving the chat saved something other than what was on screen                                                                      |
 | `I_ModeMatchesGeometry` | Follow is on away from the tail (the next token pulls the view down), or off at the tail (new content does not follow)                        |
 | `I_PillHonest`          | The jump-to-latest pill shows at the tail, or is missing away from it                                                                         |
+| `I_MissedFollowPrice`   | One specifically tagged missed re-follow leaves the reader detached with the pill, without a later offset write                               |
 | `I_NoJump`              | The transcript jumps: the line at the top of the view moves with no scroll, pick or follow of theirs                                          |
 
 `I_NoJump` is a step property kept as a flag, like `I_SavedIsView`: the step
