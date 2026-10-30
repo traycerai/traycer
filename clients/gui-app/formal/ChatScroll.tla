@@ -114,10 +114,10 @@ OwnedArm == [src |-> "owned", dir |-> "indeterminate", blocks |-> TRUE, at |-> 0
 TouchArm(at) == [src |-> "touch", dir |-> "indeterminate", blocks |-> TRUE, at |-> at,
                  dist |-> 0, wheel |-> FALSE, nested |-> FALSE, scrolled |-> FALSE]
 NoCorr == [on |-> FALSE, gen |-> 0, rgen |-> 0, att |-> 0, stage |-> "none"]
-NoCand == [on |-> FALSE, rgen |-> 0, target |-> 0, arr |-> FALSE, last |-> 0, lastPos |-> 0, blockTop |-> 0, blockGen |-> 0, blockOn |-> FALSE, rowOn |-> FALSE, blockHead |-> "",
-           headed |-> 0, headBlockTop |-> 0]
-NoMom == [on |-> FALSE, target |-> 0, last |-> 0, lastPos |-> 0, from |-> 0, base |-> 0, blockTop |-> 0, blockGen |-> 0, blockOn |-> FALSE, rowOn |-> FALSE, blockHead |-> ""]
+NoCand == [on |-> FALSE, rgen |-> 0, target |-> 0, arr |-> FALSE, last |-> 0, lastPos |-> 0, blockTop |-> 0, blockGen |-> 0, blockOn |-> FALSE, rowOn |-> FALSE, blockHead |-> "", unreadRowSize |-> -1]
+NoMom == [on |-> FALSE, target |-> 0, last |-> 0, lastPos |-> 0, from |-> 0, base |-> 0, blockTop |-> 0, blockGen |-> 0, blockOn |-> FALSE, rowOn |-> FALSE, blockHead |-> "", unreadRowSize |-> -1]
 NoLiftEnd == [on |-> FALSE, target |-> 0, last |-> 0, lastPos |-> 0]
+NoHeadedEnd == [on |-> FALSE, rgen |-> 0, target |-> 0, last |-> 0, lastPos |-> 0]
 NoCmd == [k |-> "none", tok |-> 0, anim |-> FALSE, ph |-> "none", row |-> 0, off |-> 0]
 NoFz == [on |-> FALSE, target |-> 0, h |-> 0, v |-> 0, rowPos |-> 0, ver |-> 0, row |-> 0]
 NoNav == [k |-> "none", pol |-> NONE, gen |-> 0, ret |-> 0, ph |-> "none",
@@ -128,6 +128,7 @@ Snap(mode, anchor, idx, off) ==
 TailSnap == Snap("follow", 0, 0, 0)
 NoPend == [on |-> FALSE, row |-> 0, off |-> 0]
 NoGeo == [on |-> FALSE, s |-> 0]
+NoView == [on |-> FALSE, s |-> 0, h |-> 0, v |-> 0]
 Intent(k, row, off) == [k |-> k, row |-> row, off |-> off]
 
 VARIABLES
@@ -144,9 +145,9 @@ VARIABLES
 
     \* (silent) GHOST: a finger landed on a fling with no touch event, and no
     \*   report has since seen the reader away from where they departed
-VARIABLE silent, liftEnd, nestedInput
+VARIABLE silent, liftEnd, nestedInput, missedFollow
 
-vars == <<w, intent, flags, budget, last, led, silent, liftEnd, nestedInput>>
+vars == <<w, intent, flags, budget, last, led, silent, liftEnd, nestedInput, missedFollow>>
 
 (***************************************************************************)
 (* Geometry over the list's believed sizes.                                *)
@@ -196,6 +197,10 @@ EndShift(x, ref) ==
             /\ x.tailGen[ref.last] = ref.blockGen
             /\ TailHeadHolds(x.tailHead[ref.last], ref.blockHead)
          THEN [known |-> TRUE, shift |-> TailBlockTop(x, ref.last) - ref.blockTop]
+    ELSE IF "unreadsize" \in Fixes /\ ~ref.blockOn
+            /\ (IF ~ref.rowOn \/ x.hi # ref.last THEN -1
+                 ELSE IF ref.last \in x.known THEN x.sz[ref.last] ELSE -2) # ref.unreadRowSize
+         THEN [known |-> FALSE, shift |-> 0]
     ELSE IF ~ref.rowOn THEN [known |-> TRUE, shift |-> 0]
     ELSE IF x.rowKnown[ref.last]
          THEN [known |-> TRUE, shift |-> Pos(x, ref.last) - ref.lastPos]
@@ -221,12 +226,32 @@ TrMom(x, t) ==
     IF "momhybrid" \in Fixes /\ x.mom.on
     THEN [x.mom EXCEPT !.base = @ + t - Clamp(x, x.s)] ELSE x.mom
 
+\* #3085: remembered geometry is translated knowledge, not a snap to live.
+ViewAt(x) == [on |-> TRUE, s |-> x.s, h |-> H(x) + x.pad, v |-> x.V]
+ViewAfterMove(x, t, range) ==
+    IF "viewcarry" \notin Fixes \/ ~x.lastView.on \/ t = x.s THEN x.lastView
+    ELSE LET d == t - (IF range THEN x.s ELSE Clamp(x, x.s))
+         IN [x.lastView EXCEPT !.s = @ + d,
+                 !.h = IF range THEN @ - (MaxS(x) - t) ELSE @ + d]
+RangeArm(x, t) == IF "viewcarry" \in Fixes THEN TrArm(x, t) ELSE Carry(x, t)
+ViewRead(x) ==
+    IF "viewcarry" \notin Fixes \/ ~x.mounted \/ ~Measurable(x) THEN x
+    ELSE LET ref == x.lastView
+             predicted == Min(ref.s, Max(0, ref.h - x.V))
+             absorbs == ref.on /\ x.V > ref.v /\ predicted < ref.s /\ x.s = predicted
+             d == IF absorbs THEN predicted - ref.s ELSE 0
+             a == IF absorbs THEN RangeArm(x, x.s + d) ELSE x.armed
+         IN [x EXCEPT !.lastView = ViewAt(x), !.viewCredit = @ + d,
+                      !.armed = a,
+                      !.depAt = IF absorbs /\ @ # -1 THEN @ + d ELSE @,
+                      !.mom.base = IF absorbs /\ x.mom.on THEN @ + d ELSE @]
+
 \* A scroll the list makes (an MVCP adjust): it cancels a native smooth
 \* scroll, and the browser reports it.
 Adjust(x, t) ==
     IF t = x.s THEN x
     ELSE ListSaw([x EXCEPT !.s = t, !.dirty = TRUE, !.smooth = -1, !.send = HasScrollEnd,
-                           !.depAt = Tr(x, t), !.armed = TrArm(x, t), !.mom = TrMom(x, t)], t)
+                           !.depAt = Tr(x, t), !.armed = TrArm(x, t), !.mom = TrMom(x, t), !.lastView = ViewAfterMove(x, t, FALSE)], t)
 
 (***************************************************************************)
 (* Estimates. A row the list has never measured is laid out at a cached    *)
@@ -338,14 +363,14 @@ CommitPending(x) ==
 
 (***************************************************************************)
 (* The scroll node. A programmatic write cancels a native smooth scroll    *)
-(* and ends in `scrollend`. Under a finger on iOS it is held until lift.   *)
+(* and ends in `scrollend`. A contact may override a write, never replay it.*)
 (***************************************************************************)
 Write(x, t) ==
     IF DeferUnderFinger /\ x.finger
     THEN [x EXCEPT !.touchWriteMayLand = @ \/ (x.armed.src = "touch" /\ t # x.s)]
     ELSE IF t = x.s THEN [x EXCEPT !.smooth = -1]
     ELSE [x EXCEPT !.s = t, !.dirty = TRUE, !.smooth = -1, !.send = HasScrollEnd,
-                   !.depAt = Tr(x, t), !.armed = Carry(x, t), !.mom = TrMom(x, t)]
+                   !.depAt = Tr(x, t), !.armed = Carry(x, t), !.mom = TrMom(x, t), !.lastView = ViewAfterMove(x, t, FALSE)]
 
 (***************************************************************************)
 (* Promises. A LegendList command's promise is named by its token. It      *)
@@ -489,6 +514,17 @@ EndLoop(x) ==
 (* setFollowIntent. The recursion ends because each level first writes     *)
 (* the permission it then compares.                                        *)
 (***************************************************************************)
+\* #3086: settled detaches eagerly take an owed position; reads wait for restore.
+TakeOwed(x) ==
+    IF "oweddep" \in Fixes /\ x.depOwed /\ Measurable(x) /\ ~AtBottom(x)
+    THEN [x EXCEPT !.depAt = x.s, !.depOwed = FALSE] ELSE x
+OweAtView(x) ==
+    IF "oweddep" \in Fixes /\ ~x.perm THEN TakeOwed([x EXCEPT !.depOwed = TRUE]) ELSE x
+NoteOwed(x) == IF CorrSuppressed(x) THEN x ELSE TakeOwed(x)
+PublishAt(x) ==
+    IF "oweddep" \in Fixes /\ "fallen" \in Fixes
+    THEN [x EXCEPT !.depAt = x.s, !.depMoved = FALSE] ELSE x
+
 RECURSIVE LatchSetIntent(_, _), OnIntentChange(_, _), SetTimelineMode(_, _, _),
           SetFollowingEndFromPosition(_)
 
@@ -498,7 +534,9 @@ LatchSetIntent(x, b) ==
     IF x1.perm = b THEN x1
     ELSE OnIntentChange([x1 EXCEPT !.armed = IF x1.armed.src = "touch" THEN @ ELSE NoArm,
                                    !.perm = b,
-                                   !.depAt = IF b \/ "fallen" \notin Fixes THEN -1 ELSE x1.s,
+                                   !.depAt = IF b \/ "fallen" \notin Fixes THEN -1
+                                            ELSE IF "oweddep" \in Fixes THEN @ ELSE x1.s,
+                                   !.depOwed = IF b THEN FALSE ELSE @,
                                    !.depMoved = FALSE, !.depAhead = FALSE, !.depWheel = FALSE], b)
 
 \* onFollowIntentChange
@@ -509,7 +547,7 @@ OnIntentChange(x, b) ==
 
 \* setTimelineMode
 SetTimelineMode(x, next, release) ==
-    LET x1 == LatchSetIntent(x, next = "follow")
+    LET x1 == OweAtView(LatchSetIntent(x, next = "follow"))
         x2 == [x1 EXCEPT !.mode = next, !.atEnd = (next = "follow")]
     IN IF next = "follow"
        THEN [x2 EXCEPT !.gate = IF release THEN FALSE ELSE @,
@@ -557,13 +595,14 @@ StartEndCorrection(x) == CorrIssue(NewCorr(x))
 \* to the loop that replaces it, never to a bare pointer preflight. A click
 \* says nothing about where the reader wants to be, and the restore is the
 \* only release of its gate.
-HandleReaderGesture(x, freeze, publishes) ==
+HandleReaderGesture(x, freeze, publishes, answers) ==
     LET hadAnim == x.animOp
-        keepsRestore == "restore" \in Fixes /\ ~publishes /\ x.nav.k = "restore"
+        retires == publishes /\ ("restoreanswer" \notin Fixes \/ answers)
+        keepsRestore == "restore" \in Fixes /\ ~retires /\ x.nav.k = "restore"
         x1 == [x EXCEPT !.animOp = FALSE, !.navGen = IF keepsRestore THEN @ ELSE @ + 1,
-                        !.pendMeas = IF publishes \/ (x.pendHyd = 0 /\ "restore" \notin Fixes)
+                        !.pendMeas = IF retires \/ (x.pendHyd = 0 /\ "restore" \notin Fixes)
                                      THEN NoPend ELSE @]
-        x2 == IF publishes THEN [ClearHydration(x1) EXCEPT !.gate = FALSE] ELSE x1
+        x2 == IF retires THEN [ClearHydration(x1) EXCEPT !.gate = FALSE] ELSE x1
         \* Fixed ("cancel"): the restore or navigation this input ends may
         \* still have a command queued in the list, its own or the latch's
         \* supersede write just before this handler; it is retired, unrun.
@@ -583,7 +622,8 @@ NoteReaderGesture(x, dir, freeze, publishes) ==
     \* A gesture toward the end forgets where the reader departed: a strict
     \* bottom they reach after it is theirs, which "fallen" no longer holds.
     LET x1 == CancelCorr([x EXCEPT !.rgen = @ + 1, !.mom = NoMom,
-                                   !.depAt = IF dir = "toward-end" THEN -1 ELSE @])
+                                   !.depAt = IF dir = "toward-end" THEN -1 ELSE @,
+                                   !.depOwed = IF dir = "toward-end" THEN FALSE ELSE @])
         meas == Measurable(x1)
         blocks == ~meas \/ CanMove(x1, dir)
         \* Fixed ("toward"): a following reader moving toward the end cannot
@@ -603,11 +643,14 @@ NoteReaderGesture(x, dir, freeze, publishes) ==
                       blockTop |-> TailBlockTop(x1, x1.hi), blockGen |-> x1.tailGen[x1.hi],
                       blockOn |-> InWindow(x1, x1.hi), rowOn |-> x1.rowKnown[x1.hi],
                       blockHead |-> x1.tailHead[x1.hi],
-                      headed |-> H(x1) + x1.pad, headBlockTop |-> TailBlockTop(x1, x1.hi)]
+                      unreadRowSize |-> IF InWindow(x1, x1.hi) \/ ~x1.rowKnown[x1.hi] THEN -1 ELSE IF x1.hi \in x1.known THEN x1.sz[x1.hi] ELSE -2]
                 ELSE NoCand
-        x2 == [x1 EXCEPT !.armed = arm, !.cand = cand]
+        headed == IF dir = "toward-end" /\ arm.src # "touch" /\ meas
+                  THEN [on |-> TRUE, rgen |-> x1.rgen, target |-> H(x1) + x1.pad,
+                        last |-> x1.hi, lastPos |-> TailBlockTop(x1, x1.hi)] ELSE NoHeadedEnd
+        x2 == [x1 EXCEPT !.armed = arm, !.cand = cand, !.headedEnd = headed]
         x3 == IF publishes /\ blocks /\ meas /\ ~cont THEN SupersedeEnd(x2, x2.s) ELSE x2
-    IN HandleReaderGesture(x3, freeze, publishes)
+    IN HandleReaderGesture(x3, freeze, publishes, blocks)
 
 (***************************************************************************)
 (* reconcileStrictBottom, tryReattachReader, publishArmedDeparture,        *)
@@ -641,7 +684,8 @@ MomAt(x) == [on |-> TRUE,
              last |-> x.hi, lastPos |-> Pos(x, x.hi), from |-> x.s, base |-> x.s,
              blockTop |-> TailBlockTop(x, x.hi), blockGen |-> x.tailGen[x.hi],
              blockOn |-> InWindow(x, x.hi), rowOn |-> x.rowKnown[x.hi],
-             blockHead |-> x.tailHead[x.hi]]
+             blockHead |-> x.tailHead[x.hi],
+             unreadRowSize |-> IF InWindow(x, x.hi) \/ ~x.rowKnown[x.hi] THEN -1 ELSE IF x.hi \in x.known THEN x.sz[x.hi] ELSE -2]
 MomArrived(x) ==
     LET m == x.mom
         shift == EndShift(x, m)
@@ -653,7 +697,10 @@ MomArrived(x) ==
        /\ x.s >= target
        /\ "momstill" \in Fixes => x.s > base
 MomNoted(x) ==
-    IF ~x.mom.on \/ "momhybrid" \in Fixes \/ CorrSuppressed(x) \/ ReattachSuppressed(x)
+    IF "unreadsize" \in Fixes /\ x.mom.on /\ ~CorrSuppressed(x)
+       /\ ~ReattachSuppressed(x) /\ ~x.liftLanding /\ ~EndShift(x, x.mom).known
+    THEN [x EXCEPT !.mom = NoMom]
+    ELSE IF ~x.mom.on \/ "momhybrid" \in Fixes \/ CorrSuppressed(x) \/ ReattachSuppressed(x)
     THEN x
     ELSE LET m == x.mom
              observed == EndShift(x, m)
@@ -692,7 +739,7 @@ ReconcileAt(x, native, top, landing) ==
                 supp == CorrSuppressed(x3)
                 res == IF supp THEN ResolveSuppressedEndLanding(x3) ELSE [w |-> x3, r |-> FALSE]
             IN IF FollowGuarded(x3) /\ ~landing THEN x3
-               ELSE LatchSetIntent(res.w, ~supp \/ res.r)
+               ELSE OweAtView(LatchSetIntent(res.w, ~supp \/ res.r))
 
 \* Fixed ("reach"): the end the gesture headed for is the content that ended
 \* the transcript then, so it moves down with every row that grows above that
@@ -706,16 +753,34 @@ TryReattach(x) ==
                   THEN EndOffset(x, c.target, shift) ELSE c.target + shift
         reached == c.on /\ c.rgen = x.rgen /\ x.s >= target
                    /\ ("reach" \in Fixes => observed.known)
-    IN IF ~reached \/ CorrSuppressed(x) THEN [w |-> x, r |-> FALSE]
+    IN IF "unreadsize" \in Fixes /\ c.on /\ c.rgen = x.rgen /\ ~observed.known
+       THEN [w |-> [x EXCEPT !.cand = NoCand], r |-> FALSE]
+       ELSE IF ~reached \/ CorrSuppressed(x) THEN [w |-> x, r |-> FALSE]
        ELSE [w |-> StartEndCorrection(LatchSetIntent([x EXCEPT !.cand = NoCand], TRUE)),
              r |-> TRUE]
 
+ReadCandidate(x) ==
+    LET c == x.cand
+        shift == EndShift(x, c)
+        met == c.on /\ c.rgen = x.rgen /\ shift.known
+               /\ x.s >= (IF "momhybrid" \in Fixes
+                          THEN EndOffset(x, c.target, shift.shift)
+                          ELSE c.target + shift.shift)
+    IN IF "viewcarry" \notin Fixes THEN [w |-> x, r |-> FALSE]
+       ELSE IF "unreadsize" \in Fixes /\ c.on /\ c.rgen = x.rgen /\ ~shift.known
+            THEN [w |-> [x EXCEPT !.cand = NoCand], r |-> FALSE]
+       ELSE IF ~met THEN [w |-> x, r |-> FALSE]
+       ELSE IF ~x.perm /\ ReattachSuppressed(x)
+            THEN [w |-> [x EXCEPT !.cand = Arrived(x)], r |-> FALSE]
+       ELSE TryReattach(x)
+
 \* GHOST: the content endpoint headed for, independent of either production
 \* target representation and independent of DOM block identity/fallback.
+\* A production candidate becoming unreadable never retires this oracle.
 ReachedHeadedEnd(x) ==
-    LET c == x.cand
-        shift == IF Present(x, c.last) THEN TailBlockTop(x, c.last) - c.headBlockTop ELSE 0
-    IN c.on /\ c.rgen = x.rgen /\ x.s >= EndOffset(x, c.headed, shift)
+    LET c == x.headedEnd
+        shift == IF Present(x, c.last) THEN TailBlockTop(x, c.last) - c.lastPos ELSE 0
+    IN c.on /\ c.rgen = x.rgen /\ x.s >= EndOffset(x, c.target, shift)
 
 PublishArmedDeparture(x, a) ==
     CASE a.src = "touch" ->
@@ -723,8 +788,8 @@ PublishArmedDeparture(x, a) ==
             \* A following reader's finger is decided a step at a time: a step
             \* toward the end never departs, and the next is measured from here.
             ELSE IF x.perm /\ x.s > a.at THEN [w |-> [x EXCEPT !.armed = TouchArm(x.s)], r |-> FALSE]
-            ELSE [w |-> HandleReaderGesture(SupersedeEnd(x, x.s), TRUE, TRUE), r |-> TRUE]
-      [] a.src = "gesture" -> [w |-> SupersedeEnd(x, x.s), r |-> TRUE]
+            ELSE [w |-> HandleReaderGesture(PublishAt(SupersedeEnd(x, x.s)), TRUE, TRUE, TRUE), r |-> TRUE]
+      [] a.src = "gesture" -> [w |-> PublishAt(SupersedeEnd(x, x.s)), r |-> TRUE]
       [] OTHER -> [w |-> x, r |-> TRUE]
 
 \* Fixed ("ledger"): every write of the list's and the app's is announced as
@@ -732,9 +797,12 @@ PublishArmedDeparture(x, a) ==
 \* the browser's clamps leave the view is the reader's own movement, with no
 \* arm and no owned navigation to say so: their departure, published as a
 \* delivered touchmove would be.
+ReadLedger(x) ==
+    IF led = -1 \/ x.rgen # w.rgen THEN -1
+    ELSE led + x.viewCredit - w.viewCredit
 Unexplained(x) ==
     /\ "ledger" \in Fixes /\ x.perm /\ x.armed.src = "none" /\ ~OwnsNav(x)
-    /\ led # -1 /\ w.s < Min(led, MaxS(x))
+    /\ ReadLedger(x) # -1 /\ w.s < Min(ReadLedger(x), MaxS(x))
 
 \* noteReportAfterDeparture: a moved report used to forget the departure.
 \* Fixed ("deprebase"): a report off the strict bottom carries the reader's
@@ -743,7 +811,8 @@ Unexplained(x) ==
 \* departure: at or under it mid-turn, the end came to them; above it, they
 \* arrived, and the hold ends before strict-bottom reconciliation follows.
 ReportAfterDeparture(x) ==
-    IF x.depAt = -1 \/ ((x.turn \/ "idlehold" \in Fixes) /\ AtBottom(x) /\ x.s <= x.depAt) THEN x
+    IF x.depAt = -1 THEN NoteOwed(x)
+    ELSE IF ((x.turn \/ "idlehold" \in Fixes) /\ AtBottom(x) /\ x.s <= x.depAt) THEN x
     \* An arrival forgets the held position even when reattach is suppressed.
     ELSE IF "deprebase" \in Fixes /\ AtBottom(x)
          THEN [x EXCEPT !.depAt = -1, !.depMoved = FALSE]
@@ -781,7 +850,7 @@ NotePressView(x) ==
 \* A maintenance or correction read sees movement whose scroll report is
 \* still owed. Its publication waits for that report, unlike a report's own.
 PublishReadDeparture(x) ==
-    [LatchSetIntent(HandleReaderGesture(SupersedeEnd(x, x.s), TRUE, TRUE), FALSE)
+    [LatchSetIntent(HandleReaderGesture(PublishAt(SupersedeEnd(x, x.s)), TRUE, TRUE, TRUE), FALSE)
      EXCEPT !.depAhead = TRUE, !.depWheel = FALSE]
 
 ReportAfterLiftLanding(x) ==
@@ -791,7 +860,7 @@ ReportAfterLiftLanding(x) ==
                    !.mom.base = IF "momhybrid" \in Fixes /\ x.mom.on THEN x.s ELSE @]
 
 ObserveLiveGeometry(x0) ==
-    LET reported == ReportAfterLiftLanding([x0 EXCEPT !.depAhead = FALSE, !.depWheel = FALSE]) IN
+    LET reported == ReportAfterLiftLanding([ViewRead(x0) EXCEPT !.depAhead = FALSE, !.depWheel = FALSE]) IN
     IF ~reported.mounted \/ ~Measurable(reported) THEN reported
     \* #3062's report returns before press/momentum reconciliation when the
     \* streaming end met the held reader. The report still ends its await.
@@ -804,38 +873,39 @@ ObserveLiveGeometry(x0) ==
     IF AtBottom(x) THEN ReconcileStrictBottom(x, TRUE, x.s)
     \* Ahead of a correction in flight: its writes only move toward the end.
     ELSE IF Unexplained(x)
-         THEN LatchSetIntent(HandleReaderGesture(SupersedeEnd(x, x.s), TRUE, TRUE), FALSE)
+         THEN LatchSetIntent(HandleReaderGesture(PublishAt(SupersedeEnd(x, x.s)), TRUE, TRUE, TRUE), FALSE)
     ELSE IF x.corr.on /\ x.corr.rgen = x.rgen THEN x
-    ELSE LET ra == TryReattach(x) IN
-         IF ra.r THEN ra.w
-         ELSE IF arrived /\ ~x.perm /\ ~CorrSuppressed(x) THEN MomFollow(x)
+    ELSE LET ra == TryReattach(x)
+             after == ra.w IN
+         IF ra.r THEN after
+         ELSE IF arrived /\ ~after.perm /\ ~CorrSuppressed(after) THEN MomFollow(after)
          \* Fixed ("restore"): a free reader's finger that moved the view is the
          \* reader's position too; published once, while a restore still holds
          \* the saved coordinate (iOS delivers no touchmove to publish it).
-         ELSE IF ~x.perm
-         THEN IF /\ "restore" \in Fixes /\ x.armed.src = "touch"
-                 /\ x.s # x.armed.at /\ CorrSuppressed(x)
-              THEN PublishArmedDeparture(x, x.armed).w
+         ELSE IF ~after.perm
+         THEN IF /\ "restore" \in Fixes /\ after.armed.src = "touch"
+                 /\ after.s # after.armed.at /\ CorrSuppressed(after)
+              THEN PublishArmedDeparture(after, after.armed).w
               \* Fixed ("freeland"): a free reader's report that shows their
               \* gesture's scroll landed retires its arm, so a later arrival
               \* at the strict bottom is theirs to follow from.
-              ELSE IF /\ "freeland" \in Fixes /\ x.armed.blocks
-                      /\ x.armed.dir = "away-from-end" /\ GestureLanded(x)
+              ELSE IF /\ "freeland" \in Fixes /\ after.armed.blocks
+                      /\ after.armed.dir = "away-from-end" /\ GestureLanded(after)
                    \* Fixed ("freelanddep"): that report is the reader
                    \* departing again, from where it landed.
-                   THEN [x EXCEPT !.armed = NoArm,
-                                  !.depAt = IF "freelanddep" \in Fixes THEN x.s ELSE @,
+                   THEN [after EXCEPT !.armed = NoArm,
+                                  !.depAt = IF "freelanddep" \in Fixes THEN after.s ELSE @,
                                   !.depMoved = IF "freelanddep" \in Fixes THEN FALSE ELSE @,
                                   !.depAhead = IF "freelanddep" \in Fixes THEN FALSE ELSE @]
-              ELSE x
-         ELSE IF PressUnlanded(x) THEN x
-         ELSE IF x.armed.src # "none"
-              THEN LET pd == PublishArmedDeparture(x, x.armed) IN
+              ELSE after
+         ELSE IF PressUnlanded(after) THEN after
+         ELSE IF after.armed.src # "none"
+              THEN LET pd == PublishArmedDeparture(after, after.armed) IN
                    IF ~pd.r THEN pd.w
-                   ELSE LatchSetIntent(IF x.armed.src # "touch"
+                   ELSE LatchSetIntent(IF after.armed.src # "touch"
                                        THEN [pd.w EXCEPT !.armed = NoArm] ELSE pd.w,
                                        FALSE)
-         ELSE IF CorrSuppressed(x) THEN x ELSE StartEndCorrection(x)
+         ELSE IF CorrSuppressed(after) THEN after ELSE StartEndCorrection(after)
 
 \* Fixed ("obsarm"): an observation that sees the view on the end re-bases a
 \* finger's step there, as a report at that clamp would: the clamp lands in
@@ -846,8 +916,11 @@ ObsArm(x) ==
 
 FollowEndIfPermitted(x0) ==
     IF ~x0.mounted \/ ~Measurable(x0) THEN x0
-    ELSE LET arrived == MomArrived(x0)
-             x == NotePressView(ObsArm(MomNoted(x0))) IN
+    ELSE LET read == ViewRead(x0)
+             arrived == MomArrived(read)
+             x == NotePressView(ObsArm(MomNoted(read)))
+             rc == ReadCandidate(NoteOwed(x))
+             y == rc.w IN
     IF AtBottom(x)
          THEN IF CorrSuppressed(x) THEN CancelCorr(x)
               \* reconcileMaintenanceAtStrictBottom: maintenance is never the
@@ -865,27 +938,26 @@ FollowEndIfPermitted(x0) ==
               ELSE IF ~x.perm /\ ReattachSuppressed(x)
                    THEN [CancelCorr(x) EXCEPT !.cand = Arrived(x)]
               ELSE ReconcileStrictBottom(x, FALSE, x.s)
+    ELSE IF "ledgermaint" \in Fixes /\ Unexplained(x) THEN PublishReadDeparture(x)
+    ELSE IF rc.r THEN y
     \* Fixed ("arrive"): the suppression has lifted, and the reader reached
     \* the end they asked for while it held: they follow from here.
-    ELSE IF /\ ~x.perm /\ x.cand.arr /\ x.cand.rgen = x.rgen
-            /\ ~CorrSuppressed(x) /\ ~ReattachSuppressed(x)
-         THEN StartEndCorrection(LatchSetIntent([x EXCEPT !.cand = NoCand], TRUE))
-    ELSE IF arrived /\ ~x.perm /\ ~CorrSuppressed(x) THEN MomFollow(x)
+    ELSE IF /\ ~y.perm /\ y.cand.arr /\ y.cand.rgen = y.rgen
+            /\ ~CorrSuppressed(y) /\ ~ReattachSuppressed(y)
+         THEN StartEndCorrection(LatchSetIntent([y EXCEPT !.cand = NoCand], TRUE))
+    ELSE IF arrived /\ ~y.perm /\ ~CorrSuppressed(y) THEN MomFollow(y)
     \* Fixed ("depart"): growth that an away-from-end wheel's arm keeps from
     \* being corrected is that reader's departure, with no write.
-    ELSE IF "depart" \in Fixes /\ x.perm /\ DepartsOnGrowth(x.armed)
-         THEN [LatchSetIntent(x, FALSE) EXCEPT
-                    !.depAhead = "alwaysawait" \in Fixes \/ led = -1 \/ x.rgen # w.rgen,
-                    !.depWheel = x.armed.nested]
-    ELSE IF ~x.perm \/ CorrSuppressed(x) \/ ArmBlocks(x.armed) THEN x
-    \* Fixed ("ledgermaint"): maintenance reads the ledger too.
-    ELSE IF "ledgermaint" \in Fixes /\ Unexplained(x)
-         THEN PublishReadDeparture(x)
-    ELSE StartEndCorrection(x)
+    ELSE IF "depart" \in Fixes /\ y.perm /\ DepartsOnGrowth(y.armed)
+         THEN [LatchSetIntent(PublishAt(y), FALSE) EXCEPT
+                    !.depAhead = "alwaysawait" \in Fixes \/ led = -1 \/ y.rgen # w.rgen,
+                    !.depWheel = y.armed.nested]
+    ELSE IF ~y.perm \/ CorrSuppressed(y) \/ ArmBlocks(y.armed) THEN y
+    ELSE StartEndCorrection(y)
 
 \* beginOwnedEndNavigation / beginOwnedFreeNavigation and their completions
-BeginOwnedEnd(x) == NewCorr(LatchSetIntent([x EXCEPT !.armed = NoArm, !.mom = NoMom], TRUE))
-BeginOwnedFree(x) == [CancelCorr(x) EXCEPT !.cand = NoCand, !.mom = NoMom, !.armed = OwnedArm]
+BeginOwnedEnd(x) == NewCorr(LatchSetIntent([x EXCEPT !.armed = NoArm, !.mom = NoMom, !.headedEnd = NoHeadedEnd], TRUE))
+BeginOwnedFree(x) == [CancelCorr(x) EXCEPT !.cand = NoCand, !.mom = NoMom, !.headedEnd = NoHeadedEnd, !.armed = OwnedArm]
 \* Fixed ("nav"): the landing decides. At the strict bottom (the row sat in
 \* the last screenful) the reader follows again, whatever suppresses a
 \* reattach; anywhere else they stay where it put them, though no report
@@ -902,8 +974,8 @@ CompleteOwnedFree(x) ==
     ELSE IF x.armed.src = "touch" THEN x
     ELSE LET x1 == [x EXCEPT !.armed = NoArm] IN
          IF AtBottom(x1) THEN ReconcileAt(x1, FALSE, x1.s, TRUE)
-         ELSE LatchSetIntent(x1, FALSE)
-CompleteOwnedEnd(x, landed) == LatchSetIntent(CancelCorr(x), landed)
+         ELSE OweAtView(LatchSetIntent(x1, FALSE))
+CompleteOwnedEnd(x, landed) == OweAtView(LatchSetIntent(CancelCorr(x), landed))
 
 \* The touch lift (clearTouch).
 ClearTouch(x) ==
@@ -1110,6 +1182,7 @@ MountState(store, reg, lo, hi, real, rowsVer, tok) ==
             tailOff |-> [i \in Rows |-> 0], tailGen |-> [i \in Rows |-> 0],
             tailHead |-> [i \in Rows |-> TailHead], rowKnown |-> [i \in Rows |-> TRUE],
             touchWriteMayLand |-> FALSE, liftLanding |-> FALSE,
+            lastView |-> NoView, viewCredit |-> 0, depOwed |-> ~follow,
             mounted |-> TRUE, lo |-> lo, hi |-> hi, real |-> real,
             sz |-> [i \in Rows |-> EST], s |-> 0, V |-> VH, visible |-> TRUE,
             dirty |-> FALSE, send |-> FALSE, smooth |-> -1, finger |-> FALSE,
@@ -1118,7 +1191,7 @@ MountState(store, reg, lo, hi, real, rowsVer, tok) ==
             ro |-> TRUE, settling |-> FALSE, structUnsettled |-> FALSE,
             tok |-> tok, cmd |-> NoCmd,
             perm |-> follow, armed |-> NoArm, rgen |-> 0, cgen |-> 0, corr |-> NoCorr,
-            pendEnd |-> 0, cand |-> NoCand, mom |-> NoMom,
+            pendEnd |-> 0, cand |-> NoCand, mom |-> NoMom, headedEnd |-> NoHeadedEnd,
             mode |-> IF follow THEN "follow" ELSE "free", atEnd |-> follow,
             pill |-> ~follow, navGen |-> 0,
             gate |-> raw.on /\ raw.mode # "follow" /\ raw.anchor # 0,
@@ -1206,6 +1279,7 @@ Init ==
     /\ silent = FALSE
     /\ liftEnd = NoLiftEnd
     /\ nestedInput = [gen |-> -1, prior |-> intent, endMoved |-> FALSE]
+    /\ missedFollow = "none"
     /\ budget = [grow |-> Grows, append |-> Appends, prepend |-> Prepends,
                  wheel |-> Wheels, drag |-> Drags, click |-> Clicks, touch |-> Touches,
                  fling |-> Flings, minimap |-> Minimaps, pick |-> PhonePicks,
@@ -1265,7 +1339,8 @@ AboveTailGrow ==
     /\ w.mounted /\ w.turn /\ Measurable(w) /\ Can("aboveTail")
     /\ InWindow(w, w.hi) /\ w.real[w.hi] = w.sz[w.hi] /\ w.sz[w.hi] < MaxH
     /\ LET x == [w EXCEPT !.real[w.hi] = @ + 1, !.sz[w.hi] = @ + 1,
-                          !.tailOff[w.hi] = @ + 1, !.rowsVer = @ + 1, !.hydFx = TRUE]
+                          !.tailOff[w.hi] = @ + 1, !.rowsVer = @ + 1, !.hydFx = TRUE,
+                          !.known = IF "unreadsize" \in Fixes THEN @ \cup {w.hi} ELSE @]
            xf == FollowEndIfPermitted(x)
        IN /\ w' = xf
           \* As Measure: an unreported landing moved past before any read
@@ -1325,7 +1400,8 @@ PrependRow ==
            x2 == IF Measurable(x1)
                  THEN [x1 EXCEPT !.s = @ + x1.sz[w.lo - 1], !.depAt = Tr(x1, x1.s + x1.sz[w.lo - 1]),
                                  !.armed = TrArm(x1, x1.s + x1.sz[w.lo - 1]),
-                                 !.mom = TrMom(x1, x1.s + x1.sz[w.lo - 1])]
+                                 !.mom = TrMom(x1, x1.s + x1.sz[w.lo - 1]),
+                                 !.lastView = ViewAfterMove(x1, x1.s + x1.sz[w.lo - 1], FALSE)]
                  ELSE x1
        IN w' = FollowEndIfPermitted(ReEstimate(x2, DataPass))
     /\ Spend("prepend") /\ last' = "PrependRow"
@@ -1338,14 +1414,14 @@ PrependRow ==
 Measure(i) ==
     /\ w.mounted /\ Measurable(w) /\ Present(w, i) /\ InWindow(w, i)
     \* A row at its estimate is measured too, which only matters to a
-    \* pass that would replace that estimate.
-    /\ w.sz[i] # w.real[i] \/ (Jumps > 0 /\ i \notin w.known)
+    \* pass that would replace that estimate, and to #3088's measured-only size.
+    /\ w.sz[i] # w.real[i] \/ ((Jumps > 0 \/ "unreadsize" \in Fixes) /\ i \notin w.known)
     /\ ReportBeforeGrowth /\ i = w.hi /\ w.real[i] > w.sz[i]
        /\ w.armed.src = "gesture" /\ w.armed.wheel => led # -1
     /\ LET d == w.real[i] - w.sz[i]
            above == i < AnchorRow(w)
            x1 == [w EXCEPT !.sz[i] = w.real[i],
-                           !.known = IF Jumps > 0 THEN @ \cup {i} ELSE @]
+                           !.known = IF Jumps > 0 \/ "unreadsize" \in Fixes THEN @ \cup {i} ELSE @]
            \* Held back under an animated command; a shrink below the
            \* reader is still the browser's clamp.
            defer == above /\ Deferring(w)
@@ -1356,7 +1432,7 @@ Measure(i) ==
                                  !.depAt = Tr(x1, t),
                                  !.armed = IF x1.armed.src = "touch" THEN TrArm(x1, want)
                                            ELSE Carry(x1, t),
-                                 !.mom = TrMom(x1, t)]
+                                 !.mom = TrMom(x1, t), !.lastView = ViewAfterMove(x1, t, FALSE)]
            x3 == IF defer THEN [x2 EXCEPT !.pend = @ + d] ELSE ListSaw(x2, t)
            xf == FollowEndIfPermitted(ReEstimate(x3, SizePass))
        IN /\ w' = xf
@@ -1461,8 +1537,9 @@ PadCycle ==
           /\ w' = [w EXCEPT !.s = t, !.dirty = TRUE, !.ro = TRUE,
                             !.smooth = -1, !.send = HasScrollEnd,
                             !.depAt = IF "padannounce" \in Fixes THEN Tr(w, t) ELSE @,
-                            !.armed = IF "padannounce" \in Fixes THEN Carry(w, t) ELSE @,
-                            !.mom = IF "padannounce" \in Fixes THEN TrMom(w, t) ELSE @]
+                            !.armed = IF "padannounce" \in Fixes THEN RangeArm(w, t) ELSE @,
+                            !.mom = IF "padannounce" \in Fixes THEN TrMom(w, t) ELSE @,
+                            !.lastView = IF "padannounce" \in Fixes THEN ViewAfterMove(w, t, TRUE) ELSE @]
     /\ Spend("cycle") /\ last' = "PadCycle"
     /\ UNCHANGED <<intent, flags>>
 
@@ -1472,8 +1549,9 @@ PadReset ==
            t == Clamp(x1, w.s)
            x2 == IF t = w.s THEN x1
                  ELSE [x1 EXCEPT !.s = t, !.dirty = TRUE, !.smooth = -1, !.send = HasScrollEnd,
-                                 !.depAt = Tr(IF "padannounce" \in Fixes THEN w ELSE x1, t), !.armed = Carry(IF "padannounce" \in Fixes THEN w ELSE x1, t),
-                                 !.mom = IF "padannounce" \in Fixes THEN TrMom(w, t) ELSE @]
+                                 !.depAt = Tr(IF "padannounce" \in Fixes THEN w ELSE x1, t), !.armed = RangeArm(IF "padannounce" \in Fixes THEN w ELSE x1, t),
+                                 !.mom = IF "padannounce" \in Fixes THEN TrMom(w, t) ELSE @,
+                            !.lastView = IF "padannounce" \in Fixes THEN ViewAfterMove(w, t, TRUE) ELSE @]
        IN /\ w' = x2
           \* A reader inside the pad has nowhere to stay once it goes: the
           \* clamp's end is where they are now, whatever the latch has heard.
@@ -1605,7 +1683,7 @@ SmoothStep ==
     /\ LET t == Clamp(w, w.smooth)
            s1 == IF t > w.s THEN w.s + 1 ELSE IF t < w.s THEN w.s - 1 ELSE w.s
            done == s1 = t
-       IN w' = [w EXCEPT !.s = s1, !.depAt = Tr(w, s1), !.armed = Carry(w, s1), !.mom = TrMom(w, s1),
+       IN w' = [w EXCEPT !.s = s1, !.depAt = Tr(w, s1), !.armed = Carry(w, s1), !.mom = TrMom(w, s1), !.lastView = ViewAfterMove(w, s1, FALSE),
                          !.dirty = (s1 # w.s) \/ @,
                          !.smooth = IF done THEN -1 ELSE w.smooth,
                          !.send = IF done THEN HasScrollEnd ELSE @]
@@ -1694,7 +1772,7 @@ CorrFrame ==
     /\ w.mounted /\ w.corr.stage \in {"f1", "f2"}
     /\ w' = IF ~CorrCurrent(w) THEN [w EXCEPT !.corr.stage = "none"]
             ELSE IF w.corr.stage = "f1" THEN [w EXCEPT !.corr.stage = "f2"]
-            ELSE LET x1 == [w EXCEPT !.corr.stage = "none"] IN
+            ELSE LET x1 == ViewRead([w EXCEPT !.corr.stage = "none"]) IN
                  IF "ledgermaint" \in Fixes /\ Unexplained(x1)
                  THEN PublishReadDeparture(x1)
                  ELSE IF ~Measurable(x1) \/ AtBottom(x1) THEN CancelCorr(x1) ELSE CorrIssue(x1)
@@ -1866,7 +1944,7 @@ TouchStart ==
     /\ TouchInput /\ Reading(w) /\ Can("touch") /\ ~w.finger /\ w.flingDir = 0
     /\ LET x1 == TranscriptPointerDown(w, FALSE)
            x2 == CancelCorr([x1 EXCEPT !.rgen = @ + 1])
-           x3 == [x2 EXCEPT !.cand = NoCand, !.mom = NoMom, !.armed = TouchArm(x2.s)]
+           x3 == [x2 EXCEPT !.cand = NoCand, !.mom = NoMom, !.headedEnd = NoHeadedEnd, !.armed = TouchArm(x2.s)]
        IN w' = [SupersedeEnd(x3, x3.s) EXCEPT !.finger = TRUE, !.silent = FALSE, !.panDir = 0]
     \* A seen contact takes control at this geometry, superseding any
     \* preceding fling arrival that no observation has reconciled yet.
@@ -2062,7 +2140,8 @@ ReaderMoved(l) ==
 \* the ahead-of-report publication read that null until their report.
 \* A remount restarts it on the remounted view.
 LedgerNext ==
-    led' = IF last' = "NestedWheel(consumed)" THEN led
+    led' = LET credited == IF led = -1 THEN -1 ELSE led + w'.viewCredit - w.viewCredit IN
+           IF last' = "NestedWheel(consumed)" THEN credited
            ELSE IF last' = "PadCycle" /\ "padannounce" \notin Fixes THEN led
            ELSE IF \/ "ledger" \notin Fixes \/ ~w'.mounted \/ ~w'.visible
               \/ last' \in {"DeliverScroll", "Show", "Remount", "Remount(close)"}
@@ -2072,10 +2151,10 @@ LedgerNext ==
            ELSE IF last' = "TouchEnd" /\ w'.liftLanding THEN -1
            ELSE IF "liftledger" \in Fixes /\ last' = "TouchEnd" /\ ~w.silent THEN w'.s
            ELSE IF w'.rgen # w.rgen THEN -1
-           ELSE IF last' = "ViewportChange" THEN led
-           ELSE IF led = -1 \/ ReaderMoved(last') THEN led
+           ELSE IF last' = "ViewportChange" THEN credited
+           ELSE IF led = -1 \/ ReaderMoved(last') THEN credited
            ELSE IF AtBottom(w') THEN w'.s
-           ELSE (IF AtBottom(w) THEN w.s ELSE led) + w'.s - w.s
+           ELSE (IF AtBottom(w) THEN w.s ELSE credited) + w'.s - w.s
 
 Steps ==
     \/ Grow \/ AboveTailGrow \/ \E k \in {"remount", "recycle", "empty", "unknown-row"} : TailBlockChange(k)
@@ -2118,6 +2197,24 @@ LiftEndNext ==
                      lastPos |-> TailBlockTop(w', w'.hi)]
                ELSE IF w'.flingDir # 1 THEN NoLiftEnd ELSE liftEnd
 
+\* GHOST: provenance for the accepted missed re-follow prices. This never
+\* changes intent or permits an action. New input/navigation or content
+\* moving under the reading line ends it; a compensation preserves it.
+MissedFollowNext ==
+    LET unreadRetired == "unreadsize" \in Fixes
+                         /\ ((w.mom.on /\ ~w'.mom.on /\ ~EndShift(w', w.mom).known)
+                             \/ (w.cand.on /\ ~w'.cand.on /\ ~EndShift(w', w.cand).known))
+        newInput == last' \in {"TouchStart", "TouchOnFling", "DragStart", "Click", "Minimap", "PhonePick", "Pill"}
+                    \/ \E d \in Dirs2 : last' \in {"Wheel(" \o d \o ")", "UnscrolledWheel(" \o d \o ")",
+                                                         "NestedWheel(" \o d \o ")"}
+        row == AnchorRow(w)
+        carriedLine == Present(w', row) /\ Pos(w', row) - w'.s = Pos(w, row) - w.s
+        reset == newInput \/ w'.nav.k # "none" \/ w'.mounted # w.mounted \/ w'.perm
+                 \/ (~ReaderMoved(last') /\ ~carriedLine)
+    IN missedFollow' = IF reset THEN "none"
+                       ELSE IF unreadRetired THEN "unread-tail"
+                       ELSE missedFollow
+
 SilentNext ==
     silent' = IF last' = "TouchOnFling" /\ w'.armed.src # "touch" THEN TRUE
               ELSE IF w'.perm \/ ~w'.turn \/ (last' = "DeliverScroll" /\ w.s # w.depAt)
@@ -2148,7 +2245,7 @@ SilentMomentumFrame ==
       /\ ~AtBottom(w) /\ w'.perm)
 
 Next == Steps /\ LedgerNext /\ NestedInputNext /\ LiftEndNext /\ SilentNext /\ SilentFrame /\ DragFrame
-        /\ SilentMomentumFrame
+        /\ SilentMomentumFrame /\ MissedFollowNext
 
 Spec == Init /\ [][Next]_vars
 
@@ -2157,8 +2254,12 @@ Spec == Init /\ [][Next]_vars
 (***************************************************************************)
 TypeOK ==
     /\ w.s >= 0
+    /\ missedFollow \in {"none", "unread-tail"}
     /\ w.depWheel \in BOOLEAN
     /\ w.inputMove \in {"none", "drag", "finger"}
+    /\ w.depOwed \in BOOLEAN
+    /\ w.lastView.on \in BOOLEAN
+    /\ w.viewCredit \in Int
     /\ led \in Nat \cup {-1}
     /\ w.mode \in {"follow", "free"}
     /\ w.armed.src \in {"none", "gesture", "owned", "touch"}
@@ -2172,7 +2273,14 @@ TypeOK ==
 
 \* "It does not stay where I put it": at rest, the transcript shows the tail
 \* the reader asked for, the row they scrolled to, or the row they picked.
-I_IntentHeld == Quiescent(w) => IntentHeld(w)
+\* Only a tagged unread-end retirement may miss the tail. Reading-position
+\* and navigation failures, and tail failures without this history, still
+\* fail I_IntentHeld. The separate price invariant keeps the witnesses live.
+KnownMissedFollow(x) ==
+    /\ missedFollow = "unread-tail"
+    /\ intent.k = "tail" /\ ~x.perm /\ x.mode = "free" /\ x.pill /\ ~AtBottom(x)
+I_IntentHeld == Quiescent(w) => (IntentHeld(w) \/ KnownMissedFollow(w))
+I_MissedFollowPrice == ~(Quiescent(w) /\ KnownMissedFollow(w))
 
 \* "It does not keep my place": at rest with the whole transcript loaded, the
 \* reading position is being saved (neither restore gate is stuck armed).

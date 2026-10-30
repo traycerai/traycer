@@ -8,41 +8,77 @@ within small budgets and checks what a reader would notice.
 
 ## Current scope and CI status
 
-`SHIPPED` in `gen-configs.py` models OSS main at `4706d7b5c`, including #3071 at `ef13d502f`.
-The generated set contains 176 exploration configs. The initial CI run selects
-26 bounded configs explicitly in `expected.py`; it does not claim the final
-full generated matrix has completed. It includes passing shipped configurations
-and failing controls whose invariant sets must remain reproducible.
+`SHIPPED` models pinned OSS main `66529da1c`, including #3086, #3088,
+#3089 and #3085. The generator contains 189 exploration configs. CI selects
+25 bounded configs explicitly in `expected.py`; it does not claim a full
+matrix verdict. Passing cases and known failing controls remain distinct.
+The scope is promotions and known exceptions; no new environment scenarios
+were added in this round.
 
-#3079's `idlehold` keeps a departed reader held when the end meets them,
-exactly or by clamp, at idle as well as mid-turn. A maintenance hold re-bases
-`depAt` under `deprebase`; `depAhead` remains the turn-end guard, and is no
-longer an independent maintenance hold. The idle clamp+regrow scenario is
-now in CI. `EndCameIdle` is the owner's accepted idle geometry/pill price;
-raw controls retain the 13-state exact-meet and 17-state clamp witnesses.
-`noidlehold` preserves the previous idle-follow rule for comparison.
+| Switch                  | Landed behavior                                                                                                                                                                                                                                                                                                                                                    |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `oweddep` (#3086)       | A mount or explicit/owned detach owes a departure until an off-bottom settled view takes it. Ordinary reads wait for correction suppression; settled transitions take eagerly. Follow and toward gestures clear the debt.                                                                                                                                          |
+| `unreadsize` (#3088)    | A lift without a captured tail block retains the list's measured size, not its layout estimate. A changed/unavailable size declines arrival. Unreadable momentum/candidates are retired for that gesture.                                                                                                                                                          |
+| `restoreanswer` (#3089) | A publishing gesture that the viewport cannot answer preserves the restore loop and hydration target, while still cancelling its pending command.                                                                                                                                                                                                                  |
+| `viewcarry` (#3085)     | Offset announcements carry remembered geometry by their delta. Range announcements subtract the exact range loss from remembered height and carry touch references too. Report, maintenance and correction reads absorb a recognisable viewport-growth clamp before judging movement. Both arrival paths judge the content candidate against live viewport height. |
 
-#3081's announced pad clamp carries the ledger, departure and press reference
-by its actual delta before any observer can see regrowth. `PadCycle` represents
-an atomic reset, clamp and reopen. Fixed following/press cases hold;
-`drag_pad_fixed_nopadannounce` keeps the prior 13-state unmoved-press witness.
+The four existing viewport-family witnesses have source-aligned configurations:
+`armless_viewport_fixed`, `phone_viewport_fixed`, `phone_pad_range_fixed`
+and `wheel_viewport_fixed`. Their removed-`viewcarry` controls stay generated.
+`phone_pad_range_fixed` remains outside CI because its 16-state clamp/lift
+yank is also present in 1.5.1; it is not accepted as safe behavior.
+`phone_above_tail_fixed` returns to CI with `unreadsize` and its explicit
+missed-re-follow price. Older row-only, initial navigation/send and removed
+pad-announcement controls remain generated. The original `nav_follow` and
+`send` controls return at their recorded 14-state bounds, keeping CI at25.
 
-The landed `momhybrid` / `tailblock` rules use announced-write travel and
-a lift-time content end tracked by the trailing block. Pending work stays
-separate: the contact-reference and owed-departure rules. The model currently seeds a
-changed-to-free mode directly in `LatchSetIntent`, a stronger abstraction
-than main's incomplete navigation/restore publications. That coverage will
-be split into explicit publication and owed state with the pending fix;
-these bounded checks are not evidence that main already handles those paths.
+`idlehold` (#3079) still holds a departed reader when the end meets them,
+rebasing at a maintenance hold. `depAhead` remains the turn-end guard.
+`EndCameIdle` is the accepted pill-at-bottom price; raw controls retain its
+13-state exact-meet and 17-state clamp traces. `padannounce` (#3081) still
+announces a pad clamp before any observer can see regrowth.
 
-`ChatScroll_phone_above_tail_fixed` remains an exploration-only, known
-19-state `I_IntentHeld` witness on #3071: an unrendered lift-time last row
-has no captured tail block, so later growth above its final paragraph is
-missed by the row fallback. A lazy-capture fix-forward is pending; this is a
-production defect, not a residue. The positive config will join CI after
-that fix lands. CI includes the fixed nested-wheel input-consuming no-op
-and the row-only before-fix controls. The `nopadannounce` control also keeps
-the known 18-state Mode/Pill symptoms of the unannounced pad clamp.
+### Known unread-tail declines
+
+For a lift without a captured block, #3088 declines when the measured size
+changes, a row appended below makes the captured row's size unavailable,
+or a never-measured row is first measured, even at the layout estimate.
+A row that stays unmeasured compares undefined with undefined and does not
+decline for that reason. The model distinguishes unavailable (`-1`) from
+unmeasured (`-2`); neither is a numeric row height. `known` records measurement
+independently of `sz`, including an equal-estimate measurement.
+
+The known 18-state prototype trace is a missed re-follow: the fling reaches
+its original content endpoint at 5/6 and stops, detached with the pill; no
+correction moves it. CI retains this known invariant outcome explicitly.
+The other two decline orders have the same declared price and were not
+separately re-measured. The old 19-state yank is a removed-`unreadsize`
+control, not a permitted yank. Lazy capture was rejected and is not modeled.
+
+### Other retained exceptions
+
+`phone_viewport_fixed` (11 states) and `wheel_viewport_fixed` (12 states)
+reach 5/5 with their own movement before a report; the viewport then shrinks
+from 2 to 1, moving the end to 6. Report and lift/scrollend leave the reader
+at 5/6 with the pill. No subsequent write moves the view. These pill-only missed re-follows remain outside CI. A later 14-state wheel
+witness reaches its content endpoint before a measurement moves it on,
+with the same pill-only price; none of these grants a general viewport
+exception in `I_IntentHeld`.
+
+`I_IntentHeld` remains active in all selected cases. A separate
+`I_MissedFollowPrice` records only a tagged unread-end retirement, with Tail
+intent, free mode, the pill and an off-bottom view. New input/navigation, follow, or a non-reader movement of content under
+the reading line clears the history; an announced compensation that keeps
+that content still preserves it. Thus accepting these prices does not drop
+`I_IntentHeld` and hide another reading-position or navigation failure.
+
+`phone_pad_range_fixed`, outside CI, retains the 16-state content-moving
+clamp/lift witness: 70/70/ref70 → own away move to60 → announced range60→50
+carries ref to60 → lift at50/50 → tail +10 → correction to60. The view is
+carried 10 past a reader holding at50. `clearTouch`'s
+`!isChatTimelineAtStrictBottom(liveGeometry)` conjunct vetoes catch-up before
+clearing the touch arm. The 1.5.1 strict-bottom report path also re-follows
+this reader, so this is pre-existing; the positive returns to CI when fixed.
 
 ## What is modelled
 
@@ -104,7 +140,7 @@ the rows the list has mounted (a blank frame) cannot be seen.
 
 `Fixes` switches the client's fixes on. `gen-configs.py` writes every config
 twice: `<name>` is the code before them (`Fixes = {}`), `<name>_fixed` the set
-the client ships (`{"nav", "toward", "restore", "pill", "cancel", "paint", "supersede", "reach", "arrive", "live", "hold-init", "fling", "evidence", "nested", "fallen", "depart", "keep", "padend", "turnguard", "ledger", "ledgermaint", "translate", "followguard", "liftledger", "obsarm", "momstill", "freeland", "freelanddep", "armcarry", "restspend", "deprebase", "heldgap", "pressland", "pressstep", "padannounce", "idlehold", "momhybrid", "tailblock"}`).
+the client ships, defined by `SHIPPED` in [gen-configs.py](gen-configs.py).
 Some configs also run with one of them taken out (`<name>_fixed_no<fix>`;
 `_fixed_nohold` takes out the estimate hold), with a rejected rule added
 (`<name>_fixed_with<rule>`), and the estimate configs with `"hold-init"`
@@ -367,11 +403,13 @@ records the content a native fling headed for, including its lift-time end
 inset and the live viewport conversion. Tail extension below that content
 leaves its target still; content above its final block moves it.
 `FlingStep` uses this physical contract independently of production momentum.
+The separate `headedEnd` ghost likewise survives production candidate retirement;
+only new input/owned navigation retires that physical oracle.
 A seen `TouchStart` takes intent from current geometry.
 
 `momhybrid` (#3071) records the lift offset and content end once. Every
-announced write carries the offset by actual movement; observations only
-judge it. The first report after a flagged lift mismatch re-bases the travel
+announced write carries the offset by actual movement; observations judge it and permanently retire an unreadable record under
+`unreadsize`. The first report after a flagged lift mismatch re-bases the travel
 baseline and clears its guard. Browser writes never replay unannounced after
 lift: a touch-overridden assignment has no deferred-replay actor. Pending
 list commands still use their announced writes and carried targets.
@@ -391,8 +429,8 @@ row's top. `phone_above_tail_fixed_notailblock` retains the row-only early
 arrival witness; `phone_read_fixed_nomomhybrid_notailblock` keeps the old
 re-recorded target's lost streaming arrival. `Viewports`, `TailRemounts` and
 `AppWrites` are finite extra probe budgets, off in ordinary configs. Current
-contact/viewport defects remain separate pre-fix probes until their producer
-and latch rule lands; they are not new residue exceptions.
+viewport-family before-fix controls remain generated beside the fixed cases;
+they are not permitted residue exceptions.
 
 `NoOpPicks = FALSE` limits picks to rows whose landing moves the view, which
 separates the streaming form of a minimap failure from its no-op form.
@@ -441,6 +479,7 @@ press offset.
 | `I_SavedIsView`         | Hiding or leaving the chat saved something other than what was on screen                                                                      |
 | `I_ModeMatchesGeometry` | Follow is on away from the tail (the next token pulls the view down), or off at the tail (new content does not follow)                        |
 | `I_PillHonest`          | The jump-to-latest pill shows at the tail, or is missing away from it                                                                         |
+| `I_MissedFollowPrice`   | One specifically tagged missed re-follow leaves the reader detached with the pill, without a later offset write                               |
 | `I_NoJump`              | The transcript jumps: the line at the top of the view moves with no scroll, pick or follow of theirs                                          |
 
 `I_NoJump` is a step property kept as a flag, like `I_SavedIsView`: the step
@@ -462,12 +501,27 @@ went away and came back to where they departed with no report seeing it
 (`SilentReturn`). That is the R2 residue `"translate"` exposes: at every
 observation it is the end come up to a reader who held still, held with the
 pill until the turn rests, `"fallen"`'s price. The turn's end then follows
-them (`phone_read_turn`). Nothing else at rest allows either.
+them (`phone_read_turn`). `EndCameIdle` additionally allows the named idle end-meet state; its raw
+controls retain the geometry and pill violations.
 
 "At rest" (`Quiescent`) means nothing is in flight: no navigation, correction,
 list command, scroll event, pending effect, finger, fling, wheel still to
 scroll, end pad, or unmeasured row
 on screen.
+
+The model's scalar touch reference is the effective baseline after netting
+row movement. Offset compensations therefore carry that effective baseline
+where the source leaves its raw touch offset and reads the row shift. Range
+moves carry the baseline directly and move no row. `lastView` retains the
+geometry needed to recognise viewport clamps; `viewCredit` makes an absorbed
+delta visible to ledger reads within the same modeled task. The exact range
+height form is used; there is no `view` announcement cause.
+
+The existing away-wheel guard excludes offset zero. `restoreanswer` is wired
+to the same `CanMove`/measurability result as production, but these fixtures do
+not establish the new top-edge restore control. No top-edge actor or new
+budget was added under the scope freeze. Stable row IDs abstract same-count
+re-keying as the same logical row; DOM fallback mechanics remain source-read.
 
 ## Running
 

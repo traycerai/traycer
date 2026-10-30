@@ -24,7 +24,7 @@ PHONE = dict(HasWheel="FALSE", TouchInput="TRUE", TouchMoveDelivered="TRUE",
              HasScrollEnd="FALSE", DeferUnderFinger="FALSE")
 
 INVARIANTS = ["TypeOK", "I_IntentHeld", "I_SavingLive", "I_SavedIsView",
-              "I_ModeMatchesGeometry", "I_PillHonest", "I_NoJump"]
+              "I_ModeMatchesGeometry", "I_PillHonest", "I_NoJump", "I_MissedFollowPrice"]
 
 CONFIGS = {
     # Desktop: a minimap pick while following a live reply.
@@ -71,6 +71,14 @@ CONFIGS = {
                    dict(PHONE, Grows=1, Touches=1, PhonePicks=1)),
     "phone_read": ("Phone: the reader pans and flings while a reply streams.",
                    dict(PHONE, Grows=2, Touches=2, Flings=1)),
+    "phone_viewport": ("Phone: a resting contact across the viewport clamp and tail regrowth witness.",
+                       dict(PHONE, Grows=1, Touches=1, Flings=1, Viewports=1)),
+    "phone_pad_range": ("Phone: a resting contact across the announced pad-range clamp witness.",
+                       dict(PHONE, Grows=1, Touches=1, Flings=1, Pads=1)),
+    "armless_viewport": ("A following reader with no arm across the viewport clamp witness.",
+                         dict(Grows=1, Viewports=1, WheelsApart="TRUE")),
+    "wheel_viewport": ("A toward wheel whose arrival only the viewport read observes.",
+                       dict(Grows=1, Wheels=2, Viewports=1, WheelsApart="TRUE")),
     "phone_above_tail": ("Phone: content above the last paragraph grows while a native fling heads for it.",
                          dict(PHONE, Grows=1, Touches=1, Flings=1, AboveTailGrows=1)),
     "phone_read_turn": ("Phone: the same, and the turn ends.",
@@ -173,7 +181,7 @@ SHIPPED = ["nav", "toward", "restore", "pill", "cancel", "paint", "supersede", "
            "arrive", "live", "hold-init", "fling", "evidence", "nested", "fallen", "depart",
            "keep", "padend", "turnguard", "ledger", "ledgermaint", "translate", "followguard",
            "liftledger", "obsarm", "momstill", "freeland", "freelanddep", "armcarry", "restspend",
-           "deprebase", "heldgap", "pressland", "pressstep", "padannounce", "idlehold", "momhybrid", "tailblock"]
+           "deprebase", "heldgap", "pressland", "pressstep", "padannounce", "idlehold", "momhybrid", "tailblock", "unreadsize", "restoreanswer", "viewcarry", "oweddep"]
 FIXED = "{" + ", ".join(f'"{f}"' for f in SHIPPED) + "}"
 
 # Configs also run with one shipped fix taken out (`_fixed_no<fix>`;
@@ -196,7 +204,11 @@ VARIANTS = {
     "touch_end": EVERY_RULE + ["nosupersede", "noobsarm", "nomomstill"],
     "stream_f2": ["noevidence", "nodepart", "notranslate"],
     "phone_read": ["nofling", "noledger", "noliftledger", "nomomhybrid_notailblock"],
-    "phone_above_tail": ["notailblock"],
+    "phone_above_tail": ["notailblock", "nounreadsize"],
+    "phone_viewport": ["noviewcarry"],
+    "phone_pad_range": ["noviewcarry"],
+    "armless_viewport": ["noviewcarry"],
+    "wheel_viewport": ["noviewcarry"],
     "phone_pick": ["notranslate"],
     "phone_restore": ["noobsarm"],
     "release_wheel": EVERY_RULE + ["noevidence"],
