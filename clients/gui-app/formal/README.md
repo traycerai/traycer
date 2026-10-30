@@ -559,7 +559,7 @@ also an error. Trace lengths are evidence; worker scheduling can change the
 first witness, so length itself is not an assertion.
 
 The initial bounds were measured locally with four TLC workers; the CI job
-has a 20-minute timeout. This is bounded checking, not an unbounded proof.
+has a 45-minute timeout. This is bounded checking, not an unbounded proof.
 `TLC_WORKERS` (default 4) and `JAVA_XMX` (default 6g) size the run. Newly
 generated exploration configs do not enter CI until their bounds and
 expectations have been measured and added explicitly.
