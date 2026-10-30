@@ -1701,7 +1701,11 @@ export async function runLaunchctlBootout(
   // One deadline covers the bootout and every probe after it.
   const deadline = Date.now() + LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS;
   const remainingMs = (): number => Math.max(0, deadline - Date.now());
-  const code = await spawnBootout(target, spawnFn, remainingMs());
+  // Each subprocess is admitted on ONE read of the clock: a second read could
+  // see 0, and a zero timeout means no timeout.
+  const bootoutLeftMs = remainingMs();
+  if (bootoutLeftMs <= 0) return false;
+  const code = await spawnBootout(target, spawnFn, bootoutLeftMs);
   if (!classifyBootoutExit(code, target)) return false;
   // Not loaded: nothing is draining.
   if (code !== 0) return true;
@@ -1714,12 +1718,14 @@ export async function runLaunchctlBootout(
   // plist's `ExitTimeOut` bounds the drain, and the deadline is derived
   // from it.
   const label = target.slice(target.lastIndexOf("/") + 1);
-  while (remainingMs() > 0) {
+  for (;;) {
+    const probeLeftMs = remainingMs();
+    if (probeLeftMs <= 0) break;
     let result: ProbeCommandResult;
     try {
       result = await runAgentPrint(
         target,
-        Math.min(PRINT_TIMEOUT_MS, remainingMs()),
+        Math.min(PRINT_TIMEOUT_MS, probeLeftMs),
       );
     } catch (err) {
       log.warn("[host-login-item] launchctl print threw after bootout", {

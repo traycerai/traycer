@@ -842,6 +842,44 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       expect(calls).not.toContain("bootstrap");
     });
 
+    // Node treats a timeout of 0 as no timeout, so a probe must never be given
+    // the remainder when the clock can tick to the deadline between the check
+    // that admits it and the read that sizes it.
+    it("never gives a probe a zero timeout when the clock reaches the deadline between two reads", async () => {
+      const timeouts: number[] = [];
+      let phase: "before" | "after" = "before";
+      let afterReads = 0;
+      const now = vi.spyOn(Date, "now").mockImplementation(() => {
+        if (phase === "before") return 0;
+        afterReads += 1;
+        // The probe's admission sees 1 ms left; every later read sees the
+        // deadline.
+        return afterReads === 1
+          ? LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS - 1
+          : LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS;
+      });
+      const runner: ProcessRunner = async (_command, args, options) => {
+        if (args[0] === "bootout") {
+          phase = "after";
+          return buildSuccessResult();
+        }
+        if (args[0] === "print" && phase === "after") {
+          timeouts.push(options.timeoutMs);
+        }
+        return buildSuccessResult();
+      };
+
+      try {
+        await expect(install(runner)).rejects.toMatchObject({
+          code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+        });
+      } finally {
+        now.mockRestore();
+      }
+
+      expect(timeouts).toEqual([1]);
+    });
+
     it("fails the install, without bootstrapping, when the job is still loaded after the whole budget, and never spends more than the budget on slow calls", async () => {
       // Only the clock: the install's file writes run on real I/O.
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });

@@ -1495,6 +1495,37 @@ describe("runLaunchctlBootout", () => {
     expect(caps).toEqual([1_000]);
   });
 
+  // Node treats a timeout of 0 as no timeout, so a probe must never be given
+  // the remainder when the clock can tick to the deadline between the check
+  // that admits it and the read that sizes it.
+  it("never gives a probe a zero cap when the clock reaches the deadline between two reads", async () => {
+    const fake = makeFakeChild();
+    const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
+    queueMicrotask(() => {
+      fake.fireExit();
+    });
+    const caps: number[] = [];
+    overrideAgentPrintRunnerForTests(async (_target, timeoutMs) => {
+      caps.push(timeoutMs);
+      return agentJobLoadedPrintResult();
+    });
+    // Reads: the deadline, the bootout's admission, the probe's admission
+    // (1 ms left), then the deadline itself on every later read.
+    const reads = [0, 0, LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS - 1];
+    const now = vi.spyOn(Date, "now").mockImplementation(() => {
+      return reads.shift() ?? LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS;
+    });
+    try {
+      await expect(
+        runLaunchctlBootout("gui/501/test.label", spawnFn),
+      ).resolves.toBe(false);
+    } finally {
+      now.mockRestore();
+    }
+
+    expect(caps).toEqual([1]);
+  });
+
   // The bootout is the only launchd mutation. The wait after it only reads, so
   // an authority lost during the wait has nothing further to stop, and no
   // second bootout edge exists to run without a fresh authority check.

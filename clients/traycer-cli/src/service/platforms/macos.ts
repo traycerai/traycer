@@ -1681,18 +1681,24 @@ async function bootoutAndWait(
       LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
     );
   };
+  // Each subprocess is admitted on ONE read of the clock: a second read could
+  // see 0, and a zero timeout means no timeout.
+  const bootoutLeftMs = remainingMs();
+  if (bootoutLeftMs <= 0) return notDrained("the wait ran out before bootout");
   const bootout = await run("launchctl", ["bootout", target], {
     env: undefined,
     cwd: undefined,
-    timeoutMs: Math.min(LAUNCHCTL_CALL_TIMEOUT_MS, remainingMs()),
+    timeoutMs: Math.min(LAUNCHCTL_CALL_TIMEOUT_MS, bootoutLeftMs),
     tolerateNonZeroExit,
   });
   if (bootout.exitCode !== 0) return bootout;
-  while (remainingMs() > 0) {
+  for (;;) {
+    const probeLeftMs = remainingMs();
+    if (probeLeftMs <= 0) break;
     const loaded = await verifyAgentBootedOut(
       target,
       run,
-      Math.min(LAUNCHCTL_CALL_TIMEOUT_MS, remainingMs()),
+      Math.min(LAUNCHCTL_CALL_TIMEOUT_MS, probeLeftMs),
     );
     if (loaded === "absent") return bootout;
     if (loaded === "indeterminate") {
