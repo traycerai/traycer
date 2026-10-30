@@ -1567,6 +1567,8 @@ function inAppLaunchAgentPlistPath(): string {
  */
 const PRINT_TIMEOUT_MS = 5_000;
 
+const BOOTOUT_JOB_POLL_MS = 250;
+
 /**
  * Forcibly drop the job under `labelId` from launchd's GUI domain so BTM
  * releases its cached LWCR. On macOS 26+ this is the only path that
@@ -1679,26 +1681,59 @@ export type BootoutSpawnFn = (
  * Exported for unit tests; never call this from new production code —
  * use `bootoutStaleAgent` instead.
  */
-export function runLaunchctlBootout(
+export async function runLaunchctlBootout(
   target: string,
   spawnFn: BootoutSpawnFn,
 ): Promise<boolean> {
-  return new Promise((resolve) => {
-    // `--wait`: a bare bootout returns when launchd ACCEPTS the request, and
-    // the registration that follows would run while the old job is still
-    // draining its shutdown (a failed register, or a replacement that sees
-    // the still-serving incumbent and exits 0, which KeepAlive does not
-    // revive). The bundled plist's `ExitTimeOut` bounds the drain, and
-    // `LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS` is derived from it.
-    const child = spawnFn("/bin/launchctl", ["bootout", "--wait", target], {
-      stdio: "ignore",
+  // `--wait`: a bare bootout returns when launchd ACCEPTS the request, and
+  // the registration that follows would run while the old job is still
+  // draining its shutdown (a failed register, or a replacement that sees
+  // the still-serving incumbent and exits 0, which KeepAlive does not
+  // revive). The bundled plist's `ExitTimeOut` bounds the drain, and
+  // `LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS` is derived from it.
+  const waited = await spawnBootout(["bootout", "--wait", target], spawnFn);
+  // `--wait` is a usage error on macOS 15 (exit 64, "Unrecognized target
+  // specifier"): boot out bare, then wait for the job to leave the domain.
+  if (waited !== 64) return classifyBootoutExit(waited, target);
+  log.info(
+    "[host-login-item] launchctl bootout --wait is not accepted here; booting out and polling until the job is gone",
+    { target },
+  );
+  const bare = await spawnBootout(["bootout", target], spawnFn);
+  const cleared = classifyBootoutExit(bare, target);
+  await waitUntilJobGone(target);
+  return cleared;
+}
+
+/** Poll `launchctl print` until the job is gone or the bootout bound passes. */
+async function waitUntilJobGone(target: string): Promise<void> {
+  const deadline = Date.now() + LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const loaded = await runAgentPrint(target);
+    if (loaded.exitCode !== 0) return;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, BOOTOUT_JOB_POLL_MS);
     });
+  }
+}
+
+/**
+ * One launchctl bootout subprocess: its exit code, or `null` when it errored
+ * or outlived the bound (already logged).
+ */
+function spawnBootout(
+  args: readonly string[],
+  spawnFn: BootoutSpawnFn,
+): Promise<number | null> {
+  const target = args[args.length - 1];
+  return new Promise((resolve) => {
+    const child = spawnFn("/bin/launchctl", args, { stdio: "ignore" });
     let settled = false;
-    const settle = (cleared: boolean): void => {
+    const settle = (code: number | null): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve(cleared);
+      resolve(code);
     };
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
@@ -1706,35 +1741,41 @@ export function runLaunchctlBootout(
         target,
         timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
       });
-      settle(false);
+      settle(null);
     }, LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS);
     child.once("error", (err) => {
       log.warn("[host-login-item] launchctl bootout errored", {
         target,
         err,
       });
-      settle(false);
+      settle(null);
     });
     child.once("exit", (code) => {
-      if (code === 0) {
-        log.info("[host-login-item] launchctl bootout cleared BTM entry", {
-          target,
-        });
-      } else if (code === 3 || code === 5 || code === 113) {
-        // "Not loaded" — nothing to clear. Common on first install.
-        log.info(
-          "[host-login-item] launchctl bootout: agent not loaded (clean state)",
-          { target, code },
-        );
-      } else {
-        log.warn(
-          "[host-login-item] launchctl bootout returned unexpected exit code — BTM may still hold a stale LWCR",
-          { target, code },
-        );
-      }
-      settle(code === 0 || code === 3 || code === 5 || code === 113);
+      settle(code);
     });
   });
+}
+
+/** Did this exit leave nothing registered under the label? */
+function classifyBootoutExit(code: number | null, target: string): boolean {
+  if (code === null) return false;
+  if (code === 0) {
+    log.info("[host-login-item] launchctl bootout cleared BTM entry", {
+      target,
+    });
+  } else if (code === 3 || code === 5 || code === 113) {
+    // "Not loaded" — nothing to clear. Common on first install.
+    log.info(
+      "[host-login-item] launchctl bootout: agent not loaded (clean state)",
+      { target, code },
+    );
+  } else {
+    log.warn(
+      "[host-login-item] launchctl bootout returned unexpected exit code — BTM may still hold a stale LWCR",
+      { target, code },
+    );
+  }
+  return code === 0 || code === 3 || code === 5 || code === 113;
 }
 
 function fileExists(path: string): Promise<boolean> {

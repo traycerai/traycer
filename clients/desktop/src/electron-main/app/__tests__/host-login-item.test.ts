@@ -1340,6 +1340,52 @@ describe("runLaunchctlBootout", () => {
   // real launchctl failure - the BTM entry may still be present - and must
   // resolve `false` so `bootoutStaleAgent` reports "bootout-failed" rather
   // than silently claiming the clear succeeded.
+  // `launchctl bootout --wait` is a usage error on macOS 15 (exit 64,
+  // pingdotgg/t3code#11995). Only that exit falls back; the registration that
+  // follows must still not run beside a draining job.
+  it("falls back to a bare bootout and waits for the job to leave when `--wait` is a usage error (exit 64)", async () => {
+    const calls: Array<readonly string[]> = [];
+    const spawnFn = vi.fn((_command: string, args: readonly string[]) => {
+      calls.push(args);
+      const fake = makeFakeChild();
+      queueMicrotask(() => {
+        fake.child.emit("exit", calls.length === 1 ? 64 : 0, null);
+      });
+      return fake.child;
+    });
+    let prints = 0;
+    overrideAgentPrintRunnerForTests(async () => {
+      prints += 1;
+      // Still draining on the first poll, gone on the second.
+      return prints >= 2
+        ? { ...agentJobLoadedPrintResult(), exitCode: 113 }
+        : agentJobLoadedPrintResult();
+    });
+
+    await expect(
+      runLaunchctlBootout("gui/501/test.label", spawnFn),
+    ).resolves.toBe(true);
+
+    expect(calls).toEqual([
+      ["bootout", "--wait", "gui/501/test.label"],
+      ["bootout", "gui/501/test.label"],
+    ]);
+    expect(prints).toBe(2);
+  });
+
+  it("does not fall back on any other failing exit code", async () => {
+    const spawnFn = vi.fn(() => {
+      const fake = makeFakeChild();
+      queueMicrotask(() => fake.child.emit("exit", 1, null));
+      return fake.child;
+    });
+
+    await expect(
+      runLaunchctlBootout("gui/501/test.label", spawnFn),
+    ).resolves.toBe(false);
+    expect(spawnFn).toHaveBeenCalledOnce();
+  });
+
   it("resolves false on an unexpected exit code — the BTM entry may still be present", async () => {
     const fake = makeFakeChild();
     const spawnFn = vi.fn().mockReturnValueOnce(fake.child);

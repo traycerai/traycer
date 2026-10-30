@@ -775,6 +775,94 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     }
   });
 
+  // `launchctl bootout --wait` is a usage error on macOS 15 (exit 64,
+  // "Unrecognized target specifier"; pingdotgg/t3code#11995). Only that error
+  // may fall back to a bare bootout; any other failure must still fail.
+  describe("bootout --wait where the flag is not accepted", () => {
+    function usageError(command: string, args: readonly string[]): Error {
+      return buildLaunchctlError({
+        command,
+        cmdArgs: args,
+        stderr:
+          "Unrecognized target specifier.\nUsage: launchctl bootout <domain-target> [service-path1, service-path2, ...] | <service-target>\n",
+        stdout: "",
+        exitCode: 64,
+      });
+    }
+
+    it("installs over a loaded job by booting out bare and polling until the job is gone, then bootstraps", async () => {
+      const calls: string[][] = [];
+      let bareBootouts = 0;
+      let printsAfterBootout = 0;
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push([...args]);
+        if (args[0] === "bootout" && args[1] === "--wait") {
+          throw usageError(command, args);
+        }
+        if (args[0] === "bootout") bareBootouts += 1;
+        if (args[0] === "print" && bareBootouts > 0) {
+          printsAfterBootout += 1;
+          // Still draining on the first poll, gone on the second.
+          if (printsAfterBootout >= 2) {
+            return { stdout: "", stderr: "", exitCode: 113 };
+          }
+        }
+        return buildSuccessResult();
+      };
+      const controller = createMacosController(runner);
+      createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+
+      await controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      });
+
+      const verbs = calls.map((args) =>
+        args[0] === "bootout" ? args.slice(0, 2).join(" ") : args[0],
+      );
+      const bootoutAt = verbs.indexOf("bootout --wait");
+      expect(verbs.slice(bootoutAt, bootoutAt + 2)).toEqual([
+        "bootout --wait",
+        "bootout " + `gui/${process.getuid?.() ?? 0}/${label.id}`,
+      ]);
+      expect(printsAfterBootout).toBe(2);
+      // The bootstrap came after the job was seen gone, never beside it.
+      const lastPoll = verbs.lastIndexOf("print");
+      expect(verbs.indexOf("bootstrap")).toBeGreaterThan(lastPoll);
+    });
+
+    it("still fails the install on any other bootout failure, without falling back", async () => {
+      const calls: string[][] = [];
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push([...args]);
+        if (args[0] === "bootout") {
+          throw buildLaunchctlError({
+            command,
+            cmdArgs: args,
+            stderr: "Boot-out failed: 1: Operation not permitted\n",
+            stdout: "",
+            exitCode: 1,
+          });
+        }
+        return buildSuccessResult();
+      };
+      const controller = createMacosController(runner);
+      createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+
+      await expect(
+        controller.install({
+          label,
+          cli: { command: "/usr/local/bin/traycer", args: [] },
+          enableLinger: false,
+        }),
+      ).rejects.toMatchObject({ code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED });
+      expect(calls.filter((args) => args[0] === "bootout")).toEqual([
+        ["bootout", "--wait", `gui/${process.getuid?.() ?? 0}/${label.id}`],
+      ]);
+    });
+  });
+
   it("on bootstrap 'already loaded' races, reloads via bootout → bootstrap rather than kickstarting the cache", async () => {
     const calls: RecordedCall[] = [];
     let bootstrapAttempts = 0;

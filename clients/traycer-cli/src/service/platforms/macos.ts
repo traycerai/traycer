@@ -438,15 +438,11 @@ async function takeoverDesktopRegistration(
   // `tolerateNonZeroExit` stays `true`, unlike the retirement path, because
   // that positive probe is the gate here - a benign "no such process" exit
   // must reach it rather than abort a takeover that in fact succeeded.
-  const agentBootout = await run(
-    "launchctl",
-    ["bootout", "--wait", agentTarget],
-    {
-      env: undefined,
-      cwd: undefined,
-      timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
-      tolerateNonZeroExit: true,
-    },
+  const agentBootout = await bootoutAndWait(
+    agentTarget,
+    label.environment,
+    run,
+    true,
   );
   // Verification must be POSITIVE. `inspectLaunchdOwnership` collapses every
   // non-zero exit - and its caller every thrown error - into `not-loaded`,
@@ -1059,12 +1055,12 @@ async function unloadCliLabelJob(
 ): Promise<void> {
   const { pid } = job;
   const serviceTarget = `${guiDomain()}/${label.id}`;
-  const bootout = await run("launchctl", ["bootout", "--wait", serviceTarget], {
-    env: undefined,
-    cwd: undefined,
-    timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
-    tolerateNonZeroExit: true,
-  });
+  const bootout = await bootoutAndWait(
+    serviceTarget,
+    label.environment,
+    run,
+    true,
+  );
   const postBootout = await verifyAgentBootedOut(serviceTarget, run);
   const verification =
     postBootout === "absent" && (await processMayLiveOn(job, bootout.exitCode))
@@ -1217,12 +1213,12 @@ async function installService(
     // a job still draining its shutdown makes the bootstrap below fail with
     // `Bootstrap failed: 5: Input/output error`. The wait is bounded by the
     // job's `ExitTimeOut`.
-    await run("launchctl", ["bootout", "--wait", serviceTarget], {
-      env: undefined,
-      cwd: undefined,
-      timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
-      tolerateNonZeroExit: false,
-    }).catch((cause: unknown) => {
+    await bootoutAndWait(
+      serviceTarget,
+      options.label.environment,
+      run,
+      false,
+    ).catch((cause: unknown) => {
       // An authority loss - a stop's confirmed host replaced included - is
       // not a bootout failure, and keeps its identity and code.
       if (isServiceMutationAuthorityError(cause)) throw cause;
@@ -1282,6 +1278,7 @@ async function installService(
     // retry a full reload against the on-disk plist instead.
     await reloadRegisteredService({
       labelId: options.label.id,
+      environment: options.label.environment,
       guiTarget,
       serviceTarget,
       manifestPath,
@@ -1325,6 +1322,7 @@ async function installService(
 
 interface ReloadRegisteredServiceOptions {
   readonly labelId: string;
+  readonly environment: ServiceLabel["environment"];
   readonly guiTarget: string;
   readonly serviceTarget: string;
   readonly manifestPath: string;
@@ -1356,15 +1354,11 @@ async function reloadRegisteredService(
   }
   try {
     // `--wait` for the reason the install's own bootout carries it.
-    await options.run(
-      "launchctl",
-      ["bootout", "--wait", options.serviceTarget],
-      {
-        env: undefined,
-        cwd: undefined,
-        timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
-        tolerateNonZeroExit: false,
-      },
+    await bootoutAndWait(
+      options.serviceTarget,
+      options.environment,
+      options.run,
+      false,
     );
   } catch (cause) {
     if (isServiceMutationAuthorityError(cause)) throw cause;
@@ -1656,6 +1650,85 @@ function lastExitWasClean(fields: ReadonlyMap<string, string>): boolean {
   return fields.get("last exit code") === "0";
 }
 
+// `launchctl bootout --wait` is a usage error (exit 64, "Unrecognized target
+// specifier") on macOS 15, so the flag is not something every supported macOS
+// accepts. The failure leaves the job loaded, and the bootstrap that follows
+// fails with EIO.
+function isBootoutWaitUnsupported(result: {
+  readonly exitCode: number;
+  readonly stderr: string;
+  readonly stdout: string;
+}): boolean {
+  return (
+    result.exitCode === 64 ||
+    `${result.stderr}\n${result.stdout}`
+      .toLowerCase()
+      .includes("unrecognized target specifier")
+  );
+}
+
+const BOOTOUT_JOB_POLL_MS = 250;
+
+/**
+ * `launchctl bootout --wait <target>`: returns once the job has exited, at
+ * worst after its whole `ExitTimeOut`. Where the flag is not accepted it
+ * falls back to a bare `bootout` and polls `launchctl print` until the label
+ * is gone, bounded by the same budget. Every place that must not act on a job
+ * still draining its shutdown goes through here.
+ *
+ * `tolerateNonZeroExit` has `run`'s meaning: a failed bootout resolves with its
+ * exit code instead of throwing.
+ */
+async function bootoutAndWait(
+  target: string,
+  environment: ServiceLabel["environment"],
+  run: ProcessRunner,
+  tolerateNonZeroExit: boolean,
+): Promise<RunResult> {
+  // The usage error arrives as a rejection when the caller does not tolerate a
+  // non-zero exit and as a result when it does; both read the same way.
+  const waited = await run("launchctl", ["bootout", "--wait", target], {
+    env: undefined,
+    cwd: undefined,
+    timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
+    tolerateNonZeroExit,
+  }).catch((cause: unknown): RunResult => {
+    if (cause instanceof ProcessRunError && isBootoutWaitUnsupported(cause)) {
+      return {
+        exitCode: cause.exitCode,
+        stdout: cause.stdout,
+        stderr: cause.stderr,
+      };
+    }
+    throw cause;
+  });
+  if (!isBootoutWaitUnsupported(waited)) return waited;
+  createCliLogger(environment).info(
+    "launchctl bootout --wait is not accepted here; booting out and polling until the job is gone",
+    { target, exitCode: waited.exitCode },
+  );
+  const bare = await run("launchctl", ["bootout", target], {
+    env: undefined,
+    cwd: undefined,
+    timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
+    tolerateNonZeroExit,
+  });
+  const deadline = Date.now() + LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const loaded = await run("launchctl", ["print", target], {
+      env: undefined,
+      cwd: undefined,
+      timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
+      tolerateNonZeroExit: true,
+    });
+    if (loaded.exitCode !== 0) return bare;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, BOOTOUT_JOB_POLL_MS);
+    });
+  }
+  return bare;
+}
+
 // launchctl returns "Service is already loaded" / "Bootstrap failed:
 // 37: ... (already loaded)" when the agent is already registered. We
 // classify these as *recoverable races* (not success): the caller must
@@ -1741,16 +1814,10 @@ async function uninstallService(
     [options.label.id, serviceTarget],
   ] as const) {
     try {
-      await run("launchctl", ["bootout", "--wait", target], {
-        env: undefined,
-        cwd: undefined,
-        // `--wait` is launchd's authoritative completion barrier and returns
-        // once the job has exited, at worst after its whole `ExitTimeOut`.
-        // Keep the subprocess bound above that so a host that takes its full
-        // forced shutdown watchdog is waited on, not abandoned.
-        timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
-        tolerateNonZeroExit: false,
-      });
+      // The wait returns once the job has exited, at worst after its whole
+      // `ExitTimeOut`: a host that takes its full forced shutdown watchdog is
+      // waited on, not abandoned.
+      await bootoutAndWait(target, options.label.environment, run, false);
     } catch (cause) {
       if (isServiceMutationAuthorityError(cause)) throw cause;
       if (!isBenignBootoutFailure(cause)) {
@@ -2463,12 +2530,7 @@ async function retireCompetingRegistration(
       // false}` leaves DOWN until the next login. That is the exact outcome
       // this whole repair exists to prevent. Same barrier, same timeout as
       // `uninstallService`'s bootout.
-      await run("launchctl", ["bootout", "--wait", serviceTarget], {
-        env: undefined,
-        cwd: undefined,
-        timeoutMs: LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS,
-        tolerateNonZeroExit: false,
-      });
+      await bootoutAndWait(serviceTarget, label.environment, run, false);
       bootedOut = true;
     } catch (cause) {
       if (isServiceMutationAuthorityError(cause)) throw cause;
