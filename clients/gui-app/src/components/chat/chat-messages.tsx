@@ -986,6 +986,11 @@ function awaitChatTimelineScrollPromiseSettle(
  * reader checks above still end the loop, so a caller that answers true
  * forever is bounded by the reader rather than by the count: its own predicate
  * has to be one that goes false once the target stops moving.
+ *
+ * A caller that passes `false` keeps exactly the behavior it had before this
+ * check existed: its landing is judged on the first settle. That says nothing
+ * about whether its own target can move - only that it does not defer
+ * acceptance when it does.
  */
 function settleChatTimelineNavigation(input: {
   readonly awaitSettle: (onSettle: () => void) => () => void;
@@ -1037,6 +1042,29 @@ function settleChatTimelineNavigation(input: {
     cancelled = true;
     cancelActiveWait();
   };
+}
+
+/** Which operation owns the active navigation settle loop, and how to end it.
+ *
+ *  The owner is carried with the cleanup rather than inferred, because the two
+ *  readers of this ref need different answers. A supersede ends whatever is
+ *  registered and does not care what it was. The hide-time cancellation does:
+ *  a restore has nothing left to converge on once the tile is concealed, while
+ *  a cross-tile scroll request is the newer intent the show branch re-issues
+ *  and must not report cancelled.
+ *
+ *  Whether that request is PENDING answers neither question. A request whose
+ *  row is not in the rendered index yet is pending with no loop of its own -
+ *  `landScrollRequestRow` returns before it registers anything - so a restore
+ *  stays the owner, and a hide that read pending-ness would leave it running.
+ *
+ *  Only `"request"` is tested anywhere. `"restore"` and `"navigation"` are kept
+ *  apart so each registration states what it is rather than what it is not;
+ *  nothing distinguishes them, and a reader should not go looking for a
+ *  consumer that does. */
+interface ActiveNavigationSettleCleanup {
+  readonly owner: "restore" | "request" | "navigation";
+  readonly cancel: () => void;
 }
 
 /**
@@ -2334,7 +2362,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const blockReveal = useChatNavigationBlockReveal({
     getScroller,
   });
-  const activeNavigationSettleCleanupRef = useRef<(() => void) | null>(null);
+  const activeNavigationSettleCleanupRef =
+    useRef<ActiveNavigationSettleCleanup | null>(null);
   // The cleanup above stays installed after its loop finishes, so it cannot
   // say whether a restore or navigation still has a command the list holds.
   // This does. A loop claims it once it has issued its first command. However
@@ -2379,7 +2408,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // Stop that placeholder restore before its valid/exhausted callbacks
     // normalize durable state. The raw hydration coordinate stays armed
     // unless the frozen issued target proves the reader moved past it.
-    activeNavigationSettleCleanupRef.current?.();
+    activeNavigationSettleCleanupRef.current?.cancel();
     activeNavigationSettleCleanupRef.current = null;
     resolvePendingRestoreEndLandingRef.current = null;
     pendingMeasuredFreeRestoreRef.current = null;
@@ -2442,7 +2471,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       if (navigationHighlightTimeoutRef.current !== null) {
         window.clearTimeout(navigationHighlightTimeoutRef.current);
       }
-      activeNavigationSettleCleanupRef.current?.();
+      activeNavigationSettleCleanupRef.current?.cancel();
       activeAnimatedImperativeScrollGenerationRef.current = null;
     },
     [],
@@ -2724,7 +2753,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // hydration id is cleared above and the gate always releases.
   const scrollToEnd = useCallback(
     (animated: boolean): void => {
-      activeNavigationSettleCleanupRef.current?.();
+      activeNavigationSettleCleanupRef.current?.cancel();
       activeNavigationSettleCleanupRef.current = null;
       clearNavigationHighlight();
       pendingHydrationRestoreAnchorIdRef.current = null;
@@ -2752,9 +2781,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         // its own - a real gesture already bumps the generation and is
         // caught by `isAborted` above.
         shouldYieldToReader: () => false,
-        // This target cannot move under the loop while it settles: a
-        // precomputed offset or an already-measured row, not a position summed
-        // over rows that are still resolving from estimates.
         isStillSettling: () => false,
         // While the reader still follows, a landing short of the end is a
         // tail that outgrew it - a streaming reply can grow past every retry
@@ -2786,9 +2812,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         onAborted: releaseSettle,
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
-      activeNavigationSettleCleanupRef.current = (): void => {
-        cancelSettle();
-        releaseSettle();
+      activeNavigationSettleCleanupRef.current = {
+        owner: "navigation",
+        cancel: (): void => {
+          cancelSettle();
+          releaseSettle();
+        },
       };
     },
     [
@@ -3380,7 +3409,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       location: ChatTimelineNavigationLocation,
       afterSettle: (() => void) | null,
     ): void => {
-      activeNavigationSettleCleanupRef.current?.();
+      activeNavigationSettleCleanupRef.current?.cancel();
       const generationAtIssue = anchorUserScrollGenerationRef.current;
       const list = chatTimelineRef.current;
       if (!list) return;
@@ -3414,9 +3443,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         // No reader-departure detection here - a real gesture already bumps
         // the generation and is caught above.
         shouldYieldToReader: () => false,
-        // This target cannot move under the loop while it settles: a
-        // precomputed offset or an already-measured row, not a position summed
-        // over rows that are still resolving from estimates.
         isStillSettling: () => false,
         validate: () =>
           !lastSettleTimedOut &&
@@ -3476,11 +3502,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       });
       // A cancelled navigation has no landing of its own to decide: it only
       // stops owning the view, which whatever cancelled it now decides.
-      activeNavigationSettleCleanupRef.current = (): void => {
-        cancelled = true;
-        cancelSettle();
-        releaseSettle();
-        followLatchRef.current?.cancelOwnedFreeNavigation();
+      activeNavigationSettleCleanupRef.current = {
+        owner: "navigation",
+        cancel: (): void => {
+          cancelled = true;
+          cancelSettle();
+          releaseSettle();
+          followLatchRef.current?.cancelOwnedFreeNavigation();
+        },
       };
     },
     [
@@ -3543,7 +3572,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const initialIndex = rowIndexByKeyRef.current.get(messageId);
       if (!list || initialIndex === undefined) return false;
 
-      activeNavigationSettleCleanupRef.current?.();
+      activeNavigationSettleCleanupRef.current?.cancel();
       const generationAtIssue = readerPositionGenerationRef.current;
       const scrollNode = list.getScrollableNode();
       const targetIndex = (): number | null =>
@@ -3700,9 +3729,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         onAborted: releaseSettle,
         maxRetries: CHAT_TIMELINE_NAVIGATION_MAX_RETRIES,
       });
-      activeNavigationSettleCleanupRef.current = (): void => {
-        cancelSettle();
-        releaseSettle();
+      activeNavigationSettleCleanupRef.current = {
+        owner: "restore",
+        cancel: (): void => {
+          cancelSettle();
+          releaseSettle();
+        },
       };
       return true;
     },
@@ -3772,7 +3804,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // Superseding an earlier landing of THIS request is a re-issue, not a
       // cancellation; any other active navigation is torn down as cancelled.
       reissuingScrollRequestIdRef.current = requestId;
-      activeNavigationSettleCleanupRef.current?.();
+      activeNavigationSettleCleanupRef.current?.cancel();
       reissuingScrollRequestIdRef.current = null;
       const generationAtIssue = anchorUserScrollGenerationRef.current;
       followLatchRef.current?.beginOwnedFreeNavigation();
@@ -3846,9 +3878,6 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           return true;
         },
         shouldYieldToReader: () => false,
-        // This target cannot move under the loop while it settles: a
-        // precomputed offset or an already-measured row, not a position summed
-        // over rows that are still resolving from estimates.
         isStillSettling: () => false,
         validate: () => !lastSettleTimedOut && landedOnHydratedRow(),
         reissue: () => {
@@ -3898,12 +3927,15 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       // from here instead - otherwise the request stays pending, a later
       // hidden→visible transition re-issues the stale landing over the tail,
       // and the tile keeps the target row's hydration hold until its TTL.
-      activeNavigationSettleCleanupRef.current = (): void => {
-        cancelLandingLoop();
-        finish();
-        if (reissuingScrollRequestIdRef.current !== requestId) {
-          settleScrollRequest(requestId, "cancelled");
-        }
+      activeNavigationSettleCleanupRef.current = {
+        owner: "request",
+        cancel: (): void => {
+          cancelLandingLoop();
+          finish();
+          if (reissuingScrollRequestIdRef.current !== requestId) {
+            settleScrollRequest(requestId, "cancelled");
+          }
+        },
       };
       return true;
     },
@@ -4038,15 +4070,18 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // that loop instead.
     const settleCleanup = activeNavigationSettleCleanupRef.current;
     if (issued && settleCleanup !== null) {
-      activeNavigationSettleCleanupRef.current = (): void => {
-        settleCleanup();
-        if (
-          resolvePendingRestoreEndLandingRef.current ===
-          resolvePendingEndLanding
-        ) {
-          resolvePendingRestoreEndLandingRef.current = null;
-          pendingMeasuredFreeRestoreRef.current = null;
-        }
+      activeNavigationSettleCleanupRef.current = {
+        owner: settleCleanup.owner,
+        cancel: (): void => {
+          settleCleanup.cancel();
+          if (
+            resolvePendingRestoreEndLandingRef.current ===
+            resolvePendingEndLanding
+          ) {
+            resolvePendingRestoreEndLandingRef.current = null;
+            pendingMeasuredFreeRestoreRef.current = null;
+          }
+        },
       };
     }
   }, [
@@ -4099,17 +4134,20 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // loop had reached - which is also what gives a row destroyed while hidden
   // its clamp-to-neighbour fallback.
   //
-  // Guarded as the show branch's own cleanup is: this cleanup reports a pending
-  // cross-tile scroll request `cancelled` (`landScrollRequestRow` registers it
-  // there), and that request is the newer intent the show branch re-issues
-  // instead of replaying. A restore loop cannot be the registered owner while
-  // such a request is pending - issuing one supersedes the restore through this
-  // same ref - so the guard never leaves a restore loop running. The show
-  // branch does not share this helper, because a pending request there is not a
-  // no-op: it re-issues it against the now-measurable geometry first.
+  // Skips a loop a cross-tile scroll request owns: cancelling that one reports
+  // the request `cancelled` (`landScrollRequestRow` registers it so), and the
+  // request is the newer intent the show branch re-issues instead of replaying.
+  // The test is the registered OWNER, not whether a request is pending - a
+  // request whose row is not in the rendered index yet is pending with no loop
+  // of its own, and a hide that read pending-ness would leave the restore
+  // running, which is the bug this helper exists to prevent.
+  //
+  // The show branch does not share this helper, because a pending request there
+  // is not a no-op: it re-issues it against the now-measurable geometry first.
   const endNavigationSettleForConcealment = useCallback((): void => {
-    if (pendingScrollRequestLandingRef.current !== null) return;
-    activeNavigationSettleCleanupRef.current?.();
+    const active = activeNavigationSettleCleanupRef.current;
+    if (active === null || active.owner === "request") return;
+    active.cancel();
     activeNavigationSettleCleanupRef.current = null;
   }, []);
   useLayoutEffect(() => {
@@ -4159,7 +4197,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       }
       return;
     }
-    activeNavigationSettleCleanupRef.current?.();
+    activeNavigationSettleCleanupRef.current?.cancel();
     activeNavigationSettleCleanupRef.current = null;
     queueMicrotask(() => {
       clearNavigationHighlight();
