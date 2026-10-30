@@ -2046,7 +2046,7 @@ export class RemoteSession<
       ? new HostTransportFailureError(notReady)
       : new RetryableTransportError({
           ...notReady,
-          // "Not ready" is decided before anything is sealed, so this
+          // "Not ready" is decided before anything is enqueued, so this
           // retryability is the no-dispatch guarantee, not a key.
           replaySafetyFromKey: false,
         });
@@ -2131,16 +2131,24 @@ export class RemoteSession<
     return new Promise<unknown>((resolve, reject) => {
       {
         const timer = setTimeout(() => {
-          this.rejectUnary(
-            streamId,
-            replaySafe
-              ? retryableUnaryFailure(
-                  requestId,
-                  method,
-                  `Remote unary '${method}' timed out awaiting a response`,
-                )
-              : unaryTimeoutError(requestId, method),
-          );
+          // The timer is cleared with its entry, so the entry is still here.
+          let failure: HostRpcError;
+          if (this.pendingUnary.get(streamId)?.sealed !== true) {
+            failure = unsentUnaryFailure(
+              requestId,
+              method,
+              `Remote unary '${method}' timed out before it was sent`,
+            );
+          } else if (replaySafe) {
+            failure = retryableUnaryFailure(
+              requestId,
+              method,
+              `Remote unary '${method}' timed out awaiting a response`,
+            );
+          } else {
+            failure = unaryTimeoutError(requestId, method);
+          }
+          this.rejectUnary(streamId, failure);
           // The caller settles FIRST, with the timeout it earned: whatever the
           // session decides next about its own liveness is a different
           // question with a different consumer.
@@ -6671,9 +6679,11 @@ export class RemoteSession<
    * carries no attestation that the request was never dispatched - and `error`
    * is marked for `mayHaveReachedHost`.
    *
-   * An entry never sealed went nowhere, whatever `error` says: a hold can
-   * outlast its response budget with the request still queued. It takes the
-   * pre-send rejection instead, and no CLOSE, since the host never saw the id.
+   * An entry never sealed went nowhere: a hold can outlast its response budget
+   * with the request still queued. Its caller passes the pre-send failure,
+   * which goes unmarked, and no CLOSE follows, since the host never saw the
+   * id. Only the timer reaches one: the other callers answer an inbound frame
+   * on the stream, which the host cannot send for an id it never saw.
    */
   private rejectUnary(streamId: number, error: HostRpcError): void {
     const entry = this.pendingUnary.get(streamId);
@@ -6695,7 +6705,7 @@ export class RemoteSession<
     }
     this.markStreamTerminal(streamId);
     if (!entry.sealed) {
-      entry.reject(this.notReadyRejection(entry.requestId, entry.method));
+      entry.reject(error);
       return;
     }
     markMayHaveReachedHost(error);
@@ -6773,7 +6783,13 @@ export class RemoteSession<
       this.pendingUnary.delete(streamId);
       this.outboundSeq.delete(streamId);
       if (!entry.sealed) {
-        entry.reject(this.notReadyRejection(entry.requestId, entry.method));
+        entry.reject(
+          unsentUnaryFailure(
+            entry.requestId,
+            entry.method,
+            "Remote session dropped before the request was sent",
+          ),
+        );
         continue;
       }
       entry.reject(
@@ -7472,6 +7488,26 @@ function unaryTimeoutError(
     requestId,
     method,
     fatalDetails: null,
+  });
+}
+
+/**
+ * The PRE-SEND retryable failure for a request still queued when its wait
+ * ended: the frame was never sealed, so the retry license is the no-dispatch
+ * guarantee, not a key. `message` names what ended the wait.
+ */
+function unsentUnaryFailure(
+  requestId: string,
+  method: string,
+  message: string,
+): RetryableTransportError {
+  return new RetryableTransportError({
+    code: "RPC_ERROR",
+    message,
+    requestId,
+    method,
+    fatalDetails: null,
+    replaySafetyFromKey: false,
   });
 }
 

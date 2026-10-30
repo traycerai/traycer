@@ -1369,7 +1369,10 @@ describe("RemoteSession host-leg resume", () => {
         await until(() => call.settled);
 
         expect(call.error).toBeInstanceOf(RetryableTransportError);
-        expect(call.error).toMatchObject({ replaySafetyFromKey: false });
+        expect(call.error).toMatchObject({
+          message: `Remote unary '${STATUS_METHOD}' timed out before it was sent`,
+          replaySafetyFromKey: false,
+        });
         expect(mayHaveReachedHost(call.error)).toBe(false);
         // Still held on the same connection: nothing rebuilt.
         expect(host.connections).toHaveLength(1);
@@ -1562,7 +1565,10 @@ describe("RemoteSession host-leg resume", () => {
       expect(mayHaveReachedHost(sealing?.error)).toBe(true);
       for (const call of queued) {
         expect(call.error).toBeInstanceOf(RetryableTransportError);
-        expect(call.error).toMatchObject({ replaySafetyFromKey: false });
+        expect(call.error).toMatchObject({
+          message: "Remote session dropped before the request was sent",
+          replaySafetyFromKey: false,
+        });
         expect(mayHaveReachedHost(call.error)).toBe(false);
       }
     });
