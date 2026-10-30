@@ -201,6 +201,13 @@ vi.mock("@/hooks/chats/use-chat-prestart-runtime", () => ({
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => false,
+  useHostMethodSchemaVersion: (hostId: string | null, method: string) => {
+    if (hostId === null) return null;
+    if (method === "epic.create" || method === "epic.createChat")
+      return { major: 1, minor: 4 };
+    if (method === "epic.updateChatRunSettings") return { major: 1, minor: 2 };
+    return null;
+  },
 }));
 vi.mock("../picker/use-composer-picker-items", () => ({
   useComposerPickerItems: () => undefined,

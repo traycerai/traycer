@@ -8842,13 +8842,15 @@ const [
 ] = clientFrameOptionsAfterQueueSteerNow;
 const chatSubscribeClientFrameSchemaOptionsV141 = [
   lazySchema(() =>
-    sendClientFrameSchemaPreSteerRestartConfirm.extend({
+    z.object({
+      ...sendClientFrameSchemaPreSteerRestartConfirm.shape,
       settings: chatRunSettingsSchema,
     }),
   ),
   deleteMessageSuffixClientFrameSchemaLive,
   lazySchema(() =>
-    editUserMessageClientFrameSchemaLive.extend({
+    z.object({
+      ...editUserMessageClientFrameSchemaLive.shape,
       settings: chatRunSettingsSchema,
     }),
   ),
@@ -8860,17 +8862,24 @@ const chatSubscribeClientFrameSchemaOptionsV141 = [
   queueCancelClientFrameSchemaLive,
   queueReorderClientFrameSchemaLive,
   lazySchema(() =>
-    queueSteerNowClientFrameSchemaPreSteerRestartConfirm.extend({
+    z.object({
+      ...queueSteerNowClientFrameSchemaPreSteerRestartConfirm.shape,
       newSettings: chatRunSettingsSchema.nullable().default(null),
       restartConfirmed: z.boolean().default(false),
     }),
   ),
   queueAbortSteerV140,
   lazySchema(() =>
-    queueSettingsUpdateV140.extend({ settings: chatRunSettingsSchema }),
+    z.object({
+      ...queueSettingsUpdateV140.shape,
+      settings: chatRunSettingsSchema,
+    }),
   ),
   lazySchema(() =>
-    queueSettingsRestampV140.extend({ settings: chatRunSettingsSchema }),
+    z.object({
+      ...queueSettingsRestampV140.shape,
+      settings: chatRunSettingsSchema,
+    }),
   ),
   ...clientFrameOptionsAfterSettingsV140,
 ] as const;

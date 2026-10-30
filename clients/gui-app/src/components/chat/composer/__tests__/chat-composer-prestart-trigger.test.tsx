@@ -98,6 +98,8 @@ vi.mock("@/hooks/chats/use-chat-prestart-runtime", () => ({
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => captured.support,
+  useHostMethodSchemaVersion: (_hostId: string | null, method: string) =>
+    method === "epic.updateChatRunSettings" ? { major: 1, minor: 2 } : null,
 }));
 vi.mock("@/stores/worktree/worktree-intent-staging-store", async (original) => {
   const actual =
