@@ -181,13 +181,16 @@ function scrollerMoveOf(event: Event): ChatTimelineScrollerMove | null {
  * scroll moved the view in the same unobserved frame does not land on the
  * clamp's offset - below it scrolling away, above it scrolling toward the end -
  * so their movement still counts as theirs.
+ *
+ * A taller viewport is not tested for: an offset that fitted the range it was
+ * read in can only stop fitting when the viewport grows, so the clamp coming
+ * out below the reference says the viewport grew.
  */
 function viewportGrowthClamp(
   reference: ChatTimelineScrollGeometry,
   geometry: ChatTimelineScrollGeometry,
 ): number | null {
   const epsilon = CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX;
-  if (geometry.clientHeight <= reference.clientHeight + epsilon) return null;
   const clamped = Math.min(
     reference.scrollTop,
     Math.max(0, reference.scrollHeight - geometry.clientHeight),
@@ -658,6 +661,36 @@ function readerEndCandidateFor(input: {
     lastRow: lastListRowTop(input.list),
     reached: false,
   };
+}
+
+/** Whether this view has reached the end a toward-end gesture asked for, with
+ *  that end moved by what the list has moved the rows under it since. As the
+ *  momentum's arrival reads it: an end the list may have moved by an unknown
+ *  amount is not an end this view can be said to reach.
+ *
+ *  Both observation paths judge it here. A wheel that moves the view nothing -
+ *  the viewport grew and the end came up to meet it - emits no scroll report,
+ *  so a read is the only observation the arrival has, and a tail growing past
+ *  it afterwards would otherwise leave the reader free at an end they
+ *  reached. */
+function readerEndCandidateMet(
+  candidate: ReaderEndCandidate | null,
+  geometry: ChatTimelineScrollGeometry,
+  list: LegendListRef | null,
+  readerGestureGeneration: number,
+): boolean {
+  if (
+    candidate === null ||
+    candidate.readerGestureGeneration !== readerGestureGeneration
+  ) {
+    return false;
+  }
+  const shift = listRowShift(list, candidate.lastRow);
+  return (
+    shift !== null &&
+    geometry.scrollTop >=
+      candidate.targetScrollTop + shift - CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
+  );
 }
 
 /** The current gesture's end candidate, marked as reached; none for an
@@ -1495,23 +1528,15 @@ export function useChatTimelineFollowLatch(
 
   const tryReattachReader = useCallback(
     (node: HTMLElement, geometry: ChatTimelineScrollGeometry): boolean => {
-      const readerCandidate = readerEndCandidateRef.current;
-      // As the momentum's arrival reads it: an end the list may have moved
-      // by an unknown amount is not an end this view can be said to reach.
-      const shift =
-        readerCandidate === null
-          ? null
-          : listRowShift(listRef.current, readerCandidate.lastRow);
-      const reachedGestureStartEnd =
-        readerCandidate !== null &&
-        shift !== null &&
-        readerCandidate.readerGestureGeneration ===
-          readerGestureGenerationRef.current &&
-        geometry.scrollTop >=
-          readerCandidate.targetScrollTop +
-            shift -
-            CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX;
-      if (!reachedGestureStartEnd || isCorrectionSuppressed?.() === true) {
+      if (
+        !readerEndCandidateMet(
+          readerEndCandidateRef.current,
+          geometry,
+          listRef.current,
+          readerGestureGenerationRef.current,
+        ) ||
+        isCorrectionSuppressed?.() === true
+      ) {
         return false;
       }
       readerEndCandidateRef.current = null;
@@ -2052,6 +2077,40 @@ export function useChatTimelineFollowLatch(
     ],
   );
 
+  /** A toward-end gesture whose arrival only a read can see. The reader
+   *  wheeled toward the end, the viewport then grew and brought the end up to
+   *  them, and the wheel moved the view nothing - so no scroll report is owed
+   *  and the report path never judges the candidate. Left unseen, the tail
+   *  growing past the arrival leaves them free at an end they asked for and
+   *  reached.
+   *
+   *  A recovering transcript holding reattachment off is answered as
+   *  `reconcileStrictBottom` answers it: the arrival survives as reached, and
+   *  the settle that lifts the hold follows it. */
+  const followReaderEndArrivalOnRead = useCallback(
+    (node: HTMLElement, geometry: ChatTimelineScrollGeometry): boolean => {
+      if (
+        !readerEndCandidateMet(
+          readerEndCandidateRef.current,
+          geometry,
+          listRef.current,
+          readerGestureGenerationRef.current,
+        )
+      ) {
+        return false;
+      }
+      if (!permissionRef.current && isReattachSuppressed?.() === true) {
+        readerEndCandidateRef.current = reachedReaderEnd(
+          readerEndCandidateRef.current,
+          readerGestureGenerationRef.current,
+        );
+        return false;
+      }
+      return tryReattachReader(node, geometry);
+    },
+    [isReattachSuppressed, listRef, tryReattachReader],
+  );
+
   const reconcileMaintenanceAtStrictBottom = useCallback(
     (geometry: ChatTimelineScrollGeometry): void => {
       if (isCorrectionSuppressed?.() === true) {
@@ -2124,6 +2183,7 @@ export function useChatTimelineFollowLatch(
       departureAwaitsReportRef.current = { wheelTarget: null };
       return;
     }
+    if (followReaderEndArrivalOnRead(node, geometry)) return;
     if (followReachedReaderEnd(list, node)) return;
     if (followReaderMomentumArrival(node, momentumArrived)) return;
     if (!permissionRef.current) return;
@@ -2156,6 +2216,7 @@ export function useChatTimelineFollowLatch(
     startEndCorrection(list, node);
   }, [
     followReachedReaderEnd,
+    followReaderEndArrivalOnRead,
     followReaderMomentumArrival,
     isCorrectionSuppressed,
     listRef,
