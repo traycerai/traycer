@@ -534,17 +534,51 @@ describe("<ErrorSegment /> a provider whose command-line tool is out of date", (
     expect(updateButton().disabled).toBe(false);
   });
 
-  it("stays pending with no failure when the list read after the update fails, until the list's own next read answers, and asks for the update once", async () => {
+  it("asks again when the list read after the update fails, holding Update and sending no second update while a profile switch rewrites the list, and settles on the read's answer", async () => {
     const user = userEvent.setup();
-    host.listRefusals = 1;
-    const release = holdList();
+    hostOffers(["providers.ensurePack", "providers.setProfileEnabled"]);
     const queryClient = renderRow("provider_outdated", OUTDATED);
+    // The cached list says the old copy is installed, which reads as settled.
+    queryClient.setQueryData(LIST_KEY, {
+      providers: [grokRow()],
+      native: null,
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ProvidersPanel />
+      </QueryClientProvider>,
+    );
+    // The panel's own read of the list settles before the press.
+    await waitFor(() =>
+      expect(queryClient.isFetching({ queryKey: LIST_KEY })).toBe(0),
+    );
+    const readsBefore = listReads();
+    // The first two reads after the update fail: the panel's, which the
+    // update's answer sets off, and the press's own, in whichever order.
+    host.listRefusals = 2;
+    const release = holdList();
 
     await user.click(updateButton());
-
-    // The press's own read failed; the list's next read is out.
-    await waitFor(() => expect(listReads()).toBe(2));
+    // The press's read is asked again once the app's retry comes round; that
+    // one is held.
+    await waitFor(
+      () => expect(listReads()).toBeGreaterThanOrEqual(readsBefore + 3),
+      {
+        timeout: 3_000,
+      },
+    );
+    // Each flip of the switch cancels the list's reads and writes its own
+    // copy of the list, with no answer from the host.
+    const flip = screen.getByRole("button", { name: "Turn off profile" });
+    await user.click(flip);
+    await user.click(flip);
+    await waitFor(() =>
+      expect(
+        host.asked.filter((asked) => asked === "toggle work"),
+      ).toHaveLength(2),
+    );
     expect(updateButton().disabled).toBe(true);
+    await user.click(updateButton());
     expect(screen.queryByTestId("provider-update-failure")).toBeNull();
 
     release();
@@ -564,6 +598,26 @@ describe("<ErrorSegment /> a provider whose command-line tool is out of date", (
 
     await waitFor(() => expect(updateButton().disabled).toBe(false));
     expect(screen.queryByTestId("provider-update-failure")).toBeNull();
+    expect(host.asked.filter((asked) => asked === "update grok")).toEqual([
+      "update grok",
+    ]);
+  });
+
+  it("says the host's words when the list read after the update keeps failing", async () => {
+    const user = userEvent.setup();
+    host.listRefusals = 2;
+    renderRow("provider_outdated", OUTDATED);
+
+    await user.click(updateButton());
+
+    expect(
+      (
+        await screen.findByTestId("provider-update-failure", undefined, {
+          timeout: 3_000,
+        })
+      ).textContent,
+    ).toContain("The host did not answer the list.");
+    expect(updateButton().disabled).toBe(false);
     expect(host.asked.filter((asked) => asked === "update grok")).toEqual([
       "update grok",
     ]);

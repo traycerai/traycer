@@ -1,16 +1,13 @@
 import { useCallback } from "react";
 import {
+  CancelledError,
   queryOptions,
   useMutation,
   useQueryClient,
   type QueryClient,
-  type UseQueryResult,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
-import type {
-  HostRpcError,
-  ResponseOfMethod,
-} from "@traycer-clients/shared/host-transport/host-messenger";
+import type { ResponseOfMethod } from "@traycer-clients/shared/host-transport/host-messenger";
 import type {
   ProviderId,
   ProviderManagedInstallState,
@@ -40,17 +37,7 @@ interface UpdatePress {
   readonly hostId: string;
 }
 
-/**
- * How a press ended: the update was taken, and the list read after it was
- * answered, or failed at `readFailedAt`.
- */
-interface PressOutcome {
-  readonly press: UpdatePress;
-  readonly readFailedAt: number | null;
-}
-
 type ProvidersList = ResponseOfMethod<HostRpcRegistry, "providers.list">;
-type ProvidersListQuery = UseQueryResult<ProvidersList, HostRpcError>;
 
 /** Tells one press's post-update list read from every other press's. */
 let pressCount = 0;
@@ -72,8 +59,9 @@ let pressCount = 0;
  * the host took it. That answer goes into the list's cache, and from there
  * this reports the provider's install state as the host's list presents it:
  * pending while it downloads, the host's reason when the install is in error,
- * and done otherwise. If that read fails, the press stays pending until the
- * list's own next read is answered or fails, and goes on from there. It infers nothing about versions. The list says an install
+ * and done otherwise. That read retries as the app's queries do, and is
+ * asked again if a sweep of the host's queries cancels it; a read that still
+ * fails is the press's failure, in the host's words. It infers nothing about versions. The list says an install
  * is in error only while no copy of the provider is runnable: a replacement
  * that fails beside a runnable old copy reads as installed, so it settles
  * here, and the next refused turn offers Update again. A press belongs to the
@@ -94,7 +82,7 @@ export function useProviderUpdateForClient(
   const ensure = useProvidersEnsurePackForClient(client);
   const press = useMutation({
     mutationKey: providersMutationKeys.updateProvider(hostId),
-    mutationFn: (variables: UpdatePress): Promise<PressOutcome> => {
+    mutationFn: (variables: UpdatePress): Promise<UpdatePress> => {
       if (client === null) {
         return Promise.reject(new Error("No host to update the provider on."));
       }
@@ -112,8 +100,7 @@ export function useProviderUpdateForClient(
   });
   // A press belongs to the host it was made on.
   const ours = press.variables?.hostId === (client?.getActiveHostId() ?? null);
-  const outcome = ours ? press.data : undefined;
-  const following = outcome?.press.providerId ?? null;
+  const following = (ours ? press.data?.providerId : undefined) ?? null;
   const listed = useProvidersListForClient(client, {
     enabled: following !== null,
     subscribed: following !== null,
@@ -133,7 +120,7 @@ export function useProviderUpdateForClient(
   return {
     update: canEnsure ? update : null,
     ...presentPress(
-      ours && (press.isPending || awaitingListAnswer(outcome, listed)),
+      ours && press.isPending,
       ours ? (press.error?.message ?? null) : null,
       installSlot(listed.data, following),
     ),
@@ -152,70 +139,59 @@ interface PressDeps {
 /**
  * One press: the check, the update, then one list read under a key of its
  * own, sent after the host answered the update and written into the list's
- * cache. A refused update rejects; a failed read does not.
+ * cache. A refused update rejects, as does a list read that keeps failing.
  */
 async function runPress(
   deps: PressDeps,
   variables: UpdatePress,
-): Promise<PressOutcome> {
+): Promise<UpdatePress> {
   const { client, queryClient } = deps;
   // Filed under the host that answers it, as `useHostQuery` files it.
   const listKey = providersListQueryKey(variables.hostId);
-  // `gcTime` `undefined` keeps the list's own; a one-off read is dropped.
-  const readList = (
-    queryKey: ReadonlyArray<unknown>,
-    staleTime: number,
-    gcTime: number | undefined,
-  ): Promise<ProvidersList | null> =>
-    queryClient
-      .fetchQuery(
-        queryOptions({
-          queryKey,
-          queryFn: () => client.request("providers.list", { native: null }),
-          staleTime,
-          gcTime,
-          retry: false,
-        }),
-      )
-      .catch(() => null);
+  const queryFn = (): Promise<ProvidersList> =>
+    client.request("providers.list", { native: null });
   // A cached list names the pack as well as a fresh one.
-  const packId = deps.canRefresh
-    ? ((
-        await readList(listKey, Number.POSITIVE_INFINITY, undefined)
-      )?.providers.find(
-        (candidate) => candidate.providerId === variables.providerId,
-      )?.packId ?? null)
+  const cached = deps.canRefresh
+    ? await queryClient
+        .fetchQuery(
+          queryOptions({
+            queryKey: listKey,
+            queryFn,
+            staleTime: Number.POSITIVE_INFINITY,
+            retry: false,
+          }),
+        )
+        .catch(() => null)
     : null;
+  const packId =
+    cached?.providers.find(
+      (candidate) => candidate.providerId === variables.providerId,
+    )?.packId ?? null;
   // A refused or failed check is toasted by its hook; the update still runs,
   // on whatever the host already knows.
   if (packId !== null) await deps.refresh(packId).catch(() => undefined);
   await deps.ensure(variables.providerId);
-  pressCount += 1;
-  const answer = await readList([...listKey, "post-ensure", pressCount], 0, 0);
-  if (answer === null) {
-    // The update was taken; the list's own reads say how it goes.
-    const readFailedAt = Date.now();
-    void queryClient.invalidateQueries({ queryKey: listKey, exact: true });
-    return { press: variables, readFailedAt };
-  }
-  queryClient.setQueryData(listKey, answer);
-  return { press: variables, readFailedAt: null };
-}
-
-/**
- * Whether a press whose own list read failed still waits on the list's next
- * read: neither answered nor failed since.
- */
-function awaitingListAnswer(
-  outcome: PressOutcome | undefined,
-  listed: Pick<ProvidersListQuery, "dataUpdatedAt" | "errorUpdatedAt">,
-): boolean {
-  const readFailedAt = outcome?.readFailedAt ?? null;
-  return (
-    readFailedAt !== null &&
-    listed.dataUpdatedAt < readFailedAt &&
-    listed.errorUpdatedAt < readFailedAt
-  );
+  const readAfterUpdate = async (): Promise<ProvidersList> => {
+    pressCount += 1;
+    try {
+      // No other read shares the key, so none joins or cancels it; it
+      // retries as the app's queries do.
+      return await queryClient.fetchQuery(
+        queryOptions({
+          queryKey: [...listKey, "post-ensure", pressCount],
+          queryFn,
+          staleTime: 0,
+          gcTime: 0,
+        }),
+      );
+    } catch (error) {
+      // A sweep of the host's queries cancelled it before it settled.
+      if (error instanceof CancelledError) return readAfterUpdate();
+      throw error;
+    }
+  };
+  queryClient.setQueryData(listKey, await readAfterUpdate());
+  return variables;
 }
 
 function installSlot(
