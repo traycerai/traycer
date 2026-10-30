@@ -121,7 +121,7 @@ export const MuxFrameType = {
   CREDIT: 9,
   /** Host-standing evidence (R4-D2 peer-enforcement): `{standingUntil}`. */
   REAUTH_NOTICE: 10,
-  /** RESERVED (R4-E3): resume-ticket message type. Not built in v1. */
+  /** Session resume: `{received}` (streamId 0), exempt from resume counts. */
   RESUME: 11,
   /**
    * In-place credential update on streamId 0: the rotated user bearer, or a
@@ -239,7 +239,7 @@ export interface SessionOpenPayload {
   readonly bearer: string;
   readonly manifest: SessionManifests;
   readonly authz: ReservedAuthzSlot;
-  /** Reserved resume descriptor (R4-E3). Always null in v1. */
+  /** Stays null; `session.resume` replaces the descriptor reserved by R4-E3. */
   readonly resume: null;
   /**
    * Additive transport capabilities the CLIENT can honour, mirroring the
@@ -345,6 +345,11 @@ export interface SessionOpenAckPayload {
 /** Host-standing evidence payload (REAUTH_NOTICE, R4-D2). */
 export interface ReauthNoticePayload {
   readonly standingUntil: number;
+}
+
+/** Peer's count of received transport mux frames, excluding RESUME itself. */
+export interface ResumePayload {
+  readonly received: number;
 }
 
 // -----------------------------------------------------------------------------
@@ -550,6 +555,12 @@ export const reauthNoticePayloadSchema: z.ZodType<ReauthNoticePayload> =
     }),
   );
 
+export const resumePayloadSchema: z.ZodType<ResumePayload> = lazySchema(() =>
+  z.object({
+    received: z.number().int().nonnegative(),
+  }),
+);
+
 export const memberCredentialHandoffSchema: z.ZodType<MemberCredentialHandoff> =
   lazySchema(() =>
     z
@@ -638,6 +649,14 @@ export const SESSION_CAPABILITY_BODY_COMPRESSION = "bodyCompression.deflate";
  * the one direction of this change that can deadlock.
  */
 export const SESSION_CAPABILITY_FINE_CREDITS = "flowControl.fineCredits";
+
+/**
+ * Both peers advertise this in OPEN / OPEN_ACK to keep a session through a
+ * relay-leg loss; otherwise the session behaves as before. The ledger starts
+ * before negotiation, at the first transport mux frame, and is dropped if the
+ * acknowledgement does not carry this tag.
+ */
+export const SESSION_CAPABILITY_RESUME = "session.resume";
 
 /**
  * Advertised in `openAck.capabilities` by a host that serves tunnel streams
