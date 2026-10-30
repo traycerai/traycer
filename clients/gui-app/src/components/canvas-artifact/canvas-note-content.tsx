@@ -232,7 +232,7 @@ function CanvasTextNoteDisplay({
       className={cn(
         "min-h-full w-full",
         note.type === "title"
-          ? "whitespace-nowrap"
+          ? "whitespace-pre"
           : "whitespace-pre-wrap break-words",
       )}
       onDoubleClick={() => {
