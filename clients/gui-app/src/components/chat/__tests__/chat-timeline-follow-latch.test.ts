@@ -12,6 +12,7 @@ import type { LegendListRef, LegendListState } from "@legendapp/list/react";
 import { SANDBOX_SCROLL_GESTURE_EVENT } from "@/lib/sandbox/bridge-host";
 import {
   CHAT_TIMELINE_FOLLOW_CORRECTION_MAX_ATTEMPTS,
+  CHAT_TIMELINE_SCROLLER_MOVED_EVENT,
   isChatTimelineAtStrictBottom,
   isChatTimelineGeometryMeasurable,
   moveChatTimelineScroller,
@@ -4358,6 +4359,108 @@ describe("useChatTimelineFollowLatch", () => {
     // The press ends with no move of its own: the reader's intent was still
     // the tail, and the correction it held off now runs.
     node.dispatchEvent(new PointerEvent("pointerup"));
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  // The pad restore's own rAF clamps the view and a React commit in the same
+  // frame regrows the end, with no scroll report in between: the first read
+  // of the frame sees the clamped view beside an end already grown past it.
+  // Unannounced, that reads as the press having scrolled away; announced (as
+  // the patch now does), the press's reference travels with the clamp and
+  // still holds follow.
+  it("keeps a following reader whose scrollbar press holds through a pad-restore clamp announced in the same frame as the regrowth", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
+      }),
+    );
+
+    result.current.noteReaderGesture({
+      direction: "indeterminate",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+    });
+
+    // The pad-restore's rAF clamps the view down with the end it drops, and
+    // announces it exactly as the patched list does - no native scroll event
+    // of its own, just the move it made.
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: { from: 1000, fromEnd: 1000, to: 900, intended: 900 },
+      }),
+    );
+    shim.setGeometry(node, { scrollTop: 900, scrollHeight: 1400 });
+    // The same frame's React commit regrows the end past the clamp, with no
+    // scroll report of its own.
+    shim.setGeometry(node, { scrollHeight: 1450 });
+
+    // A maintain trigger is the frame's first read: it sees the clamped view
+    // (900) beside the already-regrown end (950) together. The arm still
+    // holds the correction off while the press is down.
+    result.current.followEndIfPermitted();
+    expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+
+    node.dispatchEvent(new PointerEvent("pointerup"));
+
+    expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+    expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+  });
+
+  // Same frame, no press at all: a following reader with nothing armed. The
+  // ledger (not a press reference) is what the announced clamp has to carry
+  // for the maintain read to still see the reader at the tail.
+  it("keeps a following reader with no press through a pad-restore clamp announced in the same frame as the regrowth", () => {
+    const node = shim.makeNode({
+      scrollTop: 1000,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onFollowIntentChange = vi.fn();
+    const { result } = renderHook(() =>
+      useChatTimelineFollowLatch(listRef, true, true, {
+        onFollowIntentChange,
+        onReaderGesture: undefined,
+        isCorrectionSuppressed: undefined,
+        resolveSuppressedEndLanding: undefined,
+        isReattachSuppressed: undefined,
+        isTurnRunning: undefined,
+      }),
+    );
+
+    // A real scroll report primes the ledger at the strict bottom - the
+    // reader's last known position before the clamp.
+    fireNativeScroll(node);
+
+    // The pad-restore's rAF clamps the view down with the end it drops, and
+    // announces it exactly as the patched list does.
+    node.dispatchEvent(
+      new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, {
+        detail: { from: 1000, fromEnd: 1000, to: 900, intended: 900 },
+      }),
+    );
+    shim.setGeometry(node, { scrollTop: 900, scrollHeight: 1400 });
+    // The same frame's React commit regrows the end past the clamp, with no
+    // scroll report of its own.
+    shim.setGeometry(node, { scrollHeight: 1450 });
+
+    // A maintain trigger is the frame's first read: it sees the clamped view
+    // (900) beside the already-regrown end (950) together.
+    result.current.followEndIfPermitted();
 
     expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
     expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
