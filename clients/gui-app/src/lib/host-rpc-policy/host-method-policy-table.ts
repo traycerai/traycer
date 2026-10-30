@@ -13,6 +13,7 @@ import type {
 } from "@traycer/protocol/host/provider-schemas";
 import { chatPublicationDefinitiveReason } from "@/lib/chats/chat-publication-definitive";
 import { DRAFT_BLOB_PUT_RESPONSE_TIMEOUT_MS } from "@/lib/drafts/draft-blob-transport-budget";
+import { moveIsRunning } from "@/lib/environment/move-in-progress";
 import { CATALOG_LIST_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/catalog-list-response-timeout";
 import { PROVIDER_PACK_DISCOVERY_CHECK_TIMEOUT_MS } from "@/lib/host-rpc-policy/provider-pack-discovery-check-timeout";
 import { SIMULATOR_OPEN_RESPONSE_TIMEOUT_MS } from "@/lib/host-rpc-policy/simulator-open-response-timeout";
@@ -388,6 +389,54 @@ const A2A_PEER_PENDING_POLL_LANE: ConditionPollLane = {
   initialDelayMs: 2 * SECOND_MS,
   maxDelayMs: 5 * MINUTE_MS,
 };
+
+/**
+ * This computer's move into Personal, while it can still progress.
+ *
+ * `environment.status` is the ONLY source of the move's own state, so this
+ * read's cadence IS the frame rate of the line a person is watching - the
+ * Local row's note and the Overview's settings card both read `Moving this
+ * computer's settings to Personal · <n> of <m> items applied` from it. Same
+ * reasoning as `providers.list`'s installing lane below, and the same shape.
+ *
+ * The steady lane cannot resolve this at all: a move of a handful of items
+ * finishes in a couple of seconds, so the whole moving window falls between
+ * two of its ticks and the pre-move note stands through it.
+ */
+const ENVIRONMENT_MOVE_RUNNING_POLL_LANE: ConditionPollLane = {
+  id: "environment.status.move-running",
+  initialDelayMs: 500,
+  maxDelayMs: 2 * SECOND_MS,
+};
+/**
+ * Every other answer, at the cadence every environments surface has read the
+ * status at: an edit goes from `applying` to `applied` in seconds and nothing
+ * else tells the page it did. Pinned rather than backing off, and reset on
+ * each settlement, so a second move still starts at the lane above's first
+ * delay instead of inheriting the first move's.
+ */
+const ENVIRONMENT_STATUS_STEADY_POLL_LANE: ConditionPollLane = {
+  id: "environment.status.steady",
+  initialDelayMs: 5 * SECOND_MS,
+  maxDelayMs: 5 * SECOND_MS,
+};
+/**
+ * The read itself failed. Pinned at the steady cadence, deliberately: this
+ * method was a fixed 5 s poll before the lanes above, and a fixed interval
+ * keeps firing in the error state, so a reader whose host drops a read has
+ * always re-asked 5 s later. Backing off here would have slowed every
+ * existing reader's recovery - `useSandboxSettingsStatus` is the readiness
+ * gate a send to a just-woken sandbox waits on, where a dropped dial is
+ * ordinary - and the branded poller takes no ordinary retry under it.
+ */
+const ENVIRONMENT_STATUS_ERROR_POLL_LANE: ConditionPollLane = {
+  id: "environment.status.error",
+  initialDelayMs: 5 * SECOND_MS,
+  maxDelayMs: 5 * SECOND_MS,
+};
+const ENVIRONMENT_STATUS_RESET_LANES: ReadonlySet<string> = new Set([
+  ENVIRONMENT_STATUS_STEADY_POLL_LANE.id,
+]);
 
 const LATEST_SCHEDULING = {
   mode: "latest",
@@ -2461,10 +2510,22 @@ export const HOST_METHOD_POLL_TABLE = {
     poll: { kind: "fixed", intervalMs: 5_000 },
   },
   // A Personal page re-reads it while open: an edit goes from "applying" to
-  // "applied" in seconds and nothing else tells the page it did.
+  // "applied" in seconds and nothing else tells the page it did. While this
+  // computer's move into Personal runs, the same read is the move's progress
+  // bar, which the steady lane cannot resolve - see the lanes above.
   "environment.status": {
     ...LATEST_SCHEDULING,
-    poll: { kind: "fixed", intervalMs: 5_000 },
+    poll: defineConditionPolicy("environment.status", {
+      classify: (data) => {
+        if (data === undefined) return ENVIRONMENT_STATUS_STEADY_POLL_LANE;
+        return moveIsRunning(data)
+          ? ENVIRONMENT_MOVE_RUNNING_POLL_LANE
+          : ENVIRONMENT_STATUS_STEADY_POLL_LANE;
+      },
+      initialErrorLane: ENVIRONMENT_STATUS_ERROR_POLL_LANE,
+      staleDataErrorLane: ENVIRONMENT_STATUS_ERROR_POLL_LANE,
+      resetLaneIds: ENVIRONMENT_STATUS_RESET_LANES,
+    }),
   },
   "environment.notices": { ...LATEST_SCHEDULING, poll: null },
   "environment.review": { ...LATEST_SCHEDULING, poll: null },

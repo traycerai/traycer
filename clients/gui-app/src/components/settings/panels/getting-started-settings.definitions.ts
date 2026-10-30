@@ -10,7 +10,8 @@ import { defineSettingsSection } from "@/lib/settings-search/settings-definition
  * contribute to this page rather than competing with Providers and Secrets.
  * Start a task and the download card have no other home, so each owns an
  * entry. Credits contributes too: Account ▸ Credits is the page that owns
- * those words once E4's section is on the index.
+ * those words once E4's section is on the index. So does the move, whose own
+ * words belong to the sheet it opens rather than to a page.
  */
 export const GETTING_STARTED = defineSettingsSection("getting-started", {
   page: {
@@ -45,6 +46,15 @@ export const GETTING_STARTED = defineSettingsSection("getting-started", {
     description: "A deploy key or a login.",
     availableWhen: alwaysAvailable,
     keywords: ["secret", "deploy key", "login"],
+  },
+  move: {
+    kind: "row",
+    group: null,
+    search: { contributesTo: "page" },
+    label: "Move this computer's settings to Personal",
+    description: "So they work on every computer and sandbox you use.",
+    availableWhen: alwaysAvailable,
+    keywords: ["move", "personal", "this computer", "settings"],
   },
   install: {
     kind: "row",

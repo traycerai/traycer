@@ -46,6 +46,20 @@ vi.mock("@/hooks/host/use-requester-host-id", () => ({
   useRequesterHostId: () => "host-1",
 }));
 
+// This computer and where its settings stand: the move card's own boundary,
+// faked here so these cases stay about the cards. The move card has its own
+// suite (`panels/__tests__/getting-started-settings-panel.test.tsx`).
+vi.mock("@/components/settings/move/this-computer", () => ({
+  useThisComputer: () => ({
+    hostId: null,
+    hostName: "this computer",
+    client: null,
+  }),
+}));
+vi.mock("@/components/settings/move/use-this-computers-move", () => ({
+  useThisComputersMove: () => "unknown",
+}));
+
 vi.mock("@/hooks/epics/use-cloud-epic-tasks-query", () => ({
   useCloudEpicTasksQuery: () => ({ tasks: mocks.tasks }),
 }));

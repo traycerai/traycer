@@ -1,7 +1,11 @@
-import { lazy, Suspense, useEffect, useRef, type RefObject } from "react";
+import { lazy, Suspense, useEffect, type RefObject } from "react";
 import { toast } from "sonner";
 import {
   captureOnboardingReminderIdentity,
+  markMoveInvitationAnswered,
+  markMoveInvitationShown,
+  moveInvitationIsOutstanding,
+  MOVE_INVITATION_TOAST_ID,
   ONBOARDING_REMINDER_TOAST_ID,
 } from "@/lib/toast/onboarding-reminder-toast";
 import { navigateToSettingsSection } from "@/lib/settings-navigation";
@@ -18,12 +22,8 @@ import {
   useThisComputer,
   type ThisComputer,
 } from "@/components/settings/move/this-computer";
-import { planesNotMoved } from "@/components/settings/move/cohort-rows";
-import { planesFromStatus } from "@/components/settings/move/status-planes";
-import {
-  useEnvironmentReviewRead,
-  useEnvironmentStatusRead,
-} from "@/hooks/environment/use-environment-reads";
+import { useThisComputersMove } from "@/components/settings/move/use-this-computers-move";
+import { useEnvironmentReviewRead } from "@/hooks/environment/use-environment-reads";
 import { useRetrospectiveSheetStore } from "@/stores/settings/retrospective-sheet-store";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import {
@@ -104,45 +104,133 @@ function GettingStartedToast() {
   // (`unreleased-features.ts`): there is no Personal to move settings to.
   const remindersOn = UNRELEASED_FEATURES_ENABLED && completedAt !== null;
   const held = useHeldOnThisComputer(computer, remindersOn);
-  const notMoved = useNotMovedOnThisComputer(computer, remindersOn);
-  // Neither toast until the review and the status answer, so the reminder
-  // never shows for a moment before another toast replaces it.
-  if (held === "pending" || notMoved === "pending") return null;
+  const move = useThisComputersMove(computer, remindersOn);
+  // No toast until the review and the status answer, so none shows for a
+  // moment before another replaces it.
+  if (held === "pending" || move === "pending") return null;
   if (held === "held") return <HeldOnThisComputerToast computer={computer} />;
   const moveTarget =
-    notMoved === "not_moved" && computer.hostId !== null
+    move === "not_moved" && computer.hostId !== null
       ? { hostId: computer.hostId, hostName: computer.hostName }
       : null;
-  return (
-    <SetupReminderToast completedAt={completedAt} moveTarget={moveTarget} />
-  );
+  return <StartToast completedAt={completedAt} moveTarget={moveTarget} />;
 }
 
 /**
- * Whether nothing of this computer's settings has moved and the move still
- * waits for the person: `pending` while its status is being read, `clear`
- * with no local host, a host without the method or its planes, a first read
- * that failed, an accepted move, or anything already in Personal. The status
- * is re-read every few seconds, and a re-read that fails keeps the last
- * answer: otherwise one failed read would take the move toast away unpressed.
+ * The Start page's two toasts, under two ids: the move's invitation while
+ * this computer's settings are not in Personal, and the setup reminder
+ * otherwise. The invitation wins while there is one - two things asking for
+ * the next move at once is noise - and the reminder is held back for as long
+ * as one has been shown and not answered.
+ *
+ * Once shown, the invitation stands until the person presses it, answers Not
+ * now, or ×s it. A status that stops naming a move - a host swap, a version
+ * without the planes, a move accepted elsewhere - is not an answer from the
+ * person: it neither withdraws the invitation nor lets the reminder take its
+ * place. Both effects live here, the invitation's first, so the reminder's
+ * reads an invitation shown on an earlier render - and the fact that one is
+ * outstanding lives with the toast's identity rather than here, because the
+ * toast outlives this component: the Start page is left and comes back while
+ * the invitation stays up.
  */
-function useNotMovedOnThisComputer(
-  computer: ThisComputer,
-  enabled: boolean,
-): "not_moved" | "clear" | "pending" {
-  const status = useEnvironmentStatusRead(
-    computer.client,
-    computer.hostId,
-    enabled,
+function StartToast(props: {
+  readonly completedAt: number | null;
+  readonly moveTarget: MoveSheetTarget | null;
+}) {
+  const { completedAt } = props;
+  const hostId = props.moveTarget?.hostId ?? null;
+  const hostName = props.moveTarget?.hostName ?? null;
+  const dismissed = useOnboardingStore((state) => state.setupReminderDismissed);
+  const dismiss = useOnboardingStore((state) => state.dismissSetupReminder);
+  const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
+  // Availability, not just completion: a guide this build cannot offer would
+  // otherwise leave a nudge that can never be satisfied, pointing at a card
+  // that cannot be opened.
+  const browserView = useRunnerHostOrNull()?.browserView ?? null;
+  const shell = { browserView: browserView !== null };
+  const complete = useOnboardingStore((state) =>
+    onboardingCompletedCount(state, shell),
   );
-  if (!enabled || computer.hostId === null) return "clear";
-  if (status.supported === false) return "clear";
-  if (status.data === null) return status.isError ? "clear" : "pending";
-  const planes = planesFromStatus(status.data);
-  if (planes === null || status.data.consent !== null) return "clear";
-  return planesNotMoved(planes, status.data.pendingUploads.length > 0)
-    ? "not_moved"
-    : "clear";
+  const remaining = onboardingGuideCount(shell) - complete;
+  useEffect(() => {
+    if (dismissed || hostId === null || hostName === null) return;
+    markMoveInvitationShown();
+    const identityIsCurrent = captureOnboardingReminderIdentity();
+    // The invitation's shape is the import announcement's
+    // (`session-import-announcement-controller.tsx`): it does not time out,
+    // and only the person takes it down - which is why there is nothing to
+    // undo here. ×, Not now and the action each dismiss it themselves, and a
+    // sign-out retires it (`retireOnboardingReminder`).
+    toast("This computer's settings aren't in Personal.", {
+      id: MOVE_INVITATION_TOAST_ID,
+      description: (
+        <span className="text-pretty">Move them to use them everywhere</span>
+      ),
+      duration: Infinity,
+      closeButton: true,
+      onDismiss: () => {
+        if (!identityIsCurrent()) return;
+        markMoveInvitationAnswered();
+        dismiss();
+      },
+      action: {
+        label: "Show me what moves",
+        onClick: () => {
+          if (!identityIsCurrent()) return;
+          markMoveInvitationAnswered();
+          dismiss();
+          openMoveSheet({ hostId, hostName });
+        },
+      },
+      cancel: {
+        label: "Not now",
+        onClick: () => {
+          if (!identityIsCurrent()) return;
+          markMoveInvitationAnswered();
+          dismiss();
+        },
+      },
+    });
+  }, [dismissed, dismiss, hostId, hostName, openMoveSheet]);
+  useEffect(() => {
+    if (completedAt === null || dismissed) return;
+    if (remaining === 0) return;
+    // An invitation on screen is the thing being asked; the reminder waits
+    // for it to be answered, whatever the status says by now and whether or
+    // not this instance is the one that published it.
+    if (hostId !== null || moveInvitationIsOutstanding()) return;
+    let mounted = true;
+    const id = ONBOARDING_REMINDER_TOAST_ID;
+    const identityIsCurrent = captureOnboardingReminderIdentity();
+    toast("You're all set", {
+      id,
+      // `text-pretty` rather than the default: on a phone this line wraps, and
+      // the old sentence left "Getting started." alone on a second line with a
+      // ›-separated path the user cannot tap. Shorter copy, and the wrap is
+      // balanced where it does happen.
+      description: (
+        <span className="text-pretty">More setup is in Settings.</span>
+      ),
+      duration: Infinity,
+      closeButton: true,
+      onDismiss: () => {
+        if (mounted && identityIsCurrent()) dismiss();
+      },
+      action: {
+        label: "Open",
+        onClick: () => {
+          if (!identityIsCurrent()) return;
+          dismiss();
+          navigateToSettingsSection("getting-started");
+        },
+      },
+    });
+    return () => {
+      mounted = false;
+      toast.dismiss(id);
+    };
+  }, [completedAt, remaining, dismissed, dismiss, hostId]);
+  return null;
 }
 
 /**
@@ -180,14 +268,16 @@ function HeldOnThisComputerToast(props: { readonly computer: ThisComputer }) {
     let mounted = true;
     toast("An earlier version shared this computer's settings", {
       id: HELD_TOAST_ID,
-      description: <span className="text-pretty">Review</span>,
+      // The verb is the toast's own action - `… · Review` - so there is no
+      // line under it repeating the word it is already pressing.
+      description: null,
       duration: Infinity,
       closeButton: true,
       onDismiss: () => {
         if (mounted) dismiss();
       },
       action: {
-        label: "Open",
+        label: "Review",
         onClick: () => {
           dismiss();
           openSheet({ hostId, hostName });
@@ -199,113 +289,5 @@ function HeldOnThisComputerToast(props: { readonly computer: ThisComputer }) {
       toast.dismiss(HELD_TOAST_ID);
     };
   }, [dismissed, hostId, hostName, dismiss, openSheet]);
-  return null;
-}
-
-/**
- * `moveTarget` names this computer when none of its settings are in Personal
- * yet: the reminder then says so and opens its move sheet instead of
- * Settings.
- */
-function SetupReminderToast(props: {
-  readonly completedAt: number | null;
-  readonly moveTarget: MoveSheetTarget | null;
-}) {
-  const { completedAt } = props;
-  const moveHostId = props.moveTarget?.hostId ?? null;
-  const moveHostName = props.moveTarget?.hostName ?? null;
-  const dismissed = useOnboardingStore((state) => state.setupReminderDismissed);
-  const dismiss = useOnboardingStore((state) => state.dismissSetupReminder);
-  const openMoveSheet = useMoveSheetStore((state) => state.openSheet);
-  // Availability, not just completion: a guide this build cannot offer would
-  // otherwise leave a nudge that can never be satisfied, pointing at a card
-  // that cannot be opened.
-  const browserView = useRunnerHostOrNull()?.browserView ?? null;
-  const shell = { browserView: browserView !== null };
-  const complete = useOnboardingStore((state) =>
-    onboardingCompletedCount(state, shell),
-  );
-  const remaining = onboardingGuideCount(shell) - complete;
-  // Declared first, so on unmount its cleanup runs before the toast's: the
-  // toast stays until the person presses it or ×, even once the Start page is
-  // left, and that × still records the dismissal. A change of what it says
-  // still replaces it, and a later mount replaces it by its id.
-  const unmounting = useRef(false);
-  useEffect(() => {
-    unmounting.current = false;
-    return () => {
-      unmounting.current = true;
-    };
-  }, []);
-  useEffect(() => {
-    if (completedAt === null || dismissed) return;
-    // The setup count gates only the setup reminder: a computer whose
-    // settings have not moved still has that to do with every guide done.
-    if (remaining === 0 && moveHostId === null) return;
-    let mounted = true;
-    const id = ONBOARDING_REMINDER_TOAST_ID;
-    const identityIsCurrent = captureOnboardingReminderIdentity();
-    if (moveHostId !== null && moveHostName !== null) {
-      toast("This computer's settings aren't in Personal.", {
-        id,
-        description: (
-          <span className="text-pretty">Move them to use them everywhere</span>
-        ),
-        duration: Infinity,
-        closeButton: true,
-        onDismiss: () => {
-          if (mounted && identityIsCurrent()) dismiss();
-        },
-        action: {
-          label: "Show me what moves",
-          onClick: () => {
-            if (!identityIsCurrent()) return;
-            dismiss();
-            openMoveSheet({ hostId: moveHostId, hostName: moveHostName });
-          },
-        },
-      });
-      return () => {
-        if (unmounting.current) return;
-        mounted = false;
-        toast.dismiss(id);
-      };
-    }
-    toast("You're all set", {
-      id,
-      // `text-pretty` rather than the default: on a phone this line wraps, and
-      // the old sentence left "Getting started." alone on a second line with a
-      // ›-separated path the user cannot tap. Shorter copy, and the wrap is
-      // balanced where it does happen.
-      description: (
-        <span className="text-pretty">More setup is in Settings.</span>
-      ),
-      duration: Infinity,
-      closeButton: true,
-      onDismiss: () => {
-        if (mounted && identityIsCurrent()) dismiss();
-      },
-      action: {
-        label: "Open",
-        onClick: () => {
-          if (!identityIsCurrent()) return;
-          dismiss();
-          navigateToSettingsSection("getting-started");
-        },
-      },
-    });
-    return () => {
-      mounted = false;
-      toast.dismiss(id);
-    };
-  }, [
-    completedAt,
-    remaining,
-    dismissed,
-    dismiss,
-    moveHostId,
-    moveHostName,
-    openMoveSheet,
-  ]);
   return null;
 }
