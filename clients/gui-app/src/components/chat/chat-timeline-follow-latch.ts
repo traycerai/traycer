@@ -65,15 +65,32 @@ export function chatTimelineEndScrollTop(
   return Math.max(node.scrollTop, Math.min(domEnd, listEnd));
 }
 
+/**
+ * What moved the view, which decides what a contact's reference owes it.
+ *
+ *  - `offset`: a write of the offset itself, which the list makes to hold
+ *    content still as it grows. The content moved with it, so a reference
+ *    measured against the content (a finger's, against its row and the
+ *    element on the edge) has already netted it out and must not be moved
+ *    again.
+ *  - `range`: a write that moves the view only by changing what the scroller
+ *    can reach, so the browser clamps it onto the new end. **No content
+ *    position moves**, so there is nothing to net against and every
+ *    reference owes it, the finger's included.
+ */
+type ChatTimelineScrollerMoveCause = "offset" | "range";
+
 /** A write to the scroll node, announced as it lands: the offset before and
- *  after it, the end before it, and the offset it asked for within the
- *  scroll range. iOS holds back a write made while a finger is down and
- *  lands it after the lift, so `to` can fall short of `intended`. */
+ *  after it, the end before it, the offset it asked for within the scroll
+ *  range, and what moved the view. iOS holds back a write made while a finger
+ *  is down and lands it after the lift, so `to` can fall short of
+ *  `intended`. */
 interface ChatTimelineScrollerMove {
   readonly from: number;
   readonly fromEnd: number;
   readonly to: number;
   readonly intended: number;
+  readonly cause: ChatTimelineScrollerMoveCause;
 }
 
 /** Dispatched on the scroll node for every write the app or the list makes to
@@ -96,6 +113,9 @@ export function moveChatTimelineScroller(
     fromEnd,
     to: node.scrollTop,
     intended: Math.max(0, Math.min(intendedTop, fromEnd)),
+    // The app writes the offset; only the list changes the range under the
+    // view (its end pad), and it says so itself.
+    cause: "offset",
   };
   node.dispatchEvent(
     new CustomEvent(CHAT_TIMELINE_SCROLLER_MOVED_EVENT, { detail }),
@@ -133,7 +153,57 @@ function scrollerMoveOf(event: Event): ChatTimelineScrollerMove | null {
   ) {
     return null;
   }
-  return { from, fromEnd, to, intended };
+  // Anything that does not name itself a range move is read as an offset
+  // write, which is what every announcement was before the list began
+  // announcing the clamp its end pad's restore causes.
+  const cause: ChatTimelineScrollerMoveCause =
+    "cause" in detail && detail.cause === "range" ? "range" : "offset";
+  return { from, fromEnd, to, intended, cause };
+}
+
+/**
+ * The clamp a viewport that just grew forces on the view, as a delta, or null
+ * when this observation is not one.
+ *
+ * A taller viewport leaves less to scroll through, so the end comes up to meet
+ * the view and the browser brings the view down onto it. Nothing writes the
+ * offset and nothing announces it: the keyboard closing over a phone's
+ * transcript moves a following reader off the tail without a finger moving.
+ *
+ * The end is computed from the content height at the REFERENCE, not the one
+ * this observation sees. The clamp was forced when the viewport grew, against
+ * the content as it stood then, and a row remeasuring afterwards grows the end
+ * back over the clamped view - which is exactly the frame the reader is judged
+ * in. Measured against the live height, the clamp would look like an offset no
+ * clamp could explain, and the drop would be charged to the reader.
+ *
+ * The last clause is the whole of the safety argument: a reader whose own
+ * scroll moved the view in the same unobserved frame does not land on the
+ * clamp's offset - below it scrolling away, above it scrolling toward the end -
+ * so their movement still counts as theirs.
+ *
+ * The viewport is tested for growth even though the clamp coming out below the
+ * reference nearly implies it, because iOS WebKit's rubber-band breaks the
+ * premise that implication rests on: during an overscroll bounce `scrollTop`
+ * reads PAST the end, so a reference taken mid-bounce is already outside its
+ * own range, and the bounce settling back onto the end would read here as a
+ * clamp with no viewport change at all. The bounce is not this function's to
+ * absorb - the contact machinery owns it, and a settle lands on the strict
+ * end, where both observation paths reconcile before any of this is consulted.
+ */
+function viewportGrowthClamp(
+  reference: ChatTimelineScrollGeometry,
+  geometry: ChatTimelineScrollGeometry,
+): number | null {
+  const epsilon = CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX;
+  if (geometry.clientHeight <= reference.clientHeight + epsilon) return null;
+  const clamped = Math.min(
+    reference.scrollTop,
+    Math.max(0, reference.scrollHeight - geometry.clientHeight),
+  );
+  if (clamped >= reference.scrollTop - epsilon) return null;
+  if (Math.abs(geometry.scrollTop - clamped) > epsilon) return null;
+  return clamped - reference.scrollTop;
 }
 
 export interface ChatTimelineFollowLatch {
@@ -478,6 +548,34 @@ function geometryMovedBy(
 }
 
 /**
+ * The geometry a later clamp is recognised against, moved by an announced
+ * write. Not where the view IS - where the view would be from everything this
+ * latch knows about, so that a movement it does not know about is still there
+ * to be found as the difference between the two.
+ *
+ * The content height has to come out exactly, because it is what the clamp is
+ * predicted from. An OFFSET write moved the content with the view, by as much.
+ * A RANGE move took content away, and `fromEnd` and `to` are both ends measured
+ * in the same viewport, so their difference is exactly how much - which is more
+ * than the view moved whenever the view sat below the old end. Taking the
+ * view's own delta for the content's there would overstate the height left, and
+ * an overstated height predicts the clamp at the reference offset itself, which
+ * reads as no clamp at all and charges the drop to the reader.
+ */
+function geometryAfterAnnouncedMove(
+  geometry: ChatTimelineScrollGeometry,
+  move: ChatTimelineScrollerMove,
+): ChatTimelineScrollGeometry {
+  const delta = move.to - move.from;
+  if (move.cause === "offset") return geometryMovedBy(geometry, delta);
+  return {
+    ...geometry,
+    scrollTop: geometry.scrollTop + delta,
+    scrollHeight: geometry.scrollHeight - (move.fromEnd - move.to),
+  };
+}
+
+/**
  * Whether an indeterminate gesture arm still holds its reader's follow: a
  * press (the scrollbar's) that has not scrolled yet. It arms before anything
  * moves, and the press itself says nothing about which way it will go, so
@@ -641,6 +739,39 @@ function readerEndCandidateFor(input: {
     lastRow: lastListRowTop(input.list),
     reached: false,
   };
+}
+
+/** Whether this view has reached the end a toward-end gesture asked for, with
+ *  that end moved by what the list has moved the rows under it since. As the
+ *  momentum's arrival reads it: an end the list may have moved by an unknown
+ *  amount is not an end this view can be said to reach.
+ *
+ *  Both observation paths judge it here. A wheel that moves the view nothing -
+ *  the viewport grew and the end came up to meet it - emits no scroll report,
+ *  so a read is the only observation the arrival has, and a tail growing past
+ *  it afterwards would otherwise leave the reader free at an end they
+ *  reached. */
+function readerEndCandidateMet(
+  candidate: ReaderEndCandidate | null,
+  geometry: ChatTimelineScrollGeometry,
+  list: LegendListRef | null,
+  readerGestureGeneration: number,
+): boolean {
+  if (
+    candidate === null ||
+    candidate.readerGestureGeneration !== readerGestureGeneration
+  ) {
+    return false;
+  }
+  const shift =
+    tailBlockShift(list, candidate.tailBlock) ??
+    listRowShift(list, candidate.lastRow);
+  return (
+    shift !== null &&
+    geometry.scrollTop >=
+      endScrollTopOf(candidate.targetContentEnd, geometry, shift) -
+        CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
+  );
 }
 
 /** The current gesture's end candidate, marked as reached; none for an
@@ -971,6 +1102,55 @@ function touchStep(
   return "away";
 }
 
+/**
+ * A finger's step with a range move applied: the view's offset moves by it,
+ * the edge element's recorded place on screen moves against it (lowering the
+ * offset carries the content down the screen by as much), and the reference
+ * row is untouched, because a range move leaves every content position where
+ * it was.
+ *
+ * Carried, not re-measured. A step re-armed at the live geometry would take
+ * the reader's own movement into its baseline and forget it: a step at 6, an
+ * own move to 5 that has not reported, then a clamp 5 -> 4, re-armed at 4,
+ * reads as a reader who never moved. Carried to 5, the step still sees their
+ * own pixel.
+ */
+/** An armed departure's references carried by a view movement that was none of
+ *  the reader's, announced (`noteScrollerMoved`) or recognised
+ *  (`noteViewportGrowthClamp`).
+ *
+ *  A gesture's geometry is a view offset and owes every such movement. A
+ *  finger's references owe only a RANGE move: measured against the content,
+ *  they have already netted out an offset write, which moved the content with
+ *  the view. An owned navigation holds no offset of its own. */
+function armCarriedBy(
+  arm: ArmedReaderDeparture,
+  delta: number,
+  cause: ChatTimelineScrollerMoveCause,
+): ArmedReaderDeparture {
+  if (arm === null || arm.source === "owned-navigation") return arm;
+  if (arm.source === "gesture") {
+    return arm.geometryAtGesture === null
+      ? arm
+      : {
+          ...arm,
+          geometryAtGesture: geometryMovedBy(arm.geometryAtGesture, delta),
+        };
+  }
+  return cause === "range" ? touchArmCarriedBy(arm, delta) : arm;
+}
+
+function touchArmCarriedBy(arm: ReaderTouchArm, delta: number): ReaderTouchArm {
+  return {
+    ...arm,
+    scrollTopAtStep: arm.scrollTopAtStep + delta,
+    edgeAtStep:
+      arm.edgeAtStep === null
+        ? null
+        : { ...arm.edgeAtStep, top: arm.edgeAtStep.top - delta },
+  };
+}
+
 function canReaderGestureMove(
   geometry: ChatTimelineScrollGeometry,
   direction: ChatTimelineReaderScrollDirection,
@@ -1113,6 +1293,14 @@ export function useChatTimelineFollowLatch(
   // held-back write may land after, until the next report; and before the
   // first.
   const expectedScrollTopRef = useRef<number | null>(null);
+  // The whole geometry this latch last saw, which the ledger above keeps only
+  // the offset of. A viewport growing clamps the view with nothing to announce
+  // it, and the only way to know the browser did that is to compare the end
+  // the content and the viewport reached then against the one they reach now
+  // (`viewportGrowthClamp`).
+  const lastObservedGeometryRef = useRef<ChatTimelineScrollGeometry | null>(
+    null,
+  );
   // A write announced under a finger read back short of what it asked for:
   // iOS holds it back and lands it after the lift, unannounced.
   const touchWriteMayLandRef = useRef(false);
@@ -1359,6 +1547,55 @@ export function useChatTimelineFollowLatch(
     return correction;
   }, [cancelActiveCorrection]);
 
+  /**
+   * The browser clamping the view because the viewport grew, absorbed as the
+   * announced writes above are: every reference that judges the reader against
+   * a stored offset moves by what the clamp moved the view, and this
+   * observation charges the reader with none of it.
+   *
+   * It runs before the ledger is read on every path that reads it - a scroll
+   * report, a maintenance read, and a correction's validation frame - because a
+   * lower offset is what the ledger turns into the reader having moved away.
+   *
+   * The ends a reader is headed for are left, here as at an announced write:
+   * they name content, and the clamp moved none.
+   */
+  const noteViewportGrowthClamp = useCallback(
+    (geometry: ChatTimelineScrollGeometry): void => {
+      const reference = lastObservedGeometryRef.current;
+      lastObservedGeometryRef.current = geometry;
+      if (reference === null) return;
+      const delta = viewportGrowthClamp(reference, geometry);
+      if (delta === null) return;
+      const departure = readerDepartureScrollTopRef.current;
+      if (departure !== null) {
+        readerDepartureScrollTopRef.current = departure + delta;
+      }
+      armedReaderDepartureRef.current = armCarriedBy(
+        armedReaderDepartureRef.current,
+        delta,
+        "range",
+      );
+      // The lift a momentum travels from, as at an announced write: the clamp
+      // moved the view it is read against, so travel across the clamp is the
+      // same travel it was. Left behind, the clamp's own pixels would come off
+      // a lifted finger's momentum and a tail regrowing over the clamp - the
+      // frame this absorbs - is where that would be read.
+      const momentum = readerMomentumEndRef.current;
+      if (momentum !== null) {
+        readerMomentumEndRef.current = {
+          ...momentum,
+          liftScrollTop: momentum.liftScrollTop + delta,
+        };
+      }
+      const expected = expectedScrollTopRef.current;
+      if (expected !== null) {
+        expectedScrollTopRef.current = expected + delta;
+      }
+    },
+    [],
+  );
+
   const startEndCorrection = useCallback(
     (list: LegendListRef, node: HTMLElement): void => {
       const correction = createActiveCorrection();
@@ -1377,6 +1614,11 @@ export function useChatTimelineFollowLatch(
           cancelActiveCorrection();
           return;
         }
+        // This frame reads the view and can publish a departure from it, so it
+        // is a third observation of the geometry and owes the same absorption
+        // the other two do - and it is the one most likely to see a viewport
+        // change, running two frames after a write while the layout settles.
+        noteViewportGrowthClamp(liveGeometry);
         const movedAway = noteViewRead(liveGeometry);
         if (isChatTimelineAtStrictBottom(liveGeometry)) {
           cancelActiveCorrection();
@@ -1440,6 +1682,7 @@ export function useChatTimelineFollowLatch(
       cancelActiveCorrection,
       createActiveCorrection,
       noteViewRead,
+      noteViewportGrowthClamp,
       publishUnannouncedDeparture,
     ],
   );
@@ -1606,23 +1849,15 @@ export function useChatTimelineFollowLatch(
 
   const tryReattachReader = useCallback(
     (node: HTMLElement, geometry: ChatTimelineScrollGeometry): boolean => {
-      const readerCandidate = readerEndCandidateRef.current;
-      // As the momentum's arrival reads it: an end the list may have moved
-      // by an unknown amount is not an end this view can be said to reach.
-      const shift =
-        readerCandidate === null
-          ? null
-          : (tailBlockShift(listRef.current, readerCandidate.tailBlock) ??
-            listRowShift(listRef.current, readerCandidate.lastRow));
-      const reachedGestureStartEnd =
-        readerCandidate !== null &&
-        shift !== null &&
-        readerCandidate.readerGestureGeneration ===
-          readerGestureGenerationRef.current &&
-        geometry.scrollTop >=
-          endScrollTopOf(readerCandidate.targetContentEnd, geometry, shift) -
-            CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX;
-      if (!reachedGestureStartEnd || isCorrectionSuppressed?.() === true) {
+      if (
+        !readerEndCandidateMet(
+          readerEndCandidateRef.current,
+          geometry,
+          listRef.current,
+          readerGestureGenerationRef.current,
+        ) ||
+        isCorrectionSuppressed?.() === true
+      ) {
         return false;
       }
       readerEndCandidateRef.current = null;
@@ -1716,11 +1951,10 @@ export function useChatTimelineFollowLatch(
   // A lifted finger's lift moves with it for the same reason: it is the
   // offset the view's travel is read from, so a write that moved the view
   // moved what that travel is measured against. The ends a reader is headed
-  // for are left: they move with the content they name, which the list can
-  // push down by growing a row in view without writing anything
-  // (`listRowShift`). The touch offsets are left too: they measure the
-  // reader net of the list's own movement already (an element's rise on
-  // screen), and would count it twice.
+  // for are left: they name content, and move only with the content they
+  // name, which the list can push down by growing a row in view without
+  // writing anything (`tailBlockShift`, `listRowShift`). What the arms owe
+  // turns on what moved the view, which is why the write says (`armCarriedBy`).
   const noteScrollerMoved = useCallback((event: Event): void => {
     const move = scrollerMoveOf(event);
     if (move === null) return;
@@ -1730,31 +1964,41 @@ export function useChatTimelineFollowLatch(
     ) {
       touchWriteMayLandRef.current = true;
     }
+    const delta = move.to - move.from;
     const departure = readerDepartureScrollTopRef.current;
     if (departure !== null) {
       // Exactly `to` for a departure at `from`: a reader held on the end
       // stays at no greater offset than the write's own report.
       readerDepartureScrollTopRef.current = move.to - (move.from - departure);
     }
-    const armedDeparture = armedReaderDepartureRef.current;
-    if (
-      armedDeparture?.source === "gesture" &&
-      armedDeparture.geometryAtGesture !== null
-    ) {
-      armedReaderDepartureRef.current = {
-        ...armedDeparture,
-        geometryAtGesture: geometryMovedBy(
-          armedDeparture.geometryAtGesture,
-          move.to - move.from,
-        ),
-      };
-    }
+    armedReaderDepartureRef.current = armCarriedBy(
+      armedReaderDepartureRef.current,
+      delta,
+      move.cause,
+    );
     const momentum = readerMomentumEndRef.current;
     if (momentum !== null) {
       readerMomentumEndRef.current = {
         ...momentum,
-        liftScrollTop: momentum.liftScrollTop + move.to - move.from,
+        liftScrollTop: momentum.liftScrollTop + delta,
       };
+    }
+    // The geometry a later clamp is recognised against moves by what this write
+    // moved the view, whichever kind of write it was. It is not where the view
+    // IS - it is where the view would be from everything this latch knows
+    // about, so that a movement it does not know about is still there to be
+    // found as the difference between the two. Snapping it onto `to` would
+    // assert the whole of the view's offset as accounted for, and an unobserved
+    // viewport clamp before this write - whose growth this remembered
+    // `clientHeight` has not even seen - would be swallowed by that assertion
+    // and charged to the reader at the next read. The content height each kind
+    // of write leaves behind is in `geometryAfterAnnouncedMove`.
+    const lastObserved = lastObservedGeometryRef.current;
+    if (lastObserved !== null) {
+      lastObservedGeometryRef.current = geometryAfterAnnouncedMove(
+        lastObserved,
+        move,
+      );
     }
     const expected = expectedScrollTopRef.current;
     if (expected === null) return;
@@ -1762,7 +2006,7 @@ export function useChatTimelineFollowLatch(
       move.fromEnd - move.from <= CHAT_TIMELINE_STRICT_BOTTOM_EPSILON_PX
         ? move.from
         : expected;
-    expectedScrollTopRef.current = base + move.to - move.from;
+    expectedScrollTopRef.current = base + delta;
   }, []);
 
   // The first report after a lift that a held-back write may land after: a
@@ -2021,6 +2265,10 @@ export function useChatTimelineFollowLatch(
     if (!node) return;
     const geometry = readScrollGeometry(node);
     if (!isChatTimelineGeometryMeasurable(geometry)) return;
+    // Before the ledger reads this offset: a viewport that grew since the last
+    // observation took the view down with the end, and that is the browser's
+    // move, not the reader's.
+    noteViewportGrowthClamp(geometry);
     noteReportAfterLiftLanding(geometry);
     const movedAway = noteReportMovement(geometry);
     if (noteReportAfterDeparture(geometry)) return;
@@ -2072,6 +2320,7 @@ export function useChatTimelineFollowLatch(
     noteReportAfterDeparture,
     noteReportAfterLiftLanding,
     noteReportMovement,
+    noteViewportGrowthClamp,
     notePressView,
     publishArmedReport,
     publishFreeTouchWhileSuppressed,
@@ -2108,6 +2357,40 @@ export function useChatTimelineFollowLatch(
       setFollowIntent,
       startEndCorrection,
     ],
+  );
+
+  /** A toward-end gesture whose arrival only a read can see. The reader
+   *  wheeled toward the end, the viewport then grew and brought the end up to
+   *  them, and the wheel moved the view nothing - so no scroll report is owed
+   *  and the report path never judges the candidate. Left unseen, the tail
+   *  growing past the arrival leaves them free at an end they asked for and
+   *  reached.
+   *
+   *  A recovering transcript holding reattachment off is answered as
+   *  `reconcileStrictBottom` answers it: the arrival survives as reached, and
+   *  the settle that lifts the hold follows it. */
+  const followReaderEndArrivalOnRead = useCallback(
+    (node: HTMLElement, geometry: ChatTimelineScrollGeometry): boolean => {
+      if (
+        !readerEndCandidateMet(
+          readerEndCandidateRef.current,
+          geometry,
+          listRef.current,
+          readerGestureGenerationRef.current,
+        )
+      ) {
+        return false;
+      }
+      if (!permissionRef.current && isReattachSuppressed?.() === true) {
+        readerEndCandidateRef.current = reachedReaderEnd(
+          readerEndCandidateRef.current,
+          readerGestureGenerationRef.current,
+        );
+        return false;
+      }
+      return tryReattachReader(node, geometry);
+    },
+    [isReattachSuppressed, listRef, tryReattachReader],
   );
 
   const reconcileMaintenanceAtStrictBottom = useCallback(
@@ -2163,6 +2446,9 @@ export function useChatTimelineFollowLatch(
     if (!list || !node) return;
     const geometry = readScrollGeometry(node);
     if (!isChatTimelineGeometryMeasurable(geometry)) return;
+    // As on the report path: the clamp a grown viewport forced is absorbed
+    // before this read can charge it to the reader.
+    noteViewportGrowthClamp(geometry);
     const movedAway = noteViewRead(geometry);
     // A press's step, or the clamp of an end that dropped under it, can be
     // what this read sees before any report of it arrives: the view it finds
@@ -2180,6 +2466,7 @@ export function useChatTimelineFollowLatch(
       return;
     }
     noteOwedDeparture(geometry);
+    if (followReaderEndArrivalOnRead(node, geometry)) return;
     if (followReachedReaderEnd(list, node)) return;
     if (followReaderMomentumArrival(node, momentumArrived)) return;
     if (!permissionRef.current) return;
@@ -2212,6 +2499,7 @@ export function useChatTimelineFollowLatch(
     startEndCorrection(list, node);
   }, [
     followReachedReaderEnd,
+    followReaderEndArrivalOnRead,
     followReaderMomentumArrival,
     isCorrectionSuppressed,
     listRef,
@@ -2219,6 +2507,7 @@ export function useChatTimelineFollowLatch(
     noteReaderMomentum,
     notePressView,
     noteViewRead,
+    noteViewportGrowthClamp,
     publishArmedDeparture,
     publishUnannouncedDeparture,
     reconcileMaintenanceAtStrictBottom,
