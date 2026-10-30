@@ -2814,14 +2814,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       if (!timeline || !scroller) return;
       event.preventDefault();
       event.stopPropagation();
-      // Freeze an owned native smooth-scroll at its current pixel first, then
-      // apply this key's deterministic step as the replacement movement. The
-      // resulting native `scroll` event is what determines follow, via
-      // the latch's geometry observer - no separate reattach check needed here.
       const towardEnd =
         scrollAction === "page-down" ||
         scrollAction === "line-down" ||
         scrollAction === "bottom";
+      // Freeze an owned native smooth-scroll at its current pixel first, then
+      // apply this key's deterministic step as the replacement movement. A
+      // step that moves the view decides follow at its native `scroll` event,
+      // via the latch's geometry observer.
       cancelTimelineLiveFollowForUserNavigation({
         direction: towardEnd ? "toward-end" : "away-from-end",
         freezeInFlightScroll: true,
