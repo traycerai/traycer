@@ -374,6 +374,37 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
     expect(await sendEnabledAfterTyping()).toBe(false);
   });
 
+  it("takes a send under a question of the bot on any binding, its row saying it roots a thread everywhere", async () => {
+    const question: Message = {
+      ...botReply({
+        messageId: "question-1",
+        text: "Which release should I watch?",
+        timestamp: 4_500,
+      }),
+      announcement: { kind: "question", link: null },
+    };
+    mocks.sessions[CHANNEL_ID].store.setState((state) => ({
+      messages: [...state.messages, question],
+    }));
+    mocks.threads = [
+      {
+        ...NOTICE_THREAD,
+        threadId: "thread-question",
+        anchor:
+          NOTICE_THREAD.anchor === null
+            ? null
+            : { ...NOTICE_THREAD.anchor, messageId: "question-1" },
+      },
+    ];
+    mocks.threadAnchors = anchorsNaming([]);
+    useBotOpenThreadStore
+      .getState()
+      .setRail(BOT_ID, { ...BY_ANCHOR, anchorMessageId: "question-1" });
+    render(<MountedChannel />);
+
+    expect(await sendEnabledAfterTyping()).toBe(true);
+  });
+
   it("takes a send while the binding names the row among the rows a thread roots on", async () => {
     mocks.threads = [NOTICE_THREAD];
     mocks.threadAnchors = anchorsNaming(["answer", "message"]);

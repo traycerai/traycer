@@ -957,11 +957,11 @@ function useChannelThreads(args: {
  * row the thread hangs off once the channel has it, whatever opened the
  * thread (a memory's link and a session's "Open thread" name the anchor
  * only): a row of the bot takes a send only while the bot's binding names
- * it among the rows a thread roots on. A listed thread whose anchor no
- * member wrote takes none until its row says which row it is, however its
- * read ends; one that names its kind, one on a member's post, one on a post
- * being sent and one whose anchor the list says is gone go by what they
- * say.
+ * it among the rows a thread roots on. An open that names its kind, or was
+ * made from its row (a box under a question, a proposal or a direct post),
+ * and a post being sent go by what they say. A thread opened by its anchor
+ * alone takes none until the channel's row or the thread list says a
+ * member wrote the anchor.
  */
 function anchorSendable(input: {
   readonly open: BotOpenThread | null;
@@ -969,11 +969,14 @@ function anchorSendable(input: {
   readonly post: OpenMessage | null;
   readonly threadAnchorKinds: readonly string[];
 }): boolean {
-  const { open, listed, post } = input;
+  const { open, post } = input;
   const kind =
     post === null ? (open?.anchorKind ?? null) : threadOpenOf(post).anchorKind;
   if (kind !== null) return input.threadAnchorKinds.includes(kind);
-  return post !== null || listed?.anchor?.senderUserId !== null;
+  if (post !== null) return true;
+  if (open !== null && (open.sent !== null || open.announcement)) return true;
+  const anchor = input.listed?.anchor ?? null;
+  return anchor !== null && anchor.senderUserId !== null;
 }
 
 /**

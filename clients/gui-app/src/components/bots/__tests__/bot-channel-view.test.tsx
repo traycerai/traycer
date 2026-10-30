@@ -878,6 +878,32 @@ describe("<BotChannelView /> channel", () => {
     expect(sendable()).toBe("false");
   });
 
+  it("offers no box in a thread opened by its anchor alone before the list has it, and one that sends once the list says a member wrote the anchor", () => {
+    const panel = (): HTMLElement => screen.getByTestId("bot-thread-panel");
+    const BY_ANCHOR: BotOpenThread = {
+      anchorMessageId: "post-late",
+      announcement: false,
+      anchorKind: null,
+      sent: null,
+    };
+    mocks.state.threads = [];
+    const { reopen } = mount({ openThreadPostId: null });
+    reopen(BY_ANCHOR);
+
+    expect(
+      within(panel()).queryByTestId("stub-bot-thread-composer"),
+    ).toBeNull();
+
+    mocks.state.threads = [thread("thread-late", "post-late", {})];
+    reopen(BY_ANCHOR);
+
+    expect(
+      within(panel())
+        .getByTestId("stub-bot-thread-composer")
+        .getAttribute("data-sendable"),
+    ).toBe("true");
+  });
+
   it("keeps the box under a direct reply mounted, beside Retry, through a failed read of the list after a claim, and sending once the read recovers", async () => {
     const user = userEvent.setup();
     const ANSWER_THREAD: BotOpenThread = {
