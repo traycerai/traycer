@@ -49,6 +49,9 @@ const params = new URLSearchParams(window.location.search);
 const LONG_LABEL =
   "Claude Opus 5.5 with an unusually long display name for narrow screens";
 const CLAUDE_LABEL = params.get("label") === "long" ? LONG_LABEL : "Opus 5.5";
+// The phone toolbar's chip by default; `display=responsive` is the desktop
+// chip inside the composer shell's `@container`, which collapses when narrow.
+const RESPONSIVE = params.get("display") === "responsive";
 const EFFORTS = [
   { id: "low", label: "Low", description: null },
   { id: "high", label: "High", description: null },
@@ -235,7 +238,7 @@ function FixturePicker({ store }: { readonly store: ComposerToolbarStore }) {
     <HarnessModelPicker
       openForHarnessRef={openForHarnessRef}
       withUltracode
-      labelDisplay="model-only"
+      labelDisplay={RESPONSIVE ? "responsive" : "model-only"}
       store={store}
       maxModeContext={{ kind: "none" }}
       withServiceTier={false}
@@ -304,7 +307,18 @@ export function UltracodePickerRowFixture() {
         >
           <TooltipProvider delayDuration={0}>
             <main className="min-h-safe-svh w-full bg-canvas text-canvas-foreground">
-              <FixturePicker store={store} />
+              {/* Every composer ends its right-hand cluster with the model
+                  chip, so the chip grows leftward and the end-aligned panel
+                  stays put as its text changes. */}
+              <div
+                className={
+                  RESPONSIVE ? "@container flex min-w-0" : "flex min-w-0"
+                }
+              >
+                <div className="ml-auto flex min-w-0 shrink items-center gap-1">
+                  <FixturePicker store={store} />
+                </div>
+              </div>
             </main>
           </TooltipProvider>
         </HostRuntimeProvider>

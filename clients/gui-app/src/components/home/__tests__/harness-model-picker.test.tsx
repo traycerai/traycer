@@ -5759,7 +5759,15 @@ describe("<HarnessModelPicker />", () => {
       return harness;
     }
 
-    it("a carried offering model toggles the request on, and the trigger shows the icon", async () => {
+    /** What the model chip writes out, not its accessible name. */
+    function chipText(label: string): string {
+      return screen.getByRole("button", {
+        name: new RegExp(`^${label}`),
+        hidden: true,
+      }).textContent;
+    }
+
+    it("a carried offering model toggles the request on, and the chip writes it after the effort", async () => {
       const harness = await openClaudePicker(OFFERING, {
         withUltracode: true,
         ultracode: false,
@@ -5768,12 +5776,12 @@ describe("<HarnessModelPicker />", () => {
 
       const toggle = screen.getByRole("switch", { name: "Ultracode" });
       expect(toggle.hasAttribute("disabled")).toBe(false);
-      expect(screen.queryByTestId("model-ultracode-icon")).toBeNull();
+      expect(chipText(OFFERING.label)).not.toContain("Ultracode");
 
       fireEvent.click(toggle);
 
       expect(harness.store.getState().values.ultracode).toBe(true);
-      expect(screen.getByTestId("model-ultracode-icon")).toBeDefined();
+      expect(chipText(OFFERING.label)).toMatch(/·Ultracode$/);
     });
 
     interface DisplayHealCase {
@@ -5850,7 +5858,7 @@ describe("<HarnessModelPicker />", () => {
         expect(toggle.hasAttribute("disabled")).toBe(true);
         expect(toggle.getAttribute("aria-checked")).toBe(String(ultracode));
         expect(screen.getByText(NORMAL_HINT)).toBeDefined();
-        expect(screen.queryByTestId("model-ultracode-icon")).toBeNull();
+        expect(chipText(OFFERING.label)).not.toContain("Ultracode");
 
         fireEvent.click(toggle);
 
@@ -5879,7 +5887,7 @@ describe("<HarnessModelPicker />", () => {
       expect(harness.store.getState().values.ultracode).toBe(true);
     });
 
-    it("a surface that is not a chat shows no row and no icon even with the intent saved", async () => {
+    it("a surface that is not a chat shows no row and no chip text even with the intent saved", async () => {
       await openClaudePicker(OFFERING, {
         withUltracode: false,
         ultracode: true,
@@ -5887,10 +5895,10 @@ describe("<HarnessModelPicker />", () => {
       });
 
       expect(screen.queryByRole("switch", { name: "Ultracode" })).toBeNull();
-      expect(screen.queryByTestId("model-ultracode-icon")).toBeNull();
+      expect(chipText(OFFERING.label)).not.toContain("Ultracode");
     });
 
-    it("an excluded model says why, stays checked and disabled, and shows no trigger icon", async () => {
+    it("an excluded model says why, stays checked and disabled, and the chip does not claim it", async () => {
       await openClaudePicker(EXCLUDING, {
         withUltracode: true,
         ultracode: true,
@@ -5901,7 +5909,7 @@ describe("<HarnessModelPicker />", () => {
       expect(toggle.hasAttribute("disabled")).toBe(true);
       expect(toggle.getAttribute("aria-checked")).toBe("true");
       expect(screen.getByText("Not offered for Excluding Model")).toBeDefined();
-      expect(screen.queryByTestId("model-ultracode-icon")).toBeNull();
+      expect(chipText(EXCLUDING.label)).not.toContain("Ultracode");
     });
 
     it("a model with unknown metadata is disabled with the normal hint and keeps the request", async () => {

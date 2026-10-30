@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes, Ref } from "react";
-import { ChevronDown, Workflow, Zap } from "lucide-react";
+import { ChevronDown, Zap } from "lucide-react";
 import { ToolbarPillButton } from "@/components/home/toolbar/toolbar-buttons";
 import { HarnessIcon } from "@/components/home/pickers/harness-icon";
 import { MutedAgentSpinner } from "@/components/ui/agent-spinning-dots";
@@ -146,17 +146,6 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
           strokeWidth={2}
         />
       )}
-      {ultracodeRequested ? (
-        <span
-          className="inline-flex shrink-0"
-          data-testid="model-ultracode-icon"
-        >
-          <Workflow
-            aria-label="Ultracode requested"
-            className="size-3.5 text-muted-foreground"
-          />
-        </span>
-      ) : null}
       {maxModeRequired ? (
         <span
           className={cn(
@@ -213,6 +202,22 @@ export function HarnessModelTrigger(props: HarnessModelTriggerProps) {
           {reasoningLabel}
         </span>
       )}
+      {/* Written out after the effort, as Claude Code's own status line does.
+          It stays when the rest of the label collapses, so a narrow chip
+          still shows the request. */}
+      {ultracodeRequested ? (
+        <>
+          <span
+            aria-hidden="true"
+            className={cn("shrink-0 text-muted-foreground/70", narrowHidden)}
+          >
+            ·
+          </span>
+          <span className="shrink-0 whitespace-nowrap text-muted-foreground">
+            Ultracode
+          </span>
+        </>
+      ) : null}
       <ChevronDown
         className={cn("size-3.5 shrink-0 text-muted-foreground", narrowHidden)}
       />

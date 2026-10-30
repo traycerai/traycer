@@ -8,7 +8,8 @@ import { HarnessModelTrigger } from "@/components/home/pickers/harness-model-tri
  * single-line hint, and a disabled switch (with the normal hint) while the
  * model's eligibility is unknown. Nothing here reads a build constant, so the
  * production build, where the global unreleased switch is off, shows the same
- * row. The trigger shows the icon only for a requested saved intent.
+ * row. The trigger writes "Ultracode" after the effort only for a requested
+ * saved intent.
  */
 
 afterEach(() => {
@@ -116,8 +117,11 @@ describe("<UltracodeFooterButton />", () => {
   });
 });
 
-describe("<HarnessModelTrigger /> Ultracode icon", () => {
-  function renderTrigger(ultracodeRequested: boolean | undefined) {
+describe("<HarnessModelTrigger /> Ultracode text", () => {
+  function renderTrigger(
+    ultracodeRequested: boolean | undefined,
+    labelDisplay: "responsive" | "model-only",
+  ) {
     render(
       <HarnessModelTrigger
         selection={{ harnessId: "claude", modelSlug: "opus", profileId: null }}
@@ -132,28 +136,35 @@ describe("<HarnessModelTrigger /> Ultracode icon", () => {
         profileAccentDot={null}
         isLoading={false}
         disabled={false}
-        labelDisplay="responsive"
+        labelDisplay={labelDisplay}
       />,
     );
   }
 
-  it("shows the icon inside the trigger for a requested intent", () => {
-    renderTrigger(true);
-    const icon = screen.getByTestId("model-ultracode-icon");
-    expect(icon.closest("button")).not.toBeNull();
-    expect(screen.getByRole("button").getAttribute("aria-label")).toContain(
-      "Ultracode requested",
-    );
-  });
+  it.each([
+    ["responsive", "ClaudeOpus 5.5·High·Ultracode"],
+    ["model-only", "ClaudeOpus 5.5·Ultracode"],
+  ] as const)(
+    "writes Ultracode after the %s label for a requested intent",
+    (labelDisplay, written) => {
+      renderTrigger(true, labelDisplay);
+      const trigger = screen.getByRole("button");
+      expect(trigger.textContent).toBe(written);
+      expect(trigger.getAttribute("aria-label")).toBe(
+        "Opus 5.5, Thinking High, Ultracode requested",
+      );
+    },
+  );
 
   it.each([false, undefined])(
-    "shows no icon when the request is %s",
+    "writes nothing when the request is %s",
     (requested) => {
-      renderTrigger(requested);
-      expect(screen.queryByTestId("model-ultracode-icon")).toBeNull();
-      expect(
-        screen.getByRole("button").getAttribute("aria-label"),
-      ).not.toContain("Ultracode requested");
+      renderTrigger(requested, "responsive");
+      const trigger = screen.getByRole("button");
+      expect(trigger.textContent).toBe("ClaudeOpus 5.5·High");
+      expect(trigger.getAttribute("aria-label")).toBe(
+        "Opus 5.5, Thinking High",
+      );
     },
   );
 });
