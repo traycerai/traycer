@@ -97,11 +97,12 @@ def geometry(w):
     return tops, acc
 
 
-def describe(w, intent):
+def describe(w, intent, est0):
     if not w["mounted"]:
         return "unmounted"
     tops, h = geometry(w)
     vh = w["V"]
+    h += w.get("pad", 0)
     maxs = max(0, h - 2) if vh == 0 else max(0, h - vh)
     s = w["s"]
     rows = []
@@ -116,6 +117,14 @@ def describe(w, intent):
         f"mode={w['mode']} perm={'T' if w['perm'] else 'F'} pill={'T' if w['pill'] else 'F'}",
         f"arm={w['armed']['src']}",
     ]
+    if w["armed"]["src"] in ("gesture", "touch"):
+        arm = w["armed"]
+        parts[-1] += f"@{arm['at']}"
+        if arm["src"] == "gesture":
+            parts[-1] += f"/{arm['dir']} dist={arm['dist']}"
+    if w.get("depAt", -1) != -1:
+        phase = "ahead" if w.get("depAhead") else "rebased" if w.get("depMoved") else "reported"
+        parts.append(f"dep={w['depAt']}({phase})")
     if w["corr"]["on"]:
         parts.append(f"corr(att {w['corr']['att']}, {w['corr']['stage']})")
     if w["cmd"]["k"] != "none":
@@ -137,6 +146,24 @@ def describe(w, intent):
         flags.append(f"deferred={w['deferred']}")
     if w["flingDir"]:
         flags.append(f"fling{w['flingDir']:+d}")
+    # The estimates (`est` is the list's estimate for an unmeasured row) and
+    # the adjust MVCP holds back under an animated command, written from the
+    # list's own `state.scroll` (`ls`).
+    if w.get("est", est0) != est0:
+        flags.append(f"est={w['est']}")
+    if w.get("pend"):
+        flags.append(f"pend{w['pend']:+d}@ls={w['ls']}")
+    if w.get("jump"):
+        flags.append("JUMPED")
+    # A wheel whose scroll has yet to land, the list's end pad, a finished turn.
+    if w.get("wheelPend"):
+        flags.append(f"wheel{w['wheelPend']:+d}")
+    if w.get("pad"):
+        flags.append(f"pad={w['pad']}")
+    if w.get("turn") is False:
+        flags.append("turnEnded")
+    if w.get("boot", "none") != "none":
+        flags.append(f"boot={w['boot']}")
     if flags:
         parts.append("{" + ",".join(flags) + "}")
     st = w["store"]
@@ -149,13 +176,16 @@ def describe(w, intent):
 
 def main(path):
     text = open(path).read()
-    head = re.search(r"Error: (Invariant \w+ is violated)", text)
+    head = re.search(r"Error: ((?:Invariant|Action property) \w+ is violated)", text)
     if head is None:
         print("no counterexample in", path)
         return
     print(head.group(1))
+    est0 = None
     for n, st in enumerate(states(text), 1):
-        print(f"{n:2} {st['last']:<22} {describe(st['w'], st['intent'])}")
+        if est0 is None:
+            est0 = st["w"].get("est")
+        print(f"{n:2} {st['last']:<22} {describe(st['w'], st['intent'], est0)}")
 
 
 if __name__ == "__main__":
