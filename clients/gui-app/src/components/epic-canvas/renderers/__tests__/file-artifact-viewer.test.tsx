@@ -768,6 +768,62 @@ describe("<FileArtifactViewer /> media in the native shell", () => {
     }
   });
 
+  it("starts the byte probe once this machine's host id resolves under a mounted viewer, and plays from the host it names", async () => {
+    const bridge = mediaBridge(false);
+    mocks.runnerHost = nativeHostWith(bridge);
+    mocks.localHostId = null;
+    const { readSpan } = recordedMediaSpans();
+    const object = mediaObject("published", "video/mp4");
+    const view = renderViewer("clip.mp4", object, readSpan);
+    expect(mocks.probeRequests).toEqual([]);
+
+    mocks.localHostId = "host-1";
+    view.rerenderWith("clip.mp4", object, readSpan);
+
+    await waitFor(() =>
+      expect(view.container.querySelector("video")?.getAttribute("src")).toBe(
+        `traycer-sandbox://artifact-media-${MEDIA_SHA}--${bridge.registered[0]}/media`,
+      ),
+    );
+    expect(mocks.probeRequests).toHaveLength(1);
+  });
+
+  it("plays a second viewing from the cloud when its own probe fails, even though the first viewing's byte is still cached", async () => {
+    const bridge = mediaBridge(false);
+    mocks.runnerHost = nativeHostWith(bridge);
+    const signed = "https://cdn.example.test/clip.mp4?sig=probe-failed";
+    mocks.hostQuery = {
+      data: { kind: "url", url: signed, expiresAt: Date.now() + 60_000 },
+      isPending: false,
+      refetch: vi.fn<(...args: unknown[]) => unknown>(),
+    };
+    const queryClient = new QueryClient();
+    const { readSpan } = recordedMediaSpans();
+    const first = renderViewerWith(
+      queryClient,
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+    await waitFor(() => expect(bridge.registered).toHaveLength(1));
+    first.unmount();
+
+    mocks.probeAnswer = () => Promise.reject(new Error("socket"));
+    const second = renderViewerWith(
+      queryClient,
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+
+    await waitFor(() =>
+      expect(second.container.querySelector("video")?.getAttribute("src")).toBe(
+        signed,
+      ),
+    );
+    expect(bridge.registered).toHaveLength(1);
+  });
+
   it("plays a second viewing from this machine's host once it holds the file, not from the first viewing's cached `downloading`", async () => {
     const bridge = mediaBridge(false);
     mocks.runnerHost = nativeHostWith(bridge);

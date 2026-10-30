@@ -112,7 +112,8 @@ function useMediaSource(
       probe.isFetchedAfterMount &&
       (answer !== undefined || probe.isError)
     ) {
-      setSource(answer === "bytes" ? "host" : "cloud");
+      // A failed probe keeps an earlier viewing's `data`; the error decides.
+      setSource(!probe.isError && answer === "bytes" ? "host" : "cloud");
     }
   }
   return source;
