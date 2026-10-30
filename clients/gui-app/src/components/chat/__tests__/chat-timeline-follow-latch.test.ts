@@ -1430,8 +1430,61 @@ describe("useChatTimelineFollowLatch", () => {
       direction: "away-from-end",
       freezeInFlightScroll: true,
       publishesReaderPosition: true,
+      viewportCanAnswer: true,
     });
     expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("reports that the viewport could not answer a wheel at the top", () => {
+    const node = shim.makeNode({
+      scrollTop: 0,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onReaderGesture = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, false, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onReaderGesture,
+      }),
+    );
+
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+
+    expect(onReaderGesture).toHaveBeenCalledWith({
+      direction: "away-from-end",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+      viewportCanAnswer: false,
+    });
+  });
+
+  // Control: one pixel off the top edge, the same wheel can still move the
+  // view, so the viewport can answer it.
+  it("reports that the viewport could answer a wheel one pixel off the top", () => {
+    const node = shim.makeNode({
+      scrollTop: 1,
+      scrollHeight: 1500,
+      clientHeight: 500,
+    });
+    const listRef = makeFakeListRef(node);
+    const onReaderGesture = vi.fn();
+    renderHook(() =>
+      useChatTimelineFollowLatch(listRef, false, true, {
+        ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+        onReaderGesture,
+      }),
+    );
+
+    node.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+
+    expect(onReaderGesture).toHaveBeenCalledWith({
+      direction: "away-from-end",
+      freezeInFlightScroll: true,
+      publishesReaderPosition: true,
+      viewportCanAnswer: true,
+    });
   });
 
   it("blocks a maintain correction between wheel intent and native scroll", () => {
@@ -2665,6 +2718,7 @@ describe("useChatTimelineFollowLatch", () => {
         direction: "away-from-end",
         freezeInFlightScroll: true,
         publishesReaderPosition: true,
+        viewportCanAnswer: true,
       });
       expect(listRef.scrollToEnd).not.toHaveBeenCalled();
       expect(node.scrollTop).toBe(960);
@@ -2872,6 +2926,7 @@ describe("useChatTimelineFollowLatch", () => {
         direction: "away-from-end",
         freezeInFlightScroll: true,
         publishesReaderPosition: true,
+        viewportCanAnswer: true,
       });
       expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
       expect(node.scrollTop).toBe(1160);
@@ -4475,6 +4530,7 @@ describe("useChatTimelineFollowLatch", () => {
       direction: "indeterminate",
       freezeInFlightScroll: true,
       publishesReaderPosition: true,
+      viewportCanAnswer: true,
     });
     fireTouch(node, "touchend", 100);
     shim.setGeometry(node, { scrollHeight: 1900 });
@@ -4487,6 +4543,7 @@ describe("useChatTimelineFollowLatch", () => {
       direction: "indeterminate",
       freezeInFlightScroll: true,
       publishesReaderPosition: true,
+      viewportCanAnswer: true,
     };
 
     function mountFreeReader(isSuppressed: () => boolean) {
@@ -6745,6 +6802,7 @@ describe("useChatTimelineFollowLatch", () => {
       direction: "away-from-end",
       freezeInFlightScroll: true,
       publishesReaderPosition: true,
+      viewportCanAnswer: true,
     } as const;
 
     // Following at the strict bottom with one report seen, so the latch knows
