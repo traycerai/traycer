@@ -29,6 +29,8 @@ import type {
   ProviderCliState,
   ProviderManagedInstallState,
 } from "@traycer/protocol/host/provider-schemas";
+import { useProvidersListForClient } from "@/hooks/providers/use-providers-list-query";
+import { useProvidersSetProfileEnabledForClient } from "@/hooks/providers/use-providers-set-profile-enabled-mutation";
 import { ChatTranscriptProvider } from "@/components/chat/chat-transcript-context";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -131,6 +133,10 @@ function hostClientPlaying(
         host.asked = [...host.asked, `check ${params.packId}`];
         return { result: { ok: true, outcome: "moved" } };
       },
+      "providers.setProfileEnabled": (params) => {
+        host.asked = [...host.asked, `toggle ${params.profileId}`];
+        return { profileId: params.profileId, enabled: params.enabled };
+      },
       "providers.ensurePack": (params) => {
         host.asked = [...host.asked, `update ${params.providerId}`];
         if (host.ensure instanceof Error) return Promise.reject(host.ensure);
@@ -210,6 +216,29 @@ function renderRows(
     </QueryClientProvider>,
   );
   return queryClient;
+}
+
+/**
+ * Settings' providers panel, open beside the row: it watches the host's
+ * provider list and has a switch for one of Grok's profiles.
+ */
+function ProvidersPanel(): React.JSX.Element {
+  useProvidersListForClient(mocks.client, { enabled: true, subscribed: true });
+  const toggle = useProvidersSetProfileEnabledForClient(mocks.client, "grok");
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        toggle.mutate({ providerId: "grok", profileId: "work", enabled: false })
+      }
+    >
+      Turn off profile
+    </button>
+  );
+}
+
+function updateButtons(): ReadonlyArray<HTMLButtonElement> {
+  return screen.getAllByRole<HTMLButtonElement>("button", { name: "Update" });
 }
 
 function hostOffers(methods: ReadonlyArray<string>): void {
@@ -345,40 +374,79 @@ describe("<ErrorSegment /> a provider whose command-line tool is out of date", (
     expect(updateButton().disabled).toBe(true);
   });
 
-  it("keeps two Update rows on the host pending until the host answers a list read after both took effect, though each press cancels the other's read", async () => {
+  it("settles every one of three Update rows on the host pressed one after another, each on a list answer after its own request", async () => {
     const user = userEvent.setup();
     host.ensure = "finishes-at-once";
     const release = holdList();
     const queryClient = renderRows("provider_outdated", OUTDATED, [
       "turn-1",
       "turn-2",
+      "turn-3",
     ]);
     // The cached list says the old copy is installed, which reads as settled.
     queryClient.setQueryData(LIST_KEY, {
       providers: [grokRow()],
       native: null,
     });
-    const [first, second] = screen.getAllByRole<HTMLButtonElement>("button", {
-      name: "Update",
-    });
+    const updates = (): number =>
+      host.asked.filter((asked) => asked === "update grok").length;
 
-    await user.click(first);
-    await user.click(second);
-
-    await waitFor(() =>
-      expect(
-        host.asked.filter((asked) => asked === "update grok"),
-      ).toHaveLength(2),
-    );
+    for (const [index, button] of updateButtons().entries()) {
+      await user.click(button);
+      await waitFor(() => expect(updates()).toBe(index + 1));
+    }
     await waitFor(() => expect(queryClient.isMutating()).toBe(0));
-    expect(listReads()).toBe(1);
-    expect(first.disabled).toBe(true);
-    expect(second.disabled).toBe(true);
+    expect(updateButtons().map((button) => button.disabled)).toEqual([
+      true,
+      true,
+      true,
+    ]);
 
     release();
 
-    await waitFor(() => expect(first.disabled).toBe(false));
-    expect(second.disabled).toBe(false);
+    await waitFor(() =>
+      expect(updateButtons().map((button) => button.disabled)).toEqual([
+        false,
+        false,
+        false,
+      ]),
+    );
+    expect(screen.queryByTestId("provider-update-failure")).toBeNull();
+  });
+
+  it("stays pending while a profile switch rewrites the cached list before the host answers the press's list read", async () => {
+    const user = userEvent.setup();
+    hostOffers(["providers.ensurePack", "providers.setProfileEnabled"]);
+    host.ensure = "finishes-at-once";
+    const release = holdList();
+    const queryClient = renderRow("provider_outdated", OUTDATED);
+    queryClient.setQueryData(LIST_KEY, {
+      providers: [grokRow()],
+      native: null,
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ProvidersPanel />
+      </QueryClientProvider>,
+    );
+
+    await user.click(updateButton());
+    await waitFor(() => expect(host.asked).toContain("list"));
+    // Each flip of the switch cancels the list's reads and writes its own
+    // copy of the list, with no answer from the host.
+    const flip = screen.getByRole("button", { name: "Turn off profile" });
+    await user.click(flip);
+    await user.click(flip);
+    await waitFor(() =>
+      expect(
+        host.asked.filter((asked) => asked === "toggle work"),
+      ).toHaveLength(2),
+    );
+    expect(updateButton().disabled).toBe(true);
+
+    release();
+
+    await waitFor(() => expect(updateButton().disabled).toBe(false));
     expect(screen.queryByTestId("provider-update-failure")).toBeNull();
   });
 

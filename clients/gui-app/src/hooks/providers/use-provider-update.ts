@@ -88,37 +88,25 @@ export function useProviderUpdateForClient(
         "providers.list",
         { native: null },
       );
-      const readList = (staleTime: number): Promise<ProvidersList> =>
-        queryClient.fetchQuery(
-          queryOptions({
-            queryKey: listKey,
-            queryFn: () => client.request("providers.list", { native: null }),
-            staleTime,
-            retry: false,
-          }),
-        );
-      // Resolves once the list holds an answer newer than the `count`th. A
-      // read another press cancels resolves with the data it replaced, so the
-      // read is taken again; every read in flight by then left after this
-      // press's own cancel.
-      const readAnswerAfter = async (count: number): Promise<void> => {
-        await readList(0);
-        if (
-          (queryClient.getQueryState(listKey)?.dataUpdateCount ?? 0) > count
-        ) {
-          return;
-        }
-        await readAnswerAfter(count);
-      };
       void (async () => {
         // A cached list names the pack as well as a fresh one.
-        const packId = canRefresh
-          ? ((
-              await readList(Number.POSITIVE_INFINITY).catch(() => null)
-            )?.providers.find(
-              (candidate) => candidate.providerId === providerId,
-            )?.packId ?? null)
+        const cached = canRefresh
+          ? await queryClient
+              .fetchQuery(
+                queryOptions({
+                  queryKey: listKey,
+                  queryFn: () =>
+                    client.request("providers.list", { native: null }),
+                  staleTime: Number.POSITIVE_INFINITY,
+                  retry: false,
+                }),
+              )
+              .catch(() => null)
           : null;
+        const packId =
+          cached?.providers.find(
+            (candidate) => candidate.providerId === providerId,
+          )?.packId ?? null;
         // A refused or failed check is toasted by its hook; the update still
         // runs, on whatever the host already knows.
         if (packId !== null) {
@@ -126,11 +114,12 @@ export function useProviderUpdateForClient(
         }
         try {
           await ensure.mutateAsync({ providerId });
-          // A list read already in flight may have left before the host took
-          // the request; this read must not join it.
-          await queryClient.cancelQueries({ queryKey: listKey, exact: true });
-          await readAnswerAfter(
-            queryClient.getQueryState(listKey)?.dataUpdateCount ?? 0,
+          // Sent once the host has answered the update, so answered after it
+          // took it; sent past the list cache, which other reads and writes
+          // can cancel, revert or overwrite meanwhile.
+          queryClient.setQueryData(
+            listKey,
+            await client.request("providers.list", { native: null }),
           );
         } catch (error) {
           setPhase({
