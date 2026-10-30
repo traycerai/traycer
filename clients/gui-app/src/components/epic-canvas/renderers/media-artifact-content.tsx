@@ -73,11 +73,13 @@ function useMediaSource(
   },
   hasBridge: boolean,
 ): MediaSource | null {
+  // `null` until the binding resolves, which is not yet "another machine".
   const localHostId = useReactiveLocalHostId();
+  const isLocalHost = localHostId !== null && props.hostId === localHostId;
   const [source, setSource] = useState<MediaSource | null>(() => {
     if (!hasBridge) return "cloud";
     if (props.object.status !== "published") return "host";
-    return props.hostId === localHostId ? null : "cloud";
+    return localHostId !== null && !isLocalHost ? "cloud" : null;
   });
   const client = useHostClientForHostId(props.hostId);
   const probe = useHostQuery({
@@ -89,19 +91,29 @@ function useMediaSource(
       want: { kind: "range", offset: 0, length: 1 },
     },
     cacheKeyIdentity: undefined,
-    options: { enabled: source === null, staleTime: 0 },
+    options: { enabled: source === null && isLocalHost, staleTime: 0 },
   });
   useEffect(() => {
     if (source !== null) return;
     const timer = setTimeout(() => setSource("cloud"), PROBE_DEADLINE_MS);
     return () => clearTimeout(timer);
   }, [source]);
-  // Latched from the first answer during render: the method's policy keeps
-  // polling a `downloading` answer, and a later "bytes" must not move a
-  // playing element off the cloud.
+  // Latched during render from the first answer fetched for THIS mount: the
+  // method's policy keeps polling a `downloading` answer, and a later "bytes"
+  // must not move a playing element off the cloud; and an earlier viewing's
+  // cached `downloading` must not send this one to the cloud once the host
+  // has the file.
   const answer = probe.data?.kind;
-  if (source === null && (answer !== undefined || probe.isError)) {
-    setSource(answer === "bytes" ? "host" : "cloud");
+  if (source === null) {
+    if (localHostId !== null && !isLocalHost) {
+      setSource("cloud");
+    } else if (
+      isLocalHost &&
+      probe.isFetchedAfterMount &&
+      (answer !== undefined || probe.isError)
+    ) {
+      setSource(answer === "bytes" ? "host" : "cloud");
+    }
   }
   return source;
 }

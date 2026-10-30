@@ -249,7 +249,16 @@ function renderViewer(
   object: ArtifactObjectRef,
   readSpan: ArtifactReadSpan,
 ) {
-  const queryClient = new QueryClient();
+  return renderViewerWith(new QueryClient(), name, object, readSpan);
+}
+
+// A second viewing in the same window shares the first one's query cache.
+function renderViewerWith(
+  queryClient: QueryClient,
+  name: string,
+  object: ArtifactObjectRef,
+  readSpan: ArtifactReadSpan,
+) {
   const wrap = (children: ReactNode) => (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
@@ -720,6 +729,95 @@ describe("<FileArtifactViewer /> media in the native shell", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // Before the binding resolves nothing is known about this machine's host,
+  // which is not the same as the file living on another machine.
+  it("asks no host for a byte while this machine's host id is still unknown, and falls back to the cloud on the same deadline", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      const bridge = mediaBridge(false);
+      mocks.runnerHost = nativeHostWith(bridge);
+      mocks.localHostId = null;
+      const signed = "https://cdn.example.test/clip.mp4?sig=unknown-local";
+      mocks.hostQuery = {
+        data: { kind: "url", url: signed, expiresAt: Date.now() + 60_000 },
+        isPending: false,
+        refetch: vi.fn<(...args: unknown[]) => unknown>(),
+      };
+      const { readSpan } = recordedMediaSpans();
+
+      const { container } = renderViewer(
+        "clip.mp4",
+        mediaObject("published", "video/mp4"),
+        readSpan,
+      );
+
+      expect(container.querySelector("video")).toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(1_100);
+      });
+
+      expect(container.querySelector("video")?.getAttribute("src")).toBe(
+        signed,
+      );
+      expect(mocks.probeRequests).toEqual([]);
+      expect(bridge.registered).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("plays a second viewing from this machine's host once it holds the file, not from the first viewing's cached `downloading`", async () => {
+    const bridge = mediaBridge(false);
+    mocks.runnerHost = nativeHostWith(bridge);
+    mocks.probeResponse = {
+      kind: "downloading",
+      receivedBytes: 10,
+      totalBytes: HUGE_MEDIA_BYTES,
+    };
+    const signed = "https://cdn.example.test/clip.mp4?sig=first-viewing";
+    mocks.hostQuery = {
+      data: { kind: "url", url: signed, expiresAt: Date.now() + 60_000 },
+      isPending: false,
+      refetch: vi.fn<(...args: unknown[]) => unknown>(),
+    };
+    const queryClient = new QueryClient();
+    const { readSpan } = recordedMediaSpans();
+    const first = renderViewerWith(
+      queryClient,
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+    await waitFor(() =>
+      expect(first.container.querySelector("video")?.getAttribute("src")).toBe(
+        signed,
+      ),
+    );
+    first.unmount();
+
+    // The host finished mirroring the file between the two viewings.
+    mocks.probeResponse = {
+      kind: "bytes",
+      bytesBase64: "",
+      offset: 0,
+      totalBytes: 0,
+      mediaType: "video/mp4",
+    };
+    const second = renderViewerWith(
+      queryClient,
+      "clip.mp4",
+      mediaObject("published", "video/mp4"),
+      readSpan,
+    );
+
+    await waitFor(() =>
+      expect(second.container.querySelector("video")?.getAttribute("src")).toBe(
+        `traycer-sandbox://artifact-media-${MEDIA_SHA}--${bridge.registered[0]}/media`,
+      ),
+    );
+    expect(mocks.probeRequests).toHaveLength(2);
   });
 
   it("shows the player only after the shell has registered the mount", async () => {
