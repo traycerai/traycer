@@ -169,7 +169,12 @@ describe("AgentActivityStreamClient", () => {
 
     const reason: StreamCloseReason = { kind: "caller" };
     session.emitStatus("closed", reason);
-    expect(onConnectionStatus).toHaveBeenCalledWith("closed", reason);
+    expect(onConnectionStatus).toHaveBeenCalledWith(
+      "closed",
+      reason,
+      null,
+      null,
+    );
 
     client.close();
     client.close();

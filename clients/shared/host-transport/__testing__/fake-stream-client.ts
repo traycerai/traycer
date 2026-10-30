@@ -34,12 +34,14 @@ export class FakeStreamSession implements IStreamSession {
   private serverHandler: ServerFrameHandler | null = null;
   private statusHandler: StatusChangeHandler | null = null;
   private status: StreamStatus = "connecting";
+  /** A held stream queues sends for delivery after the resume, as the real session does. */
+  private held = false;
 
   sendClientFrame(
     frame: StreamFrameEnvelope,
     _binaryPayload: Uint8Array | null,
   ): void {
-    if (this.closed || this.status !== "open") return;
+    if (this.closed || (this.status !== "open" && !this.held)) return;
     this.sentFrames.push(frame);
   }
 
@@ -70,6 +72,7 @@ export class FakeStreamSession implements IStreamSession {
 
   emitStatus(status: StreamStatus): void {
     this.status = status;
+    this.held = false;
     this.statusHandler?.(status, null, null, null);
   }
 
@@ -79,6 +82,7 @@ export class FakeStreamSession implements IStreamSession {
     continuity: StreamContinuity,
   ): void {
     this.status = status;
+    this.held = continuity === "held";
     this.statusHandler?.(status, null, null, continuity);
   }
 

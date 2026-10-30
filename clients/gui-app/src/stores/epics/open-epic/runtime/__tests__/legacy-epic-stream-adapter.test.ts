@@ -324,13 +324,14 @@ describe("createLegacyEpicStreamAdapter - onConnectionStatus", () => {
     latest().callbacks.onConnectionStatus("closed", reason, false, null);
 
     expect(host.statuses).toEqual([
-      { connection: "closed", closeReason: reason },
+      { connection: "closed", closeReason: reason, continuity: null },
     ]);
     expect(host.emitted).toEqual([
       {
         plane: "control",
         event: {
           kind: "transport-status",
+          continuity: null,
           durabilityStatusNegotiated: false,
           status: "closed",
           reason,
@@ -355,13 +356,14 @@ describe("createLegacyEpicStreamAdapter - onConnectionStatus", () => {
     latest().callbacks.onConnectionStatus(status, null, false, null);
 
     expect(host.statuses).toEqual([
-      { connection: "reconnecting", closeReason: null },
+      { connection: "reconnecting", closeReason: null, continuity: null },
     ]);
     expect(host.emitted).toEqual([
       {
         plane: "control",
         event: {
           kind: "transport-status",
+          continuity: null,
           durabilityStatusNegotiated: false,
           status,
           reason: null,
