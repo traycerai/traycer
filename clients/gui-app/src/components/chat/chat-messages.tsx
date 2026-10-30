@@ -3523,38 +3523,49 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       const landedAtSavedLocation = (): boolean => {
         const index = targetIndex();
         if (index === null) return false;
-        // A position the list has only ESTIMATED cannot say the reader has
-        // arrived. `initialScrollIndex`'s bootstrap resolves the saved row
-        // from the same estimates, so while the row is unmeasured both sides
-        // of the check below read one number and agree with each other
-        // wherever that number happens to point - the restore then accepts
-        // the bootstrap's own clamp and stands down for good, and nothing
-        // re-checks once measurement moves the row. Observed on CI, where the
-        // reader was left at `scrollTop` 4546 of 11319 content with the saved
-        // row never mounted, after the restore issued once and reported
-        // VALIDATED: every write after the bootstrap was scroll-anchoring
-        // compensation, not a landing.
-        //
-        // `sizeAtIndex` is measured-only (`sizesKnown`), with no fallback to
-        // the estimate, so an unmeasured row reads as not landed and the
-        // settle loop re-issues - which is what it already does, correctly,
-        // on the runs where measurement arrives before the first settle. The
-        // rows ABOVE the saved one stay estimated, and that is fine: it is the
-        // normal state of a virtualized list, and once the saved row has
-        // rendered the list's own anchoring holds it where the DOM put it.
-        // TEMPORARY DIAGNOSTIC - probe branch only. Records what the list had
-        // MEASURED for the saved row every time the restore asks whether the
-        // reader has arrived, so each `validated` and each refusal in the log
-        // is preceded by the size the decision was made on. A failure whose
-        // `validated` follows a measured row would mean this gate is not the
-        // whole defect.
+        // TEMPORARY DIAGNOSTIC - probe branch only, never for `main`. Asks, at
+        // every landing check, whether the list's own idea of where the saved
+        // row sits agrees with the DOM. `positionAtIndex` sums the rows ABOVE
+        // the saved one, which stay estimated in a virtualized list, so it can
+        // keep moving long after the saved row itself has measured - and the
+        // check below compares it against a `scrollTop` that the same
+        // estimates produced. Records:
+        //   mounted  - is the row's element in the scroller at all
+        //   domTop   - its real top, relative to the scroller's viewport
+        //   domConte - its real offset in the content (domTop + scrollTop)
+        //   posAt    - what `positionAtIndex` claims, plus the adjustment
+        //   scroll   - the `scrollTop` the check reads
+        //   want     - the `scrollTop` the check wants to see
+        // `domConte` against `posAt+adj` is the question: if they diverge at a
+        // `validated`, the list's position is not DOM truth and a landing
+        // check cannot be built on it.
         const probeMeasured = measuredSizeAtIndex(list, index);
-        probeRestorePath(
-          `land?row=${String(index)},measured=${
-            probeMeasured === null ? "none" : String(Math.round(probeMeasured))
-          }`,
+        const probeAdjustment = listTopOffsetAdjustmentRef.current;
+        const probePosition = list.getState().positionAtIndex(index);
+        const probeRow = scrollNode.querySelector(
+          `[data-message-id="${CSS.escape(messageId)}"]`,
         );
-        if (measuredSizeAtIndex(list, index) === null) return false;
+        const probeDomTop =
+          probeRow === null
+            ? null
+            : probeRow.getBoundingClientRect().top -
+              scrollNode.getBoundingClientRect().top;
+        const probeRound = (value: number): string => String(Math.round(value));
+        probeRestorePath(
+          [
+            `land?row=${String(index)}`,
+            `measured=${probeMeasured === null ? "none" : probeRound(probeMeasured)}`,
+            `mounted=${probeRow === null ? "no" : "yes"}`,
+            `domTop=${probeDomTop === null ? "none" : probeRound(probeDomTop)}`,
+            `domConte=${probeDomTop === null ? "none" : probeRound(probeDomTop + scrollNode.scrollTop)}`,
+            `posAt=${probeRound(probePosition)}`,
+            `adj=${probeRound(probeAdjustment)}`,
+            `posAt+adj=${probeRound(probePosition + probeAdjustment)}`,
+            `scroll=${probeRound(scrollNode.scrollTop)}`,
+            `want=${probeRound(probePosition + probeAdjustment - viewOffset)}`,
+            `viewOffset=${probeRound(viewOffset)}`,
+          ].join(","),
+        );
         return chatTimelineNavigationLandedAtLocation(
           {
             positionAtIndex: (positionIndex) =>

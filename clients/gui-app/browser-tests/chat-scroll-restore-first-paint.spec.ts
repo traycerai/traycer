@@ -523,7 +523,12 @@ async function attempt(
       const log: unknown = Reflect.get(window, "__restorePath");
       return Array.isArray(log) ? log.map((entry) => String(entry)) : [];
     });
-    problems.push(`RESTORE PATH: ${restorePath.join(" | ")}`);
+    // One entry per line: a `land?` entry now carries the DOM-vs-list
+    // comparison, so the joined form was long enough to risk truncation and
+    // too dense to read a single check out of.
+    problems.push(
+      `RESTORE PATH (${String(restorePath.length)}):\n    ${restorePath.join("\n    ")}`,
+    );
     const resting = await page.evaluate(() => {
       const node = document.querySelector<HTMLElement>(
         '[data-testid="chat-messages-scroll"]',
