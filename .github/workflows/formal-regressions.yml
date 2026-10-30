@@ -3,7 +3,7 @@ name: Formal regressions
 # The TLA+ model of the chat transcript's scrolling
 # (`clients/gui-app/formal/`, see its README.md), checked by TLC. The initial CI subset selected in expected.py
 # is explored breadth-first to the depth `expected.py` records for it, which
-# fits one 20-minute job on a 4-vCPU runner. The run passes when each selected config
+# fits one 45-minute job using the runner's available cores. The run passes when each selected config
 # violates exactly the invariants `expected.py` records, each with its reason:
 # a `_fixed` config holds the rest to its bound, and a config of the code
 # before a fix still reaches the violation that fix removes, so a model edit
@@ -138,8 +138,9 @@ jobs:
       )
       && needs.changes.outputs.run == 'true'
     runs-on: ubuntu-24.04
-    # Each config's depth is set so it runs well inside this on 4 vCPUs.
-    timeout-minutes: 20
+    # The above-tail case exceeded 20m on hosted runners; preserve its bound
+    # and allow roughly twice that observed duration plus setup headroom.
+    timeout-minutes: 45
     strategy:
       # One red config must not cancel the others: each proves different claims.
       fail-fast: false
@@ -162,7 +163,7 @@ jobs:
         working-directory: clients/gui-app/formal
         env:
           CONFIG: ${{ matrix.config }}
-          TLC_WORKERS: "4"
+          TLC_WORKERS: "auto"
           JAVA_XMX: 8g
         run: |
           set -euo pipefail
