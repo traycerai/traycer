@@ -26,6 +26,13 @@ interface Layout {
     readonly left: number;
   };
   readonly style?: Readonly<Record<string, string>>;
+  /** What `checkVisibility()` answers for it; absent means visible. */
+  readonly visible?: boolean;
+  /**
+   * Inside a `content-visibility: auto` ancestor that is off screen, so
+   * only `checkVisibility({ contentVisibilityAuto: true })` answers false.
+   */
+  readonly autoSkipped?: boolean;
 }
 
 interface ScrollCall {
@@ -134,6 +141,21 @@ function startFrame(canvas: boolean): Frame {
     return { ...rect, x: rect.left, y: rect.top };
   });
   define(proto, "getClientRects", () => [{}]);
+  // jsdom has no `checkVisibility`, so each element declares what the engine
+  // would answer. Default options, which is what the bootstrap asks: false
+  // for a box that is not generated and for contents an ancestor skips.
+  // `browser-tests/sandbox-frame-scroll.spec.ts` is where that answer is
+  // held to a real engine; here it is the input.
+  define(proto, "checkVisibility", function (this: Element, options: unknown) {
+    const layout = layouts.get(this) ?? {};
+    const asksAuto =
+      typeof options === "object" &&
+      options !== null &&
+      "contentVisibilityAuto" in options &&
+      options.contentVisibilityAuto === true;
+    if (asksAuto && layout.autoSkipped === true) return false;
+    return layout.visible ?? true;
+  });
   define(proto, "scrollTo", function (this: Element, options: unknown) {
     const given = options as {
       top: number;
@@ -650,62 +672,47 @@ describe("body overflow inside a frame", () => {
     ]);
   });
 
-  // A page whose contents are skipped. Every scroller here has room to
-  // reveal the target, which is the point: the engine still reveals nothing,
-  // so neither may the walk, and a page that happened to leave no room would
-  // pass whether the rule is there or not.
-  function skippedPage(
+  // A page the engine will not reveal into. Every scroller here has room,
+  // which is the point: the reveal must still not happen, and a page that
+  // happened to leave no room would pass whether the rule is there or not.
+  function unrevealable(
     frame: Frame,
-    skipped: Record<string, string>,
-    on: string,
-  ): { html: HTMLElement; ancestor: HTMLElement; target: HTMLElement } {
+    visible: boolean,
+    autoSkipped: boolean,
+  ): { html: HTMLElement; target: HTMLElement } {
     const doc = frame.window.document;
-    const ancestor = doc.createElement("div");
     const target = doc.createElement("button");
-    doc.body.append(ancestor);
-    ancestor.append(target);
+    doc.body.append(target);
     const roomy = {
       client: { height: 100, width: 100 },
       scroll: { height: 1000, width: 1000, top: 0, left: 0 },
     };
-    frame.place(doc.documentElement, {
-      ...roomy,
-      style: { ...VISIBLE, ...(on === "html" ? skipped : {}) },
-    });
-    frame.place(doc.body, {
-      ...roomy,
-      style: { ...VISIBLE, ...(on === "body" ? skipped : {}) },
-    });
-    frame.place(ancestor, { style: on === "an ancestor" ? skipped : {} });
+    frame.place(doc.documentElement, { ...roomy, style: VISIBLE });
+    frame.place(doc.body, { ...roomy, style: VISIBLE });
     frame.place(target, {
       rect: { top: 300, bottom: 340, left: 20, right: 60 },
-      style: on === "the target" ? skipped : {},
+      visible,
+      autoSkipped,
     });
-    return { html: doc.documentElement, ancestor, target };
+    return { html: doc.documentElement, target };
   }
 
-  const HIDDEN = { contentVisibility: "hidden" };
-
-  // The engine reveals nothing inside skipped contents, however much room
-  // the page leaves around them, and the target in there still reports a
-  // client rect, so the walk's empty-rect return never sees it.
-  it.each(["html", "body", "an ancestor"])(
-    "scrolls nothing into view when %s is skipped",
-    (on) => {
-      const frame = startFrame(false);
-      const { target } = skippedPage(frame, HIDDEN, on);
-
-      scrollIntoView(target, { block: "start" });
-
-      expect(frame.scrolls).toEqual([]);
-    },
-  );
-
-  // An element's own `hidden` skips what is inside it. The element itself is
-  // laid out and revealed as any other.
-  it("reveals a target that is itself skipped", () => {
+  // `checkVisibility()` is false exactly when the engine reveals nothing:
+  // the target is inside contents an ancestor skips, or has no box at all.
+  // Which pages those are is held to the engine in
+  // `browser-tests/sandbox-frame-scroll.spec.ts`.
+  it("scrolls nothing into view when the engine would reveal nothing", () => {
     const frame = startFrame(false);
-    const { html, target } = skippedPage(frame, HIDDEN, "the target");
+    const { target } = unrevealable(frame, false, false);
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([]);
+  });
+
+  it("reveals a target the engine would reveal", () => {
+    const frame = startFrame(false);
+    const { html, target } = unrevealable(frame, true, false);
 
     scrollIntoView(target, { block: "start" });
 
@@ -714,105 +721,45 @@ describe("body overflow inside a frame", () => {
     ]);
   });
 
-  // `auto` skips its contents only while they are off screen, and the engine
-  // reveals into them, so the walk must not take it for `hidden`.
-  it.each(["html", "body", "an ancestor"])(
-    "reveals into %s when it is content-visibility: auto",
-    (on) => {
-      const frame = startFrame(false);
-      const { html, target } = skippedPage(
-        frame,
-        { contentVisibility: "auto" },
-        on,
-      );
-
-      scrollIntoView(target, { block: "start" });
-
-      expect(frame.scrolls).toEqual([
-        { scroller: html, top: 300, left: 0, behavior: "auto" },
-      ]);
-    },
-  );
-
-  // `content-visibility` takes effect only where layout containment can
-  // apply. On these the computed value still reads `hidden` while the engine
-  // reveals as though it were not set, each measured in Chrome against its
-  // own control.
-  it.each([
-    "contents",
-    "inline",
-    "table",
-    "inline-table",
-    "table-row-group",
-    "table-header-group",
-    "table-footer-group",
-    "table-row",
-    "ruby",
-  ])(
-    "reveals past a skipped ancestor that display: %s makes inert",
-    (display) => {
-      const frame = startFrame(false);
-      const { html, target } = skippedPage(
-        frame,
-        { ...HIDDEN, display },
-        "an ancestor",
-      );
-
-      scrollIntoView(target, { block: "start" });
-
-      expect(frame.scrolls).toEqual([
-        { scroller: html, top: 300, left: 0, behavior: "auto" },
-      ]);
-    },
-  );
-
-  // A display containment does apply to, so the same ancestor skips.
-  it.each(["block", "flex", "grid", "inline-block", "table-cell"])(
-    "scrolls nothing into view past a skipped display: %s ancestor",
-    (display) => {
-      const frame = startFrame(false);
-      const { target } = skippedPage(
-        frame,
-        { ...HIDDEN, display },
-        "an ancestor",
-      );
-
-      scrollIntoView(target, { block: "start" });
-
-      expect(frame.scrolls).toEqual([]);
-    },
-  );
-
-  // The walk is over the flat tree, so a hidden element between a slot and
-  // its host skips the light-DOM element assigned to that slot, which no
-  // chain of `parentElement` would reach.
-  it("scrolls nothing into view when a slot's hidden wrapper skips it", () => {
+  // `scrollIntoViewIfNeeded` and `focus` reveal through the same walk, so
+  // the rule has to hold for them too.
+  it("skips the reveal of an unrevealable target through focus", () => {
     const frame = startFrame(false);
-    const doc = frame.window.document;
-    const host = doc.createElement("div");
-    const target = doc.createElement("button");
-    doc.body.append(host);
-    host.append(target);
-    const wrapper = doc.createElement("div");
-    const slot = doc.createElement("slot");
-    wrapper.append(slot);
-    host.attachShadow({ mode: "open" }).append(wrapper);
-    const roomy = {
-      client: { height: 100, width: 100 },
-      scroll: { height: 1000, width: 1000, top: 0, left: 0 },
-    };
-    frame.place(doc.documentElement, { ...roomy, style: VISIBLE });
-    frame.place(doc.body, { ...roomy, style: VISIBLE });
-    frame.place(host, { style: {} });
-    frame.place(wrapper, { style: HIDDEN });
-    frame.place(slot, { style: {} });
-    frame.place(target, {
-      rect: { top: 300, bottom: 340, left: 20, right: 60 },
-    });
+    const { target } = unrevealable(frame, false, false);
+
+    target.focus();
+
+    expect(frame.nativeFocusArgs).toEqual([[{ preventScroll: true }]]);
+    expect(frame.scrolls).toEqual([]);
+  });
+
+  // A target inside an off-screen `content-visibility: auto` ancestor is
+  // skipped contents the engine reveals into anyway. Measured in Chrome:
+  // the default answer is true and the reveal scrolls, while asking with
+  // `contentVisibilityAuto` answers false, which would swallow it.
+  it("reveals into an off-screen content-visibility: auto ancestor", () => {
+    const frame = startFrame(false);
+    const { html, target } = unrevealable(frame, true, true);
 
     scrollIntoView(target, { block: "start" });
 
-    expect(frame.scrolls).toEqual([]);
+    expect(frame.scrolls).toEqual([
+      { scroller: html, top: 300, left: 0, behavior: "auto" },
+    ]);
+  });
+
+  // An engine with no `checkVisibility` is left alone: the reveal behaves as
+  // it did before the rule rather than skipping every page.
+  it("reveals as before on an engine without checkVisibility", () => {
+    const frame = startFrame(false);
+    const { html, target } = unrevealable(frame, false, false);
+    Reflect.deleteProperty(frame.window.Element.prototype, "checkVisibility");
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([
+      { scroller: html, top: 300, left: 0, behavior: "auto" },
+    ]);
   });
 });
 

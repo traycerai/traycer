@@ -111,6 +111,8 @@ for (const reveal of [
     from: 0,
     block: "start",
   },
+  { command: "skipped-block", target: "#mid", from: 0, block: "start" },
+  { command: "skipped-details", target: "#mid", from: 0, block: "start" },
   {
     command: "covering-nearest",
     target: "#cover",

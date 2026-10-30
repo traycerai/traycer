@@ -339,47 +339,33 @@ function bootstrapMain(config: BootstrapConfig): void {
     const root = element.getRootNode();
     return root instanceof ShadowRoot ? root.host : null;
   };
-  // Nothing inside skipped contents is scrolled to: the engine reveals
-  // nothing in there, however much room the page leaves around it. A target
-  // in there still has a client rect, so the walk cannot tell from the
-  // target alone.
+  // Nothing inside skipped contents is scrolled to: an ancestor's
+  // `content-visibility: hidden` skips what is inside it, and the engine
+  // reveals nothing in there however much room the page leaves around it.
+  // A target in there still has a client rect, so the rect above cannot
+  // tell.
   //
-  // It is an ancestor's `hidden` that skips the target. An element's own
-  // skips what is inside it, and the element itself is still revealed; and
-  // `auto` skips its contents only while they are off screen, which the
-  // engine reveals into.
+  // `checkVisibility` is the engine's own answer to that, and the only one
+  // worth asking. Reading the ancestors' computed style cannot replace it:
+  // `content-visibility` applies only where layout containment can, and the
+  // computed `display` does not say where that is — `<svg>` and a plain
+  // `<label>` are both `inline`, and the engine skips the first and ignores
+  // the second. It is also computed over the real flat tree, so it sees a
+  // closed shadow root, `<details>` included, which no walk from here can
+  // reach: `assignedSlot` is null for a closed root.
   //
-  // `content-visibility` takes effect only where layout containment can
-  // apply. Everywhere else the computed value still reads `hidden` and the
-  // engine reveals as though it were not set, so the display is read too:
-  // a box that is never generated, a non-atomic inline, and the internal
-  // table and ruby boxes that are not containers themselves. Measured in
-  // Chrome, which also ignores it on `table` and `inline-table`, where the
-  // specification does not.
+  // Default options are the question being asked. They answer false for a
+  // box that is not generated and for skipped contents, and leave out
+  // `visibility`, `opacity` and the off-screen skipping of a
+  // `content-visibility: auto` ancestor, each of which the engine reveals
+  // into. An element's own `hidden` skips only what is inside it, so the
+  // element itself still answers true.
   //
-  // This does not see a hidden element between a `slot` and its host in a
-  // CLOSED shadow root: `assignedSlot` is null there, so the flat-tree walk
-  // goes straight from the slotted element to the host and never enters the
-  // shadow tree. Such a reveal still scrolls. The scroller walk below misses
-  // the same elements, from the same `parentOf`.
-  const isSkipped = (target: Element): boolean => {
-    for (
-      let element = parentOf(target);
-      element !== null;
-      element = parentOf(element)
-    ) {
-      const style = window.getComputedStyle(element);
-      if (
-        style.contentVisibility === "hidden" &&
-        !/^(?:contents|inline|table|inline-table|table-row-group|table-header-group|table-footer-group|table-row|ruby)$/.test(
-          style.display,
-        )
-      ) {
-        return true;
-      }
-    }
-    return false;
-  };
+  // An engine without the method is left alone, which is how the reveal
+  // behaved before this rule: a page it would have skipped is scrolled to
+  // as any other.
+  const isSkipped = (target: Element): boolean =>
+    "checkVisibility" in target && !target.checkVisibility();
   // Containment of any kind, on the root or on the body. `contain` names it;
   // `container-type` and `content-visibility` apply it without naming it, and
   // leave `contain` itself `none`.
@@ -394,9 +380,10 @@ function bootstrapMain(config: BootstrapConfig): void {
   // cannot change the answer. This is asked only of the root and the body,
   // and only to decide whether the walk treats the body as a scroller of
   // its own — which matters only when the body is an ancestor of the
-  // target, and `isSkipped` walks that same chain first. So whenever a
-  // `hidden` here would be read, the reveal is already over. `auto` is
-  // containment the engine does reveal into, and counts.
+  // target, and a target under a `hidden` root or body is skipped contents,
+  // which `isSkipped` has already turned the reveal back on. So whenever a
+  // `hidden` here would matter, the reveal is over. `auto` is containment
+  // the engine does reveal into, and counts.
   const contains = (element: Element | null): boolean => {
     if (element === null) return false;
     const style = window.getComputedStyle(element);
