@@ -7,7 +7,7 @@ relay. **This document is the source of truth the T11 host responder builds to**
 machine-checkable form of everything here lives in `remote/protocol.ts`.
 
 Governs Architecture **§3** (mux/transport), **§9** (client rows). Carries
-**R4-E3** (defer resume tickets), **R4-A2** (bridging-never-identity), **R4-D1**
+**R4-E3** (full attach as the fallback recovery path), **R4-A2** (bridging-never-identity), **R4-D1**
 (reserved authz slot), **R4-D2** (peer-enforce host standing).
 
 > Status: client transport implemented in T12. The host responder (T11) is
@@ -64,8 +64,10 @@ its registry-published static X25519 key.
   `DEFAULT_REPLAY_WINDOW_SIZE`). All subsequent DATA frames are Noise transport
   frames wrapping mux frames.
 
-A **fresh Noise session is built per session, including per resume** — forward
-secrecy per session.
+A **fresh Noise session is built per session**, so per full attach — forward
+secrecy per session. A resume (§9) keeps the session, and with it its Noise
+channel: no handshake runs, and frames resent after one are sealed again under
+fresh counters.
 
 ## 3. Mux frame binary layout
 
@@ -96,45 +98,48 @@ Fixed 15-byte header, big-endian:
 | 8     | `FATAL`             | 0 or ≥1  | `{details}` (`FatalErrorDetails`; streamId 0 = whole session)                                                                           |
 | 9     | `CREDIT`            | 0        | `{credits}` (bulk send-window replenish)                                                                                                |
 | 10    | `REAUTH_NOTICE`     | 0        | `{standingUntil}` — host-standing evidence (R4-D2)                                                                                      |
-| 11    | `RESUME`            | 0        | **RESERVED** (for resume) — not sent in v1                                                                                              |
+| 11    | `RESUME`            | 0        | `{received, attempt}` — always `seq` 0, unchunked and uncompressed; see §9                                                              |
 | 12    | `CREDENTIAL_UPDATE` | 0        | `{bearer, memberCredential}` — in-place bearer rotation, or a team host's member credential with `bearer: null` (each capability-gated) |
 
 `streamId` allocation: the client allocates monotonically from 1. A **subscribe
-streamId is stable for the subscription's life across resumes**; a **unary
-streamId is ephemeral** (freed when its `RESPONSE` arrives). On resume the client
-re-sends `SUBSCRIBE` on the same streamId, so the host re-learns
-`streamId → subscription` from the frames.
+streamId is stable for the subscription's life across full attaches**; a **unary
+streamId is ephemeral** (freed when its `RESPONSE` arrives). On a full attach the
+client re-sends `SUBSCRIBE` on the same streamId, so the host re-learns
+`streamId → subscription` from the frames. A resume sends no `SUBSCRIBE`: the
+host still holds the subscription.
 
 ## 4. Session open / ack (identity, R4-A2 / R4-D1)
 
-`OPEN` (streamId 0) is sent immediately after the Noise handshake **and again on
-every resume**:
+`OPEN` (streamId 0) is sent immediately after the Noise handshake, **so again on
+every full attach**. A resume sends none, because the session it continues is
+already authenticated:
 
 ```jsonc
 {
   "muxVersion": 1,
-  "bearer": "<user JWS>",          // R4-A2: re-presented on attach AND resume
+  "bearer": "<user JWS>",          // R4-A2: re-presented on every full attach
   "manifest": {                     // see "Manifest shape" below - all three keys REQUIRED
     "rpc": { …ConnectionManifest… },         // released floor ONLY
     "optionalRpc": { …ConnectionManifest… }, // every non-floor method
     "stream": { …ConnectionManifest… }
   },
   "authz": null,                    // R4-D1 RESERVED: versioned session-grant slot (team hosts, v3)
-  "resume": null                    // R4-E3 RESERVED: always null (v1 = fresh full attach)
+  "resume": null                    // R4-E3 RESERVED: always null (the RESUME frame is §9, not this slot)
 }
 ```
 
 - **Bridging-never-identity (R4-A2).** The attach grant authorizes relay
   _bridging_ only. A fresh Noise session is **not** an authenticated session
   until `OPEN` re-presents the `bearer`. The host MUST verify the bearer
-  (JWKS + `token.id == ownerUserId`) on **every** `OPEN`, attach and resume
-  alike — a grant/ticket MUST NEVER restore identity.
+  (JWKS + `token.id == ownerUserId`) on **every** `OPEN` — a grant, a ticket or
+  a relay resume key MUST NEVER restore identity. A key only moves a relay `sid`
+  to a new socket; what proves the session is the Noise channel it still holds.
 - **Reserved authz slot (R4-D1).** `authz` is always `null` in v1. The host MUST
   accept `null` and ignore any populated slot. It exists so a future
   `session-grant` (own `typ`/`aud`/signing key) enables team hosts without a
   breaking `OPEN` change.
-- **Reserved resume descriptor (R4-E3).** `resume` is always `null`. v1 resume is
-  a fresh full attach (new grant + new Noise + fresh `OPEN`).
+- **Reserved resume descriptor (R4-E3).** `resume` is always `null`. Continuing
+  a session does not use it: see `RESUME` in §9.
 
 `OPEN_ACK` (streamId 0):
 
@@ -144,6 +149,10 @@ every resume**:
   "capabilities": ["credentialUpdate"]         // additive; e.g. in-place bearer rotation
 }
 ```
+
+`SESSION_CAPABILITY_RESUME` (`"session.resume"`) in both peers' capabilities
+turns on §9's session continuity; a session without it recovers by full attach
+only.
 
 A team host's session-grant session offers `memberCredential` in place of
 `credentialUpdate`. The host spends only a member credential the client hands
@@ -191,15 +200,22 @@ method either side lacks never fatals the session.
   is not yet ready (provably pre-send); once the `REQUEST` is enqueued, any drop
   surfaces as a plain non-retryable error. Exact local parity — the host needs no
   retry/dedup handling.
+- With session continuity (§9) a call survives a resume: its `REQUEST` is
+  resent if the host missed it and its `RESPONSE` arrives as usual. Readiness
+  holds through the mask, so a call made then is queued rather than refused. If
+  the session rebuilds, a call whose frame was never sealed is rejected as
+  retryable, because it provably went nowhere, and a sealed one fails as above.
 
 ## 6. Streams
 
 - `SUBSCRIBE` opens a logical stream; inbound `STREAM_FRAME`s carry the contract
   envelope as json and its payload as the frame binary (adjacency preserved
   inside one frame). Outbound frames while the session is not ready are dropped
-  (fire-and-forget parity; the durable channel / CRDT reconciles above).
-- **Shared fate:** one transport drop reconnects ALL streams. The client re-sends
-  every live `SUBSCRIBE` after `OPEN_ACK` on resume.
+  (fire-and-forget parity; the durable channel / CRDT reconciles above). The one
+  exception is a `held` stream (§9), whose frames are queued, delivered after
+  the gap on a resume and discarded on a rebuild.
+- **Shared fate:** a rebuild reconnects ALL streams. The client re-sends every
+  live `SUBSCRIBE` after `OPEN_ACK` on a full attach. A resume re-sends none.
 
 ## 7. QoS classes, priority scheduling, credits (audit C1/C2)
 
@@ -243,10 +259,25 @@ Per-stream FIFO keeps a message's chunks contiguous, so the receiver reassembles
 by accumulating a stream's chunk binaries until `CHUNK_LAST` (`ChunkReassembler`).
 Control/session frames are never chunked.
 
-## 9. Full-attach resume (R4-E3 — the primary recovery path)
+## 9. Recovery: full attach, resume and relink (R4-E3)
+
+There are two ways back from a lost relay leg. A **full attach** builds a new
+session and works against any peer. A **resume** keeps the session and continues
+it on the same Noise channel, and needs both peers to have negotiated
+`session.resume` (§4). A resume that fails falls back to a full attach, which
+this document calls a **rebuild**, so a drop that does not heal in time ends
+where it always did.
+
+The client separates the two things a connection used to be. The **leg** is the
+socket and what is bound to it: the relay's re-auth deadline and the dial
+timeouts. The **session** is everything else: the Noise channel, scheduler,
+reassembler, credits, manifest, ledger, relay `sid` and resume key. A resume
+keeps the session; a rebuild discards both.
+
+### Full attach
 
 A relay deploy drops every socket by documented Cloudflare behavior — treat it as
-routine. **v1 resume = a fresh full attach**, not a ticket:
+routine.
 
 ```mermaid
 sequenceDiagram
@@ -256,7 +287,7 @@ sequenceDiagram
   participant H as Host
   Note over C,R: socket drop (relay deploy / error / peer_gone:reauth_timeout)
   C->>CS: POST /hosts/:id/attach-grant (fresh, one-time)
-  C->>R: attach(grant) → attach_ack{sid}
+  C->>R: attach(grant, park=1) → attach_ack{sid, resumeKey}
   C->>H: Noise-NK (new ephemerals → new session keys)
   C->>H: OPEN{bearer, manifest, authz:null, resume:null}   // re-presents bearer (A2)
   H-->>C: OPEN_ACK
@@ -265,17 +296,150 @@ sequenceDiagram
 ```
 
 - **Backoff resets ONLY at the ready boundary** (transport open · E2E handshake ·
-  session open · subscriptions restored), never on socket-open.
-- In-flight unary calls are rejected non-retryably on drop (post-send from the
-  caller's view — the host may have applied them).
+  session open · subscriptions restored), never on socket-open, and only after
+  the connection has survived there for `RECONNECT_STABLE_RESET_MS`.
+- In-flight unary calls are handled as in §5.
 - **Reconcile** of in-flight terminal input rides the terminal action protocol's
   ack watermark — that is **T13**; the mux only guarantees per-stream FIFO +
   re-subscribe and reserves `seq` for the watermark.
 
-### Host blip is NOT a resume — a re-attach RE-HANDSHAKES
+Every relay attach carries `grant`, `park=1` and, once a leg has been replaced,
+`prev=<code>:<reason>` (at most 64 characters, telemetry only). A relay that
+predates a field ignores it.
+
+### Session continuity: the `RESUME` exchange
+
+Each peer keeps a **ledger** from its first transport mux frame: a count of what
+it has sent, a count of what it has received, and a ring of up to 5 MiB of sent
+frames. `RESUME` frames are in neither. If `OPEN_ACK` does not carry
+`session.resume`, the ledger is dropped.
+
+An exchange runs when the client has reason to think the path is back, either a
+`host_attached` or the same `sid` in a relink's ack:
+
+1. The client pauses its scheduler and waits for the frames it is still
+   decrypting and the write it is still sealing, so `received` is exact and
+   nothing overtakes the `RESUME`.
+2. It sends `RESUME{received, attempt}`. `attempt` numbers the session's
+   exchanges 1, 2, 3 and so on, across legs. From here it decrypts and discards
+   every inbound frame without counting it, until a `RESUME` carrying that
+   `attempt`. An answer to another attempt is ignored, and so is whatever follows
+   it.
+3. The host answers `RESUME{received, attempt}` with its own count and the
+   client's `attempt`, then resends what the client lacks. A later `RESUME`
+   supersedes a replay still running.
+4. The matching answer opens inbound. The client trims its ring to the host's
+   count and resends the gap ahead of both queues. Resent frames go through the
+   pacer, because the relay limits frame rate whatever the frames are, and spend
+   no bulk credit, because the first send already did.
+5. When the last resent frame is written the pause ends and the session is live.
+
+A second `host_attached` restarts the exchange with the next `attempt`. A
+`host_detached` before step 5 cancels it, including a replay already running, and
+the session returns to where it was with its original deadlines. The exchange
+rebuilds if the answer does not come within `RESUME_ACK_MS` (5 s), if it is
+malformed, if the gap is no longer in the ring, or if a session `FATAL` arrives
+during the wait.
+
+A host that holds no session for the `sid` builds a fresh responder, so the
+client's sealed `RESUME` fails as stale and the host resets the session. A
+`RESUME` arriving on a live session is answered in place: the relay can supersede
+a client leg the host never saw die.
+
+| State       | `isReady()`                  | Meaning                                                                 |
+| ----------- | ---------------------------- | ----------------------------------------------------------------------- |
+| `live`      | true                         | Traffic flows.                                                          |
+| `masked`    | true                         | Host or own leg lost, within `RESUME_MASK_MS` (5 s). Nothing announced. |
+| `down`      | false                        | Past the mask. The session is retracted, as on any loss.                |
+| `resuming`  | as it was                    | The exchange above; ends live, or on the resumed edge from `down`.      |
+| `relinking` | as it was, the mask expiring | No leg; a claim is being dialed.                                        |
+
+Streams tell the truth about all of this through `StreamContinuity`, the fourth
+argument of a status change:
+
+- Inside the mask nothing is announced.
+- At the mask's end an open stream goes `reconnecting` with `"held"`. Its
+  negotiated version stays, and the subscription is not lost: a consumer must not
+  reset for a snapshot that will not come. Frames it sends are queued (§6).
+- On the resumed edge it goes `open` with `"continued"`, and no `SUBSCRIBE` is
+  sent. The edge reports dial success and announces a session under ids of their
+  own, because the authority de-duplicates by both.
+- When `RESUME_HOLD_MS` (60 s) passes, or on a rebuild, it goes `reconnecting`
+  with `null`, the plain contract: expect a reset and a re-subscribe.
+- A stream whose subscribe was never answered is not held. It stays `reconnecting`
+  and opens with `null` on its first frame.
+
+The local transport never emits `"held"` or `"continued"`.
+
+A host that never returns is no slower to detect: retraction at the mask's end
+hands the authority the same evidence as any other loss. A `host_attached` past
+the hold rebuilds instead of attempting a `RESUME` that could only fail, and a
+hold flip waits for an exchange in progress or a claim being dialed, either of
+which can still prove the session alive.
+
+### Own-leg loss: the relink
+
+The relay can **park** a client's session: when a socket that declared `park=1`
+closes with 1005, 1006 or a code from 4000 to 4007 while the host leg declared it
+too, the relay keeps the `sid` for 60 s rather than closing it. 1000 and 1001 are
+a person's action or a deliberate teardown, and close as ever.
+
+`attach_ack{sid, resumeKey}` carries a key for the session's life, and it is what
+claims the `sid` back. A secret: never log it. It is not an identity (§4). A relay
+that sends no key cannot park, so an own-leg loss there is an ordinary full attach.
+
+With a key in hand and a ready, resume-negotiated session, every loss of the
+client's own leg enters `relinking`: a socket close or error, a failed send, a
+missed-pong or wake-probe failure, `forceReconnect`, `requestSessionReconnect`, and
+the mobile wake path, which calls `forceReconnect`. So `forceReconnect` keeps the
+session and replaces only the leg; before ready, or with no key, it drops the
+connection and redials.
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant CS as Coordination
+  participant R as Relay
+  participant H as Host
+  Note over C,R: own leg lost, session kept, mask starts or continues
+  C-xR: close 4007 relay-relink (if the client gives the leg up itself)
+  R->>H: session_parked{sid}
+  C->>CS: POST /hosts/:id/attach-grant (fresh, as ever)
+  C->>R: attach(grant, park=1, resume=sid:key, prev)
+  alt same sid
+    R-->>C: attach_ack{sid, resumeKey}
+    C->>H: RESUME{received, attempt}   // no Noise, no OPEN, no SUBSCRIBE
+  else row expired: a fresh sid
+    R-->>C: attach_ack{newSid, newKey}
+    Note over C,H: rebuild on this leg: Noise, OPEN, re-SUBSCRIBE
+  end
+```
+
+- **4007 `relay-relink`** is the code for a leg the client gives up while keeping
+  the session, because 1000 would end it for good. The socket's own failure codes
+  4000 to 4006 are unchanged and park too.
+- The dial is today's immediate recovery rung. A dial that fails or never acks
+  walks the ordinary ladder and claims again with the same key: the relay may have
+  moved the `sid` to a leg whose ack was lost, and only the key takes it back.
+- The client always claims. The hold does not apply to its own loss, because
+  only the relay's answer can say whether the session is still there. Past the
+  relay's 60 s the ack carries a fresh `sid`, which is what a phone back from a
+  long background usually sees.
+- A fresh `sid` is a full attach on the leg already open. Another dial would cost
+  a second grant and attach on the most visible path there is, opening the app.
+  The old session is discarded in the ack's own turn, and anything the relay says
+  before the new Noise channel exists waits in arrival order.
+- Late events from a leg the session has left do nothing. Socket callbacks check
+  the leg's identity, not the generation, because a relink keeps the generation.
+
+### Host blip
+
+Without session continuity, a host blip is NOT a resume: a re-attach
+RE-HANDSHAKES.
 
 `host_detached` (relay control) → the client **pauses** the scheduler (holding
-frames, not losing them to a host-less relay) and marks streams reconnecting.
+frames, not losing them to a host-less relay). A resume-negotiated ready session
+then takes the mask as above. Any other session marks streams reconnecting.
 
 The same frame is the relay's answer to a client that has **no host to reach**:
 it is sent right after `attach_ack` when no host leg is attached, and in reply
@@ -300,28 +464,30 @@ host stayed away — 88,269 attaches a day across 20 hosts on 2026-09-24, each
 minting a grant and waking the relay object. Relays no longer emit
 `peer_gone{host_gone}`; the reason stays in the enum for older relays.
 
-`host_attached` → **full attach, always**: fresh `NoiseChannel`, fresh relay
-dial, fresh `open{bearer}`. The host discards every client Noise session on any
-uplink close, and the relay emits this frame from exactly one site — the host's
-re-attach — so the frame is proof that the responder this session was built
-against is gone. That holds whether or not this client ever saw the matching
-`host_detached`: a client that missed it is left holding a channel nothing can
-answer, and its only other exit is the 15-min standing watchdog (§10). It holds
-mid-handshake too, where the rebuild replaces a phase timeout that would
-otherwise land as a _refusal_. The loss is reported `indeterminate`, never a
-host refusal: the frame says the host is ATTACHED, and it is the redial's own
-outcome that speaks about the host.
+`host_attached` → a resume-negotiated ready session inside the hold starts the
+exchange above. Otherwise **full attach**: fresh `NoiseChannel`, fresh relay
+dial, fresh `open{bearer}`. A host without continuity discards every client Noise
+session on any uplink close, and the relay emits this frame from exactly one
+site — the host's re-attach — so the frame is proof that the responder this
+session was built against is gone. That holds whether or not this client ever
+saw the matching `host_detached`: a client that missed it is left holding a
+channel nothing can answer, and its only other exit is the 15-min standing
+watchdog (§10). It holds mid-handshake too, where the rebuild replaces a phase
+timeout that would otherwise land as a _refusal_. The loss is reported
+`indeterminate`, never a host refusal: the frame says the host is ATTACHED, and
+it is the redial's own outcome that speaks about the host.
 
-A socket drop, a `peer_gone`/`killed`, and a proven session silence (§11) reach
-the same full attach. `peer_gone`/`killed` reason `revoked` is **terminal**.
-`host_gone` / `reauth_timeout` → full-resume with ordinary backoff. These two
+A `peer_gone`/`killed` and a proven session silence (§11) reach the same full
+attach, and so does a socket drop that cannot relink. `peer_gone`/`killed` reason
+`revoked` is **terminal**.
+`host_gone` / `reauth_timeout` → full attach with ordinary backoff. These two
 name the HOST's leg — it left, or it failed to re-present standing — so they are
 the only relay kills reported on the `host-transport-plane`, and a handshake
 timeout on the redial that follows is a refusal.
 `session_reset` (the host asked the relay to drop this client leg because it can
-no longer serve the Noise session behind it) → full-resume at the ladder's
+no longer serve the Noise session behind it) → full attach at the ladder's
 **current** rung: the host is alive and waiting for a re-handshake.
-`policy_violation` and every unknown/future reason → full-resume at the capped
+`policy_violation` and every unknown/future reason → full attach at the capped
 backoff rung. `session_reset`, `policy_violation` and the unknown reasons report
 an indeterminate relay loss, never a host refusal: they describe the relay's
 handling of this leg, not the host's willingness to serve it.
@@ -340,8 +506,9 @@ handling of this leg, not the host's willingness to serve it.
   answers keepalives at its own edge and re-announces host attachment on every
   burst, so a client that let those reset the clock would re-arm its own
   watchdog forever against a host that had stopped answering. (A relay
-  `host_attached` now rebuilds the session anyway — §9 — so there is nothing
-  left to reset.) **⚠️ reconcile:** T11 SHOULD emit
+  `host_attached` now rebuilds the session or starts a resume — §9 — and neither
+  leaves it to reset; the watchdog is re-armed when a resume completes.)
+  **⚠️ reconcile:** T11 SHOULD emit
   `REAUTH_NOTICE{standingUntil}` after each successful relay re-auth so the
   client has an explicit host-standing signal (the future P2P swap turns this
   into a CS-signed assertion); absent it, the client falls back to
@@ -369,13 +536,14 @@ all arrive in-channel and are all counted, while a rejection with the counter
 unchanged means the probe was never asked (a method this host does not
 advertise, an enqueue that threw) and cancels the verdict instead. A session
 that is still silent when the timer fires is dropped `indeterminate` and
-redialed. An idle session with nothing outstanding never probes.
+redialed. An idle session with nothing outstanding never probes, and neither does
+one waiting for its host to come back (§9): that silence has an owner already.
 
 ## 12. Reserved / deferred (do not build in v1, keep additive)
 
-| Field / type                        | Reserve  | Why                                                      |
-| ----------------------------------- | -------- | -------------------------------------------------------- |
-| `OPEN.authz`                        | R4-D1    | versioned session-grant slot for team hosts (v3)         |
-| `OPEN.resume` + `RESUME` frame type | R4-E3    | resume-ticket fast-follow; v1 is fresh full attach       |
-| `REQUEST.idempotencyKey`            | audit C3 | later per-method opt-in dedup                            |
-| `CREDENTIAL_UPDATE` capability      | —        | in-place bearer rotation; capability-gated on `OPEN_ACK` |
+| Field / type                   | Reserve  | Why                                                      |
+| ------------------------------ | -------- | -------------------------------------------------------- |
+| `OPEN.authz`                   | R4-D1    | versioned session-grant slot for team hosts (v3)         |
+| `OPEN.resume`                  | R4-E3    | always `null`; session continuity uses `RESUME` (§9)     |
+| `REQUEST.idempotencyKey`       | audit C3 | later per-method opt-in dedup                            |
+| `CREDENTIAL_UPDATE` capability | —        | in-place bearer rotation; capability-gated on `OPEN_ACK` |
