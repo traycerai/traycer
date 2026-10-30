@@ -56,10 +56,15 @@ type MediaSource = "host" | "cloud";
  * unary replies under the 30 s remote deadline, which is how a 5 MB recording
  * became unplayable on a bad link. So another machine's host answers with
  * its cloud URL, and this machine's host is asked for one byte: the byte
- * means the file is on its disk and plays from there for free, "downloading"
+ * means the file is on its disk and plays from there for free; any other
+ * answer, a failed probe, or no answer within {@link PROBE_DEADLINE_MS}
  * means it plays from the cloud this time while the host finishes fetching
- * it for the next. An unpublished object exists only on its host.
+ * it for the next. The deadline matters because a host asked for a sha it
+ * does not hold starts the fetch and holds the reply up to 3 s before saying
+ * so. An unpublished object exists only on its host.
  */
+const PROBE_DEADLINE_MS = 1_000;
+
 function useMediaSource(
   props: {
     readonly epicId: string;
@@ -86,12 +91,17 @@ function useMediaSource(
     cacheKeyIdentity: undefined,
     options: { enabled: source === null, staleTime: 0 },
   });
+  useEffect(() => {
+    if (source !== null) return;
+    const timer = setTimeout(() => setSource("cloud"), PROBE_DEADLINE_MS);
+    return () => clearTimeout(timer);
+  }, [source]);
   // Latched from the first answer during render: the method's policy keeps
   // polling a `downloading` answer, and a later "bytes" must not move a
   // playing element off the cloud.
   const answer = probe.data?.kind;
-  if (source === null && answer !== undefined) {
-    setSource(answer === "downloading" ? "cloud" : "host");
+  if (source === null && (answer !== undefined || probe.isError)) {
+    setSource(answer === "bytes" ? "host" : "cloud");
   }
   return source;
 }
