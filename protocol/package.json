@@ -21,7 +21,7 @@
     "./host/lifecycle": "./src/host/lifecycle/index.ts",
     "./host/*": "./src/host/*.ts",
     "./host-transport/mux": "./src/host-transport/mux.ts",
-    "./host-transport/resume-ledger": "./src/host-transport/remote/resume-ledger.ts",
+    "./host-transport/resume-ledger": "./src/host-transport/resume-ledger.ts",
     "./host-transport/chunking": "./src/host-transport/chunking.ts",
     "./host-transport/backoff": "./src/host-transport/backoff.ts",
     "./host-transport/dial-priority": "./src/host-transport/dial-priority.ts",
@@ -102,8 +102,8 @@
         "import": "./dist/src/host-transport/mux.js"
       },
       "./host-transport/resume-ledger": {
-        "types": "./dist/src/host-transport/remote/resume-ledger.d.ts",
-        "import": "./dist/src/host-transport/remote/resume-ledger.js"
+        "types": "./dist/src/host-transport/resume-ledger.d.ts",
+        "import": "./dist/src/host-transport/resume-ledger.js"
       },
       "./host-transport/chunking": {
         "types": "./dist/src/host-transport/chunking.d.ts",

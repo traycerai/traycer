@@ -10,14 +10,15 @@ import {
   BULK_CHUNK_SIZE_BYTES,
   ChunkReassembler,
   OutboundChunkSource,
-} from "../../chunking";
+} from "../chunking";
 import {
   decodeMuxFrame,
   encodeMuxFrame,
   MuxFrameType,
   type MuxFrameTypeValue,
+  type ResumePayload,
   QosClass,
-} from "../../mux";
+} from "../mux";
 import {
   encodeResumeFrame,
   parseResumeFrame,
@@ -25,7 +26,7 @@ import {
   ResumeLedger,
   type ResumeGap,
   type ResumeGapReport,
-} from "../resume-ledger";
+} from "@traycer/protocol/host-transport/resume-ledger";
 
 const EMPTY = new Uint8Array(0);
 const MIB = 1024 * 1024;
@@ -131,8 +132,8 @@ describe("ResumeLedger counting", () => {
   it("does not count or retain RESUME on either side", () => {
     const { ledger, reports } = newLedger();
     ledger.append(plain(MuxFrameType.OPEN, 20, 1));
-    expect(ledger.append(encodeResumeFrame(0))).toBeNull();
-    expect(ledger.receive(encodeResumeFrame(5))).toBeNull();
+    expect(ledger.append(encodeResumeFrame(0, 1))).toBeNull();
+    expect(ledger.receive(encodeResumeFrame(5, 1))).toBeNull();
     expect([ledger.sent, ledger.received]).toEqual([1, 0]);
     framesOf(ledger.gapFrom(0));
     expect(reports[0]).toMatchObject({ ringFrames: 1, ringBytes: 20 });
@@ -375,6 +376,8 @@ class Peer {
   readonly authored: Uint8Array[] = [];
   readonly authoredMessages: Dispatched[] = [];
   readonly dispatched: Dispatched[] = [];
+  /** The client's last RESUME attempt; it only ever increases. */
+  resumeAttempt = 0;
   private readonly reassembler = new ChunkReassembler(undefined);
   private seq = 0;
 
@@ -420,6 +423,12 @@ class Peer {
 }
 
 type LinkMode = "blackhole" | "held";
+
+function parseResume(plaintext: Uint8Array): ResumePayload {
+  const payload = parseResumeFrame(decodeMuxFrame(plaintext));
+  if (payload === null) throw new Error("invalid RESUME frame");
+  return payload;
+}
 
 /**
  * One connection over the session's single Noise pair (a resume re-seals with
@@ -472,19 +481,22 @@ async function runLink(
   let hostBacklog = host.authored.slice();
   if (link.resume) {
     const sentBefore = [client.ledger.sent, host.ledger.sent];
-    const clientHello = encodeResumeFrame(client.ledger.received);
-    const hostHello = encodeResumeFrame(host.ledger.received);
+    // Every RESUME the client sends takes the next attempt; the host echoes it.
+    const attempt = ++client.resumeAttempt;
+    const clientHello = encodeResumeFrame(client.ledger.received, attempt);
     expect(client.ledger.append(clientHello)).toBeNull();
-    expect(host.ledger.append(hostHello)).toBeNull();
     const atHost = await roundTrip(initiator, responder, clientHello);
-    const atClient = await roundTrip(responder, initiator, hostHello);
     expect(host.ledger.receive(atHost)).toBeNull();
+    const hostHello = encodeResumeFrame(
+      host.ledger.received,
+      parseResume(atHost).attempt,
+    );
+    expect(host.ledger.append(hostHello)).toBeNull();
+    const atClient = await roundTrip(responder, initiator, hostHello);
     expect(client.ledger.receive(atClient)).toBeNull();
-    const peerReceived = (plaintext: Uint8Array): number => {
-      const payload = parseResumeFrame(decodeMuxFrame(plaintext));
-      if (payload === null) throw new Error("invalid RESUME frame");
-      return payload.received;
-    };
+    expect(parseResume(atClient).attempt).toBe(attempt);
+    const peerReceived = (plaintext: Uint8Array): number =>
+      parseResume(plaintext).received;
     const gap = (peer: Peer, received: number): Uint8Array[] => {
       const frames = framesOf(peer.ledger.gapFrom(received));
       peer.ledger.trimReceived(received);
@@ -570,6 +582,7 @@ describe("two ledgers over a lossy link", () => {
         type: MuxFrameType.OPEN_ACK,
         n: 0,
       });
+      expect(client.resumeAttempt).toBe(2);
       for (const peer of [client, host]) {
         expect(peer.reports).toHaveLength(2);
         expect(peer.reports.every((r) => r.recoverable)).toBe(true);
@@ -606,6 +619,108 @@ describe("two ledgers over a lossy link", () => {
       downtime: 0,
       fresh: 0,
     });
+    expect(client.resumeAttempt).toBe(6);
+    expectExactlyOnceInOrder(host, client);
+    expectExactlyOnceInOrder(client, host);
+  });
+
+  it("discards a superseded answer and its stale replay uncounted, then resumes exactly once from the matching answer", async () => {
+    const { client, host } = newPair();
+    const { initiator, responder } = await establishSessionPair();
+    // Both directions end the first link with a gap: the host's whole stream
+    // (5 frames) and the client's last 3 frames are missing.
+    await runLink(
+      client,
+      host,
+      { initiator, responder },
+      {
+        resume: false,
+        clientCut: 2,
+        hostCut: 0,
+        mode: "blackhole",
+        downtime: 1,
+        fresh: 2,
+      },
+    );
+    const receivedAtRelink = client.ledger.received;
+    expect(host.ledger.sent - receivedAtRelink).toBeGreaterThanOrEqual(5);
+    const sentBefore = [client.ledger.sent, host.ledger.sent];
+
+    // Attempt 1: the host answers and starts replaying, two frames in flight.
+    const hostSees1 = await initiator
+      .encrypt(encodeResumeFrame(client.ledger.received, 1), EMPTY)
+      .then((wire) => responder.decrypt(wire, EMPTY));
+    expect(host.ledger.receive(hostSees1)).toBeNull();
+    const inboundToClient: Uint8Array[] = [];
+    const sealToClient = async (plaintext: Uint8Array): Promise<void> => {
+      inboundToClient.push(await responder.encrypt(plaintext, EMPTY));
+    };
+    const attempt1 = parseResume(hostSees1);
+    await sealToClient(
+      encodeResumeFrame(host.ledger.received, attempt1.attempt),
+    );
+    const replay1 = framesOf(host.ledger.gapFrom(attempt1.received));
+    expect(replay1.length).toBeGreaterThanOrEqual(5);
+    for (const plaintext of replay1.slice(0, 2)) await sealToClient(plaintext);
+
+    // The client relinks before any of that arrives and sends attempt 2 with
+    // an unchanged count; the host's new RESUME supersedes the running replay.
+    client.resumeAttempt = 2;
+    const hostSees2 = await initiator
+      .encrypt(encodeResumeFrame(client.ledger.received, 2), EMPTY)
+      .then((wire) => responder.decrypt(wire, EMPTY));
+    expect(host.ledger.receive(hostSees2)).toBeNull();
+    const attempt2 = parseResume(hostSees2);
+    expect(attempt2.received).toBe(receivedAtRelink);
+    await sealToClient(
+      encodeResumeFrame(host.ledger.received, attempt2.attempt),
+    );
+    for (const plaintext of framesOf(host.ledger.gapFrom(attempt2.received))) {
+      await sealToClient(plaintext);
+    }
+    host.ledger.trimReceived(attempt2.received);
+
+    // The client awaits attempt 2. Everything before that answer is decrypted
+    // and dropped without being counted or dispatched.
+    let awaiting: number | null = 2;
+    let discarded = 0;
+    let hostReceived = -1;
+    for (const wire of inboundToClient) {
+      const opened = await initiator.decrypt(wire, EMPTY);
+      const frame = decodeMuxFrame(opened);
+      if (frame.type === MuxFrameType.RESUME) {
+        const answer = parseResumeFrame(frame);
+        if (answer === null || answer.attempt !== awaiting) {
+          discarded++;
+          continue;
+        }
+        awaiting = null;
+        hostReceived = answer.received;
+        continue;
+      }
+      if (awaiting !== null) {
+        discarded++;
+        expect(client.ledger.received).toBe(receivedAtRelink);
+        expect(client.dispatched).toEqual([]);
+        continue;
+      }
+      client.accept(opened, host);
+    }
+    expect(discarded).toBe(1 + 2); // answer 1 and its two stale frames
+    expect(awaiting).toBeNull();
+
+    // The client now replays its own gap from the host's matching answer.
+    const clientGap = framesOf(client.ledger.gapFrom(hostReceived));
+    client.ledger.trimReceived(hostReceived);
+    for (const plaintext of clientGap) {
+      host.accept(
+        await initiator
+          .encrypt(plaintext, EMPTY)
+          .then((wire) => responder.decrypt(wire, EMPTY)),
+        client,
+      );
+    }
+    expect([client.ledger.sent, host.ledger.sent]).toEqual(sentBefore);
     expectExactlyOnceInOrder(host, client);
     expectExactlyOnceInOrder(client, host);
   });

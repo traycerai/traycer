@@ -10,7 +10,7 @@ import {
   resumePayloadSchema,
   unaryRequestPayloadSchema,
 } from "../mux";
-import { encodeResumeFrame, parseResumeFrame } from "../remote/resume-ledger";
+import { encodeResumeFrame, parseResumeFrame } from "../resume-ledger";
 
 const requestWithoutCaller = {
   requestId: "request-1",
@@ -40,8 +40,12 @@ describe("unaryRequestPayloadSchema caller attribution", () => {
 
 describe("resume payload", () => {
   it("round-trips a RESUME frame as an unchunked interactive control frame", () => {
-    for (const received of [0, 41, Number.MAX_SAFE_INTEGER]) {
-      const frame = decodeMuxFrame(encodeResumeFrame(received));
+    for (const [received, attempt] of [
+      [0, 1],
+      [41, 2],
+      [Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER],
+    ]) {
+      const frame = decodeMuxFrame(encodeResumeFrame(received, attempt));
       expect(frame).toMatchObject({
         type: MuxFrameType.RESUME,
         streamId: 0,
@@ -55,27 +59,32 @@ describe("resume payload", () => {
       });
       expect(frame.binary).not.toBeNull();
       expect(decodeMuxMessageBody(frame.binary ?? new Uint8Array(0))).toEqual({
-        json: { received },
+        json: { received, attempt },
         binary: null,
       });
-      expect(parseResumeFrame(frame)).toEqual({ received });
+      expect(parseResumeFrame(frame)).toEqual({ received, attempt });
     }
   });
 
-  it("refuses to encode a count that is not a non-negative safe integer", () => {
-    for (const bad of [
+  it("refuses to encode a count or attempt outside its range", () => {
+    const badCounts = [
       -1,
       1.5,
       Number.NaN,
       Infinity,
       Number.MAX_SAFE_INTEGER + 1,
-    ]) {
-      expect(() => encodeResumeFrame(bad)).toThrow();
+    ];
+    for (const bad of badCounts) {
+      expect(() => encodeResumeFrame(bad, 1)).toThrow();
+    }
+    // Attempts start at 1: zero is as invalid as a negative or unsafe value.
+    for (const bad of [0, ...badCounts]) {
+      expect(() => encodeResumeFrame(0, bad)).toThrow();
     }
   });
 
   describe("parseResumeFrame rejects", () => {
-    const base = decodeMuxFrame(encodeResumeFrame(7));
+    const base = decodeMuxFrame(encodeResumeFrame(7, 3));
     const withOverrides = (overrides: Partial<EncodeMuxFrameInput>): MuxFrame =>
       decodeMuxFrame(encodeMuxFrame({ ...base, ...overrides }));
     const bodyOf = (
@@ -92,7 +101,7 @@ describe("resume payload", () => {
       ["bulk qos", { qos: QosClass.BULK }],
       ["a chunked frame", { chunked: true, chunkFirst: true, chunkLast: true }],
       ["a compressed frame", { compressed: true }],
-      ["a frame-level json section", { json: { received: 7 } }],
+      ["a frame-level json section", { json: { received: 7, attempt: 3 } }],
       ["a missing body", { binary: null }],
     ] satisfies [string, Partial<EncodeMuxFrameInput>][])(
       "a bad envelope: %s",
@@ -104,11 +113,20 @@ describe("resume payload", () => {
     it.each([
       ["a body shorter than its header", { binary: new Uint8Array([1, 2]) }],
       ["a null body json", bodyOf(null, null)],
-      ["a missing count", bodyOf({}, null)],
-      ["a negative count", bodyOf({ received: -1 }, null)],
-      ["a fractional count", bodyOf({ received: 1.5 }, null)],
-      ["a string count", bodyOf({ received: "7" }, null)],
-      ["a logical binary half", bodyOf({ received: 7 }, new Uint8Array([1]))],
+      ["a missing count", bodyOf({ attempt: 3 }, null)],
+      ["a negative count", bodyOf({ received: -1, attempt: 3 }, null)],
+      ["a fractional count", bodyOf({ received: 1.5, attempt: 3 }, null)],
+      ["a string count", bodyOf({ received: "7", attempt: 3 }, null)],
+      ["a missing attempt", bodyOf({ received: 7 }, null)],
+      ["a zero attempt", bodyOf({ received: 7, attempt: 0 }, null)],
+      ["a negative attempt", bodyOf({ received: 7, attempt: -1 }, null)],
+      ["a fractional attempt", bodyOf({ received: 7, attempt: 1.5 }, null)],
+      ["an unsafe attempt", bodyOf({ received: 7, attempt: 2 ** 53 }, null)],
+      ["a non-finite attempt", bodyOf({ received: 7, attempt: null }, null)],
+      [
+        "a logical binary half",
+        bodyOf({ received: 7, attempt: 3 }, new Uint8Array([1])),
+      ],
     ] satisfies [string, Partial<EncodeMuxFrameInput>][])(
       "a bad body: %s",
       (_name, overrides) => {
@@ -117,28 +135,34 @@ describe("resume payload", () => {
     );
 
     it("still accepts the untouched frame the overrides started from", () => {
-      expect(parseResumeFrame(base)).toEqual({ received: 7 });
+      expect(parseResumeFrame(base)).toEqual({ received: 7, attempt: 3 });
     });
   });
 
-  it("accepts a non-negative safe integer and nothing else", () => {
+  it("accepts a non-negative safe-integer count with a positive safe-integer attempt, and nothing else", () => {
     for (const ok of [0, Number.MAX_SAFE_INTEGER]) {
-      expect(resumePayloadSchema.parse({ received: ok }).received).toBe(ok);
+      expect(
+        resumePayloadSchema.parse({ received: ok, attempt: 1 }).received,
+      ).toBe(ok);
     }
-    for (const bad of [
-      -1,
-      1.5,
-      Number.NaN,
-      Infinity,
-      Number.MAX_SAFE_INTEGER + 1,
-      "3",
-      null,
-      undefined,
-    ]) {
-      expect(resumePayloadSchema.safeParse({ received: bad }).success).toBe(
-        false,
-      );
+    expect(
+      resumePayloadSchema.parse({
+        received: 0,
+        attempt: Number.MAX_SAFE_INTEGER,
+      }).attempt,
+    ).toBe(Number.MAX_SAFE_INTEGER);
+    const unsafe = Number.MAX_SAFE_INTEGER + 1;
+    for (const bad of [-1, 1.5, Number.NaN, Infinity, unsafe, "3", null]) {
+      expect(
+        resumePayloadSchema.safeParse({ received: bad, attempt: 1 }).success,
+      ).toBe(false);
     }
-    expect(resumePayloadSchema.safeParse({}).success).toBe(false);
+    for (const bad of [0, -1, 1.5, Number.NaN, Infinity, unsafe, "3", null]) {
+      expect(
+        resumePayloadSchema.safeParse({ received: 0, attempt: bad }).success,
+      ).toBe(false);
+    }
+    expect(resumePayloadSchema.safeParse({ received: 0 }).success).toBe(false);
+    expect(resumePayloadSchema.safeParse({ attempt: 1 }).success).toBe(false);
   });
 });

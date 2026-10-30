@@ -121,7 +121,7 @@ export const MuxFrameType = {
   CREDIT: 9,
   /** Host-standing evidence (R4-D2 peer-enforcement): `{standingUntil}`. */
   REAUTH_NOTICE: 10,
-  /** Session resume: `{received}` (streamId 0), exempt from resume counts. */
+  /** Session resume: `{received, attempt}` (streamId 0), exempt from resume counts. */
   RESUME: 11,
   /**
    * In-place credential update on streamId 0: the rotated user bearer, or a
@@ -350,6 +350,8 @@ export interface ReauthNoticePayload {
 /** Peer's count of received transport mux frames, excluding RESUME itself. */
 export interface ResumePayload {
   readonly received: number;
+  /** Positive safe integer, numbered by the client and echoed by the host. */
+  readonly attempt: number;
 }
 
 // -----------------------------------------------------------------------------
@@ -558,6 +560,7 @@ export const reauthNoticePayloadSchema: z.ZodType<ReauthNoticePayload> =
 export const resumePayloadSchema: z.ZodType<ResumePayload> = lazySchema(() =>
   z.object({
     received: z.number().int().nonnegative(),
+    attempt: z.number().int().positive(),
   }),
 );
 

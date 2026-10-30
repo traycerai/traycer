@@ -6,17 +6,28 @@ import {
   type ResumePayload,
   resumePayloadSchema,
   SESSION_CONTROL_STREAM_ID,
-} from "../mux";
-import { decodeMuxMessageBody, encodeMuxMessageBody } from "../chunking";
+} from "./mux";
+import { decodeMuxMessageBody, encodeMuxMessageBody } from "./chunking";
 
 /**
  * A RESUME bypasses the scheduler's stream-0 sequence counter and is consumed
  * as a raw mux frame, ahead of any sequence gate or reassembler. Its body uses
  * the same JSON/body codec as other controls, in one unchunked, uncompressed
  * frame. It neither advances the resume ledger nor enters its send ring.
+ *
+ * The client numbers each RESUME it sends in a session 1, 2, 3, ...; another
+ * host_attached or a relink starts the next attempt. The host echoes that
+ * attempt in its answer. While awaiting attempt n, the client decrypts and
+ * discards every inbound frame without counting it until a RESUME carrying n,
+ * including RESUMEs for other attempts and the stale replay behind them. The
+ * matching answer's replay starts at the client's unchanged received count.
+ * On the host, a new RESUME supersedes any replay still running.
  */
-export function encodeResumeFrame(received: number): Uint8Array {
-  const payload = resumePayloadSchema.parse({ received });
+export function encodeResumeFrame(
+  received: number,
+  attempt: number,
+): Uint8Array {
+  const payload = resumePayloadSchema.parse({ received, attempt });
   return encodeMuxFrame({
     type: MuxFrameType.RESUME,
     streamId: SESSION_CONTROL_STREAM_ID,
@@ -27,13 +38,14 @@ export function encodeResumeFrame(received: number): Uint8Array {
     chunkLast: false,
     compressed: false,
     json: null,
-    binary: encodeMuxMessageBody({ received: payload.received }, null),
+    binary: encodeMuxMessageBody({ ...payload }, null),
   });
 }
 
 /**
  * Parse a decoded raw RESUME ahead of sequence gates and reassembly. Null is a
- * malformed envelope or payload; callers fail the resume exchange on it.
+ * malformed envelope or payload; callers fail the resume exchange on it. The
+ * client accepts an answer only when its attempt matches the one awaited.
  */
 export function parseResumeFrame(frame: MuxFrame): ResumePayload | null {
   if (
@@ -140,9 +152,10 @@ export class ResumeLedger {
   /**
    * Call in inbound order after a successful AEAD open, before decode or
    * dispatch, even when dispatch drops the frame. Returns the pre-frame index,
-   * or null for RESUME or a dropped ledger. While awaiting RESUME, the caller
-   * discards other opened frames without calling this method; drain the inbound
-   * decrypt chain before reading `received` to construct a RESUME payload.
+   * or null for RESUME or a dropped ledger. While awaiting its matching RESUME
+   * attempt, the client discards all opened frames without calling this method;
+   * the held host does the same until a client RESUME. Drain the inbound decrypt
+   * chain before reading `received` to construct a RESUME payload.
    */
   receive(plaintext: Uint8Array): number | null {
     if (this.dropped || plaintext[1] === MuxFrameType.RESUME) return null;
