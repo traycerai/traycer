@@ -586,6 +586,38 @@ async function hideWithCollapsedScrollBox(
   await settleLegendList();
 }
 
+/** Holds a list command's promise open until the test settles it, so the
+ *  test - not real timing - decides when the command's own settle loop
+ *  continues. Module scope: both the "list still holds a command" tests
+ *  and a visibility-handoff test below share this one definition. */
+function holdListCommands() {
+  const settlers: Array<() => void> = [];
+  return {
+    hold: (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        settlers.push(resolve);
+      }),
+    settleAll: (): void => {
+      for (const settle of settlers.splice(0)) settle();
+    },
+    // Holds the first command only. Later ones (the latch's own end
+    // correction, issued behind the pill's) run to completion, so the
+    // pill's is the one command left held.
+    holdFirst: (): Promise<void> => {
+      if (settlers.length > 0) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        settlers.push(resolve);
+      });
+    },
+  };
+}
+
+function requireList(): import("@legendapp/list/react").LegendListRef {
+  const list = legendListRefHolder.current;
+  if (list === null) throw new Error("LegendList ref is not mounted");
+  return list;
+}
+
 /**
  * Ticket 15 review (live pass S5 round 3): sets `scrollTop` and fires the
  * scroll event WITHOUT yielding an animation frame afterward - deliberately
@@ -4055,6 +4087,112 @@ describe("ChatMessages scroll policy", () => {
       view.unmount();
     });
 
+    it("doesn't accept a mount-time restore until the saved row's position has held still across a settle", async () => {
+      const messages = makeCompletedTranscript(30);
+      const targetIndex = 20;
+      const targetId = messages[targetIndex].id;
+      const viewOffset = -12;
+      const instanceId = `t5-still-settling-restore-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(instanceId);
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: targetId,
+        anchorIndex: targetIndex,
+        offset: viewOffset,
+      });
+
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages,
+        scrollStateKey: instanceId,
+        instanceId,
+      });
+      const list = legendListRefHolder.current;
+      expect(list).not.toBeNull();
+      if (list === null) throw new Error("LegendList ref did not mount");
+
+      const expectedScrollTop = LEGEND_LIST_HEADER_PX + targetIndex * 90 + 12;
+      const scrollNode = getScrollNode();
+      // Load-bearing premise: the mount-time restore issues and lands
+      // synchronously within render, before any spy below can see it - the
+      // same contract the "re-lands..." test above relies on. Assert it
+      // here so a future change to that ordering fails loudly, at the
+      // point it would silently invalidate the setup below, instead of
+      // leaving this test to pass (or fail) for an unrelated reason.
+      expect(scrollNode.scrollTop).toBe(expectedScrollTop);
+
+      // Knock the already-correct landing to a position that agrees with
+      // the HALF-MEASURED ESTIMATE this test is about to report for the
+      // saved row (not its real one), so the existing position check -
+      // unchanged by the fix - would pass on it alone.
+      const estimatedScrollTop = 0;
+      scrollNode.scrollTop = estimatedScrollTop;
+      // positionAtIndex + topOffsetAdjustment - viewOffset must equal
+      // estimatedScrollTop, so the fake estimate agrees with the write
+      // above exactly as a real half-measured estimate would agree with
+      // the bootstrap's own clamp.
+      const fakeRowTop =
+        estimatedScrollTop - LEGEND_LIST_HEADER_PX + viewOffset;
+
+      const originalScrollToIndex = list.scrollToIndex.bind(list);
+      // States the phase change explicitly rather than inferring it from a
+      // count: measurement has arrived once the restore's OWN loop has
+      // reissued for the first time. Not a raw count of `positionAtIndex`
+      // reads, which other consumers (viewability, the minimap, ...) make
+      // many of regardless of this restore, and which would flip the fake
+      // estimate off before the loop's own first settle even finishes;
+      // `scrollToIndex` is only ever called by a navigation/restore issuing
+      // a command, so this flag is reacting to this loop specifically, not
+      // causing anything itself.
+      let measurementHasArrived = false;
+      const scrollToIndexSpy = vi
+        .spyOn(list, "scrollToIndex")
+        .mockImplementation((options) => {
+          const result = originalScrollToIndex(options);
+          measurementHasArrived = true;
+          return result;
+        });
+      const originalGetState = list.getState.bind(list);
+      // While measurement has not yet arrived, the saved row reads at the
+      // half-measured estimate; once it has, it reads its real, settled
+      // position - the rows above it measuring in across the commit that
+      // reissue's write belongs to.
+      const getStateSpy = vi.spyOn(list, "getState").mockImplementation(() => {
+        const state = originalGetState();
+        return {
+          ...state,
+          positionAtIndex: (index: number) => {
+            if (index !== targetIndex) return state.positionAtIndex(index);
+            return measurementHasArrived
+              ? state.positionAtIndex(index)
+              : fakeRowTop;
+          },
+        };
+      });
+
+      try {
+        for (let round = 0; round < 4; round += 1) {
+          await settleLegendList();
+        }
+
+        // On main this must read `estimatedScrollTop` (0): the one-shot
+        // position check agreed with the knocked-off write, against an
+        // estimate indistinguishable from a real half-measured one, and
+        // the restore retired for good. The fix requires the saved row's
+        // position to have held still since the previous settle before
+        // the landing check may speak, so it keeps re-issuing through the
+        // estimate-to-real transition above and only then lands at the
+        // row's real, settled position.
+        expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      } finally {
+        scrollToIndexSpy.mockRestore();
+        getStateSpy.mockRestore();
+      }
+      view.unmount();
+    });
+
     it("keeps a mount-time free restore running through a wheel the top edge cannot answer", async () => {
       const messages = makeCompletedTranscript(20);
       const targetIndex = 8;
@@ -4421,39 +4559,11 @@ describe("ChatMessages scroll policy", () => {
       // when a settle loop times out and gives up. These hold the command's
       // promise until the test settles it.
       describe("a command the list still holds after its loop has given up", () => {
-        function holdListCommands() {
-          const settlers: Array<() => void> = [];
-          return {
-            hold: (): Promise<void> =>
-              new Promise<void>((resolve) => {
-                settlers.push(resolve);
-              }),
-            settleAll: (): void => {
-              for (const settle of settlers.splice(0)) settle();
-            },
-            // Holds the first command only. Later ones (the latch's own end
-            // correction, issued behind the pill's) run to completion, so the
-            // pill's is the one command left held.
-            holdFirst: (): Promise<void> => {
-              if (settlers.length > 0) return Promise.resolve();
-              return new Promise<void>((resolve) => {
-                settlers.push(resolve);
-              });
-            },
-          };
-        }
-
         // Longer than every attempt of a bounded loop whose waits all time out.
         async function exhaustTimedOutSettleLoop(): Promise<void> {
           await advanceLegendListTime(
             5 * CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS,
           );
-        }
-
-        function requireList() {
-          const list = legendListRefHolder.current;
-          if (list === null) throw new Error("LegendList ref is not mounted");
-          return list;
         }
 
         it("cancels a restore's command until it settles, and only then leaves the list alone", async () => {
@@ -8264,6 +8374,76 @@ describe("ChatMessages scroll policy", () => {
       expect(restoredTop).toBeLessThan(maxScrollTopFor(getScrollNode()) - 1);
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       expect(getScrollNode().dataset.scrollMode).not.toBe("following-end");
+    });
+
+    it("a hide while a restore's re-issue is still held leaves the concealed list alone", async () => {
+      const messages = makeCompletedTranscript(200);
+      const anchorIndex = 20;
+      const savedViewOffset = 24;
+      const anchorId = messages[anchorIndex]?.id ?? null;
+      expect(anchorId).toBeTruthy();
+      const identity = makeDefaultTestIdentity(
+        `t-visibility-held-reissue-${Math.random().toString(36).slice(2)}`,
+      );
+      const key = identity.tileInstanceId;
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+      );
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        anchorIndex,
+        offset: savedViewOffset,
+      });
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: key,
+      });
+      await settleLegendList();
+      await hideWithCollapsedScrollBox(rerenderWith);
+
+      // Install the hold only now, before showing again: the test - not
+      // real timing - decides when the replay's settle loop continues, so
+      // nothing here depends on a race. The spy still calls through, unlike
+      // the one in "cancels a restore's command...", because this witness
+      // has to observe the re-issue's actual write landing on the concealed
+      // node, not merely that a command was issued.
+      const held = holdListCommands();
+      const list = requireList();
+      const placeRow = list.scrollToIndex.bind(list);
+      vi.spyOn(list, "scrollToIndex").mockImplementation((params) => {
+        void placeRow(params);
+        return held.hold();
+      });
+
+      rerenderWith({ visible: true });
+
+      // Premise: the replay's placement landed the saved row for real while
+      // visible, before anything below conceals it again. If this isn't
+      // true the hold is in the wrong place and nothing past this point
+      // proves anything.
+      const shownScrollTop = getScrollNode().scrollTop;
+      expect(shownScrollTop).toBeGreaterThan(0);
+      const expectedShownScrollTop =
+        LEGEND_LIST_HEADER_PX +
+        anchorIndex * TICKET_13_ROW_HEIGHT_PX -
+        savedViewOffset;
+      expect(shownScrollTop).toBe(expectedShownScrollTop);
+
+      await hideWithCollapsedScrollBox(rerenderWith);
+      expect(getScrollNode().scrollTop).toBe(0);
+
+      // Settle the held command now, with the list already hidden and its
+      // box already collapsed - the whole point, and why this test has no
+      // timing in it: the loop's continuation must not write the saved
+      // position back onto a node the reader can no longer see.
+      act(() => {
+        held.settleAll();
+      });
+      await settleLegendList();
+
+      expect(getScrollNode().scrollTop).toBe(0);
     });
   });
 

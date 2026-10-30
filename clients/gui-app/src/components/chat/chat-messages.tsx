@@ -3330,7 +3330,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // ahead of the `visible` early-return below - the minimap's own previous
     // native listener never gated on this component's `visible` prop either,
     // and there is no reason a background/not-yet-selected tile's scroll
-    // (e.g. a still-settling restore) should leave its in-view dots stale.
+    // (e.g. a restore still settling on a tile never selected yet - a tile
+    // hidden AFTER being visible has no settling restore, since the hide ends
+    // it) should leave its in-view dots stale.
     minimapInViewRefreshRef.current();
     if (!visible) return;
     const scrollNode = chatTimelineRef.current?.getScrollableNode();
@@ -4086,12 +4088,37 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const concealedScrollGeometryRef = useRef<ConcealedScrollGeometry | null>(
     null,
   );
+  // Ends the navigation settle loop a hide leaves behind. A restore still
+  // converging when the tile hides has nowhere left to converge: the hide
+  // zeroes this tile's measured geometry, so every further settle reads a
+  // viewport that cannot answer, and a re-issue the loop makes from a
+  // continuation resolving after the hide writes the saved position back onto a
+  // concealed node - over the reset a collapsing tab host just performed. The
+  // show branch is then the only placement a hidden tile takes, and it
+  // re-derives the anchor from the state cache rather than from wherever this
+  // loop had reached - which is also what gives a row destroyed while hidden
+  // its clamp-to-neighbour fallback.
+  //
+  // Guarded as the show branch's own cleanup is: this cleanup reports a pending
+  // cross-tile scroll request `cancelled` (`landScrollRequestRow` registers it
+  // there), and that request is the newer intent the show branch re-issues
+  // instead of replaying. A restore loop cannot be the registered owner while
+  // such a request is pending - issuing one supersedes the restore through this
+  // same ref - so the guard never leaves a restore loop running. The show
+  // branch does not share this helper, because a pending request there is not a
+  // no-op: it re-issues it against the now-measurable geometry first.
+  const endNavigationSettleForConcealment = useCallback((): void => {
+    if (pendingScrollRequestLandingRef.current !== null) return;
+    activeNavigationSettleCleanupRef.current?.();
+    activeNavigationSettleCleanupRef.current = null;
+  }, []);
   useLayoutEffect(() => {
     const wasVisible = wasSurfaceVisibleRef.current;
     wasSurfaceVisibleRef.current = visible;
     if (visible === wasVisible) return;
 
     if (!visible) {
+      endNavigationSettleForConcealment();
       concealedScrollGeometryRef.current = readIntactConcealedGeometry(
         chatTimelineRef.current?.getScrollableNode(),
         lastVisibleScrollTopRef.current,
@@ -4142,8 +4169,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       listRowsRef.current.map((row) => row.key),
     );
     // An undisturbed list needs no replay (see `concealedScrollGeometryRef`).
-    // Unless a saved restore is still converging: the cleanup above just
-    // cancelled its settle loop, and that loop was the only thing that would
+    // Unless a saved restore was still converging when the tile hid: the hide
+    // ended its settle loop, and that loop was the only thing that would
     // release the persistence gate - returning here would leave the gate
     // armed with no scroll capture allowed until the next publishing reader
     // gesture. Let the replay below re-issue it and own the release instead.
@@ -4196,6 +4223,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     if (!issued) acceptFailedReplayLanding();
   }, [
     clearNavigationHighlight,
+    endNavigationSettleForConcealment,
     identity,
     isSavedTurnPart,
     landScrollRequestRow,
