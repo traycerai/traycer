@@ -195,7 +195,6 @@ export interface ChatTimelineProps {
    * false; this timeline adds its own geometry settle on top.
    */
   readonly isReattachSuppressed?: () => boolean;
-  /** True while the transcript's latest turn is still running. */
   /** Message row receiving the temporary external-navigation highlight. */
   readonly navigationHighlightedMessageId?: string | null;
   /**

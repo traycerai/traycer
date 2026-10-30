@@ -3212,6 +3212,30 @@ describe("useChatTimelineFollowLatch", () => {
       };
     }
 
+    // A read sees the clamp ahead of its report, and an announced write then
+    // carries the view on: the departure moves from the clamped offset, so
+    // their arrival past it is still theirs.
+    it("a clamp a read saw moves the departure, so an announced write carries it from there and their arrival past it follows", () => {
+      const { node, onFollowIntentChange, result } = followingWithTurn();
+
+      node.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+      shim.setGeometry(node, { scrollTop: 960 });
+      fireNativeScroll(node);
+      shim.setGeometry(node, { scrollHeight: 1400, scrollTop: 900 });
+      result.current.followEndIfPermitted();
+      shim.setGeometry(node, { scrollHeight: 1500 });
+      moveChatTimelineScroller(node, 1000, () => {
+        shim.setGeometry(node, { scrollTop: 1000 });
+      });
+      result.current.followEndIfPermitted();
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(false);
+
+      shim.setGeometry(node, { scrollHeight: 1540, scrollTop: 1040 });
+      fireNativeScroll(node);
+
+      expect(onFollowIntentChange).toHaveBeenLastCalledWith(true);
+    });
+
     /** The end comes to the departed reader mid-turn, the tail then grows
      *  past them, and the turn rests with the end back on them. */
     function expectHeldThenFollowedAtRest(mounted: {

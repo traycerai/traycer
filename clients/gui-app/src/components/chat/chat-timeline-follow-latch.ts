@@ -1887,7 +1887,10 @@ export function useChatTimelineFollowLatch(
       }
       if (endMetDepartedReader(geometry)) {
         // The end meeting a departed reader (a temporary end pad dropped) is
-        // the list's, not the reader returning.
+        // the list's, not the reader returning. The departure stands where
+        // it put them, as at the report of it (`noteReportAfterDeparture`):
+        // that report may come after a write has carried the view on.
+        readerDepartureScrollTopRef.current = geometry.scrollTop;
         cancelActiveCorrection();
         return;
       }
