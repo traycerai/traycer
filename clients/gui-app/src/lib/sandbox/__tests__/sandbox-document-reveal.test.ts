@@ -26,6 +26,18 @@ interface Layout {
     readonly left: number;
   };
   readonly style?: Readonly<Record<string, string>>;
+  /** What `checkVisibility()` answers for it; absent means visible. */
+  readonly visible?: boolean;
+  /**
+   * Inside a `content-visibility: auto` ancestor that is off screen, so
+   * only `checkVisibility({ contentVisibilityAuto: true })` answers false.
+   */
+  readonly autoSkipped?: boolean;
+  /**
+   * Under a `visibility: hidden` or `opacity: 0` ancestor, so only the
+   * options that ask about CSS visibility or opacity answer false.
+   */
+  readonly cssHidden?: boolean;
 }
 
 interface ScrollCall {
@@ -39,6 +51,7 @@ interface Frame {
   readonly window: DOMWindow;
   readonly layouts: WeakMap<Element, Layout>;
   readonly scrolls: ScrollCall[];
+  readonly rectReads: Element[];
   readonly nativeFocusArgs: unknown[][];
   readonly native: {
     readonly scrollIntoView: unknown;
@@ -100,6 +113,7 @@ function startFrame(canvas: boolean): Frame {
 
   const layouts = new WeakMap<Element, Layout>();
   const scrolls: ScrollCall[] = [];
+  const rectReads: Element[] = [];
   const nativeFocusArgs: unknown[][] = [];
   const proto = window.Element.prototype;
   const define = (owner: object, name: string, value: unknown): void => {
@@ -133,7 +147,41 @@ function startFrame(canvas: boolean): Frame {
     };
     return { ...rect, x: rect.left, y: rect.top };
   });
-  define(proto, "getClientRects", () => [{}]);
+  // Recorded, not just answered: in the engine this read is the layout the
+  // page asked not to do, so where it happens is part of the contract.
+  define(proto, "getClientRects", function (this: Element) {
+    rectReads.push(this);
+    return [{}];
+  });
+  // jsdom has no `checkVisibility`, so each element declares what the engine
+  // would answer. Default options, which is what the bootstrap asks: false
+  // for a box that is not generated and for contents an ancestor skips.
+  // `browser-tests/sandbox-frame-scroll.spec.ts` is where that answer is
+  // held to a real engine; here it is the input.
+  define(proto, "checkVisibility", function (this: Element, options: unknown) {
+    const layout = layouts.get(this) ?? {};
+    const asked = (name: string): boolean =>
+      typeof options === "object" &&
+      options !== null &&
+      name in options &&
+      Reflect.get(options, name) === true;
+    // Only the default answer is the engine's reveal decision. Every other
+    // option asks a different question, and these are the pages that tell
+    // them apart: each answers false where the engine reveals.
+    if (layout.autoSkipped === true && asked("contentVisibilityAuto")) {
+      return false;
+    }
+    if (
+      layout.cssHidden === true &&
+      (asked("checkVisibilityCSS") ||
+        asked("visibilityProperty") ||
+        asked("checkOpacity") ||
+        asked("opacityProperty"))
+    ) {
+      return false;
+    }
+    return layout.visible ?? true;
+  });
   define(proto, "scrollTo", function (this: Element, options: unknown) {
     const given = options as {
       top: number;
@@ -193,6 +241,7 @@ function startFrame(canvas: boolean): Frame {
     window,
     layouts,
     scrolls,
+    rectReads,
     nativeFocusArgs,
     native,
     place: (element, layout) => layouts.set(element, layout),
@@ -543,7 +592,8 @@ describe("body overflow inside a frame", () => {
   // the next ones. `contain` names the containment; `container-type` and
   // `content-visibility` apply it with `contain` itself left `none`.
   // `content-visibility: hidden` is in neither list: it contains, and the
-  // walk reads it as the viewport's anyway, which the last test here covers.
+  // walk never asks, because a reveal inside skipped contents is over
+  // before it starts. The "skipped" tests below cover that.
   const CONTAINS: Record<string, string>[] = [
     { contain: "paint" },
     { contain: "layout" },
@@ -649,47 +699,102 @@ describe("body overflow inside a frame", () => {
     ]);
   });
 
-  // `content-visibility: hidden` skips the page's contents, and the engine
-  // reveals nothing inside them. Such a page lays out no taller than its
-  // view, so the viewport it is left to has no room and the walk scrolls
-  // nothing, which is what the engine does. Were it read as the containment
-  // it is, the body would be a scroller and the walk would move it to an
-  // element the engine never moves to.
-  it.each(["html", "body"])(
-    "scrolls nothing into view when %s is skipped",
-    (skipped) => {
-      const frame = startFrame(false);
-      const doc = frame.window.document;
-      const target = doc.createElement("button");
-      doc.body.append(target);
-      const view = { height: 100, width: 100 };
-      frame.place(doc.documentElement, {
-        client: view,
-        // Skipped contents leave the root no taller than its view.
-        scroll: { height: 100, width: 100, top: 0, left: 0 },
-        style:
-          skipped === "html"
-            ? { ...VISIBLE, contentVisibility: "hidden" }
-            : VISIBLE,
-      });
-      frame.place(doc.body, {
-        client: view,
-        scroll: { height: 1000, width: 1000, top: 0, left: 0 },
-        style: {
-          overflowX: "hidden",
-          overflowY: "visible",
-          ...(skipped === "body" ? { contentVisibility: "hidden" } : {}),
-        },
-      });
-      frame.place(target, {
-        rect: { top: 300, bottom: 340, left: 20, right: 60 },
-      });
+  // A page with room to scroll in every scroller, so what the walk does is
+  // decided by the answer declared for the target and nothing else. A page
+  // that happened to leave no room would behave the same either way.
+  function pageDeclaring(
+    frame: Frame,
+    answers: { visible: boolean; autoSkipped: boolean; cssHidden: boolean },
+  ): { html: HTMLElement; target: HTMLElement } {
+    const doc = frame.window.document;
+    const target = doc.createElement("button");
+    doc.body.append(target);
+    const roomy = {
+      client: { height: 100, width: 100 },
+      scroll: { height: 1000, width: 1000, top: 0, left: 0 },
+    };
+    frame.place(doc.documentElement, { ...roomy, style: VISIBLE });
+    frame.place(doc.body, { ...roomy, style: VISIBLE });
+    frame.place(target, {
+      rect: { top: 300, bottom: 340, left: 20, right: 60 },
+      ...answers,
+    });
+    return { html: doc.documentElement, target };
+  }
 
-      scrollIntoView(target, { block: "start" });
+  const REVEALS = { visible: true, autoSkipped: false, cssHidden: false };
+  const REVEALED = [
+    { scroller: null, top: 300, left: 0, behavior: "auto" },
+  ] as const;
+  const revealedBy = (html: HTMLElement): unknown[] =>
+    REVEALED.map((call) => ({ ...call, scroller: html }));
 
-      expect(frame.scrolls).toEqual([]);
-    },
-  );
+  // Wherever `checkVisibility()` is false the engine reveals nothing, which
+  // is the one direction the rule relies on. Which pages those are is held
+  // to a real engine in `browser-tests/sandbox-frame-scroll.spec.ts`.
+  it("scrolls nothing into view, and measures nothing, when the engine would reveal nothing", () => {
+    const frame = startFrame(false);
+    const { target } = pageDeclaring(frame, { ...REVEALS, visible: false });
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual([]);
+    // Asking the engine comes before measuring: a rect read here lays out
+    // the subtree whose layout the page skipped.
+    expect(frame.rectReads).toEqual([]);
+  });
+
+  it("reveals a target the engine would reveal", () => {
+    const frame = startFrame(false);
+    const { html, target } = pageDeclaring(frame, REVEALS);
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual(revealedBy(html));
+  });
+
+  // `focus` reveals through the same walk, so the rule holds for it too.
+  it("skips the reveal of an unrevealable target through focus", () => {
+    const frame = startFrame(false);
+    const { target } = pageDeclaring(frame, { ...REVEALS, visible: false });
+
+    target.focus();
+
+    expect(frame.nativeFocusArgs).toEqual([[{ preventScroll: true }]]);
+    expect(frame.scrolls).toEqual([]);
+  });
+
+  // The default answer is the question. Each of these pages is one the
+  // engine reveals into while some other option set calls it invisible: an
+  // off-screen `content-visibility: auto` ancestor, and a `visibility:
+  // hidden` or `opacity: 0` one. Asking with those options would swallow
+  // the reveal.
+  it.each([
+    { ...REVEALS, autoSkipped: true },
+    { ...REVEALS, cssHidden: true },
+  ])("reveals a target only another option set hides: %o", (answers) => {
+    const frame = startFrame(false);
+    const { html, target } = pageDeclaring(frame, answers);
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual(revealedBy(html));
+  });
+
+  // An engine with no `checkVisibility` is left alone: the reveal behaves as
+  // it did before the rule rather than skipping every page.
+  it("reveals as before on an engine without checkVisibility", () => {
+    const frame = startFrame(false);
+    const { html, target } = pageDeclaring(frame, {
+      ...REVEALS,
+      visible: false,
+    });
+    Reflect.deleteProperty(frame.window.Element.prototype, "checkVisibility");
+
+    scrollIntoView(target, { block: "start" });
+
+    expect(frame.scrolls).toEqual(revealedBy(html));
+  });
 });
 
 describe("scrollIntoViewIfNeeded inside a frame", () => {
