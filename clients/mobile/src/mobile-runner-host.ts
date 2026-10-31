@@ -143,6 +143,13 @@ import {
   type TraycerModelsFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
+  voiceSessionsEndViaHttp,
+  voiceSessionsMintViaHttp,
+  type VoiceSessionEndFetchResult,
+  type VoiceSessionMintFetchResult,
+  type VoiceSessionMintRequest,
+} from "@traycer-clients/shared/host-client/voice-sessions";
+import {
   decideSecretRequestViaHttp,
   fetchEnvironmentProvidersViaHttp,
   fetchSandboxGrantsViaHttp,
@@ -736,6 +743,30 @@ export class MobileRunnerHost implements IRunnerHost {
     return fetchTraycerModelsViaHttp(this.serverBaseUrl, bearerToken, null);
   }
 
+  mintVoiceSession(
+    bearerToken: string,
+    request: VoiceSessionMintRequest,
+  ): Promise<VoiceSessionMintFetchResult> {
+    return voiceSessionsMintViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      request,
+    );
+  }
+
+  endVoiceSession(
+    bearerToken: string,
+    voiceSessionId: string,
+  ): Promise<VoiceSessionEndFetchResult> {
+    return voiceSessionsEndViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      voiceSessionId,
+    );
+  }
+
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -962,6 +993,13 @@ export class MobileRunnerHost implements IRunnerHost {
 
   onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable {
     return this.systemResume.subscribe(handler);
+  }
+
+  onSystemSuspended(handler: () => void): Disposable {
+    // The phone ends a voice session on its background edge, which the
+    // mobile voice ticket wires; nothing fires this signal here yet.
+    void handler;
+    return disposable();
   }
 
   onNetworkPathChanged(handler: () => void): Disposable {

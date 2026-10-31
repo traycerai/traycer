@@ -25,6 +25,7 @@ describe("installHostWakeRecovery", () => {
       reloadSnapshotFromDisk: vi.fn(async () => undefined),
     };
     const onWake = vi.fn();
+    const onLeave = vi.fn();
 
     installHostWakeRecovery(
       host,
@@ -32,6 +33,7 @@ describe("installHostWakeRecovery", () => {
         installed.push(handlers);
       },
       onWake,
+      onLeave,
     );
 
     const handlers = installed[0];
@@ -47,6 +49,12 @@ describe("installHostWakeRecovery", () => {
     expect(onWake).toHaveBeenCalledTimes(1);
     handlers.onUnlockScreen();
     expect(onWake).toHaveBeenCalledTimes(2);
+    // The leave edge fires on suspend and on lock, through the same
+    // registration, and never on a wake.
+    expect(onLeave).not.toHaveBeenCalled();
+    handlers.onSuspend();
+    handlers.onLockScreen();
+    expect(onLeave).toHaveBeenCalledTimes(2);
     return vi.advanceTimersByTimeAsync(4_250).then(() => {
       expect(host.reloadSnapshotFromDisk).toHaveBeenCalledTimes(4);
     });

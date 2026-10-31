@@ -30,6 +30,7 @@ import { SplitTabItem } from "@/components/layout/tabs/split-tab-item";
 import { TabStripNewButton } from "@/components/layout/tabs/tab-strip-new-button";
 import { HomeStripSlot } from "@/components/layout/tabs/tab-strip-home-item";
 import { TracyStripSlot } from "@/components/layout/tabs/tracy-strip-entry";
+import { TalkControl } from "@/components/layout/voice/talk-control";
 import { useHomeTabDrawn } from "@/components/layout/tabs/use-home-tab-drawn";
 import {
   useTabStripController,
@@ -215,7 +216,12 @@ function TabStripBody() {
           />
         ) : null}
         {controller.tracy === null ? null : (
-          <TracyStripSlot entry={controller.tracy} />
+          <>
+            <TracyStripSlot entry={controller.tracy} />
+            {/* Beside the Tracy entry, never in the composer (V6): the voice
+                belongs to the whole bot surface, not to one draft. */}
+            <TalkControl />
+          </>
         )}
         <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
           {hasOverflow ? (

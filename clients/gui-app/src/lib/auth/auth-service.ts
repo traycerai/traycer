@@ -51,6 +51,11 @@ import type {
   TraycerModelsFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
+  VoiceSessionEndFetchResult,
+  VoiceSessionMintFetchResult,
+  VoiceSessionMintRequest,
+} from "@traycer-clients/shared/host-client/voice-sessions";
+import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
@@ -3185,6 +3190,35 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.getTraycerModels(bearer);
+  }
+
+  /**
+   * The voice session routes, with the cloud bearer: the SDP exchange that
+   * opens a session on the person's own account, and its end. A shell that
+   * cannot reach traycer-server at all (`sandboxControlUnavailableReason`)
+   * reads as the dormant answer, so Talk hides there too.
+   */
+  async mintVoiceSession(
+    request: VoiceSessionMintRequest,
+  ): Promise<VoiceSessionMintFetchResult> {
+    if (this.sandboxControlUnavailableReason() !== null) {
+      return { kind: "dormant" };
+    }
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.mintVoiceSession(bearer, request);
+  }
+
+  async endVoiceSession(
+    voiceSessionId: string,
+  ): Promise<VoiceSessionEndFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.endVoiceSession(bearer, voiceSessionId);
   }
 
   async createSandbox(

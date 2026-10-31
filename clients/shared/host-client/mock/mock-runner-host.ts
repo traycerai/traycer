@@ -21,6 +21,13 @@ import {
   type TraycerModelsFetchResult,
 } from "../sandbox-control";
 import {
+  voiceSessionsEndViaHttp,
+  voiceSessionsMintViaHttp,
+  type VoiceSessionEndFetchResult,
+  type VoiceSessionMintFetchResult,
+  type VoiceSessionMintRequest,
+} from "../voice-sessions";
+import {
   decideSecretRequestViaHttp,
   fetchEnvironmentProvidersViaHttp,
   fetchSandboxGrantsViaHttp,
@@ -261,6 +268,7 @@ export class MockRunnerHost implements IRunnerHost {
     (event: SystemResumeEvent) => void
   >();
   private readonly networkPathChangedHandlers = new Set<() => void>();
+  private readonly systemSuspendedHandlers = new Set<() => void>();
   private localHostUnresponsive: LocalHostUnresponsive | null = null;
   private readonly localHostUnresponsiveHandlers = new Set<
     (state: LocalHostUnresponsive | null) => void
@@ -660,6 +668,30 @@ export class MockRunnerHost implements IRunnerHost {
 
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult> {
     return fetchTraycerModelsViaHttp(this.serverBaseUrl, bearerToken, null);
+  }
+
+  mintVoiceSession(
+    bearerToken: string,
+    request: VoiceSessionMintRequest,
+  ): Promise<VoiceSessionMintFetchResult> {
+    return voiceSessionsMintViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      request,
+    );
+  }
+
+  endVoiceSession(
+    bearerToken: string,
+    voiceSessionId: string,
+  ): Promise<VoiceSessionEndFetchResult> {
+    return voiceSessionsEndViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      voiceSessionId,
+    );
   }
 
   createSandbox(
@@ -1148,6 +1180,15 @@ export class MockRunnerHost implements IRunnerHost {
     };
   }
 
+  onSystemSuspended(handler: () => void): Disposable {
+    this.systemSuspendedHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.systemSuspendedHandlers.delete(handler);
+      },
+    };
+  }
+
   onNetworkPathChanged(handler: () => void): Disposable {
     this.networkPathChangedHandlers.add(handler);
     return {
@@ -1190,6 +1231,13 @@ export class MockRunnerHost implements IRunnerHost {
   emitSystemResumed(event: SystemResumeEvent): void {
     for (const handler of this.systemResumedHandlers) {
       handler(event);
+    }
+  }
+
+  /** Test helper: fire the sleep / lock signal to every `onSystemSuspended` subscriber. */
+  emitSystemSuspended(): void {
+    for (const handler of this.systemSuspendedHandlers) {
+      handler();
     }
   }
 

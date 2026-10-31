@@ -33,6 +33,8 @@ import { TopLevelSurfaceActivationProvider } from "@/components/layout/top-level
 import { HostScopeReady } from "@/components/layout/host-readiness-controller";
 import { MigrationRunController } from "@/components/migration/migration-run-controller";
 import { TracyEntryController } from "@/components/layout/tabs/tracy-entry-controller";
+import { VoiceSessionController } from "@/components/layout/voice/voice-session-controller";
+import { VoiceSessionStrip } from "@/components/layout/voice/voice-session-strip";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
@@ -143,6 +145,10 @@ function AppShellBody(props: AppShellProps) {
                   <SessionConnectivityStrip
                     connectivity={sessionConnectivity}
                   />
+                  {/* Beneath the tab strip and across every tab while a
+                    voice session is live (V6): the destination the next
+                    spoken post goes to, Mute, End, captions. */}
+                  {UNRELEASED_FEATURES_ENABLED ? <VoiceSessionStrip /> : null}
                 </>
               }
               surface={
@@ -210,6 +216,12 @@ function AppShellBody(props: AppShellProps) {
                     Tracy entry's tab, its lock and its place first. */}
                   {UNRELEASED_FEATURES_ENABLED ? (
                     <TracyEntryController />
+                  ) : null}
+                  {/* Once per window: the voice session's owner (the
+                    microphone, the engine, the scheduler), which the Talk
+                    control and the strip drive through the store. */}
+                  {UNRELEASED_FEATURES_ENABLED ? (
+                    <VoiceSessionController />
                   ) : null}
                   <MigrationRunController />
                   <MigrationBlockingModalHost />

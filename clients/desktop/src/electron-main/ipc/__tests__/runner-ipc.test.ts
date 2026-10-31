@@ -763,6 +763,9 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.runSandboxVerb,
           RunnerHostInvoke.getSandboxAutomation,
           RunnerHostInvoke.openSandboxAutomation,
+          // The voice session routes, for the same CORS reason.
+          RunnerHostInvoke.mintVoiceSession,
+          RunnerHostInvoke.endVoiceSession,
           // The secrets broker, on authn.
           RunnerHostInvoke.getSandboxGrants,
           RunnerHostInvoke.getTeamEnvironment,

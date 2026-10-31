@@ -36,6 +36,9 @@ import type {
   SecretRequestDecision,
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
+  VoiceSessionEndFetchResult,
+  VoiceSessionMintFetchResult,
+  VoiceSessionMintRequest,
 } from "../ipc-contracts/host-types";
 import type {
   CredentialsMigrationOutcome,
@@ -132,6 +135,14 @@ export interface AuthBridgeSurface {
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult>;
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
+  mintVoiceSession(
+    bearerToken: string,
+    request: VoiceSessionMintRequest,
+  ): Promise<VoiceSessionMintFetchResult>;
+  endVoiceSession(
+    bearerToken: string,
+    voiceSessionId: string,
+  ): Promise<VoiceSessionEndFetchResult>;
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -282,6 +293,20 @@ export function buildAuthBridge(): AuthBridgeSurface {
         RunnerHostInvoke.getSandboxCatalogue,
         bearerToken,
       ) as Promise<SandboxCatalogueFetchResult>,
+
+    mintVoiceSession: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.mintVoiceSession,
+        bearerToken,
+        request,
+      ) as Promise<VoiceSessionMintFetchResult>,
+
+    endVoiceSession: (bearerToken, voiceSessionId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.endVoiceSession,
+        bearerToken,
+        voiceSessionId,
+      ) as Promise<VoiceSessionEndFetchResult>,
 
     getTraycerModels: (bearerToken) =>
       ipcRenderer.invoke(

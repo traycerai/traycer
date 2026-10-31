@@ -1186,28 +1186,37 @@ function runDeferredBackground(state: BootState, services: AppServices): void {
     // (either may be the user-visible moment depending on lock state); the
     // renderer coalesces them, and a frozen/hidden renderer queues the IPC
     // until it unfreezes - i.e. it fires the moment the user views the window.
-    installHostWakeRecovery(services.host, installPowerMonitorListeners, () => {
-      state.bridge?.notifySystemResumed();
-      state.bridge?.fanOut(RunnerHostEvent.systemResumed, undefined);
-      checkForUpdatesAfterResume(state.config.isDev);
-      // `force: true` - matches `checkForUpdatesAfterResume` above: a real
-      // probe on every wake, gated only by the debounce below (not by cache
-      // age), so waking from sleep sees a release that shipped during sleep
-      // immediately instead of waiting out a staleness threshold.
-      const nowMs = Date.now();
-      if (
-        services.localHostCapability === "managed" &&
-        nowMs - lastHostRegistryResumeCheckMs >=
-          HOST_REGISTRY_RESUME_DEBOUNCE_MS
-      ) {
-        lastHostRegistryResumeCheckMs = nowMs;
-        void refreshHostRegistryIfNotRemoved(
-          services.hostController,
-          services.menu,
-          { force: true, maxAgeMs: null },
-        );
-      }
-    }),
+    installHostWakeRecovery(
+      services.host,
+      installPowerMonitorListeners,
+      () => {
+        state.bridge?.notifySystemResumed();
+        state.bridge?.fanOut(RunnerHostEvent.systemResumed, undefined);
+        checkForUpdatesAfterResume(state.config.isDev);
+        // `force: true` - matches `checkForUpdatesAfterResume` above: a real
+        // probe on every wake, gated only by the debounce below (not by cache
+        // age), so waking from sleep sees a release that shipped during sleep
+        // immediately instead of waiting out a staleness threshold.
+        const nowMs = Date.now();
+        if (
+          services.localHostCapability === "managed" &&
+          nowMs - lastHostRegistryResumeCheckMs >=
+            HOST_REGISTRY_RESUME_DEBOUNCE_MS
+        ) {
+          lastHostRegistryResumeCheckMs = nowMs;
+          void refreshHostRegistryIfNotRemoved(
+            services.hostController,
+            services.menu,
+            { force: true, maxAgeMs: null },
+          );
+        }
+      },
+      // The leave edge (suspend, screen lock): a live voice session ends so
+      // its microphone never outlives the person at the machine.
+      () => {
+        state.bridge?.fanOut(RunnerHostEvent.systemSuspended, undefined);
+      },
+    ),
   );
 }
 
