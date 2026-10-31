@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { VoiceEngine } from "@/lib/voice/engine";
+import type { QueueVerb, QueueVerbOutcome } from "@/lib/voice/queue-verbs";
 import type { SpeechActivity } from "@/lib/voice/scheduler";
 
 /**
@@ -56,16 +57,62 @@ export interface SpanReservation {
 }
 
 /**
- * A reply or notice waiting to be spoken, from the same signal the bell uses.
- * The queue is filled by a later ticket; the shape is here so the strip's
- * Waiting slot and the re-mint summary have something to read.
+ * What a queued thing is, by the record it was hydrated from: a bot's reply,
+ * a bot's own question to the person (a row with `question`), a task agent's
+ * question or approval a bot's post points at (a row with `surface`), a
+ * teammate's message in a thread the person follows, an answer the bot
+ * failed or parked, or an announcement at a channel's top level (spoken only
+ * in a briefing).
+ */
+export type QueueItemKind =
+  | "reply"
+  | "question"
+  | "surface"
+  | "message"
+  | "failed"
+  | "announcement";
+
+/**
+ * Where the voice is with an item, kept apart from the bell's read state:
+ * `offered`, its one line was heard ("want it?"); `heard`, its content was
+ * confirmed spoken (the only state that marks anything read); `dismissed`,
+ * the person said later. Looking at the channel changes none of these.
+ */
+export type QueueItemState = "queued" | "offered" | "heard" | "dismissed";
+
+/**
+ * Something waiting to be said, from one named source and hydrated from the
+ * records (never from notification copy). The queue keeps its own ids and is
+ * not the unread count.
  */
 export interface QueueItem {
+  /** The dedupe key: the reply's message id, the surface id, the stopped request. */
   readonly id: string;
+  readonly kind: QueueItemKind;
   readonly botId: string;
+  /** The host that serves the bot's records, and takes the mark. */
+  readonly hostId: string;
   readonly threadId: string | null;
+  /** The chat the row lives in: the thread, or the channel at the top level. */
+  readonly chatId: string;
+  readonly messageId: string | null;
+  readonly surfaceId: string | null;
+  /** What it is about, from the row itself. */
+  readonly title: string;
+  /** Who wrote a `message`, by the name the member directory gives; `null` for the bot's own. */
+  readonly author: string | null;
   /** One line: which bot, which thread, the gist. */
   readonly line: string;
+  /** When it happened, epoch ms; its age is measured from this. */
+  readonly at: number;
+  readonly state: QueueItemState;
+}
+
+/** What the queue's executor runs; the controller that owns the queue installs it. */
+export interface VoiceQueueDriver {
+  readonly run: (verb: QueueVerb) => QueueVerbOutcome;
+  /** A switch to the item the router carries out itself: the queue's side of it. */
+  readonly noteSwitched: (itemId: string) => void;
 }
 
 /**
@@ -248,6 +295,8 @@ export interface VoiceSessionState {
   readonly destinationKnown: boolean;
   readonly muted: boolean;
   readonly driver: VoiceSessionDriver | null;
+  /** The queue's executor while the controller is mounted; the session's state says whether it acts. */
+  readonly queueDriver: VoiceQueueDriver | null;
 
   readonly setAvailability: (availability: VoiceAvailability) => void;
   /** A new user session begins: a new token and a new engine generation. */
@@ -307,6 +356,7 @@ export interface VoiceSessionState {
   readonly setDestinationKnown: (known: boolean) => void;
   readonly setMuted: (muted: boolean) => void;
   readonly setDriver: (driver: VoiceSessionDriver | null) => void;
+  readonly setQueueDriver: (driver: VoiceQueueDriver | null) => void;
 }
 
 const CLEAR_ACTIVITY: SpeechActivity = {
@@ -346,6 +396,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   destinationKnown: true,
   muted: false,
   driver: null,
+  queueDriver: null,
 
   setAvailability: (availability) => set({ availability }),
   sessionConnecting: () =>
@@ -506,7 +557,25 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   },
   setMuted: (muted) => set({ muted }),
   setDriver: (driver) => set({ driver }),
+  setQueueDriver: (queueDriver) => set({ queueDriver }),
 }));
+
+/**
+ * What the Waiting control lists and counts: the items still waiting
+ * (queued, or offered and not taken up), newest first. Announcements are
+ * left out: they are spoken only in a briefing (V3).
+ */
+export function waitingItems(
+  queue: ReadonlyArray<QueueItem>,
+): ReadonlyArray<QueueItem> {
+  return queue
+    .filter(
+      (item) =>
+        item.kind !== "announcement" &&
+        (item.state === "queued" || item.state === "offered"),
+    )
+    .sort((a, b) => b.at - a.at);
+}
 
 function openSegments(
   segments: ReadonlyArray<TranscriptSegment>,
