@@ -139,6 +139,36 @@ const fake = vi.hoisted(() => {
     ],
     mainBotIds: { "env-1": "bot-1" },
   };
+  // The router's fixture answer: post the whole utterance to `botId`'s
+  // channel, or to the focus for `null`.
+  function routePost(botId: string | null, body: string): unknown {
+    const segments = body.split(String.raw`\"segment\":`).length - 1;
+    return {
+      output: [
+        {
+          type: "message",
+          content: [
+            {
+              type: "output_text",
+              text: JSON.stringify({
+                action: "post",
+                target: {
+                  environmentId: null,
+                  botId,
+                  threadId: null,
+                  itemId: null,
+                },
+                span: { fromSegment: 0, toSegment: segments - 1 },
+                uncertain: false,
+                question: null,
+                control: null,
+              }),
+            },
+          ],
+        },
+      ],
+    };
+  }
   return {
     personalEnvironment,
     mainBotList,
@@ -161,34 +191,12 @@ const fake = vi.hoisted(() => {
      * The router's answer for these cases: every utterance posts, whole, to
      * the focus, which is what the say loop's post path they pin needs.
      */
-    routeToFocus: (body: string): unknown => {
-      const segments = body.split(String.raw`\"segment\":`).length - 1;
-      return {
-        output: [
-          {
-            type: "message",
-            content: [
-              {
-                type: "output_text",
-                text: JSON.stringify({
-                  action: "post",
-                  target: {
-                    environmentId: null,
-                    botId: null,
-                    threadId: null,
-                    itemId: null,
-                  },
-                  span: { fromSegment: 0, toSegment: segments - 1 },
-                  uncertain: false,
-                  question: null,
-                  control: null,
-                }),
-              },
-            ],
-          },
-        ],
-      };
-    },
+    routeToFocus: (body: string): unknown => routePost(null, body),
+    /** A router answer for one case, in place of {@link routeToFocus}; reset for every case. */
+    routeAnswer: null as ((body: string) => unknown) | null,
+    /** The answer that posts the whole utterance to bot `botId`'s channel. */
+    routeToBot: (botId: string, body: string): unknown =>
+      routePost(botId, body),
   };
 });
 
@@ -214,7 +222,10 @@ vi.mock("@/lib/host", async (importOriginal) => ({
       }),
     endVoiceSession: fake.endVoiceSession,
     routeVoiceUtterance: (body: string) =>
-      Promise.resolve({ kind: "ok", body: fake.routeToFocus(body) }),
+      Promise.resolve({
+        kind: "ok",
+        body: (fake.routeAnswer ?? fake.routeToFocus)(body),
+      }),
   }),
   useHostClient: () => null,
 }));
@@ -555,6 +566,7 @@ beforeEach(() => {
   fake.endVoiceSession.mockImplementation(() =>
     Promise.resolve({ kind: "ok", closedAt: 1 }),
   );
+  fake.routeAnswer = null;
   fake.sendMock.mockReset();
   fake.sendMock.mockImplementation(() => fake.send.promise);
   fake.markRead.mockReset();
@@ -842,6 +854,55 @@ describe("an interruption before the session's first delegation", () => {
     const held = useVoiceSessionStore.getState().pendingAction;
     expect(held?.text).toContain("Delete");
     expect(held?.text).toContain("the branch.");
+  });
+});
+
+describe("a routed post to another bot", () => {
+  it("opens that bot, sends only once its channel is known and never on the previous bot's, and does not read the tab it left as the person moving", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    await bringLive();
+    expect(useVoiceSessionStore.getState().focus).toEqual(CHANNEL_FOCUS);
+    fake.routeAnswer = (body) => fake.routeToBot("bot-2", body);
+    const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+    await say("Ask the release bot when the train leaves.", "d1");
+
+    // The voice moved to bot-2 itself; bot-1's tab is still the active one
+    // here (navigation is mocked), which is the tab it left, not a move.
+    expect(useVoiceSessionStore.getState().focus).toEqual({
+      ...CHANNEL_FOCUS,
+      botId: "bot-2",
+    });
+    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
+      generation,
+    );
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    expect(fake.sendMock).toHaveBeenCalledWith({
+      botId: "bot-2",
+      conversationId: "chan-bot-2",
+      text: "Ask the release bot when the train leaves.",
+      threadId: null,
+      announcementId: null,
+      redeliver: null,
+      supersedes: null,
+      answer: null,
+    });
+
+    // The tab then comes up: the voice already moved there, so it is not a move.
+    selectBotTab("bot-2");
+    await settle();
+
+    expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
+    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
+      generation,
+    );
+    expect(
+      (fake.engines[0]?.appendCommentary.mock.calls ?? []).filter(
+        ([text]) => text === MOVED_ASK_TEXT,
+      ),
+    ).toEqual([]);
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
   });
 });
 
