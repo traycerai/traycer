@@ -506,6 +506,10 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
   ),
 }));
 
+import {
+  parseNotificationPayload,
+  routeNotificationForHost,
+} from "@/lib/notifications/payload";
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
@@ -2147,6 +2151,36 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
         .request(BOT_ID, { threadId: null, messageId: "post-1" });
       render(surface());
 
+      expect(openThreadBeside()).toBe("none");
+    });
+
+    it("is closed by a tapped push of the channel itself, from its payload through its route to the surface", () => {
+      mocks.state.threads = [];
+      const payload = parseNotificationPayload({
+        kind: "chat",
+        epicId: BOT_ID,
+        chatId: "conversation-app",
+        botId: BOT_ID,
+      });
+      expect(payload).toMatchObject({
+        kind: "chat",
+        bot: { botId: BOT_ID, threadId: null, messageId: null },
+      });
+      if (payload === null) throw new Error("the payload did not parse");
+
+      expect(
+        routeNotificationForHost(vi.fn(), payload, 1_000, {
+          originHostId: null,
+          effectiveHostId: "host-1",
+        }),
+      ).toBe(true);
+      expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
+        threadId: null,
+        messageId: null,
+      });
+      render(surface());
+
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
       expect(openThreadBeside()).toBe("none");
     });
 

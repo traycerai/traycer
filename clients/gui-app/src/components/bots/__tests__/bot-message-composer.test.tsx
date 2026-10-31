@@ -351,6 +351,80 @@ describe("<BotMessageComposer /> @ mentions", () => {
       expect(await sentText(user)).toBe("<@u-ann>");
     });
 
+    it("keeps each pick's member when a mention is inserted before an earlier pick", async () => {
+      const user = userEvent.setup();
+      mountIn(SHARED);
+      await user.type(box(), "@ann");
+      await user.keyboard("{ArrowDown}{Enter}");
+      expect(box().value).toBe("@Ann Lee ");
+
+      await user.keyboard("{Home}@ann{Enter}");
+
+      expect(box().value).toBe("@Ann Lee @Ann Lee ");
+      expect(await sentText(user)).toBe("<@u-ann> <@u-ann-2>");
+    });
+
+    it("keeps the second recipient when the first edited mention is deleted", async () => {
+      const user = userEvent.setup();
+      render(
+        <BotIdentityContext
+          value={{ botId: "bot-1", title: "Tracy", owner: SHARED }}
+        >
+          {composer({
+            requestId: "request-failed",
+            text: "hi <@u-ann> and <@u-ann-2>",
+          })}
+        </BotIdentityContext>,
+      );
+      expect(box().value).toBe("hi @Ann Lee and @Ann Lee");
+      await user.click(box());
+      act(() => box().setSelectionRange(3, 16));
+
+      await user.keyboard("{Backspace}");
+
+      expect(box().value).toBe("hi @Ann Lee");
+      expect(await sentText(user)).toBe("hi <@u-ann-2>");
+    });
+
+    it("does not turn a later plain shared name into a mention once its pick is deleted", async () => {
+      const user = userEvent.setup();
+      mountIn(SHARED);
+      await user.type(box(), "hello @ann");
+      await user.keyboard("{ArrowDown}{Enter}");
+      expect(box().value).toBe("hello @Ann Lee ");
+      act(() => box().setSelectionRange(6, 15));
+
+      await user.keyboard("{Backspace}");
+      expect(box().value).toBe("hello ");
+      await user.type(box(), "plain @Ann Lee");
+
+      expect(await sentText(user)).toBe("hello plain @Ann Lee");
+    });
+
+    it("sends a shared name retyped over a picked mention as typed, not as the member picked", async () => {
+      const user = userEvent.setup();
+      mountIn(SHARED);
+      await user.type(box(), "@ann");
+      await user.keyboard("{ArrowDown}{Enter}");
+      expect(box().value).toBe("@Ann Lee ");
+      act(() => box().setSelectionRange(0, 8));
+
+      await user.keyboard("@Ann Lee");
+
+      expect(box().value).toBe("@Ann Lee ");
+      expect(await sentText(user)).toBe("@Ann Lee");
+    });
+
+    it("sends a unique member's name typed plainly, with no pick, as their token", async () => {
+      const user = userEvent.setup();
+      mountIn(TEAM);
+      await user.type(box(), "hi @Bob");
+
+      await user.click(screen.getByTestId("bot-channel-composer-send"));
+
+      expect(mocks.send.mock.calls.at(-1)?.[0].text).toBe("hi <@u-bob>");
+    });
+
     it("sends an edited message's mention to the member it named", async () => {
       const user = userEvent.setup();
       render(

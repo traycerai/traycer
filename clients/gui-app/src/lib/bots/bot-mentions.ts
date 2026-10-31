@@ -23,34 +23,96 @@ export function botMentionToken(userId: string): string {
 const NAME_BOUNDARY = /[\s.,;:!?()[\]{}'"]/;
 
 /**
- * The text as sent: each `@Name` of a member becomes that member's token.
- * A name two members share is the one the person picked: `picks` are the
- * members picked from the list, in the order they were, and each such
- * `@Name` takes the next pick that names one of them; with none left it
- * stays as typed. Longer names are matched first, so "@Ann Lee" is not
- * read as "@Ann".
+ * A member picked from the list, by where the `@Name` the pick wrote sits in
+ * the box: `[start, end)`, the `@` and the name.
+ */
+export interface BotMentionPick {
+  readonly start: number;
+  readonly end: number;
+  readonly userId: string;
+}
+
+/**
+ * `picks` once `[start, end)` of the text is replaced by `insertedLength`
+ * characters: a pick the edit touches is gone, and one after it moves with
+ * the text.
+ */
+export function spliceMentionPicks(
+  picks: ReadonlyArray<BotMentionPick>,
+  start: number,
+  end: number,
+  insertedLength: number,
+): ReadonlyArray<BotMentionPick> {
+  const delta = insertedLength - (end - start);
+  return picks.flatMap((pick) => {
+    if (pick.end <= start) return [pick];
+    if (pick.start >= end) {
+      return [{ ...pick, start: pick.start + delta, end: pick.end + delta }];
+    }
+    return [];
+  });
+}
+
+/**
+ * `picks` across the change from `previous` to `next`, read as the one span
+ * between their common start and end. The common end is taken first, so
+ * typing just before a pick moves it rather than touching it.
+ */
+export function shiftMentionPicks(
+  previous: string,
+  next: string,
+  picks: ReadonlyArray<BotMentionPick>,
+): ReadonlyArray<BotMentionPick> {
+  if (previous === next || picks.length === 0) return picks;
+  const shorter = Math.min(previous.length, next.length);
+  let suffix = 0;
+  while (
+    suffix < shorter &&
+    previous[previous.length - 1 - suffix] === next[next.length - 1 - suffix]
+  ) {
+    suffix += 1;
+  }
+  let prefix = 0;
+  while (prefix < shorter - suffix && previous[prefix] === next[prefix]) {
+    prefix += 1;
+  }
+  return spliceMentionPicks(
+    picks,
+    prefix,
+    previous.length - suffix,
+    next.length - suffix - prefix,
+  );
+}
+
+/**
+ * The text as sent: a pick whose range still reads `@Name` of the member it
+ * picked becomes that member's token, and any other `@Name` becomes its
+ * member's token only where no other member has that name; a name two
+ * members share and that no pick holds stays as typed. Longer names are
+ * matched first, so "@Ann Lee" is not read as "@Ann".
  */
 export function mentionsToWire(
   text: string,
   members: ReadonlyArray<BotMentionCandidate>,
-  picks: ReadonlyArray<string>,
+  picks: ReadonlyArray<BotMentionPick>,
 ): string {
+  const nameOf = new Map(members.map((member) => [member.userId, member.name]));
   const byName = new Map<string, string[]>();
   for (const member of members) {
     const name = member.name.trim();
     if (name.length === 0) continue;
     byName.set(name, [...(byName.get(name) ?? []), member.userId]);
   }
-  const unspent = [...picks];
-  const userIdOf = (name: string): string | null => {
-    const userIds = byName.get(name) ?? [];
-    if (userIds.length === 1) return userIds[0];
-    const index = unspent.findIndex((userId) => userIds.includes(userId));
-    if (index === -1) return null;
-    const [picked] = unspent.splice(index, 1);
-    return picked;
+  const unique = [...byName]
+    .flatMap(([name, userIds]) =>
+      userIds.length === 1 ? [{ name, userId: userIds[0] }] : [],
+    )
+    .sort((a, b) => b.name.length - a.name.length);
+  const pickAt = new Map(picks.map((pick) => [pick.start, pick]));
+  const endsName = (at: number): boolean => {
+    const after = text.charAt(at);
+    return after === "" || NAME_BOUNDARY.test(after);
   };
-  const names = [...byName.keys()].sort((a, b) => b.length - a.length);
   let out = "";
   let index = 0;
   while (index < text.length) {
@@ -58,38 +120,65 @@ export function mentionsToWire(
     if (at === -1) break;
     out += text.slice(index, at);
     const before = at === 0 ? "" : text[at - 1];
-    const name =
-      before === "" || NAME_BOUNDARY.test(before)
-        ? names.find((candidate) => {
-            if (!text.startsWith(candidate, at + 1)) return false;
-            const after = text.charAt(at + 1 + candidate.length);
-            return after === "" || NAME_BOUNDARY.test(after);
-          })
-        : undefined;
-    const userId = name === undefined ? null : userIdOf(name);
-    if (name === undefined || userId === null) {
+    if (before !== "" && !NAME_BOUNDARY.test(before)) {
       out += "@";
       index = at + 1;
       continue;
     }
-    out += botMentionToken(userId);
-    index = at + 1 + name.length;
+    const pick = pickAt.get(at);
+    const picked = pick === undefined ? undefined : nameOf.get(pick.userId);
+    if (
+      pick !== undefined &&
+      picked !== undefined &&
+      picked.trim().length > 0 &&
+      text.slice(at, pick.end) === `@${picked}` &&
+      endsName(pick.end)
+    ) {
+      out += botMentionToken(pick.userId);
+      index = pick.end;
+      continue;
+    }
+    const named = unique.find(
+      ({ name }) =>
+        text.startsWith(name, at + 1) && endsName(at + 1 + name.length),
+    );
+    if (named === undefined) {
+      out += "@";
+      index = at + 1;
+      continue;
+    }
+    out += botMentionToken(named.userId);
+    index = at + 1 + named.name.length;
   }
   return out + text.slice(index);
 }
 
 /**
- * The text as the box shows it: each member's token as `@Name`; a token of
- * anyone else stays as it is.
+ * The text as the box shows it: each member's token as `@Name`, held as a
+ * pick of that member, so it is sent as them again; a token of anyone else
+ * stays as it is.
  */
 export function mentionsToDisplay(
   text: string,
   nameOf: (userId: string) => string | null,
-): string {
-  return text.replace(BOT_MENTION_TOKEN, (token, userId: string) => {
+): { readonly text: string; readonly picks: ReadonlyArray<BotMentionPick> } {
+  const picks: BotMentionPick[] = [];
+  let out = "";
+  let index = 0;
+  for (const match of text.matchAll(BOT_MENTION_TOKEN)) {
+    const userId = match[1];
     const name = nameOf(userId);
-    return name === null ? token : `@${name}`;
-  });
+    out += text.slice(index, match.index);
+    index = match.index + match[0].length;
+    if (name === null) {
+      out += match[0];
+      continue;
+    }
+    const shown = `@${name}`;
+    picks.push({ start: out.length, end: out.length + shown.length, userId });
+    out += shown;
+  }
+  return { text: out + text.slice(index), picks };
 }
 
 /**

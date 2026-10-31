@@ -481,6 +481,7 @@ function useBotTabSession(args: {
   readonly closeSession: () => void;
   readonly changeView: (view: BotTabView) => void;
   readonly showChannel: (messageId: string | null) => void;
+  readonly landChannel: (messageId: string | null) => void;
   readonly showThread: (threadId: string, messageId: string | null) => void;
 } {
   const { threads, onViewChange, setOpenThread } = args;
@@ -546,6 +547,20 @@ function useBotTabSession(args: {
     },
     [setOpenThread, showLanded],
   );
+  // A landing asked of the tab from outside it (a tapped push) shows the
+  // channel with nothing beside it, on its row where one is named. Unlike
+  // Back to the channel, it is never a return to a thread left open.
+  const landChannel = useCallback(
+    (messageId: string | null) => {
+      setOpenThread(null);
+      showLanded(
+        messageId === null
+          ? null
+          : { messageId, sendPostId: null, threadId: null },
+      );
+    },
+    [setOpenThread, showLanded],
+  );
   // Leaving Messages spends the channel's landing: the channel mounts again
   // when Messages shows, and must not land on that post a second time.
   const changeView = useCallback(
@@ -594,6 +609,7 @@ function useBotTabSession(args: {
     closeSession,
     changeView,
     showChannel,
+    landChannel,
     showThread,
   };
 }
@@ -608,10 +624,10 @@ function useSpendTabLanding(args: {
   readonly botId: string;
   /** `null` while the list is read. */
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
-  readonly showChannel: (messageId: string | null) => void;
+  readonly landChannel: (messageId: string | null) => void;
   readonly showThread: (threadId: string, messageId: string | null) => void;
 }): void {
-  const { botId, threads, showChannel, showThread } = args;
+  const { botId, threads, landChannel, showThread } = args;
   const landing = useBotTabLandingStore((state) =>
     Object.hasOwn(state.byBotId, botId) ? state.byBotId[botId] : null,
   );
@@ -619,11 +635,11 @@ function useSpendTabLanding(args: {
     if (landing === null || threads === null) return;
     useBotTabLandingStore.getState().clear(botId);
     if (landing.threadId === null) {
-      showChannel(landing.messageId);
+      landChannel(landing.messageId);
     } else {
       showThread(landing.threadId, landing.messageId);
     }
-  }, [botId, landing, showChannel, showThread, threads]);
+  }, [botId, landChannel, landing, showThread, threads]);
 }
 
 /**
@@ -767,9 +783,10 @@ function BotTabContent(props: {
     closeSession,
     changeView,
     showChannel,
+    landChannel,
     showThread,
   } = useBotTabSession({ threads, onViewChange, setOpenThread });
-  useSpendTabLanding({ botId, threads, showChannel, showThread });
+  useSpendTabLanding({ botId, threads, landChannel, showThread });
   const openActivity = useCallback(() => changeView("activity"), [changeView]);
   const activitySummary = useBotActivitySummary({
     botId,

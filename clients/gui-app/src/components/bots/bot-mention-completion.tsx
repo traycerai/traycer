@@ -10,12 +10,14 @@ import {
 import { MemberAvatar } from "@/components/bots/bot-avatars";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
 import {
-  BOT_MENTION_TOKEN,
   activeMentionQuery,
   matchMentionCandidates,
   mentionsToDisplay,
   mentionsToWire,
+  shiftMentionPicks,
+  spliceMentionPicks,
   type BotMentionCandidate,
+  type BotMentionPick,
 } from "@/lib/bots/bot-mentions";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { cn } from "@/lib/utils";
@@ -80,12 +82,20 @@ export function useBotMentionCompletion(args: {
   const [dismissedAt, setDismissedAt] = useState<number | null>(null);
   // Where the caret goes once a pick is in the box.
   const placeCaret = useRef<number | null>(null);
-  // The members picked into the box, in order: a name two members share is
-  // sent as the one picked (`mentionsToWire`). An emptied box has none.
-  const picks = useRef<string[]>([]);
-  useEffect(() => {
-    if (text.length === 0) picks.current = [];
-  }, [text]);
+  // The members picked into the box, by where each `@Name` sits in the text
+  // they were read against: a name two members share is sent as the one
+  // picked (`mentionsToWire`). Each change of the text moves them with it,
+  // and drops the ones it touched.
+  const [anchored, setAnchored] = useState<{
+    readonly text: string;
+    readonly picks: ReadonlyArray<BotMentionPick>;
+  }>({ text, picks: [] });
+  if (anchored.text !== text) {
+    setAnchored({
+      text,
+      picks: shiftMentionPicks(anchored.text, text, anchored.picks),
+    });
+  }
   const mention = activeMentionQuery(text, Math.min(caret, text.length));
   const matches =
     mention === null || candidates.length === 0
@@ -106,11 +116,28 @@ export function useBotMentionCompletion(args: {
 
   const pick = (candidate: BotMentionCandidate): void => {
     if (mention === null) return;
+    const end = Math.min(caret, text.length);
     const before = text.slice(0, mention.start);
-    const after = text.slice(Math.min(caret, text.length));
+    const after = text.slice(end);
     const inserted = `@${candidate.name} `;
-    picks.current = [...picks.current, candidate.userId];
-    setText(before + inserted + after);
+    const written = before + inserted + after;
+    setAnchored({
+      text: written,
+      picks: [
+        ...spliceMentionPicks(
+          shiftMentionPicks(anchored.text, text, anchored.picks),
+          mention.start,
+          end,
+          inserted.length,
+        ),
+        {
+          start: mention.start,
+          end: mention.start + 1 + candidate.name.length,
+          userId: candidate.userId,
+        },
+      ],
+    });
+    setText(written);
     const next = before.length + inserted.length;
     setCaret(next);
     setHighlight(0);
@@ -188,15 +215,22 @@ export function useBotMentionCompletion(args: {
       setCaret(next);
       setHighlight(0);
     },
-    toWire: (sent) => mentionsToWire(sent, everyone, picks.current),
+    // The text sent is the box's trimmed, which starts where the box's
+    // leading space ends.
+    toWire: (sent) => {
+      const offset = anchored.text.indexOf(sent);
+      const picks =
+        offset === -1
+          ? shiftMentionPicks(anchored.text, sent, anchored.picks)
+          : spliceMentionPicks(anchored.picks, 0, offset, 0);
+      return mentionsToWire(sent, everyone, picks);
+    },
     // A sent text's tokens are its picks again, so an edit sends each
     // mention to the member it named.
     toDisplay: (sent) => {
-      picks.current = Array.from(
-        sent.matchAll(BOT_MENTION_TOKEN),
-        (match) => match[1],
-      );
-      return mentionsToDisplay(sent, nameOf);
+      const display = mentionsToDisplay(sent, nameOf);
+      setAnchored(display);
+      return display.text;
     },
   };
 }
