@@ -78,6 +78,13 @@ export interface SpeechScheduler {
   /** Drops a queued item that has not been appended; a no-op otherwise. */
   remove(itemId: string): void;
   /**
+   * Takes an item back whatever its stage: a queued one is dropped, and one
+   * in flight is settled now with neither of its callbacks and never
+   * retried. Its audio, if any is playing, still holds the next append
+   * through the playback facts and the floor.
+   */
+  withdraw(itemId: string): void;
+  /**
    * Re-labels a queued item's delegation before it is appended (its request
    * was placed after it was scheduled). A no-op once the item is in flight
    * or gone.
@@ -374,6 +381,14 @@ export function createSpeechScheduler(
     remove(itemId) {
       const index = queue.findIndex((entry) => entry.item.id === itemId);
       if (index !== -1) queue.splice(index, 1);
+    },
+    withdraw(itemId) {
+      const index = queue.findIndex((entry) => entry.item.id === itemId);
+      if (index !== -1) queue.splice(index, 1);
+      if (inFlight?.queued.item.id !== itemId) return;
+      if (inFlight.timer !== null) deps.clearTimer(inFlight.timer);
+      inFlight = null;
+      onFactsChanged();
     },
     relabel(itemId, delegationId) {
       const entry = queue.find((candidate) => candidate.item.id === itemId);

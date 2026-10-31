@@ -49,7 +49,7 @@ export interface PendingHydration {
 }
 
 export interface VoiceQueueDeps {
-  readonly scheduler: Pick<SpeechScheduler, "enqueue" | "remove">;
+  readonly scheduler: Pick<SpeechScheduler, "enqueue" | "withdraw">;
   /** Mirrors the items into the store, for the strip and the re-mint summary. */
   readonly publish: (items: ReadonlyArray<QueueItem>) => void;
   readonly botTitle: (botId: string) => string;
@@ -184,7 +184,8 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
 
   const withdrawOffer = (entry: Entry): void => {
     if (entry.offerId === null) return;
-    deps.scheduler.remove(entry.offerId);
+    // Queued or already appended: either way it is not said (again).
+    deps.scheduler.withdraw(entry.offerId);
     entry.offerId = null;
   };
 

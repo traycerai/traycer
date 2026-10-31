@@ -200,7 +200,7 @@ export function useVoiceQueueOwner(input: {
     const created = createVoiceQueue({
       scheduler: {
         enqueue: (item) => ensureSpeech().enqueue(item),
-        remove: (itemId) => ensureSpeech().remove(itemId),
+        withdraw: (itemId) => ensureSpeech().withdraw(itemId),
       },
       publish: (items) => useVoiceSessionStore.getState().setQueue(items),
       botTitle: (botId) => botTitleRef.current(botId),
