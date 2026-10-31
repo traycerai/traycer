@@ -19,6 +19,7 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import type { BotSubscriptionResult } from "@/hooks/bots/use-bot-subscription";
 import type { StreamFrameEnvelope } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { SystemSuspendCause } from "@traycer-clients/shared/platform/runner-host";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
 import type { VoiceEngineEvents } from "@/lib/voice/engine";
@@ -367,6 +368,11 @@ const fake = vi.hoisted(() => {
         | null,
     },
     endVoiceSession: vi.fn(),
+    getUserMedia: vi.fn(),
+    // The runner host's suspend handler the controller subscribed, if any.
+    suspend: {
+      handler: null as ((cause: SystemSuspendCause) => void) | null,
+    },
     engines: [] as FakeEngine[],
     handles: new Map<string, { store: StoreApi<ChatState> }>(),
     /**
@@ -408,7 +414,14 @@ const fake = vi.hoisted(() => {
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({
     requestMicrophoneAccess: () => fake.micAccess.promise,
-    onSystemSuspended: () => ({ dispose: () => undefined }),
+    onSystemSuspended: (handler: (cause: SystemSuspendCause) => void) => {
+      fake.suspend.handler = handler;
+      return {
+        dispose: () => {
+          if (fake.suspend.handler === handler) fake.suspend.handler = null;
+        },
+      };
+    },
     setVoiceSessionLive: fake.setVoiceSessionLive,
     setVoiceSessionIndicator: fake.setVoiceSessionIndicator,
     onVoiceTrayAction: (
@@ -893,6 +906,8 @@ beforeEach(() => {
   fake.endVoiceSession.mockImplementation(() =>
     Promise.resolve({ kind: "ok", closedAt: 1 }),
   );
+  fake.getUserMedia.mockReset();
+  fake.getUserMedia.mockImplementation(() => fake.media.promise);
   fake.routeAnswer = null;
   fake.navigateOutcome = () => Promise.resolve();
   fake.navigate.mockClear();
@@ -910,7 +925,7 @@ beforeEach(() => {
   useBotTabsStore.setState(initialBotTabs, true);
   Object.defineProperty(navigator, "mediaDevices", {
     configurable: true,
-    value: { getUserMedia: () => fake.media.promise },
+    value: { getUserMedia: fake.getUserMedia },
   });
   vi.stubGlobal(
     "Audio",
@@ -959,6 +974,153 @@ describe("pagehide", () => {
     expect(fake.track.stop).toHaveBeenCalled();
     expect(fake.endVoiceSession).toHaveBeenCalledWith("vs1");
     expect(fake.setVoiceSessionLive.mock.lastCall).toEqual([false]);
+  });
+});
+
+describe("the app leaving or the OS taking the sound", () => {
+  it.each<SystemSuspendCause>(["background", "interrupted"])(
+    "%s ends a live session with that cause and stops the microphone before the end route answers",
+    async (cause) => {
+      fake.endVoiceSession.mockImplementation(() => new Promise(() => {}));
+      await bringLive();
+
+      act(() => fake.suspend.handler?.(cause));
+
+      const state = useVoiceSessionStore.getState();
+      expect(state.phase).toBe("idle");
+      expect(state.endReason).toBe(cause);
+      expect(fake.track.stop).toHaveBeenCalled();
+      await settle();
+      expect(fake.endVoiceSession).toHaveBeenCalledWith("vs1");
+      expect(fake.setVoiceSessionLive.mock.lastCall).toEqual([false]);
+    },
+  );
+
+  it("the track ending under a live session ends it as interrupted", async () => {
+    await bringLive();
+
+    act(() => {
+      fake.track.dispatchEvent(new Event("ended"));
+    });
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.endReason).toBe("interrupted");
+    expect(fake.track.stop).toHaveBeenCalled();
+  });
+
+  describe("the track being muted by the OS", () => {
+    let visibility: DocumentVisibilityState = "visible";
+
+    beforeEach(() => {
+      visibility = "visible";
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => visibility,
+      });
+    });
+
+    afterEach(() => {
+      Reflect.deleteProperty(document, "visibilityState");
+    });
+
+    it("ends the session as interrupted while the page is on screen", async () => {
+      await bringLive();
+
+      act(() => {
+        fake.track.dispatchEvent(new Event("mute"));
+      });
+
+      expect(useVoiceSessionStore.getState().phase).toBe("idle");
+      expect(useVoiceSessionStore.getState().endReason).toBe("interrupted");
+    });
+
+    it("leaves the session to the background edge while the page is hidden", async () => {
+      await bringLive();
+      visibility = "hidden";
+
+      act(() => {
+        fake.track.dispatchEvent(new Event("mute"));
+      });
+
+      expect(useVoiceSessionStore.getState().phase).toBe("live");
+      expect(fake.track.stop).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("the microphone refused or failing at the start", () => {
+  it("ends as microphone-denied without opening the microphone when the OS says denied", async () => {
+    await startTalk();
+    await act(async () => {
+      fake.micAccess.resolve("denied");
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.endReason).toBe("microphone-denied");
+    expect(fake.getUserMedia).not.toHaveBeenCalled();
+  });
+
+  it("ends as microphone-denied when the web view refuses the capture", async () => {
+    fake.getUserMedia.mockImplementation(() =>
+      Promise.reject(new DOMException("refused", "NotAllowedError")),
+    );
+    await startTalk();
+    await grantMicrophone();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.endReason).toBe("microphone-denied");
+  });
+
+  it("ends as microphone when the capture fails for any other reason", async () => {
+    fake.getUserMedia.mockImplementation(() =>
+      Promise.reject(new DOMException("in use", "NotReadableError")),
+    );
+    await startTalk();
+    await grantMicrophone();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.endReason).toBe("microphone");
+  });
+});
+
+describe("push-to-talk", () => {
+  it("opens the microphone only while the talk button is held, and the person's mute no longer applies once switched", async () => {
+    await bringLive();
+    expect(fake.track.enabled).toBe(true);
+
+    act(() => useVoiceSessionStore.getState().setPushToTalk(true));
+    expect(fake.track.enabled).toBe(false);
+
+    act(() => useVoiceSessionStore.getState().setTalkHeld(true));
+    expect(fake.track.enabled).toBe(true);
+    act(() => useVoiceSessionStore.getState().setTalkHeld(false));
+    expect(fake.track.enabled).toBe(false);
+
+    // Switching back to the open microphone listens again; a mute taken
+    // there is dropped by the next switch rather than silencing the held
+    // button.
+    act(() => useVoiceSessionStore.getState().setPushToTalk(false));
+    expect(fake.track.enabled).toBe(true);
+    act(() => useVoiceSessionStore.getState().driver?.setMuted(true));
+    expect(fake.track.enabled).toBe(false);
+    act(() => useVoiceSessionStore.getState().setPushToTalk(true));
+    act(() => useVoiceSessionStore.getState().setTalkHeld(true));
+    expect(fake.track.enabled).toBe(true);
+  });
+
+  it("keeps the microphone shut while held if dictation has paused the voice", async () => {
+    await bringLive();
+    act(() => useVoiceSessionStore.getState().setPushToTalk(true));
+    act(() => useVoiceSessionStore.getState().acquireDictationHold("composer"));
+
+    act(() => useVoiceSessionStore.getState().setTalkHeld(true));
+
+    expect(fake.track.enabled).toBe(false);
   });
 });
 
