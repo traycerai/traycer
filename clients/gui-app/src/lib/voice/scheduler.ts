@@ -658,14 +658,19 @@ function isDiscriminative(word: string): boolean {
 const LETTER_WORD_RE = /^\p{L}[\p{L}'’-]*$/u;
 
 /**
- * A content word: letters alone, neither filler nor a backchannel. A token
- * with a digit in it ("1000", "v1000", "2026-10-31") is never one: the word
- * splitter has dropped its sign, separators and grouping, so as proof it
- * would stand for a different value; numbers are proven only by the numeral
- * extraction on the raw text, judged at the utterance's completion.
+ * A content word: letters alone, neither filler nor a backchannel, and not
+ * a number said in words. A token with a digit in it ("1000", "v1000",
+ * "2026-10-31") is never one: the word splitter has dropped its sign,
+ * separators and grouping, so as proof it would stand for a different
+ * value; nor is a number word ("two", "forty-two"), which may go on to
+ * "hundred" or "percent". Numbers are proven only as complete values, by
+ * the numeral extraction on the raw text or their spoken forms, judged at
+ * the utterance's completion.
  */
 function isContentWord(word: string): boolean {
-  return LETTER_WORD_RE.test(word) && isDiscriminative(word);
+  return (
+    LETTER_WORD_RE.test(word) && isDiscriminative(word) && !isNumberWord(word)
+  );
 }
 
 /**
@@ -936,6 +941,12 @@ const NUMBER_WORDS: ReadonlySet<string> = new Set([
   "negative",
   "point",
 ]);
+
+/** A number said in words, hyphenated or not ("two", "forty-two"). */
+function isNumberWord(word: string): boolean {
+  const parts = word.split("-");
+  return parts.length > 0 && parts.every((part) => NUMBER_WORDS.has(part));
+}
 
 /** A complete number, as written or as said, and nothing else. */
 function isNumberPhrase(phrase: string): boolean {

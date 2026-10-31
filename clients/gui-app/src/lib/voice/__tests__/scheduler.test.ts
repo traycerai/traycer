@@ -340,6 +340,33 @@ describe("delivery confirmation", () => {
     expect(answer.delivered()).toBe(1);
   });
 
+  it("never takes a spoken number on a delta: two then hundred. is not 2, forty-two then percent. is not 42, zero then point five. is not 0", () => {
+    for (const [reply, first, rest] of [
+      ["2", "two", " hundred."],
+      ["42", "forty-two", " percent."],
+      ["0", "zero", " point five."],
+    ] as const) {
+      const answer = numericAnswer(reply);
+      scheduler.noteOutputTranscript(first);
+      expect(answer.delivered()).toBe(0);
+      scheduler.noteOutputTranscript(rest);
+      clock.advance(OUTPUT_HANGOVER_MS);
+      expect(answer.delivered()).toBe(0);
+      // The item is given up on with its budget spent; the next reply starts fresh.
+      clock.advance(CONFIRM_WINDOW_MS * MAX_DELIVERY_ATTEMPTS);
+      expect(scheduler.pendingCount()).toBe(0);
+      appended.length = 0;
+    }
+  });
+
+  it("proves 2 by two. at the quiet, not before", () => {
+    const answer = numericAnswer("2");
+    scheduler.noteOutputTranscript("two.");
+    expect(answer.delivered()).toBe(0);
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(answer.delivered()).toBe(1);
+  });
+
   it("takes no part of the number, nor filler that happens to hold one, as proof", () => {
     const answer = numericAnswer("42");
 
