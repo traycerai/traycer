@@ -4705,7 +4705,7 @@ describe("<TestEpicSessionTab />", () => {
     expect(streams[1].closeCount).toBe(0);
   });
 
-  // Fixup 2, item 4: the park effect's `setSession(null)` is now SYNCHRONOUS
+  // The park effect's `setSession(null)` is now SYNCHRONOUS
   // (`epic-session-provider.tsx`, ~1707), not deferred to a `queueMicrotask`
   // with a cancel-on-cleanup guard. The old deferred shape had a race: an
   // unpark landing before that microtask fired ran the effect's cleanup

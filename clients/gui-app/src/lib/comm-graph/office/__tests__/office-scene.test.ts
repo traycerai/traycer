@@ -11692,7 +11692,7 @@ describe("OfficeScene leads audience", () => {
   });
 });
 
-// ---- T2 fixup 1: cold-review findings F1-F9 ------------------------- //
+// ---- Cold-review findings F1-F9 ------------------------------------- //
 
 /** A projector whose x axis is offset far from the identity mapping. */
 const SHIFTED_PROJECTOR: OfficeProjector = {
@@ -13102,7 +13102,7 @@ describe("OfficeScene fixup 1 - F17 isometric growth reports a projected shift",
   });
 });
 
-// ---- T2 fixup 2: the reviewer's residuals ---------------------------- //
+// ---- The reviewer's residuals ---------------------------------------- //
 
 describe("OfficeScene fixup 2 - F2 a remembered errand tile follows the shift", () => {
   /**
@@ -15066,7 +15066,7 @@ describe("OfficeScene fixup 8d - the queue and the claim answer the right pool",
 });
 
 /**
- * Fixup 8e - finding 3 (the instant-seating gate was too narrow) and finding
+ * Finding 3 (the instant-seating gate was too narrow) and finding
  * 6 (an instant seat walk never moved the character's own tile).
  *
  * Standalone for the same reason 8d is: these build scenes directly off
@@ -15316,7 +15316,7 @@ describe("OfficeScene fixup 8e - the instant-seating gate, and the tile it seats
 });
 
 /**
- * Fixup 3a - the playback entry of `settleForStilledMotion`. Reduced motion
+ * The playback entry of `settleForStilledMotion`. Reduced motion
  * already settled walks; playback did not, because `wasSuppressed` was read
  * after `this.playing = input.playing` and the transition was always false.
  */

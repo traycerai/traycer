@@ -986,7 +986,7 @@ describe("officeBoardText - fixup 3 F11 the ladder never overflows its board", (
 });
 
 /**
- * Fixup 7 (finding L2): the HQ board used to letter its way down PAST the
+ * Finding L2: the HQ board used to letter its way down PAST the
  * first-names rung into manufactured initials - " · "-joined, then spaced,
  * then run together - and a real HQ board is eight tiles, which at office
  * zoom (0.92x) is well under the first-names rung's own width for any real
@@ -1272,7 +1272,7 @@ describe("compareHeat - the comparator contract", () => {
 });
 
 /**
- * Fixup 6, rule 1 (finding M2): `officeFloorSignsToDraw` used to gate on
+ * Rule 1 (finding M2): `officeFloorSignsToDraw` used to gate on
  * `floors.length <= 1`, so a host holding several floors got a label on
  * EVERY ONE of them - `host-a` x9 and `host-b` x10 down the two towers,
  * `Unattributed` x21 down the thousand-agent Building. The plan already
@@ -1402,7 +1402,7 @@ describe("officeFloorSignsToDraw - fixup 6 rule 1: one host label per building, 
 });
 
 /**
- * Fixup 6, rule 3 (finding L1): the resolver used to hand the renderer the
+ * Rule 3 (finding L1): the resolver used to hand the renderer the
  * plan's literal text unconditionally, so a bullpen plate's `Bullpen · 9 live
  * solos` (22 characters) went in whole and the RENDERER's own twelve-char
  * budget (`OFFICE_SIGN_PLATE_MAX_CHARS`, `truncateSign` in the canvas) cut it

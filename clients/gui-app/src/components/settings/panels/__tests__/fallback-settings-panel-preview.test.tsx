@@ -479,7 +479,7 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
           profileId: WORK_PROFILE_ID,
         }),
         // Not in the providers list - a profile deleted since the walk resolved
-        // it. The host's own rule (D118) degrades to a short prefix rather than
+        // it. The host's own rule degrades to a short prefix rather than
         // dropping the clause, because a card describing an account still has to
         // name it.
         previewRow(1, {

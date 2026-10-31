@@ -1,4 +1,4 @@
-// D8/D17: the bound update dispatches (`host.update.activate` /
+// The bound update dispatches (`host.update.activate` /
 // `host.update.continue`), dispatch OWNERSHIP (the per-host `updateDispatch`
 // slot), and the one-shot activation dialog auto-open.
 //

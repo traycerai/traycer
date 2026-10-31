@@ -1913,7 +1913,7 @@ describe("mission-control cold-review findings", () => {
 });
 
 /**
- * Fixup 5 (finding M3, amphitheatre half): a lead's plate used to be
+ * Finding M3, amphitheatre half: a lead's plate used to be
  * `widthTiles: 1` at a single tile beside the lead's console, drawn at a
  * fixed face and centred on that one tile - so a twelve-character
  * `team-26-lead` reached several consoles either side and the next opaque
@@ -2737,7 +2737,7 @@ describe("mission-control cold review: one hall for every host", () => {
 });
 
 /**
- * Fixup 6, rule 4, mission control's own version (see
+ * Rule 4, mission control's own version (see
  * `MissionControlFrozen.reserveLabelSeatIds`'s own doc comment): `paintSeat`
  * used to letter `reserve` under every empty console, which on a full bank
  * was several identical grey words in a row. `missionControlLettersReserve`

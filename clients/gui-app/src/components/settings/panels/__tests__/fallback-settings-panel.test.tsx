@@ -83,7 +83,7 @@ const fallbackMocks = vi.hoisted(
      *
      * It used to be a `vi.fn()` minted inside the module mock's factory, which
      * is unreachable by construction - a fresh function every call, so no test
-     * could ever arm it. D347 needs the restore's OWN lost reply, not a
+     * could ever arm it. This needs the restore's OWN lost reply, not a
      * stand-in, so it routes through the fixture the way `set` and `reset` do.
      * The hook itself stays mocked, which was the reason it was inert: it
      * would otherwise reach `useHostClient()` outside a provider.
@@ -583,7 +583,7 @@ describe("FallbackSettingsPanel - reset reads from the refetch, never the mutati
     //
     // The mutation resolves with a policy that is DISABLED and has a
     // DIFFERENT grace window - if the panel ever wrote this response into the
-    // reducer (the D116/D127 bug this test exists to catch), the assertions
+    // reducer (the bug this test exists to catch), the assertions
     // below would see these values instead of the refetch's.
     fallbackMocks.resetMutateAsync.mockImplementationOnce(() => {
       // Put the post-reset policy in the cache the panel is about to READ. The
@@ -1148,7 +1148,7 @@ describe("FallbackSettingsPanel - R8 a confirmed reset whose read fails is not s
     // notice, and a page showing settings the host no longer has as though
     // they had just been read. This `findByTestId` is what goes red.
     const banner = await screen.findByTestId("fallback-reset-unrefreshed");
-    // Re-specified under D330 (sixth pass). This asserted `toContain("out of
+    // Re-specified. This asserted `toContain("out of
     // date")` when written: an inequality claim - a reset of an ALREADY-DEFAULT
     // policy leaves the host holding exactly what is on screen, so "out of
     // date" is a fact about the host that the failed read is precisely what
@@ -2253,7 +2253,7 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
     // no existing test had ever had reason to notice. The property this pin
     // needs is only that TYPING sends nothing, and that is what this now says.
     // NOT focused, deliberately, and this is the second thing the fixture got
-    // wrong. `commitOnLeave` commits the group name on BLUR (D181), and Radix
+    // wrong. `commitOnLeave` commits the group name on BLUR, and Radix
     // restores focus to the Select's trigger asynchronously after
     // `chooseOption` - so focusing the input here handed it a blur on the next
     // flush and committed "opus" as a third save. That is the blur rule working
@@ -2987,8 +2987,8 @@ describe("FallbackSettingsPanel - R8/R10 fifth pass: the page's claims match the
     // `displaySubject` expression, leaving the two-way form. The banner then
     // calls the rollback "your own edit" while the notice immediately below it
     // calls the same values "still the settings from before the reset" - two
-    // alerts contradicting each other about one set of values, which is what
-    // D327 removed by giving provenance to the notice alone.
+    // alerts contradicting each other about one set of values, which was
+    // removed by giving provenance to the notice alone.
     expect(rolledBack.textContent).not.toContain("your own edit");
     expect(rolledBack.textContent).not.toContain("before the reset");
     // The banner keeps its own subject, and only that.
@@ -3211,7 +3211,7 @@ describe("FallbackSettingsPanel - sixth pass: no sentence asserts host knowledge
     // Same falsification as above, and this is the arm where the old wording
     // was furthest from the truth: the host has stored exactly what is on
     // screen, and the page said it had never been sent.
-    // Re-specified under D347 (eighth pass). This asserted
+    // Re-specified. This asserted
     // `toContain("has been saved")`, quoting "A change you made since has been
     // saved." - a HISTORY claim the state cannot support, since a read-back can
     // adopt a policy nobody authored. The sentence now describes the display's
@@ -3351,7 +3351,7 @@ describe('FallbackSettingsPanel - seventh pass: "hasn\'t been sent" is claimed o
     // confirmation at this revision, falls to the final arm, and tells the user
     // the values a read-back just confirmed have never been sent.
     expect(notice.textContent).not.toContain(NEVER_SENT);
-    // Re-specified under D347 (eighth pass). This asserted
+    // Re-specified. This asserted
     // `toContain("has been saved")`, quoting "A change you made since has been
     // saved." - a HISTORY claim the state cannot support, since a read-back can
     // adopt a policy nobody authored. The sentence now describes the display's
@@ -3414,7 +3414,7 @@ describe('FallbackSettingsPanel - seventh pass: "hasn\'t been sent" is claimed o
     // confirmed them.
     expect(notice.textContent).not.toContain(NEVER_SENT);
     expect(notice.textContent).not.toContain(SENT_UNKNOWN);
-    // Re-specified under D347 (eighth pass). This asserted
+    // Re-specified. This asserted
     // `toContain("has been saved")`, quoting "A change you made since has been
     // saved." - a HISTORY claim the state cannot support, since a read-back can
     // adopt a policy nobody authored. The sentence now describes the display's
@@ -3564,7 +3564,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
   it("CONTROL: when the read-back returns the displayed change, the display account still holds", async () => {
     // The positive control for the pin above: the same shape, except the
     // read-back returns B. The sentence is unchanged - it describes the
-    // display's relation to the host either way, which is the point of D347 -
+    // display's relation to the host either way, which is the point -
     // so this pin is what stops the fix being "delete the confirmed arm".
     fallbackMocks.queryData = respond(
       policy({ enabled: false, graceWindowSeconds: 15 }),
@@ -3691,7 +3691,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
       "whether the default tiers were restored",
     );
     expect(notice.textContent).not.toContain("whether model routing was reset");
-    // Re-specified under D353 (ninth pass). This asserted
+    // Re-specified. This asserted
     // `toContain("hasn't been sent")`, which was the whole `uncommitted` arm at
     // the time. The matrix splits that arm: this display is `loaded-unchanged`
     // - untouched values straight from the load - and "a newer edit that hasn't

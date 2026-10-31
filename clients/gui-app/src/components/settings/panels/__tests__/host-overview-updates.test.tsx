@@ -3149,7 +3149,7 @@ describe("Overview updates — CLI floor remedy", () => {
   });
 });
 
-// T2 fixup 1: a FIRST `host.update.check` that settles with no catalog and a
+// A FIRST `host.update.check` that settles with no catalog and a
 // failure (`cli-failed` / `invalid-output`) is a SETTLED answer, not a still-
 // pending one. `describeCheckState` used to fall through this exact input
 // shape (`manifest: null`, `checking: false`, `unreachable: false`, failure

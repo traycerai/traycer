@@ -1411,7 +1411,7 @@ describe("oblique fit ranges", () => {
 });
 
 /**
- * Fixup 6, rule 2 (finding M3-towers): a plate's box used to be centred on its
+ * Rule 2 (finding M3-towers): a plate's box used to be centred on its
  * text at whatever length the plan wrote, never checked against the pod it
  * sat over - `TEAM-6-LE│TEAM-8-LEAD│TEAM-10-LEAD` clipped across three
  * neighbouring pods because nothing shrank the reading OR checked its box
@@ -1641,7 +1641,7 @@ describe("oblique plates: fixup 6 rule 2 - plates fit their pods and never overl
 });
 
 /**
- * Fixup 6, rule 4 (finding L4): `seatProps` used to draw a `reserve` label
+ * Rule 4 (finding L4): `seatProps` used to draw a `reserve` label
  * under EVERY empty desk at close-up, so a vacant fifteen-desk storey painted
  * the same word fifteen times and competed with the name tags close-up exists
  * to show. `obliqueReserveLabelSeatId` now names one seat per storey - the one

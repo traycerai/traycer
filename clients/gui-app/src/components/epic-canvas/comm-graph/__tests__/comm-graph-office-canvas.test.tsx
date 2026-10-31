@@ -2638,7 +2638,7 @@ describe("CommGraphOfficeCanvas", () => {
   });
 
   /**
-   * Fixup 10 (L5, live sitting): pressing Fit used to be a one-off the moment
+   * L5, live sitting: pressing Fit used to be a one-off the moment
    * a person had touched the camera even once beforehand, because
    * `takeManualControl` (which every path into `fitToFloor` calls on the way
    * in, to abandon a playback pan in flight) cleared auto-fit for good and

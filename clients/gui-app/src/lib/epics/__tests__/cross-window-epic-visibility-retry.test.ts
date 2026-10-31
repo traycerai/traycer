@@ -399,7 +399,7 @@ describe("installCrossWindowEpicVisibility - failed-report retry (fixup 2, item 
 });
 
 /**
- * Fixup 2, the class sweep on item 2: the INBOUND startup read retries too.
+ * The class sweep: the INBOUND startup read retries too.
  *
  * CodeRabbit flagged the outbound `report`; the `snapshot()` leg one line down
  * was the same fire-and-forget shape, and it is the worse of the two. A dropped
