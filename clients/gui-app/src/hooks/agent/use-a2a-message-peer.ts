@@ -3,13 +3,14 @@ import type {
   AgentMessagePeer,
   AgentMessagePeerOrigin,
 } from "@traycer/protocol/host/agent/message-peer";
+import { useChatContainerId } from "@/components/chat/chat-container-context";
 import { useMaybeChatTranscript } from "@/components/chat/chat-transcript-context";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import {
   useEpicAgentReference,
-  useOpenEpicId,
+  useMaybeOpenEpicId,
   useRegisteredEpicLiveAgents,
 } from "@/lib/epic-selectors";
 
@@ -18,17 +19,19 @@ export function useA2AMessagePeer(
   agentId: string,
   origin: AgentMessagePeerOrigin | null,
 ): AgentMessagePeer | null {
-  const epicId = useOpenEpicId();
+  const epicId = useMaybeOpenEpicId();
+  // A bot's transcript keys its routing records by the bot, not a task.
+  const containerId = useChatContainerId();
   const local = useEpicAgentReference(agentId);
   const hostId = useTabHostId();
   const transcript = useMaybeChatTranscript();
   const exactLocal = local?.id === agentId;
   const { peer, unsupported } = useResolvedMessagePeer({
-    epicId,
-    chatId: transcript?.chatId ?? "",
+    epicId: containerId,
+    chatId: transcript?.chatId ?? null,
     agentId,
     origin,
-    enabled: !exactLocal && transcript !== null,
+    enabled: !exactLocal,
   });
   const refs = useMemo(
     () =>
@@ -41,7 +44,7 @@ export function useA2AMessagePeer(
   // or ambiguous conversation stays unlinked; only older hosts keep the
   // pre-existing prefix behavior when this lookup is unsupported.
   const canUseLocal = exactLocal || transcript === null || unsupported;
-  if (local !== null && canUseLocal) {
+  if (local !== null && epicId !== null && canUseLocal) {
     return {
       epicId,
       agentId: local.id,
@@ -58,24 +61,28 @@ export function useA2AMessagePeer(
   };
 }
 
-/** One shared lookup per conversation peer, then a message-specific fork fallback. */
+/**
+ * One shared lookup per conversation peer, then a message-specific fork
+ * fallback. Disabled while the conversation (its container or chat) is unknown.
+ */
 function useResolvedMessagePeer(input: {
-  readonly epicId: string;
-  readonly chatId: string;
+  readonly epicId: string | null;
+  readonly chatId: string | null;
   readonly agentId: string;
   readonly origin: AgentMessagePeerOrigin | null;
   readonly enabled: boolean;
 }): { readonly peer: AgentMessagePeer | null; readonly unsupported: boolean } {
   const { epicId, chatId, agentId, origin, enabled } = input;
   const client = useTabHostClient();
-  const params = { epicId, chatId, agentId };
+  const active = enabled && epicId !== null && chatId !== null;
+  const params = { epicId: epicId ?? "", chatId: chatId ?? "", agentId };
   const query = useHostQuery({
     client,
     method: "agent.resolveMessagePeer",
     params: { ...params, origin: null },
     cacheKeyIdentity: undefined,
     options: {
-      enabled,
+      enabled: active,
       staleTime: 30_000,
       poll: true,
     },
@@ -88,7 +95,7 @@ function useResolvedMessagePeer(input: {
     params: { ...params, origin },
     cacheKeyIdentity: undefined,
     options: {
-      enabled: enabled && origin !== null && query.data?.peer === null,
+      enabled: active && origin !== null && query.data?.peer === null,
       staleTime: 30_000,
       poll: true,
     },

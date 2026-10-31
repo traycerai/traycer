@@ -19,7 +19,7 @@ vi.mock("@/hooks/epic/use-epic-tile-navigation", () => ({
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
-  useOpenEpicId: () => "epic-current",
+  useMaybeOpenEpicId: () => "epic-current",
 }));
 
 vi.mock("@/lib/tab-navigation", async (importOriginal) => {

@@ -867,6 +867,11 @@ export function useOpenEpicId(): string {
   return useOpenEpicHandle().epicId;
 }
 
+/** {@link useOpenEpicId}, or `null` outside an open-epic session. */
+export function useMaybeOpenEpicId(): string | null {
+  return useMaybeOpenEpicHandle()?.epicId ?? null;
+}
+
 // ─── Title ────────────────────────────────────────────────────────────────
 
 export function useEpicTitle(): string {
@@ -1459,10 +1464,22 @@ function resolveEpicAgentReference(
   return matchedId === null ? null : exactEpicAgent(state, matchedId);
 }
 
+/**
+ * `null` without an open-epic session: a bot's transcript renders the same
+ * agent-message cards and has no task agents to match.
+ */
 export function useEpicAgentReference(
   referenceId: string,
 ): EpicAgentProjection | null {
-  return useEpicStore((state) => resolveEpicAgentReference(state, referenceId));
+  const handle = useMaybeOpenEpicHandle();
+  return useSyncExternalStore(
+    (listener) => handle?.store.subscribe(listener) ?? noopSubscribe,
+    () =>
+      handle === null
+        ? null
+        : resolveEpicAgentReference(handle.store.getState(), referenceId),
+    () => null,
+  );
 }
 
 export function useEpicLiveArtifactTitle(
