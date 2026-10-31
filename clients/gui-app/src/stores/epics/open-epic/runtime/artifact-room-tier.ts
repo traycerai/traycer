@@ -113,9 +113,8 @@ export interface ArtifactRoomReplicaEntry {
    * Local artifact-room-body updates produced while the stream is not ready to
    * send are queued here and replayed once the fresh root snapshot confirms
    * write permission. This mirrors the root-doc unsynced queue so reconnect
-   * windows do not silently discard user edits - see ticket
-   * 4a598302-ac79-47a5-a686-cc9e35bde18b "GUI artifact-room-doc awareness and
-   * reconnect-safe body edits".
+   * windows do not silently discard user edits: artifact-room-doc awareness
+   * and reconnect-safe body edits.
    *
    * On viewer downgrade the queue is cleared (fail-closed). When a
    * `artifactRoomSnapshot` arrives, the queue is collapsed into a single

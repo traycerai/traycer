@@ -23,7 +23,7 @@
  * ## Why the pane's own `activationHistory`
  *
  * Two independent layers have to agree on this set or they drift into the
- * two-owners failure design-review slice-4 finding 2 already cost us once:
+ * two-owners failure that already cost us once:
  *
  * - `tile-surface-membership.ts` decides which hosted records EXIST. It runs
  *   outside React, from a raw `canvasByTabId` snapshot.

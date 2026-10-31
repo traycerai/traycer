@@ -1,5 +1,5 @@
 /**
- * The store-backed chat RECORD channel (chat-sync-v2 ticket 49).
+ * The store-backed chat RECORD channel.
  *
  * Since the single-write pivot the epic Y.Doc is no longer where a chat's
  * existence is recorded: creation writes only the chat database, and the upgrade

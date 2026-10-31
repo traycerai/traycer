@@ -252,7 +252,7 @@ export interface TuiAgentProjection {
   /**
    * Which of the harness's logged-in profiles (subscriptions) this agent runs
    * on. `null` = the ambient/host login, so agents persisted before profiles
-   * existed still project cleanly. See the multi-profile decision log.
+   * existed still project cleanly.
    */
   readonly profileId: string | null;
   /**
