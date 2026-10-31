@@ -30,9 +30,12 @@ export function useA2AMessagePeer(
     origin,
     enabled: !exactLocal && transcript !== null,
   });
+  // A bot's session lives in the bot's container, which no task registers.
   const refs = useMemo(
     () =>
-      peer === null ? [] : [{ epicId: peer.epicId, agentId: peer.agentId }],
+      peer === null || peer.bot !== null
+        ? []
+        : [{ epicId: peer.epicId, agentId: peer.agentId }],
     [peer],
   );
   const [live] = useRegisteredEpicLiveAgents(refs);
@@ -48,14 +51,23 @@ export function useA2AMessagePeer(
       hostId: local.hostId ?? hostId,
       title: local.title.trim().length > 0 ? local.title : null,
       surface: "harnessId" in local ? "tui" : "gui",
+      bot: null,
     };
   }
   if (peer === null) return null;
-  const liveTitle = live?.title;
-  return {
-    ...peer,
-    title: liveTitle?.trim() ? liveTitle : peer.title,
-  };
+  return { ...peer, title: peerTitle(peer, live?.title) };
+}
+
+/**
+ * A bot's session is named by the bot, whose current title the host read; a
+ * task agent by its live title.
+ */
+function peerTitle(
+  peer: AgentMessagePeer,
+  liveTitle: string | null | undefined,
+): string | null {
+  const name = peer.bot === null ? liveTitle : peer.bot.title;
+  return name?.trim() ? name : peer.title;
 }
 
 /** One shared lookup per conversation peer, then a message-specific fork fallback. */

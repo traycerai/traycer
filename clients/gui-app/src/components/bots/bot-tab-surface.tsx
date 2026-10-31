@@ -647,7 +647,9 @@ function useBotTabSession(args: {
  * the channel. A `chat` landing (a chat search hit, a session link) names one
  * of the bot's chats, which is its channel, a thread, a thread's session or
  * its trunk session, each shown the way the tab shows it; an id that is none
- * of these lands nowhere, and the tab stays as it is.
+ * of these lands nowhere, and the tab stays as it is. A `sender` landing
+ * (a sender chip) shows the thread whose session sent beside the channel, or
+ * the channel for any other session.
  */
 function useSpendTabLanding(args: {
   readonly botId: string;
@@ -669,6 +671,12 @@ function useSpendTabLanding(args: {
   useEffect(() => {
     if (landing === null || threads === null) return;
     useBotTabLandingStore.getState().clear(botId);
+    if (landing.kind === "sender") {
+      const thread = threads.find((t) => t.sessionChatId === landing.chatId);
+      if (thread === undefined) landChannel(null);
+      else showThread(thread.threadId, null);
+      return;
+    }
     const { messageId } = landing;
     if (landing.kind === "thread") {
       if (landing.threadId === null) landChannel(messageId);

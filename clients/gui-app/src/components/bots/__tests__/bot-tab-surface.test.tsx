@@ -3014,6 +3014,32 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       expect(useBotTabLandingStore.getState().byBotId).toEqual({});
     });
 
+    it("shows the thread whose session sent beside the channel, with no session opened, for a sender landing", () => {
+      useBotTabLandingStore
+        .getState()
+        .request(BOT_ID, { kind: "sender", chatId: "session-thread-1" });
+      render(surface());
+
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-open-thread")).toBe("post-7");
+      expect(channel.getAttribute("data-land-on")).toBe("none");
+      expectNoSession();
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+    });
+
+    it("lands the channel, with no thread or session, for a sender landing on the trunk chat", () => {
+      useBotTabLandingStore
+        .getState()
+        .request(BOT_ID, { kind: "sender", chatId: BOT.trunkChatId });
+      render(surface());
+
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-open-thread")).toBe("none");
+      expect(channel.getAttribute("data-land-on")).toBe("none");
+      expectNoSession();
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+    });
+
     it.each([
       ["the trunk session", "trunk-1"],
       ["a thread's session", "session-thread-1"],

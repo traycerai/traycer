@@ -87,6 +87,7 @@ const REMOTE: AgentMessagePeer = {
   hostId: "host-remote",
   title: "Remote Title",
   surface: "gui",
+  bot: null,
 };
 
 const SENT_ORIGIN: AgentMessagePeerOrigin = {
@@ -126,6 +127,7 @@ describe("useA2AMessagePeer", () => {
       hostId: "host-local",
       title: "Local Title",
       surface: "gui",
+      bot: null,
     });
     const { primary, inherited } = lastRender();
     expect(primary.options.enabled).toBe(false);
@@ -148,6 +150,7 @@ describe("useA2AMessagePeer", () => {
       hostId: "tab-host",
       title: null,
       surface: "tui",
+      bot: null,
     });
   });
 
@@ -188,6 +191,31 @@ describe("useA2AMessagePeer", () => {
     );
 
     expect(result.current).toEqual({ ...REMOTE, title: "Renamed Live" });
+  });
+
+  it("names a bot's session by the bot's title, and looks up no task agent for it", () => {
+    mocks.primary = {
+      peer: {
+        epicId: "bot-1",
+        agentId: "session-chat-1",
+        hostId: "host-remote",
+        title: "Session chat title",
+        surface: "gui",
+        bot: { botId: "bot-1", title: "Release bot" },
+      },
+    };
+    mocks.live = { title: "A task agent that shares the id" };
+
+    const { result } = renderHook(() =>
+      useA2AMessagePeer("session-chat-1", SENT_ORIGIN),
+    );
+
+    expect(result.current).toMatchObject({
+      agentId: "session-chat-1",
+      title: "Release bot",
+      bot: { botId: "bot-1", title: "Release bot" },
+    });
+    expect(mocks.liveRefs[mocks.liveRefs.length - 1]).toEqual([]);
   });
 
   it("keeps the resolved title when the live title is empty or whitespace", () => {

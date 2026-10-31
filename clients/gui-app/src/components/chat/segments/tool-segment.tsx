@@ -785,10 +785,12 @@ function useA2ASendReceiver(
     // it is already mounted or is being opened by the call above. The receipt
     // is the receiver's own transcript message id, so this lands on the exact
     // row the message was delivered as. A send without one (TUI receiver, or
-    // a block persisted before the host carried receipts) just opens the tile.
+    // a block persisted before the host carried receipts) just opens the tile,
+    // and a bot's session opens the bot's channel, which lands no jump.
     if (
       receipt === null ||
       receiver.surface !== "gui" ||
+      receiver.bot !== null ||
       receipt.receiverAgentId !== receiver.agentId
     ) {
       return;

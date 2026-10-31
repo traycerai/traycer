@@ -159,7 +159,11 @@ import {
   agentArchiveV10,
   agentArchiveV11,
 } from "@traycer/protocol/host/agent/archive";
-import { agentResolveMessagePeerV10 } from "@traycer/protocol/host/agent/message-peer";
+import {
+  agentResolveMessagePeerUpgradeV10ToV11,
+  agentResolveMessagePeerV10,
+  agentResolveMessagePeerV11,
+} from "@traycer/protocol/host/agent/message-peer";
 import {
   agentConfigureDowngradeV20ToV10,
   agentConfigureDowngradeV30ToV10,
@@ -8189,11 +8193,16 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "agent.resolveMessagePeer": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentResolveMessagePeerV10,
           upgradeFromPreviousVersion: null,
+        },
+        // @1.1 names the bot of a bot session peer (Tracy Bots T107).
+        1: {
+          contract: agentResolveMessagePeerV11,
+          upgradeFromPreviousVersion: agentResolveMessagePeerUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},

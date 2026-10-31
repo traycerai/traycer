@@ -18,6 +18,9 @@ import { CHAT_TIMELINE_SCROLLER_MOVED_EVENT } from "@/components/chat/chat-timel
 import type { SetupWorkspaceState } from "@/components/chat/segments/setup-card-segment";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { botTabIntent } from "@/lib/tab-navigation/intents";
+import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
+import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import {
   buildComposerClipboardHtml,
   composerClipboardPlainText,
@@ -155,6 +158,12 @@ const navigationMocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   activateTabIntent:
     vi.fn<(navigate: unknown, intent: unknown, extra: unknown) => void>(),
+  navigateToTabIntent:
+    vi.fn<(navigate: unknown, intent: unknown, options: unknown) => void>(),
+}));
+
+vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
+  useConnectableHostIds: () => ({ hostIds: [], resolved: false }),
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
@@ -165,7 +174,11 @@ vi.mock("@tanstack/react-router", async (importOriginal) => {
 
 vi.mock("@/lib/tab-navigation", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/tab-navigation")>();
-  return { ...actual, activateTabIntent: navigationMocks.activateTabIntent };
+  return {
+    ...actual,
+    activateTabIntent: navigationMocks.activateTabIntent,
+    navigateToTabIntent: navigationMocks.navigateToTabIntent,
+  };
 });
 
 function expectCrossTaskActivation(node: {
@@ -236,6 +249,7 @@ const peerMocks = vi.hoisted(() => ({
       hostId: string;
       title: string | null;
       surface: "gui" | "tui";
+      bot: { botId: string; title: string } | null;
     } | null
   >,
 }));
@@ -1355,6 +1369,9 @@ describe("<UserMessageBody /> agent messages", () => {
 
     afterEach(() => {
       navigationMocks.activateTabIntent.mockClear();
+      navigationMocks.navigateToTabIntent.mockClear();
+      useBotTabsStore.setState({ tabs: {}, fixedBotId: null });
+      useBotTabLandingStore.setState({ byBotId: {} });
       peerMocks.byId = {};
       peerMocks.origins = [];
     });
@@ -1387,6 +1404,7 @@ describe("<UserMessageBody /> agent messages", () => {
         hostId: "host-2",
         title: "Cross Task Sender",
         surface: "gui",
+        bot: null,
       };
       const message = crossMessage(null);
       render(<UserMessageBody actions={null} message={message} />);
@@ -1418,6 +1436,7 @@ describe("<UserMessageBody /> agent messages", () => {
         hostId: "host-2",
         title: "Cross Terminal",
         surface: "tui",
+        bot: null,
       };
       render(<UserMessageBody actions={null} message={crossMessage(null)} />);
 
@@ -1431,6 +1450,40 @@ describe("<UserMessageBody /> agent messages", () => {
       expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual(
         {},
       );
+    });
+
+    it("opens a bot sender's channel, landing on the session, and parks no transcript jump", () => {
+      peerMocks.byId[CROSS_ID] = {
+        epicId: "bot-1",
+        agentId: CROSS_ID,
+        hostId: "host-2",
+        title: "Release bot",
+        surface: "gui",
+        bot: { botId: "bot-1", title: "Release bot" },
+      };
+      render(<UserMessageBody actions={null} message={crossMessage(null)} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Release bot" }));
+
+      expect(useBotTabsStore.getState().tabs["bot-1"]).toMatchObject({
+        botId: "bot-1",
+        hostId: TAB_HOST_ID,
+        title: "Release bot",
+      });
+      expect(navigationMocks.navigateToTabIntent).toHaveBeenCalledWith(
+        navigationMocks.navigate,
+        botTabIntent("bot-1"),
+        undefined,
+      );
+      expect(useBotTabLandingStore.getState().byBotId["bot-1"]).toEqual({
+        kind: "sender",
+        chatId: CROSS_ID,
+      });
+      expect(useChatTranscriptJumpStore.getState().requestsByChatId).toEqual(
+        {},
+      );
+      expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
+      expect(navigationMocks.activateTabIntent).not.toHaveBeenCalled();
     });
 
     it("renders the stamped title as plain text when the peer cannot be resolved", () => {
