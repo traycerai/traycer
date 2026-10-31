@@ -1942,7 +1942,7 @@ function ConsentLogToggleRow(props: {
   );
 }
 
-// One consent flag, one row, two files (plan D3): there is no
+// One consent flag, one row, two files (ticket 03 / plan D3): there is no
 // scenario where a user wants `browser-telemetry.jsonl` attached but not
 // `browser-trace.jsonl` (or vice versa), so a single switch covers both -
 // unlike `ConsentLogToggleRow`'s single target, this offers two independent

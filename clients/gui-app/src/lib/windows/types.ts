@@ -751,7 +751,7 @@ export interface DesktopReportIssueForm {
   // the private submission / diagnostic bundle when false.
   readonly includeDesktopLog: boolean;
   readonly includeHostLog: boolean;
-  // One toggle covering both browser diagnostic files (plan D3):
+  // One toggle covering both browser diagnostic files (plan D3, ticket 03):
   // `browser-telemetry.jsonl` and `browser-trace.jsonl`. Default on, same
   // shape as `includeDesktopLog`/`includeHostLog` - withholds both frozen
   // tails when false. Field-for-field match with main's

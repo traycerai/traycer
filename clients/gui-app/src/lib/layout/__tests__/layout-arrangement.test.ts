@@ -2015,7 +2015,7 @@ describe("the tab strip's placement and the sidebar's side (S-01, S-02, S-05, S-
 });
 
 /**
- * What the vertical strip shows, and the predicate for when it lists the
+ * D8: what the vertical strip shows, and D9's predicate for when it lists the
  * active task's live agents under its row.
  */
 describe("the vertical strip's view (D8, D9)", () => {
