@@ -76,7 +76,7 @@ const compatAnchorAtFailure = new Map<string, string | null>();
  * verdict, one render before the query re-keys".
  *
  * Its last such reader was the status strip's switch trigger, deleted with the
- * strip (D11). It has one again - {@link useHostStatusReprobeOnRepoint}, which
+ * strip. It has one again - {@link useHostStatusReprobeOnRepoint}, which
  * names the INCOMING host by definition and so cannot ask through
  * `useHostCompatibility()` - and the rule it reads through this export for is
  * unchanged: a per-host reader must not re-derive this key.
@@ -468,7 +468,7 @@ export function useHostCompatibilityProbeForClient(
 
 /**
  * Feeds the compat probe's verdict to the selection authority (redesign
- * P1.3), which is what makes D13/C4 real: a host whose probe reports a
+ * P1.3), which is what makes C4 real: a host whose probe reports a
  * blocking version mismatch is `dead("incompatible")` for SELECTION - never a
  * failover candidate, refused by Activate, and given the ∅ modal's
  * "update host" variant - even though its socket is alive and Settings can

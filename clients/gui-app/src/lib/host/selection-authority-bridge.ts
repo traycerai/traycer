@@ -194,7 +194,7 @@ function narrate(
     targetHostId: change.targetHostId,
   });
   // G4: a `null`-selection surface re-points and resets its host-dependent
-  // state. Pinned instances ignore this by construction (D6).
+  // state. Pinned instances ignore this by construction.
   notifyEffectiveHostChanged(
     change.previousEffectiveHostId,
     change.effectiveHostId,
@@ -205,7 +205,7 @@ function narrate(
   // derivation, which is the conflation this split ends.
   const effectiveHostId = change.effectiveHostId;
   if (effectiveHostId !== null) {
-    // ∅ has its own narrator - the global modal (D10) - and a toast saying
+    // ∅ has its own narrator - the global modal - and a toast saying
     // the app switched to nothing would compete with it.
     toastSelectionSwitched({
       cause: change.cause,

@@ -7,7 +7,7 @@ import { recordObservationFromLocalAttempt } from "@/lib/host/fleet-update/recor
 // module's own doc: FACTS ONLY — nothing here may invent `execution`,
 // `trigger`, busy counts, or an error, since those are things only a RUNNING
 // host can report. `liveness` and its stamp are the one pair a reader on this
-// machine CAN establish (D13), and they are FORWARDED from the publisher's own
+// machine CAN establish, and they are FORWARDED from the publisher's own
 // probe, never derived here from a phase. `toEqual` (exact shape), never
 // `toMatchObject`, for every non-null case below — a subset match would not
 // notice a future edit that started fabricating one of those fields, nor one
@@ -24,7 +24,7 @@ function facts(overrides: Partial<LocalAttemptFacts>): LocalAttemptFacts {
     continuation: null,
     updatedAt: "2026-08-27T00:00:00.000Z",
     error: null,
-    // Desktop's probed liveness (D13). `unknown` is the base fixture because
+    // Desktop's probed liveness. `unknown` is the base fixture because
     // these cases are about the RECORD's facts; a case about liveness overrides
     // it explicitly.
     liveness: "unknown",
@@ -149,7 +149,7 @@ describe("recordObservationFromLocalAttempt", () => {
     expect(result?.errorMessage).toBeNull();
   });
 
-  // D13's stamp is the PUBLISHER's clock at its probe, and forwarding it
+  // The stamp is the PUBLISHER's clock at its probe, and forwarding it
   // verbatim — `null` included — is what makes the projector's five-second
   // proof deadline enforceable. Re-stamping here with this reader's clock
   // would restart the proof's life on every read, which is the "cached

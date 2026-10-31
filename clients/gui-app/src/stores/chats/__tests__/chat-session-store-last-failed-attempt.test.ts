@@ -26,7 +26,7 @@ import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-st
  * existing call site a required argument it does not exercise.
  *
  * `undefined` here is a VALUE (the attempt was consumed / superseded /
- * turn ended cleanly), never an omission - the same rule D215 pins for
+ * turn ended cleanly), never an omission - the same rule pinned for
  * `lastFallbackOutcome`. A `??` on any of the three write sites below would
  * make a failed turn's retry/switch/wait affordances immortal.
  */
@@ -277,11 +277,11 @@ function deferredWindowedSnapshot(
       managedCommands: [],
       heldUpdates: [],
       portForwards: [],
-      // Unhydrated tail (same construction as the D215 file's) - every case
+      // Unhydrated tail (same construction as the fallback-outcome file's) - every case
       // below drives the DEFERRAL branch, not the ordinary fold. `rowCount: 2`
       // with `fromOrdinal: 0` below leaves ordinal 1 uncovered, so a partial
       // range genuinely stays partial rather than accidentally completing the
-      // tail (the D219 trap `last-fallback-outcome`'s re-entry test hit).
+      // tail (the trap `last-fallback-outcome`'s re-entry test hit).
       transcriptEpoch: 4,
       rowCount: 2,
       indexRevision: null,

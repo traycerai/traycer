@@ -17,7 +17,7 @@ export function HostCompatibilityProvider(props: {
 }): ReactNode {
   const effectiveHostId = useEffectiveHostId();
   const compatibility = useHostCompatibilityProbe();
-  // The probe's verdict is also SELECTION evidence (D13/C4): reported from
+  // The probe's verdict is also SELECTION evidence (C4): reported from
   // here, one level up from the state machine, because that machine is a
   // render function and reporting from render double-fires under StrictMode.
   useHostCompatibilityAuthorityReport(compatibility, effectiveHostId);

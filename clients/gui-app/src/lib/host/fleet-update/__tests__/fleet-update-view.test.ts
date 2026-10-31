@@ -1370,7 +1370,7 @@ describe("projectFleetUpdateView — the durable-record arm (host-down window)",
           message: "the service did not start",
           phase: "restarting",
         },
-        // A terminal record is never probed (D13), so Desktop publishes
+        // A terminal record is never probed, so Desktop publishes
         // `unknown` with no observation timestamp.
         liveness: "unknown",
         livenessObservedAtMs: null,

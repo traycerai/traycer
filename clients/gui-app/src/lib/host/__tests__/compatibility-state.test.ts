@@ -461,7 +461,7 @@ describe("compatibility-state - compat verdict session anchoring (P5.2)", () => 
 
     // NOT asserted via the rendered status text: the real selection bridge is
     // mounted here, so the incompatible verdict moves `effectiveHostId` off
-    // this host (D13/C4) and the probe's own status falls back to `checking`
+    // this host (C4) and the probe's own status falls back to `checking`
     // with nothing bound - see `authorityIncompatibleCode` in
     // `host-compatibility-provider.test.tsx` for the same reasoning. The
     // report to the authority is the thing under test, so wait on it directly.

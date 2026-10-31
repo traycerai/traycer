@@ -151,7 +151,7 @@ export interface FleetUpdateRecordObservation {
   readonly errorMessage: string | null;
   readonly errorCode: string | null;
   /**
-   * What the READER's own holder probe established (D13), never something
+   * What the READER's own holder probe established, never something
    * derived from the record's contents.
    *
    * This is the one fact the record cannot supply about itself: a file saying
@@ -192,7 +192,7 @@ export interface FleetUpdateRecordObservation {
 }
 
 /**
- * How long a POSITIVE holder probe may still be presented as proof (D13).
+ * How long a POSITIVE holder probe may still be presented as proof.
  *
  * Five seconds: comfortably above the 750 ms cadence a live record is
  * published at, so an ordinary publication always renews the proof before it
@@ -209,7 +209,7 @@ export const LOCAL_LIVENESS_PROOF_MS = 5_000;
  * How far a probe stamp may sit in this reader's FUTURE before it stops
  * counting as proof.
  *
- * The rule D13 states is `0 ≤ nowMs - livenessObservedAtMs`, and a strict `0`
+ * The rule is `0 ≤ nowMs - livenessObservedAtMs`, and a strict `0`
  * would be wrong here for a reason that has nothing to do with clocks
  * disagreeing: `nowMs` comes from a one-second renderer tick, so it lags real
  * time by up to that interval, while the stamp is written at the instant of
@@ -690,7 +690,7 @@ export function projectFleetUpdateView(
 }
 
 /**
- * What the DURABLE RECORD projects on its own (D13).
+ * What the DURABLE RECORD projects on its own.
  *
  * Two arms, and the split is exactly the difference between evidence and
  * inference:
@@ -1469,7 +1469,7 @@ function kindWarrantsFastPoll(kind: FleetUpdateViewKind): boolean {
 }
 
 /**
- * Precedence between a live read and the durable record (ordering per D13).
+ * Precedence between a live read and the durable record.
  *
  * A FRESH wire observation always wins: a running host reporting on itself is
  * strictly better evidence than a file describing what it last wrote, and the

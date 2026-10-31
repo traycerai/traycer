@@ -19,7 +19,7 @@ import type { FleetUpdateRecordObservation } from "@/lib/host/fleet-update/fleet
  * ## FACTS ONLY
  *
  * Everything here comes off the record, or — for `liveness` and its stamp —
- * off the PROBE the publisher ran beside the read (D13). Nothing invents
+ * off the PROBE the publisher ran beside the read. Nothing invents
  * `execution`, `trigger`, busy counts, or an error: those are things only a
  * RUNNING host can report, and the whole reason this arm exists is that there
  * is no running host to report them. Liveness is the one thing a reader on

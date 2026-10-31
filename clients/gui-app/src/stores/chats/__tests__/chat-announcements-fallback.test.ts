@@ -1290,7 +1290,7 @@ describe("fallbackAnnouncementPlan: the announcer reads the frame the card reads
 
   const RESUME_SENTENCE = `The chat will resume on ${FAILED_IDENTITY}.`;
 
-  // The live D8 frame: a profile rung whose target is the account that
+  // The live frame: a profile rung whose target is the account that
   // failed. The card said "Resuming in 12s"; the announcer said "The chat will
   // switch to" that same account.
   it("a profile rung whose target is the failed tuple announces a resume, never a switch - hold and switching", () => {
@@ -1862,7 +1862,7 @@ describe("fallbackNoticeAnnouncements", () => {
   });
 });
 
-// D215: confirmed host outcome metadata reaches the announcer independent of
+// Confirmed host outcome metadata reaches the announcer independent of
 // transcript row hydration. `fallbackOutcomeAnnouncement` is the pure adapter
 // for that path; it speaks the same TITLE-only sentence as
 // `fallbackNoticeAnnouncements` (`fallbackNoticeText`), not a parallel
@@ -1987,7 +1987,7 @@ describe("createFallbackAnnouncementObserver", () => {
       residentMessageIds: new Set(),
       traversal: null,
       returnOffer: null,
-      // Host outcome metadata (D215), independent of transcript hydration.
+      // Host outcome metadata, independent of transcript hydration.
       // Defaulted to null here; the dedicated liveOutcome tests below
       // override it explicitly.
       liveOutcome: null,
@@ -2818,7 +2818,7 @@ describe("createFallbackAnnouncementObserver", () => {
     ]);
   });
 
-  // D215 liveOutcome: confirmed host metadata, delivered independent of
+  // liveOutcome: confirmed host metadata, delivered independent of
   // transcript row hydration.
   describe("liveOutcome (D215 confirmed host outcome metadata)", () => {
     it("delivers a liveOutcome even when its underlying row is NOT resident in the transcript - host metadata bypasses the hydration-residency gate that regular notices are subject to", () => {
