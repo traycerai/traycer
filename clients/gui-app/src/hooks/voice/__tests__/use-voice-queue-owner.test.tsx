@@ -141,7 +141,9 @@ const REPLY_ROW: HydrationRow = {
  * with a waiting question and a waiting reply in the queue. Only the card's
  * records (the watcher's part) and the host APIs are fed by hand.
  */
-function mountOwnerWithWaitingItems(arrival: "briefed" | "during-session") {
+function mountOwnerWithWaitingItems(
+  arrival: "briefed" | "during-session" | "in-focused-chat",
+) {
   const clock = createClock();
   const appended: string[] = [];
   const scheduler = createSpeechScheduler({
@@ -181,8 +183,19 @@ function mountOwnerWithWaitingItems(arrival: "briefed" | "during-session") {
     act(() => {
       queue.begin([], () => "host-a");
     });
-    // The voice is speaking when the question arrives: its offer waits queued.
-    scheduler.noteOutputLevel(true);
+    if (arrival === "during-session") {
+      // The voice is speaking when the question arrives: its offer waits queued.
+      scheduler.noteOutputLevel(true);
+    } else {
+      // The person is in the chat the question arrives in: it is not offered.
+      useVoiceSessionStore.getState().setFocus({
+        botId: "bot-2",
+        hostId: "host-a",
+        threadId: "thread-x",
+        anchorMessageId: null,
+        anchorThread: null,
+      });
+    }
     act(() => {
       queue.ingestReplies([ref(QUESTION_ITEM, 5_000)], () => "host-a");
       queue.hydrated(QUESTION_ITEM, QUESTION_ROW, null);
@@ -357,5 +370,51 @@ describe("Read on a question whose offer is still queued", () => {
     });
     h.say("yes");
     expect(h.api.answerBotQuestion).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a question the focused feed said", () => {
+  it("is still found by a spoken open and read as the card, until its row settles", () => {
+    const h = mountOwnerWithWaitingItems("in-focused-chat");
+    expect(
+      h
+        .owner()
+        .queue?.items()
+        .map((item) => item.id),
+    ).toEqual([QUESTION_ITEM]);
+    expect(h.enqueued.mock.calls.map(([item]) => item.text)).toEqual([]);
+
+    act(() => {
+      h.owner().noteFocused(QUESTION_ITEM);
+    });
+    let opened = "";
+    act(() => {
+      opened = runVoiceQueueVerb({
+        kind: "open",
+        itemId: QUESTION_ITEM,
+        delegationId: null,
+      });
+    });
+
+    expect(opened).toBe("appended");
+    expect(useVoiceSessionStore.getState().activeCard).toMatchObject({
+      family: "bot-question",
+      ids: { itemId: QUESTION_ITEM },
+    });
+
+    act(() => {
+      h.owner().queue?.promptSettled(QUESTION_ITEM);
+    });
+    let again = "";
+    act(() => {
+      again = runVoiceQueueVerb({
+        kind: "open",
+        itemId: QUESTION_ITEM,
+        delegationId: null,
+      });
+    });
+
+    expect(again).toBe("nothing");
+    expect(h.owner().queue?.items()).toEqual([]);
   });
 });

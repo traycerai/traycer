@@ -163,6 +163,26 @@ function botRow(
   return { role: "assistant", messageId, blocks: [textBlock(text)] };
 }
 
+/** A bot row asking one open question. */
+function questionRow(
+  messageId: string,
+): Extract<HydrationRow, { readonly role: "assistant" }> {
+  return {
+    ...botRow(messageId, "The release is ready. Ship or hold?"),
+    question: {
+      requestId: "req-1",
+      questions: [
+        {
+          text: "Ship or hold?",
+          options: ["Ship", "Hold"],
+          allowFreeText: false,
+          settlement: null,
+        },
+      ],
+    },
+  };
+}
+
 /** A reply that arrives while the session runs, hydrated and so offered. */
 function arrive(ref: ReplyRef, row: HydrationRow): void {
   queue.ingestReplies([ref], hostOf);
@@ -237,7 +257,8 @@ describe("a reply seen from two views", () => {
     // The focused feed schedules a row before the records answer for it.
     queue.ingestReplies([replyRef({ messageId: "r-2" })], hostOf);
     queue.noteFocused("r-2");
-    expect(queue.pendingHydrations()).toEqual([]);
+    // Whether it is a prompt is not known until its row is read.
+    expect(queue.pendingHydrations()).toHaveLength(1);
     queue.hydrated("r-2", botRow("r-2", "Merged the release branch."), null);
     queue.ingestReplies([replyRef({ messageId: "r-2" })], hostOf);
     expect(queue.pendingHydrations()).toEqual([]);
@@ -382,6 +403,49 @@ describe("two posts about the same approval", () => {
       resolution: null,
     });
     expect(queue.surfaceOf("r-unknown")).toBeNull();
+  });
+});
+
+describe("a question or approval the focused feed says", () => {
+  it("stays queued as a card to open, with its offer taken back, and is left by the focused feed", () => {
+    scheduler.noteInputTranscript();
+    arrive(replyRef({ messageId: "q-1" }), questionRow("q-1"));
+    expect(stateOf("q-1")).toBe("queued");
+
+    queue.noteFocused("q-1");
+
+    expect(
+      queue.items().map((item) => [item.id, item.kind, item.state]),
+    ).toEqual([["q-1", "question", "queued"]]);
+    expect(queue.keepsFromFocus("q-1")).toBe(true);
+    clock.advance(INPUT_ACTIVE_WINDOW_MS * 5);
+    expect(appended).toEqual([]);
+  });
+
+  it("is decided once its row is read when the feed said it while it was pending: a question is kept", () => {
+    queue.ingestReplies([replyRef({ messageId: "q-2" })], hostOf);
+    queue.noteFocused("q-2");
+    expect(queue.pendingHydrations()).toHaveLength(1);
+
+    queue.hydrated("q-2", questionRow("q-2"), null);
+
+    expect(
+      queue.items().map((item) => [item.id, item.kind, item.state]),
+    ).toEqual([["q-2", "question", "queued"]]);
+    expect(queue.keepsFromFocus("q-2")).toBe(true);
+    clock.advance(120_000);
+    expect(appended).toEqual([]);
+  });
+
+  it("is let go once its row is read when it turns out to be a plain reply", () => {
+    queue.ingestReplies([replyRef({ messageId: "r-2" })], hostOf);
+    queue.noteFocused("r-2");
+
+    queue.hydrated("r-2", botRow("r-2", REPLY_TEXT), null);
+
+    expect(queue.items()).toEqual([]);
+    clock.advance(120_000);
+    expect(appended).toEqual([]);
   });
 });
 
