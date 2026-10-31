@@ -19,6 +19,8 @@ import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query
 import { useRereadEnvironmentListOnFocus } from "@/hooks/bots/use-reread-environment-list-on-focus";
 import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
+import { useBotChannelMuted } from "@/hooks/bots/use-bot-notification-level";
+import { BotMutedGlyph } from "@/components/bots/bot-muted-glyph";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { indicatorHasUnread } from "@/stores/notifications/notification-indicator-state";
 import {
@@ -150,6 +152,7 @@ export function BotChannelSidebar(props: {
               (setup) => setup.environmentId === group.environmentId,
             ) ?? null
           }
+          hostId={hostId}
           onOpenChannel={openChannel}
           onNewBot={setNewBot}
         />
@@ -174,10 +177,13 @@ function SidebarSection(props: {
   readonly unreadByBotId: ReadonlyMap<string, number | null>;
   /** The team's main bot while it is still to be set up; `null` otherwise. */
   readonly setup: TeamSetup | null;
+  /** The tab's host, which reads each channel's level. */
+  readonly hostId: string;
   readonly onOpenChannel: (channel: SidebarChannel) => void;
   readonly onNewBot: (target: NewBotTarget) => void;
 }): ReactNode {
-  const { group, activeBotId, unreadByBotId, setup, onOpenChannel } = props;
+  const { group, activeBotId, unreadByBotId, setup, hostId, onOpenChannel } =
+    props;
   const isTeam = group.canCreate && group.ownerKind === "organization";
   const isPersonal = group.canCreate && group.ownerKind === "user";
   const newBot = (event: MouseEvent<HTMLButtonElement>): void =>
@@ -236,6 +242,7 @@ function SidebarSection(props: {
               active={bot.botId === activeBotId}
               unread={unreadByBotId.has(bot.botId)}
               unreadCount={unreadByBotId.get(bot.botId) ?? null}
+              hostId={hostId}
               onOpen={() => onOpenChannel(bot)}
             />
           </li>
@@ -322,9 +329,16 @@ function ChannelRow(props: {
   readonly unread: boolean;
   /** Drawn right-aligned; `null` where the host does not count. */
   readonly unreadCount: number | null;
+  readonly hostId: string;
   readonly onOpen: () => void;
 }): ReactNode {
-  const { bot, isMain, active, unread, unreadCount, onOpen } = props;
+  const { bot, isMain, active, unread, unreadCount, hostId, onOpen } = props;
+  const muted = useBotChannelMuted(
+    useTabHostClient(),
+    hostId,
+    bot.botId,
+    bot.appConversationChatId,
+  );
   return (
     <button
       type="button"
@@ -349,6 +363,12 @@ function ChannelRow(props: {
           <MainBotBadge
             testId="bot-channel-row-main"
             tone={active ? "current" : "muted"}
+          />
+        ) : null}
+        {muted ? (
+          <BotMutedGlyph
+            className={active ? "text-primary-foreground" : undefined}
+            testId="bot-channel-row-muted"
           />
         ) : null}
       </span>

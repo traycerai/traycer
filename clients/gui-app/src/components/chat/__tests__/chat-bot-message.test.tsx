@@ -219,6 +219,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: 0,
           replying: false,
+          followedUnwritten: false,
         }),
         openThread,
       ),
@@ -235,6 +236,40 @@ describe("<ChatMessage /> in a bot channel", () => {
     expect(openThread).toHaveBeenCalledWith(POST_ID);
   });
 
+  it.each([
+    [true, 1],
+    [false, 0],
+  ])(
+    "marks the thread line as followed when followedUnwritten is %s",
+    (followedUnwritten, count) => {
+      renderRow(
+        memberPost(undefined),
+        channelPresentation(
+          () => ({
+            participants: [],
+            replyCount: 2,
+            lastReplyAt: Date.now() - 5 * 60_000,
+            unread: false,
+            unreadCount: 0,
+            replying: false,
+            followedUnwritten,
+          }),
+          vi.fn(),
+        ),
+      );
+
+      const line = screen.getByTestId("bot-thread-line");
+      expect(
+        within(line).queryAllByTestId("bot-thread-following-mark"),
+      ).toHaveLength(count);
+      if (count === 1) {
+        expect(
+          within(line).getByTestId("bot-thread-following-mark").textContent,
+        ).toBe("following");
+      }
+    },
+  );
+
   it("offers Reply in thread among a member post's hover actions, with no thread line until the thread has a reply", async () => {
     const user = userEvent.setup();
     const openThread = vi.fn<(postMessageId: string) => void>();
@@ -248,6 +283,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: 0,
           replying: false,
+          followedUnwritten: false,
         }),
         openThread,
       ),
@@ -286,6 +322,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: 0,
           replying: true,
+          followedUnwritten: false,
         }),
         vi.fn(),
       ),
@@ -313,6 +350,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: 0,
           replying: false,
+          followedUnwritten: false,
         }),
         vi.fn(),
       ),
@@ -350,6 +388,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: 0,
           replying: false,
+          followedUnwritten: false,
         }),
         vi.fn(),
       ),
@@ -381,6 +420,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: true,
           unreadCount: null,
           replying: false,
+          followedUnwritten: false,
         }),
         vi.fn(),
       ),
@@ -401,6 +441,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: null,
           replying: false,
+          followedUnwritten: false,
         }),
         vi.fn(),
       ),
@@ -422,6 +463,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: true,
           unreadCount: 2,
           replying: false,
+          followedUnwritten: false,
         }),
         vi.fn(),
       ),
@@ -446,6 +488,7 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: 0,
           replying: false,
+          followedUnwritten: false,
         }),
         vi.fn(),
       ),
@@ -1061,6 +1104,7 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
         unread: false,
         unreadCount: 0,
         replying: false,
+        followedUnwritten: false,
       }));
       const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
       renderRow(
@@ -1123,6 +1167,7 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
         unread: false,
         unreadCount: 0,
         replying: false,
+        followedUnwritten: false,
       }));
       renderRow(announcementRow(kind), {
         ...withActions({
@@ -1338,6 +1383,7 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
       unread: false,
       unreadCount: 0,
       replying: false,
+      followedUnwritten: false,
     }));
     renderRow(
       {
@@ -1370,6 +1416,7 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
             unread: false,
             unreadCount: 0,
             replying: false,
+            followedUnwritten: false,
           }
         : null,
     );

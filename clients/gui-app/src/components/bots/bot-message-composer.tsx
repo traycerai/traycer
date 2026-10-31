@@ -21,6 +21,7 @@ import {
   BotQueuedNotice,
   BotSendFailedNotice,
 } from "@/components/bots/bot-channel-notices";
+import { useBotMentionCompletion } from "@/components/bots/bot-mention-completion";
 
 const MESSAGE_MAX = 100_000;
 
@@ -50,6 +51,10 @@ const MESSAGE_MAX = 100_000;
  *
  * A send that lands clears the box only while the box still holds the
  * draft it sent: an edit or a seed loaded since is a newer draft, and stays.
+ *
+ * `@` completes a member of the team's environment (decision 137); the box
+ * shows their name and the send writes their token, so the bot's host knows
+ * who was mentioned.
  */
 export function BotMessageComposer(props: {
   readonly botId: string;
@@ -110,6 +115,14 @@ export function BotMessageComposer(props: {
   const client = useTabHostClient();
   const send = useBotConversationSendMutation(client);
   const [text, setText] = useState("");
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const mentionListId = useId();
+  const mentions = useBotMentionCompletion({
+    text,
+    setText,
+    inputRef,
+    listId: mentionListId,
+  });
   // Which draft the box holds: each edit or seed loaded is a new one, and a
   // send owns the one it started with.
   const [generation, setGeneration] = useState(0);
@@ -118,7 +131,7 @@ export function BotMessageComposer(props: {
   if (edit !== loadedEdit) {
     setLoadedEdit(edit);
     if (edit !== null) {
-      setText(edit.text);
+      setText(mentions.toDisplay(edit.text));
       setGeneration((current) => current + 1);
     }
   }
@@ -137,7 +150,6 @@ export function BotMessageComposer(props: {
       setText("");
     }
   }
-  const inputRef = useRef<HTMLTextAreaElement>(null);
   // The draft the box holds now, for a send that lands after the person
   // moved on to another; and whether the box is still there to say anything.
   const generationRef = useRef(generation);
@@ -183,7 +195,7 @@ export function BotMessageComposer(props: {
       .mutateAsync({
         botId,
         conversationId,
-        text: trimmed,
+        text: mentions.toWire(trimmed),
         threadId,
         announcementId,
         redeliver: null,
@@ -208,6 +220,7 @@ export function BotMessageComposer(props: {
       );
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (mentions.onKeyDown(event)) return;
     if (
       event.key !== "Enter" ||
       event.shiftKey ||
@@ -228,7 +241,8 @@ export function BotMessageComposer(props: {
         submit();
       }}
     >
-      <div className="flex flex-col rounded-lg border border-border bg-background transition-colors focus-within:border-ring">
+      <div className="relative flex flex-col rounded-lg border border-border bg-background transition-colors focus-within:border-ring">
+        {mentions.list}
         <label htmlFor={inputId} className="sr-only">
           {label}
         </label>
@@ -266,8 +280,14 @@ export function BotMessageComposer(props: {
           maxLength={MESSAGE_MAX}
           className="max-h-60 min-h-10"
           data-testid={`${testId}-input`}
+          aria-autocomplete="list"
+          aria-controls={mentions.listOpen ? mentionListId : undefined}
+          onSelect={(event) =>
+            mentions.onCaret(event.currentTarget.selectionStart)
+          }
           onChange={(event) => {
             setText(event.target.value);
+            mentions.onCaret(event.target.selectionStart);
             if (lastDelivery !== null) setLastDelivery(null);
             failure.clear();
           }}

@@ -348,6 +348,8 @@ export const HOST_UNARY_RPC_ROUTES = {
   "bot.task.setPaused": "target-host",
   "bot.task.stop": "target-host",
   "bot.thread.list": "target-host",
+  "bot.threadFollow.read": "target-host",
+  "bot.threadFollow.set": "target-host",
   "bot.turn.locate": "target-host",
   "bot.updateDirective": "target-host",
   "bot.updateReplyMode": "target-host",

@@ -1313,6 +1313,14 @@ function ThreadLine(props: {
         unread={unread}
         unreadCount={line.unreadCount}
       />
+      {line.followedUnwritten ? (
+        <span
+          className="shrink-0 text-muted-foreground"
+          data-testid="bot-thread-following-mark"
+        >
+          following
+        </span>
+      ) : null}
       <ThreadLineStatus
         lastReplyAt={line.lastReplyAt}
         replying={replying}

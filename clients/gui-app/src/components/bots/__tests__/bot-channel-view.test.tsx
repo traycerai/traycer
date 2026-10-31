@@ -25,6 +25,7 @@ import type {
   BotThreadAnchors,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotThreadFollow } from "@traycer/protocol/host/bot/schemas";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-context";
@@ -98,6 +99,8 @@ const mocks = vi.hoisted(() => {
       conversationsError: false,
       // Whether a `bot.conversation.send` is in flight.
       sending: false,
+      // The person's follows of the threads; `undefined` = not read.
+      follows: undefined as Record<string, BotThreadFollow> | undefined,
       chats,
     },
   };
@@ -170,6 +173,19 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
     typeof import("@/lib/registries/chat-session-registry")
   >()),
   useChatSessionHandleForContainer: () => null,
+}));
+// The person's follows are read from the cloud through the host; here the
+// read answers `state.follows`.
+vi.mock("@/hooks/bots/use-bot-thread-follow", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/bots/use-bot-thread-follow")
+  >()),
+  useBotThreadFollows: () => ({
+    data:
+      mocks.state.follows === undefined
+        ? undefined
+        : { follows: mocks.state.follows },
+  }),
 }));
 vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
@@ -287,6 +303,9 @@ function PostStub(props: {
           line === null || line.lastReplyAt === null
             ? ""
             : String(line.lastReplyAt)
+        }
+        data-followed-unwritten={
+          line === null ? "" : String(line.followedUnwritten)
         }
         data-unread={line === null ? "" : String(line.unread)}
         data-unread-count={
@@ -495,6 +514,7 @@ beforeEach(() => {
   mocks.state.conversationsError = false;
   mocks.state.sending = false;
   mocks.state.chats = {};
+  mocks.state.follows = undefined;
   mocks.postIds = [];
   mocks.sendResponse = {
     messageId: "post-new",
@@ -628,6 +648,34 @@ describe("<BotChannelView /> channel", () => {
     expect(line("post-e").getAttribute("data-unread-count")).toBe("");
     // A post with no thread listed yet has no line to read.
     expect(line("post-new").getAttribute("data-has-line")).toBe("false");
+  });
+
+  it("marks a thread's line as followed only where the person follows it without having written in it", () => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", { replyCount: 1 }),
+      thread("thread-b", "post-b", { replyCount: 1 }),
+      thread("thread-c", "post-c", { replyCount: 1 }),
+      thread("thread-d", "post-d", { replyCount: 1 }),
+      thread("thread-e", "post-e", { replyCount: 1 }),
+    ];
+    mocks.state.follows = {
+      "thread-a": { state: "following", reason: "mentioned" },
+      "thread-b": { state: "following", reason: "manual" },
+      "thread-c": { state: "following", reason: "participated" },
+      "thread-d": { state: "unfollowed", reason: "manual" },
+    };
+    mocks.postIds = ["post-a", "post-b", "post-c", "post-d", "post-e"];
+    mount({ openThreadPostId: null });
+
+    const marked = (postId: string): string | null =>
+      screen
+        .getByTestId(`stub-line-${postId}`)
+        .getAttribute("data-followed-unwritten");
+    expect(marked("post-a")).toBe("true");
+    expect(marked("post-b")).toBe("true");
+    expect(marked("post-c")).toBe("false");
+    expect(marked("post-d")).toBe("false");
+    expect(marked("post-e")).toBe("false");
   });
 
   it("stacks a thread's line with the post's writer, and the bot once the thread has a reply", () => {

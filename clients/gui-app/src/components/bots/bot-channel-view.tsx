@@ -16,6 +16,7 @@ import type {
 import type {
   BotSurfaceActionState,
   BotTaskEntry,
+  BotThreadFollow,
 } from "@traycer/protocol/host/bot/schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -32,6 +33,8 @@ import {
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
 import { threadOpenOf } from "@/lib/bots/bot-trunk-model";
+import { followingOf } from "@/lib/bots/bot-notification-settings";
+import { useBotThreadFollows } from "@/hooks/bots/use-bot-thread-follow";
 import {
   BotMemoryPanel,
   type BotMemoryNavigation,
@@ -326,6 +329,7 @@ export function BotChannelView(props: {
     isUnread,
     unreadCountOf,
     threadAnchorKinds,
+    follows,
   } = useChannelThreads({
     client,
     botId,
@@ -524,6 +528,7 @@ export function BotChannelView(props: {
           replying:
             postMessageId !== openThreadPostId &&
             activity?.threads[thread.threadId]?.state === "replying",
+          followedUnwritten: followedUnwritten(follows, thread.threadId),
         };
       },
       // A host without the thread list has no thread to open.
@@ -558,6 +563,7 @@ export function BotChannelView(props: {
       directive,
       discussQuestion,
       failedRequest,
+      follows,
       isUnread,
       unreadCountOf,
       onOpenThread,
@@ -970,6 +976,8 @@ function useChannelThreads(args: {
   readonly unreadCountOf: (threadId: string) => number | null;
   /** The rows of the bot its host opens their own thread under. */
   readonly threadAnchorKinds: readonly string[];
+  /** The person's follows of the threads; `undefined` until read, or where the host keeps none. */
+  readonly follows: Readonly<Record<string, BotThreadFollow>> | undefined;
 } {
   const { client, botId, hostId, boundHostId, boundHostEpoch } = args;
   const supported = useHostMethodSupport(hostId, "bot.thread.list") === true;
@@ -1028,6 +1036,7 @@ function useChannelThreads(args: {
         : [],
     [anchors, boundHostEpoch, boundHostId, supported],
   );
+  const follows = useBotThreadFollows(botId, hostId)?.data?.follows;
   return {
     supported,
     threadList,
@@ -1035,7 +1044,20 @@ function useChannelThreads(args: {
     isUnread,
     unreadCountOf,
     threadAnchorKinds,
+    follows,
   };
+}
+
+/**
+ * Whether the person follows a thread without having written in it: they
+ * were mentioned in it, or chose to follow it.
+ */
+function followedUnwritten(
+  follows: Readonly<Record<string, BotThreadFollow>> | undefined,
+  threadId: string,
+): boolean {
+  const follow = followingOf(follows, threadId);
+  return follow !== null && follow.reason !== "participated";
 }
 
 /**

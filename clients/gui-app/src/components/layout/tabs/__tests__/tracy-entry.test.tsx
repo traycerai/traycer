@@ -100,12 +100,14 @@ const scripted = vi.hoisted(
     activity: BotActivity | null;
     indicators: SurfaceNotificationIndicators;
     connectable: ConnectableHosts;
+    levels: Record<string, "all" | "mentions" | "off">;
     stream: MockWsStreamClient<StreamFrameEnvelope> | null;
   } => ({
     list: undefined,
     activity: null,
     indicators: { epics: {}, chats: {} },
     connectable: { hostIds: [], resolved: true },
+    levels: {},
     stream: null,
   }),
 );
@@ -135,6 +137,18 @@ vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => ({
   useStreamHostId: () => "host-a",
   useWsStreamClient: () => scripted.stream,
 }));
+// The person's notification levels, as the host answers them.
+vi.mock("@/hooks/host/use-host-query", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("@/hooks/host/use-host-query")>();
+  return {
+    ...original,
+    useHostQuery: (args: { method: string }) =>
+      args.method === "bot.notificationLevel.read"
+        ? { data: { levels: scripted.levels } }
+        : original.useHostQuery(args as never),
+  };
+});
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => scripted.connectable,
 }));
@@ -343,6 +357,7 @@ function resetStores(): void {
   tabCommandCoordinator.resetReconciliationForTesting();
   __resetBotListChangedSessionsForTesting();
   scripted.list = undefined;
+  scripted.levels = {};
   scripted.activity = null;
   scripted.indicators = { epics: {}, chats: {} };
   scripted.connectable = { hostIds: ["host-a"], resolved: true };
@@ -1061,6 +1076,47 @@ describe("the fixed Tracy entry - signals", () => {
         }
       },
     );
+  });
+});
+
+describe("the fixed Tracy entry - muted", () => {
+  const PLACEMENTS = [
+    { placement: "top strip", mountEntry: () => mountTopStrip("/") },
+    { placement: "vertical strip", mountEntry: () => mountSideStrip("/") },
+  ];
+
+  beforeEach(() => {
+    tracyIsMainBot();
+  });
+
+  it.each(PLACEMENTS)(
+    "carries the muted mark in the $placement while Tracy's channel is set to Nothing",
+    async ({ mountEntry }) => {
+      scripted.levels = { [`app-${TRACY}`]: "off" };
+      mountEntry();
+
+      const entry = await screen.findByTestId("tab-tracy");
+      expect(within(entry).getByTestId("tracy-entry-muted")).toBeTruthy();
+    },
+  );
+
+  it.each(["all", "mentions", null] as const)(
+    "carries no muted mark for the level %s",
+    async (level) => {
+      scripted.levels = level === null ? {} : { [`app-${TRACY}`]: level };
+      mountTopStrip("/");
+
+      const entry = await screen.findByTestId("tab-tracy");
+      expect(within(entry).queryByTestId("tracy-entry-muted")).toBeNull();
+    },
+  );
+
+  it("is not muted by another bot's channel being set to Nothing", async () => {
+    scripted.levels = { [`app-${TEAM_BOT}`]: "off" };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(within(entry).queryByTestId("tracy-entry-muted")).toBeNull();
   });
 });
 

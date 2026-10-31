@@ -23,8 +23,12 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createFollowHostFixture,
+  type FollowHostFixture,
+} from "@/hooks/bots/__tests__/bot-thread-follow-test-support";
 import type {
   BotThreadListResponse,
   BotThreadSummary,
@@ -46,10 +50,30 @@ const mocks = vi.hoisted(() => ({
   locateAnswer: "found" as "found" | "not-found" | "rejects" | "held",
   /** Finds the row for the request `held` left in flight. */
   releaseHeld: null as (() => void) | null,
+  /** The host holding the person's follows; `null` = it cannot read them. */
+  follows: null as FollowHostFixture | null,
+  /** Unread notifications by thread id, as the indicators read them. */
+  unread: {} as Record<string, number>,
+}));
+
+vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
+  useCloudChatViewerId: () => "user-1",
+}));
+vi.mock("@/hooks/host/use-host-supports-method", () => ({
+  useHostMethodSupport: (_hostId: string | null, method: string) =>
+    method.startsWith("bot.threadFollow.") ? mocks.follows !== null : false,
+}));
+vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
+  useNotificationIndicators: (args: { chatIds: ReadonlyArray<string> }) => ({
+    chats: Object.fromEntries(
+      args.chatIds.map((id) => [id, { unreadCount: mocks.unread[id] ?? 0 }]),
+    ),
+  }),
 }));
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
-  useTabHostClient: () => ({ getActiveHostId: () => "host-1" }),
+  useTabHostClient: () =>
+    mocks.follows?.client ?? { getActiveHostId: () => "host-1" },
 }));
 vi.mock("@/lib/chats/chat-serving-witness", () => ({
   useChatServingHostId: () => "host-1",
@@ -57,11 +81,15 @@ vi.mock("@/lib/chats/chat-serving-witness", () => ({
 // The host's `chat.locateRow`, answered through the real query cache under
 // the options the hook passes (`gcTime: 0`, `retry: false`). A request is one
 // ask of the host, recorded when it leaves.
-vi.mock("@/hooks/host/use-host-query", async () => {
+vi.mock("@/hooks/host/use-host-query", async (importOriginal) => {
   const { useQuery } = await import("@tanstack/react-query");
+  const original =
+    await importOriginal<typeof import("@/hooks/host/use-host-query")>();
   return {
+    ...original,
     useHostQuery: (args: {
-      params: { target: { kind: string; messageId?: string } };
+      method: string;
+      params: { target?: { kind: string; messageId?: string } };
       cacheKeyIdentity: ReadonlyArray<number>;
       options: {
         enabled: boolean;
@@ -70,9 +98,11 @@ vi.mock("@/hooks/host/use-host-query", async () => {
         retry: boolean;
       };
     }) => {
-      const messageId = args.params.target.messageId ?? "";
+      // Only `chat.locateRow` is faked; the follows read goes to the host.
+      const locating = args.method === "chat.locateRow";
+      const messageId = args.params.target?.messageId ?? "";
       const epoch = args.cacheKeyIdentity[0];
-      return useQuery({
+      const located = useQuery({
         queryKey: ["locate-row", args.params, args.cacheKeyIdentity],
         queryFn: () => {
           mocks.located.push(messageId);
@@ -91,7 +121,16 @@ vi.mock("@/hooks/host/use-host-query", async () => {
           }
         },
         ...args.options,
+        enabled: locating && args.options.enabled,
       });
+      const hosted = original.useHostQuery({
+        ...args,
+        options: {
+          ...args.options,
+          enabled: !locating && args.options.enabled,
+        },
+      } as never);
+      return locating ? located : hosted;
     },
   };
 });
@@ -167,7 +206,9 @@ function mount(
   listed: boolean,
 ): void {
   render(
-    <QueryClientProvider client={new QueryClient()}>
+    <QueryClientProvider
+      client={mocks.follows?.queryClient ?? new QueryClient()}
+    >
       <Page threads={threads} listed={listed} />
     </QueryClientProvider>,
   );
@@ -180,6 +221,8 @@ beforeEach(() => {
   mocks.located = [];
   mocks.locateAnswer = "found";
   mocks.releaseHeld = null;
+  mocks.follows = null;
+  mocks.unread = {};
 });
 
 afterEach(() => {
@@ -361,5 +404,94 @@ describe("<BotThreadsPage />", () => {
     expect(
       screen.getByText("This bot's host can't list its threads."),
     ).toBeTruthy();
+  });
+});
+
+describe("<BotThreadsPage /> follow filter", () => {
+  function threadNamed(threadId: string): BotThreadSummary {
+    return { ...thread(1), threadId, sessionChatId: `session-${threadId}` };
+  }
+  const THREADS = [threadNamed("thread-a"), threadNamed("thread-b")];
+
+  function listedThreadIds(): ReadonlyArray<string | null> {
+    return screen
+      .getAllByTestId("bot-thread-list-item")
+      .map((item) => item.getAttribute("data-thread-id"));
+  }
+
+  async function openRowMenu(user: UserEvent, threadId: string): Promise<void> {
+    const item = screen
+      .getAllByTestId("bot-thread-list-item")
+      .find((li) => li.getAttribute("data-thread-id") === threadId);
+    if (item === undefined) throw new Error(`no row for ${threadId}`);
+    await user.click(within(item).getByTestId("bot-thread-row-menu"));
+  }
+
+  beforeEach(() => {
+    mocks.channelPosts = {};
+    mocks.follows = createFollowHostFixture({
+      "thread-a": { state: "following", reason: "participated" },
+      "thread-b": { state: "unfollowed", reason: "manual" },
+    });
+  });
+
+  it("opens on Following and lists only the followed threads, each with its unread count", async () => {
+    mocks.unread = { "thread-a": 3 };
+    mount(THREADS, true);
+
+    await waitFor(() => expect(listedThreadIds()).toEqual(["thread-a"]));
+    expect(
+      screen
+        .getByRole("button", { name: "Following" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(screen.getByTestId("bot-thread-row-unread-count").textContent).toBe(
+      "3 unread",
+    );
+  });
+
+  it("removes a thread from Following when Unfollow is chosen from its menu", async () => {
+    const user = userEvent.setup();
+    mount(THREADS, true);
+    await waitFor(() => expect(listedThreadIds()).toEqual(["thread-a"]));
+
+    await openRowMenu(user, "thread-a");
+    await user.click(await screen.findByTestId("bot-thread-row-unfollow"));
+
+    await screen.findByText("You don't follow any threads here yet.");
+    expect(mocks.follows?.writes).toEqual([
+      { botId: BOT_ID, threadId: "thread-a", state: "unfollowed" },
+    ]);
+  });
+
+  it("lists every thread under All, and its menu follows an unfollowed one", async () => {
+    const user = userEvent.setup();
+    mount(THREADS, true);
+    await waitFor(() => expect(listedThreadIds()).toEqual(["thread-a"]));
+
+    await user.click(screen.getByRole("button", { name: "All" }));
+    expect(listedThreadIds()).toEqual(["thread-a", "thread-b"]);
+
+    await openRowMenu(user, "thread-b");
+    await user.click(await screen.findByTestId("bot-thread-row-follow"));
+    expect(mocks.follows?.writes).toEqual([
+      { botId: BOT_ID, threadId: "thread-b", state: "following" },
+    ]);
+
+    await user.click(screen.getByRole("button", { name: "Following" }));
+    await waitFor(() =>
+      expect(listedThreadIds()).toEqual(["thread-a", "thread-b"]),
+    );
+  });
+
+  it("hides the filter and the menus on a host that cannot read follows", async () => {
+    mocks.follows = null;
+    mount(THREADS, true);
+
+    await waitFor(() =>
+      expect(listedThreadIds()).toEqual(["thread-a", "thread-b"]),
+    );
+    expect(screen.queryByRole("button", { name: "Following" })).toBeNull();
+    expect(screen.queryByTestId("bot-thread-row-menu")).toBeNull();
   });
 });

@@ -56,6 +56,11 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
 }));
 
 import {
+  BotIdentityContext,
+  type BotOwner,
+} from "@/components/bots/bot-identity-context";
+import { useAuthStore } from "@/stores/auth/auth-store";
+import {
   BotMessageComposer,
   type BotComposerEdit,
 } from "@/components/bots/bot-message-composer";
@@ -220,5 +225,104 @@ describe("<BotMessageComposer /> reporting a send", () => {
     expect(onSent).not.toHaveBeenCalled();
     expect(onEditEnd).not.toHaveBeenCalled();
     expect(box().value).toBe("Is the nightly green?");
+  });
+});
+
+describe("<BotMessageComposer /> @ mentions", () => {
+  const TEAM: BotOwner = {
+    kind: "team",
+    name: "Acme",
+    members: [
+      { userId: "u-viewer", displayName: "Andy Viewer", avatarUrl: null },
+      { userId: "u-ann", displayName: "Ann Lee", avatarUrl: null },
+      { userId: "u-anders", displayName: "Anders", avatarUrl: null },
+      { userId: "u-anon", displayName: null, avatarUrl: null },
+      { userId: "u-bob", displayName: "Bob", avatarUrl: null },
+    ],
+  };
+  const PERSON: BotOwner = {
+    kind: "person",
+    userId: "u-viewer",
+    name: "Andy Viewer",
+    avatarUrl: null,
+  };
+
+  function mountIn(owner: BotOwner): void {
+    render(
+      <BotIdentityContext value={{ botId: "bot-1", title: "Tracy", owner }}>
+        {composer(null)}
+      </BotIdentityContext>,
+    );
+  }
+
+  function optionNames(): string[] {
+    return screen
+      .getAllByTestId("bot-mention-option")
+      .map((option) => option.getAttribute("data-user-id") ?? "");
+  }
+
+  beforeEach(() => {
+    useAuthStore.setState({
+      profile: {
+        userId: "u-viewer",
+        userName: "Andy Viewer",
+        email: "andy@example.com",
+        avatarUrl: null,
+      },
+    });
+  });
+
+  afterEach(() => {
+    useAuthStore.setState({ profile: null });
+  });
+
+  it("lists the team's matching members, not the viewer nor a member without a name", async () => {
+    const user = userEvent.setup();
+    mountIn(TEAM);
+
+    await user.type(box(), "@an");
+
+    expect(optionNames()).toEqual(["u-ann", "u-anders"]);
+  });
+
+  it("picks the highlighted member with the arrows and Enter, shows @Name, and sends the token", async () => {
+    const user = userEvent.setup();
+    mountIn(TEAM);
+
+    await user.type(box(), "hey @an");
+    await user.keyboard("{ArrowDown}{Enter}");
+
+    expect(box().value).toBe("hey @Anders ");
+    expect(screen.queryByTestId("bot-mention-list")).toBeNull();
+    expect(mocks.send).not.toHaveBeenCalled();
+
+    await user.type(box(), "look");
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    expect(mocks.send.mock.calls[0][0].text).toBe("hey <@u-anders> look");
+  });
+
+  it("closes the list on Escape and keeps the text", async () => {
+    const user = userEvent.setup();
+    mountIn(TEAM);
+
+    await user.type(box(), "@an");
+    expect(screen.getByTestId("bot-mention-list")).toBeTruthy();
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByTestId("bot-mention-list")).toBeNull();
+    expect(box().value).toBe("@an");
+  });
+
+  it("shows no list for a personal bot, and sends the @ as typed", async () => {
+    const user = userEvent.setup();
+    mountIn(PERSON);
+
+    await user.type(box(), "@an");
+    expect(screen.queryByTestId("bot-mention-list")).toBeNull();
+
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    expect(mocks.send.mock.calls[0][0].text).toBe("@an");
   });
 });

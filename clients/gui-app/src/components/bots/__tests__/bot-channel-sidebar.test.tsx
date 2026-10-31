@@ -74,6 +74,8 @@ const mocks = vi.hoisted(() => {
       support: null as boolean | null,
       /** The line the host negotiated for `bot.onboarding.read`. */
       version: { major: 1, minor: 1 },
+      /** What `bot.notificationLevel.read` answers: levels by channel id. */
+      levels: {},
     },
     readRequests,
   };
@@ -146,6 +148,16 @@ vi.mock("@/hooks/bots/use-environment-list-query", async () => {
       ),
   };
 });
+// The person's notification levels, as the host answers them.
+vi.mock("@/hooks/host/use-host-query", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/host/use-host-query")>()),
+  useHostQuery: (args: { method: string }) => ({
+    data:
+      args.method === "bot.notificationLevel.read"
+        ? { levels: mocks.state.levels }
+        : undefined,
+  }),
+}));
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
   useBotListQuery: () => ({
     data: { bots: mocks.state.bots, mainBotIds: mocks.state.mainBotIds },
@@ -294,6 +306,7 @@ beforeEach(() => {
   mocks.state.epics = {};
   mocks.state.support = true;
   mocks.state.version = { major: 1, minor: 1 };
+  mocks.state.levels = {};
   for (const key of Object.keys(mocks.state.reads)) {
     delete mocks.state.reads[key];
   }
@@ -390,6 +403,52 @@ describe("<BotChannelSidebar /> sections", () => {
       within(row("bot-notes")).queryByTestId("bot-channel-row-unread-count"),
     ).toBeNull();
     expect(row("bot-notes").getAttribute("data-unread")).toBe("true");
+  });
+});
+
+describe("<BotChannelSidebar /> muted channels", () => {
+  function withChannels(): void {
+    mocks.state.bots = [
+      {
+        ...bot("bot-release", "env-team", "release-bot"),
+        appConversationChatId: "chan-release",
+      },
+      {
+        ...bot("bot-triage", "env-team", "triage-bot"),
+        appConversationChatId: "chan-triage",
+      },
+      {
+        ...bot("bot-notes", "env-me", "notes-bot"),
+        appConversationChatId: "chan-notes",
+      },
+      bot("bot-bare", "env-me", "bare-bot"),
+    ];
+  }
+
+  it("marks only the channel the person set to Nothing", () => {
+    withChannels();
+    mocks.state.levels = {
+      "chan-release": "off",
+      "chan-triage": "mentions",
+      "chan-notes": "all",
+    };
+    mount("bot-release");
+
+    expect(
+      within(row("bot-release")).getByTestId("bot-channel-row-muted"),
+    ).toBeTruthy();
+    for (const botId of ["bot-triage", "bot-notes", "bot-bare"]) {
+      expect(
+        within(row(botId)).queryByTestId("bot-channel-row-muted"),
+      ).toBeNull();
+    }
+  });
+
+  it("marks nothing for a channel with no level set", () => {
+    withChannels();
+    mount("bot-release");
+
+    expect(screen.queryByTestId("bot-channel-row-muted")).toBeNull();
   });
 });
 

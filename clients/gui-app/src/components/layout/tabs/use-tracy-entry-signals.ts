@@ -4,6 +4,11 @@ import {
   useBotActivity,
 } from "@/hooks/bots/use-bot-activity";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
+import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import { useBotChannelMuted } from "@/hooks/bots/use-bot-notification-level";
+import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useOptionalHostClient } from "@/lib/host/runtime";
 import { indicatorHasUnread } from "@/stores/notifications/notification-indicator-state";
 
 const NO_CHAT_IDS: ReadonlyArray<string> = [];
@@ -33,6 +38,8 @@ export interface TracyEntrySignals {
    * host cannot read it: unknown is not idle.
    */
   readonly idle: boolean;
+  /** The person set the bot's channel to Nothing. */
+  readonly muted: boolean;
 }
 
 /**
@@ -55,6 +62,16 @@ export function useTracyEntrySignals(botId: string): TracyEntrySignals {
     : null;
   const activity = useBotActivity(botId);
   const replying = replyingSessionOf(activity);
+  // The entry is app-wide, so its bot's level is read through the app's
+  // host; the bot list it reads the channel from is the entry's own.
+  const client = useOptionalHostClient();
+  const hostId = useEffectiveHostId();
+  const listed = useHostMethodSupport(hostId, "bot.list") === true;
+  const channelId =
+    useBotListQuery(client, listed).data?.bots.find(
+      (bot) => bot.botId === botId,
+    )?.appConversationChatId ?? null;
+  const muted = useBotChannelMuted(client, hostId, botId, channelId);
   return {
     unread: state !== null && indicatorHasUnread(state),
     unreadCount: state === null ? 0 : state.unreadCount,
@@ -62,5 +79,6 @@ export function useTracyEntrySignals(botId: string): TracyEntrySignals {
     workingSince: replying?.startedAt ?? null,
     step: replying?.step ?? null,
     idle: replying === null && activity?.trunk?.state === "idle",
+    muted,
   };
 }

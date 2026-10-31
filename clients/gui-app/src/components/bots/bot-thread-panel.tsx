@@ -34,6 +34,7 @@ import {
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
 import { BotTaskList } from "@/components/bots/bot-task-list";
+import { BotThreadFollowControl } from "@/components/bots/bot-thread-follow";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
@@ -168,6 +169,13 @@ export function BotThreadPanel(props: {
   // A send from the panel that fails, a retry of its post included, says so
   // in the panel's box.
   const sendFailure = useBotSendFailure();
+  const viewerUserId = useAuthStore((s) => s.profile?.userId ?? null);
+  // A thread the person's send just opened is theirs; a listed one is whose
+  // post it hangs off.
+  const postedByViewer =
+    props.thread.kind === "posted" ||
+    (viewerUserId !== null &&
+      (thread?.anchor?.senderUserId ?? null) === viewerUserId);
   return (
     <section
       aria-label="Thread"
@@ -187,6 +195,14 @@ export function BotThreadPanel(props: {
             <span className="truncate">{botTitle}</span>
           </span>
         </div>
+        {threadId === null ? null : (
+          <BotThreadFollowControl
+            botId={props.botId}
+            hostId={props.hostId}
+            threadId={threadId}
+            postedByViewer={postedByViewer}
+          />
+        )}
         {thread === null ? null : (
           <Button
             type="button"

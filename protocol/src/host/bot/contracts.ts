@@ -40,6 +40,10 @@ import {
   botNotificationLevelReadResponseSchema,
   botNotificationLevelSetRequestSchema,
   botNotificationLevelSetResponseSchema,
+  botThreadFollowReadRequestSchema,
+  botThreadFollowReadResponseSchema,
+  botThreadFollowSetRequestSchema,
+  botThreadFollowSetResponseSchema,
   botUpdateTitleRequestSchema,
 } from "./schemas";
 import {
@@ -175,6 +179,25 @@ export const botNotificationLevelSetV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botNotificationLevelSetRequestSchema,
   responseSchema: botNotificationLevelSetResponseSchema,
+});
+
+/**
+ * `bot.threadFollow.read@1.0` / `.set@1.0` (decision 137): the caller's
+ * follow state per thread of a bot, kept in the cloud and proxied by any
+ * host, as the notification levels are.
+ */
+export const botThreadFollowReadV10 = defineRpcContract({
+  method: "bot.threadFollow.read",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botThreadFollowReadRequestSchema,
+  responseSchema: botThreadFollowReadResponseSchema,
+});
+
+export const botThreadFollowSetV10 = defineRpcContract({
+  method: "bot.threadFollow.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botThreadFollowSetRequestSchema,
+  responseSchema: botThreadFollowSetResponseSchema,
 });
 
 export const botDeleteV10 = defineRpcContract({
