@@ -670,7 +670,9 @@ import {
   botConversationSendUpgradeV11ToV12,
   botThreadListV10,
   botThreadListV11,
+  botThreadListV12,
   botThreadListUpgradeV10ToV11,
+  botThreadListUpgradeV11ToV12,
   botTurnLocateV10,
   botTaskRunNowV10,
   botTaskSetPausedV10,
@@ -9458,7 +9460,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.thread.list": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: botThreadListV10,
@@ -9469,6 +9471,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: botThreadListV11,
           upgradeFromPreviousVersion: botThreadListUpgradeV10ToV11,
+        },
+        // @1.2 carries each anchor's excerpt (voice VT3b).
+        2: {
+          contract: botThreadListV12,
+          upgradeFromPreviousVersion: botThreadListUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},

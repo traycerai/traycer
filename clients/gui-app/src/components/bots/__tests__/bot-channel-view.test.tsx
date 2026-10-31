@@ -438,6 +438,7 @@ function thread(
       senderUserId: "user-teammate",
       sentAt: 1_000,
       resolvedAt: null,
+      excerpt: null,
     },
     replyCount: 0,
     lastReplyAt: null,
@@ -980,6 +981,7 @@ describe("<BotChannelView /> channel", () => {
           senderUserId: null,
           sentAt: 1_000,
           resolvedAt: null,
+          excerpt: null,
         },
         replyCount: 1,
         lastReplyAt: 8_000,
@@ -1242,6 +1244,7 @@ describe("<BotChannelView /> channel", () => {
           senderUserId: null,
           sentAt: 1_500,
           resolvedAt: null,
+          excerpt: null,
         },
       },
     ];

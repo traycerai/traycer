@@ -84,12 +84,22 @@ function threadSummary(
       senderUserId,
       sentAt,
       resolvedAt: null,
+      excerpt: null,
     },
     replyCount: 1,
     lastReplyAt: null,
     openRequestCount: 0,
     costUsd: null,
   };
+}
+
+/** The summary with its anchor carrying `excerpt`, as a 1.2 host lists it. */
+function withExcerpt(
+  summary: BotThreadSummary,
+  excerpt: string | null,
+): BotThreadSummary {
+  if (summary.anchor === null) return summary;
+  return { ...summary, anchor: { ...summary.anchor, excerpt } };
 }
 
 function threadWithoutAnchor(threadId: string): BotThreadSummary {
@@ -165,11 +175,28 @@ describe("the same words in two teams", () => {
       botRecord("bot_home", HOME, null),
     ],
     threadsByBot: new Map([
-      ["bot_acme", [threadSummary("thr-acme", "m-acme", VIEWER, NOW - 10)]],
-      ["bot_home", [threadSummary("thr-home", "m-home", VIEWER, NOW - 20)]],
+      [
+        "bot_acme",
+        [
+          withExcerpt(
+            threadSummary("thr-acme", "m-acme", VIEWER, NOW - 10),
+            "hold the 1.5.1 build",
+          ),
+        ],
+      ],
+      [
+        "bot_home",
+        [
+          withExcerpt(
+            threadSummary("thr-home", "m-home", VIEWER, NOW - 20),
+            "hold the 1.5.1 build",
+          ),
+        ],
+      ],
     ]),
     focus: null,
-    heldPostText: () => "hold the 1.5.1 build",
+    // The excerpt comes off the wire: nothing is rendered in the window.
+    heldPostText: () => null,
   });
 
   it("makes two candidate threads, and a bot with its thread binds to its own team's", () => {
@@ -269,7 +296,17 @@ describe("what the snapshot leaves out", () => {
 describe("anchorExcerptOf", () => {
   const SUMMARY = threadSummary("thr-1", "m-1", VIEWER, NOW);
 
-  it("collapses runs of whitespace and line breaks to single spaces", () => {
+  it("is the wire's excerpt when the host lists one, over any text the app holds", () => {
+    expect(
+      anchorExcerptOf(
+        "bot_a",
+        withExcerpt(SUMMARY, "hold the 1.5.1 build"),
+        () => "other words the window renders",
+      ),
+    ).toBe("hold the 1.5.1 build");
+  });
+
+  it("composes it from the text the app holds when the host lists none, collapsing runs of whitespace and line breaks to single spaces", () => {
     expect(
       anchorExcerptOf(
         "bot_a",
