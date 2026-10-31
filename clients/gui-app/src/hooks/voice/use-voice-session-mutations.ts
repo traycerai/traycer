@@ -4,6 +4,7 @@ import type {
   VoiceSessionMintFetchResult,
   VoiceSessionMintRequest,
 } from "@traycer-clients/shared/host-client/voice-sessions";
+import type { VoiceRouteFetchResult } from "@traycer-clients/shared/host-client/voice-router";
 import type { MicrophoneAccessStatus } from "@traycer-clients/shared/platform/runner-host";
 import { useAuthService } from "@/lib/host";
 import { voiceMutationKeys } from "@/lib/query-keys";
@@ -41,6 +42,23 @@ export function useVoiceSessionEndMutation(): UseMutationResult<
   return useMutation({
     mutationKey: voiceMutationKeys.end(),
     mutationFn: (voiceSessionId) => auth.endVoiceSession(voiceSessionId),
+  });
+}
+
+/**
+ * The voice router's one model call for an utterance (the passthrough). A
+ * refusal comes back as the result's `kind`: the say loop refuses the route
+ * and the voice asks the person to repeat, so nothing is toasted here.
+ */
+export function useVoiceRouteMutation(): UseMutationResult<
+  VoiceRouteFetchResult,
+  Error,
+  string
+> {
+  const auth = useAuthService();
+  return useMutation({
+    mutationKey: voiceMutationKeys.route(),
+    mutationFn: (requestBody) => auth.routeVoiceUtterance(requestBody),
   });
 }
 

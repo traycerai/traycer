@@ -7,6 +7,8 @@
 export const voiceMutationKeys = {
   mint: () => ["voice.sessions.mint"] as const,
   end: () => ["voice.sessions.end"] as const,
+  /** The voice router's model call for one utterance. */
+  route: () => ["voice.route"] as const,
   /** The shell's flag that a window's voice is live (it hides, not closes). */
   shellLive: () => ["voice.shell.live"] as const,
   /** The microphone permission prompt. */
