@@ -427,8 +427,9 @@ function wordsOfText(text: string): ReadonlyArray<string> {
 /**
  * What proves a card's list was read to its end: the words of its last part
  * (the final choice and the "or skip" of a question, Allow and Deny of an
- * approval), each to be said more often than the part before it (the bot,
- * the place, the question, or the tool and summary) says it. A word only
+ * approval), each to be said more often than everything said before it
+ * says it (the bot, the place, the question and every earlier choice, or
+ * the tool and summary). A word only
  * the end says needs one saying; one the question says too must be said
  * again, so the question alone, however its words repeat the choices,
  * proves nothing. Not every word of every choice: a paraphrase may drop
@@ -440,9 +441,15 @@ function listEndWords(
 ): ReadonlyArray<ConfirmWord> {
   const approval = content.family === "approval" ? content.approval : null;
   if (approval === null) {
+    const options = question?.options ?? [];
     return repeatedWords(
-      `${question?.options.at(-1) ?? ""} skip`,
-      `${content.botTitle} ${content.place} ${question?.text ?? ""}`,
+      `${options.at(-1) ?? ""} skip`,
+      [
+        content.botTitle,
+        content.place,
+        question?.text ?? "",
+        ...options.slice(0, -1),
+      ].join(" "),
     );
   }
   return repeatedWords(
@@ -452,16 +459,20 @@ function listEndWords(
 }
 
 /**
- * What proves a candidate was read back: its own label's words. A label too
- * short to prove anything by its words alone ("No", "Go") is proven by the
- * read-back's words instead.
+ * What proves a candidate was read back: its own label's words, said more
+ * often than what precedes the label says them (the line a re-offer opens
+ * with). A label too short to prove anything by its words alone ("No",
+ * "Go") is proven by the read-back's words instead.
  */
 function candidateWords(
   choice: CardChoice,
+  prefix: string,
   readBack: string,
-): ReadonlyArray<string> {
-  const label = wordsOfText(choiceText(choice));
-  return label.some((word) => word.length >= 4) ? label : wordsOfText(readBack);
+): ReadonlyArray<ConfirmWord> {
+  const label = repeatedWords(choiceText(choice), prefix);
+  return label.some((entry) => entry.word.length >= 4)
+    ? label
+    : wordsOfText(readBack);
 }
 
 /** One speech item's say, kept for its withdrawal and its heard mark. */
@@ -725,7 +736,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     held.candidateSay = say(held, {
       text: prefix.length > 0 ? `${prefix} ${text}` : text,
       priority: "ask",
-      confirmWords: candidateWords(choice, text),
+      confirmWords: candidateWords(choice, prefix, text),
       onHeard: () => startWindow(held),
       onGivenUp: () => {
         held.candidateSay = null;
