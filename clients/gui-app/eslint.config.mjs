@@ -1736,7 +1736,7 @@ const epicCanvasAppWideReadExemptions = [
   // session the fallback is unreachable. It is the mechanism the rest of the
   // subtree resolves through, so it is the one place the read may live.
   "src/components/epic-canvas/hooks/use-canvas-host-id.ts",
-  // Clone-not-migrate (D5/D7): the clone TARGET is, by design, the host the
+  // Clone-not-migrate: the clone TARGET is, by design, the host the
   // app is now pointed at - a dead tile's chat is cloned onto the effective
   // host. Reading anything else here would clone onto a host nobody chose.
   "src/components/epic-canvas/renderers/use-chat-clone-on-host-switch.ts",

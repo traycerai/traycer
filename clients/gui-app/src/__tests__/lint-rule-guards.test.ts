@@ -80,7 +80,7 @@ const importedLintRuleModule: unknown = await import(lintRuleModuleUrl);
 const lintRuleModule = readLintRuleModule(importedLintRuleModule);
 
 /**
- * F2 host-selection layer (`eslint/traycer-host-selection-layer-rules.mjs`).
+ * D12/F2 host-selection layer (`eslint/traycer-host-selection-layer-rules.mjs`).
  * Unlike the nested-focus module above, these six families are plain exported
  * arrays/lists, not factories - `selectByIdRestrictions` and
  * `selectionAuthorityRestrictions` need no allowlist parameter because
@@ -371,7 +371,7 @@ describe("tabNavigationStoreActionRestrictions", () => {
 });
 
 /**
- * The write path, lower half: `selectById` has NO allowlist (see the rules
+ * D12 write path, lower half: `selectById` has NO allowlist (see the rules
  * module's doc comment at :84-98) - every shape must flag with zero
  * conditions, unlike `nestedFocusBoundaryRestrictions`/
  * `tabNavigationStoreActionRestrictions` above, which both take an allowlist
@@ -440,7 +440,7 @@ describe("selectByIdRestrictions", () => {
 });
 
 /**
- * The write path, upper half: `selectionAuthority` is banned except for the
+ * D12 write path, upper half: `selectionAuthority` is banned except for the
  * two files in `selectionAuthorityWriteAllowlist`, enforced at the config
  * layer (below), not by a runtime allowlist parameter here.
  */
@@ -685,7 +685,7 @@ describe("eslint config actually catches tabActivate bypass forms (lintText)", (
 });
 
 /**
- * F2 host-selection layer, Layer 2: the config-mention sweep. This is the
+ * D12/F2 host-selection layer, Layer 2: the config-mention sweep. This is the
  * layer that catches the hazard documented at `eslint.config.mjs:30-48` -
  * flat config REPLACES a rule's options rather than merging them, so the LAST
  * block matching a file supplies that file's entire `no-restricted-syntax`
