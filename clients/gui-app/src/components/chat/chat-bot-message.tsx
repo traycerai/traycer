@@ -1222,6 +1222,7 @@ function ThreadLine(props: {
       type="button"
       data-testid="bot-thread-line"
       data-unread={unread ? "true" : "false"}
+      data-new-replies={line.newReplies === true ? "true" : "false"}
       onClick={onOpen}
       className="group/thread -ml-1 flex w-fit max-w-full items-center gap-2 rounded-md border border-transparent px-1 py-0.5 text-left text-ui-xs transition-colors hover:border-border/60 hover:bg-background focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
     >
@@ -1235,8 +1236,25 @@ function ThreadLine(props: {
       <ThreadLineCount
         replies={replies}
         unread={unread}
+        bold={line.newReplies ?? unread}
         unreadCount={line.unreadCount}
       />
+      {line.newReplies === true ? (
+        <span
+          className="shrink-0 font-semibold text-foreground"
+          data-testid="bot-thread-new-replies"
+        >
+          new replies
+        </span>
+      ) : null}
+      {line.followedUnwritten ? (
+        <span
+          className="shrink-0 text-muted-foreground"
+          data-testid="bot-thread-following-mark"
+        >
+          following
+        </span>
+      ) : null}
       <ThreadLineStatus
         lastReplyAt={line.lastReplyAt}
         replying={replying}
@@ -1247,16 +1265,18 @@ function ThreadLine(props: {
 }
 
 /**
- * "N replies", bold behind the unread count while one is unread (a 2 badge
- * before "5 replies" reads two unread of five), or behind a dot where the
- * host does not count.
+ * "N replies" behind the unread count while one is unread (a 2 badge before
+ * "5 replies" reads two unread of five), or behind a dot where the host does
+ * not count; bold while a followed thread has new replies, or, where the
+ * host keeps no read cursors, while unread.
  */
 function ThreadLineCount(props: {
   readonly replies: number;
   readonly unread: boolean;
+  readonly bold: boolean;
   readonly unreadCount: number | null;
 }): ReactNode {
-  const { replies, unread, unreadCount } = props;
+  const { replies, unread, bold, unreadCount } = props;
   return (
     <>
       {unreadCount === null ? (
@@ -1277,7 +1297,7 @@ function ThreadLineCount(props: {
       )}
       {replies === 0 ? null : (
         <span
-          className={cn("text-primary", unread ? "font-bold" : "font-semibold")}
+          className={cn("text-primary", bold ? "font-bold" : "font-semibold")}
         >
           {replies === 1 ? "1 reply" : `${replies} replies`}
         </span>

@@ -1000,42 +1000,102 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("reads a channel with no level set as mentions and answers, and sets Off for this channel", async () => {
-    const user = userEvent.setup();
+  const PERSON_OWNER: BotOwner = {
+    kind: "person",
+    userId: "user-1",
+    name: "Olive Owner",
+    avatarUrl: null,
+  };
+
+  function checkedLevels(): ReadonlyArray<string> {
+    const group = screen.getByRole("radiogroup", { name: "Notifications" });
+    return ["All new messages", "Mentions and answers to me", "Nothing"].filter(
+      (name) =>
+        within(group)
+          .getByRole("radio", { name })
+          .getAttribute("aria-checked") === "true",
+    );
+  }
+
+  it("reads a channel with no level set as All for a personal bot", () => {
+    mountChannelPanel({
+      personal: true,
+      owner: PERSON_OWNER,
+      environmentBots: null,
+    });
+
+    const checked = checkedLevels();
+    expect(checked).toEqual(["All new messages"]);
+  });
+
+  it("reads a channel with no level set as Mentions for a team bot", () => {
+    mountChannelPanel({
+      personal: false,
+      owner: TEAM_OWNER,
+      environmentBots: null,
+    });
+
+    const checked = checkedLevels();
+    expect(checked).toEqual(["Mentions and answers to me"]);
+  });
+
+  it("checks nothing while the owner is unknown", () => {
     mountChannelPanel({ personal: true, owner: null, environmentBots: null });
 
-    const group = screen.getByRole("radiogroup", { name: "Notifications" });
-    const mentions = within(group).getByRole("radio", {
-      name: "Mentions and answers to me",
-    });
-    const off = within(group).getByRole("radio", { name: "Off" });
-    expect(mentions.getAttribute("aria-checked")).toBe("true");
-    expect(off.getAttribute("aria-checked")).toBe("false");
+    expect(checkedLevels()).toEqual([]);
+  });
 
-    await user.click(off);
+  it.each([
+    ["All new messages", "all"],
+    ["Mentions and answers to me", "mentions"],
+    ["Nothing", "off"],
+  ])("choosing %s writes %s for this channel", async (name, level) => {
+    const user = userEvent.setup();
+    // The other two levels are the ones not currently set.
+    mocks.notificationLevels = {
+      [CHANNEL]: level === "off" ? "all" : "off",
+    };
+    mountChannelPanel({
+      personal: true,
+      owner: PERSON_OWNER,
+      environmentBots: null,
+    });
+
+    const group = screen.getByRole("radiogroup", { name: "Notifications" });
+    await user.click(within(group).getByRole("radio", { name }));
     expect(mocks.setNotificationLevel).toHaveBeenCalledTimes(1);
     expect(mocks.setNotificationLevel.mock.calls[0][0]).toEqual({
       botId: BOT.botId,
       conversationId: CHANNEL,
-      level: "off",
+      level,
     });
   });
 
-  it("checks Off for a channel set off, whatever another conversation is set to", () => {
+  it("checks Nothing for a channel set off, whatever another conversation is set to", () => {
     mocks.notificationLevels = { [CHANNEL]: "off", "other-channel": "all" };
-    mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+    mountChannelPanel({
+      personal: true,
+      owner: PERSON_OWNER,
+      environmentBots: null,
+    });
 
     expect(
-      screen.getByRole("radio", { name: "Off" }).getAttribute("aria-checked"),
+      screen
+        .getByRole("radio", { name: "Nothing" })
+        .getAttribute("aria-checked"),
     ).toBe("true");
   });
 
   it("locks the choice until the levels are read", () => {
     mocks.notificationLevels = undefined;
-    mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+    mountChannelPanel({
+      personal: true,
+      owner: PERSON_OWNER,
+      environmentBots: null,
+    });
 
     for (const radio of screen.getAllByRole("radio", {
-      name: /Mentions and answers to me|Off/,
+      name: /All new messages|Mentions and answers to me|Nothing/,
     })) {
       expect(radio.getAttribute("aria-checked")).toBe("false");
       expect(radio.hasAttribute("disabled")).toBe(true);
@@ -1044,13 +1104,17 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
 
   it("keeps the choice locked while a level is being written", () => {
     mocks.notificationPending = true;
-    mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+    mountChannelPanel({
+      personal: true,
+      owner: PERSON_OWNER,
+      environmentBots: null,
+    });
 
-    const off = screen.getByRole("radio", { name: "Off" });
-    expect(off.hasAttribute("disabled")).toBe(true);
+    const nothing = screen.getByRole("radio", { name: "Nothing" });
+    expect(nothing.hasAttribute("disabled")).toBe(true);
     expect(
       screen
-        .getByRole("radio", { name: "Mentions and answers to me" })
+        .getByRole("radio", { name: "All new messages" })
         .getAttribute("aria-checked"),
     ).toBe("true");
   });

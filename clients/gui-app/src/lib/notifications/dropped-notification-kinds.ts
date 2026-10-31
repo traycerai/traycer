@@ -1,4 +1,5 @@
 import {
+  isBotConversationAttention,
   isBotThreadVerdictNotification,
   RETIRED_HOST_NOTIFICATION_KINDS,
   type HostNotificationKind,
@@ -74,6 +75,7 @@ export function notificationSummaryContribution(entry: {
   const attention =
     entry.severity === "needs_action" ||
     entry.severity === "failure" ||
-    isBotThreadVerdictNotification(entry);
+    isBotThreadVerdictNotification(entry) ||
+    isBotConversationAttention(entry);
   return { unread: 1, attention: attention ? 1 : 0 };
 }
