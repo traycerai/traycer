@@ -619,6 +619,35 @@ function requireList(): import("@legendapp/list/react").LegendListRef {
 }
 
 /**
+ * Holds every `scrollToOffset` call the cross-tile landing issues: the real
+ * write still lands synchronously (so a test can read whether it happened),
+ * but each call's own settle stays open until the test resolves it, oldest
+ * first - so a cascading reissue can be driven one settle at a time, the way
+ * a real `scrollToShim` resolving on its own schedule would.
+ */
+function holdScrollToOffsetWrites(
+  list: import("@legendapp/list/react").LegendListRef,
+) {
+  const real = list.scrollToOffset.bind(list);
+  let calls = 0;
+  const resolvers: Array<() => void> = [];
+  const spy = vi.spyOn(list, "scrollToOffset").mockImplementation((params) => {
+    calls += 1;
+    void real(params);
+    return new Promise<void>((resolve) => {
+      resolvers.push(resolve);
+    });
+  });
+  return {
+    spy,
+    callCount: (): number => calls,
+    settleOldest: (): void => {
+      resolvers.shift()?.();
+    },
+  };
+}
+
+/**
  * Ticket 15 review (live pass S5 round 3): sets `scrollTop` and fires the
  * scroll event WITHOUT yielding an animation frame afterward - deliberately
  * leaves `scheduleActiveViewportUpdate`'s rAF-throttled reading-line mirror
@@ -9180,6 +9209,362 @@ describe("ChatMessages scroll policy", () => {
       // merely "somewhere else" from the pre-restore snapshot.
       expect(persisted?.anchorMessageId).toBe(missingMessageId);
       expect(persisted?.anchorIndex).toBe(missingIndex);
+    });
+
+    describe("park a scroll request's landing across a collapsed hide", () => {
+      it("a collapsed hide with the landing's command held parks the loop: no write while concealed, no outcome, lands on show", async () => {
+        const messages = makeCompletedTranscript(30);
+        const target = messages[10];
+        expect(target).toBeTruthy();
+        const onScrollRequestSettled = vi.fn();
+        const { rerenderWith } = renderChatMessages({
+          messages,
+          scrollStateKey: "landing-suspend-witness-1",
+          onScrollRequestSettled,
+        });
+        await settleLegendList();
+
+        const list = requireList();
+        const held = holdScrollToOffsetWrites(list);
+        try {
+          rerenderWith({
+            scrollRequest: {
+              kind: "message",
+              messageId: target.id,
+              blockId: null,
+              requestId: 101,
+            },
+          });
+          // The loop's own write landed for real before anything conceals
+          // it - the premise this witness needs to mean anything.
+          expect(getScrollNode().scrollTop).toBeGreaterThan(0);
+          expect(held.callCount()).toBe(1);
+
+          await hideWithCollapsedScrollBox(rerenderWith);
+          expect(getScrollNode().scrollTop).toBe(0);
+          expect(onScrollRequestSettled).not.toHaveBeenCalled();
+
+          // Settle the held command now, with the list concealed and its
+          // box already collapsed. Settling it here - not leaving it held
+          // to the end of the test - is the whole point: an unsuspended
+          // loop (M1: delete `suspendScrollRequestLandingForCollapse()`'s
+          // call in the hide branch) reissues right here, writing onto the
+          // concealed node; the fix's already-torn-down loop does nothing.
+          act(() => {
+            held.settleOldest();
+          });
+          await settleLegendList();
+          expect(held.callCount()).toBe(1);
+          expect(getScrollNode().scrollTop).toBe(0);
+          expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
+            101,
+            "landed",
+          );
+          expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
+            101,
+            "exhausted",
+          );
+          expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
+            101,
+            "cancelled",
+          );
+
+          rerenderWith({ visible: true });
+          act(() => {
+            held.settleOldest();
+          });
+          await waitFor(
+            () => {
+              expect(onScrollRequestSettled).toHaveBeenCalledWith(
+                101,
+                "landed",
+              );
+            },
+            { timeout: 8_000 },
+          );
+          expect(held.callCount()).toBe(2);
+          expect(getScrollNode().scrollTop).toBeGreaterThan(0);
+        } finally {
+          held.spy.mockRestore();
+        }
+      });
+
+      it("a row hydrating while hidden, after a collapsed hide, is not placed until the show re-issues it", async () => {
+        const full = makeCompletedTranscript(8);
+        const initial = full.slice(0, 6);
+        const lateTarget = full[7];
+        expect(lateTarget).toBeTruthy();
+        const onScrollRequestSettled = vi.fn();
+        const { rerenderWith } = renderChatMessages({
+          messages: initial,
+          scrollStateKey: "landing-suspend-witness-2",
+          onScrollRequestSettled,
+        });
+        await settleLegendList();
+
+        const list = requireList();
+        const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+        try {
+          rerenderWith({
+            scrollRequest: {
+              kind: "message",
+              messageId: lateTarget.id,
+              blockId: null,
+              requestId: 201,
+            },
+          });
+          await settleLegendList();
+          // Not burned: the row key was not in the rendered index at
+          // arrival, so nothing issued or settled yet (same premise as
+          // "keeps a request whose row is not rendered yet" above).
+          expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+          expect(onScrollRequestSettled).not.toHaveBeenCalled();
+
+          await hideWithCollapsedScrollBox(rerenderWith);
+
+          // The row hydrates while this landing sits pending-but-unissued
+          // and the tile is concealed by its own collapsed hide. M1
+          // (delete the hide-time suspension) leaves this landing
+          // `pending`, so the `listRows` re-attempt effect below issues it
+          // right here, writing onto the collapsed box - this assertion is
+          // where that mutant goes red.
+          rerenderWith({ messages: full });
+          await settleLegendList();
+          expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+          expect(onScrollRequestSettled).not.toHaveBeenCalled();
+
+          rerenderWith({ visible: true });
+          await waitFor(() => {
+            expect(onScrollRequestSettled).toHaveBeenCalledWith(201, "landed");
+          });
+          // Not an exact count: a freshly-hydrated, unmeasured row's own
+          // settle/reissue loop can correct itself over a few calls before
+          // landing. What matters here is that NONE of them happened while
+          // hidden (proven above) and at least one happened once shown.
+          expect(scrollToOffsetSpy).toHaveBeenCalled();
+        } finally {
+          scrollToOffsetSpy.mockRestore();
+        }
+      });
+
+      it("the request reaching what would be a terminal outcome while hidden must not settle it: still pending across concealment, honoured on show", async () => {
+        const messages = makeCompletedTranscript(30);
+        const target = messages[10];
+        expect(target).toBeTruthy();
+        const onScrollRequestSettled = vi.fn();
+        const { rerenderWith } = renderChatMessages({
+          messages,
+          scrollStateKey: "landing-suspend-witness-3",
+          onScrollRequestSettled,
+        });
+        await settleLegendList();
+
+        const list = requireList();
+        const held = holdScrollToOffsetWrites(list);
+        try {
+          rerenderWith({
+            scrollRequest: {
+              kind: "message",
+              messageId: target.id,
+              blockId: null,
+              requestId: 301,
+            },
+          });
+          expect(held.callCount()).toBe(1);
+
+          await hideWithCollapsedScrollBox(rerenderWith);
+          expect(onScrollRequestSettled).not.toHaveBeenCalled();
+
+          // First settle: on main (no suspension) this is the measured
+          // `reissues-while-hidden=1` write - `validate()` reads the box's
+          // collapsed `scrollTop` (0, forced by the hide), mismatches the
+          // target, and `reissue()` calls `scrollToOffset` again, right
+          // here, while still hidden. The fix's already-cancelled loop
+          // does nothing.
+          act(() => {
+            held.settleOldest();
+          });
+          await settleLegendList();
+          expect(held.callCount()).toBe(1);
+          expect(onScrollRequestSettled).not.toHaveBeenCalled();
+
+          // Second settle: on main this is where the reissue's own write
+          // (just landed above) now matches, `validate()` passes, and the
+          // terminal `onSettledValid` callback fires - reporting `landed`
+          // and clearing `pendingScrollRequestLandingRef` WHILE STILL
+          // HIDDEN. That is the defect that makes write-suppression alone
+          // insufficient: the show's re-issue branch below would then find
+          // nothing pending. The fix never created a second held command
+          // to settle, so this is a no-op.
+          act(() => {
+            held.settleOldest();
+          });
+          await settleLegendList();
+          expect(held.callCount()).toBe(1);
+          expect(onScrollRequestSettled).not.toHaveBeenCalled();
+
+          // Still the live intent: the show resumes and lands it fresh.
+          rerenderWith({ visible: true });
+          act(() => {
+            held.settleOldest();
+          });
+          await waitFor(
+            () => {
+              expect(onScrollRequestSettled).toHaveBeenCalledWith(
+                301,
+                "landed",
+              );
+            },
+            { timeout: 8_000 },
+          );
+          expect(held.callCount()).toBe(2);
+        } finally {
+          held.spy.mockRestore();
+        }
+      });
+
+      it("an intact conceal with a row hydrating while hidden lands it invisibly and issues no placement on show", async () => {
+        const full = makeCompletedTranscript(8);
+        const initial = full.slice(0, 6);
+        const lateTarget = full[7];
+        expect(lateTarget).toBeTruthy();
+        const onScrollRequestSettled = vi.fn();
+        const { rerenderWith } = renderChatMessages({
+          messages: initial,
+          scrollStateKey: "landing-suspend-witness-4",
+          onScrollRequestSettled,
+        });
+        await settleLegendList();
+
+        // Conceal WITHOUT collapsing: report the box's true bottom before
+        // hiding, the same "intact" premise the retained-box witnesses
+        // above use.
+        await fireScrollTopAndFlush(maxScrollTopFor(getScrollNode()));
+        rerenderWith({ visible: false });
+        await settleLegendList();
+
+        rerenderWith({
+          scrollRequest: {
+            kind: "message",
+            messageId: lateTarget.id,
+            blockId: null,
+            requestId: 401,
+          },
+        });
+        await settleLegendList();
+        expect(onScrollRequestSettled).not.toHaveBeenCalled();
+
+        // The row hydrates while still concealed, box intact: this must
+        // land right here, invisibly, exactly as it would without this
+        // fix. M3 (suspend on any concealment, or gate the re-attempt on
+        // `visible`) skips this and defers it to the show instead - the
+        // assertion after the show below is where that mutant goes red.
+        rerenderWith({ messages: full });
+        await waitFor(() => {
+          expect(onScrollRequestSettled).toHaveBeenCalledWith(401, "landed");
+        });
+
+        const list = requireList();
+        const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+        try {
+          rerenderWith({ visible: true });
+          await settleLegendList();
+          expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+        } finally {
+          scrollToOffsetSpy.mockRestore();
+        }
+      });
+
+      it("a request arriving while already concealed by a collapsed hide starts suspended and lands on show", async () => {
+        const messages = makeCompletedTranscript(30);
+        const target = messages[10];
+        expect(target).toBeTruthy();
+        const onScrollRequestSettled = vi.fn();
+        const { rerenderWith } = renderChatMessages({
+          messages,
+          scrollStateKey: "landing-suspend-witness-5",
+          onScrollRequestSettled,
+        });
+        await settleLegendList();
+
+        await hideWithCollapsedScrollBox(rerenderWith);
+
+        const list = requireList();
+        const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+        try {
+          rerenderWith({
+            scrollRequest: {
+              kind: "message",
+              messageId: target.id,
+              blockId: null,
+              requestId: 501,
+            },
+          });
+          await settleLegendList();
+          // Arrived while already concealed by THIS tile's own collapsed
+          // hide: starts suspended, so nothing is issued here even though
+          // the row is already in the rendered index. M2 (make the
+          // landing's `state` unconditionally `"pending"` at creation)
+          // would issue it right here instead - the assertion below is
+          // where that mutant goes red.
+          expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+          expect(onScrollRequestSettled).not.toHaveBeenCalled();
+
+          rerenderWith({ visible: true });
+          await waitFor(() => {
+            expect(onScrollRequestSettled).toHaveBeenCalledWith(501, "landed");
+          });
+          expect(scrollToOffsetSpy).toHaveBeenCalledTimes(1);
+        } finally {
+          scrollToOffsetSpy.mockRestore();
+        }
+      });
+
+      it("a request into a tile mounted hidden behaves exactly as without the fix: no recorded hide, so no suspension", async () => {
+        const full = makeCompletedTranscript(8);
+        const initial = full.slice(0, 6);
+        const lateTarget = full[7];
+        expect(lateTarget).toBeTruthy();
+        const onScrollRequestSettled = vi.fn();
+        const { rerenderWith } = renderChatMessages({
+          messages: initial,
+          scrollStateKey: "landing-suspend-witness-6",
+          onScrollRequestSettled,
+          visible: false,
+        });
+        await settleLegendList();
+
+        const list = requireList();
+        const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+        try {
+          rerenderWith({
+            scrollRequest: {
+              kind: "message",
+              messageId: lateTarget.id,
+              blockId: null,
+              requestId: 601,
+            },
+          });
+          await settleLegendList();
+          expect(onScrollRequestSettled).not.toHaveBeenCalled();
+
+          // The row hydrates while this mounted-hidden tile has never run
+          // a hide of its own, so `concealedWithCollapsedBoxRef` has never
+          // been set: the landing started (and stays) `pending`, and the
+          // `listRows` re-attempt issues it right here, unconditionally -
+          // exactly what it did before this fix existed. The tile's
+          // `visible` prop never changes in this test.
+          rerenderWith({ messages: full });
+          await waitFor(() => {
+            expect(onScrollRequestSettled).toHaveBeenCalledWith(601, "landed");
+          });
+          // Not an exact count - see the sibling witness above - just that
+          // it issued unconditionally, with no hide ever having run.
+          expect(scrollToOffsetSpy).toHaveBeenCalled();
+        } finally {
+          scrollToOffsetSpy.mockRestore();
+        }
+      });
     });
   });
 
