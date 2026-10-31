@@ -19,7 +19,7 @@ import {
 import { BackdropDimSource } from "@/components/ui/backdrop-dim-source";
 
 /**
- * THE window narrator (D10, C4, M5): one global surface for the two facts that
+ * THE window narrator (C4, M5): one global surface for the two facts that
  * belong to the window scope - nothing can serve it, or nothing has served it
  * yet.
  *

@@ -2,7 +2,7 @@ import type { DefaultHostReadinessPresentation } from "@/components/layout/host-
 import type { HostCompatibility } from "@/lib/host/compatibility-state";
 
 /**
- * The probe verdict, reduced to what a pre-filled REPORT needs (D13, P3.2).
+ * The probe verdict, reduced to what a pre-filled REPORT needs (P3.2).
  *
  * It used to carry the copy and the recovery action too - `errorMessage`,
  * `retry`, `retrying` - because two surfaces narrated compatibility from it.

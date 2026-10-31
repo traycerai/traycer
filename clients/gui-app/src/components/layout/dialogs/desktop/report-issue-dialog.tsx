@@ -445,7 +445,7 @@ export function ReportIssueDialog(
 
   // Flow 1 (error-triggered) vs Flow 2 (manual): an error envelope is either
   // a structured cause or a fingerprint captured at catch time. The evidence
-  // gate (D7/tech-plan T4) and the type-chip row are both keyed off this.
+  // gate (tech-plan T4) and the type-chip row are both keyed off this.
   const { cause, fingerprint, hasErrorEnvelope } =
     errorEnvelopeFromContext(draftContext);
 
@@ -1942,7 +1942,7 @@ function ConsentLogToggleRow(props: {
   );
 }
 
-// One consent flag, one row, two files (plan D3): there is no
+// One consent flag, one row, two files (the plan): there is no
 // scenario where a user wants `browser-telemetry.jsonl` attached but not
 // `browser-trace.jsonl` (or vice versa), so a single switch covers both -
 // unlike `ConsentLogToggleRow`'s single target, this offers two independent

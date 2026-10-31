@@ -133,7 +133,7 @@ function typeIntoScratch(text: string): void {
 }
 
 /**
- * No window-scope banner is on screen (D11's first acceptance bullet).
+ * No window-scope banner is on screen (the first acceptance bullet).
  *
  * Asserted by ROLE, not by the deleted strip's test id. A `queryByTestId
  * ("host-status-strip")` would be unfalsifiable now - nothing in the tree can
@@ -315,7 +315,7 @@ describe("the ready gate does not remount the app when readiness context changes
     // Local → remote never produces a non-ready readiness kind (remote targets
     // pass readiness through as ready the moment the entry is dialable), so
     // this moves the app-wide pointer and the switch carries no readiness
-    // event at all. That is the whole D2/D11 claim: a switch needs no
+    // event at all. That is the whole claim: a switch needs no
     // narration, because nothing about it is a failure.
     mountSwitchSurface({ kind: "ready" }, PRESENTATION, mockLocalHostEntry);
     expect(screen.getByTestId("app-shell")).toBeTruthy();

@@ -12,7 +12,7 @@ import { admitsLocalPlane, type AuthStatus } from "@/stores/auth/auth-store";
 export type HostReadinessScope = "none" | "default-host" | "tab-host";
 
 /**
- * COMPATIBILITY IS NOT A READINESS KIND (D13, P3.2).
+ * COMPATIBILITY IS NOT A READINESS KIND (P3.2).
  *
  * There used to be three more members here - `compatibility-checking`,
  * `compatibility-error`, `incompatible-host` - and a `readinessForCompatibility`
@@ -160,7 +160,7 @@ export interface DefaultHostReadinessPresentation {
      * `compatible` held from an earlier probe whose latest refetch failed.
      * A report says so - "compatible (degraded)" - because triage needs to
      * know the verdict was held rather than freshly answered. It is no longer
-     * a user-facing state of its own (D11): a host that answered once and is
+     * a user-facing state of its own: a host that answered once and is
      * being re-probed is still working, and the strip that narrated it is
      * gone.
      */
@@ -591,8 +591,8 @@ export function projectDefaultHostReadiness(args: {
 }
 
 /**
- * Whether the WINDOW NARRATOR owns this readiness kind (status narration,
- * D10).
+ * Whether the WINDOW NARRATOR owns this readiness kind (status
+ * narration).
  *
  * Exactly one narrator per scope is the rule, and these three kinds are the
  * ones the global modal now speaks for: a window with no host yet, a window
@@ -661,7 +661,7 @@ export function windowNarratorOwns(
  * This was a four-valued `PostLatchSurface` while the status strip existed:
  * two of its rows (`switching`, `error`) named which STRIP variant to draw
  * beside the children, and the strip was their only reader. With the strip
- * deleted (D11) one reader is left asking one question, so it is asked
+ * deleted, one reader is left asking one question, so it is asked
  * directly. `restoring-request-context` answering `false` here is the same
  * deliberate classification it had before: it fires whenever
  * `requestContextUserId` goes transiently null while signed in, and the gate's
