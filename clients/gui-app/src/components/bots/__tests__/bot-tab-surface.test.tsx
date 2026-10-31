@@ -174,6 +174,8 @@ const mocks = vi.hoisted(() => ({
     membersSupport: null as boolean | null,
     openResult: null as OpenResult | null,
     threads: [] as BotThreadSummary[],
+    // No bot.thread.list answer is held yet (the first read is in flight).
+    threadsHeld: true,
     // A read of bot.thread.list is in flight over the held `threads`.
     threadsFetching: false,
     environments: [] as Array<{
@@ -572,7 +574,9 @@ vi.mock("@/components/bots/bot-threads-view", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
   useBotThreadListQuery: () => ({
-    data: { threads: mocks.state.threads },
+    data: mocks.state.threadsHeld
+      ? { threads: mocks.state.threads }
+      : undefined,
     isFetching: mocks.state.threadsFetching,
   }),
 }));
@@ -822,6 +826,7 @@ beforeEach(() => {
     { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
   ];
   mocks.state.threads = [];
+  mocks.state.threadsHeld = true;
   mocks.state.threadsFetching = false;
   mocks.subscribed.length = 0;
   for (const key of Object.keys(mocks.reads)) delete mocks.reads[key];
@@ -3186,6 +3191,64 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
         screen.getByTestId("stub-sidebar").getAttribute("data-threads-shown"),
       ).toBe("true");
       expect(screen.queryByTestId("stub-channel")).toBeNull();
+      expectNoSession();
+    });
+
+    it("spends a sender landing waiting on the first thread-list read when the person opens Activity, which stays when the list answers", async () => {
+      const user = userEvent.setup();
+      const NEW_THREAD: BotThreadSummary = {
+        ...LISTED_THREAD,
+        threadId: "thread-2",
+        sessionChatId: "session-thread-2",
+        anchor: {
+          messageId: "post-8",
+          requestId: "req-8",
+          senderUserId: "user-1",
+          sentAt: 3_000,
+          resolvedAt: null,
+          excerpt: null,
+        },
+      };
+      // No list is held yet, and its first read is in flight.
+      mocks.state.threadsHeld = false;
+      mocks.state.threadsFetching = true;
+      const view = render(surface());
+      act(() =>
+        useBotTabLandingStore
+          .getState()
+          .request(BOT_ID, { kind: "sender", chatId: "session-thread-2" }),
+      );
+      expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
+        kind: "sender",
+        chatId: "session-thread-2",
+      });
+
+      // The person opens Activity while the landing waits on the first read.
+      await user.click(screen.getByRole("tab", { name: /^Activity/ }));
+
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+      expect(
+        screen.getByRole("tab", { name: /^Activity/, selected: true }),
+      ).toBeTruthy();
+
+      // The first read answers with the sender's thread.
+      mocks.state.threadsHeld = true;
+      mocks.state.threads = [LISTED_THREAD, NEW_THREAD];
+      mocks.state.threadsFetching = false;
+      view.rerender(surface());
+
+      expect(
+        screen.getByRole("tab", { name: /^Activity/, selected: true }),
+      ).toBeTruthy();
+      expect(screen.getByTestId("stub-activity")).toBeTruthy();
+      expectNoSession();
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+
+      await user.click(screen.getByRole("tab", { name: /^Messages/ }));
+
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-open-thread")).toBe("none");
+      expect(channel.getAttribute("data-land-on")).toBe("none");
       expectNoSession();
     });
 

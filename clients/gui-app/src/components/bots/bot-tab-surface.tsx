@@ -667,7 +667,8 @@ type WaitingLanding = {
 function spendSenderLanding(input: {
   readonly botId: string;
   readonly landing: Extract<BotTabLanding, { kind: "sender" }>;
-  readonly threads: ReadonlyArray<BotThreadSummary>;
+  /** `null` while the list is first read. */
+  readonly threads: ReadonlyArray<BotThreadSummary> | null;
   readonly threadsFetching: boolean;
   readonly place: BotTabPlace;
   readonly waiting: { current: WaitingLanding | null };
@@ -676,9 +677,10 @@ function spendSenderLanding(input: {
 }): void {
   const { landing, threads, place, waiting } = input;
   const held = waiting.current?.landing === landing ? waiting.current : null;
-  const thread = threads.find((t) => t.sessionChatId === landing.chatId);
+  const thread = threads?.find((t) => t.sessionChatId === landing.chatId);
   const moved = held !== null && held.place !== place;
-  if (!moved && thread === undefined && input.threadsFetching) {
+  const reading = threads === null || input.threadsFetching;
+  if (!moved && thread === undefined && reading) {
     waiting.current = held ?? { landing, place };
     return;
   }
@@ -727,7 +729,8 @@ function useSpendTabLanding(args: {
   );
   const waiting = useRef<WaitingLanding | null>(null);
   useEffect(() => {
-    if (landing === null || threads === null) return;
+    if (landing === null) return;
+    // A sender's wait begins at the tab's place whether or not a list is held.
     if (landing.kind === "sender") {
       spendSenderLanding({
         botId,
@@ -741,6 +744,7 @@ function useSpendTabLanding(args: {
       });
       return;
     }
+    if (threads === null) return;
     useBotTabLandingStore.getState().clear(botId);
     const { messageId } = landing;
     if (landing.kind === "thread") {
