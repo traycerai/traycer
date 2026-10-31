@@ -3140,6 +3140,55 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       expectNoSession();
     });
 
+    it("spends a waiting sender landing unlanded when the person opens Threads, which stays open when the list answers", async () => {
+      const user = userEvent.setup();
+      const NEW_THREAD: BotThreadSummary = {
+        ...LISTED_THREAD,
+        threadId: "thread-2",
+        sessionChatId: "session-thread-2",
+        anchor: {
+          messageId: "post-8",
+          requestId: "req-8",
+          senderUserId: "user-1",
+          sentAt: 3_000,
+          resolvedAt: null,
+          excerpt: null,
+        },
+      };
+      const { rerender } = render(surface());
+
+      // The held list lacks the sender's thread, and a read of it starts.
+      mocks.state.threadsFetching = true;
+      rerender(surface());
+      act(() =>
+        useBotTabLandingStore
+          .getState()
+          .request(BOT_ID, { kind: "sender", chatId: "session-thread-2" }),
+      );
+      expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
+        kind: "sender",
+        chatId: "session-thread-2",
+      });
+
+      // The person opens Threads from the column while the landing waits.
+      await user.click(screen.getByTestId("stub-sidebar-threads"));
+
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+      expect(screen.getByTestId("stub-threads")).toBeTruthy();
+
+      // The read answers with the thread.
+      mocks.state.threads = [LISTED_THREAD, NEW_THREAD];
+      mocks.state.threadsFetching = false;
+      rerender(surface());
+
+      expect(screen.getByTestId("stub-threads")).toBeTruthy();
+      expect(
+        screen.getByTestId("stub-sidebar").getAttribute("data-threads-shown"),
+      ).toBe("true");
+      expect(screen.queryByTestId("stub-channel")).toBeNull();
+      expectNoSession();
+    });
+
     it("lands the channel, with no thread or session, for a sender landing on the trunk chat", () => {
       useBotTabLandingStore
         .getState()

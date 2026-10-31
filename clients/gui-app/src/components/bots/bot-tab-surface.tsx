@@ -641,9 +641,13 @@ function useBotTabSession(args: {
   };
 }
 
-/** Where the tab is: its view, the session shown, and the channel's state. */
+/**
+ * Where the tab is: its view, Threads in its place, the session shown, and
+ * the channel's state.
+ */
 type BotTabPlace = {
   readonly view: BotTabView;
+  readonly threadsShown: boolean;
   readonly session: BotOpenSession | null;
   readonly openThread: BotOpenThread | null;
   readonly channelLanding: BotChannelLanding | null;
@@ -927,9 +931,16 @@ function BotTabContent(props: {
     landChannel,
     showThread,
   } = useBotTabSession({ threads, onViewChange, setOpenThread });
+  const threadsShown = tabThreadsView.shown;
   const place = useMemo(
-    (): BotTabPlace => ({ view, session, openThread, channelLanding }),
-    [channelLanding, openThread, session, view],
+    (): BotTabPlace => ({
+      view,
+      threadsShown,
+      session,
+      openThread,
+      channelLanding,
+    }),
+    [channelLanding, openThread, session, threadsShown, view],
   );
   useSpendTabLanding({
     botId,
