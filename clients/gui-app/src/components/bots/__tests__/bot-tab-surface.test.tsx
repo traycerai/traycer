@@ -37,6 +37,7 @@ import {
 import type {
   SandboxCatalogueFetchResult,
   SandboxCreateFetchResult,
+  SandboxListFetchResult,
   TraycerModelsFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
@@ -1452,6 +1453,51 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       );
       expect(enableButton()).toHaveProperty("disabled", true);
     });
+
+    it.each([
+      [
+        "is still out",
+        (): Promise<SandboxListFetchResult> => new Promise(() => undefined),
+        "The team has a cloud sandbox. Its bots start once it's running.",
+      ],
+      [
+        "fails",
+        (): Promise<SandboxListFetchResult> =>
+          Promise.resolve({ kind: "network-error", detail: "offline" }),
+        "Couldn't reach Traycer. Try again in a moment.",
+      ],
+    ] as const)(
+      "keeps the button held after the create is accepted while the list's next read %s, so a second press creates nothing",
+      async (_case, nextList, sentence) => {
+        const user = userEvent.setup();
+        auth().createSandbox.mockResolvedValue({
+          kind: "ok",
+          accepted: {
+            sandboxId: "sbx_1",
+            hostId: "host-sbx-1",
+            sandbox: sandboxSummaryFixture({ environmentId: "env-new" }),
+          },
+        });
+        render(surfaceFor(SETUP_BOT_ID));
+        await waitFor(() =>
+          expect(enableButton()).toHaveProperty("disabled", false),
+        );
+        auth().listSandboxes.mockImplementation(nextList);
+
+        await user.click(enableButton());
+        await waitFor(() =>
+          expect(
+            document.getElementById(
+              enableButton().getAttribute("aria-describedby") ?? "",
+            )?.textContent,
+          ).toBe(sentence),
+        );
+        expect(enableButton()).toHaveProperty("disabled", true);
+        await user.click(enableButton());
+
+        expect(auth().createSandbox).toHaveBeenCalledTimes(1);
+      },
+    );
 
     it.each([
       [

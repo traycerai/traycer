@@ -1,8 +1,14 @@
 import { useId, useMemo, useRef, useState, type ReactNode } from "react";
+import type { UseQueryResult } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostSandboxState } from "@traycer/protocol/host/host-status";
-import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import type {
+  SandboxCatalogue,
+  SandboxListResponse,
+  SandboxSummary,
+} from "@traycer/protocol/host/sandbox-control";
+import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import type { HostRpcRegistry } from "@/lib/host";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
@@ -26,10 +32,16 @@ import {
   SandboxCreateError,
   useSandboxCreate,
 } from "@/hooks/sandboxes/use-sandbox-create-mutation";
-import { useSandboxDefaults } from "@/hooks/sandboxes/use-sandbox-defaults";
+import {
+  useSandboxDefaults,
+  type SandboxDefaultsRead,
+} from "@/hooks/sandboxes/use-sandbox-defaults";
 import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
 import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
-import { configurationStageShape } from "@/lib/sandboxes/sandbox-stage-model";
+import {
+  configurationStageShape,
+  type StageShape,
+} from "@/lib/sandboxes/sandbox-stage-model";
 import { createErrorNeedsFreshKey } from "@/lib/sandboxes/staged-sandbox-run";
 
 /**
@@ -299,6 +311,67 @@ interface EnableTeamCloudBlocked {
 }
 
 /**
+ * What the team's create asks for: the configuration's defaults' shape over
+ * the catalogue (`null` when no provider can create), or `undefined` while
+ * either is unread.
+ */
+function teamStageShape(
+  catalogue: SandboxCatalogue | undefined,
+  defaults: SandboxDefaultsRead | undefined,
+): StageShape | null | undefined {
+  if (catalogue === undefined || defaults === undefined) return undefined;
+  if (defaults.kind === "pending") return undefined;
+  return configurationStageShape(
+    catalogue,
+    // An unreadable item reads as none set, as every create does.
+    defaults.kind === "ready" ? defaults.value.defaults : null,
+  );
+}
+
+/**
+ * Why Enable cloud cannot be pressed for the team in `environmentId`, or
+ * `null` when it can. `unlisted` is a sandbox this surface's create was
+ * answered with that the list does not carry yet; `shape` is `undefined`
+ * while the catalogue or the team's defaults are unread.
+ */
+function enableTeamCloudBlocked(input: {
+  readonly environmentId: string;
+  readonly models: UseQueryResult<ReadonlyArray<GuiAgentModelOption>>;
+  readonly sandboxes: UseQueryResult<SandboxListResponse | null>;
+  readonly unlisted: string | null;
+  readonly catalogue: UseQueryResult<SandboxCatalogue>;
+  readonly shape: StageShape | null | undefined;
+}): EnableTeamCloudBlocked | null {
+  const { models, sandboxes, catalogue, shape } = input;
+  if (models.status === "error") return { note: models.error.message };
+  if (models.data === undefined) return { note: null };
+  if (models.data.length === 0) {
+    return { note: "No model is available for team sandboxes yet." };
+  }
+  // An unread list is not "none": the team may have its sandbox already,
+  // and a list whose refresh failed may predate it.
+  if (sandboxes.status === "error") return { note: sandboxes.error.message };
+  const list = sandboxes.data;
+  if (list === undefined || list === null) return { note: null };
+  if (
+    input.unlisted !== null ||
+    list.sandboxes.some((summary) =>
+      hostsTeamBots(summary, input.environmentId),
+    )
+  ) {
+    return {
+      note: "The team has a cloud sandbox. Its bots start once it's running.",
+    };
+  }
+  if (catalogue.status === "error") return { note: catalogue.error.message };
+  if (shape === undefined) return { note: null };
+  if (shape === null) {
+    return { note: "Sandboxes aren't available right now. Try again later." };
+  }
+  return null;
+}
+
+/**
  * Enable cloud (decision 130): create the team's one kept sandbox in the
  * team's environment, in the configuration's default shape and region. The
  * team's main bot is created on it once it is up, which ends this setup.
@@ -323,44 +396,27 @@ function EnableTeamCloudAction(props: {
   // An unanswered request may already have created the sandbox. Reuse its key
   // until the server accepts it or refuses it before creating anything.
   const requestKey = useRef<string | null>(null);
+  // The sandbox the last accepted create made, until the list carries it: the
+  // create settles before the list's refresh answers, and a press in between
+  // would create a second one.
+  const [unlisted, setUnlisted] = useState<string | null>(null);
+  if (
+    unlisted !== null &&
+    sandboxes.data?.sandboxes.some((summary) => summary.id === unlisted) ===
+      true
+  ) {
+    setUnlisted(null);
+  }
 
-  const shape =
-    catalogue.data === undefined ||
-    defaults === undefined ||
-    defaults.kind === "pending"
-      ? undefined
-      : configurationStageShape(
-          catalogue.data,
-          // An unreadable item reads as none set, as every create does.
-          defaults.kind === "ready" ? defaults.value.defaults : null,
-        );
-  const blocked = ((): EnableTeamCloudBlocked | null => {
-    if (models.status === "error") return { note: models.error.message };
-    if (models.data === undefined) return { note: null };
-    if (models.data.length === 0) {
-      return { note: "No model is available for team sandboxes yet." };
-    }
-    // An unread list is not "none": the team may have its sandbox already.
-    const list = sandboxes.data;
-    if (list === undefined || list === null) {
-      return {
-        note: sandboxes.status === "error" ? sandboxes.error.message : null,
-      };
-    }
-    if (
-      list.sandboxes.some((summary) => hostsTeamBots(summary, environmentId))
-    ) {
-      return {
-        note: "The team has a cloud sandbox. Its bots start once it's running.",
-      };
-    }
-    if (catalogue.status === "error") return { note: catalogue.error.message };
-    if (shape === undefined) return { note: null };
-    if (shape === null) {
-      return { note: "Sandboxes aren't available right now. Try again later." };
-    }
-    return null;
-  })();
+  const shape = teamStageShape(catalogue.data, defaults);
+  const blocked = enableTeamCloudBlocked({
+    environmentId,
+    models,
+    sandboxes,
+    unlisted,
+    catalogue,
+    shape,
+  });
 
   const enable = (): void => {
     if (blocked !== null || shape === undefined || shape === null) return;
@@ -389,8 +445,9 @@ function EnableTeamCloudAction(props: {
         teamName: props.teamName,
       },
       {
-        onSuccess: () => {
+        onSuccess: (accepted) => {
           requestKey.current = null;
+          setUnlisted(accepted.sandboxId);
         },
         onError: (error) => {
           if (createErrorNeedsFreshKey(error)) requestKey.current = null;
