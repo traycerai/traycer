@@ -14,6 +14,8 @@ import { choicesSentence } from "@/lib/voice/focused-replies";
 import { confirmationAnswer } from "@/lib/voice/say-loop";
 import {
   confirmationWords,
+  repeatedWords,
+  type ConfirmWord,
   type SpeechPriority,
   type SpeechScheduler,
 } from "@/lib/voice/scheduler";
@@ -425,28 +427,28 @@ function wordsOfText(text: string): ReadonlyArray<string> {
 /**
  * What proves a card's list was read to its end: the words of its last part
  * (the final choice and the "or skip" of a question, Allow and Deny of an
- * approval) that the part before it did not already say, so the question's
- * own words, said first, prove nothing. Not every word of every choice: a
- * paraphrase may drop some, and the end, said after the rest, is enough.
+ * approval), each to be said more often than the part before it (the bot,
+ * the place, the question, or the tool and summary) says it. A word only
+ * the end says needs one saying; one the question says too must be said
+ * again, so the question alone, however its words repeat the choices,
+ * proves nothing. Not every word of every choice: a paraphrase may drop
+ * some, and the end is enough.
  */
 function listEndWords(
   content: CardContent,
   question: CardQuestion | null,
-): ReadonlyArray<string> {
+): ReadonlyArray<ConfirmWord> {
   const approval = content.family === "approval" ? content.approval : null;
-  const end =
-    approval === null
-      ? `${question?.options.at(-1) ?? ""} skip`
-      : APPROVAL_CHOICES.join(" ");
-  const before = new Set(
-    wordsOfText(
-      approval === null
-        ? `${content.botTitle} ${content.place} ${question?.text ?? ""}`
-        : `${content.botTitle} ${content.place} ${approval.tool} ${approval.summary}`,
-    ),
+  if (approval === null) {
+    return repeatedWords(
+      `${question?.options.at(-1) ?? ""} skip`,
+      `${content.botTitle} ${content.place} ${question?.text ?? ""}`,
+    );
+  }
+  return repeatedWords(
+    APPROVAL_CHOICES.join(" "),
+    `${content.botTitle} ${content.place} ${approval.tool} ${approval.summary}`,
   );
-  const fresh = wordsOfText(end).filter((word) => !before.has(word));
-  return fresh.length > 0 ? fresh : wordsOfText(end);
 }
 
 /**
@@ -475,7 +477,7 @@ interface Line {
   readonly text: string;
   readonly priority: SpeechPriority;
   /** The words whose saying proves it was heard (see `confirmationWords`). */
-  readonly confirmWords: ReadonlyArray<string>;
+  readonly confirmWords: ReadonlyArray<ConfirmWord>;
   readonly onHeard: ((spoken: Spoken) => void) | null;
   readonly onGivenUp: (() => void) | null;
 }
