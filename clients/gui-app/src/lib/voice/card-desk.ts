@@ -23,6 +23,7 @@ import type {
   CardChoice,
   CardFamily,
   CardKey,
+  RoutedCardAnswer,
   RouterCard,
   VoiceCardDriver,
   VoiceSessionState,
@@ -1199,11 +1200,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
   const answerRoutedWith = (
     held: Desk,
     active: ActiveCard,
-    routed: {
-      readonly choice: number | null;
-      readonly text: string;
-      readonly key: CardKey;
-    },
+    routed: RoutedCardAnswer,
   ): boolean => {
     const { choice, text, key } = routed;
     // Routed against another card, or another of its questions: the
@@ -1213,8 +1210,18 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
       return true;
     }
     const content = held.content;
-    // Said before the card could be answered: spent, choosing nothing.
-    if (content === null || !answerable(held)) return true;
+    // Said before the card could be answered, judged by when the words were
+    // said, not by when the route came back: spent, choosing nothing, as an
+    // exact choice said then is.
+    const list = held.list;
+    if (
+      content === null ||
+      list === null ||
+      !answerable(held) ||
+      routed.seqs.some((seq) => seq <= list.heardAfterSeq)
+    ) {
+      return true;
+    }
     const question = currentQuestion(held);
     const choices = choicesOf(content, question);
     if (choice === null) {
@@ -1328,7 +1335,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
       }
     },
 
-    answerRouted(choice, text, delegationId, key) {
+    answerRouted(routed, delegationId) {
       const held = desk;
       const active = card();
       if (!listening(held) || held.offer !== null || active === null) {
@@ -1336,7 +1343,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
       }
       held.delegationId = delegationId;
       try {
-        return answerRoutedWith(held, active, { choice, text, key });
+        return answerRoutedWith(held, active, routed);
       } finally {
         held.delegationId = null;
       }

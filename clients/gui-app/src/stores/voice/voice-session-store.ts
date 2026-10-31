@@ -272,10 +272,8 @@ export interface VoiceCardDriver {
    * them. `false` when no card waits.
    */
   readonly answerRouted: (
-    choice: number | null,
-    text: string,
+    routed: RoutedCardAnswer,
     delegationId: string | null,
-    key: CardKey,
   ) => boolean;
   /** The question and choices the router is shown while the card waits; `null` otherwise. */
   readonly routerCard: () => RouterCard | null;
@@ -292,6 +290,18 @@ export interface VoiceCardDriver {
 export interface CardKey {
   readonly opening: number;
   readonly questionIndex: number;
+}
+
+/** The router's answer to a card, as the words it was made from. */
+export interface RoutedCardAnswer {
+  /** The choice by its number in the list read back; `null` for the person's own words. */
+  readonly choice: number | null;
+  /** The person's words the router took as the answer, verbatim. */
+  readonly text: string;
+  /** The card the route was made against. */
+  readonly key: CardKey;
+  /** Which segments those words were: only words said after the list was heard answer it. */
+  readonly seqs: ReadonlyArray<number>;
 }
 
 /** The active card as the router sees it: what was asked, and the choices by number. */

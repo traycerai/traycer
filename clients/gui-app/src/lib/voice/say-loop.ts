@@ -1026,18 +1026,19 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   ): void {
     store.getState().consumeReservation(entry.seqs);
     settleDelegation(entry.delegationId);
-    const text = joinSegments(
-      entry.segments.slice(decision.span.from, decision.span.to + 1),
-    );
+    const span = entry.segments.slice(decision.span.from, decision.span.to + 1);
     const driver = store.getState().cardDriver;
     const taken =
       driver !== null &&
       entry.card !== null &&
       driver.answerRouted(
-        decision.choice,
-        text,
+        {
+          choice: decision.choice,
+          text: joinSegments(span),
+          key: entry.card,
+          seqs: span.map((segment) => segment.seq),
+        },
         delegationOf(entry),
-        entry.card,
       );
     if (!taken) deps.notify(NO_CARD_TEXT, delegationOf(entry));
   }
