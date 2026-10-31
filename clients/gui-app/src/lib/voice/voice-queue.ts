@@ -454,6 +454,10 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
         if (entry.item.kind !== "failed" || entry.item.botId !== botId)
           continue;
         if (live.has(id) || entry.item.state !== "queued") continue;
+        // The bot recovered: a read asked of it and not yet said would now
+        // tell of a stop that is over, about an item no longer listed.
+        withdrawOffer(entry);
+        withdrawRead(entry);
         entries.delete(id);
         changed = true;
       }
