@@ -173,6 +173,51 @@ describe("delivery confirmation", () => {
     expect(scheduler.pendingCount()).toBe(0);
   });
 
+  it("never takes a numeric token from the word splitter as proof: 1000 is not -1000, which its numeral and nothing else confirms", () => {
+    expect(
+      confirmationWords({
+        botTitle: "Tracy",
+        threadTitle: null,
+        text: "-1000",
+      }),
+    ).toEqual(["tracy", "-1000"]);
+    expect(
+      confirmationWords({
+        botTitle: null,
+        threadTitle: null,
+        text: "Deploy v1000 on 2026-10-31.",
+      }),
+    ).toEqual(["deploy"]);
+
+    const answer = numericAnswer("-1000");
+    scheduler.noteOutputTranscript("1000.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(answer.delivered()).toBe(0);
+    clock.advance(CONFIRM_WINDOW_MS);
+    expect(appended).toHaveLength(2);
+
+    scheduler.noteOutputTranscript("It is -1,000.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(answer.delivered()).toBe(1);
+  });
+
+  it("confirms an ordinary sentence by its words, a year in it being neither proof nor a bar", () => {
+    let delivered = 0;
+    const text = "The release shipped in 2026.";
+    const words = confirmationWords({
+      botTitle: null,
+      threadTitle: null,
+      text,
+    });
+    expect(words).toEqual(["release", "shipped"]);
+    scheduler.enqueue(
+      item("a", { text, confirmWords: words, onDelivered: () => delivered++ }),
+    );
+
+    scheduler.noteOutputTranscript("The release");
+    expect(delivered).toBe(1);
+  });
+
   it("takes no part of the number, nor filler that happens to hold one, as proof", () => {
     const answer = numericAnswer("42");
 

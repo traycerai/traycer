@@ -654,6 +654,20 @@ function isDiscriminative(word: string): boolean {
   return !STOP_WORDS.has(word) && !BACKCHANNEL_WORDS.has(word);
 }
 
+/** A word of letters alone, apostrophes and dashes inside it. */
+const LETTER_WORD_RE = /^\p{L}[\p{L}'’-]*$/u;
+
+/**
+ * A content word: letters alone, neither filler nor a backchannel. A token
+ * with a digit in it ("1000", "v1000", "2026-10-31") is never one: the word
+ * splitter has dropped its sign, separators and grouping, so as proof it
+ * would stand for a different value; numbers are proven only by the numeral
+ * extraction on the raw text, judged at the utterance's completion.
+ */
+function isContentWord(word: string): boolean {
+  return LETTER_WORD_RE.test(word) && isDiscriminative(word);
+}
+
 /**
  * What proves an item was spoken, each entry a phrase the output transcript
  * must hold whole: the bot's name and the thread's title, and the item's own
@@ -676,14 +690,14 @@ export function confirmationWords(input: {
   for (const source of [input.botTitle, input.threadTitle]) {
     if (source === null) continue;
     for (const word of wordsOf(source)) {
-      if (word.length >= 3 && isDiscriminative(word)) words.add(word);
+      if (word.length >= 3 && isContentWord(word)) words.add(word);
     }
   }
   const content = wordsOf(input.text);
   const before = words.size;
   for (const word of content) {
     if (words.size >= MAX_CONFIRM_WORDS) break;
-    if (word.length >= 4 && isDiscriminative(word)) words.add(word);
+    if (word.length >= 4 && isContentWord(word)) words.add(word);
   }
   if (words.size === before) {
     for (const phrase of shortAnswerPhrases(input.text, content)) {
@@ -714,7 +728,7 @@ function shortAnswerPhrases(
     phrases.push(numeral, ...spokenNumeral(numeral));
   }
   for (const word of content) {
-    if (!NUMERAL_RE.test(word) && isDiscriminative(word)) phrases.push(word);
+    if (isContentWord(word)) phrases.push(word);
   }
   if (
     numerals.length === 0 &&
@@ -735,9 +749,14 @@ function wholeReplyOf(text: string): string {
 const WHOLE_REPLY_MAX_WORDS = 2;
 
 /** A number as written: an optional sign, digits, an optional decimal part. */
-const NUMERAL_RE = /^-?\d+(?:\.\d+)?$/u;
+const NUMERAL_RE = /^-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$/u;
 const NUMERALS_IN_TEXT_RE =
-  /(?<![\p{L}\p{N}.,\-$€£¥])-?\d+(?:\.\d+)?(?![\p{L}\p{N}])(?![.,]\d)(?!\s*(?:[%‰°$€£¥]|(?:percent|hundred|thousand|million|billion|trillion|point)\b))/giu;
+  /(?<![\p{L}\p{N}.,\-$€£¥])-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\p{L}\p{N}])(?![.,]\d)(?!\s*(?:[%‰°$€£¥]|(?:percent|hundred|thousand|million|billion|trillion|point)\b))/giu;
+
+/** The same number written with or without grouping ("42,000" and "42000"). */
+function sameNumeral(a: string, b: string): boolean {
+  return a.replaceAll(",", "") === b.replaceAll(",", "");
+}
 
 /** Symbols glued to a number that make it a different value: said, a magnitude word. */
 const MAGNITUDE_SYMBOL_RE = /[%‰°]/gu;
@@ -941,7 +960,7 @@ function isOnly(said: string, phrase: string): boolean {
     .filter((part) => part.length > 0);
   if (parts.length === 0) return false;
   if (NUMERAL_RE.test(expected)) {
-    return parts.every((part) => part === expected);
+    return parts.every((part) => sameNumeral(part, expected));
   }
   const words = wordsOf(expected).map(canonicalWord).join(" ");
   return parts.every(
@@ -961,10 +980,7 @@ const REPEAT_SPLIT_RE = /[!?;:]+|\.(?!\d)|,(?!\d)/u;
 function holdsPhrase(said: string, phrase: string): boolean {
   const expected = phrase.toLowerCase();
   if (NUMERAL_RE.test(expected)) {
-    for (const numeral of numeralsOf(said)) {
-      if (numeral === expected) return true;
-    }
-    return false;
+    return numeralsOf(said).some((numeral) => sameNumeral(numeral, expected));
   }
   const needle = wordsOf(expected);
   if (needle.length === 0) return false;
