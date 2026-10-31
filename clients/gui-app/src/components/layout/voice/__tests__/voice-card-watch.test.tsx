@@ -19,7 +19,22 @@ const ITEM = "q-1";
 const BOT_ID = "bot-1";
 const HOST = "host-a";
 
+/** The bot's conversation list as the watcher reads it: pending, then answered. */
+interface FakeConversations {
+  data:
+    | {
+        readonly conversations: ReadonlyArray<{
+          readonly botId: string;
+          readonly conversationId: string;
+          readonly createdAt: number;
+        }>;
+      }
+    | undefined;
+  isError: boolean;
+}
+
 const fake = vi.hoisted(() => {
+  const conversations: FakeConversations = { data: undefined, isError: false };
   const listeners = new Set<() => void>();
   let messages: ReadonlyArray<unknown> = [];
   const state = { getState: () => ({ messages }) };
@@ -35,7 +50,7 @@ const fake = vi.hoisted(() => {
       messages = next;
       for (const listener of listeners) listener();
     },
-    conversations: { data: undefined, isError: false },
+    conversations,
   };
 });
 
