@@ -1,5 +1,5 @@
 /**
- * A bot looks like a bot (Tracy Bots, T62): on a bot's channel rows the
+ * A bot looks like a bot: on a bot's channel rows the
  * bot's picture is a squircle and a person's a circle, read from the
  * rendered element's clip; a row names no owner, which the bot's card
  * carries; and the bot's card says what it is doing now from the real `useBotActivity` over the real shared

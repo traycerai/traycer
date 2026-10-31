@@ -10,7 +10,7 @@ import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
 
 /**
- * Keeps the fixed Tracy entry (T58, decision 150) in step with "Show Tracy",
+ * Keeps the fixed Tracy entry (decision 150) in step with "Show Tracy",
  * once per window. On, and with a host that lists bots: the Tracy surface
  * opens on this window's host, with or without a main bot, and its tab is
  * pinned (`tracy-entry.ts`) and kept first in the strip. Off: the pin is

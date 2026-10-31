@@ -15,7 +15,7 @@ export const HOT_DOCS_MAX_MATERIALIZED = 32;
 
 /**
  * Live-epic count cap. The session registry's `DEFAULT_MAX_LIVE_EPICS` is
- * this value. T4 re-exports it; this is the one definition.
+ * this value. The session registry re-exports it; this is the one definition.
  */
 export const EPIC_REPLICAS_MAX_LIVE = 5;
 

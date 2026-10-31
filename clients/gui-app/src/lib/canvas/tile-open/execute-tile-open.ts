@@ -119,7 +119,7 @@ export function executeTileOpen(
       );
     }
     // No `<kind>Opened` here: nothing entered the canvas, and counting a
-    // focus as an open inflates every open metric (R9).
+    // focus as an open inflates every open metric.
     const target = commit(() =>
       store.prepareSetActiveTileTabFocusTarget(
         tabId,

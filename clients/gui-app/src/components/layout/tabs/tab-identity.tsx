@@ -27,7 +27,7 @@ export type SideTabTile =
   | { readonly kind: "generating" };
 
 /**
- * What a task's tile shows (S-17): the custom icon, else the spinner while
+ * What a task's tile shows: the custom icon, else the spinner while
  * the title is generating, else the monogram of the resolved title, else
  * `fallback` (the row's status glyph) for a title with no letter or digit.
  * `title` is the resolved title, never the "Untitled" placeholder.

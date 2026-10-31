@@ -9,7 +9,7 @@ import { create } from "zustand";
 // `partialize` - which no longer carries the minimap side, the pinned
 // breakdown or the resource-monitor switch - the moment `create()` runs below.
 // Capturing it first has to be strictly earlier than this module's body, which
-// an import is and a bootstrap call is not (G1-01).
+// an import is and a bootstrap call is not.
 import "@/lib/layout/legacy-layout-records";
 import { useThemeLibraryStore } from "@/stores/settings/theme-library-store";
 import { persist } from "zustand/middleware";

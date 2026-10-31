@@ -864,8 +864,8 @@ function ArtifactCardSegmentContent(props: MarkdownArtifactCardSegmentProps) {
   // Drag source (mirrors the sidebar): the card opens its artifact in the
   // canvas. Identity is present only when a host is bound (`activeHostId`);
   // `enabled` reuses the `canOpen` gate (live artifact + host + not deleted).
-  // The surrounding Epic surface supplies the exact owning view tab (C1); the
-  // shared hook owns the occurrence-unique drag id (C3) and identity payload (C2). The card
+  // The surrounding Epic surface supplies the exact owning view tab; the
+  // shared hook owns the occurrence-unique drag id (C3) and identity payload. The card
   // attaches `setNodeRef` + `listeners` to the whole header row (no
   // `attributes`).
   const {

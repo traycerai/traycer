@@ -61,7 +61,7 @@ export function SideStripNavRows(props: {
 }
 
 /**
- * New Task (F7): the button that closes the nav list - after Home
+ * New Task: the button that closes the nav list - after Home
  * expanded, after All tasks on the rail - and does what the header's `+` does.
  * Expanded, a row lined up with the nav rows, its shortcut trailing as All
  * tasks' does; collapsed, a primary 32px tile. Solid primary in every view:

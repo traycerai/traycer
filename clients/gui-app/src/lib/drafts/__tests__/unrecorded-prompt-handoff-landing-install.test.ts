@@ -1,5 +1,5 @@
 /**
- * R5F1: `buildUnrecordedPromptHandoff` through the REAL landing draft store
+ * `buildUnrecordedPromptHandoff` through the REAL landing draft store
  * and the REAL landing image partition (fake-indexeddb), not a mocked write.
  *
  * A mocked destination cannot see the defect this round fixed: the old handoff

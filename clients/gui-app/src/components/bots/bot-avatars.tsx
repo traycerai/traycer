@@ -29,13 +29,12 @@ const CREATURE_SIZE: Readonly<Record<IdentityAvatarSize, CreatureMarkSize>> = {
 };
 
 /**
- * Who a picture is of, in a bot's channel and everywhere a bot appears
- * (Tracy Bots, T62): a person is a circle, a bot a squircle. A bot is its
- * creature mark (T111) on a swatch, both from its id alone, so a rename
- * changes neither. A person without a picture shows their initials on a
- * colour hashed from who they are; the smallest size has room for one
- * letter. The picture is decoration beside the name, which every surface
- * shows or labels its control with.
+ * Who a picture is of, in a bot's channel and everywhere a bot appears:
+ * a person is a circle, a bot a squircle. A bot is its creature mark on a
+ * swatch, both from its id alone, so a rename changes neither. A person
+ * without a picture shows their initials on a colour hashed from who they
+ * are; the smallest size has room for one letter. The picture is decoration
+ * beside the name, which every surface shows or labels its control with.
  */
 function IdentityAvatar(
   props: (

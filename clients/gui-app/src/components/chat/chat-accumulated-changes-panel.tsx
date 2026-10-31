@@ -559,7 +559,7 @@ function ArtifactAccumulatedHeaderView(
           the verb on the dock's row text, the title on the code ramp, because
           it occupies the row slot a path occupies. This branch was `text-ui-sm`
           throughout - a 1.875px step inside one typeface at one weight, which
-          is exactly the size step the ruling is about (R6H-03). */}
+          is exactly the size step the ruling is about. */}
       <span
         className={cn(
           "shrink-0 font-medium text-foreground/85",

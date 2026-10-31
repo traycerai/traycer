@@ -567,7 +567,7 @@ describe("eslint config retains raw tabActivate restriction", () => {
 });
 
 /**
- * F10: the config-mention tests above only prove the config MENTIONS
+ * The config-mention tests above only prove the config MENTIONS
  * tabActivate for a given file path. These probe the bypass forms THROUGH
  * THE REAL flat config end-to-end via `ESLint#lintText`, which actually
  * parses and runs every configured rule (not just `no-restricted-syntax`)

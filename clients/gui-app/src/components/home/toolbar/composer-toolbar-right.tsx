@@ -58,8 +58,8 @@ function ComposerToolbarRightImpl(props: ComposerToolbarRightProps) {
     </div>
   );
 
-  // One menu for the strip, naming whichever item the pointer was over
-  // (G3-10); the send button is no region, so a right-click on it opens
+  // One menu for the strip, naming whichever item the pointer was over;
+  // the send button is no region, so a right-click on it opens
   // nothing. The presentation copy carries the menu too - it is the sample
   // workspace's toolbar, which is the one the user right-clicks while
   // customizing (L-129).

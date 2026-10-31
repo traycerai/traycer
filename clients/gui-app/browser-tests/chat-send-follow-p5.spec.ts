@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures.ts";
 
-// P5: a free reader reaches the strict bottom while the structural commit of a
+// A free reader reaches the strict bottom while the structural commit of a
 // new reply row is still unsettled (the reply streams in bursts, so the
 // "two frames of unchanged scrollHeight" settle may not come until the stream
 // pauses). The reader must end up following, with no pill, at the bottom.

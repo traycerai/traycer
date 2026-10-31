@@ -80,7 +80,7 @@ import { nextFrames } from "../support/fixtures.ts";
 //       corners is checked for the square join an arc cannot draw.
 //   A14. A real click on Position "Left" moves the strip in one frame as one
 //       history step, and one undo restores the top.
-//   D14/T09. The tab strip and the sidebar are each selected by their own
+//   D14. The tab strip and the sidebar are each selected by their own
 //       space, the placement bar sits beside them (never over them) with its
 //       pictograms checked on the current edge, a pictogram writes the edge,
 //       and a real drag lights every drop zone (the current one marked, the
@@ -340,7 +340,7 @@ test.describe("the canvas at the top placement", () => {
       target: {
         kind: "member",
         selector: '[data-layout-member="divider:1"]',
-        // The sample sidebar is expanded, so its rail runs horizontally (F3).
+        // The sample sidebar is expanded, so its rail runs horizontally.
         dx: -DROP_OVERSHOOT,
         dy: 0,
         // A 36px icon against an 8px divider: the overshoot has to be
@@ -360,7 +360,7 @@ test.describe("the canvas at the top placement", () => {
       memberId: "railComments",
       memberSelector: regionSelector("railComments"),
       siblingSelector: null,
-      // The expanded sample sidebar's rail runs horizontally (F3).
+      // The expanded sample sidebar's rail runs horizontally.
       target: { kind: "viewport", dx: -60, dy: 300, axis: "x" },
       expect: { kind: "none" },
     });
@@ -525,7 +525,7 @@ test.describe("the canvas at the top placement", () => {
     violations.assertNone("A9: the editing frame is not drawn as designed");
   });
 
-  // --- the placement bar and the surface drag (D14, T09) --------------------
+  // --- the placement bar and the surface drag (D14) --------------------
 
   test("the tab strip is selected by its own space with the placement bar beside it, and a pictogram writes the edge", async () => {
     const page = getPage();
@@ -719,7 +719,7 @@ test.describe("the canvas at the top placement", () => {
 
   test("a real click on Tab placement Left moves the strip in one frame as one history step, and one undo restores the top", async () => {
     const page = getPage();
-    // The two-level form (T3/T4): a real click on the Task tabs row opens its
+    // The two-level form: a real click on the Task tabs row opens its
     // area before the Tab placement control exists in the document.
     const taskTabsArea = await requireRect(
       page,
@@ -904,7 +904,7 @@ function changedCount(
  * that one is a Chrome event.
  *
  * The sample sidebar's body is left out: it shows the panel of the selected
- * Sidebar setting by design (F3), so a click that selects a rail icon swaps
+ * Sidebar setting by design, so a click that selects a rail icon swaps
  * its sections without the app having acted. So is the sample model picker,
  * which the editor opens while Model is selected so its footer has something
  * to show: it is the editor's picture, not a popover the app opened.

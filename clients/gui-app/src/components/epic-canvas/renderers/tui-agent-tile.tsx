@@ -240,7 +240,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   }, [sessionId]);
   useEffect(() => {
     if (reachability.status !== "unreachable") return;
-    // The same basis gate as `terminal-tile`: since F4 this verdict also arrives from a
+    // The same basis gate as `terminal-tile`: this verdict also arrives from a
     // starting host that overran its budget, which is the UI's patience
     // expiring rather than proof the agent's session ended. The tile stops
     // waiting; the persisted notification still needs directory evidence.
@@ -309,8 +309,8 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
   // or the host's lease vouches for an announced restart - show
   // the loading shell, never the permanently-closed banner. The shell and its
   // worktree notice stay; only the wordless skeleton inside it is retired for
-  // a bounded state that names the host it is waiting on (audit S5, and
-  // invariant 6 for the end of the wait).
+  // a bounded state that names the host it is waiting on (invariant 6
+  // for the end of the wait).
   if (hostLoad.kind !== "ready") {
     return (
       <TerminalAgentTileShell tileId={props.tileId}>

@@ -23,7 +23,7 @@ import { createReportIssueContext } from "@/lib/report-issue-context";
  *
  * This is the surface that retires the BARE SKELETON. Terminal, TUI and
  * shell-output tiles rendered an animated placeholder with no text at all for
- * `checking` and `host-starting` (audit S5) - a person watching one could not
+ * `checking` and `host-starting` - a person watching one could not
  * tell a host booting from a host that would never answer, and neither state
  * ever ended. Chats had words for one of the two states and nothing for the
  * other. Every tile now says which host it is waiting on and stops waiting.

@@ -271,7 +271,7 @@ function rootValue(name: string): string {
 
 /**
  * Everything the app column draws, so the frame's layer can be measured
- * against the ceiling its comment CLAIMS rather than against one file (R3-10).
+ * against the ceiling its comment CLAIMS rather than against one file.
  *
  * The column is `app-shell.tsx`'s `[data-layout-column]`: the header, the tab
  * strip and the screen. So these are the header's and the strip's own
@@ -326,8 +326,8 @@ function sourceFiles(directory: string): ReadonlyArray<string> {
  * derived from the source rather than kept as a list, so a new popover is
  * exempt by portalling.
  *
- * The exemption is per FILE, and saying so is the honest half of the claim
- * (R4B-10): a `z-50` this file adds to something it does NOT portal is skipped
+ * The exemption is per FILE, and saying so is the honest half of the claim:
+ * a `z-50` this file adds to something it does NOT portal is skipped
  * with the rest, so the scan is a floor on the column's ceiling rather than a
  * proof of it. Per CALL was tried and does not work in this tree - every
  * portalling file here hoists the portalled tree into a variable

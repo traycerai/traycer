@@ -468,8 +468,8 @@ describe("<TuiAgentTile /> basis notification gate", () => {
 });
 
 /**
- * S5, the TuiAgentTile mirror of `terminal-tile-close-navigation.test.tsx`'s
- * S5 block: a wordless skeleton for `checking`/`host-starting` used to be
+ * The TuiAgentTile mirror of `terminal-tile-close-navigation.test.tsx`'s
+ * bounded pre-bootstrap wait: a wordless skeleton for `checking`/`host-starting` used to be
  * indistinguishable from an agent about to appear and never ended. Asserted
  * on the rendered sentence, not on the absence of a spinner.
  */

@@ -33,9 +33,9 @@ import {
  * THE LOCAL HOST'S LIFECYCLE STATE - the one owner of this machine's
  * host-startup facts and its user-initiated recovery gestures.
  *
- * It lived inside `local-host-gate.tsx` until redesign P3.4, wrapped by three
+ * It lived inside `local-host-gate.tsx` before the redesign, wrapped by three
  * components that had been marked NOT RENDERED IN PRODUCTION for two
- * consolidations (F21). Those wrappers are gone; this is what was alive inside
+ * consolidations. Those wrappers are gone; this is what was alive inside
  * them, moved out unchanged.
  *
  * WHAT IT IS NOT: it does not draw anything, and it does not decide when a
@@ -44,7 +44,7 @@ import {
  * authority's leases; the readiness gate decides whether the app may mount.
  * This projects the facts both of them read.
  *
- * WHERE IT MOUNTS, and why that is not the modal (P3.4 ruling, shape A). The
+ * WHERE IT MOUNTS, and why that is not the modal (the ruling, shape A). The
  * mount stays in `HostReadinessControllerProvider`, above the router:
  *
  *  - the readiness projection CONSUMES this lifecycle (`provisioning` ->
@@ -446,8 +446,8 @@ function useHostProvisioning(args: {
   // What stays HERE is presentation state and USER-INITIATED recovery: Retry,
   // forced update, the busy-keep flow, the removal surface, and the progress
   // the mutation lane pushes. Those are gestures and facts, not automatic
-  // process mutation. P3.1 re-homed the SURFACE they drive into the window
-  // modal; P3.4 moved this state out of the dead gate wrapper. Nothing here
+  // process mutation. The SURFACE they drive was re-homed into the window
+  // modal; this state was moved out of the dead gate wrapper. Nothing here
   // asks for a process on its own.
   //
   // BOOT-TIME PROVISIONING SPLITS IN TWO, and an earlier draft of this comment
@@ -585,7 +585,7 @@ interface LocalHostStartupState {
 
 /**
  * The local host snapshot plus the staged wait over it. Called
- * `useLocalHostGateState` until P3.4 deleted the gate it was named for; the
+ * `useLocalHostGateState` until the redesign deleted the gate it was named for; the
  * behaviour is unchanged, so a search for the old name lands here.
  *
  * Staged wait:

@@ -36,8 +36,8 @@ import { newestLandingDraftId } from "@/stores/home/landing-draft-store";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { subscribeTabStructuralLocks } from "@/stores/tabs/tab-structural-lock";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
-// Side-effect import: installs renderer parking's open-tab mirror (plan C,
-// C1). Anchored HERE because this component is the retention pool - it is
+// Side-effect import: installs renderer parking's open-tab mirror.
+// Anchored HERE because this component is the retention pool - it is
 // what unmounts a hidden tab's surface past `retainedTopLevelSurfaces`, leaving
 // a still-open tab whose session goes warm with `epic.subscribe` held. Parking
 // is keyed on the open tab precisely so that tab is still reachable, and the

@@ -1868,7 +1868,7 @@ describe("adversarial navigation: coordinator ledger & structural restore", () =
     // (which drive a call that eventually places its source), this one
     // deliberately throws and never places anything -
     // `expectLedgerReleased()` below is the applicable contract here,
-    // matching "fresh source failure preserves T2 error precedence".
+    // preserving error precedence for a fresh source failure.
     const unsubscribeRace = tabCommandCoordinator.subscribe(() => {
       const current = useEpicCanvasStore.getState().tabsById[phase.tabId];
       if (current?.epicId === "phase-race") {

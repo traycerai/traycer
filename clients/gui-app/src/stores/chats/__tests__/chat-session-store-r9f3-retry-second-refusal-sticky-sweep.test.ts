@@ -358,7 +358,7 @@ describe("R9F3: a retry's SECOND refusal reads the sticky host-level sweep, not 
 
     // The host sweeps A's path while the retry is outstanding. The
     // consumer-observing subscription folds it into the retry's sticky
-    // record (R9F2) as this fires, AND updates the per-slot record for the
+    // record as this fires, AND updates the per-slot record for the
     // same key.
     useWorktreeIntentStagingStore
       .getState()

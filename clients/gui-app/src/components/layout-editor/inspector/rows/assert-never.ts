@@ -4,7 +4,7 @@
  * Both switches in this folder - the grammar row kind and the order group -
  * return `ReactNode`, which INCLUDES `undefined`, so falling off the end of
  * either is something TypeScript accepts in silence: a member added later
- * would render nothing and say nothing (G1-22). Shared by the two rather than
+ * would render nothing and say nothing. Shared by the two rather than
  * written twice, and kept to this folder rather than made an app-wide helper,
  * which is the same shape the three other `assertNever`s in this app take.
  */

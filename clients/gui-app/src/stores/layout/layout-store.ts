@@ -346,7 +346,7 @@ function migrateLayoutPersistedState(
  *
  * Two things do not survive, deliberately:
  * - A provider on Automatic AND explicit limits keeps only the explicit keys.
- *   The two are exclusive now (R1-15), and the explicit picks are the more
+ * The two are exclusive now, and the explicit picks are the more
  *   specific answer.
  * - The resource monitor's Scope (host tree or this app) has no equivalent:
  *   the monitor always reads the host.

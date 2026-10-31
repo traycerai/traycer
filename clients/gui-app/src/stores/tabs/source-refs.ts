@@ -10,7 +10,7 @@ import type { TabRef } from "@/stores/tabs/types";
  * The canonical set of refs a strip layout may reference: every open Epic tab
  * in canvas order, then every open, non-retired landing draft, then the
  * Tracy surface while it is open. Closed drafts stay in the store for history
- * (T11) but are not strip sources. Retirement can precede another window's
+ * but are not strip sources. Retirement can precede another window's
  * storage-event cleanup of its local row.
  *
  * Defined once on purpose. Reconciliation (the command coordinator) and

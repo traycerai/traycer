@@ -241,7 +241,7 @@ describe("back stays functional after promoting a system overlay to a tab", () =
     // as a result. That collapse-in-one-click only happens once an ancestor
     // stops the remounts. There is no longer a test proving that half: it was
     // the local-host gate's structural-stability suite, and both the gate and
-    // its suite were deleted in P3.4 (no production ancestor swaps element
+    // its suite were deleted during the redesign (no production ancestor swaps element
     // types across the bypass boundary any more). Stated rather than re-aimed
     // at this file's own stand-in, which cannot prove it.
     // What matters here is what layers 2+3 alone guarantee: back never

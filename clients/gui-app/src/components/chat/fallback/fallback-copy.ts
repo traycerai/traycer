@@ -240,7 +240,7 @@ export function joinCostClauses(
  * renders it: an ACCEPTED ack carrying no token refuses too (the host took the
  * freeze and minted nothing), and since B1 made reopening from `choosing` a
  * normal path, a refusal no longer implies the traversal advanced. Same class
- * as MF10/F6 - refusal copy names no cause unless advancement is proven.
+ * as MF10 - refusal copy names no cause unless advancement is proven.
  *
  * A "try again" or "the countdown is still running" tail is not a fix either:
  * both are causes in disguise. The card or menu state above this line is the
@@ -646,7 +646,7 @@ export function routingSwitchLine(
 }
 
 /**
- * The chooser's footer line on a bot's chat (T99), in place of
+ * The chooser's footer line on a bot's chat, in place of
  * {@link routingSwitchLine}: a bot's chats all run on the bot's model, so the
  * confirm moves that and then retries the failed answer.
  */

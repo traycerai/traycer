@@ -353,7 +353,7 @@ export interface FailedTurnRungReporting extends FallbackOutcomeReporting {
  * So the answer is recorded from HERE, the Mutation's own callback, and not
  * from a per-call handler: TanStack skips a per-call handler once the pressing
  * card has unmounted, and another tile's card of the same attempt may still be
- * on screen, drawing the buttons the host just refused (F7).
+ * on screen, drawing the buttons the host just refused.
  */
 export function useFailedTurnRunManualRung(
   client: HostClient<HostRpcRegistry> | null,

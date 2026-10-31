@@ -1,7 +1,7 @@
 /**
  * A bot's post that points into a task (Tracy Bots T89), through the REAL
  * `BotChannelView`: its transcript rows, the surface card under the post,
- * T91's question card it reuses, the channel's link policy and the
+ * the question card it reuses, the channel's link policy and the
  * `bot.surface.act` mutation over a host client whose messenger records the
  * request that leaves. Only the virtualised list is replaced, as in the
  * question-card suite. What is asserted is what the person sees on the card

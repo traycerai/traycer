@@ -41,7 +41,7 @@ export function MobileAppHeader(): ReactNode {
   const footerShown = useStatusBarVisible();
   const resourceMonitorShown = useRegionShown("resourceMonitor");
   // The same switch the desktop header and the strip follow; the phone header
-  // drew the glyph whatever it said (G6).
+  // drew the glyph whatever it said.
   const usageLimitsShown = useRegionShown("usageLimits");
   const showGlobalResourceMonitor = !footerShown && resourceMonitorShown;
   const showUsageLimits = !footerShown && usageLimitsShown;

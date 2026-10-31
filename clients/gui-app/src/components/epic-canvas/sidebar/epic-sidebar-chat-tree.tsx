@@ -2179,7 +2179,7 @@ const CHAT_ROW_ARCHIVE_ABSENT: ChatRowArchiveDecision = Object.freeze({
  * This matters most exactly when the feature is newest: until the host RPC
  * ships, NO host advertises the method, so without this split every row in
  * every sidebar would pay for a status resolution that is then discarded. It
- * also preserves T1's constraint that the open-chat session read is "paid by
+ * also preserves the constraint that the open-chat session read is "paid by
  * those few rows rather than by every row".
  */
 function ChatNodeShell(props: ChatNodeShellProps) {

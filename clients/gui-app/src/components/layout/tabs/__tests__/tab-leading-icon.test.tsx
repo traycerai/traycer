@@ -167,7 +167,7 @@ describe("TabLeadingIcon status and manual icon", () => {
     );
     expect(screen.getByTestId("header-tab-activity-tab-4")).toBeTruthy();
     expect(document.querySelector('[data-slot="tab-custom-icon"]')).toBeNull();
-    // Drawn through the shared glyph set, like the side strip row (F3).
+    // Drawn through the shared glyph set, like the side strip row.
     const status = document.querySelector('[data-slot="tab-status-icon"]');
     expect(
       status

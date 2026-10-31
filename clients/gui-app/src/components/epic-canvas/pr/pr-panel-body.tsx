@@ -134,7 +134,7 @@ function PrPanelBodyLive(
 
 /**
  * The panel's list for rows already in hand. Exported for the sample
- * workspace's sidebar, which draws the same list from sample rows (F3).
+ * workspace's sidebar, which draws the same list from sample rows.
  */
 export function PrPanelBodyContent(props: {
   readonly epicId: string;

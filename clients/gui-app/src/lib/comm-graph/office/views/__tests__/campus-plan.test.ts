@@ -1883,7 +1883,7 @@ describe("planCampus", () => {
   });
 
   it("I1: culls seats AND spots by their own PROJECTED box, not a raw tile viewport", () => {
-    // T2 F1: `chunkKeysOfBox(this.seatBox(seat))`/`chunkKeysOfBox(this.spotBox(spot))`
+    // F1: `chunkKeysOfBox(this.seatBox(seat))`/`chunkKeysOfBox(this.spotBox(spot))`
     // file a seat/spot under the chunks its own PROJECTED box covers. Real
     // Campus at 1,000 agents, over three populated windows - the chunk-
     // boundary corner this case originally shipped with (which, it turns
@@ -1948,8 +1948,8 @@ describe("planCampus", () => {
       if (wantedSpots.size < allSpots.length) sawExcludedSpot = true;
     }
 
-    // Non-vacuous: at least one window genuinely contains spots (closing R3
-    // - the shipped window alone never could), and every window's exact
+    // Non-vacuous: at least one window genuinely contains spots (the shipped
+    // window alone never could), and every window's exact
     // match still excludes some of the world's seats and spots rather than
     // the comparison passing because both sides happened to be everything,
     // or both empty.
@@ -1959,7 +1959,7 @@ describe("planCampus", () => {
   });
 
   it("I1: a small window's spot query reads a small fraction of a whole-world one, through the index's own approachTile objects", () => {
-    // R3's read-budget half. Counting Proxies installed IN PLACE over the
+    // The read-budget check. Counting Proxies installed IN PLACE over the
     // exact `approachTile` object each spot carries - the same objects
     // `spotsIn`'s chunk index holds and `spotBox` reads through - so this
     // measures the real per-tile cost of the lookup the painter is fed
@@ -2022,7 +2022,7 @@ describe("planCampus", () => {
   });
 
   it("I3: a cabin's plate anchors at its tile PROJECTED, never at a raw col * OFFICE_TILE", () => {
-    // T2 F5: `officeSignsToDraw` anchors every sign at
+    // F5: `officeSignsToDraw` anchors every sign at
     // `projector.project(sign.tile.col, sign.tile.row)`. Real Campus cabins
     // at lod 2, so every plate a real plan hands the painter is checked, not
     // one hand-built sign object.

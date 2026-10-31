@@ -120,7 +120,7 @@ export function armLayoutGesture(input: {
   // press released just OUTSIDE the window delivers its `pointerup` nowhere
   // without capture, and an arm that never disarms leaves `layoutDragActive()`
   // true - which swallows every later `pointermove` on the canvas and refuses
-  // every later drag for the rest of the session (G3-06).
+  // every later drag for the rest of the session.
   const pressed = event.target instanceof Element ? event.target : null;
 
   const disarm = (): void => {
@@ -265,7 +265,7 @@ function startLayoutDrag(
    * keeps streaming (L-17). A scroll therefore moves every member out from
    * under the numbers this drag is reflowing against, so the gesture ends
    * where it can still be honest rather than dropping into a slot the pointer
-   * was never over (G3-09). Capture phase, because a scroll on an ancestor
+   * was never over. Capture phase, because a scroll on an ancestor
    * does not bubble to `window`.
    */
   const onScroll = (): void => {

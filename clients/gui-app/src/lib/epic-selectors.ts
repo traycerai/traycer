@@ -2572,7 +2572,7 @@ export function useEpicAgentRoleClaimsByAgentId(): Readonly<
  * dot on every render; selecting the scalar (instead of `find`-ing it out of
  * the full `useEpicArtifactRecords()` array) keeps the value reference-stable
  * while OTHER records churn - e.g. the active chat streaming - so the memoized
- * node bails. See RENDER_PERF_FINDINGS.md (T1 follow-up).
+ * node bails. See RENDER_PERF_FINDINGS.md.
  */
 export function useEpicArtifactStatus(id: string): number | null {
   return useEpicStore((s) =>

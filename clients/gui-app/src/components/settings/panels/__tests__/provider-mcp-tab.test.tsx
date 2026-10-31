@@ -1015,7 +1015,7 @@ describe("<ProviderMcpTab />", () => {
     ).toBeDefined();
   });
 
-  // F4: every production contract sets updateServer: "none" and update: [].
+  // Every production contract sets updateServer: "none" and update: [].
   // The pencil/edit path was maintained dead code; it is removed rather than
   // wired. When a provider implements update, restore the affordance and this
   // assertion (see provider-mcp-tab canUpdate comment).
@@ -1025,7 +1025,7 @@ describe("<ProviderMcpTab />", () => {
     expect(screen.queryByRole("button", { name: /Edit context7/ })).toBeNull();
   });
 
-  // F4: realistic multi-row list — Edit must stay gone on every server name,
+  // Realistic multi-row list — Edit must stay gone on every server name,
   // not only the single-server double above. Delete/Add remain the live
   // affordances.
   it("does not render Edit on any realistic server row while Add and Delete stay", () => {

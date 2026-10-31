@@ -13,7 +13,7 @@ import {
 import { observationFromStatus } from "@/lib/host/fleet-update/borrowed-status-read";
 import { projectFleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view";
 
-// This is the F1/F2 shared fix: a
+// The freshness rule: a
 // canonical `host.status` read must carry its own freshness rather than being
 // asserted as permanently current. `canonicalReadIsLive` is the health
 // predicate; `observationFromCanonicalRead` is what stamps an already-expired

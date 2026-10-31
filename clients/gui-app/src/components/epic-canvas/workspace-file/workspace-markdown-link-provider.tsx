@@ -41,7 +41,7 @@ export function WorkspaceMarkdownLinkProvider(
           link.path,
         );
         if (ref === null) return false;
-        // A markdown link click is a single-click gesture (C4/C11); the
+        // A markdown link click is a single-click gesture; the
         // anchor hands over the link, not the mouse event, so no modifiers.
         openTile(
           tileIntent(ref, { tabId: props.tabId }, "single", "direct_ui"),

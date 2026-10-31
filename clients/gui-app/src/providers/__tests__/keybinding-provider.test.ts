@@ -693,7 +693,7 @@ describe("leader digit dispatch (global scope)", () => {
   });
 
   it("settings section digit no-ops when [Settings | empty] is focused on empty", () => {
-    // F4 (closure): the section leader was pathname-owned. With the empty side
+    // The section leader was pathname-owned. With the empty side
     // of a [Settings | empty] split focused, routeBackingSide keeps the URL on
     // /settings, but Settings does NOT own focus - an Alt-digit section command
     // must no-op instead of stealing focus back to Settings.

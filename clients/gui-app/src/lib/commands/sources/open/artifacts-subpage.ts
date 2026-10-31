@@ -50,8 +50,7 @@ export function useArtifactsOpenerItems(
               : `Untitled ${artifact.kind}`,
           hostId: defaultHostId,
         },
-        // Artifacts carry no per-item hostId (verified host-agnostic, audit
-        // G3) - never badged.
+        // Artifacts carry no per-item hostId and are never badged.
         null,
       ),
     );

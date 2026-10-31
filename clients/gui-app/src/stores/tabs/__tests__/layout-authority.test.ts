@@ -1,5 +1,5 @@
 /**
- * T1 pure tests: layout v2 authority, ten invariants through every reducer,
+ * Pure tests: layout v2 authority, ten invariants through every reducer,
  * v1/v2 migration repair, TAB_KINDS surface exhaustiveness, and multi-group
  * round-trips (ratios, active item, route backing).
  */

@@ -76,7 +76,7 @@ type OpenTarget =
  *   yields a `null` handler so the chip stays plain text.
  * - CROSS epic: navigate to the target epic and reuse `focusArtifactId =
  *   nodeId` (the auto-open path already opens chat tiles, so chats reuse
- *   `focusArtifactId`; no `focusChatId`) with a fresh `focusedAt` (G2) so a
+ *   `focusArtifactId`; no `focusChatId`) with a fresh `focusedAt` so a
  *   re-click after closing the tab re-opens it. `<traycer-epic>` passes no
  *   artifact id and only focuses the epic.
  *
@@ -132,7 +132,7 @@ export function useTraycerReferenceOpenHandler(input: {
         }
         case "navigate":
           // `focusArtifactId` opens chat tiles too; `traycer-epic` passes
-          // `undefined`. A fresh `focusedAt` (G2) re-opens a closed tab on
+          // `undefined`. A fresh `focusedAt` re-opens a closed tab on
           // re-click.
           navigateToTabIntent(
             navigate,

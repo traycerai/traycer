@@ -422,7 +422,7 @@ export function useMergedNotificationOccurrenceEntries(): ReadonlyArray<MergedNo
  * is not a field on a row, it is what `classifyNotificationLifecycle` says
  * about one, and the unfiltered attention list also carries failures. The
  * layout editor's relay row is the caller (4.8) and it says "an agent is
- * waiting for you", which a failed task is not (C-05).
+ * waiting for you", which a failed task is not.
  */
 export function useBlockingAttentionCount(): number {
   const rows = useMergedNotificationRows();

@@ -327,7 +327,7 @@ const mocks = vi.hoisted(
     modelsWarmupError: boolean;
     /** The retry the panel's "Try again" button calls; must return a Promise. */
     modelsWarmupRetry: () => Promise<void>;
-    /** T4 - the Provider picker's options; overridable per test. */
+    /** The Provider picker's options; overridable per test. */
     harnesses: readonly HarnessFixture[];
   } => ({
     testQuerySpy: () => {},
@@ -395,7 +395,7 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
           profiles: [
             providerProfile({ profileId: "profile-2", label: "Personal 2" }),
             // The same account id Codex lists, so a pick carried across a
-            // provider switch would still be on offer (T4).
+            // provider switch would still be on offer.
             providerProfile({ profileId: "profile-3", label: "Work" }),
           ],
         },
@@ -633,7 +633,7 @@ describe("FallbackTestModelPanel - wireframe 4 rendering", () => {
     // row 1: opus, switches here
     within(rows[0]).getByText("switches here");
     within(rows[0]).getByText("Default (Opus 5.5)");
-    // T3 - the "switches here" pill carries the success variant.
+    // The "switches here" pill carries the success variant.
     expect(
       within(rows[0]).getByText("switches here").getAttribute("data-variant"),
     ).toBe("success");
@@ -646,7 +646,7 @@ describe("FallbackTestModelPanel - wireframe 4 rendering", () => {
     expect(row2Skips[1].textContent).toBe(
       "skipped · same account, no headroom after a rate limit",
     );
-    // T3 - the blocked-model skip (neutral tone) and the no-headroom skip
+    // The blocked-model skip (neutral tone) and the no-headroom skip
     // (warning tone) render through the tone-to-variant map.
     expect(row2Skips[0].dataset.tone).toBe("neutral");
     expect(row2Skips[0].getAttribute("data-variant")).toBe("muted");

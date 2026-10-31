@@ -42,7 +42,7 @@ import { DEFAULT_PROVIDER_NATIVE_CAPABILITIES } from "@traycer/protocol/host/pro
  *
  * Fakes only the host providers-list transport and usage presentation
  * (external boundary / nondeterministic gauges). Does not mock the prompt
- * seam under test (closes T2 P3-1).
+ * seam under test.
  */
 
 const mocks = vi.hoisted(() => ({

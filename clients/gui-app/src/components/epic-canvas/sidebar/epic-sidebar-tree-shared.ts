@@ -258,7 +258,7 @@ export function chatRowClassName(state: {
 
 /**
  * An artifact row's class list, shared by the tree's row button and the
- * sample workspace's sidebar so the two draw one row (F3).
+ * sample workspace's sidebar so the two draw one row.
  */
 export function artifactRowClassName(state: {
   readonly isDragging: boolean;

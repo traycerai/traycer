@@ -28,7 +28,7 @@ import { hrefPathname } from "@/lib/routes";
  *   when `resolveTabIdForEpic(epicId)` finds no sibling tab (top-level
  *   entries) - a nested target never salvages onto a sibling.
  * - `/draft/$draftId` — dead when `draftId` is absent OR closed. A closed
- *   start-task draft is retained in the store (T10) but is not a strip
+ *   start-task draft is retained in the store but is not a strip
  *   source; Back onto `/draft/:id` would landing-correct. `/draft/new` is a
  *   distinct route and is always kept.
  *

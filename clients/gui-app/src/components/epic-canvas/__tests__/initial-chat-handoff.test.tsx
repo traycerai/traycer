@@ -130,7 +130,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 
 // The Epic session resolves its host through the selection authority's derived
 // pointer, not the active-host projection above - seed the
-// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+// decider at its own name (the convention in epic-shell-usage-entry-point).
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => HOST_ID,
 }));

@@ -1,8 +1,8 @@
 /**
- * The vertical strip's group header (S-19): the shared group editor on
+ * The vertical strip's group header: the shared group editor on
  * right-click, mirrored off the sidebar column, and the rail's tile. The
  * count, the click that folds the group and the collapsed group's worst
- * member badge (S-30) are `side-tab-strip.test.tsx`'s, through the real strip;
+ * member badge are `side-tab-strip.test.tsx`'s, through the real strip;
  * the badge ranking is `side-tab-rail-badge.test.tsx`'s.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

@@ -272,7 +272,7 @@ vi.mock("@/hooks/epic/use-epic-create-mutation", () => ({
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   useCreateTuiAgentForClient: () => ({ isPending: false }),
 }));
-// P1.2: the composer resolves its placement (pin ?? effective) through this
+// The composer resolves its placement (pin ?? effective) through this
 // one hook. These suites are about paste/gating/banner behaviour, not
 // selection derivation, so it is stubbed at that single boundary - the same
 // treatment the other host-backed hooks above get.
@@ -317,7 +317,7 @@ vi.mock("@/lib/host", () => ({
     findById: () => null,
     onChange: () => ({ dispose: () => undefined }),
   }),
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => null,
 }));
 
@@ -419,7 +419,7 @@ describe("LandingComposer rate-limit banner wiring", () => {
     if (bannerProps === null) throw new Error("expected banner props");
     // Task-wide checkbox is never wired: affectedChatCount is fixed at 0.
     expect(bannerProps.affectedChatCount).toBe(0);
-    // Landing has no tab, but it does have a PLACEMENT (redesign P1.2): the
+    // Landing has no tab, but it does have a PLACEMENT: the
     // usage sidecar / R-key refresh must resolve to the composer's own
     // resolved host - the machine the turn will run on - not to whichever
     // host the window happens to be bound to.

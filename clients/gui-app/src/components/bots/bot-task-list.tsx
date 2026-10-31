@@ -83,7 +83,7 @@ function taskCreator(
  * an automation's interval. A one-off task shows no interval, and an entry
  * from a host that predates where a task came from shows neither the post
  * nor the thread. In a thread's panel the title opens the task; on the bot's
- * Activity page (T86) the row also names its kind, its next check-in and the
+ * Activity page the row also names its kind, its next check-in and the
  * host that last reported it, opens the task from "Open the brief", and
  * lists its check-ins under it; an automation there also carries its Run
  * now, Pause and Stop (T92).

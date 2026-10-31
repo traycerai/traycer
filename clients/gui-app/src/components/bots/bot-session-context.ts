@@ -3,7 +3,7 @@ import type { BotSendReceipt } from "@traycer/protocol/persistence/epic/content-
 import type { BotSendNames } from "@/lib/bots/bot-send-tool";
 
 /**
- * One of a bot's own sessions read as a chat, read-only (Tracy Bots T93):
+ * One of a bot's own sessions read as a chat, read-only:
  * what its send cards name and where their links take the reader. `null`
  * everywhere else, where a send card names no place and links nowhere.
  */

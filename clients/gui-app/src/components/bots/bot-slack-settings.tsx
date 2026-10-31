@@ -33,7 +33,7 @@ const SLACK_APPS_URL = "https://api.slack.com/apps";
 const COPIED_RESET_MS = 2_000;
 
 /**
- * The bot's own Slack app (Slack for Tracy, S4), in three states:
+ * The bot's own Slack app (Slack for Tracy), in three states:
  * - no app: create one in Slack from the manifest, then register its
  *   credentials;
  * - registered (or uninstalled, which keeps the credentials): install it to a

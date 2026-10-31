@@ -11,7 +11,7 @@ import type { TabRef } from "@/stores/tabs/types";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
- * The fixed Tracy entry (T58, decision 150): the Tracy surface's tab, held
+ * The fixed Tracy entry (decision 150): the Tracy surface's tab, held
  * first in the strip and drawn beside Home rather than among the tabs, while
  * "Show Tracy" is on and the surface is open. `TracyEntryController` opens
  * the surface when the setting is on.

@@ -3149,7 +3149,7 @@ describe("Overview updates — CLI floor remedy", () => {
   });
 });
 
-// T2: a FIRST `host.update.check` that settles with no catalog and a
+// A FIRST `host.update.check` that settles with no catalog and a
 // failure (`cli-failed` / `invalid-output`) is a SETTLED answer, not a still-
 // pending one. `describeCheckState` used to fall through this exact input
 // shape (`manifest: null`, `checking: false`, `unreachable: false`, failure
@@ -3802,7 +3802,7 @@ describe("Overview updates — activation debt", () => {
     scopeOverrides.current = scopeFrom("host-a", fixture);
     renderPanel();
 
-    // T2: the debt is an in-flight park (`waiting-to-activate`), so it is the
+    // The debt is an in-flight park (`waiting-to-activate`), so it is the
     // notices strip's operation card that carries the sentence now - the
     // answer card withholds its own answer for any in-flight kind
     // (see host-overview-notices.test.tsx's duplication regression), so
@@ -3939,7 +3939,7 @@ describe("Overview updates — record-leg liveness and entry-level floor gates",
     const { queryClient } = renderPanel();
 
     // Live debt: the record (rc.3) is ahead of the running host (rc.2), and
-    // the catalog's rc.3 is what is installed - no offer, a restart. T2's
+    // the catalog's rc.3 is what is installed - no offer, a restart. The
     // notices strip carries this while it is live (the answer card
     // withholds its own answer for any in-flight kind - see
     // host-overview-notices.test.tsx's duplication regression), and its

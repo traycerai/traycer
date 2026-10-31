@@ -30,7 +30,7 @@ vi.mock("@/lib/browser-view/pip/pip-store", () => ({
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 // The real store, minus the analytics call - `focus-existing` must not count
-// as an open (R9), and only a spy can prove a call that did NOT happen.
+// as an open, and only a spy can prove a call that did NOT happen.
 vi.mock("@/stores/epics/canvas/store", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/stores/epics/canvas/store")>();
@@ -123,7 +123,7 @@ describe("executeTileOpen", () => {
       "inst-1",
     );
     expect(spies.promotePreview).not.toHaveBeenCalled();
-    // R9: focusing an open tile is not an open.
+    // Focusing an open tile is not an open.
     expect(trackOpenedCanvasTile).not.toHaveBeenCalled();
     expect(navigateNested).toHaveBeenCalledWith(
       EPIC_ID,
@@ -132,7 +132,7 @@ describe("executeTileOpen", () => {
     );
   });
 
-  // R1: a permanent re-open of the pane's preview pins it.
+  // A permanent re-open of the pane's preview pins it.
   it("clears the pane's preview slot for a promoting focus", () => {
     const spies = installPrepareSpies();
 
@@ -220,7 +220,7 @@ describe("executeTileOpen", () => {
     expect(tileVersion()).toEqual(htmlVersion(2_000));
   });
 
-  // C1: a background open of an already-open tile touches nothing.
+  // A background open of an already-open tile touches nothing.
   it("does nothing at all for a noop plan", () => {
     const spies = installPrepareSpies();
 
@@ -322,7 +322,7 @@ describe("executeTileOpen", () => {
     );
   });
 
-  // C3: `insertPaneAtEdge` refuses past MAX_TREE_DEPTH and the prepare returns
+  // `insertPaneAtEdge` refuses past MAX_TREE_DEPTH and the prepare returns
   // null; the tile still has to land somewhere.
   it("falls back to a tab in the anchor pane when the split is refused", () => {
     const spies = installPrepareSpies();

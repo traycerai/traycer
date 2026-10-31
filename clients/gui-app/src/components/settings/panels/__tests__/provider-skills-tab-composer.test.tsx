@@ -28,7 +28,7 @@ vi.mock("@/hooks/host/use-host-credential-refusal", () => ({
   useHostCredentialRefusal: () => skillMocks.credentialRefusal,
 }));
 
-// Entry-button suite never switches scope; stub shared hook so F5 workspace
+// Entry-button suite never switches scope; stub shared hook so workspace
 // resolution does not require a QueryClient. Dynamic import: `vi.mock` is
 // hoisted above static imports.
 vi.mock("@/components/settings/panels/use-provider-native-scope", async () => {

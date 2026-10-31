@@ -346,7 +346,7 @@ function inProviders(children: ReactNode): ReactNode {
   );
 }
 
-/** The channel settings panel (T63), as it first opens: nothing folded. */
+/** The channel settings panel, as it first opens: nothing folded. */
 function mountPanel(bot: BotRecord, personal: boolean): void {
   render(
     inProviders(

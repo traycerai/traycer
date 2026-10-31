@@ -85,7 +85,7 @@ function Channel(): ReactNode {
 
 /**
  * The channel as the bot tab draws it with the bot's identity and its
- * memory (T87): the bot's name opens its card, whose memory row opens the
+ * memory: the bot's name opens its card, whose memory row opens the
  * memory over the rail the way the tab's opener does (`memoryRailOver`).
  */
 function KnowingChannel(): ReactNode {

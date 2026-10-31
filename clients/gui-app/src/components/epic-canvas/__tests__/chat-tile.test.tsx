@@ -288,7 +288,7 @@ vi.mock("@/lib/host", () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),
   useHostClient: () => MOCK_HOST_CLIENT,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => MOCK_HOST_CLIENT,
 }));
 
@@ -444,7 +444,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 
 // The Epic session resolves its host through the selection authority's derived
 // pointer, not the active-host projection above - seed the
-// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+// decider at its own name (the convention in epic-shell-usage-entry-point).
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-test",
 }));

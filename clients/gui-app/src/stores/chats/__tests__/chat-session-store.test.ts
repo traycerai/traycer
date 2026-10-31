@@ -3140,7 +3140,7 @@ describe("createChatSessionStore", () => {
     ).toEqual(intent);
   });
 
-  // R14 `-CKjC`: the sweep's fallback is a PICK hand-back for one specific
+  // `-CKjC`: the sweep's fallback is a PICK hand-back for one specific
   // action, so it inherits the rejection path's ownership rule - a swept
   // action hands its pick back only when the outstanding consumption is ITS
   // OWN. Here it is not: a later send consumed the slot and was ACCEPTED, so
@@ -3778,7 +3778,7 @@ describe("createChatSessionStore", () => {
     ).toEqual([]);
   });
 
-  // `P42f`: the same divide, at the LIVE site. `-NRic` fixed the record
+  // The same divide, at the LIVE site. `-NRic` fixed the record
   // retirement where the settled pass runs inside a snapshot; the settled
   // pass also runs on a live `turnStateChanged` frame, and THAT caller
   // applied every field of the patch except the retirement. So a send
@@ -5511,7 +5511,7 @@ describe("createChatSessionStore", () => {
     ).toHaveLength(1);
   });
 
-  // R11 `-ApT-`: a multi-workspace intent labelled as "branch a, branch b"
+  // `-ApT-`: a multi-workspace intent labelled as "branch a, branch b"
   // with no workspace association, so a multi-repo staging could not actually
   // be re-picked. A SINGLE-workspace intent stays unqualified - the workspace
   // is unambiguous there and naming it would be noise.
@@ -5545,7 +5545,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("/repo/frontend");
     expect(notice.message).toContain("/repo/backend");
   });
-  // R12 `-A8bB`: the winning prompt's claim is TERMINAL. A send deliberately
+  // `-A8bB`: the winning prompt's claim is TERMINAL. A send deliberately
   // dispatched with no worktree still decides the slot - it just decides it is
   // empty. Skipping a null claim let a stale edit's binding attach itself to a
   // prompt that was sent without one: the same wrong-binding hazard as round
@@ -5608,7 +5608,7 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
   });
 
-  // R10 `-AdAP`: the consumed-mark said "a dispatch took this slot" but not
+  // `-AdAP`: the consumed-mark said "a dispatch took this slot" but not
   // WHICH one. With a dead edit and a dead send both wanting their intent
   // back, the sweep runs first and the older EDIT claimed the mark - so the
   // send's recovered prompt landed in the composer bound to the edit's
@@ -5675,7 +5675,7 @@ describe("createChatSessionStore", () => {
     ).toEqual(sendIntent);
   });
 
-  // R13 `-BtWD`: the consume-site mirror of the terminal-claim rule. An
+  // `-BtWD`: the consume-site mirror of the terminal-claim rule. An
   // intent-FREE send skipped `consumeForDispatch` entirely, so the mark stayed
   // owned by an earlier edit - and that edit's rejection handed E back even
   // though a later send had superseded it. A dispatch's state is authoritative
@@ -5743,7 +5743,7 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
   });
 
-  // R13 `-BmQF`: the sweep tested the LAST consumption's entries, but a
+  // `-BmQF`: the sweep tested the LAST consumption's entries, but a
   // restoration hands back its OWN action's intent. Send 1 took A; the user
   // then staged B and send 2 took that, so the mark describes B. A sweep that
   // removes A leaves the mark untouched - and send 1's prompt comes back with
@@ -5830,7 +5830,7 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
   });
 
-  // R12 `-BZH4`: a third arrival order the claimant rules never saw. The edit
+  // `-BZH4`: a third arrival order the claimant rules never saw. The edit
   // consumed E; the user then staged S and a send consumed THAT, so the slot's
   // mark now belongs to the send's dispatch. If the edit's rejection lands
   // first and hands E back, it takes a slot the send still needs AND
@@ -5904,7 +5904,7 @@ describe("createChatSessionStore", () => {
     ).toBeUndefined();
   });
 
-  // R12 `-BQcb`: the rejection path refuses the hand-back like the reconnect
+  // `-BQcb`: the rejection path refuses the hand-back like the reconnect
   // paths do, but states things through its own errorNotice rather than
   // `failedSendRestoration.reason` - so the refusal was silent here while
   // being spoken everywhere else.
@@ -6064,7 +6064,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).not.toContain("re-pick that before resending");
   });
 
-  // R13 `-B5UX`: the founding invariant's last uncovered surface. Two sends
+  // `-B5UX`: the founding invariant's last uncovered surface. Two sends
   // rejected together - the first claims the restoration slot, the second's
   // optimistic row is dropped, and the rejection path appended only the host's
   // REASON. A dead send neither restored nor stated, on the one path that
@@ -6128,7 +6128,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("Host refused the send");
   });
 
-  // R13 `-BZHy`: the SEEDED first message (landing handoff) stamped PERSONAL
+  // `-BZHy`: the SEEDED first message (landing handoff) stamped PERSONAL
   // on its pendings while the frame carried the real context - so a
   // Team-billed first message that stranded would report it was going to bill
   // personal. A drift statement lying about the very thing it warns about.
@@ -6178,7 +6178,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("billing team team-7");
   });
 
-  // R13 `-BmQJ`: delivery is dispatched per send and dies with the action, so
+  // `-BmQJ`: delivery is dispatched per send and dies with the action, so
   // a resend takes whatever the submit gesture implies then - a message queued
   // to land after a safe point can come back and interrupt instead.
   it("states a non-default delivery the send was queued with", () => {
@@ -6224,7 +6224,7 @@ describe("createChatSessionStore", () => {
     );
   });
 
-  // R12 `-A8bF`: billing context is stamped at dispatch and dies with the
+  // `-A8bF`: billing context is stamped at dispatch and dies with the
   // action, so a resend bills whatever the picker holds now. Unlike a model
   // change it leaves no trace in the conversation.
   it("states that a resend would bill a different account", () => {
@@ -6266,7 +6266,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("different settings now");
   });
 
-  // R9 `-AQUj`: the drift compared against the last SNAPSHOT's settings. When
+  // `-AQUj`: the drift compared against the last SNAPSHOT's settings. When
   // the user changes settings and a `turnStateChanged` settles the send before
   // another snapshot lands, the live composer already holds the new tuple - so
   // the clause was omitted exactly when the change most worth warning about
@@ -6318,7 +6318,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("gpt-5-codex");
   });
 
-  // R9 `-AQUm`: `null` is a VALUE - "use the default" - not an absence. A send
+  // `-AQUm`: `null` is a VALUE - "use the default" - not an absence. A send
   // dispatched under default effort and settled after the user picked an
   // explicit one drifts, and dropping the field because its sent value was
   // null hid exactly that.
@@ -6352,7 +6352,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("service tier default");
   });
 
-  // R9 `-AQUo`: the exemption's cost must not be paid by ordinary history. The
+  // `-AQUo`: the exemption's cost must not be paid by ordinary history. The
   // cap counted TOTAL length, so retained records crowded the ordinary window
   // down to nothing and an ordinary notice was evicted before it was ever seen.
   it("keeps the ordinary notice window intact alongside retained records", () => {
@@ -6400,7 +6400,7 @@ describe("createChatSessionStore", () => {
     ).toHaveLength(4);
   });
 
-  // R8 `-6Te`: the dead send's run settings die with it, so a resend picks up
+  // `-6Te`: the dead send's run settings die with it, so a resend picks up
   // whatever the chat uses NOW. A different model changes what the agent does,
   // silently - same statement-obligation class as the worktree.
   it("names run settings that moved between dispatch and settle", () => {
@@ -6433,7 +6433,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("gpt-5-codex");
     expect(notice.message).toContain("model");
   });
-  // R7 `-oRb`: "no branch to re-pick" is not "nothing to state". A send staged
+  // `-oRb`: "no branch to re-pick" is not "nothing to state". A send staged
   // to switch to a LOCAL checkout or to IMPORT an existing worktree settles
   // with no statement at all today, so the resend runs against the previous
   // binding - the same silent-wrong-worktree class, two entry kinds over.
@@ -6451,7 +6451,7 @@ describe("createChatSessionStore", () => {
 
     expect(notice.message).toContain("/repo/service-a");
   });
-  // R7 `-oRn`: the guard's contract is "a newer LIVE pick wins", but it was
+  // `-oRn`: the guard's contract is "a newer LIVE pick wins", but it was
   // implemented as "a newer REVISION wins". A second send consuming its own
   // staged pick advances the revision and then leaves the slot EMPTY - so
   // nothing live is at risk, yet the winner's binding was suppressed.
@@ -6513,7 +6513,7 @@ describe("createChatSessionStore", () => {
     ).toEqual(first);
   });
 
-  // R6 `-cbH`: a diagram-only send used to be told it had "no recoverable
+  // `-cbH`: a diagram-only send used to be told it had "no recoverable
   // content" while its source was deleted. The block is an ATOM - the source
   // is in `attrs.code`, not in children - so the projection saw nothing, and
   // classifying it text-complete on top of that was the defect.
@@ -6534,7 +6534,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).not.toContain("no recoverable content");
   });
 
-  // R5 `-LSI`: the slot LOSER's worktree. The winner gets its binding
+  // `-LSI`: the slot LOSER's worktree. The winner gets its binding
   // back; a send that loses the race is STATED, and its intent dies with the
   // row. The staging slot is single and the winner holds it, so this cannot be
   // a restore - it is a statement obligation, and the branch name is the part
@@ -6591,7 +6591,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("feat/rescue");
   });
 
-  // R5 `-LSS`: the quoted draft must be the user's text, not a mangling of it.
+  // `-LSS`: the quoted draft must be the user's text, not a mangling of it.
   // `plainTextFromNode` joins a list's children with "", so `foo`/`bar` come
   // back as `foobar` - the statement tells them to copy something they never
   // wrote, which is worse than saying nothing.
@@ -6613,7 +6613,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).toContain("- foo\n- bar");
   });
 
-  // R5 `-KNQ`: the settled patch is spread into the state object, so its
+  // `-KNQ`: the settled patch is spread into the state object, so its
   // non-state keys land in the store. They are reconcile plumbing, not state,
   // and every `useShallow` subscriber compares them forever after.
   it("keeps reconcile-only patch keys out of the store state", () => {
@@ -6635,7 +6635,7 @@ describe("createChatSessionStore", () => {
     expect(stateKeys).not.toContain("restoredWorktreeIntent");
   });
 
-  // R4-2: a terminal/artifact quote projects through the blockquote branch to
+  // A terminal/artifact quote projects through the blockquote branch to
   // plain quoted text, dropping sourceType/sourceId/sourceEpicId - the
   // provenance `serializeSourcedQuote` sends to the agent. Second member of
   // the mention class: projection-loses-invisible-structure.
@@ -6694,7 +6694,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).not.toContain("re-pick");
   });
 
-  // R4-1: a staged worktree/branch choice rides the send, and dispatch clears
+  // A staged worktree/branch choice rides the send, and dispatch clears
   // the slot. The ACCEPTED ack drops the pending action - `acceptedActions`
   // does not retain `restoreWorktreeIntent` - so a stop before
   // `messageAccepted` leaves this pass restoring the prompt with no binding.
@@ -6842,7 +6842,7 @@ describe("createChatSessionStore", () => {
     ).toEqual(newer);
   });
 
-  // R3-1: absence from a snapshot is only evidence for a send dispatched on an
+  // Absence from a snapshot is only evidence for a send dispatched on an
   // EARLIER connection, where the ack is definitively dead. A send dispatched
   // after this connection reached `open` can be missing simply because the
   // snapshot was generated before it arrived - settling on that would tell the
@@ -6922,7 +6922,7 @@ describe("createChatSessionStore", () => {
     expect(noticesForLive()).toEqual([]);
   });
 
-  // R3-2: a mention chip projects to plain `@path`, so the quoted text LOOKS
+  // A mention chip projects to plain `@path`, so the quoted text LOOKS
   // complete - but the workspace, host and entity binding behind the chip do
   // not survive, and pasting the text back does not rebuild it. A partial loss
   // presented as a whole recovery is the same silence one content class over.

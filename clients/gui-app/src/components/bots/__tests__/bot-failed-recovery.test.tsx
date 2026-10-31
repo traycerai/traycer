@@ -1,6 +1,6 @@
 /**
- * A post the bot did not answer, and the routing card above its box (Tracy
- * Bots T86), through the REAL `BotChannelView` and `BotThreadPanel`: where
+ * A post the bot did not answer, and the routing card above its box,
+ * through the REAL `BotChannelView` and `BotThreadPanel`: where
  * the session that answers the surface (the trunk beside the channel, a
  * thread's session in its panel) names the post's turn as its last failed
  * attempt, the row says why in the agent chat's words and offers the agent

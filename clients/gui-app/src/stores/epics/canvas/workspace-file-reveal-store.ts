@@ -35,11 +35,11 @@ interface WorkspaceFileRevealState {
 }
 
 /**
- * Hard cap on live reveal entries. The happy path consumes its entry on reveal
- * (G4), but the dead-tile / error / null-content states never mount the
+ * Hard cap on live reveal entries. The happy path consumes its entry on reveal,
+ * but the dead-tile / error / null-content states never mount the
  * consuming preview, so a stranded entry can survive until the tile clears it.
  * This bounds the worst case - a flood of clicks landing on failing tiles -
- * regardless of any single clear path firing (CL-5 / pin G4). Far above any
+ * regardless of any single clear path firing (CL-5). Far above any
  * realistic count of simultaneously-pending reveals.
  */
 const MAX_REVEAL_TARGETS = 64;
@@ -90,7 +90,7 @@ export function setWorkspaceFileRevealTarget(
 
 /**
  * Drops the reveal entry for a `(viewTabId, contentId)` pair. The tile CONSUMES
- * its target this way after scrolling (G4); the dead-tile / error / null-content
+ * its target this way after scrolling; the dead-tile / error / null-content
  * states clear it the same way when they settle without mounting the consuming
  * preview, so a failing click leaves no residual entry. Clearing both bounds the
  * map and prevents a tab-switch remount from re-scrolling to a stale line. A

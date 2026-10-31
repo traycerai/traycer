@@ -7,7 +7,7 @@ import {
 } from "./support/chat-scroll-oracle";
 
 /**
- * R5, "pulled to the tail by growth above". A reader stops a little short of
+ * A reader stops a little short of
  * the end with a toward-end wheel (which records a reattach candidate at the
  * end as it was then), and with no further input a row FULLY ABOVE the
  * viewport grows: the list's MVCP compensation raises scrollTop by the growth,
@@ -327,7 +327,7 @@ for (const line of ["legacy", "windowed"] as const) {
     await page.waitForTimeout(1000);
     const grown = await readView(page);
     // On the fixed tree the reader is still free here; on the unfixed tree
-    // the growth may already have pulled them to the tail (R5).
+    // the growth may already have pulled them to the tail.
     const wheeled = grown.mode === "free-scrolling";
     if (wheeled) {
       await wheelsDelivered(

@@ -37,7 +37,7 @@ import {
 export interface SideStripTopBlockProps {
   readonly edge: EdgeSide;
   readonly variant: SideTabRowVariant;
-  /** macOS with the strip at the left: the first row is the title bar (S-04). */
+  /** macOS with the strip at the left: the first row is the title bar. */
   readonly ownsTitleBar: boolean;
   /** The drag-region class for the title row, or `undefined` when not frameless. */
   readonly dragClass: string | undefined;
@@ -54,14 +54,14 @@ export interface SideStripTopBlockProps {
 }
 
 /**
- * What leads in the header, in the strip (S-03). Expanded: history back and
+ * What leads in the header, in the strip. Expanded: history back and
  * forward beside the collapse toggle, the Notifications and All tasks nav rows,
- * Home, New Task as the primary last row (F7), then the "Tasks" label over the
+ * Home, New Task as the primary last row, then the "Tasks" label over the
  * rows (the Activity view's section headers replace it). On macOS with the
  * strip at the left the first row is the title bar: a drag row that reserves
- * the traffic lights and puts the arrows right of them (S-04).
+ * the traffic lights and puts the arrows right of them.
  *
- * Collapsed, one centred column (F1): the title bar's lights, the expand
+ * Collapsed, one centred column: the title bar's lights, the expand
  * toggle, Notifications, All tasks and New Task as 32px tiles 4px apart, a divider,
  * then Home as the first tile of the rail's 8px rhythm the task tiles
  * continue. The arrows are not drawn; their shortcuts still work.
@@ -223,7 +223,7 @@ const COLLAPSE_ICON: Record<
   right: { collapse: PanelRightClose, expand: PanelRightOpen },
 };
 
-/** Collapses the strip to the rail and back (S-07, S-20); the icon mirrors for a right strip. */
+/** Collapses the strip to the rail and back; the icon mirrors for a right strip. */
 function SideStripCollapseToggle(props: {
   readonly edge: EdgeSide;
   readonly collapsed: boolean;

@@ -25,7 +25,7 @@ import {
  * that no amount of firsthand knowledge could correct. Meanwhile the selection
  * authority — which aggregates every window's actual transport outcomes into
  * one verdict per host — was published, consumed by tiles, and invisible here.
- * `hooks/host/use-host-lease.ts` has stated the rule since P3.3: *all status UI
+ * `hooks/host/use-host-lease.ts` has stated the rule: *all status UI
  * derives from the lease vocabulary; no surface reads sockets, probe caches, or
  * the cloud DTO directly.* This file is what makes that sentence true rather
  * than aspirational.
@@ -44,7 +44,7 @@ import {
  * "Offline". A remote host that is off simply reads `offline`.
  *
  * `reported-reachable` is the state that exists because the honest answer for
- * a never-dialled host is neither "Online" nor "Offline" (F26). See
+ * a never-dialled host is neither "Online" nor "Offline". See
  * `deriveHostPresence`.
  */
 export type HostHealthState =
@@ -146,7 +146,7 @@ export interface DeriveHostHealthOptions {
  *   2. **The lease** — the selection authority's aggregate of what every
  *      window's transports actually observed. This is the app's own
  *      experience of the host, and it is why a host can read `Offline` here
- *      while the cloud still holds a `connectable` lease for it (the F26
+ *      while the cloud still holds a `connectable` lease for it (the
  *      window, now narrowed by real evidence instead of waited out).
  *   3. **The cloud DTO** — the only thing known about a host nothing has
  *      dialled, and deliberately the weakest.
@@ -357,7 +357,7 @@ function registryHealth(options: DeriveHostHealthOptions): HostHealth {
         live: presence.showLiveDot,
       };
     case "reported-reachable":
-      // F26. The account heard from this host within the lease TTL and nothing
+      // The account heard from this host within the lease TTL and nothing
       // here has spoken to it, so the row says what is true — that the report
       // exists — instead of asserting a liveness no layer in this app has
       // observed. The moment anything dials it, the lease answers above and

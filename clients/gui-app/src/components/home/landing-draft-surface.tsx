@@ -32,7 +32,7 @@ import { LandingVisibleDraftImagePrefetch } from "./visible-draft-image-prefetch
 import { MobileDrawerTaskPaintReporter } from "@/components/layout/shell/mobile-drawer-history-gate";
 
 /**
- * Route-independent landing body. Its exact draft runtime remains the T6
+ * Route-independent landing body. Its exact draft runtime remains the
  * boundary; this surface only supplies a keyed shell for the top-level host.
  */
 export function LandingDraftSurface() {

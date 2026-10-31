@@ -75,7 +75,7 @@ export function openTileWithNavigation(
     canvas: store.canvasByTabId[tabId] ?? createEmptyCanvas(),
     resolveTargetTabForEpic: () => tabId,
     // Imperative read: a placement decision is command-time, so it must not
-    // pin this call to a viewport snapshot (C10).
+    // pin this call to a viewport snapshot.
     singleTileViewport: isMobileViewport(),
   });
   // And the tile the open actually LANDS ON, which for a dedupe hit is not the

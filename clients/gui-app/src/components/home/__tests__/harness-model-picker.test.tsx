@@ -2025,7 +2025,7 @@ describe("<HarnessModelPicker />", () => {
     });
 
     // The trigger's accessible name now carries the ambient profile suffix
-    // too (T5) - match the prefix rather than the exact pre-T5 string.
+    // too - match the prefix rather than the earlier exact string.
     await openPickerByTriggerName(/^Claude Opus 4\.7/);
 
     // The locked provider's own dropdown stays fully interactive - forking to
@@ -2143,7 +2143,7 @@ describe("<HarnessModelPicker />", () => {
     });
   });
 
-  // S11 coverage: the picker's harness rail, model rows, and refresh button
+  // Coverage: the picker's harness rail, model rows, and refresh button
   // all resolve through the composer's run-target host, never the app-wide
   // default - a regression back to the old default-host resolution would
   // render THIS test's `installCatalog()` fixture (GPT-5.5 etc.) instead of
@@ -2312,7 +2312,7 @@ describe("<HarnessModelPicker />", () => {
     ).toBeNull();
   });
 
-  // R11 · the settled UX decision, at the surface it was decided for. On a
+  // The settled UX decision, at the surface it was decided for. On a
   // first boot the host converges every enabled provider (~1.6 GB), so a rail
   // tab whose pack is still downloading is the COMMON early state - it must be
   // visible, labelled, and not selectable. The host resolver refuses the turn
@@ -2366,12 +2366,12 @@ describe("<HarnessModelPicker />", () => {
     expect(selections).toEqual([]);
   });
 
-  // P1. Every other test in this file leaves `candidates: []`, so
+  // Every other test in this file leaves `candidates: []`, so
   // `fallbackRunnable` has always been false and the picker's "is this provider
   // selectable" logic has only ever been exercised against packs that DO block.
   // The state below - downloading behind a runnable binary - is the common one
   // on a first boot, and it is the one the rail deliberately keeps selectable.
-  // P6. An ungated tab is an ordinary destination, so its accessible NAME is
+  // An ungated tab is an ordinary destination, so its accessible NAME is
   // the plain harness label - the progress sentence lives in its description,
   // where a number that changes every 1.5s belongs. It used to be the name, so
   // arrowing across a converging rail announced thirteen nine-word sentences.
@@ -2444,7 +2444,7 @@ describe("<HarnessModelPicker />", () => {
   });
 
   it("does not bounce the selection off a provider downloading behind a runnable binary", async () => {
-    // The failure P1 named: the rail offered the tab, `handleRailEntryChange`
+    // The failure: the rail offered the tab, `handleRailEntryChange`
     // committed the selection, and `resolveActiveProviderId` then recomputed
     // and threw it away - so the tab visibly sprang back, once per provider,
     // until the whole ~1.6 GB queue drained. Asserted on the browsed provider
@@ -3130,7 +3130,7 @@ describe("<HarnessModelPicker />", () => {
     // stack.
     expect(useProviderProfileAddFlowStore.getState().harnessId).toBe("claude");
     // No explicit tab host was supplied - the flow targets the app-wide
-    // default host (S8: never silently assumed non-null).
+    // default host (never silently assumed non-null).
     expect(useProviderProfileAddFlowStore.getState().hostId).toBeNull();
     await waitFor(() => {
       expect(screen.queryByRole("textbox", { name: /^Search/ })).toBeNull();

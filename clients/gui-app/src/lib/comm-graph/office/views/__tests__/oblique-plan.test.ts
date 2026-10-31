@@ -1992,7 +1992,7 @@ describe("plaza civic rooms", () => {
     });
   });
 
-  /** A door is never a road tile, no lane runs through a room, and C6's pair. */
+  /** A door is never a road tile, no lane runs through a room, and each vehicle-served room has a kerb on the road one step from its own door; the archive has none. */
   function assertKerb(
     room: OfficeCivicRoom,
     onRoad: ReadonlySet<string>,
@@ -2005,7 +2005,7 @@ describe("plaza civic rooms", () => {
     for (const key of keysOf(room.bounds))
       expect(onRoad.has(key), `${at}/${key}`).toBe(false);
     const kerb = room.kerbTile;
-    // Only the archive names no kerb (C6) - nobody is collected from it.
+    // Only the archive names no kerb - nobody is collected from it.
     if (room.kind === "archive") {
       expect(kerb, at).toBeNull();
       return;
@@ -2236,7 +2236,7 @@ describe("plaza civic rooms", () => {
  * plate keeps the tile. The pods that gave way the other way round were the
  * two-tile ones, where a one-tile plate resolved `A-ROOT` to `AR`: manufactured
  * initials, which read as a different agent rather than as a short name, and are
- * the rung T3 removed from the HQ board's ladder for that reason.
+ * the rung removed from the HQ board's ladder for that reason.
  *
  * The negative half is the point of this case: a WIDE pod must still letter its
  * count. A rule that suppressed every board would pass an overlap sweep too.

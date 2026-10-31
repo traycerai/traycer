@@ -293,21 +293,21 @@ interface CanvasVariant {
   /** Signed in, so the foot draws the account row and the strip the Notifications. */
   readonly account: boolean;
   /**
-   * Three hosts in the directory (staging round 1, F5): two dialable, one
+   * Three hosts in the directory: two dialable, one
    * with no route, so the account menu's Host section draws every row state.
    */
   readonly hosts: boolean;
   /**
-   * This computer's host alone, with a registry that lists nothing else (F8):
+   * This computer's host alone, with a registry that lists nothing else:
    * a one-host account, the case a local activity plane must still read idle.
    */
   readonly solo: boolean;
   /**
    * Epsilon's session is REGISTERED, with its agents as chats, so a hover
-   * card names them as it does for any epic this window holds live (G5).
+   * card names them as it does for any epic this window holds live.
    */
   readonly warm: boolean;
-  /** Which readings the header (the strip foot, beside a side strip) holds (F6). */
+  /** Which readings the header (the strip foot, beside a side strip) holds. */
   readonly readings: "none" | "usage" | "resource" | "both";
   /**
    * `app` mounts the REAL `AppHeader` at the top placement, so its tab strip
@@ -317,7 +317,7 @@ interface CanvasVariant {
   readonly header: "specimen" | "app";
   /**
    * `1` mounts the REAL Settings ▸ Layout panel where the editor would be
-   * (G6), beside the live app column with its status bar, so a driver can
+   * beside the live app column with its status bar, so a driver can
    * operate every setting there and read its effect on the product.
    */
   readonly settings: boolean;
@@ -430,7 +430,7 @@ interface LayoutCanvasProbe {
   /** The activity plane's working and turn agents per epic: the meters read it. */
   readonly setActivity: (byEpic: AgentActivityByEpic) => void;
   /**
-   * One host's own activity stream (F8): `fleet` a cloud union that vouches
+   * One host's own activity stream: `fleet` a cloud union that vouches
    * for every host, `partial` a local plane that answers for this host only,
    * `none` a stream not open. The union's rows stay where `setActivity` put
    * them; this is the reach, stated for a host the directory knows.
@@ -537,7 +537,7 @@ function readReadings(value: string | null): CanvasVariant["readings"] {
 const VARIANT = readVariant();
 
 /**
- * The `hosts=1` fleet (staging round 1, F5): this computer's host ("Mac
+ * The `hosts=1` fleet: this computer's host ("Mac
  * Studio", which the authority derives as the window's host), a remote this
  * window can dial, and one with no route - the row the account menu's Host
  * section draws inert. The remotes are both the directory's (the remote
@@ -556,7 +556,7 @@ const FIXTURE_LOCAL_HOST: LocalHostSnapshot = {
 const FIXTURE_REMOTE_HOSTS: readonly HostDirectoryEntry[] = [
   {
     hostId: "fixture-host-builder",
-    // Long enough to overrun the account menu's width (G4): it truncates in
+    // Long enough to overrun the account menu's width: it truncates in
     // its row and reads in full from the row's tooltip.
     label: "build-vm-01.asia-south2-b.c.example-project.internal (staging)",
     kind: "remote",
@@ -566,7 +566,7 @@ const FIXTURE_REMOTE_HOSTS: readonly HostDirectoryEntry[] = [
   },
   {
     hostId: "fixture-host-mini",
-    // Offline and long (G4): an inert row still reveals a truncated name.
+    // Offline and long: an inert row still reveals a truncated name.
     label: "gpu-runner-02.us-central1-a.c.example-project.internal (nightly)",
     kind: "remote",
     websocketUrl: null,
@@ -604,7 +604,7 @@ function resetLayout(): void {
   if (VARIANT.tabs !== "top") {
     useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
   }
-  // The three readings the strip's resource tile has to fit (F6).
+  // The three readings the strip's resource tile has to fit.
   if (VARIANT.readings !== "none") {
     useLayoutStore.getState().setRegionValues("resourceMonitor", {
       cpu: true,
@@ -813,8 +813,8 @@ let activationCount = 0;
 let requestCounter = 0;
 
 /**
- * Two signed-in providers, so the usage tile has two real readings to fit
- * (F6): Codex and Claude Code, the pair the glyph's two slots stand for.
+ * Two signed-in providers, so the usage tile has two real readings to fit:
+ * Codex and Claude Code, the pair the glyph's two slots stand for.
  */
 const FIXTURE_PROVIDERS = providersListResponseSchema.parse({
   providers: (["codex", "claude-code"] as const).map((providerId) => ({
@@ -879,7 +879,7 @@ function fixtureRateLimitUsage(providerId: string | undefined) {
 }
 
 /**
- * This computer's resource stream, answered once (F6): the host tree at 14%
+ * This computer's resource stream, answered once: the host tree at 14%
  * CPU and 3.2 GB of a 32 GB machine, which is what the resource tile reads.
  * The fixture mounts no `ResourcesStreamMount`, so the global entry is this.
  */
@@ -1389,11 +1389,11 @@ function openEpicSurfaceSession() {
 const EPIC_SURFACE_SESSION =
   VARIANT.surface === "epic" ? openEpicSurfaceSession() : null;
 
-/** The agent Epsilon's resource stream tracks (G7): "Plan the migration". */
+/** The agent Epsilon's resource stream tracks: "Plan the migration". */
 const FIXTURE_TRACKED_AGENT_ID = "fixture-agent-plan";
 
 /**
- * Epsilon's resource stream under `settings=1` (G7): one tracked agent, so the
+ * Epsilon's resource stream under `settings=1`: one tracked agent, so the
  * agent row specimen has a reading for its chip - the real chip, through the
  * real registry, reading the real `agentRows` switch.
  */
@@ -1611,7 +1611,7 @@ function EpicSurfaceStandIn(): ReactNode {
  * The app column and the editor beside it, exactly as `app-shell.tsx` arranges
  * them: a flex ROW whose first child is the column and whose second is the
  * inspector, so a side dock reflows the app rather than covering it, and the
- * column is never an ancestor of the inspector (C-06). The column is the
+ * column is never an ancestor of the inspector. The column is the
  * shell's own `AppColumnFrame`, fed the placement and band kind the way the
  * shell computes them.
  */
@@ -1668,7 +1668,7 @@ export function CanvasFixture(): ReactNode {
 }
 
 /**
- * Settings ▸ Layout as the modal draws it (G6): compact density, inside the
+ * Settings ▸ Layout as the modal draws it: compact density, inside the
  * pane the reveal watcher scrolls, with that watcher mounted so a search
  * result's landing is the shipped one. A fixed width because it stands in for
  * the modal's pane, a SIMULATED surface, as the preset miniature is.
@@ -1698,7 +1698,7 @@ function SettingsFixturePane(): ReactNode {
 }
 
 /**
- * One agent row's readings (G7): the REAL chip every agent and terminal row
+ * One agent row's readings: the REAL chip every agent and terminal row
  * draws, with the metrics the REAL hook resolves from `agentRows`. The row
  * around it is a stand-in, because the real Agents tree needs a live host.
  */
@@ -1725,7 +1725,7 @@ function AgentRowReadingsSpecimen(): ReactNode {
 }
 
 /**
- * A signed-in request context for the readings variants (F6), which is what
+ * A signed-in request context for the readings variants, which is what
  * lets a host query run at all: the fixture's AuthService has no session, so
  * every `useHostQuery` stays disabled without one. Set once the runtime has
  * started (it renders nothing before), and before anything under it mounts;
@@ -1770,7 +1770,7 @@ export function Providers(props: { readonly children: ReactNode }): ReactNode {
           <LazyMotion features={domAnimation}>
             <TooltipProvider>
               {/* The app shell's usage poll, which is what fills the usage
-                  tile's cache; the readings variants only (F6). */}
+                  tile's cache; the readings variants only. */}
               <FixtureRequestContext>
                 {VARIANT.readings === "none" ? null : <RateLimitPollProvider />}
                 <SampleSceneProvider>{props.children}</SampleSceneProvider>

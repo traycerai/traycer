@@ -8,7 +8,7 @@ import { HostDirectoryService } from "@/lib/host/host-directory-service";
 
 /**
  * The production `RemoteHostFetcher` used whenever a caller does not override
- * one (S2/T14): every shell today passes `remoteFetcher={null}` down through
+ * one (S2): every shell today passes `remoteFetcher={null}` down through
  * `TraycerApp`, which used to fall back to `HostDirectoryService`'s built-in
  * always-empty stub (S1 - "visible in My Hosts, not in the selectable
  * directory"). Reuses `AuthService.fetchRegisteredHosts()` - the same

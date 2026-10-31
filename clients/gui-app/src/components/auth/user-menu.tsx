@@ -140,7 +140,7 @@ export function UserMenu(props: UserMenuProps) {
           align={placement?.align ?? "end"}
           sideOffset={6}
           // A menu's width, whatever a host is called: long names truncate
-          // in their rows and read in full from a tooltip (G4).
+          // in their rows and read in full from a tooltip.
           className="w-max max-w-64 whitespace-nowrap"
           data-testid="user-menu-content"
         >
@@ -206,7 +206,7 @@ export function UserMenu(props: UserMenuProps) {
               onSelect={() => {
                 setOpen(false);
                 // Tracked on the RESOLVED open only: a failed OS handoff is not
-                // a subscription-management visit (R11). The failure toast is
+                // a subscription-management visit. The failure toast is
                 // the link seam's, so the rejection is ignored here.
                 void openLink(manageSubscriptionUrl, "account", null).then(
                   () =>
@@ -255,7 +255,7 @@ function isUserMenuHostPickable(
 /**
  * One host in the account menu. Its tooltip says what a click does (the
  * activate hint, on a row that can take one) and, only when the menu's width
- * has truncated it, the host's full name (G4).
+ * has truncated it, the host's full name.
  */
 function UserMenuHostRow(props: {
   readonly host: HostScopeOption;
@@ -322,7 +322,7 @@ function UserMenuHostRow(props: {
 }
 
 /**
- * The account menu's Host section (F5): every host, the check on the one this
+ * The account menu's Host section: every host, the check on the one this
  * window uses, and a click that switches to it. It is Settings' Activate in
  * another place - the same write through `useMakeActiveHost` - drawn with the
  * shared `HostOptionRow` under `bind`, so an unreachable host is inert and

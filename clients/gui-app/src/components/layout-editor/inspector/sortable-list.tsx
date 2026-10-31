@@ -34,7 +34,7 @@ import { useSettingsDensity } from "@/providers/settings-density-context";
  * the dock and the toolbars, provider ids for the usage list, ids-or-divider
  * ids for the rail. A reorder therefore hands the caller back exactly the ids
  * it put in, and the re-narrowing helper that used to sit on the other side of
- * a widened `string` is gone (G1-23).
+ * a widened `string` is gone.
  */
 export interface SortableListItem<Id extends string> {
   readonly id: Id;
@@ -58,7 +58,7 @@ export interface SortableListItem<Id extends string> {
   readonly dimmed: boolean;
   /**
    * The presence rule (L-47), where one exists. Drawn as the first line of the
-   * row's DISCLOSURE rather than under its name (R3-08): a hint that is
+   * row's DISCLOSURE rather than under its name: a hint that is
    * sometimes there and sometimes not gave one list three row heights, and a
    * rule about when a panel appears is exactly the kind of thing a row opens to
    * explain. It stays the grab's description either way, so a screen reader
@@ -363,7 +363,7 @@ export function SortableList<Id extends string>(
       {/* Said before it is needed, not after: the instructions used to reach a
           screen reader only once Space had already been pressed, which left
           every row announced as an unnamed focusable group with no stated
-          operation (G3-18). One static line, described by every row. */}
+          operation. One static line, described by every row. */}
       {ordered ? (
         <p id={instructionsId} className="sr-only">
           {GRAB_INSTRUCTIONS}
@@ -417,11 +417,11 @@ export function SortableList<Id extends string>(
  *
  * The row carries the row's identity and nothing operable: the thing with
  * `role="button"` is the NAME inside the line, because a composite widget must
- * not contain the controls it would otherwise name itself from (P-9's trap,
- * R1-02). The focus indicator is on this box rather than on the grab, so what
- * reads as focused is the whole row the keyboard operates (R2-03) - written in
+ * not contain the controls it would otherwise name itself from. The focus
+ * indicator is on this box rather than on the grab, so what
+ * reads as focused is the whole row the keyboard operates - written in
  * `layout-editor.css` beside the grabbed row's lift, which is the file that
- * owns this row's other states (R3-18).
+ * owns this row's other states.
  */
 function SortableRow<Id extends string>(props: {
   readonly item: SortableListItem<Id>;
@@ -502,7 +502,7 @@ function SortableRow<Id extends string>(props: {
 }
 
 /**
- * The presence rule (L-47, R3-08).
+ * The presence rule (L-47).
  *
  * Open, it is the first thing the disclosure says - the row explaining itself
  * on the line the user asked for. Closed, it is still in the document and still
@@ -554,7 +554,7 @@ function SortableRowHint(props: {
  * contain interactive descendants, so a page row that carried its own Shown
  * radios, its Size and its revert read to a screen reader as one collapsed
  * button named "Agents Auto Shown Hidden", with three real controls unreachable
- * as controls (R1-02). Putting the role on the whole line was that defect; the
+ * as controls. Putting the role on the whole line was that defect; the
  * split is what fixes it, and the line keeps the padding so the drag's hit area
  * is still the row rather than the words in it.
  *
@@ -565,10 +565,10 @@ function SortableRowHint(props: {
  * The presence rule is outside the grab too, and for the same reason one rung
  * down: a `role="button"` names itself from everything it contains, so the
  * Pull requests row was announced as a button called "Pull requests Auto -
- * appears when this repo has pull requests" (R2-08). It is pointed at by
+ * appears when this repo has pull requests". It is pointed at by
  * `aria-describedby` beside the grab instructions, which is what a description
  * IS, and it is drawn by the ROW rather than by the line, because it belongs to
- * the disclosure now (R3-08).
+ * the disclosure now.
  */
 function SortableRowLine<Id extends string>(props: {
   readonly item: SortableListItem<Id>;
@@ -794,7 +794,7 @@ function SortableRowGlyph<Id extends string>(props: {
   }
   // Every glyph carries a hook of its own, so a test can name THIS row's icon
   // rather than counting the SVGs in the line and breaking on the next
-  // legitimate one (R1-19).
+  // legitimate one.
   return (
     <item.icon
       data-row-icon
@@ -805,7 +805,7 @@ function SortableRowGlyph<Id extends string>(props: {
 
 /**
  * A member's name. A changed row says so with the revert after its name, so it
- * draws no dot of its own; the presence rule is a sibling (R2-08).
+ * draws no dot of its own; the presence rule is a sibling.
  */
 function SortableRowName<Id extends string>(props: {
   readonly item: SortableListItem<Id>;

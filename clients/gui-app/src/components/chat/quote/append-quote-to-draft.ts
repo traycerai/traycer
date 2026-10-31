@@ -5,7 +5,7 @@ import {
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
 
-/** Selection text already extracted from the DOM (T4/T5 own that step). */
+/** Selection text already extracted from the DOM. */
 export interface QuoteTextSnapshot {
   readonly text: string;
   readonly fenceLanguage: string | null;

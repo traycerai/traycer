@@ -207,7 +207,7 @@ export interface EpicRuntimeCorePorts {
     encode(): Promise<Uint8Array>;
     apply(update: Uint8Array, asLocalEdit: boolean): Promise<boolean>;
   };
-  /** The one durable transport this session owns (T12's ruling, worker-side). */
+  /** The one durable transport owned by this worker session. */
   readonly transport: { close(): void };
   /** The per-window indexed store. */
   readonly durableStore: { close(): void };

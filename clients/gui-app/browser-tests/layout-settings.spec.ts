@@ -13,7 +13,7 @@ import { centreOf, fixture, nextFrames } from "./support/fixtures.ts";
 // `fullyParallel`).
 test.describe.configure({ mode: "default" });
 
-// SETTINGS > LAYOUT, IN REAL CHROME (G6, G7, H2).
+// SETTINGS > LAYOUT, IN REAL CHROME (H2).
 //
 // `layout-editor-canvas.html?settings=1` mounts the REAL Settings > Layout
 // panel, either alone in the window (`settingsPage`: a width is the panel's

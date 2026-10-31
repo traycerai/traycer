@@ -1327,7 +1327,7 @@ describe("useChatTimelineFollowLatch", () => {
     });
   });
 
-  // P9 - a lifted finger's momentum travels across an unobserved viewport
+  // A lifted finger's momentum travels across an unobserved viewport
   // clamp and still arrives, because the clamp's own delta is carried into
   // `liftScrollTop` exactly as it is into every other reference
   // (`noteViewportGrowthClamp`). Deleting that one carry leaves the lift
@@ -6680,7 +6680,7 @@ describe("useChatTimelineFollowLatch", () => {
       expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
     });
 
-    // P7: the wheel moved the view nothing - the viewport grows just enough
+    // The wheel moved the view nothing - the viewport grows just enough
     // to bring the end (recorded at the wheel) up onto the view by itself -
     // so no scroll report is ever owed and the report path above
     // (`fireNativeScroll`) never gets a chance to judge the candidate. Then
@@ -6711,7 +6711,7 @@ describe("useChatTimelineFollowLatch", () => {
     });
   });
 
-  // P8 - three refusals of the maintenance-read arrival (P7's mechanism),
+  // Three refusals of the maintenance-read arrival,
   // plus a fourth case. A stale-generation refusal is not
   // listed here: every call that bumps `readerGestureGenerationRef` also
   // replaces or nulls `readerEndCandidateRef` in the same act
@@ -8981,7 +8981,7 @@ describe("useChatTimelineFollowLatch", () => {
     });
   });
 
-  // --- T2: pressIsDownRef gates the held end-correction command -----------
+  // --- pressIsDownRef gates the held end-correction command -----------
 
   describe("a standing scrollbar press gates the correction's held command", () => {
     interface PressGateHarness {

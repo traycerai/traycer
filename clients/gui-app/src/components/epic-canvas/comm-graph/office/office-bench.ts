@@ -109,8 +109,8 @@ export const OFFICE_BENCH_OUTBREAK_DEFAULT = 2;
 /**
  * HOW MANY MORE AGENTS WAIT THAN THE LOUNGE CAN SEAT.
  *
- * `waiting` exists to show the overflow keeping its desk glyph (C2) and the
- * freed chair going to the earliest waiter (C3), and neither is visible unless
+ * `waiting` exists to show the overflow keeping its desk glyph and the
+ * freed chair going to the earliest waiter, and neither is visible unless
  * the lounge is genuinely short. Taken from `civicCapacityFor` rather than
  * written down, so it stays an overflow when the live sitting moves the
  * capacity numbers.

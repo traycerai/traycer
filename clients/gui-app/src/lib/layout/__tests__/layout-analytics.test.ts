@@ -112,7 +112,7 @@ describe("layoutSnapshotProperties (L-46, L-54, L-55)", () => {
     // event is dense, never sparse (L-55). The fifteen beside the per-setting
     // keys are the built-ins the snapshot carries: the preset, the count, the
     // four placement fields the two bar readings pick (L-156), the tab strip
-    // placement, the sidebar side (S-01, S-06) and the strip's view, the
+    // placement, the sidebar side and the strip's view, the
     // minimap side and the five reorder flags.
     expect(Object.keys(properties)).toHaveLength(
       LAYOUT_SETTING_PROPERTY_KEYS.length + 15,
@@ -210,7 +210,7 @@ describe("layoutSnapshotProperties (L-46, L-54, L-55)", () => {
 /**
  * `layout_snapshot` is in `STRICT_EVENTS`, so a single declared property whose
  * value fails its validator drops the WHOLE event - for every user, with the
- * registry, the completeness suite and the compile all green (G3-03). These
+ * registry, the completeness suite and the compile all green. These
  * drive the real builders through the real sanitizer, which is the only place
  * that verdict is reached.
  */

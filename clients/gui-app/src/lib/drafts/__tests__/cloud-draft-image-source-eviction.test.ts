@@ -1,5 +1,5 @@
 /**
- * F3 — `evictUnrootedOverflow` must never drop a hash a live landing draft
+ * `evictUnrootedOverflow` must never drop a hash a live landing draft
  * still names, since `sourcesByHash` is the ONLY hash-to-cloud-address
  * mapping (it holds no bytes itself). Evicting a live row's entry makes that
  * image permanently unrecoverable: the lazy leg answers `null` with no

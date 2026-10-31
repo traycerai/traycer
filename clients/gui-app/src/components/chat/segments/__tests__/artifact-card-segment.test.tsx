@@ -68,7 +68,7 @@ const canvas = vi.hoisted(() => ({
       return null;
     },
   ),
-  // The removed global/MRU resolver (constraint C1). It returns a DIFFERENT tab
+  // The removed global/MRU resolver. It returns a DIFFERENT tab
   // than the card's owning `useEpicViewTabId` context ("tab-1"), modelling a
   // same-Epic split where a different pane is globally focused. The card must
   // read its owning context, never this resolver: the drag test asserts the

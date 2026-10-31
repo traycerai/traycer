@@ -169,7 +169,7 @@ export function tabStripPlacementChanged(
   return a.tabStripPlacement !== b.tabStripPlacement;
 }
 
-/** Whether the epic sidebar's side differs between two arrangements (S-06). */
+/** Whether the epic sidebar's side differs between two arrangements. */
 export function sidebarSideChanged(
   a: LayoutArrangement,
   b: LayoutArrangement,
@@ -842,8 +842,7 @@ function settingPropertyValue(
  * booleans. `shownProfiles`, `providerLimits`, `hiddenProviders` and
  * `limitKeys` never reach it because {@link layoutSnapshotProperties} is
  * built only from `LayoutValues` plus the five closed arrangement facts the
- * plan names - the BUILDER is what keeps them out, not this type (L-54,
- * C-41, G3-07).
+ * plan names - the BUILDER is what keeps them out, not this type (L-54).
  */
 export interface LayoutSnapshotProperties {
   // The ~40 `layout_<region>_<key>` properties are always strings
@@ -852,7 +851,7 @@ export interface LayoutSnapshotProperties {
   // than `string` alone.
   //
   // It also means the property SET is a RUNTIME guarantee, not a type-level
-  // one (G3-07): the names are built by walking the registry, TypeScript
+  // one: the names are built by walking the registry, TypeScript
   // cannot read literal keys out of that walk, and an index signature wide
   // enough for them is wide enough for any other key. What holds the payload
   // to exactly this set is `STRICT_EVENTS`'s key-count check in
@@ -928,7 +927,7 @@ export type LayoutDurationBucket =
  * Buckets a millisecond duration for `layout_editor_session`'s two duration
  * properties. Its own scale rather than the app-wide `duration_bucket`
  * allowlist (`under_10s | 10_to_30s | over_30s`): an editor session routinely
- * outruns that ceiling (C-42).
+ * outruns that ceiling.
  */
 export function layoutDurationBucket(durationMs: number): LayoutDurationBucket {
   if (durationMs < 10_000) return "under_10s";

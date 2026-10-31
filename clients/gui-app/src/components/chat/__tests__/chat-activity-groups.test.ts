@@ -1445,7 +1445,7 @@ describe("chat activity grouping", () => {
   });
 });
 
-// Layout > Chat > Thinking is Hidden (audit R1): reasoning is left out before
+// Layout > Chat > Thinking is Hidden: reasoning is left out before
 // runs are grouped, so a run of nothing but reasoning draws no row and a mixed
 // run's summary drops its "thought for" clause.
 describe("chat activity grouping - hideReasoning", () => {

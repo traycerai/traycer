@@ -2505,7 +2505,7 @@ describe("OfficeScene", () => {
     // fixture; the old 150 was enough only to reach the lobby counter.
     for (let step = 0; step < CRASH_WALK_TICKS; step += 1) scene.tick(100);
 
-    // C4: A CRASH GOES TO THE INFIRMARY, NOT TO THE COUNTER. This asserted
+    // A CRASH GOES TO THE INFIRMARY, NOT TO THE COUNTER. This asserted
     // `receptionQueueTiles[0]` until there was a bed to send it to; a failing
     // agent now walks to one and lies down in it, and `attention` is the only
     // status the front desk still answers for. The crashed SCREEN stays behind
@@ -3243,7 +3243,7 @@ describe("OfficeScene", () => {
         agents: crew,
         visibleAgentIds: BOTH,
         // Both `attention`, and beta was `failure` until the infirmary
-        // existed: C4 sends a crash to a bed rather than to the counter, so a
+        // existed: a crash goes to a bed rather than to the counter, so a
         // failing agent no longer queues anywhere. The claim here is about
         // which RECEPTION a queueing agent uses, and it needs two agents that
         // queue - not two different reasons for queueing.
@@ -4310,8 +4310,8 @@ describe("OfficeScene amenities", () => {
 
 /**
  * The behaviour core, run once per registered view. Today that is Floor
- * alone, which is the point: T3 to T5 register Towers, Building, Mission
- * control, Campus and City against this exact block and get this coverage
+ * alone, which is the point: registering Towers, Building, Mission
+ * control, Campus and City against this exact block gives them this coverage
  * for free, with no edit here.
  *
  * Frames are asserted STRUCTURALLY - counts, kinds, ids, relative positions -
@@ -5521,7 +5521,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
    * Ticks until one of `ids` is SITTING in a seat of that kind, and says which.
    *
    * Holding the claim is not the same as being in it - the walk is the whole
-   * point of C1 - so this waits for the claim AND for the agent to stop being
+   * point - so this waits for the claim AND for the agent to stop being
    * away, which together are "it has arrived".
    */
   function tickUntilSeatedIn(
@@ -5882,7 +5882,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
   });
 
   /**
-   * READ S'S S2: the same bench, through a claim the CLAIMING PASS never makes.
+   * The same bench, through a claim the CLAIMING PASS never makes.
    *
    * A sync rebuilds claims before the civic pass runs - `recomputeClaims`, then
    * rehome seats their holders - and the pass then SKIPS an agent whose claim
@@ -5982,7 +5982,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
   });
 
   /**
-   * READ S'S S3: the eviction must not steal an ARCHIVE ROUTE.
+   * The eviction must not steal an ARCHIVE ROUTE.
    *
    * An archived agent walks to the archive door and disappears. If it was on a
    * bench when the news arrived, `startLeaving` sent it to the door while leaving
@@ -6518,7 +6518,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
     }
     // THE FIXTURE IS REQUIRED, not sampled. Three held LOUNGE seats are what put
     // a box behind the walk, and q's errand to the counter is what sends it across
-    // the row: C7 names that counter the help desk wherever it is, so this is the
+    // the row: that counter is the help desk wherever it is, so this is the
     // one string that says q is queueing rather than sitting somewhere. Make q
     // idle instead and the pairs this fixture yields are both already-correct
     // ones - a head over the box of the seat in FRONT of it - and the case would
@@ -7118,7 +7118,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
 
     const after = bookOf(scene);
     expect(after.civicClaimOf(healed)).toBeNull();
-    // C3: the bed goes to the agent that has been waiting longest, not
+    // The bed goes to the agent that has been waiting longest, not
     // to `lateOverflow` who sorts first by id among the remaining
     // unbedded crashes.
     expect(after.civicClaimOf(earlyOverflow)).toBe("bed");
@@ -7377,7 +7377,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
     if (lastRect === undefined)
       throw new Error("alpha vanished without walking");
     // ON THE WALK TO THE ARCHIVE DOOR, which is what this case is named for:
-    // C5 is a records door, and the pre-civic departure walked to the lobby
+    // The archive is a records door, and the pre-civic departure walked to the lobby
     // instead - a different path, which this would not match.
     //
     // KEPT BUT NO LONGER LOAD-BEARING. This clause once passed in the plazas on
@@ -8046,7 +8046,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
       context.skip(`${viewId} plans no civic rooms`);
       return;
     }
-    // C7: the counter people queue at IS the help desk, so the card
+    // The counter people queue at IS the help desk, so the card
     // says that wherever the room is named - "Front desk" on Floor,
     // whatever K2 calls it elsewhere. This is awayWhereabouts, not
     // the seated civic-room word.
@@ -10703,7 +10703,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view vehicles", (viewId) => {
     }
     // THE GATE IS THE ROAD, and this case exists to say so about a view that
     // has everything else. Mission control plans all four rooms, and its help
-    // desk correctly carries `kerbTile: null` - C6, because nothing drives into
+    // desk correctly carries `kerbTile: null` because nothing drives into
     // a hall - so a real sync fails the DISPATCH TRIGGER on the missing kerb
     // before it ever reaches the road check, and a green would mean "no kerb
     // yet" rather than "no road".
@@ -11692,7 +11692,7 @@ describe("OfficeScene leads audience", () => {
   });
 });
 
-// ---- T2: findings F1-F9 --------------------------------------------- //
+// --------------------------------------------------------------------- //
 
 /** A projector whose x axis is offset far from the identity mapping. */
 const SHIFTED_PROJECTOR: OfficeProjector = {
@@ -12776,7 +12776,7 @@ describe("OfficeScene fixup 1 - F14 reception queue across aliased floors", () =
 
     // The real plan's own geometry, agent for agent - only agentA's and
     // agentB's own seats are turned from a cubby into a desk, so going hot
-    // does not ALSO claim them a reserve (F7) and move their effective
+    // does not ALSO claim them a reserve and move their effective
     // floor before reception ever runs. Everything else - the floors, the
     // aliased reception tiles, every other seat - is exactly what the real
     // oblique plan produced.
@@ -13102,7 +13102,7 @@ describe("OfficeScene fixup 1 - F17 isometric growth reports a projected shift",
   });
 });
 
-// ---- T2: the residuals ----------------------------------------------- //
+// ---- The residuals ----------------------------------------------- //
 
 describe("OfficeScene fixup 2 - F2 a remembered errand tile follows the shift", () => {
   /**
@@ -14223,7 +14223,7 @@ describe("OfficeScene Finding 25 - the settle latch re-arms for a new history so
     // this time with its lead awake. RED before the fix: the latch is
     // already up from phase 2, so `settling` never fires and this sync
     // costs the planner nothing - team-0 stays stranded in the provisional
-    // cubbies phase 3 forced, for the life of the mount (the 8c P2, now
+    // cubbies phase 3 forced, for the life of the mount (the 8c finding, now
     // reopened by a second history source rather than the first). The fix
     // re-arms the latch in phase 3 (agent set changed while behind), so
     // this sync IS a settle.
@@ -14253,7 +14253,7 @@ describe("OfficeScene fixup 8c - the settle plan walks people, it does not pop t
   }
 
   /**
-   * The same fixture and the same woken-lead premise as the R2 settle case
+   * The same fixture and the same woken-lead premise as the settle case
    * above, parameterized on `reducedMotion` so both branches below sync
    * against an identical, verified premise: a team member the settle
    * actually moved off a cubby, never an assumed one.
@@ -14398,7 +14398,7 @@ describe("OfficeScene fixup 8c - the book settles with the plan (D66)", () => {
    *
    * `layout.desks` said desk while the book still said cubby, and the book is
    * what `effectiveSeat`, `whereabouts`, the characters and the directory
-   * read - so the plan-side equality the R2 case asserts was true of an office
+   * read - so the plan-side equality the case asserts was true of an office
    * nobody was looking at. The book is private to the scene, so this reads it
    * through the two public carriers that project it: `locate`, which the
    * directory pans by, and `whereabouts`, which the hover card prints.
@@ -14719,7 +14719,7 @@ describe("OfficeScene fixup 8d - the queue and the claim answer the right pool",
    * (`ceil(15/25)` is 1, floored to `INFIRMARY_MIN_BEDS`).
    *
    * Four agents matter: a FILLER and a "first arrival" crasher take the two
-   * beds between them (C2's "occupying the rest first"); a "second arrival"
+   * beds between them ("occupying the rest first"); a "second arrival"
    * and a "third arrival" then both overflow. The second and third are
    * chosen from the TWO DIFFERENT desk storeys on purpose, and the third is
    * put on the storey that comes EARLIER in `characters` order (the storey
@@ -14830,7 +14830,7 @@ describe("OfficeScene fixup 8d - the queue and the claim answer the right pool",
 
     const afterHeal = bookOf(scene);
     expect(afterHeal.civicClaimOf(crashFirst)).toBeNull();
-    // C3: the freed bed goes to whichever storey asked first, not to
+    // The freed bed goes to whichever storey asked first, not to
     // whichever storey `civicOrderKey` (pre-fix) or `characters` sorts
     // first.
     expect(afterHeal.civicClaimOf(crashSecond)).toBe("bed");
@@ -15926,7 +15926,7 @@ describe("OfficeScene evidence - civic wanter under full beds and reserves", () 
     const cubbySeatId = book.effectiveSeat(overflow)?.seatId;
     const planBefore = layoutOf(scene);
 
-    // C2: a full ward is not a floor that needs a bigger one. An unchanged
+    // A full ward is not a floor that needs a bigger one. An unchanged
     // follow-up sync is what would re-plan if overflow had been written
     // into `needsCapacity` on the pass above. A replan with an empty
     // shortfall preserves every count — `desks.size` and `seats.size`

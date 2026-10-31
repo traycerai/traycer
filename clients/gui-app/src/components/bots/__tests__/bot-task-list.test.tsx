@@ -1,5 +1,5 @@
 /**
- * A bot's task list in the bot's own view (Tracy Bots T82, T86): where each
+ * A bot's task list in the bot's own view (Tracy Bots T82): where each
  * task came from, as the Activity page draws it. "for <post>" names the
  * channel post the task was set up for and "from <post>" the thread that set
  * it up; each opens its thread beside the channel. The real list runs over a

@@ -8,7 +8,7 @@ import type { CommandContext, CommandItem } from "@/lib/commands/types";
 
 /**
  * Item 5: with a non-empty query, `RootView` orders its buckets by their best
- * `paletteFilter` score ACROSS groups (C15) rather than by the fixed
+ * `paletteFilter` score ACROSS groups rather than by the fixed
  * "Tasks before Actions" default order - cmdk 1.1.1 never reorders groups
  * itself (it looks each one up by a generated id against a `data-value` that
  * holds the heading, so it never finds one and the DOM order the renderer

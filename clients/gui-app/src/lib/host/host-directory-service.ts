@@ -273,9 +273,9 @@ export class HostDirectoryService implements IHostDirectoryService {
    */
   private registrySubscription: Disposable | null = null;
   /**
-   * Coalesces concurrent `refresh()` callers onto a single in-flight fetch
-   * (T20 / audit P4) - a foundation for T21's interval + open-time triggers,
-   * which would otherwise stack requests.
+   * Coalesces concurrent `refresh()` callers onto a single in-flight fetch -
+   * a foundation for the interval and open-time triggers, which would
+   * otherwise stack requests.
    *
    * The in-flight refresh, WITH the credential era it was started for. Joining
    * is only legal for a caller in that same era — see `refreshForEra`.
@@ -1010,7 +1010,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.lastCommitCredentialGeneration = era.credentialGeneration;
     this.lastCommitIdentity = era.identity;
     // Captured BEFORE the overwrite: this is the only place that holds both
-    // sides of a membership transition (F6b).
+    // sides of a membership transition.
     const previousRemoteIds = new Set(
       this.remoteEntries.map((entry) => entry.hostId),
     );

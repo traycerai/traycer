@@ -1908,7 +1908,7 @@ function ProfileRateLimitProviderBlock({
   // for the highlight to point at and none for the eye to govern, so both go
   // until it returns. Wherever it lives - the status bar, the tab strip or the
   // phone header - it draws through the same selector, so the checks apply to
-  // every placement (G6). The checks stay in the store meanwhile.
+  // every placement. The checks stay in the store meanwhile.
   const readingShown = useRegionShown("usageLimits");
   const shownProfileIds = readingShown
     ? resolveStatusBarProfileIds(profileSelection, providerId, profiles)
@@ -2043,7 +2043,7 @@ function ProfileRateLimitProviderBlock({
                       // Read at write time rather than subscribed: this row
                       // needs the whole arrangement only to spread it, and a
                       // subscription to it re-renders the popover on every
-                      // dock reorder and divider drag (G1-14).
+                      // dock reorder and divider drag.
                       const current = useLayoutStore.getState().arrangement;
                       setArrangement({
                         ...current,

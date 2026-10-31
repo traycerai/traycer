@@ -790,7 +790,7 @@ function useBotTabRail(
 }
 
 /**
- * The bot's session shown in place of the channel's views (Tracy Bots T93),
+ * The bot's session shown in place of the channel's views,
  * and where the channel lands once it is back. A receipt, a check-in's link
  * or a thread's "Thread session" opens a session; each open is a new visit,
  * so the same turn opened again lands again. The session's links show the

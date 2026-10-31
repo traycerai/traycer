@@ -510,7 +510,7 @@ describe("BrowserPeekTile video plane", () => {
     decodeFrame(video);
 
     // No JPEG frame can arrive - the host turned the pump off - so the 8s
-    // stale timer would condemn a perfectly healthy tile (G3).
+    // stale timer would condemn a perfectly healthy tile.
     for (let elapsed = 0; elapsed < 12_000; elapsed += 1_000) {
       act(() => {
         vi.advanceTimersByTime(1_000);

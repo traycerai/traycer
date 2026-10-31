@@ -1,5 +1,5 @@
 /**
- * The fixed Tracy entry (Tracy Bots T58, decision 150: the entry is the one
+ * The fixed Tracy entry (decision 150: the entry is the one
  * Tracy surface), through the REAL `TracyEntryController`, the real top and
  * vertical strips, the real keybinding dispatch and the real General
  * settings panel, over the real settings, Tracy surface, tabs and layout

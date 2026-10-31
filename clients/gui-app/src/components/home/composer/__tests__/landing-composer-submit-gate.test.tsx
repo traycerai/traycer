@@ -549,7 +549,7 @@ vi.mock("@/hooks/composer/use-landing-image-fetcher", () => ({
 // tree reaches these two hooks - confirmed by removing them and finding the
 // suite stays green. Left removed rather than kept as a second, unreachable
 // copy of the same intent.
-// P1.2: the composer resolves its placement (pin ?? effective) through this
+// The composer resolves its placement (pin ?? effective) through this
 // one hook. These suites are about paste/gating/banner behaviour, not
 // selection derivation, so it is stubbed at that single boundary - the same
 // treatment the other host-backed hooks above get.
@@ -615,7 +615,7 @@ vi.mock("@/lib/host", () => ({
     findById: () => null,
     onChange: () => ({ dispose: () => undefined }),
   }),
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => null,
 }));
 vi.mock(

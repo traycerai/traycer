@@ -376,7 +376,7 @@ describe("useNotificationActivation", () => {
     expect(onResult).toHaveBeenCalledWith("success");
   });
 
-  // F8 (closure): a retained CLOSED tab that owns the terminal must be reopened
+  // A retained CLOSED tab that owns the terminal must be reopened
   // by the EXACT payload tabId - never resolved by epic, which prefers the
   // active/MRU same-epic sibling and lands on the wrong tab.
   it("reopens the exact retained tab that owns the terminal, not an MRU sibling", () => {
@@ -407,7 +407,7 @@ describe("useNotificationActivation", () => {
       ownerTabId,
     );
     expect(useEpicCanvasStore.getState().activeTabId).toBe(siblingTabId);
-    // Confirm the resolver WOULD pick the sibling (the exact trap F8 fixes).
+    // Confirm the resolver WOULD pick the sibling.
     expect(useEpicCanvasStore.getState().resolveTabIdForEpic("epic-dup")).toBe(
       siblingTabId,
     );

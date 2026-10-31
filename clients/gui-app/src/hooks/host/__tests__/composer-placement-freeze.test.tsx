@@ -8,7 +8,7 @@ import {
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /**
- * F4: a composer's SUBMIT client must be frozen to the resolved host, while
+ * A composer's SUBMIT client must be frozen to the resolved host, while
  * its READ client stays mutable.
  *
  * The bug this guards is invisible to any single-RPC test. A following

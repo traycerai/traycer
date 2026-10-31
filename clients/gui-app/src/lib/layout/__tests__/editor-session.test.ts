@@ -502,7 +502,7 @@ describe("the single-window lease (L-32, 5.3)", () => {
     closeLayoutEditor("done");
 
     // Still held while the editor is still on screen and still writing: the
-    // key goes back with the teardown, not 220ms before it (G2-03).
+    // key goes back with the teardown, not 220ms before it.
     expect(window.localStorage.getItem(LAYOUT_EDITOR_LEASE_KEY)).not.toBeNull();
 
     drainTransitions();

@@ -475,7 +475,7 @@ function usePanelEase(
  * being resized - lands in the frame it is made. Easing them all was a
  * frequency defect rather than a taste one: a turn touching twelve files
  * would have restarted a 220ms tween twelve times and never let the frame
- * settle, which is the band L-148 and `motion-opportunities.md` R5 and R7
+ * settle, which is the band L-148 and `motion-opportunities.md`
  * already ruled out by name.
  */
 export function ChatDockAttachedPanelSlot(props: {

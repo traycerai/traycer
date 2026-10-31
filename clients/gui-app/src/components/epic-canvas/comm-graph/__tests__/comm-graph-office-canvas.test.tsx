@@ -1730,7 +1730,7 @@ describe("CommGraphOfficeCanvas", () => {
       // user's manual framing, same as the sibling "persists...while
       // manually framed" test at the top of this block. A null pulse (no
       // focus, no key) is the simplest way to force that decline: the same
-      // setup the F12 test above used to use, before it was updated to
+      // setup the real-playback-pan test above used to use, before it was updated to
       // drive a REAL pan for its own (contrasting) case.
       const { step } = installCanvas();
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -2332,7 +2332,7 @@ describe("CommGraphOfficeCanvas", () => {
     // Codex: at the 240px minimum split the floor is only ~168px wide, and
     // the view-picker group plus the mode-toggle buttons no longer fit on one
     // line - pinned only to the right the row overflowed LEFT and, under the
-    // container's overflow-hidden, clipped the view picker itself. F33: the
+    // container's overflow-hidden, clipped the view picker itself. The
     // cap is opposing spacing-token insets (`inset-x-2`), never a raw-rem
     // max-width, per the GUI fluid-sizing rule. jsdom lays nothing out, so
     // this asserts the utility classes rather than measured geometry - the
@@ -2357,7 +2357,7 @@ describe("CommGraphOfficeCanvas", () => {
     const row = modeWrapper.parentElement;
     if (row === null) throw new Error("mode toggle wrapper has no parent row");
     expect(row.className).toContain("inset-x-2");
-    // F33: no raw-rem cap on this layout surface.
+    // No raw-rem cap on this layout surface.
     expect(row.className).not.toContain("max-w-[calc");
     expect(row.className).toContain("flex-wrap");
     expect(row.className).toContain("pointer-events-none");
@@ -2951,8 +2951,8 @@ describe("CommGraphOfficeCanvas", () => {
   });
 
   it("cancels a pending camera persist on unmount, leaving no stale write behind", () => {
-    // The same unmount a view pick's remount performs (T6's own claim: "the
-    // unmount cancels the debounce"). A pan mid-flight when that happens must
+    // The same unmount a view pick's remount performs: the
+    // unmount cancels the debounce. A pan mid-flight when that happens must
     // not land after the fact.
     vi.useFakeTimers();
     const onCameraChange = vi.fn();

@@ -647,7 +647,7 @@ describe("auth-era composition — an unverified session promotes to signed-in a
 
     expect(useAuthStore.getState().status).toBe("unverified");
     // The directory landed empty: `unverified` refuses the read outright, so
-    // this is the P2's starting condition, not yet its assertion.
+    // this is the test's starting condition, not yet its assertion.
     expect(await directoryHostIds(composition.directory)).toEqual([]);
 
     const mark = endpoint.bearers.length;

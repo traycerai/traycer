@@ -304,7 +304,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
   // The host the agent launches on - `hostScope`'s fixed host when a row pins
   // one, else this window's composer surface pin (`pin ?? effective`), which
   // is what the active-scope host list below now writes instead of rebinding
-  // the app (redesign P1.2). Resolved through the SAME
+  // the app. Resolved through the SAME
   // primitive the picker below applies to its `runTargetHostId`, so the
   // toolbar store's catalog, the picker and the saved-args `providers.list`
   // read below can never disagree on the host, and none of them can drift onto

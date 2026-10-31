@@ -701,7 +701,7 @@ describe("ticket 15 dual-key registries (round 3: sweep-simulated promotion)", (
     useTileFindStore.getState().openForTile(closedId);
     // Production order: the canvas sweep's promotion (reading
     // `uiByTileInstanceId` directly - the design dropped the
-    // `targetsByTileInstanceId` dependency the F1/F2/F3 round had) runs
+    // `targetsByTileInstanceId` dependency of the earlier design) runs
     // BEFORE `evictTileFindUi`, which itself runs BEFORE the adapter's own
     // `unregister()` (React unmount, fires last).
     promoteTileFindUiToDurable(chatIdIdentity(closedId));
