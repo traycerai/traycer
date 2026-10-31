@@ -109,7 +109,7 @@ import { makeMessage } from "./chat-message-fixtures";
  * seam (`registerHarness`), unmocked. `useHostScopedMutationForClient` is
  * unmocked too, backed by a real `HostClient` + `MockHostMessenger`
  * requester (bound to `mockLocalHostEntry`, which `HOST_ID` is aligned to)
- * with a controllable/deferred response per test - the unmount-survival
+ * with a controllable/deferred response per test - the D71 unmount-survival
  * tests hold that response open across a real `unmount()` before resolving
  * it, so a per-call callback regression (torn down with the component)
  * would actually redden them.
@@ -123,11 +123,11 @@ import { makeMessage } from "./chat-message-fixtures";
  * (`createFallbackAnnouncementObserver`), the announcer's queue/effect
  * wiring, and `usePublishConfirmedManualFallbackAction`.
  *
- * SCOPE NOTE (R1): a REAL windowed-snapshot foundation
+ * SCOPE NOTE (D224/R1): a REAL windowed-snapshot foundation
  * (`createWindowedHarness`/`emptyWindowedSnapshot`/`deferredWindowedSnapshot`/
  * `completeTail`, adapted from G1's
  * `chat-session-store-last-fallback-outcome.test.ts`) is fully wired
- * through both epoch arms below, and a separate R1 scenario (its own
+ * through both D224 epoch arms below, and a separate R1 scenario (its own
  * harness, its own tail response, real `useRenderedMessages`) proves the
  * eventual-body/eventual-projection side of the same outcome-metadata
  * pipeline.
@@ -394,7 +394,7 @@ function createHarness(): Harness {
 }
 
 /**
- * The REAL windowed-snapshot foundation (R1), adapted from G1's
+ * The REAL windowed-snapshot foundation (D224/R1), adapted from G1's
  * `chat-session-store-last-fallback-outcome.test.ts` (`createWindowedHarness`
  * / `deferredWindowedSnapshot` / `completeTail`) - NOT a copy of that file,
  * read and re-derived against this file's own `HOST_ID`/`EPIC_ID`/`CHAT_ID`.
@@ -463,7 +463,7 @@ const WINDOWED_DERIVED: ChatTranscriptDerived = {
 /**
  * A windowed snapshot whose tail is deliberately UNHYDRATED
  * (`isTailHydrated` reads it false: `tail.fromOrdinal` is past ordinal 0 and
- * `rowCount` exceeds what `tail.messages` carries) - every case below
+ * `rowCount` exceeds what `tail.messages` carries) - every D224 case below
  * relies on this to exercise the DEFERRAL branch, not the ordinary fold, so
  * the outcome metadata seats before any row is ever hydrated.
  */
@@ -576,7 +576,7 @@ function emptyWindowedSnapshot(
 /**
  * A windowed snapshot whose tail is deliberately UNHYDRATED
  * (`isTailHydrated` reads it false: `tail.fromOrdinal` is past ordinal 0 and
- * `rowCount` exceeds what `tail.messages` carries) - every case below
+ * `rowCount` exceeds what `tail.messages` carries) - every D224 case below
  * relies on this to exercise the DEFERRAL branch, not the ordinary fold, so
  * the outcome metadata seats before any row is ever hydrated.
  */
@@ -2108,7 +2108,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     const queryClient = chat.queryClient;
 
     // The RPC response stays UNRESOLVED until this test says so - this is
-    // what actually proves it: a synchronous mock's callback would already
+    // what actually proves D71: a synchronous mock's callback would already
     // have fired before `unmount()` is ever called, proving nothing about
     // surviving it.
     const firstDeferred = makeDeferred<RunManualRungResponse>();
@@ -2671,7 +2671,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     });
   });
 
-  // Paired epoch-condition cases sharing ONE warm-baseline builder and
+  // D224: paired epoch-condition cases sharing ONE warm-baseline builder and
   // ONE held-outcome fixture - the only thing that differs between them is
   // whether a REAL reconnect happened WHILE `ChatMessages` was literally
   // unmounted (the real store/registry lease survives the unmount; only the
@@ -2700,7 +2700,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
   // `transcriptBaselineEpoch`; the DEFERRAL branch of
   // `applyOrDeferWindowedSnapshot` never reads or writes the latter pair at
   // all (only the FOLD does), so this value is fixed throughout and is not
-  // what drives either arm.
+  // what drives either D224 arm.
   const D224_WINDOW_EPOCH = 4;
 
   function establishD224Baseline(): {

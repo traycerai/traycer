@@ -1042,7 +1042,7 @@ function FallbackPolicyEditor(props: {
           // time the failure arrived, and the banner called a post-reset policy
           // "the settings you had before the reset".
           //
-          // The three cases are ordered: a ROLLBACK is checked first, because
+          // D327 orders the three cases: a ROLLBACK is checked first, because
           // it is neither of the other two and the banner says nothing about
           // provenance there.
           displaySubject={unrefreshedResetSubject(state)}
@@ -1931,7 +1931,7 @@ function TierStepHint({
  * Which of the three things the staleness banner is looking at, as one function
  * rather than a nested ternary at the call site.
  *
- * The cases are ordered and the order is the rule: a ROLLBACK is checked first,
+ * D327 orders the cases and the order is the rule: a ROLLBACK is checked first,
  * because the banner says nothing about provenance there - the notice owns the
  * display's story, and the banner is left saying only that the reset is unread.
  * Otherwise the display is the pre-reset values when its revision is still the
