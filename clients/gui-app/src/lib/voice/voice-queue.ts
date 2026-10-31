@@ -1,3 +1,4 @@
+import type { BotSurfaceReference } from "@traycer/protocol/persistence/epic/messages";
 import {
   composeBriefing,
   itemLineOf,
@@ -80,6 +81,11 @@ export interface VoiceQueueDeps {
     readonly answers: ReadonlyArray<ReplyRef>;
     readonly prompts: AttentionPrompts;
   };
+  /**
+   * An item's one-line offer ("want it?") was heard: a yes said now answers
+   * the offer, so a card's candidate waiting for one is offered again.
+   */
+  readonly onOfferHeard: () => void;
 }
 
 export interface VoiceQueue {
@@ -157,8 +163,15 @@ export interface VoiceQueue {
   promptSettled(itemId: string): void;
   /** The ids of prompts settled by someone else, for a briefing to leave out. */
   settledPromptIds(): ReadonlySet<string>;
-  /** Runs `read`, `switch`, `later` or `brief`; `status` is the controller's. */
-  run(verb: Exclude<QueueVerb, { readonly kind: "status" }>): QueueVerbOutcome;
+  /**
+   * The task surface the item's row points at, of any kind and settled or
+   * not, as hydrated; `null` for an item whose row points at none.
+   */
+  surfaceOf(itemId: string): BotSurfaceReference | null;
+  /** Runs `read`, `switch`, `later` or `brief`; `status` and `open` are the controller's. */
+  run(
+    verb: Exclude<QueueVerb, { readonly kind: "status" | "open" }>,
+  ): QueueVerbOutcome;
   items(): ReadonlyArray<QueueItem>;
   /** The session ended: forgets everything. */
   reset(): void;
@@ -172,6 +185,8 @@ interface Entry {
   /** The bot's words; `null` for an item that has none (a stopped answer). */
   readonly content: string | null;
   readonly options: ReadonlyArray<string>;
+  /** The task surface the row points at, as hydrated; `null` for none. */
+  readonly surface: BotSurfaceReference | null;
   /** The scheduler item offering it, while it may still be appended. */
   offerId: string | null;
   /** The scheduler item reading it, while it is in flight. */
@@ -270,6 +285,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
         if (entry.offerId !== id) return;
         entry.offerId = null;
         if (entry.item.state === "queued") setState(entry, "offered");
+        deps.onOfferHeard();
       },
       // Not confirmed heard within its attempts: it stays queued for the
       // Waiting control and the bell, and is not offered again.
@@ -468,6 +484,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
         },
         content: entry.content,
         options: entry.options,
+        surface: surfaceOfRow(row),
         offerId: null,
         readId: carried?.readId ?? null,
       };
@@ -520,6 +537,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
         item: { ...item, line: itemLineOf(item, deps.botTitle(botId)) },
         content: announcement.content,
         options: [],
+        surface: null,
         offerId: null,
         readId: null,
       });
@@ -563,6 +581,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
           item: { ...item, line: itemLineOf(item, deps.botTitle(botId)) },
           content: null,
           options: [],
+          surface: null,
           offerId: null,
           readId: null,
         });
@@ -630,6 +649,9 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
     settledPromptIds() {
       return settledPrompts;
     },
+    surfaceOf(itemId) {
+      return entries.get(itemId)?.surface ?? null;
+    },
     noteSwitched(itemId) {
       const entry = entries.get(itemId);
       if (entry !== undefined) switchedTo(entry);
@@ -656,6 +678,12 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       publish();
     },
   };
+}
+
+/** The task surface a hydrated bot row points at; `null` for none, or a member's row. */
+function surfaceOfRow(row: HydrationRow | null): BotSurfaceReference | null {
+  if (row === null || row.role !== "assistant") return null;
+  return row.surface ?? null;
 }
 
 function stoppedId(botId: string, requestId: string): string {
