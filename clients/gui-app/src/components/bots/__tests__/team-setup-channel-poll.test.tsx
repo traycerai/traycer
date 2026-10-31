@@ -111,7 +111,6 @@ function rig(): Rig {
             title: "Tracy",
           }}
           client={client}
-          hostId={mockLocalHostEntry.hostId}
         />
       </PaneVisibilityContext>
     </QueryClientProvider>

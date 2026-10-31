@@ -18,9 +18,10 @@ import { CHAT_TIMELINE_SCROLLER_MOVED_EVENT } from "@/components/chat/chat-timel
 import type { SetupWorkspaceState } from "@/components/chat/segments/setup-card-segment";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { botTabIntent } from "@/lib/tab-navigation/intents";
+import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import {
   buildComposerClipboardHtml,
   composerClipboardPlainText,
@@ -157,7 +158,13 @@ function render(ui: ReactNode) {
 const navigationMocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   activateTabIntent:
-    vi.fn<(navigate: unknown, intent: unknown, extra: unknown) => void>(),
+    vi.fn<
+      (
+        navigate: unknown,
+        intent: TabNavigationIntent,
+        extra: unknown,
+      ) => boolean
+    >(),
   navigateToTabIntent:
     vi.fn<(navigate: unknown, intent: unknown, options: unknown) => void>(),
 }));
@@ -1367,10 +1374,26 @@ describe("<UserMessageBody /> agent messages", () => {
   describe("cross-task senders", () => {
     const CROSS_ID = "agent-sender-cross";
 
+    beforeEach(() => {
+      // The controller acknowledges a Tracy intent and commits its channel.
+      navigationMocks.activateTabIntent.mockImplementation((_nav, intent) => {
+        if (intent.kind === "tracy") {
+          useTracySurfaceStore.getState().selectChannel(intent.botId);
+        }
+        return true;
+      });
+      useSelectionAuthorityStore.setState({ effectiveHostId: TAB_HOST_ID });
+    });
+
     afterEach(() => {
-      navigationMocks.activateTabIntent.mockClear();
+      navigationMocks.activateTabIntent.mockReset();
       navigationMocks.navigateToTabIntent.mockClear();
-      useBotTabsStore.setState({ tabs: {}, fixedBotId: null });
+      useTracySurfaceStore.setState({
+        open: false,
+        hostId: null,
+        botId: null,
+        visitedBotIds: [],
+      });
       useBotTabLandingStore.setState({ byBotId: {} });
       peerMocks.byId = {};
       peerMocks.origins = [];
@@ -1452,7 +1475,7 @@ describe("<UserMessageBody /> agent messages", () => {
       );
     });
 
-    it("opens a bot sender's channel, landing on the session, and parks no transcript jump", () => {
+    it("opens a bot sender's channel on the window host, landing on the session, and parks no transcript jump", () => {
       peerMocks.byId[CROSS_ID] = {
         epicId: "bot-1",
         agentId: CROSS_ID,
@@ -1465,16 +1488,18 @@ describe("<UserMessageBody /> agent messages", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Release bot" }));
 
-      expect(useBotTabsStore.getState().tabs["bot-1"]).toMatchObject({
-        botId: "bot-1",
+      expect(useTracySurfaceStore.getState()).toMatchObject({
+        open: true,
         hostId: TAB_HOST_ID,
-        title: "Release bot",
+        botId: "bot-1",
       });
-      expect(navigationMocks.navigateToTabIntent).toHaveBeenCalledWith(
+      expect(navigationMocks.activateTabIntent).toHaveBeenCalledTimes(1);
+      expect(navigationMocks.activateTabIntent).toHaveBeenCalledWith(
         navigationMocks.navigate,
-        botTabIntent("bot-1"),
-        undefined,
+        { kind: "tracy", botId: "bot-1" },
+        expect.anything(),
       );
+      expect(navigationMocks.navigateToTabIntent).not.toHaveBeenCalled();
       expect(useBotTabLandingStore.getState().byBotId["bot-1"]).toEqual({
         kind: "sender",
         chatId: CROSS_ID,
@@ -1483,7 +1508,6 @@ describe("<UserMessageBody /> agent messages", () => {
         {},
       );
       expect(tileNavigationMocks.openTile).not.toHaveBeenCalled();
-      expect(navigationMocks.activateTabIntent).not.toHaveBeenCalled();
     });
 
     it("renders the stamped title as plain text when the peer cannot be resolved", () => {

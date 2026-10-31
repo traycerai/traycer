@@ -19,9 +19,7 @@ import {
   BotIdentityContext,
   type BotIdentity,
 } from "@/components/bots/bot-identity-context";
-import { BotChannelSidebar } from "@/components/bots/bot-channel-sidebar";
 import { BotMessageComposerUnavailable } from "@/components/bots/bot-message-composer";
-import { BotResizablePane } from "@/components/bots/bot-resizable-pane";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
 import { ChatBotAppPost } from "@/components/chat/chat-bot-message";
 import type { TeamSetup } from "@/hooks/bots/use-team-setups";
@@ -54,14 +52,13 @@ import {
  * bot has written nothing. The app draws, in the bot's voice, what the bot is
  * and that the team needs a host, with the ways to get one
  * (`TeamHostOptionsCard`), and the message box is drawn with nothing to send
- * and why. Laid out as a bot's tab is, with the channel sidebar beside it.
+ * and why. Drawn in the Tracy surface's channel pane, beside its column.
  */
 export function TeamSetupChannel(props: {
   readonly setup: TeamSetup;
   readonly client: HostClient<HostRpcRegistry> | null;
-  readonly hostId: string;
 }): ReactNode {
-  const { setup, hostId } = props;
+  const { setup } = props;
   // Re-read on the shared on-screen cadence while the person can see the
   // setup and it still needs a host. The team's host creating the bot rings
   // the team's room, which reaches this channel's bot list only while this
@@ -96,63 +93,47 @@ export function TeamSetupChannel(props: {
   );
   return (
     <BotIdentityContext value={identity}>
-      <div className="@container flex h-full min-h-0" data-testid="bot-tab">
-        <BotResizablePane
-          pane="sidebar"
-          edge="right"
-          label="Resize channels"
-          className="hidden min-h-0 w-(--bot-pane-width) max-w-[40%] shrink-0 flex-col border-r border-canvas-border/70 @3xl:flex"
-          handleClassName=""
-          testId="bot-channel-sidebar-pane"
-        >
-          <BotChannelSidebar
-            activeBotId={setup.botId}
-            hostId={hostId}
-            threadsView={null}
-          />
-        </BotResizablePane>
-        <section
-          aria-label={setup.title}
-          data-testid="team-setup-channel"
-          className="flex min-h-0 min-w-0 flex-1 flex-col md:bg-canvas"
-        >
-          <header className="flex shrink-0 items-center gap-2 px-4 pt-3 pb-2">
-            <BotAvatar size="sm" />
-            <h1
-              className="min-w-0 truncate text-ui-md font-bold text-foreground"
-              data-testid="bot-tab-title"
-            >
-              {setup.title}
-            </h1>
-            <MainBotBadge testId="bot-tab-main" tone="muted" />
-          </header>
-          {/* The post sits at the bottom, as a channel's newest row does; its
+      <section
+        aria-label={setup.title}
+        data-testid="team-setup-channel"
+        className="flex min-h-0 min-w-0 flex-1 flex-col md:bg-canvas"
+      >
+        <header className="flex shrink-0 items-center gap-2 px-4 pt-3 pb-2">
+          <BotAvatar size="sm" />
+          <h1
+            className="min-w-0 truncate text-ui-md font-bold text-foreground"
+            data-testid="bot-tab-title"
+          >
+            {setup.title}
+          </h1>
+          <MainBotBadge testId="bot-tab-main" tone="muted" />
+        </header>
+        {/* The post sits at the bottom, as a channel's newest row does; its
               top margin, not the column's end alignment, puts it there, so a
               post taller than the pane overflows downward and scrolls from
               its top. */}
-          <div
-            className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 py-3"
-            data-testid="team-setup-scroller"
-          >
-            <div className="mt-auto min-w-0" data-testid="team-setup-post-slot">
-              <ChatBotAppPost name={setup.title} testId="team-setup-post">
-                <TeamSetupPostBody
-                  live={{
-                    environmentId: setup.environmentId,
-                    teamName: setup.teamName,
-                  }}
-                />
-              </ChatBotAppPost>
-            </div>
+        <div
+          className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2 py-3"
+          data-testid="team-setup-scroller"
+        >
+          <div className="mt-auto min-w-0" data-testid="team-setup-post-slot">
+            <ChatBotAppPost name={setup.title} testId="team-setup-post">
+              <TeamSetupPostBody
+                live={{
+                  environmentId: setup.environmentId,
+                  teamName: setup.teamName,
+                }}
+              />
+            </ChatBotAppPost>
           </div>
-          <BotMessageComposerUnavailable
-            placeholder={`Message ${setup.title}`}
-            label={`Message ${setup.title}`}
-            reason={`${setup.title} can reply once the team has a host.`}
-            testId="team-setup-composer"
-          />
-        </section>
-      </div>
+        </div>
+        <BotMessageComposerUnavailable
+          placeholder={`Message ${setup.title}`}
+          label={`Message ${setup.title}`}
+          reason={`${setup.title} can reply once the team has a host.`}
+          testId="team-setup-composer"
+        />
+      </section>
     </BotIdentityContext>
   );
 }

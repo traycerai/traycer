@@ -4,8 +4,10 @@ import type {
   UseNavigateResult,
 } from "@tanstack/react-router";
 import {
-  readBotIdFromPath,
   draftPathname,
+  isTracyPath,
+  readBotIdFromPath,
+  tracyPathname,
   readActiveEpicIdFromPath,
   readActiveEpicTabIdFromPath,
 } from "@/lib/routes";
@@ -14,7 +16,6 @@ import {
   type SettingsSectionId,
 } from "@/lib/settings-sections";
 import {
-  botTabIntent,
   draftTabIntent,
   existingEpicTabIntent,
   existingEpicTabIntentWithNestedFocus,
@@ -47,7 +48,8 @@ import {
 } from "@/stores/home/landing-draft-store";
 import { tabRouteOptions } from "@/stores/tabs/registry";
 import { HOME_TAB_REF, isHomePath } from "@/stores/tabs/kinds/home";
-import { isOpenBotTab } from "@/stores/tabs/kinds/bot";
+import { isTracySurfaceOpen, TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import {
   tabCommandCoordinator,
@@ -290,8 +292,8 @@ function intentRef(intent: TabNavigationIntent): TabRef {
       return { kind: "epic", id: intent.tabId };
     case "draft":
       return { kind: "draft", id: intent.draftId };
-    case "bot":
-      return { kind: "bot", id: intent.botId };
+    case "tracy":
+      return TRACY_TAB_REF;
     case "history":
       return { kind: "history", id: "history" };
     case "settings":
@@ -433,10 +435,7 @@ function routedTabTarget(pathname: string): RoutedTabTarget | null {
   if (draftId !== null) {
     return { ref: { kind: "draft", id: draftId }, epicId: null };
   }
-  const botId = readBotIdFromPath(pathname);
-  if (botId !== null) {
-    return { ref: { kind: "bot", id: botId }, epicId: null };
-  }
+  if (isTracyPath(pathname)) return { ref: TRACY_TAB_REF, epicId: null };
   if (isSettingsPath(pathname)) {
     return { ref: { kind: "settings", id: "settings" }, epicId: null };
   }
@@ -483,8 +482,10 @@ function intentForRef(
   if (ref.kind === "draft") {
     return isOpenLandingDraftId(ref.id) ? draftTabIntent(ref.id) : null;
   }
-  if (ref.kind === "bot") {
-    return isOpenBotTab(ref.id) ? botTabIntent(ref.id) : null;
+  if (ref.kind === "tracy") {
+    return isTracySurfaceOpen()
+      ? { kind: "tracy", botId: readBotIdFromPath(pathname) }
+      : null;
   }
   if (ref.kind === "history") return historyTabIntent();
   if (ref.kind === "sample-workspace") return { kind: "sample-workspace" };
@@ -495,11 +496,15 @@ function intentForRef(
 /**
  * The pathname `intentForRef` should read when deriving an intent from the REF
  * alone - the tab's own route, never whatever the caller happens to be looking
- * at. Settings is the one kind that keeps view state in its path, and the
- * strip already remembers that path; every other kind derives its intent from
- * the ref and its source store, so the pathname it is handed is inert.
+ * at. Settings and the Tracy surface keep view state in their paths (the
+ * section; the selected channel), and the strip and the surface store
+ * remember it; every other kind derives its intent from the ref and its source
+ * store, so the pathname it is handed is inert.
  */
 function refOwnPathname(ref: TabRef): string {
+  if (ref.kind === "tracy") {
+    return tracyPathname(useTracySurfaceStore.getState().botId);
+  }
   if (ref.kind !== "settings") return "/";
   const tab = useTabsStore.getState().systemTabs.settings;
   const lastPath = tab === null ? null : tab.lastPath;
@@ -510,8 +515,37 @@ function refOwnPathname(ref: TabRef): string {
     : SETTINGS_PATH_PREFIX;
 }
 
-function destinationForRef(ref: TabRef): TabNavigationDestination {
-  return { kind: "tab", refKey: tabRefKey(ref) };
+/**
+ * The key a tab destination is told apart by: the ref's, and for the Tracy
+ * surface its channel too, so a switch between two channels of the one ref is
+ * a move to another destination - it pushes history and Back returns to the
+ * previous channel - while re-activating the channel shown is not.
+ */
+function tabDestinationKey(ref: TabRef, tracyBotId: string | null): string {
+  return ref.kind === "tracy"
+    ? `${tabRefKey(ref)}/${tracyBotId ?? ""}`
+    : tabRefKey(ref);
+}
+
+function destinationForRef(
+  ref: TabRef,
+  intent: TabNavigationIntent,
+): TabNavigationDestination {
+  return {
+    kind: "tab",
+    refKey: tabDestinationKey(
+      ref,
+      intent.kind === "tracy" ? intent.botId : null,
+    ),
+  };
+}
+
+/** The destination key of what `pathname` routes to. */
+function routedDestinationKey(
+  target: RoutedTabTarget,
+  pathname: string,
+): string {
+  return tabDestinationKey(target.ref, readBotIdFromPath(pathname));
 }
 
 function destinationKey(destination: TabNavigationDestination): string {
@@ -528,7 +562,10 @@ function destinationMatches(
     return location.pathname === destination.pathname;
   }
   const target = routedTabTarget(location.pathname);
-  if (target === null || tabRefKey(target.ref) !== destination.refKey) {
+  if (
+    target === null ||
+    routedDestinationKey(target, location.pathname) !== destination.refKey
+  ) {
     return false;
   }
   if (target.ref.kind !== "epic") return true;
@@ -543,7 +580,7 @@ function refIsMaterialized(ref: TabRef): boolean {
   if (ref.kind === "draft") {
     return isOpenLandingDraftId(ref.id);
   }
-  if (ref.kind === "bot") return isOpenBotTab(ref.id);
+  if (ref.kind === "tracy") return isTracySurfaceOpen();
   // Home has no source record to materialize: the flag is the whole condition.
   if (ref.kind === "sample-workspace")
     return findStripItemForRef(currentLayout(), ref) !== null;
@@ -564,7 +601,11 @@ function pendingDestinationMatches(
 function currentBackingMatches(destination: TabNavigationDestination): boolean {
   if (destination.kind === "route") return isLandingPath(destination.pathname);
   const ref = backingRefOfLayout(currentLayout());
-  return ref !== null && tabRefKey(ref) === destination.refKey;
+  return (
+    ref !== null &&
+    tabDestinationKey(ref, useTracySurfaceStore.getState().botId) ===
+      destination.refKey
+  );
 }
 
 function applyEnvelope(
@@ -592,6 +633,14 @@ function sameQueuedLocation(
   if (queued.key !== null || currentKey !== null)
     return queued.key === currentKey;
   return queued.location.pathname === current.pathname;
+}
+
+/** Whether `intent` asks the Tracy surface for a channel other than its own. */
+function switchesTracyChannel(intent: TabNavigationIntent): boolean {
+  return (
+    intent.kind === "tracy" &&
+    intent.botId !== useTracySurfaceStore.getState().botId
+  );
 }
 
 function systemActivationTarget(
@@ -706,7 +755,7 @@ export class TabNavigationController {
     );
     this.supersedeAll();
     const envelope = this.createAuthorityEnvelope(
-      destinationForRef(focusedRef),
+      destinationForRef(focusedRef, canonical),
       replace ? "focus-replace" : "activate-push",
     );
     const routeOptions = {
@@ -983,9 +1032,12 @@ export class TabNavigationController {
       tabCommandCoordinator.restoreTabActivation(activation);
       return false;
     }
+    // Re-activating what the active item shows replaces the entry; another
+    // channel of the Tracy surface is a move, and pushes one.
     const replace =
       options?.replace === true ||
-      activeItemContainsRef(layoutBefore, activation.ref);
+      (activeItemContainsRef(layoutBefore, activation.ref) &&
+        !switchesTracyChannel(intent));
     const search = this.activationSearch(
       intent,
       activation.ref,
@@ -993,7 +1045,7 @@ export class TabNavigationController {
     );
     this.supersedeAll();
     const envelope = this.createAuthorityEnvelope(
-      destinationForRef(activation.ref),
+      destinationForRef(activation.ref, intent),
       replace ? "focus-replace" : "activate-push",
     );
     const routeOptions = {
@@ -1197,7 +1249,7 @@ export class TabNavigationController {
     this.supersedeAll();
     const ref: TabRef = { kind: "epic", id: swap.epicTabId };
     const envelope = this.createAuthorityEnvelope(
-      destinationForRef(ref),
+      destinationForRef(ref, intent),
       "focus-replace",
     );
     const routeOptions = {
@@ -1464,7 +1516,7 @@ export class TabNavigationController {
         ? { ...base, search: route.committedSearch, replace: true }
         : { ...base, replace: true };
     return {
-      destination: destinationForRef(ref),
+      destination: destinationForRef(ref, intent),
       intent,
       ref,
       options,
@@ -1618,8 +1670,8 @@ export class TabNavigationController {
       case "draft":
         this.resolveExternalDraft(location, ref.id, navigate);
         return;
-      case "bot":
-        this.resolveExternalBot(location, ref.id, navigate);
+      case "tracy":
+        this.resolveExternalTracy(location, navigate);
         return;
       case "history":
       case "settings":
@@ -1767,7 +1819,7 @@ export class TabNavigationController {
     }
     this.issueCorrection(navigate, {
       navigation: {
-        destination: destinationForRef(activation.ref),
+        destination: destinationForRef(activation.ref, intent),
         intent,
         ref: activation.ref,
         options: {
@@ -1798,25 +1850,36 @@ export class TabNavigationController {
   }
 
   /**
-   * `/bot/{botId}` arrived from outside this controller. A bot tab exists only
-   * as a bot-tabs store record (the record is what carries the host the tab is
-   * bound to), so a path with no record behind it - a pasted link, a restored
-   * location after the tab was closed - corrects to the landing route rather
-   * than minting a tab bound to nothing.
+   * `/bot` or `/bot/{botId}` arrived from outside this controller: a pasted
+   * link, a restored location, Back or Forward. The Tracy surface opens on
+   * this window's host when it is closed, comes to the front, and selects the
+   * path's channel. Only a window with no host to bind it to corrects away.
    */
-  private resolveExternalBot(
+  private resolveExternalTracy(
     location: TabNavigationLocation,
-    botId: string,
     navigate: NavigateFn,
   ): void {
-    const ref: TabRef = { kind: "bot", id: botId };
-    if (!isOpenBotTab(botId)) {
+    if (!isTracySurfaceOpen()) {
+      const hostId = activeHostIdOrNull();
+      if (hostId === null) {
+        this.issueLandingCorrection(location, navigate);
+        return;
+      }
+      useTracySurfaceStore.getState().openSurface(hostId);
+    }
+    const activation = this.activateExternalTarget({
+      kind: "ref",
+      ref: TRACY_TAB_REF,
+    });
+    if (activation === null) {
       this.issueLandingCorrection(location, navigate);
       return;
     }
-    const activation = this.activateExternalTarget({ kind: "ref", ref });
-    if (activation === null) this.issueLandingCorrection(location, navigate);
-    else this.rememberRoute(ref, botTabIntent(botId), location.search);
+    this.rememberRoute(
+      TRACY_TAB_REF,
+      { kind: "tracy", botId: readBotIdFromPath(location.pathname) },
+      location.search,
+    );
   }
 
   private resolveExternalSystem(
@@ -1880,7 +1943,7 @@ export class TabNavigationController {
       this.rememberRoute(HOME_TAB_REF, intent, location.search);
       this.issueCorrection(navigate, {
         navigation: {
-          destination: destinationForRef(HOME_TAB_REF),
+          destination: destinationForRef(HOME_TAB_REF, intent),
           intent,
           ref: HOME_TAB_REF,
           options: { ...tabRouteOptions(intent), replace: true },
@@ -1928,7 +1991,7 @@ export class TabNavigationController {
     const intent = draftTabIntent(activation.ref.id);
     this.issueCorrection(navigate, {
       navigation: {
-        destination: destinationForRef(activation.ref),
+        destination: destinationForRef(activation.ref, intent),
         intent,
         ref: activation.ref,
         options: { ...tabRouteOptions(intent), replace: true },
@@ -1979,18 +2042,32 @@ export class TabNavigationController {
   ): void {
     if (destination.kind !== "tab") return;
     const routed = routedTabTarget(location.pathname);
-    if (routed === null || tabRefKey(routed.ref) !== destination.refKey) return;
+    if (
+      routed === null ||
+      routedDestinationKey(routed, location.pathname) !== destination.refKey
+    ) {
+      return;
+    }
     const intent = intentForRef(routed.ref, location.pathname, location.search);
     if (intent !== null)
       this.rememberRoute(routed.ref, intent, location.search);
   }
 
+  /**
+   * Records the route `ref` shows now: on an acknowledged navigation, and on
+   * an arrival from outside. The Tracy surface's channel is committed here
+   * and nowhere earlier, so a switch that is refused or rejected leaves the
+   * previous channel selected, under its own URL.
+   */
   private rememberRoute(
     ref: TabRef,
     intent: TabNavigationIntent,
     committedSearch: Readonly<Record<string, unknown>> | undefined,
   ): void {
     this.latestRouteByRef.set(tabRefKey(ref), { intent, committedSearch });
+    if (intent.kind === "tracy") {
+      useTracySurfaceStore.getState().selectChannel(intent.botId);
+    }
   }
 
   private currentLocationOrLanding(): TabNavigationLocation {

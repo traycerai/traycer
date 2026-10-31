@@ -40,8 +40,8 @@ import {
 } from "@/stores/tabs/store";
 import { isHomeTabEnabled } from "@/stores/layout/layout-store";
 import { HOME_TAB_REF } from "@/stores/tabs/kinds/home";
-import { isOpenBotTab } from "@/stores/tabs/kinds/bot";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { isTracySurfaceOpen } from "@/stores/tabs/kinds/tracy";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import {
   createEmptySplit,
   createLayoutItem,
@@ -370,7 +370,7 @@ function sourceHasRef(ref: TabRef): boolean {
       .getState()
       .drafts.some((draft) => draft.id === ref.id && isOpenLandingDraft(draft));
   }
-  if (ref.kind === "bot") return isOpenBotTab(ref.id);
+  if (ref.kind === "tracy") return isTracySurfaceOpen();
   // Home owns no source record and no strip item, so it is never a placement
   // this reconciles - `resolveHomeActivation` is its only entry point.
   if (ref.kind === "home") return false;
@@ -650,8 +650,8 @@ export class TabCommandCoordinator {
       if (next.drafts === previous.drafts) return;
       this.onSourceStoreChange();
     });
-    useBotTabsStore.subscribe((next, previous) => {
-      if (next.tabs === previous.tabs) return;
+    useTracySurfaceStore.subscribe((next, previous) => {
+      if (next.open === previous.open) return;
       this.onSourceStoreChange();
     });
   }
@@ -1370,8 +1370,8 @@ export class TabCommandCoordinator {
         useLandingDraftStore.getState().setActiveDraft(ref.id);
       });
     }
-    if (ref.kind === "bot") {
-      if (!isOpenBotTab(ref.id)) return null;
+    if (ref.kind === "tracy") {
+      if (!isTracySurfaceOpen()) return null;
       return this.activationForRef(layout, ref, () => undefined);
     }
     if (ref.kind === "sample-workspace")
@@ -2076,9 +2076,9 @@ export class TabCommandCoordinator {
       });
       return;
     }
-    if (ref.kind === "bot") {
+    if (ref.kind === "tracy") {
       this.applyExpectedSourceMutation(() => {
-        useBotTabsStore.getState().closeBotTab(ref.id);
+        useTracySurfaceStore.getState().closeSurface();
       });
     }
   }

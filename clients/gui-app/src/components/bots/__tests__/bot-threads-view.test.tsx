@@ -2,8 +2,8 @@
  * Threads in place of a bot's channel (Tracy Bots T103, decision 149): every
  * thread the person follows across the bots the column lists, newest reply
  * first, each named by its bot, with its new-replies mark and unread count;
- * choosing one asks its bot's tab to land it, and Unfollow drops it. The real
- * view, fan-out hook, follow mutation, landing store and bot-tabs store run
+ * choosing one asks its bot's channel to land it, and Unfollow drops it. The real
+ * view, fan-out hook, follow mutation, landing store and Tracy surface store run
  * over a real HostClient and QueryClient whose host answers each bot's thread
  * list, follows, read cursors and levels from the case's script. Only the
  * channels' sessions (the posts are read from), the notification indicators
@@ -61,7 +61,7 @@ const mocks = vi.hoisted(() => ({
   unread: {} as Record<string, number>,
   writes: [] as BotThreadFollowSetRequest[],
   client: null as HostClient<HostRpcRegistry> | null,
-  navigateToTabIntent: vi.fn<(intent: unknown) => void>(),
+  activateTabIntent: vi.fn<(intent: unknown) => void>(),
   /** How `bot.list` stands: answered, still being read, or failed. */
   botList: "listed" as "listed" | "pending" | "failed",
   refetchBots: vi.fn<() => Promise<unknown>>(),
@@ -121,8 +121,10 @@ vi.mock("@/lib/chats/chat-serving-witness", () => ({
 }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
 vi.mock("@/lib/tab-navigation", () => ({
-  navigateToTabIntent: (_navigate: unknown, intent: unknown) =>
-    mocks.navigateToTabIntent(intent),
+  activateTabIntent: (_navigate: unknown, intent: unknown) => {
+    mocks.activateTabIntent(intent);
+    return true;
+  },
 }));
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => ({ hostIds: ["host-1"], resolved: true }),
@@ -130,7 +132,8 @@ vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
 
 import { BotThreadsView } from "@/components/bots/bot-threads-view";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 
 const TRACY = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const TEAM = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAW";
@@ -278,7 +281,13 @@ beforeEach(() => {
   mocks.unread = {};
   mocks.writes = [];
   useBotTabLandingStore.setState({ byBotId: {} });
-  useBotTabsStore.setState({ tabs: {} });
+  useSelectionAuthorityStore.setState({ effectiveHostId: "host-1" });
+  useTracySurfaceStore.setState({
+    open: false,
+    hostId: null,
+    botId: null,
+    visitedBotIds: [],
+  });
 });
 
 afterEach(() => {
@@ -348,7 +357,7 @@ describe("<BotThreadsView />", () => {
     ).toBeNull();
   });
 
-  it("asks the thread's bot's tab to land it beside its channel, and opens that tab", async () => {
+  it("asks the thread's bot's channel to land it beside it, and opens the surface on that channel", async () => {
     const user = userEvent.setup();
     mount();
     await waitFor(() => expect(listed()).toContain("team-new"));
@@ -358,10 +367,15 @@ describe("<BotThreadsView />", () => {
     expect(useBotTabLandingStore.getState().byBotId).toEqual({
       [TEAM]: { kind: "thread", threadId: "team-new", messageId: null },
     });
-    expect(lookupBotTab(useBotTabsStore.getState().tabs, TEAM)?.hostId).toBe(
-      "host-1",
-    );
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(useTracySurfaceStore.getState()).toMatchObject({
+      open: true,
+      hostId: "host-1",
+    });
+    expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+      kind: "tracy",
+      botId: TEAM,
+    });
   });
 
   it("drops a thread from the list when Unfollow is chosen from its menu", async () => {

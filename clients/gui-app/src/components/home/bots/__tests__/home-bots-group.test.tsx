@@ -20,11 +20,12 @@ import type { HomeBotsGroup } from "@/lib/home-bots/bots-model";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import type { TeamSetup } from "@/hooks/bots/use-team-setups";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
-  navigateToTabIntent: vi.fn(),
+  activateTabIntent: vi.fn<(intent: unknown) => void>(),
   supported: true as boolean | null,
   supportQueries: [] as Array<{ hostId: string | null; method: string }>,
   memberQueries: [] as Array<{
@@ -59,7 +60,10 @@ vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
 }));
 vi.mock("@/lib/tab-navigation", () => ({
-  navigateToTabIntent: mocks.navigateToTabIntent,
+  activateTabIntent: (_navigate: unknown, intent: unknown) => {
+    mocks.activateTabIntent(intent);
+    return true;
+  },
 }));
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-band",
@@ -172,7 +176,13 @@ function createdBy(): Record<string, string> {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useBotTabsStore.setState({ tabs: {} });
+  useSelectionAuthorityStore.setState({ effectiveHostId: HOST });
+  useTracySurfaceStore.setState({
+    open: false,
+    hostId: null,
+    botId: null,
+    visitedBotIds: [],
+  });
   mocks.supported = true;
   mocks.supportQueries.length = 0;
   mocks.memberQueries.length = 0;
@@ -285,7 +295,7 @@ describe("<HomeBotsGroupCard /> adding a bot", () => {
 /**
  * A creatable team with no live bot whose main bot is still to be set up: its
  * card shows that bot, needing a host, in place of "No bots here yet.", and
- * opens the bot's tab on the band's host.
+ * opens the Tracy surface on the bot's channel on the band's host.
  */
 describe("<HomeBotsGroupCard /> a team's main bot still to be set up", () => {
   const SETUP: TeamSetup = {
@@ -342,20 +352,19 @@ describe("<HomeBotsGroupCard /> a team's main bot still to be set up", () => {
     expect(screen.queryByText("No bots here yet.")).toBeNull();
   });
 
-  it("opens the bot's tab on the band's host when its row is clicked", async () => {
+  it("opens the surface on the bot's channel on the band's host when its row is clicked", async () => {
     const user = userEvent.setup();
     mountBotlessTeam(SETUP);
 
     await user.click(screen.getByTestId("home-bot-setup-row"));
 
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, "bot-tracy-env"),
-    ).toMatchObject({ hostId: HOST, title: "Tracy" });
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledWith(
-      mocks.navigate,
+    expect(useTracySurfaceStore.getState()).toMatchObject({
+      open: true,
+      hostId: HOST,
+    });
+    expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith(
       botTabIntent("bot-tracy-env"),
-      undefined,
     );
   });
 

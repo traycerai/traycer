@@ -1,18 +1,23 @@
 import { renderHook } from "@testing-library/react";
-import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessagePeer } from "@traycer/protocol/host/agent/message-peer";
-import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useOpenA2AMessagePeer } from "@/hooks/agent/use-open-a2a-message-peer";
-import { botTabIntent } from "@/lib/tab-navigation/intents";
+import type { TabNavigationIntent } from "@/lib/tab-navigation/intents";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   openTile: vi.fn(),
   activateTabIntent:
-    vi.fn<(navigate: unknown, intent: unknown, extra: unknown) => void>(),
+    vi.fn<
+      (
+        navigate: unknown,
+        intent: TabNavigationIntent,
+        extra: unknown,
+      ) => boolean
+    >(),
   navigateToTabIntent:
     vi.fn<(navigate: unknown, intent: unknown, options: unknown) => void>(),
 }));
@@ -42,12 +47,8 @@ vi.mock("@/lib/tab-navigation", async (importOriginal) => {
   };
 });
 
-function TabHost({ children }: { readonly children: ReactNode }) {
-  return <TabHostContext value="host-tab">{children}</TabHostContext>;
-}
-
 function renderOpenPeer() {
-  return renderHook(() => useOpenA2AMessagePeer(), { wrapper: TabHost });
+  return renderHook(() => useOpenA2AMessagePeer());
 }
 
 function peer(overrides: Partial<AgentMessagePeer>): AgentMessagePeer {
@@ -65,7 +66,20 @@ function peer(overrides: Partial<AgentMessagePeer>): AgentMessagePeer {
 describe("useOpenA2AMessagePeer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    useBotTabsStore.setState({ tabs: {}, fixedBotId: null });
+    // The controller acknowledges a Tracy intent and commits its channel.
+    mocks.activateTabIntent.mockImplementation((_navigate, intent) => {
+      if (intent.kind === "tracy") {
+        useTracySurfaceStore.getState().selectChannel(intent.botId);
+      }
+      return true;
+    });
+    useSelectionAuthorityStore.setState({ effectiveHostId: "host-window" });
+    useTracySurfaceStore.setState({
+      open: false,
+      hostId: null,
+      botId: null,
+      visitedBotIds: [],
+    });
     useBotTabLandingStore.setState({ byBotId: {} });
   });
 
@@ -129,7 +143,7 @@ describe("useOpenA2AMessagePeer", () => {
     expect(mocks.openTile).not.toHaveBeenCalled();
   });
 
-  it("opens a bot peer's channel on the tab host with the sending session as the landing, and opens no tile or task tab", () => {
+  it("opens a bot peer's channel on the window host with the sending session as the landing, and opens no tile or task tab", () => {
     const { result } = renderOpenPeer();
 
     result.current(
@@ -141,22 +155,22 @@ describe("useOpenA2AMessagePeer", () => {
       "Release bot",
     );
 
-    expect(useBotTabsStore.getState().tabs["bot-1"]).toMatchObject({
+    expect(useTracySurfaceStore.getState()).toMatchObject({
+      open: true,
+      hostId: "host-window",
       botId: "bot-1",
-      hostId: "host-tab",
-      title: "Release bot",
     });
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledWith(
+    expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith(
       mocks.navigate,
-      botTabIntent("bot-1"),
-      undefined,
+      { kind: "tracy", botId: "bot-1" },
+      expect.anything(),
     );
+    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
     expect(useBotTabLandingStore.getState().byBotId["bot-1"]).toEqual({
       kind: "sender",
       chatId: "session-chat-1",
     });
     expect(mocks.openTile).not.toHaveBeenCalled();
-    expect(mocks.activateTabIntent).not.toHaveBeenCalled();
   });
 });

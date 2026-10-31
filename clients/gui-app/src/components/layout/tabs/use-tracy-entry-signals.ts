@@ -5,18 +5,25 @@ import {
   useBotActivity,
 } from "@/hooks/bots/use-bot-activity";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
+import { useArrangedBotsModel } from "@/hooks/bots/use-arranged-bots-model";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
+import { defaultTracyChannelOf } from "@/lib/bots/tracy-channel";
+import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useBotChannelMuted } from "@/hooks/bots/use-bot-notification-level";
 import { useAnyBotChannelBold } from "@/hooks/bots/use-bot-read-cursor";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useOptionalHostClient } from "@/lib/host/runtime";
 import { indicatorHasUnread } from "@/stores/notifications/notification-indicator-state";
+import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostRpcRegistry } from "@/lib/host";
 
 const NO_CHAT_IDS: ReadonlyArray<string> = [];
 const NO_BOTS: ReadonlyArray<BotRecord> = [];
 
-/** What the Tracy entry says about its bot, in every strip placement. */
+/** What the Tracy entry says about its channel, in every strip placement. */
 export interface TracyEntrySignals {
   /**
    * Bold: a row past the person's read cursor in any of their bots'
@@ -47,37 +54,97 @@ export interface TracyEntrySignals {
   readonly idle: boolean;
   /** The person set the bot's channel to Nothing. */
   readonly muted: boolean;
+  /** The channel's bot by its name; `null` while it is not known. */
+  readonly channelTitle: string | null;
 }
 
 /**
- * Bold and a count while the channel is unread and a timer while the bot runs a turn,
- * in its channel or in any of its threads, as a channel row in the sidebar
- * carries them. The bot's id is its
- * container's, a shared cloud entity, so the notification host answers for
- * its unread state.
+ * The channel the Tracy surface shows: its selected one, else the default
+ * (`defaultTracyChannelOf`) once the app's lists answer; `null` for none.
  */
-export function useTracyEntrySignals(botId: string): TracyEntrySignals {
-  const epicIds = useMemo(() => [botId], [botId]);
+function useTracyEntryChannel(
+  client: HostClient<HostRpcRegistry> | null,
+  listed: boolean,
+): string | null {
+  const botList = useBotListQuery(client, listed).data;
+  const environments = useEnvironmentListQuery(client, listed).data;
+  const selected = useTracySurfaceStore((state) => state.botId);
+  // In the column's arranged order, as the surface picks it.
+  const model = useArrangedBotsModel(
+    useMemo(
+      () =>
+        buildHomeBotsModel({
+          environments: environments?.environments ?? [],
+          bots: botList?.bots ?? [],
+          mainBotIds: botList?.mainBotIds ?? null,
+        }),
+      [botList, environments],
+    ),
+  );
+  const fallback =
+    botList === undefined || environments === undefined
+      ? null
+      : defaultTracyChannelOf(model.groups, null);
+  return selected ?? fallback;
+}
+
+/** The person set the listed bot's channel to Nothing. */
+function useChannelMuted(
+  client: HostClient<HostRpcRegistry> | null,
+  hostId: string | null,
+  bot: BotRecord | null,
+): boolean {
+  return useBotChannelMuted(
+    client,
+    hostId,
+    bot?.botId ?? "",
+    bot?.appConversationChatId ?? null,
+  );
+}
+
+/**
+ * Whether the notification host has something unread for a bot's channel,
+ * and how many; nothing for no bot.
+ */
+function useChannelUnread(botId: string | null): {
+  readonly unread: boolean;
+  readonly unreadCount: number | null;
+} {
+  const epicIds = useMemo(() => (botId === null ? [] : [botId]), [botId]);
   const indicators = useNotificationIndicators({
     hostId: null,
     epicIds,
     chatIds: NO_CHAT_IDS,
-    enabled: true,
+    enabled: botId !== null,
   });
-  const state = Object.hasOwn(indicators.epics, botId)
-    ? indicators.epics[botId]
-    : null;
-  const activity = useBotActivity(botId);
-  const replying = replyingSessionOf(activity);
-  // The entry is app-wide, so its bot's level is read through the app's
-  // host; the bot list it reads the channel from is the entry's own.
+  if (botId === null || !Object.hasOwn(indicators.epics, botId)) {
+    return { unread: false, unreadCount: 0 };
+  }
+  const state = indicators.epics[botId];
+  return { unread: indicatorHasUnread(state), unreadCount: state.unreadCount };
+}
+
+/**
+ * What the entry says about the channel the Tracy surface shows - its
+ * selected channel, else the default one (decision 150) - with bold and a
+ * count while it is unread and a timer while the bot runs a turn, in its
+ * channel or in any of its threads, as a channel row in the sidebar carries
+ * them. The bot's id is its container's, a shared cloud entity, so the
+ * notification host answers for its unread state. Nothing is said with no
+ * channel to show.
+ */
+export function useTracyEntrySignals(): TracyEntrySignals {
+  // The entry is app-wide, so its lists are read through the app's host.
   const client = useOptionalHostClient();
   const hostId = useEffectiveHostId();
   const listed = useHostMethodSupport(hostId, "bot.list") === true;
   const bots = useBotListQuery(client, listed).data?.bots ?? NO_BOTS;
-  const channelId =
-    bots.find((bot) => bot.botId === botId)?.appConversationChatId ?? null;
-  const muted = useBotChannelMuted(client, hostId, botId, channelId);
+  const botId = useTracyEntryChannel(client, listed);
+  const channelUnread = useChannelUnread(botId);
+  const activity = useBotActivity(botId);
+  const replying = replyingSessionOf(activity);
+  const bot = bots.find((row) => row.botId === botId) ?? null;
+  const muted = useChannelMuted(client, hostId, bot);
   const channels = useMemo(
     () =>
       bots.map((bot) => ({
@@ -90,12 +157,13 @@ export function useTracyEntrySignals(botId: string): TracyEntrySignals {
   // read cursors (decision 139); the entry's own indicator elsewhere.
   const bold = useAnyBotChannelBold(client, hostId, channels);
   return {
-    unread: bold ?? (state !== null && indicatorHasUnread(state)),
-    unreadCount: state === null ? 0 : state.unreadCount,
+    unread: bold ?? channelUnread.unread,
+    unreadCount: channelUnread.unreadCount,
     working: replying !== null,
     workingSince: replying?.startedAt ?? null,
     step: replying?.step ?? null,
     idle: replying === null && activity?.trunk?.state === "idle",
     muted,
+    channelTitle: bot?.title ?? null,
   };
 }

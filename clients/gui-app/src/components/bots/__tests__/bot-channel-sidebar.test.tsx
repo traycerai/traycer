@@ -1,5 +1,5 @@
 /**
- * The bot tab's sidebar (Tracy Bots, decision 41): every environment is a
+ * The Tracy surface's sidebar (Tracy Bots, decision 41): every environment is a
  * section, every bot in it an avatar and name channel, unread channels are
  * marked. The sections list channels only. The person's own section carries a
  * + that opens the create form, and an empty one a call to action doing the
@@ -8,7 +8,7 @@
  * host. A person in no team is offered "Create a team". A bot that is not its
  * environment's main bot is made main from its row's menu. "Threads", above
  * the sections, counts the followed threads with new replies across every
- * bot (T103). The real sidebar, the real new-bot dialog and the real bot-tabs store run
+ * bot (T103). The real sidebar, the real new-bot dialog and the real Tracy surface store run
  * over mocked reads; `bot.onboarding.read` answers per environment from a
  * script, the create form and the navigation helper are stubs, so the dialog's
  * focus on closing is read off the real thing.
@@ -88,7 +88,7 @@ const mocks = vi.hoisted(() => {
     navigate: vi.fn(),
     openLink: vi.fn<(url: string, kind: string) => Promise<void>>(),
     hasShell: true,
-    navigateToTabIntent: vi.fn<(intent: unknown) => void>(),
+    activateTabIntent: vi.fn<(intent: unknown) => void>(),
     setMainBot: vi.fn<(variables: object) => void>(),
     bindings: { stub: "environment-bindings" },
     state: {
@@ -124,11 +124,14 @@ vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => mocks.navigate,
 }));
 vi.mock("@/lib/tab-navigation", () => ({
-  navigateToTabIntent: (
+  activateTabIntent: (
     _navigate: unknown,
     intent: TabNavigationIntent,
     _extra: unknown,
-  ) => mocks.navigateToTabIntent(intent),
+  ) => {
+    mocks.activateTabIntent(intent);
+    return true;
+  },
 }));
 vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHostOrNull: () =>
@@ -280,7 +283,8 @@ import {
 } from "@/components/bots/bot-channel-sidebar";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { useBotColumnLayoutStore } from "@/stores/bots/bot-column-layout-store";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 
 const TAB_HOST = "host-tab";
 const OTHER_HOST = "host-other";
@@ -424,13 +428,20 @@ beforeEach(() => {
     delete mocks.state.reads[key];
   }
   mocks.readRequests.length = 0;
-  useBotTabsStore.setState({ tabs: {} });
   mocks.state.botListPending = false;
   localStorage.clear();
   useBotColumnLayoutStore.setState({
     sectionOrder: [],
     channelOrder: {},
     collapsed: [],
+  });
+  // The window's host, and the surface the sidebar is drawn in, bound to it.
+  useSelectionAuthorityStore.setState({ effectiveHostId: TAB_HOST });
+  useTracySurfaceStore.setState({
+    open: true,
+    hostId: TAB_HOST,
+    botId: null,
+    visitedBotIds: [],
   });
 });
 
@@ -772,22 +783,20 @@ describe("<BotChannelSidebar /> making a bot main", () => {
 });
 
 describe("<BotChannelSidebar /> opening a channel", () => {
-  it("opens the other bot's tab on the sidebar's host and navigates to it", async () => {
+  it("swaps the surface to the other bot's channel in place, on the surface's host", async () => {
     const user = userEvent.setup();
     mount("bot-release");
 
     await user.click(row("bot-triage"));
 
-    const opened = lookupBotTab(useBotTabsStore.getState().tabs, "bot-triage");
-    expect(opened).toMatchObject({
+    expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+      kind: "tracy",
       botId: "bot-triage",
-      hostId: TAB_HOST,
-      title: "triage-bot",
     });
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledWith({
-      kind: "bot",
-      botId: "bot-triage",
+    expect(useTracySurfaceStore.getState()).toMatchObject({
+      open: true,
+      hostId: TAB_HOST,
     });
   });
 
@@ -797,42 +806,29 @@ describe("<BotChannelSidebar /> opening a channel", () => {
 
     await user.click(row("bot-release"));
 
-    expect(useBotTabsStore.getState().tabs).toEqual({});
-    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
+    expect(mocks.activateTabIntent).not.toHaveBeenCalled();
   });
 
-  it("keeps an open tab on its own host while this client can still dial it", async () => {
+  it("keeps the surface on its own host while this client can still dial it", async () => {
     const user = userEvent.setup();
-    useBotTabsStore.getState().openBotTab({
-      botId: "bot-triage",
-      hostId: OTHER_HOST,
-      title: "triage-bot",
-    });
+    useTracySurfaceStore.setState({ hostId: OTHER_HOST });
     mount("bot-release");
 
     await user.click(row("bot-triage"));
 
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, "bot-triage")?.hostId,
-    ).toBe(OTHER_HOST);
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(useTracySurfaceStore.getState().hostId).toBe(OTHER_HOST);
+    expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
   });
 
-  it("moves an open tab onto the sidebar's host when its host can no longer be dialled", async () => {
+  it("moves the surface onto the window's host when its host can no longer be dialled", async () => {
     const user = userEvent.setup();
-    useBotTabsStore.getState().openBotTab({
-      botId: "bot-triage",
-      hostId: "host-gone",
-      title: "triage-bot",
-    });
+    useTracySurfaceStore.setState({ hostId: "host-gone" });
     mount("bot-release");
 
     await user.click(row("bot-triage"));
 
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, "bot-triage")?.hostId,
-    ).toBe(TAB_HOST);
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+    expect(useTracySurfaceStore.getState().hostId).toBe(TAB_HOST);
+    expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -906,10 +902,10 @@ describe("<BotChannelSidebar /> Threads", () => {
     await user.click(row("bot-release"));
 
     expect(threads.onLeave).toHaveBeenCalledTimes(1);
-    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
+    expect(mocks.activateTabIntent).not.toHaveBeenCalled();
   });
 
-  it("shows Threads when chosen, and another bot's row opens that bot's tab and leaves this tab's Threads alone", async () => {
+  it("shows Threads when chosen, and another bot's row opens that bot's channel and leaves Threads alone", async () => {
     const user = userEvent.setup();
     const threads = view(false);
     mountWithThreads("bot-release", threads);
@@ -919,8 +915,8 @@ describe("<BotChannelSidebar /> Threads", () => {
 
     await user.click(row("bot-triage"));
     expect(threads.onLeave).not.toHaveBeenCalled();
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledWith({
-      kind: "bot",
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+      kind: "tracy",
       botId: "bot-triage",
     });
   });
@@ -982,17 +978,11 @@ describe("<BotChannelSidebar /> a team's main bot", () => {
       }),
     );
 
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, "bot-triage"),
-    ).toMatchObject({
-      botId: "bot-triage",
-      hostId: TAB_HOST,
-      title: "triage-bot",
-    });
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledWith({
-      kind: "bot",
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+      kind: "tracy",
       botId: "bot-triage",
     });
+    expect(useTracySurfaceStore.getState().hostId).toBe(TAB_HOST);
     expect(screen.queryByTestId("new-bot-dialog")).toBeNull();
   });
 });
@@ -1046,25 +1036,19 @@ describe("<BotChannelSidebar /> a team still to be set up", () => {
         }),
     },
   ])(
-    "opens a bot tab on the setup bot's id and title from $label",
+    "opens the surface on the setup bot's channel from $label",
     async ({ control }) => {
       const user = userEvent.setup();
       mount("bot-release");
 
       await user.click(control());
 
-      expect(
-        lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
-      ).toMatchObject({
-        botId: SETUP_BOT_ID,
-        hostId: TAB_HOST,
-        title: "Tracy",
-      });
-      expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
-      expect(mocks.navigateToTabIntent).toHaveBeenCalledWith({
-        kind: "bot",
+      expect(mocks.activateTabIntent).toHaveBeenCalledTimes(1);
+      expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+        kind: "tracy",
         botId: SETUP_BOT_ID,
       });
+      expect(useTracySurfaceStore.getState().hostId).toBe(TAB_HOST);
       expect(screen.queryByTestId("new-bot-dialog")).toBeNull();
     },
   );
@@ -1083,13 +1067,11 @@ describe("<BotChannelSidebar /> a team still to be set up", () => {
       within(section("env-empty")).getByRole("button", { name: "Open Tracy" }),
     );
 
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, SETUP_BOT_ID),
-    ).toMatchObject({ botId: SETUP_BOT_ID, hostId: TAB_HOST, title: "Tracy" });
-    expect(mocks.navigateToTabIntent).toHaveBeenCalledWith({
-      kind: "bot",
+    expect(mocks.activateTabIntent).toHaveBeenCalledWith({
+      kind: "tracy",
       botId: SETUP_BOT_ID,
     });
+    expect(useTracySurfaceStore.getState().hostId).toBe(TAB_HOST);
   });
 
   it("marks the setup row as the current page while its channel is in view, and does nothing when it is clicked", async () => {
@@ -1102,8 +1084,7 @@ describe("<BotChannelSidebar /> a team still to be set up", () => {
     expect(setup.classList.contains("bg-primary")).toBe(false);
     await user.click(setup);
 
-    expect(useBotTabsStore.getState().tabs).toEqual({});
-    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
+    expect(mocks.activateTabIntent).not.toHaveBeenCalled();
   });
 });
 

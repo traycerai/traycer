@@ -54,11 +54,12 @@ export type TabNavigationIntent =
     }
   | { readonly kind: "draft"; readonly draftId: string }
   /**
-   * A bot tab (Tracy Bots). The host it is bound to is NOT on the intent: the
-   * bot-tabs store record carries it for the tab's life, and an intent that
-   * named one would be a second place for a binding that has exactly one.
+   * The Tracy surface (decision 150) on a channel, or on none (`null`). The
+   * host it is bound to is NOT on the intent: the surface store carries it,
+   * and an intent that named one would be a second place for a binding that
+   * has exactly one.
    */
-  | { readonly kind: "bot"; readonly botId: string }
+  | { readonly kind: "tracy"; readonly botId: string | null }
   | { readonly kind: "history" }
   | { readonly kind: "settings"; readonly section: SettingsSectionId }
   | { readonly kind: "home" }
@@ -285,10 +286,11 @@ export function historyTabIntent(): Extract<
   return { kind: "history" };
 }
 
+/** The Tracy surface on `botId`'s channel. */
 export function botTabIntent(
   botId: string,
-): Extract<TabNavigationIntent, { kind: "bot" }> {
-  return { kind: "bot", botId };
+): Extract<TabNavigationIntent, { kind: "tracy" }> {
+  return { kind: "tracy", botId };
 }
 
 export function homeTabIntent(): Extract<

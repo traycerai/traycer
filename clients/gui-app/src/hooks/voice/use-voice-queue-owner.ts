@@ -11,8 +11,7 @@ import {
   type VoiceAttention,
 } from "@/hooks/voice/use-voice-attention";
 import { appLogger } from "@/lib/logger";
-import { navigateToTabIntent } from "@/lib/tab-navigation";
-import { botTabIntent } from "@/lib/tab-navigation/intents";
+import { openBotChannel } from "@/lib/bots/open-bot-channel";
 import {
   composeBriefing,
   VOICE_SESSION_INPUT_MAX_CHARS,
@@ -27,8 +26,7 @@ import type { QueueVerb, QueueVerbOutcome } from "@/lib/voice/queue-verbs";
 import { confirmationWords, type SpeechScheduler } from "@/lib/voice/scheduler";
 import { createVoiceQueue, type VoiceQueue } from "@/lib/voice/voice-queue";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
-import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { tracySurfaceHostId } from "@/stores/bots/tracy-surface-store";
 import {
   useVoiceSessionStore,
   waitingItems,
@@ -209,11 +207,12 @@ export function useVoiceQueueOwner(input: {
     if (current === null || current.botId !== botId) return false;
     return (current.threadId ?? channelIdRef.current) === chatId;
   }, []);
-  // A reply's records are read on the host the bot's tab is bound to, else
-  // the bot's own host, else the one the row happened on.
+  // A reply's records are read on the Tracy surface's host, which serves
+  // every bot's channel, else the bot's own host, else the one the row
+  // happened on.
   const hostOf = useCallback(
     (ref: ReplyRef): string =>
-      lookupBotTab(useBotTabsStore.getState().tabs, ref.botId)?.hostId ??
+      tracySurfaceHostId() ??
       bots.find((bot) => bot.botId === ref.botId)?.boundHostId ??
       ref.originHostId ??
       appHostId ??
@@ -225,9 +224,9 @@ export function useVoiceQueueOwner(input: {
     hostOfRef.current = hostOf;
   }, [hostOf]);
 
-  // `switch`: the bot's tab opens on the thread (or its channel) the way a
-  // tapped notification lands it, and that is the focus at once; the
-  // selections the landing passes through are the voice's, not a move.
+  // `switch`: the Tracy surface opens on the bot's thread (or its channel)
+  // the way a tapped notification lands it, and that is the focus at once;
+  // the selections the landing passes through are the voice's, not a move.
   const switchTo = useCallback(
     (target: {
       readonly botId: string;
@@ -235,17 +234,8 @@ export function useVoiceQueueOwner(input: {
       readonly threadId: string | null;
       readonly messageId: string | null;
     }) => {
-      const tabs = useBotTabsStore.getState();
-      const existing = lookupBotTab(tabs.tabs, target.botId);
-      const hostId = existing?.hostId ?? target.hostId ?? appHostId;
+      const hostId = tracySurfaceHostId() ?? appHostId;
       if (hostId === null) return;
-      if (existing === null) {
-        tabs.openBotTab({
-          botId: target.botId,
-          hostId,
-          title: botTitleRef.current(target.botId),
-        });
-      }
       const rail = Object.hasOwn(
         useBotOpenThreadStore.getState().byBotId,
         target.botId,
@@ -265,12 +255,15 @@ export function useVoiceQueueOwner(input: {
         anchorMessageId: null,
         anchorThread: null,
       });
-      useBotTabLandingStore.getState().request(target.botId, {
-        kind: "thread",
-        threadId: target.threadId,
-        messageId: target.messageId,
+      openBotChannel(navigate, target.botId, {
+        landing: {
+          kind: "thread",
+          threadId: target.threadId,
+          messageId: target.messageId,
+        },
+        isConnectable: null,
+        onRejected: null,
       });
-      navigateToTabIntent(navigate, botTabIntent(target.botId), undefined);
     },
     [appHostId, navigate],
   );
@@ -509,7 +502,7 @@ export function useVoiceQueueOwner(input: {
         const botId = verb.botId ?? now.focus?.botId ?? null;
         if (botId === null) return "nothing";
         const hostId =
-          lookupBotTab(useBotTabsStore.getState().tabs, botId)?.hostId ??
+          tracySurfaceHostId() ??
           (now.focus?.botId === botId ? now.focus.hostId : null) ??
           appHostId;
         if (hostId === null) return "nothing";

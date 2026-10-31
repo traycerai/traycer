@@ -53,7 +53,9 @@ import * as TabNav from "@/lib/tab-navigation";
 import { existingEpicTabIntent } from "@/lib/tab-navigation/intents";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
+import { TRACY_TAB_REF } from "@/stores/tabs/kinds/tracy";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { emptyTabStripLayout, tabItemId } from "@/stores/tabs/layout";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
@@ -211,7 +213,9 @@ function setHomeTabEnabled(enabled: boolean): void {
     .setRegionValues("homeTab", { shown: enabled ? "shown" : "hidden" });
 }
 
-const TRACY: TabRef = { kind: "bot", id: "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV" };
+const TRACY: TabRef = TRACY_TAB_REF;
+/** The channel the Tracy surface shows, whose unread state the row carries. */
+const TRACY_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
 describe("MobileNavDrawer rows", () => {
   beforeEach(() => {
@@ -234,7 +238,9 @@ describe("MobileNavDrawer rows", () => {
     TabNav.__resetTabNavigationControllerForTesting();
     directory.connectable = { hostIds: [], resolved: true };
     indicators.epics = {};
-    useBotTabsStore.setState({ tabs: {}, fixedBotId: null });
+    useTracySurfaceStore.setState(useTracySurfaceStore.getInitialState(), true);
+    // The window's host, which a surface the row opens is bound to.
+    useSelectionAuthorityStore.setState({ effectiveHostId: "host-a" });
   });
 
   afterEach(() => {
@@ -248,7 +254,7 @@ describe("MobileNavDrawer rows", () => {
     setHomeTabEnabled(false);
     useEpicCanvasStore.setState(useEpicCanvasStore.getInitialState(), true);
     useTabsStore.setState({ ...emptyTabStripLayout(), stripOrder: [] });
-    useBotTabsStore.setState({ tabs: {}, fixedBotId: null });
+    useTracySurfaceStore.setState(useTracySurfaceStore.getInitialState(), true);
     setMobileApp(false);
   });
 
@@ -300,14 +306,14 @@ describe("MobileNavDrawer rows", () => {
     expect(useTabsStore.getState().items.length).toBe(1);
   });
 
-  it("opens the Tracy row's tab on this window's host when its own host can no longer be dialled, and closes the drawer", async () => {
+  it("opens the Tracy row's surface on this window's host when its own host can no longer be dialled, and closes the drawer", async () => {
     directory.connectable = { hostIds: ["host-a"], resolved: true };
-    useBotTabsStore.getState().openBotTab({
-      botId: TRACY.id,
+    useTracySurfaceStore.setState({
+      open: true,
       hostId: "host-gone",
-      title: "Release Notes",
+      botId: TRACY_BOT_ID,
+      visitedBotIds: [],
     });
-    useBotTabsStore.getState().setFixedBotId(TRACY.id);
     useTabsStore.setState({
       ...emptyTabStripLayout(),
       items: [{ kind: "tab", id: tabItemId(TRACY), ref: TRACY }],
@@ -320,21 +326,19 @@ describe("MobileNavDrawer rows", () => {
     expect(within(row).getByTestId("tracy-entry-icon")).toBeTruthy();
     fireEvent.click(row);
 
-    expect(
-      lookupBotTab(useBotTabsStore.getState().tabs, TRACY.id)?.hostId,
-    ).toBe("host-a");
+    expect(useTracySurfaceStore.getState().hostId).toBe("host-a");
     expect(useMobileNavStore.getState().open).toBe(false);
     expect(useTabsStore.getState().activeItemId).toBe(tabItemId(TRACY));
   });
 
   describe("the Tracy row's unread count", () => {
     function openTracyRow(): void {
-      useBotTabsStore.getState().openBotTab({
-        botId: TRACY.id,
+      useTracySurfaceStore.setState({
+        open: true,
         hostId: "host-a",
-        title: "Release Notes",
+        botId: TRACY_BOT_ID,
+        visitedBotIds: [],
       });
-      useBotTabsStore.getState().setFixedBotId(TRACY.id);
       useTabsStore.setState({
         ...emptyTabStripLayout(),
         items: [{ kind: "tab", id: tabItemId(TRACY), ref: TRACY }],
@@ -347,7 +351,7 @@ describe("MobileNavDrawer rows", () => {
       unreadCount: number | null,
     ): void {
       indicators.epics = {
-        [TRACY.id]: {
+        [TRACY_BOT_ID]: {
           pendingApproval: false,
           pendingInterview: false,
           pendingFork: false,

@@ -135,9 +135,9 @@ function buildRouter(initialPath: string): MockRouter {
       } else if (intent.kind === "sample-workspace") {
         calls.push({ kind: "home", epicId: null, sectionId: null });
         pathname = "/sample-workspace";
-      } else if (intent.kind === "bot") {
+      } else if (intent.kind === "tracy") {
         calls.push({ kind: "home", epicId: null, sectionId: null });
-        pathname = `/bot/${intent.botId}`;
+        pathname = intent.botId === null ? "/bot" : `/bot/${intent.botId}`;
       } else {
         calls.push({
           kind: "section",
