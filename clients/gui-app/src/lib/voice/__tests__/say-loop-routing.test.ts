@@ -161,7 +161,7 @@ function build(wiring: Wiring) {
       return resolveRoute(await next(), DIRECTORY, request.segments.length);
     },
     recheck: (tuple) => wiring.recheckHolds && tupleHolds(DIRECTORY, tuple),
-    navigate: (_target: BoundTarget) => undefined,
+    navigate: (_target: BoundTarget) => Promise.resolve(true),
     think: () => undefined,
     control: () => undefined,
     canSend: () => wiring.canSend,

@@ -96,8 +96,13 @@ export interface SayLoopDeps {
   readonly decide: (request: RouteRequest) => Promise<RoutedDecision>;
   /** Whether a bound tuple still holds against the directory as it is now. */
   readonly recheck: (tuple: VoiceTargetTuple) => boolean;
-  /** Opens the target's tab and sets its rail; the loop writes the focus. */
-  readonly navigate: (target: BoundTarget) => void;
+  /**
+   * Opens the target's tab and sets its rail, resolving once the tab's
+   * navigation settled: `true` when it landed, `false` when it was refused or
+   * undone (the previous tab is back). The loop writes the focus only on
+   * `true`.
+   */
+  readonly navigate: (target: BoundTarget) => Promise<boolean>;
   /**
    * State the voice needs about a request and need not say as an answer:
    * where the person is now, after a navigation.
@@ -278,7 +283,9 @@ type LoopRefusal =
   /** The request was bound to the focus, and the voice has since moved elsewhere. */
   | "moved-on"
   /** Another post is already waiting for the person's yes or no. */
-  | "confirm-busy";
+  | "confirm-busy"
+  /** The tab navigation to the destination was refused or undone. */
+  | "move-failed";
 
 const REFUSAL_TEXT: Record<LoopRefusal, string> = {
   unparseable:
@@ -292,6 +299,8 @@ const REFUSAL_TEXT: Record<LoopRefusal, string> = {
   gone: "Nothing was posted: that bot or thread is no longer available. The person can say it again.",
   "moved-on":
     "Nothing was posted: that request was for where the person was before the voice moved to another bot. The person can say it again.",
+  "move-failed":
+    "Nothing changed: the move to that bot or thread did not happen. The person can say it again.",
   "confirm-busy":
     "Nothing was posted: an earlier post is still waiting for the person's yes or no. The person can say this one again after answering.",
 };
@@ -449,6 +458,12 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   let resuming = false;
   /** Routes out, by action id; a move takes them away, and their completion is dropped. */
   const routing = new Map<string, RoutingEntry>();
+  /**
+   * Routed actions whose navigation is out, by action id: like a route, a
+   * manual move takes them away, and their navigation's completion commits
+   * nothing.
+   */
+  const navigating = new Map<string, RoutingEntry>();
   /** The routed post waiting for the person's yes; mirrored by the store's `pendingAction`. */
   let confirming: Confirming | null = null;
   /** The question the voice just asked about words it handed back, for the next route. */
@@ -593,16 +608,26 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   }
 
   /**
-   * Opens the target and makes it the focus; the selection follows, so the
-   * generation does not move. A post still waiting for a destination the
-   * voice is leaving can no longer be sent there: it is dropped, and the
-   * voice says so.
+   * Opens the target and, once its navigation landed, makes it the focus;
+   * the selection follows, so the generation does not move. `"failed"` when
+   * the navigation was refused or undone: the focus stays where it was.
+   * `"stale"` when a manual move or an End took the action meanwhile. A post
+   * still waiting for a destination the voice is leaving can no longer be
+   * sent there: it is dropped, and the voice says so.
    */
-  function goTo(target: BoundTarget): void {
-    const token = store.getState().sessionToken;
+  async function goTo(
+    entry: RoutingEntry,
+    target: BoundTarget,
+  ): Promise<"landed" | "failed" | "stale"> {
+    navigating.set(entry.actionId, entry);
+    const landed = await deps.navigate(target);
+    if (!navigating.delete(entry.actionId)) return "stale";
+    const state = store.getState();
+    if (state.sessionToken !== entry.sessionToken) return "stale";
+    if (!landed) return "failed";
     for (const waiting of unresolved.splice(0)) {
       if (
-        waiting.sessionToken === token &&
+        waiting.sessionToken === entry.sessionToken &&
         !stillDestination(target.focus, waiting.focus)
       ) {
         refuse(waiting, "moved-on");
@@ -610,8 +635,22 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         unresolved.push(waiting);
       }
     }
-    deps.navigate(target);
-    store.getState().setFocus(target.focus);
+    state.setFocus(target.focus);
+    return "landed";
+  }
+
+  /**
+   * Opens a non-focus target before the action that needs it: `true` once
+   * it is the focus; otherwise the action is settled (refused, said, or left
+   * to the move that took it) and `false`.
+   */
+  async function arrive(
+    entry: RoutingEntry,
+    target: BoundTarget,
+  ): Promise<boolean> {
+    const outcome = await goTo(entry, target);
+    if (outcome === "failed") refuse(entry, "move-failed");
+    return outcome === "landed";
   }
 
   /**
@@ -641,8 +680,8 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         return;
       }
       focus = now;
-    } else {
-      goTo(target);
+    } else if (!(await arrive(entry, target))) {
+      return;
     }
     const action: Action = {
       actionId: entry.actionId,
@@ -669,6 +708,45 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     }
     inFlight.set(action.actionId, action);
     await post(action);
+  }
+
+  /** A navigation by voice: the words are spent once it landed, and the voice keeps where the person is. */
+  async function move(entry: RoutingEntry, target: BoundTarget): Promise<void> {
+    if (!deps.recheck(target.tuple)) {
+      refuse(entry, "gone");
+      return;
+    }
+    if (!target.isFocus && !(await arrive(entry, target))) return;
+    store.getState().consumeReservation(entry.seqs);
+    settleDelegation(entry.delegationId);
+    const delegationId = delegationOf(entry);
+    if (delegationId === null) deps.notify(landedText(target), null);
+    else deps.think(landedText(target), delegationId);
+  }
+
+  /**
+   * A manual move takes back what routed actions still hold: routes and
+   * navigations out, and a post waiting for its yes. Their words return to
+   * the open utterance, which the move interrupts with everything else said.
+   */
+  function releaseRouted(): void {
+    const state = store.getState();
+    for (const pending of [routing, navigating]) {
+      for (const entry of Array.from(pending.values())) {
+        if (entry.sessionToken !== state.sessionToken) continue;
+        pending.delete(entry.actionId);
+        state.releaseReservation(entry.seqs);
+      }
+    }
+    if (confirming !== null) {
+      confirming.cancelWait();
+      state.releaseReservation(confirming.entry.seqs);
+      confirming = null;
+    }
+    if (state.pendingAction?.kind === "confirming") {
+      state.setPendingAction(null);
+    }
+    askedQuestion = null;
   }
 
   /** Carries out one routed decision for the words `entry` reserved. */
@@ -710,20 +788,9 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         return;
       }
       case "navigate":
-      case "switch": {
-        const { target } = decision;
-        if (!deps.recheck(target.tuple)) {
-          refuse(entry, "gone");
-          return;
-        }
-        store.getState().consumeReservation(entry.seqs);
-        settleDelegation(entry.delegationId);
-        if (!target.isFocus) goTo(target);
-        const delegationId = delegationOf(entry);
-        if (delegationId === null) deps.notify(landedText(target), null);
-        else deps.think(landedText(target), delegationId);
+      case "switch":
+        await move(entry, decision.target);
         return;
-      }
       case "post": {
         const text = joinSegments(
           entry.segments.slice(decision.span.from, decision.span.to + 1),
@@ -977,24 +1044,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     },
 
     onSelectionChanged() {
-      // Routes still out are dropped and a post waiting for its yes is let
-      // go: their words return to the open utterance, which the move
-      // interrupts below with everything else said.
-      const before = store.getState();
-      for (const entry of Array.from(routing.values())) {
-        if (entry.sessionToken !== before.sessionToken) continue;
-        routing.delete(entry.actionId);
-        before.releaseReservation(entry.seqs);
-      }
-      if (confirming !== null) {
-        confirming.cancelWait();
-        before.releaseReservation(confirming.entry.seqs);
-        confirming = null;
-      }
-      if (before.pendingAction?.kind === "confirming") {
-        before.setPendingAction(null);
-      }
-      askedQuestion = null;
+      releaseRouted();
       const state = store.getState();
       for (const action of inFlight.values()) {
         if (action.sessionToken === state.sessionToken) {

@@ -129,7 +129,7 @@ function harness(): Harness {
       return route;
     },
     recheck: () => true,
-    navigate: () => undefined,
+    navigate: () => Promise.resolve(true),
     think: () => undefined,
     control: () => undefined,
     canSend: () => true,

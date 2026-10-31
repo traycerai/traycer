@@ -40,7 +40,7 @@ import { voiceQueryKeys } from "@/lib/query-keys";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
-import { navigateToTabIntent } from "@/lib/tab-navigation";
+import { activateTabIntent, navigateToTabIntent } from "@/lib/tab-navigation";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { mainBotOf } from "@/lib/bots/bot-main";
 import { watchAudioLevel, type AudioLevelWatch } from "@/lib/voice/audio-level";
@@ -105,10 +105,16 @@ import {
   type VoiceFocus,
 } from "@/stores/voice/voice-session-store";
 
-/** A navigation by voice from one bot's tab to another's, until the new tab is active. */
+/** A navigation by voice from one bot's tab to another's, until it settles. */
 interface VoiceNavigation {
   /** The bot whose tab was active when the voice moved; `null` for none. */
   readonly fromBotId: string | null;
+  readonly toBotId: string;
+  /**
+   * `"pending"` while the tab's navigation is out; then whether it landed.
+   * Written once, when the navigation settles.
+   */
+  outcome: "pending" | "landed" | "failed";
   /**
    * What that tab's rail held then (the anchor of its open thread, `null`
    * for the channel): only that selection, still showing, is the voice's own.
@@ -462,11 +468,22 @@ export function VoiceSessionController(): ReactNode {
       navigate: (target) => {
         const from = selectHostFocusedRef(useTabsStore.getState());
         const fromBotId = from !== null && from.kind === "bot" ? from.id : null;
-        voiceNavigationRef.current =
+        const navigation: VoiceNavigation | null =
           fromBotId === target.tuple.botId
             ? null
-            : { fromBotId, fromAnchorMessageId: railAnchorOf(fromBotId) };
-        openTarget(target, navigateRef.current);
+            : {
+                fromBotId,
+                toBotId: target.tuple.botId,
+                fromAnchorMessageId: railAnchorOf(fromBotId),
+                outcome: "pending",
+              };
+        voiceNavigationRef.current = navigation;
+        return openTarget(target, navigateRef.current).then((landed) => {
+          if (navigation !== null) {
+            navigation.outcome = landed ? "landed" : "failed";
+          }
+          return landed;
+        });
       },
       think: (text, delegationId) => {
         const attempt = attemptRef.current;
@@ -1202,14 +1219,14 @@ function openMainBot(
 /**
  * Opens a routed destination as the person would: the bot's tab (on the
  * host it is bound to, or the target's), its rail on the thread named or
- * on the channel, and the tab brought to the front. The rail is written
- * before the tab moves, so the selection the sync reads is the focus the
- * voice writes next, not a move of the person's.
+ * on the channel, and the tab brought to the front. Resolves with whether
+ * the tab's navigation landed: `false` when it was refused, or when the
+ * route navigation failed and the previous tab was put back.
  */
 function openTarget(
   target: BoundTarget,
   navigate: UseNavigateResult<string>,
-): void {
+): Promise<boolean> {
   const { botId, hostId, threadId } = target.tuple;
   const anchorMessageId = target.focus.anchorMessageId;
   useBotOpenThreadStore.getState().setRail(
@@ -1227,7 +1244,29 @@ function openTarget(
   useBotTabsStore
     .getState()
     .openBotTab({ botId, hostId, title: target.botTitle });
-  navigateToTabIntent(navigate, botTabIntent(botId), undefined);
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const settle = (landed: boolean): void => {
+      if (settled) return;
+      settled = true;
+      resolve(landed);
+    };
+    // The tab navigation reports a refusal, but not a route navigation
+    // that fails after it accepted (it puts the previous tab back): the
+    // first navigation it runs through this function is watched for that.
+    const watched: UseNavigateResult<string> = (options) => {
+      const run = navigate(options);
+      run.then(
+        () => settle(true),
+        () => settle(false),
+      );
+      return run;
+    };
+    const accepted = activateTabIntent(watched, botTabIntent(botId), {
+      onRejected: () => settle(false),
+    });
+    if (!accepted) settle(false);
+  });
 }
 
 /**
@@ -1281,11 +1320,16 @@ function VoiceSelectionSync(props: {
     if (activeBotId === null || tab === null) return;
     const navigation = voiceNavigationRef.current;
     if (navigation !== null) {
-      // The tab the voice is leaving still shows what it showed when the
-      // voice moved: not a move. Anything else on it is the person's.
+      // While the voice's navigation is out, the tab it is opening, or the
+      // one it is leaving still showing what it showed when the voice
+      // moved, is not a move: the focus is written when the navigation
+      // settles. Anything else is the person's.
       if (
-        activeBotId === navigation.fromBotId &&
-        (thread?.anchorMessageId ?? null) === navigation.fromAnchorMessageId
+        navigation.outcome === "pending" &&
+        (activeBotId === navigation.toBotId ||
+          (activeBotId === navigation.fromBotId &&
+            (thread?.anchorMessageId ?? null) ===
+              navigation.fromAnchorMessageId))
       ) {
         return;
       }

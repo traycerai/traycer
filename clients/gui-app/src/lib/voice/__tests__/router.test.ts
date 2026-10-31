@@ -344,6 +344,7 @@ function harness(directory: VoiceDirectory): Harness {
     navigate: (target) => {
       navigations.push(target);
       events.push(`navigate:${target.tuple.botId}`);
+      return Promise.resolve(true);
     },
     think: (text) => {
       thinks.push(text);
