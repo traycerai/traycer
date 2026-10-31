@@ -10612,7 +10612,7 @@ describe("ChatMessages scroll policy", () => {
       // (row top aligned to viewport top), which for a short tail can
       // exceed the natural scrollHeight-clientHeight max - the post-growth
       // natural max must clearly exceed that frozen target for this to
-      // genuinely race the false-positive the review's P1 #2 describes,
+      // genuinely race the false-positive this test pins,
       // not just fall short of it regardless of geometry protection.
       for (let extra = 0; extra < 40; extra += 1) {
         partialMessages = appendAssistant(

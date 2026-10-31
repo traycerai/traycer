@@ -290,8 +290,8 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   const [oldBounds, setOldBounds] = useState<SideBounds>(DEFAULT_SIDE_BOUNDS);
   const [newBounds, setNewBounds] = useState<SideBounds>(DEFAULT_SIDE_BOUNDS);
 
-  // A rename's two sides can straddle the extension allowlist (pre-landing
-  // review, P0: `old.png -> new.txt` / `old.txt -> new.png`) - each side is
+  // A rename's two sides can straddle the extension allowlist
+  // (`old.png -> new.txt` / `old.txt -> new.png`) - each side is
   // gated against its OWN effective path, never `props.filePath` alone. The
   // old side reads from `previousPath` when the file was renamed (mirrors
   // the host's `previousPath ?? filePath` resolution); the new side is
@@ -643,7 +643,7 @@ function mirrorTransform(
 function ImageDiffSide(props: {
   /** Whether this side has a fetchable identity at all (its `stage` is non-null) - `false` renders the Added/Deleted empty state, never a fetch. */
   readonly sideExists: boolean;
-  /** Whether THIS side's own effective path (pre-landing review, P0: a rename can straddle the allowlist) is an image extension - `false` renders the non-image placeholder, never a fetch. */
+  /** Whether THIS side's own effective path (a rename can straddle the allowlist) is an image extension - `false` renders the non-image placeholder, never a fetch. */
   readonly isImageSide: boolean;
   readonly effectivePath: string;
   readonly asset: UseFileAssetResult;

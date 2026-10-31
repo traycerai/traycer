@@ -426,7 +426,7 @@ describe("useAutoPolicyQuery - per-viewer cache partition", () => {
   });
 });
 
-// FIX 1 (P1): "" is the ABSENCE of an identity - `useCloudChatViewerId()`
+// FIX 1: "" is the ABSENCE of an identity - `useCloudChatViewerId()`
 // answers it whenever `contextMetadata` is absent (startup, and the gap
 // during an account transition), not a person. Before this fix the read ran
 // unconditionally, so the account that happened to be authenticated at the

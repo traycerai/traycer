@@ -1,5 +1,5 @@
 /**
- * R6F4 (P2): image GC roots for a durable-handoff prompt.
+ * R6F4: image GC roots for a durable-handoff prompt.
  *
  * (a) A prompt sitting in `lastCopyPrompts` (before any disposal) roots its
  *     image hash - `collectPendingRestoreContentImageHashes` walks

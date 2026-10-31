@@ -1,5 +1,5 @@
 /**
- * R9F3 (P2): a hash-only retry's SECOND refusal - its send's terminal
+ * R9F3: a hash-only retry's SECOND refusal - its send's terminal
  * statement - now builds its worktree account from the transferred sticky
  * evidence via `rejectionSweepFor`/`sweepAccountForIntent`, not the live
  * per-slot partition (`worktreePartition`).

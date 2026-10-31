@@ -112,8 +112,8 @@ export interface ImagePreviewProps {
   readonly animationMs: number;
   /**
    * Fired from the underlying `<img>`'s `onError` - magic-valid, header-
-   * parseable bytes can still fail to decode in the browser (pre-landing
-   * review, P1), and this viewer never renders its own fallback (that stays
+   * parseable bytes can still fail to decode in the browser,
+   * and this viewer never renders its own fallback (that stays
    * the caller's job, per the `ImagePreviewStatus` doc comment above), so
    * the caller must react and switch to its own settled placeholder.
    */

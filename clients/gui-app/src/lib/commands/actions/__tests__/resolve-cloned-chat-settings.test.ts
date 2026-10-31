@@ -529,7 +529,7 @@ describe("resolveClonedChatSettings clamps auto against the target catalog", () 
     });
   });
 
-  // FIX 2 (P1): the sibling of the case above, WITHOUT
+  // FIX 2: the sibling of the case above, WITHOUT
   // `targetHostKnowsAutoMode()`. The row is exactly as unconstrained - an
   // empty `supportedPermissionModes` `harnessHonorsPermissionMode` treats
   // identically either way - so the only thing that differs is the target
@@ -681,7 +681,7 @@ describe("resolveClonedChatSettings clamps auto against the target catalog", () 
   });
 });
 
-// FIX 1 (P1): the demotion chain used to be applied ONE step and unchecked -
+// FIX 1: the demotion chain used to be applied ONE step and unchecked -
 // `auto` became `auto_accept_edits` on a `["full_access"]` row and went to
 // `epic.createChat` as a tuple that host refuses outright. Now every rung of
 // `demotionChain()` is checked against the target row in turn, and only when

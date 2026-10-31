@@ -1581,7 +1581,7 @@ describe("useLandingDraftStore", () => {
     it("preserves non-empty in-memory drafts on empty inbound and re-projects outbound", () => {
       // Stub the GC gates (no call-through): this suite has no idb-keyval mock,
       // and the assertion is about whether the guard fires them, not the sweep.
-      // [B1-P2] mount→readiness is covered with the real GC in
+      // mount→readiness is covered with the real GC in
       // landing-image-gc.test.ts `[B1+B2]` (spyOn cannot intercept same-module
       // internal calls from markLandingEditorMounted → markLandingDraftsReady).
       const markReady = vi

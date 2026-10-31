@@ -1771,8 +1771,7 @@ export function adoptedViewOnScreen(
  *
  *  - {@link applySaveSucceeded}'s correcting branch clears the refusal marker
  *    when it adopts, so a SECOND newer reply saw an unmarked display and
- *    advanced `persisted` past controls it had itself installed (the OSS
- *    review's first P2);
+ *    advanced `persisted` past controls it had itself installed;
  *  - `reconciled`'s adopt gate is reachable with an ADOPTED display and no
  *    refusal: a save's reply is lost at revision 2, an edit moves to revision
  *    3, a later save is refused there, an OLDER save then succeeds and takes

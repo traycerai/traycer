@@ -160,7 +160,7 @@ export interface GitImageDiffRouting {
  * Extension gate before any diff-text fetch (image-preview decision log,
  * decision #6): a binary image extension, or `.svg` (never `isBinary` to
  * git - decision #5), routes to `ImageDiffView`. A rename's CURRENT path
- * alone is not enough (pre-landing review, P0: `old.png -> new.txt` must
+ * alone is not enough (`old.png -> new.txt` must
  * still route for its old side) - route when EITHER the current or previous
  * path is allowlisted, and (re-review P1) OR the previous path into the SVG
  * check too (`old.svg -> new.txt` is text to git on the rename). A
