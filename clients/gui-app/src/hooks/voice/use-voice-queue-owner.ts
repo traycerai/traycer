@@ -62,6 +62,13 @@ export interface VoiceSwitch {
 export const VOICE_SWITCH_SETTLE_MS = 10_000;
 
 const NO_BOTS: ReadonlyArray<BotRecord> = [];
+const NO_STATUS_REQUESTS: ReadonlyArray<VoiceStatusRequest> = [];
+
+/** A `status` accepted, and its prose once composed; appended in the order asked. */
+interface StatusSlot {
+  readonly request: VoiceStatusRequest;
+  text: string | null;
+}
 
 /** What the controller and the queue's sources share. */
 export interface VoiceQueueOwner {
@@ -72,7 +79,8 @@ export interface VoiceQueueOwner {
   readonly bots: ReadonlyArray<BotRecord>;
   readonly registerMark: (hostId: string, mark: VoiceReadMark | null) => void;
   readonly voiceSwitch: { current: VoiceSwitch | null };
-  readonly statusRequest: VoiceStatusRequest | null;
+  /** Every `status` accepted and not yet composed, oldest first: each gets its own reader. */
+  readonly statusRequests: ReadonlyArray<VoiceStatusRequest>;
   readonly onStatusComposed: (
     request: VoiceStatusRequest,
     text: string,
@@ -264,17 +272,16 @@ export function useVoiceQueueOwner(input: {
     return created;
   }, [ensureSpeech, isFocused, noteHeard]);
 
-  // `status`: one bot's readings gathered by a reader mounted for the ask,
-  // composed once, and appended under the request it answers.
-  const [statusRequest, setStatusRequest] = useState<VoiceStatusRequest | null>(
-    null,
-  );
+  // `status`: one bot's readings gathered by a reader mounted for each ask,
+  // composed once, and appended under the request it answers. Every
+  // accepted ask is answered, in the order asked: a later one composed
+  // first waits for the ones before it.
+  const [statusRequests, setStatusRequests] =
+    useState<ReadonlyArray<VoiceStatusRequest>>(NO_STATUS_REQUESTS);
+  const statusOrderRef = useRef<StatusSlot[]>([]);
   const statusSeqRef = useRef(0);
-  const onStatusComposed = useCallback(
+  const appendStatus = useCallback(
     (request: VoiceStatusRequest, text: string) => {
-      setStatusRequest((current) =>
-        current?.seq === request.seq ? null : current,
-      );
       const now = useVoiceSessionStore.getState();
       if (now.phase === "idle" || now.sessionToken !== request.sessionToken) {
         return;
@@ -299,6 +306,24 @@ export function useVoiceQueueOwner(input: {
     },
     [ensureSpeech],
   );
+  const onStatusComposed = useCallback(
+    (request: VoiceStatusRequest, text: string) => {
+      setStatusRequests((current) =>
+        current.filter((candidate) => candidate.seq !== request.seq),
+      );
+      const order = statusOrderRef.current;
+      const slot = order.find((candidate) => candidate.request.seq === request.seq);
+      if (slot === undefined) return;
+      slot.text = text;
+      for (;;) {
+        const head = order.at(0);
+        if (head === undefined || head.text === null) return;
+        order.shift();
+        appendStatus(head.request, head.text);
+      }
+    },
+    [appendStatus],
+  );
 
   // The queue's executor: `runVoiceQueueVerb` reaches it, for the router's
   // spoken verbs and the Waiting control's buttons alike.
@@ -316,7 +341,7 @@ export function useVoiceQueueOwner(input: {
           appHostId;
         if (hostId === null) return "nothing";
         statusSeqRef.current += 1;
-        setStatusRequest({
+        const request: VoiceStatusRequest = {
           seq: statusSeqRef.current,
           botId,
           hostId,
@@ -324,7 +349,9 @@ export function useVoiceQueueOwner(input: {
           delegationId: verb.delegationId,
           sessionToken: now.sessionToken,
           engineGeneration: now.engineGeneration,
-        });
+        };
+        statusOrderRef.current.push({ request, text: null });
+        setStatusRequests((current) => [...current, request]);
         return "appended";
       },
     });
@@ -378,7 +405,8 @@ export function useVoiceQueueOwner(input: {
 
   const resetQueue = useCallback(() => {
     queueRef.current?.reset();
-    setStatusRequest(null);
+    setStatusRequests(NO_STATUS_REQUESTS);
+    statusOrderRef.current = [];
     voiceSwitch.current = null;
   }, []);
 
@@ -402,7 +430,7 @@ export function useVoiceQueueOwner(input: {
     bots,
     registerMark,
     voiceSwitch,
-    statusRequest,
+    statusRequests,
     onStatusComposed,
     beginQueue,
     resetQueue,

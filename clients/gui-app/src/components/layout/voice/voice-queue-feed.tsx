@@ -81,13 +81,13 @@ export function VoiceQueueSources(props: {
           registerMark={owner.registerMark}
         />
       )}
-      {owner.statusRequest === null ? null : (
+      {owner.statusRequests.map((request) => (
         <VoiceBotStatusReader
-          key={owner.statusRequest.seq}
-          request={owner.statusRequest}
+          key={request.seq}
+          request={request}
           onComposed={owner.onStatusComposed}
         />
-      )}
+      ))}
     </>
   );
 }
