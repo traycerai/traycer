@@ -1,5 +1,6 @@
 import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import {
+  ChevronRight,
   EllipsisVertical,
   ExternalLink,
   MessagesSquare,
@@ -9,6 +10,12 @@ import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
+import { useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
+  SortableColumnList,
+  type ColumnDragHandle,
+} from "@/components/bots/bot-column-sortable";
 import { BotSettingsRefusal } from "@/components/bots/bot-settings-group";
 import {
   NewBotDialog,
@@ -42,12 +49,15 @@ import { useBotChannelMuted } from "@/hooks/bots/use-bot-notification-level";
 import { useBotChannelBold } from "@/hooks/bots/use-bot-read-cursor";
 import { useBotFollowedThreads } from "@/hooks/bots/use-bot-followed-threads";
 import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
+import { useArrangedBotsModel } from "@/hooks/bots/use-arranged-bots-model";
+import { useBotColumnLayoutStore } from "@/stores/bots/bot-column-layout-store";
 import { BotMutedGlyph } from "@/components/bots/bot-muted-glyph";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { indicatorHasUnread } from "@/stores/notifications/notification-indicator-state";
 import {
   buildHomeBotsModel,
   type HomeBotsGroup,
+  type HomeBotsModel,
 } from "@/lib/home-bots/bots-model";
 import {
   createTeamDashboardUrl,
@@ -109,14 +119,23 @@ export function BotChannelSidebar(props: {
   const mainBotIds = bots.data?.mainBotIds ?? null;
   const canSetMainBot =
     useHostMethodSupport(hostId, "environment.setMainBot") === true;
-  const model = useMemo(
-    () =>
-      buildHomeBotsModel({
-        environments: environmentList,
-        bots: botList,
-        mainBotIds,
-      }),
-    [botList, environmentList, mainBotIds],
+  const model = useArrangedBotsModel(
+    useMemo(
+      () =>
+        buildHomeBotsModel({
+          environments: environmentList,
+          bots: botList,
+          mainBotIds,
+        }),
+      [botList, environmentList, mainBotIds],
+    ),
+  );
+  // What the arrangement's writes prune against: only a model both lists
+  // answered for, never one missing bots that have not loaded yet.
+  const answeredModel =
+    environments.data === undefined || bots.data === undefined ? null : model;
+  const setSectionOrder = useBotColumnLayoutStore(
+    (state) => state.setSectionOrder,
   );
   const botIds = useMemo(() => botList.map((bot) => bot.botId), [botList]);
   // A bot's id is its container's, a shared cloud entity, so the
@@ -171,23 +190,38 @@ export function BotChannelSidebar(props: {
       {threadsView === null ? null : (
         <ThreadsRow hostId={hostId} bots={botList} view={threadsView} />
       )}
-      {model.groups.map((group) => (
-        <SidebarSection
-          key={group.environmentId}
-          group={group}
-          activeBotId={currentBotId}
-          unreadByBotId={unreadByBotId}
-          canSetMainBot={canSetMainBot}
-          setup={
-            teamSetups.setups.find(
-              (setup) => setup.environmentId === group.environmentId,
-            ) ?? null
-          }
-          hostId={hostId}
-          onOpenChannel={openChannel}
-          onNewBot={setNewBot}
-        />
-      ))}
+      <SortableColumnList
+        ids={model.groups.map((group) => group.environmentId)}
+        onReorder={(order) => setSectionOrder(order, answeredModel)}
+        renderLifted={(environmentId) => (
+          <SectionLiftedHeader
+            label={
+              model.groups.find(
+                (group) => group.environmentId === environmentId,
+              )?.label ?? environmentId
+            }
+          />
+        )}
+      >
+        {model.groups.map((group) => (
+          <SidebarSection
+            key={group.environmentId}
+            answeredModel={answeredModel}
+            group={group}
+            activeBotId={currentBotId}
+            unreadByBotId={unreadByBotId}
+            canSetMainBot={canSetMainBot}
+            setup={
+              teamSetups.setups.find(
+                (setup) => setup.environmentId === group.environmentId,
+              ) ?? null
+            }
+            hostId={hostId}
+            onOpenChannel={openChannel}
+            onNewBot={setNewBot}
+          />
+        ))}
+      </SortableColumnList>
       {noTeam ? <CreateTeamRow /> : null}
       <NewBotDialog
         target={newBot}
@@ -251,7 +285,17 @@ function ThreadsRow(props: {
   );
 }
 
+/**
+ * An environment's section. It drags by its header among the other sections,
+ * and its channels drag among themselves (decision 151). The chevron at the
+ * left of the label, or the label itself, puts the section away: collapsed,
+ * it lists only the current channel and the channels with something unread,
+ * as Slack does, and its header keeps its own controls.
+ */
 function SidebarSection(props: {
+  /** The arranged model once both lists answered, whose ids every write of
+   * the arrangement keeps; `null` before, when a write keeps every id. */
+  readonly answeredModel: HomeBotsModel | null;
   readonly group: HomeBotsGroup;
   /** The current channel's bot; `null` while Threads shows in its place. */
   readonly activeBotId: string | null;
@@ -265,10 +309,35 @@ function SidebarSection(props: {
   readonly onOpenChannel: (channel: SidebarChannel) => void;
   readonly onNewBot: (target: NewBotTarget) => void;
 }): ReactNode {
-  const { group, activeBotId, unreadByBotId, setup, hostId, onOpenChannel } =
-    props;
+  const {
+    answeredModel,
+    group,
+    activeBotId,
+    unreadByBotId,
+    setup,
+    hostId,
+    onOpenChannel,
+  } = props;
   const isTeam = group.canCreate && group.ownerKind === "organization";
   const isPersonal = group.canCreate && group.ownerKind === "user";
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: group.environmentId });
+  const collapsed = useBotColumnLayoutStore((state) =>
+    state.collapsed.includes(group.environmentId),
+  );
+  const setCollapsed = useBotColumnLayoutStore((state) => state.setCollapsed);
+  const setChannelOrder = useBotColumnLayoutStore(
+    (state) => state.setChannelOrder,
+  );
+  const toggleCollapsed = (): void =>
+    setCollapsed(group.environmentId, !collapsed, answeredModel);
   const newBot = (event: MouseEvent<HTMLButtonElement>): void =>
     props.onNewBot({
       environmentId: group.environmentId,
@@ -276,36 +345,75 @@ function SidebarSection(props: {
       opener: event.currentTarget,
     });
   const main = isTeam ? teamMainChannelOf(group, setup) : null;
+  const channelRow = (bot: BotRecord, drag: ColumnDragHandle | null) => {
+    const row = (
+      <ChannelRow
+        bot={bot}
+        isMain={bot.botId === group.mainBotId}
+        active={bot.botId === activeBotId}
+        unread={unreadByBotId.has(bot.botId)}
+        unreadCount={unreadByBotId.get(bot.botId) ?? null}
+        hostId={hostId}
+        drag={drag}
+        onOpen={() => onOpenChannel(bot)}
+      />
+    );
+    const canMakeMain =
+      props.canSetMainBot &&
+      group.mainBotId !== null &&
+      bot.botId !== group.mainBotId;
+    return canMakeMain ? (
+      <MakeMainChannelRow bot={bot}>{row}</MakeMainChannelRow>
+    ) : (
+      row
+    );
+  };
+  const setupRow =
+    setup === null || (collapsed && setup.botId !== activeBotId) ? null : (
+      <li>
+        <SetupChannelRow
+          setup={setup}
+          active={setup.botId === activeBotId}
+          onOpen={() => onOpenChannel(setup)}
+        />
+      </li>
+    );
   return (
     <section
+      ref={setNodeRef}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
       aria-label={group.label}
       data-testid="bot-channel-section"
       data-environment-id={group.environmentId}
-      className="flex flex-col gap-0.5"
+      data-collapsed={collapsed ? "true" : "false"}
+      className={cn("flex flex-col gap-0.5", isDragging && "opacity-35")}
     >
-      <div className="group/section flex min-w-0 items-center gap-0.5">
-        <span className="min-w-0 flex-1 truncate px-1.5 py-1 text-ui-sm font-medium text-muted-foreground">
-          {group.label}
-        </span>
-        {main !== null || isPersonal ? (
-          // Drawn on the header's hover and on keyboard focus, as the
-          // section's own control rather than a row of it; always drawn on a
-          // touch screen, which has no hover.
-          <button
-            type="button"
-            aria-label={main === null ? "New bot" : `Open ${main.title}`}
-            data-testid="bot-channel-section-add"
-            onClick={(event) => {
-              if (main === null) newBot(event);
-              else onOpenChannel(main);
-            }}
-            className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-foreground/6 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2 group-hover/section:opacity-100 pointer-coarse:opacity-100"
-          >
-            <Plus className="size-3.5" aria-hidden="true" />
-          </button>
-        ) : null}
-      </div>
-      {!isPersonal || group.bots.length > 0 ? null : (
+      <SectionHeader
+        label={group.label}
+        collapsed={collapsed}
+        onToggle={toggleCollapsed}
+        handle={{ ref: setActivatorNodeRef, attributes, listeners }}
+        add={
+          main !== null || isPersonal ? (
+            // Drawn on the header's hover and on keyboard focus, as the
+            // section's own control rather than a row of it; always drawn on
+            // a touch screen, which has no hover.
+            <button
+              type="button"
+              aria-label={main === null ? "New bot" : `Open ${main.title}`}
+              data-testid="bot-channel-section-add"
+              onClick={(event) => {
+                if (main === null) newBot(event);
+                else onOpenChannel(main);
+              }}
+              className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-foreground/6 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2 group-hover/section:opacity-100 pointer-coarse:opacity-100"
+            >
+              <Plus className="size-3.5" aria-hidden="true" />
+            </button>
+          ) : null
+        }
+      />
+      {collapsed || !isPersonal || group.bots.length > 0 ? null : (
         <button
           type="button"
           data-testid="bot-channel-section-set-up"
@@ -316,45 +424,155 @@ function SidebarSection(props: {
           New bot
         </button>
       )}
-      <ul className="flex flex-col gap-0.5">
-        {group.bots.map((bot) => {
-          const row = (
-            <ChannelRow
+      {collapsed ? (
+        // Put away, the order cannot be changed: only some rows show.
+        <ul className="flex flex-col gap-0.5">
+          {group.bots.map((bot) => (
+            <CollapsedChannelItem
+              key={bot.botId}
               bot={bot}
-              isMain={bot.botId === group.mainBotId}
               active={bot.botId === activeBotId}
               unread={unreadByBotId.has(bot.botId)}
-              unreadCount={unreadByBotId.get(bot.botId) ?? null}
               hostId={hostId}
-              onOpen={() => onOpenChannel(bot)}
-            />
-          );
-          const canMakeMain =
-            props.canSetMainBot &&
-            group.mainBotId !== null &&
-            bot.botId !== group.mainBotId;
-          return (
-            <li key={bot.botId}>
-              {canMakeMain ? (
-                <MakeMainChannelRow bot={bot}>{row}</MakeMainChannelRow>
-              ) : (
-                row
-              )}
-            </li>
-          );
-        })}
-        {setup === null ? null : (
-          <li>
-            <SetupChannelRow
-              setup={setup}
-              active={setup.botId === activeBotId}
-              onOpen={() => onOpenChannel(setup)}
-            />
-          </li>
-        )}
-      </ul>
+            >
+              {channelRow(bot, null)}
+            </CollapsedChannelItem>
+          ))}
+          {setupRow}
+        </ul>
+      ) : (
+        <SortableColumnList
+          ids={group.bots.map((bot) => bot.botId)}
+          onReorder={(order) =>
+            setChannelOrder(group.environmentId, order, answeredModel)
+          }
+          renderLifted={(botId) => {
+            const bot = group.bots.find((entry) => entry.botId === botId);
+            return bot === undefined ? null : channelRow(bot, null);
+          }}
+        >
+          <ul className="flex flex-col gap-0.5">
+            {group.bots.map((bot) => (
+              <SortableChannelItem key={bot.botId} botId={bot.botId}>
+                {(drag) => channelRow(bot, drag)}
+              </SortableChannelItem>
+            ))}
+            {/* The team's main bot to be set up is the section's only row,
+                and stays where it is. */}
+            {setupRow}
+          </ul>
+        </SortableColumnList>
+      )}
     </section>
   );
+}
+
+/**
+ * A section's header: the chevron that puts the section away, drawn as the +
+ * is and always while the section is collapsed; the label, which the section
+ * drags by and which toggles it on a click; the section's own control.
+ */
+function SectionHeader(props: {
+  readonly label: string;
+  readonly collapsed: boolean;
+  readonly onToggle: () => void;
+  readonly handle: ColumnDragHandle;
+  /** The + or the team's main bot, on the right. */
+  readonly add: ReactNode;
+}): ReactNode {
+  const { label, collapsed, onToggle, add } = props;
+  const { ref: dragRef, attributes, listeners } = props.handle;
+  return (
+    <div className="group/section flex min-w-0 items-center gap-0.5">
+      <button
+        type="button"
+        aria-expanded={!collapsed}
+        aria-label={collapsed ? `Expand ${label}` : `Collapse ${label}`}
+        data-testid="bot-channel-section-toggle"
+        onClick={onToggle}
+        className={cn(
+          "flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-foreground/6 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2 group-hover/section:opacity-100 pointer-coarse:opacity-100",
+          collapsed && "opacity-100",
+        )}
+      >
+        <ChevronRight
+          className={cn(
+            "size-3.5 transition-transform",
+            !collapsed && "rotate-90",
+          )}
+          aria-hidden="true"
+        />
+      </button>
+      <button
+        type="button"
+        ref={dragRef}
+        {...attributes}
+        {...listeners}
+        data-testid="bot-channel-section-label"
+        onClick={onToggle}
+        className="min-w-0 flex-1 truncate rounded-md px-1 py-1 text-left text-ui-sm font-medium text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
+      >
+        {label}
+      </button>
+      {add}
+    </div>
+  );
+}
+
+/** A section's label as it lifts while the section is dragged. */
+function SectionLiftedHeader(props: { readonly label: string }): ReactNode {
+  return (
+    <div className="truncate px-1.5 py-1 text-ui-sm font-medium text-muted-foreground">
+      {props.label}
+    </div>
+  );
+}
+
+function SortableChannelItem(props: {
+  readonly botId: string;
+  readonly children: (drag: ColumnDragHandle) => ReactNode;
+}): ReactNode {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: props.botId });
+  return (
+    <li
+      ref={setNodeRef}
+      style={{ transform: CSS.Translate.toString(transform), transition }}
+      className={cn(isDragging && "opacity-35")}
+    >
+      {props.children({ ref: setActivatorNodeRef, attributes, listeners })}
+    </li>
+  );
+}
+
+/**
+ * A channel of a collapsed section, drawn only while it is the current one
+ * or has something unread: a count or a marker, or bold by its read cursor
+ * as its row draws it.
+ */
+function CollapsedChannelItem(props: {
+  readonly bot: BotRecord;
+  readonly active: boolean;
+  readonly unread: boolean;
+  readonly hostId: string;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { bot, active, unread, hostId } = props;
+  const bold = useBotChannelBold(
+    useTabHostClient(),
+    hostId,
+    bot.botId,
+    bot.appConversationChatId,
+  );
+  if (!active && !unread && bold !== true) return null;
+  return <li>{props.children}</li>;
 }
 
 /**
@@ -426,9 +644,12 @@ function ChannelRow(props: {
   /** Drawn right-aligned; `null` where the host does not count. */
   readonly unreadCount: number | null;
   readonly hostId: string;
+  /** What the row is dragged by in its section; `null` where it is not. */
+  readonly drag: ColumnDragHandle | null;
   readonly onOpen: () => void;
 }): ReactNode {
-  const { bot, isMain, active, unread, unreadCount, hostId, onOpen } = props;
+  const { bot, isMain, active, unread, unreadCount, hostId, drag, onOpen } =
+    props;
   const client = useTabHostClient();
   const muted = useBotChannelMuted(
     client,
@@ -444,6 +665,9 @@ function ChannelRow(props: {
   return (
     <button
       type="button"
+      ref={drag?.ref}
+      {...drag?.attributes}
+      {...drag?.listeners}
       data-testid="bot-channel-row"
       data-bot-id={bot.botId}
       data-unread={bold ? "true" : "false"}
