@@ -1006,8 +1006,8 @@ describe("R5F2: the four-state x cap matrix (each state protects the session, an
       // 5 s deadline fires immediately against an image read that completes in
       // microtasks. Which one wins differs between otherwise identical states.
       //
-      // Not "a harness artefact" - that framing was too categorical and the
-      // reviewer disproved it with a real-timer probe: with the bytes local,
+      // Not "a harness artefact" - that framing was too categorical and a
+      // real-timer probe disproved it: with the bytes local,
       // an event-loop stall long enough to outlast the deadline still drops
       // the image. That is the fallback behaving as designed - the words are
       // what the deadline protects - but it is production behaviour, not a

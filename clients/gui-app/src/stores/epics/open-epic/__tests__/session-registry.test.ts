@@ -1466,7 +1466,7 @@ describe("unknown activity grace applies only to epic cap eviction", () => {
 });
 
 // ── acquireMounted / releaseMounted: the mount-reference contract ────────────
-// Oracle for the seam the risk review names untested: "releaseMounted on
+// Oracle for the seam named untested: "releaseMounted on
 // unmount... a demand-0 release is a no-op." Provider-level coverage already
 // pins that an unmount leaves a warm handle adoptable by a later remount
 // (`epic-session-provider.test.tsx`, "retryRepoint forces reconnectAll on a
@@ -1517,7 +1517,7 @@ describe("acquireMounted / releaseMounted mount-reference counting", () => {
 // by `epic-session-provider.test.tsx`'s "retires the handle a worker fatal
 // killed..." and "hands a FRESH surface a new handle during the corpse
 // window...". What is untested anywhere is the narrower registry-only claim
-// the risk review calls out by name: `acquire` has NO such guard, so the
+// called out by name: `acquire` has NO such guard, so the
 // non-mounted path a future controller might reach for would adopt the
 // corpse instead of rebuilding it.
 describe("retireIfDead runs only from acquireMounted, on the next acquisition", () => {
@@ -1557,7 +1557,7 @@ describe("retireIfDead runs only from acquireMounted, on the next acquisition", 
 
 // ── Desktop-ownership release listener: pendingPark / "replaced" exemptions ──
 // Oracle for "pendingPark and 'replaced' ownership-release exemptions;
-// setReleaseListener has no test caller" - the risk review's own words for
+// setReleaseListener has no test caller" - the exact words for
 // this gap. Ownership belongs to the tab/Epic, not to one transient
 // transport, so a park (tab stays open) and a re-point (tab stays open, new
 // transport) must NOT tell the desktop layer this window gave the epic up -

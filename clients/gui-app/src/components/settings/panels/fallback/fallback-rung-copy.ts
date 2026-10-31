@@ -24,7 +24,7 @@ import { FRESH_SESSION_HELPER } from "@/components/chat/fallback/fallback-copy";
  *
  * Something the LABEL does not already say, and something they can ACT on.
  * Each of the four used to restate its own label in longer words, which is what
- * made the page read as verbose rather than merely long. A user-lens review of
+ * made the page read as verbose rather than merely long. A later pass over
  * the rewrite then found the replacements were still explaining the system to
  * someone who already knew it, so each now answers the question a reader
  * actually arrives with - where do I set this up, what does Traycer wait for,

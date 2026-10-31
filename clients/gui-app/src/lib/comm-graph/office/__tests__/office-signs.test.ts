@@ -281,7 +281,7 @@ describe("officeSignsToDraw - F5 projected anchor", () => {
     // Projected tile (2,2): x = 2048 + 2*16 = 2080, y = 2*16 = 32.
     expect(resolved.anchor).toEqual({ x: 2080, y: 32 });
     // Centre of a two-tile board hanging off that anchor: 2080 + 16 = 2096 -
-    // the same value the review's own reproduction and the component's
+    // the same value the original reproduction and the component's
     // integration case (plus its fixed camera) both pin.
     expect(officeSignCenterX(resolved)).toBe(2096);
   });
@@ -439,7 +439,7 @@ describe("officeBoardText - F11 roster filtering and width", () => {
 });
 
 describe("officeBoardText - F11 five HQ names, laid out to the board", () => {
-  /** The reviewer's own fixture: six agents, ordinary two-word names. */
+  /** The fixture: six agents, ordinary two-word names. */
   const ROSTER = ["a", "b", "c", "d", "e", "f"];
   const STATUS_BY_ID = new Map<string, OfficeAgentStatus>([
     ["a", "attention"],
@@ -832,7 +832,7 @@ describe("officeBoardText - fixup 3 F11 the ladder never overflows its board", (
   const visible = new Set(FIVE);
 
   /**
-   * The reviewer's first reproduction: five SINGLE-WORD names on the eight-tile
+   * The first reproduction: five SINGLE-WORD names on the eight-tile
    * board a real HQ has. The old ladder held every one-word name whole at all
    * three rungs, so the separators were the only width it could give back, and
    * the widest reading was also the narrowest: 212.61px against 128.
@@ -879,7 +879,7 @@ describe("officeBoardText - fixup 3 F11 the ladder never overflows its board", (
   });
 
   /**
-   * The reviewer's other two: zoom 0.7, the included lower boundary of lod 1,
+   * The other two: zoom 0.7, the included lower boundary of lod 1,
    * where every rung the ladder had ran wider than the board.
    */
   it("steps a six-tile count board below its last rung at the 0.7 zoom boundary", () => {

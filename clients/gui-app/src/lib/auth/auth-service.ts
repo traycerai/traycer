@@ -5304,7 +5304,7 @@ export class AuthService {
    * announcement — but not because nothing reads it there. This comment used
    * to claim "no synchronous listener path reads auth state from there", and
    * that claim is FALSE. It is stated as a correction rather than deleted
-   * because it is the specific artifact that let a real defect survive review:
+   * because it is the specific artifact that let a real defect through:
    *
    *   `setSignedIn` announces synchronously -> `HostRuntime` ->
    *   `directory.refreshForEra(era)` -> the auth-bound fetcher ->
@@ -5643,8 +5643,8 @@ export class AuthService {
    * from the live profile rather than the credentials file.
    *
    * Shared by every live-path intake that can land on a terminal verdict, which
-   * is the point: three of them existed and only one held the plane. Each was a
-   * separate reviewer finding, and they were the same defect — an intake path
+   * is the point: three of them existed and only one held the plane. Each was
+   * found separately, and they were the same defect — an intake path
    * that reaches a rejection and leaves the store `signed-in` on a credential
    * the server has refused. Adding a fourth caller should mean calling this,
    * not re-deriving it.

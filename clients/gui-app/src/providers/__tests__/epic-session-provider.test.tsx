@@ -1287,7 +1287,7 @@ describe("<TestEpicSessionTab />", () => {
   });
 
   // ── `handleHostClients` stamping ──────────────────────────────────────────
-  // Oracle for the risk review's "`releaseMounted` on unmount;
+  // Oracle for the risk analysis's "`releaseMounted` on unmount;
   // `handleHostClients` stamping; imported-unseen `markSeen`" untested list.
   // The stamp is read by imperative callers OUTSIDE this subtree (the DnD
   // reparent commit); nothing in this suite reads it today.

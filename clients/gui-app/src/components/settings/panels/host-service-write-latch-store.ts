@@ -4,7 +4,7 @@ import { create } from "zustand";
  * Per-HOST latches for the OS-service writes, module-scoped on purpose.
  *
  * They used to be component state in the service adapter, and that had two
- * structural holes the review rounds surfaced one each:
+ * structural holes, one each:
  *
  * - The Overview panel is keyed by host id. Switching Settings to another
  *   host unmounts the panel, discarding a latch mid-shutdown — and TanStack

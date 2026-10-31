@@ -30,7 +30,7 @@ const NEIGHBOUR_OFFSETS: ReadonlyArray<OfficeTilePos> = [
  *
  * A search used to allocate an `Int32Array` and a `Uint8Array` the size of the
  * whole floor EVERY TIME it ran, and a sync of a thousand-agent office runs
- * dozens of them: at the review's largest plan that is two arrays of 103,896
+ * dozens of them: at the largest plan that is two arrays of 103,896
  * cells per walk, handed straight to the collector. They are grown to the
  * largest grid ever searched and reused, which costs one allocation per office
  * that is bigger than every office before it.

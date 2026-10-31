@@ -506,8 +506,8 @@ function buildBootBody(args: {
   // to wait for a start that is not happening, and they report a hang instead
   // of a crash.
   //
-  // GATED ON THE FAILURE, NOT THE CAUSE - and it was the cause until a review
-  // caught it. `cause === "no-usable-host"` covers only the arm where nothing can
+  // GATED ON THE FAILURE, NOT THE CAUSE - and it was the cause until this was
+  // caught. `cause === "no-usable-host"` covers only the arm where nothing can
   // serve the window at all. A cold start whose install has ALREADY FAILED
   // (`provisioningError` set, so the action row is offering Retry and Report
   // issue) still reached the loading body and drew a live spinner claiming a

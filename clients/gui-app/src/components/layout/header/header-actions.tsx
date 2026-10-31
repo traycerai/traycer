@@ -172,7 +172,7 @@ export function HeaderResourceRegion(props: {
 // behind its own verdict gate - and on a desktop-width header this bell is
 // the ONLY entry point to those lanes, so gating it on the cloud verdict left
 // locally served failures, approvals and agent activity accumulating with no
-// way to see or act on them. Found in review.
+// way to see or act on them.
 export function HeaderNotificationsBell(): ReactNode {
   const admitted = useAuthStore((state) => admitsLocalPlane(state.status));
   if (!admitted) {

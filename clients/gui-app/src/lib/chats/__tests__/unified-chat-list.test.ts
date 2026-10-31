@@ -500,7 +500,7 @@ describe("localChatLastActiveAtById / chatListLastActiveAtByKey", () => {
 
 describe("cross-owner folding", () => {
   /**
-   * The reviewer's executable case. `chatId` is host-minted and not unique
+   * The executable case. `chatId` is host-minted and not unique
    * under a task, and the cloud list carries every task-visible chat including
    * other people's - so an id-only fold can delete a collaborator's genuinely
    * different chat from the only agent list there now is.

@@ -414,7 +414,7 @@ function noticeThenRecord(state: S) {
   });
 
   it("EVERY-CALLER CONTROL: a pure-helper notice builder with two callers, only one of which records, is reported (DRIVE RED on every->some)", () => {
-    // Reproduces the reviewer's finding: `helperCalls.some(...)` would let a
+    // Reproduces the defect: `helperCalls.some(...)` would let a
     // SECOND, forgetful caller of the same notice-building helper through as
     // long as some OTHER caller records. `every` is the only version that
     // actually enforces "every call site must record".
