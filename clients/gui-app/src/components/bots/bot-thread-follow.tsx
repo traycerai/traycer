@@ -83,7 +83,7 @@ export function BotThreadFollowControl(props: {
 }
 
 /**
- * A Threads tab row's menu: Follow or Unfollow the thread, whichever it is
+ * A Threads row's menu: Follow or Unfollow the thread, whichever it is
  * not now.
  */
 export function BotThreadRowMenu(props: {

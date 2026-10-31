@@ -105,7 +105,11 @@ export function TeamSetupChannel(props: {
           handleClassName=""
           testId="bot-channel-sidebar-pane"
         >
-          <BotChannelSidebar activeBotId={setup.botId} hostId={hostId} />
+          <BotChannelSidebar
+            activeBotId={setup.botId}
+            hostId={hostId}
+            threadsView={null}
+          />
         </BotResizablePane>
         <section
           aria-label={setup.title}

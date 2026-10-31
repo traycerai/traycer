@@ -371,12 +371,32 @@ vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   useBotOpenMutation: () => mocks.openMutation,
 }));
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({
-  BotChannelSidebar: (props: { activeBotId: string; hostId: string }) => (
+  BotChannelSidebar: (props: {
+    activeBotId: string;
+    hostId: string;
+    threadsView: {
+      shown: boolean;
+      onShow: () => void;
+      onLeave: () => void;
+    } | null;
+  }) => (
     <div
       data-testid="stub-sidebar"
       data-active-bot-id={props.activeBotId}
       data-host-id={props.hostId}
-    />
+      data-threads-shown={String(props.threadsView?.shown ?? "none")}
+    >
+      <button
+        type="button"
+        data-testid="stub-sidebar-threads"
+        onClick={props.threadsView?.onShow}
+      />
+      <button
+        type="button"
+        data-testid="stub-sidebar-own-channel"
+        onClick={props.threadsView?.onLeave}
+      />
+    </div>
   ),
 }));
 vi.mock("@/components/bots/bot-channel-view", () => ({
@@ -529,13 +549,23 @@ vi.mock("@/components/bots/bot-activity-page", () => ({
     </div>
   ),
 }));
-vi.mock("@/components/bots/bot-threads-page", () => ({
-  BotThreadsPage: (props: { botId: string; hostId: string }) => (
+vi.mock("@/components/bots/bot-threads-view", () => ({
+  BotThreadsView: (props: {
+    hostId: string;
+    channelTitle: string;
+    onBack: () => void;
+  }) => (
     <div
       data-testid="stub-threads"
-      data-bot-id={props.botId}
       data-host-id={props.hostId}
-    />
+      data-channel-title={props.channelTitle}
+    >
+      <button
+        type="button"
+        data-testid="stub-threads-back"
+        onClick={props.onBack}
+      />
+    </div>
   ),
 }));
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
@@ -2327,7 +2357,7 @@ describe("<BotTabSurface /> channel actions menu", () => {
 });
 
 describe("<BotTabSurface /> main bot", () => {
-  it("draws the header as the bot's picture, the channel's name with the main bot's star, its three views and the settings ⋮ only", () => {
+  it("draws the header as the bot's picture, the channel's name with the main bot's star, its two views and the settings ⋮ only", () => {
     mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
     mocks.state.mainBotIds = { "env-team": BOT_ID };
     render(surface());
@@ -2338,9 +2368,9 @@ describe("<BotTabSurface /> main bot", () => {
       within(header)
         .getAllByRole("tab")
         .map((tab) => tab.textContent),
-    ).toEqual(["Messages", "Activity", "Threads"]);
+    ).toEqual(["Messages", "Activity"]);
     expect(header.textContent).toBe(
-      `${screen.getByTestId("bot-tab-avatar").textContent}${screen.getByTestId("bot-tab-title").textContent}MessagesActivityThreads`,
+      `${screen.getByTestId("bot-tab-avatar").textContent}${screen.getByTestId("bot-tab-title").textContent}MessagesActivity`,
     );
     expect(
       within(header).getByRole("button", { name: "Channel settings" }),
@@ -2369,13 +2399,12 @@ describe("<BotTabSurface /> views", () => {
     return screen.getByTestId("bot-tab-view-activity");
   }
 
-  it("shows Messages first, with Activity and Threads beside it, and no counts for a quiet bot", () => {
+  it("shows Messages first, with Activity beside it and no Threads tab, and no counts for a quiet bot", () => {
     render(surface());
 
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
       "Messages",
       "Activity",
-      "Threads",
     ]);
     expect(
       screen.getByTestId("bot-tab-view-messages").getAttribute("aria-selected"),
@@ -2431,16 +2460,113 @@ describe("<BotTabSurface /> views", () => {
     expect(activityTab().textContent).toBe("Activity · 1 task");
   });
 
-  it("shows the Threads page when Threads is chosen", async () => {
+  it("shows Threads from the column in place of the channel and its views, through the tab's host, and its own channel row lands back where it was", async () => {
     const user = userEvent.setup();
     render(surface());
+    await user.click(activityTab());
 
-    await user.click(screen.getByTestId("bot-tab-view-threads"));
+    await user.click(screen.getByTestId("stub-sidebar-threads"));
 
-    const page = screen.getByTestId("stub-threads");
-    expect(page.getAttribute("data-bot-id")).toBe(BOT_ID);
-    expect(page.getAttribute("data-host-id")).toBe(TAB_HOST);
-    expect(screen.queryByTestId("stub-channel")).toBeNull();
+    expect(
+      screen.getByTestId("stub-threads").getAttribute("data-host-id"),
+    ).toBe(TAB_HOST);
+    expect(screen.queryByRole("tab")).toBeNull();
+    expect(screen.queryByTestId("stub-activity")).toBeNull();
+    const sidebar = screen.getByTestId("stub-sidebar");
+    expect(sidebar.getAttribute("data-threads-shown")).toBe("true");
+    expect(sidebar.getAttribute("data-active-bot-id")).toBe(BOT_ID);
+
+    await user.click(screen.getByTestId("stub-sidebar-own-channel"));
+
+    expect(screen.queryByTestId("stub-threads")).toBeNull();
+    expect(activityTab().getAttribute("aria-selected")).toBe("true");
+    expect(sidebar.getAttribute("data-threads-shown")).toBe("false");
+  });
+
+  it.each([
+    ["the view's back control", "stub-threads-back"],
+    ["the column's row for this channel", "stub-sidebar-own-channel"],
+  ])(
+    "leaves Threads for the channel, not for a session open before it, through %s",
+    async (_way, testId) => {
+      const user = userEvent.setup();
+      render(surface());
+      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+      expect(screen.getByTestId("stub-session")).toBeTruthy();
+      await user.click(screen.getByTestId("stub-sidebar-threads"));
+
+      await user.click(screen.getByTestId(testId));
+
+      expect(screen.queryByTestId("stub-threads")).toBeNull();
+      expect(screen.queryByTestId("stub-session")).toBeNull();
+      expect(screen.getByTestId("stub-channel")).toBeTruthy();
+      expect(
+        screen
+          .getByTestId("bot-tab-view-messages")
+          .getAttribute("aria-selected"),
+      ).toBe("true");
+    },
+  );
+
+  it("goes back from Threads to the channel where it was through the view's own back control, which names the tab's channel", async () => {
+    const user = userEvent.setup();
+    render(surface());
+    await user.click(activityTab());
+    await user.click(screen.getByTestId("stub-sidebar-threads"));
+    expect(
+      screen.getByTestId("stub-threads").getAttribute("data-channel-title"),
+    ).toBe(snapshot().bot.title);
+
+    await user.click(screen.getByTestId("stub-threads-back"));
+
+    expect(screen.queryByTestId("stub-threads")).toBeNull();
+    expect(activityTab().getAttribute("aria-selected")).toBe("true");
+    expect(
+      screen.getByTestId("stub-sidebar").getAttribute("data-threads-shown"),
+    ).toBe("false");
+  });
+
+  it("opens a thread chosen in Threads beside the channel, through the tab's landing, and leaves Threads", async () => {
+    const user = userEvent.setup();
+    mocks.state.threads = [
+      {
+        threadId: "thread-1",
+        conversationId: "conversation-app",
+        sessionChatId: "session-thread-1",
+        anchor: {
+          messageId: "post-7",
+          requestId: "req-7",
+          senderUserId: "user-1",
+          sentAt: 1_000,
+          resolvedAt: null,
+        },
+        replyCount: 1,
+        lastReplyAt: 2_000,
+        openRequestCount: 0,
+        costUsd: null,
+      },
+    ];
+    useBotTabLandingStore.setState({ byBotId: {} });
+    render(surface());
+    await user.click(screen.getByTestId("stub-sidebar-threads"));
+
+    act(() =>
+      useBotTabLandingStore
+        .getState()
+        .request(BOT_ID, { threadId: "thread-1", messageId: null }),
+    );
+
+    expect(screen.queryByTestId("stub-threads")).toBeNull();
+    expect(
+      screen.getByTestId("stub-channel").getAttribute("data-open-thread"),
+    ).toBe("post-7");
+    expect(
+      screen.getByTestId("bot-tab-view-messages").getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(
+      screen.getByTestId("stub-sidebar").getAttribute("data-threads-shown"),
+    ).toBe("false");
+    expect(useBotTabLandingStore.getState().byBotId).toEqual({});
   });
 
   it("switches to Activity from the open thread's Activity link", async () => {
