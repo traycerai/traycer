@@ -136,9 +136,14 @@ export function composeBriefing(input: {
   if (sentences.length === 0) return NOTHING_WAITING_TEXT;
   return boundedSentences(
     "Here is what needs your attention.",
-    sentences,
+    sentences.map(capitalized),
     input.maxChars,
   );
+}
+
+/** A sentence that opens with a bot's fallback name ("the bot") still opens with a capital. */
+function capitalized(sentence: string): string {
+  return sentence.charAt(0).toUpperCase() + sentence.slice(1);
 }
 
 interface AnswerGroup {

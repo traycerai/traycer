@@ -173,7 +173,8 @@ export interface Announcement {
 /**
  * The bot's rows of a channel that answer nothing: no direct reply's
  * `repliesTo`, and no member's request in the channel resolved to them. Rows
- * at or before `since` are history. Oldest first.
+ * at or before `since` are history. In the store's order, which is oldest
+ * first.
  */
 export function announcementsOf(
   rows: ReadonlyArray<AnnouncementRow>,
