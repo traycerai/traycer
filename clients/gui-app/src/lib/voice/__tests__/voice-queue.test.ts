@@ -434,6 +434,18 @@ describe("a bot's stopped answer", () => {
     expect(published).toEqual([]);
   });
 
+  it("that the stream does not date is dated when first seen, and keeps that date", () => {
+    const undated: ReadonlyArray<StoppedAnswer> = [
+      { requestId: "req-1", threadId: "thread-x", state: "failed", at: null },
+    ];
+    const firstSeen = clock.now();
+    sync(undated);
+    clock.advance(30_000);
+    sync(undated);
+
+    expect(queue.items().map((item) => item.at)).toEqual([firstSeen]);
+  });
+
   it("is read as its line, and has nothing of its own to mark read", () => {
     sync(stopped("req-1"));
 

@@ -1,3 +1,4 @@
+import type { BotActivity } from "@traycer/protocol/host/bot/schemas";
 import type { OpenTextBlock } from "@traycer/protocol/persistence/epic/open-harness-records";
 import { describe, expect, it } from "vitest";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
@@ -6,6 +7,7 @@ import {
   attentionPromptsOf,
   hydratedEntryOf,
   replyRefsOf,
+  stoppedAnswersOf,
   type AnnouncementRow,
   type HydrationRow,
 } from "../queue-sources";
@@ -364,6 +366,48 @@ describe("announcementsOf", () => {
     expect(announcementsOf(rows, 1_000)).toEqual([
       { messageId: "a-new-1", content: "Post a-new-1.", at: 4_000 },
       { messageId: "a-new-2", content: "Post a-new-2.", at: 5_000 },
+    ]);
+  });
+});
+
+describe("stoppedAnswersOf", () => {
+  it("lists the failed and parked sessions that hold a request, the trunk first, undated when the stream gives no start", () => {
+    const activity: BotActivity = {
+      trunk: {
+        state: "failed",
+        startedAt: null,
+        step: null,
+        requestId: "req-trunk",
+        reason: null,
+      },
+      threads: {
+        "thread-a": {
+          state: "parked",
+          startedAt: 4_000,
+          step: null,
+          requestId: "req-a",
+          reason: null,
+        },
+        "thread-b": {
+          state: "idle",
+          startedAt: 5_000,
+          step: null,
+          requestId: "req-b",
+          reason: null,
+        },
+        "thread-c": {
+          state: "failed",
+          startedAt: 6_000,
+          step: null,
+          requestId: null,
+          reason: null,
+        },
+      },
+    };
+
+    expect(stoppedAnswersOf(activity)).toEqual([
+      { requestId: "req-trunk", threadId: null, state: "failed", at: null },
+      { requestId: "req-a", threadId: "thread-a", state: "parked", at: 4_000 },
     ]);
   });
 });
