@@ -94,9 +94,22 @@ export interface VoiceQueue {
    */
   readonly pendingHydrations: () => ReadonlyArray<PendingHydration>;
   readonly subscribePending: (listener: () => void) => () => void;
-  /** The records answered for a reference: its row, or `null` when they have none. */
-  hydrated(messageId: string, row: HydrationRow | null): void;
-  /** The focused feed scheduled this row: it is said there, not here. */
+  /**
+   * The records answered for a reference: its row, or `null` when they have
+   * none. `author` is the name of the member who wrote a member's row, as
+   * the member directory gives it (`null` when it does not, or for the
+   * bot's own rows).
+   */
+  hydrated(
+    messageId: string,
+    row: HydrationRow | null,
+    author: string | null,
+  ): void;
+  /**
+   * The focused feed scheduled this row: it is said there, not here. Until
+   * it says so, an item in the focused chat stays queued; being focused is
+   * not being heard.
+   */
   noteFocused(messageId: string): void;
   addAnnouncement(input: {
     readonly botId: string;
@@ -246,11 +259,13 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
     withdrawOffer(entry);
     const item = entry.item;
     const botTitle = deps.botTitle(item.botId);
+    const speaker =
+      item.kind === "message" ? (item.author ?? "A teammate") : botTitle;
     const text =
       entry.content === null
         ? `${itemLineOf(item, botTitle)}.`
         : readTextOf({
-            botTitle,
+            speaker,
             content: entry.content,
             options: entry.options,
           });
@@ -264,7 +279,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       text,
       delegationId,
       confirmWords: confirmationWords({
-        botTitle,
+        botTitle: speaker,
         threadTitle: null,
         text: entry.content ?? text,
       }),
@@ -336,16 +351,15 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
         pendingListeners.delete(listener);
       };
     },
-    hydrated(messageId, row) {
+    hydrated(messageId, row, author) {
       const waiting = pending.get(messageId);
       if (waiting === undefined) return;
       pending.delete(messageId);
       notifyPending();
       const ref = waiting.hydration.ref;
       const entry = row === null ? null : hydratedEntryOf(row);
-      // No row, no prose, or a chat the focused feed speaks itself: nothing
-      // is queued, and the bell keeps it.
-      if (entry === null || deps.isFocused(ref.botId, ref.chatId)) {
+      // No row, or no prose: nothing is queued, and the bell keeps it.
+      if (entry === null) {
         settled.add(messageId);
         return;
       }
@@ -372,6 +386,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
           messageId,
           surfaceId: entry.surfaceId,
           title: itemTitleOf(entry.content),
+          author: entry.kind === "message" ? author : null,
           line: "",
           at: ref.at,
           state: "queued",
@@ -387,7 +402,12 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       };
       entries.set(messageId, created);
       publish();
-      if (waiting.offer) offer(created);
+      // An arrival in the focused chat is the focused feed's to say: it is
+      // queued, unoffered, until the feed claims it (`noteFocused`), and
+      // stays in Waiting if the feed never does (a row it took for history).
+      if (waiting.offer && !deps.isFocused(ref.botId, ref.chatId)) {
+        offer(created);
+      }
     },
     noteFocused(messageId) {
       settled.add(messageId);
@@ -395,6 +415,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       const entry = entries.get(messageId);
       if (entry === undefined) return;
       withdrawOffer(entry);
+      withdrawRead(entry);
       entries.delete(messageId);
       publish();
     },
@@ -410,6 +431,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
         messageId: announcement.messageId,
         surfaceId: null,
         title: itemTitleOf(announcement.content),
+        author: null,
         line: "",
         at: announcement.at,
         state: "queued",
@@ -448,6 +470,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
           messageId: null,
           surfaceId: null,
           title: "",
+          author: null,
           line: "",
           at: answer.at ?? seenAt,
           state: "queued",

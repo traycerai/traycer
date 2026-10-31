@@ -45,10 +45,12 @@ function placeOf(item: Pick<QueueItem, "threadId">): string {
  * Waiting control say it: which bot, which thread, the gist.
  */
 export function itemLineOf(
-  item: Pick<QueueItem, "kind" | "threadId" | "title">,
+  item: Pick<QueueItem, "kind" | "threadId" | "title" | "author">,
   botTitle: string,
 ): string {
   switch (item.kind) {
+    case "message":
+      return `${item.author ?? "A teammate"} wrote ${placeOf(item)} with ${botTitle}: "${item.title}"`;
     case "reply":
       return `${botTitle} answered ${placeOf(item)}: "${item.title}"`;
     case "question":
@@ -64,22 +66,23 @@ export function itemLineOf(
 
 /** The interjection: the item's line and the offer ("want it?"). */
 export function offerTextOf(
-  item: Pick<QueueItem, "kind" | "threadId" | "title">,
+  item: Pick<QueueItem, "kind" | "threadId" | "title" | "author">,
   botTitle: string,
 ): string {
   return `${itemLineOf(item, botTitle)}. Want it?`;
 }
 
 /**
- * The read: the bot's words, quoted by the bot's name, and an open
- * question's choices as an explicit list, so none is lost to a paraphrase.
+ * The read: the words, quoted by who said them (the bot, or the teammate
+ * who wrote a message), and an open question's choices as an explicit list,
+ * so none is lost to a paraphrase.
  */
 export function readTextOf(input: {
-  readonly botTitle: string;
+  readonly speaker: string;
   readonly content: string;
   readonly options: ReadonlyArray<string>;
 }): string {
-  const said = `${input.botTitle} said: ${input.content.trim()}`;
+  const said = `${input.speaker} said: ${input.content.trim()}`;
   if (input.options.length === 0) return said;
   const list = input.options
     .map((option, index) => `${index + 1}. ${option}`)
@@ -90,64 +93,89 @@ export function readTextOf(input: {
 export const NOTHING_WAITING_TEXT = "Nothing needs your attention right now.";
 
 /**
- * The briefing: what needs the person, most recent first, bounded to
- * `maxChars` at a sentence's end. Unread answers by bot and thread (the
- * waiting items' own lines where they are hydrated, the attention tier's
- * counts where they are not yet), then the approvals and questions that wait
- * on the person, then announcements. With nothing, one line saying so.
+ * The briefing: what needs the person, bounded to `maxChars` at a
+ * sentence's end, in V3's order so what blocks the person survives the cap:
+ * first what waits on them (the approvals and questions the attention tier
+ * counts, the bot questions and surfaced prompts the queue names, the
+ * answers a bot stopped on), then unread answers and messages by bot and
+ * thread (the waiting items' own lines where they are hydrated, the tier's
+ * counts where they are not yet), then announcements; newest first within
+ * each. With nothing, one line saying so.
  */
 export function composeBriefing(input: {
-  /** Unread answers in the attention tier, as references. */
+  /** Unread rows in the attention tier, as references. */
   readonly answers: ReadonlyArray<ReplyRef>;
   readonly prompts: AttentionPrompts;
   /**
    * The queue as it stands. Only waiting items get a line; every item, heard
-   * and dismissed included, keeps its answer out of the attention tier's
+   * and dismissed included, keeps what it names out of the attention tier's
    * counts, since `later` leaves the notification unread on purpose.
    */
   readonly items: ReadonlyArray<QueueItem>;
   readonly botTitle: (botId: string) => string;
   readonly maxChars: number;
 }): string {
-  const entries: Array<{ readonly at: number; readonly text: string }> = [];
-  const waiting = input.items.filter(
-    (item) => item.state === "queued" || item.state === "offered",
-  );
-  const itemized = new Set(
+  const waiting = input.items
+    .filter((item) => item.state === "queued" || item.state === "offered")
+    .sort((a, b) => b.at - a.at);
+  const known = new Set(
     input.items.flatMap((item) =>
-      item.messageId === null ? [] : [item.messageId],
+      [item.messageId, item.surfaceId].filter(
+        (id): id is string => id !== null,
+      ),
     ),
   );
+  const lineOf = (item: QueueItem): string =>
+    `${itemLineOf(item, input.botTitle(item.botId))}.`;
+
+  const blocking: string[] = [];
+  const prompts = promptSentence({
+    approvals: input.prompts.approvals.filter((id) => !known.has(id)),
+    questions: input.prompts.questions.filter((id) => !known.has(id)),
+  });
+  if (prompts !== null) blocking.push(prompts);
+  blocking.push(
+    ...waiting.filter((item) => isBlockingKind(item.kind)).map(lineOf),
+  );
+
+  const answers: Array<{ readonly at: number; readonly text: string }> = [];
   for (const item of waiting) {
-    if (item.kind === "announcement") continue;
-    entries.push({
-      at: item.at,
-      text: `${itemLineOf(item, input.botTitle(item.botId))}.`,
-    });
+    if (item.kind === "reply" || item.kind === "message") {
+      answers.push({ at: item.at, text: lineOf(item) });
+    }
   }
   for (const group of answerGroups(
-    input.answers.filter((ref) => !itemized.has(ref.messageId)),
+    input.answers.filter(
+      (ref) => !ref.blocking && !known.has(ref.messageId),
+    ),
   )) {
-    entries.push({
+    answers.push({
       at: group.at,
       text: `${input.botTitle(group.botId)} answered ${groupPlace(group)}.`,
     });
   }
-  entries.sort((a, b) => b.at - a.at);
-  const sentences = entries.map((entry) => entry.text);
-  const prompts = promptSentence(input.prompts);
-  if (prompts !== null) sentences.push(prompts);
+  answers.sort((a, b) => b.at - a.at);
+
   const announcements = waiting
     .filter((item) => item.kind === "announcement")
-    .sort((a, b) => b.at - a.at)
-    .map((item) => `${itemLineOf(item, input.botTitle(item.botId))}.`);
-  sentences.push(...announcements);
+    .map(lineOf);
+
+  const sentences = [
+    ...blocking,
+    ...answers.map((entry) => entry.text),
+    ...announcements,
+  ];
   if (sentences.length === 0) return NOTHING_WAITING_TEXT;
   return boundedSentences(
     "Here is what needs your attention.",
     sentences.map(capitalized),
     input.maxChars,
   );
+}
+
+/** What waits on the person rather than for them. */
+function isBlockingKind(kind: QueueItem["kind"]): boolean {
+  return kind === "question" || kind === "surface" || kind === "failed";
 }
 
 /** A sentence that opens with a bot's fallback name ("the bot") still opens with a capital. */
@@ -198,15 +226,13 @@ function groupPlace(group: AnswerGroup): string {
 }
 
 function promptSentence(prompts: AttentionPrompts): string | null {
+  const approvals = prompts.approvals.length;
+  const questions = prompts.questions.length;
   const parts: string[] = [];
-  if (prompts.approvals > 0) {
-    parts.push(plural(prompts.approvals, "approval", "approvals"));
-  }
-  if (prompts.questions > 0) {
-    parts.push(plural(prompts.questions, "question", "questions"));
-  }
+  if (approvals > 0) parts.push(plural(approvals, "approval", "approvals"));
+  if (questions > 0) parts.push(plural(questions, "question", "questions"));
   if (parts.length === 0) return null;
-  const total = prompts.approvals + prompts.questions;
+  const total = approvals + questions;
   return `${parts.join(" and ")} ${total === 1 ? "is" : "are"} waiting on you.`;
 }
 

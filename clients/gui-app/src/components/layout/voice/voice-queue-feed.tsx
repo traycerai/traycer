@@ -12,6 +12,8 @@ import type {
 import { useBotActivity } from "@/hooks/bots/use-bot-activity";
 import { useBotActivitySummary } from "@/hooks/bots/use-bot-activity-summary";
 import { useBotSubscriptionForHost } from "@/hooks/bots/use-bot-subscription";
+import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-members-query";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import {
@@ -64,7 +66,6 @@ export function VoiceQueueSources(props: {
           attention={owner.attention}
           hostOf={owner.hostOf}
           bots={owner.bots}
-          isFocused={owner.isFocused}
           registerMark={owner.registerMark}
         />
       )}
@@ -91,16 +92,13 @@ function VoiceQueueFeed(props: {
   readonly attention: VoiceAttention;
   readonly hostOf: (ref: ReplyRef) => string;
   readonly bots: ReadonlyArray<BotRecord>;
-  readonly isFocused: (botId: string, chatId: string) => boolean;
   readonly registerMark: (hostId: string, mark: VoiceReadMark | null) => void;
 }): ReactNode {
-  const { queue, attention, hostOf, bots, isFocused, registerMark } = props;
+  const { queue, attention, hostOf, bots, registerMark } = props;
   const hostOfRef = useRef(hostOf);
-  const isFocusedRef = useRef(isFocused);
   useEffect(() => {
     hostOfRef.current = hostOf;
-    isFocusedRef.current = isFocused;
-  }, [hostOf, isFocused]);
+  }, [hostOf]);
 
   // Every unread reply the attention tier names; one already known (queued,
   // hydrating, or said by the focused feed) changes nothing.
@@ -125,7 +123,6 @@ function VoiceQueueFeed(props: {
     return watchAnnouncements({
       source: getChatSessionRegistry(),
       channelBot: (chatId) => channels.get(chatId) ?? null,
-      isFocused: (botId, chatId) => isFocusedRef.current(botId, chatId),
       onAnnouncement: (found) => queue.addAnnouncement(found),
     });
   }, [bots, queue]);
@@ -142,6 +139,10 @@ function VoiceQueueFeed(props: {
           key={hydration.ref.messageId}
           hydration={hydration}
           queue={queue}
+          environmentId={
+            bots.find((bot) => bot.botId === hydration.ref.botId)
+              ?.environmentId ?? null
+          }
         />
       ))}
       {Object.values(botTabs).map((tab) => (
@@ -187,8 +188,10 @@ function uniqueHosts(hostIds: ReadonlyArray<string>): string {
 function VoiceReplyHydrator(props: {
   readonly hydration: PendingHydration;
   readonly queue: VoiceQueue;
+  /** The environment of the bot, whose member directory names a teammate; `null` when unknown. */
+  readonly environmentId: string | null;
 }): null {
-  const { hydration, queue } = props;
+  const { hydration, queue, environmentId } = props;
   const { ref, hostId } = hydration;
   const handle = useChatSessionHandleForContainer(
     ref.botId,
@@ -196,20 +199,41 @@ function VoiceReplyHydrator(props: {
     hostId,
     true,
   );
+  // A teammate's row is named by the directory the bot's channel names its
+  // members from; until it answers, or on a host without it, the line says
+  // "a teammate".
+  const client = useHostClientForHostId(hostId);
+  const membersSupported =
+    useHostMethodSupport(hostId, "environment.members") === true;
+  const directory = useEnvironmentMemberDirectory(
+    client,
+    environmentId,
+    membersSupported && environmentId !== null,
+  );
+  const resolveRef = useRef(directory.resolve);
+  useEffect(() => {
+    resolveRef.current = directory.resolve;
+  }, [directory.resolve]);
   useEffect(() => {
     const timer = window.setTimeout(
-      () => queue.hydrated(ref.messageId, null),
+      () => queue.hydrated(ref.messageId, null, null),
       HYDRATION_TIMEOUT_MS,
     );
     return () => window.clearTimeout(timer);
   }, [queue, ref.messageId]);
   useEffect(() => {
     if (handle === null) return;
+    // Whoever wrote the row: the kind decides how it is read.
     const look = (): void => {
       const row = handle.store
         .getState()
         .messages.find((message) => message.messageId === ref.messageId);
-      if (row?.role === "assistant") queue.hydrated(ref.messageId, row);
+      if (row === undefined) return;
+      const author =
+        row.role === "user" && row.sender.type === "user"
+          ? (resolveRef.current(row.sender.userId)?.displayName ?? null)
+          : null;
+      queue.hydrated(ref.messageId, row, author);
     };
     look();
     return handle.store.subscribe(look);

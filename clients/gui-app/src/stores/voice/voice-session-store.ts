@@ -59,14 +59,16 @@ export interface SpanReservation {
 /**
  * What a queued thing is, by the record it was hydrated from: a bot's reply,
  * a bot's own question to the person (a row with `question`), a task agent's
- * question or approval a bot's post points at (a row with `surface`), an
- * answer the bot failed or parked, or an announcement at a channel's top
- * level (spoken only in a briefing).
+ * question or approval a bot's post points at (a row with `surface`), a
+ * teammate's message in a thread the person follows, an answer the bot
+ * failed or parked, or an announcement at a channel's top level (spoken only
+ * in a briefing).
  */
 export type QueueItemKind =
   | "reply"
   | "question"
   | "surface"
+  | "message"
   | "failed"
   | "announcement";
 
@@ -97,6 +99,8 @@ export interface QueueItem {
   readonly surfaceId: string | null;
   /** What it is about, from the row itself. */
   readonly title: string;
+  /** Who wrote a `message`, by the name the member directory gives; `null` for the bot's own. */
+  readonly author: string | null;
   /** One line: which bot, which thread, the gist. */
   readonly line: string;
   /** When it happened, epoch ms; its age is measured from this. */
