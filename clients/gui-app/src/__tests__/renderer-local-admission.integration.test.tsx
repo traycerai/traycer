@@ -444,10 +444,10 @@ function mountHarness(opts: {
    * mints the stored session for. `MockRunnerHost.tokenStore.signIn` already
    * accepts any identity (see its mock implementation), so this is fixture
    * plumbing only - no credential-layer work. Defaults to
-   * {@link DEFAULT_STORED_IDENTITY} when the caller passes `undefined`, so both
-   * existing arms below are unaffected; a later cross-principal test mints a
-   * SECOND harness with a different identity to drive a two-principal scenario
-   * through the same real `AuthService` × `useAuthStore` wiring.
+   * {@link DEFAULT_STORED_IDENTITY} when the caller passes `undefined`, so all
+   * three existing arms below are unaffected; a later cross-principal test
+   * mints a SECOND harness with a different identity to drive a two-principal
+   * scenario through the same real `AuthService` × `useAuthStore` wiring.
    *
    * `T | undefined` with every caller passing explicitly, NOT `storedIdentity?:`.
    * The repo bans optional parameters in favour of this shape, and the three

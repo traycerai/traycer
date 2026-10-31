@@ -5674,9 +5674,8 @@ export class AuthService {
    * Both are held identically, which means the reactive case retains a secret a
    * server has already refused. The fix is NOT `null` (see above) but a
    * present-but-unconfirmed representation that readers can tell apart from a
-   * live bearer - today `currentBearer` has no such third state, and every
-   * cloud caller gates on `=== null`. Out of scope here; it wants its own
-   * ticket rather than an inline invention.
+   * live bearer - today `currentBearer` has no such third state. Out of scope
+   * here; it wants its own ticket rather than an inline invention.
    */
   private demoteVerifiedSessionToUnverified(
     session: {

@@ -604,11 +604,9 @@ const noopClone = (): void => undefined;
  * live tab's face. The ref itself is untouched (bind-for-life protects DATA
  * identity: we never show a different host's chat under this tab); only the
  * SURFACE follows reachability, and it flips back to live the moment the
- * serving host returns. The copy ref binds a LIVE reading host - serving a cloud
- * read through the dead bound host would just be the same dial with extra
- * steps - so it uses the captured reading host (or the pool for an
- * index-unavailable fallback), and an owner user id from the projection or
- * cloud row.
+ * serving host returns. The copy ref uses the captured reading host (or the
+ * pool for an index-unavailable fallback), and an owner user id from the
+ * projection or cloud row.
  *
  * ## Extended for a REACHABLE owner with a confirmed-absent chat (ticket 35)
  *

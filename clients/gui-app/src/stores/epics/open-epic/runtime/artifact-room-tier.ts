@@ -950,8 +950,8 @@ export function createArtifactRoomTier(
    * ignored:
    *  - an editor holds a lease;
    *  - the replica carries local divergence the host has not acknowledged,
-   *    where cooling would encode away the very bytes the reconnect reconcile
-   *    is supposed to ship and silently lose user edits;
+   *    where cooling would discard the dirty watermark, pending updates,
+   *    and pending reconcile;
    *  - a remote collaborator is present in the room. Cooling destroys the
    *    room's `Awareness`. Presence is exactly what a shared room is for,
    *    so a room someone else is in is not a room worth reclaiming.
