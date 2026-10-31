@@ -293,7 +293,10 @@ export type ConfirmReason = "uncertain" | "team-channel";
 
 /** Why a route is refused client-side; the voice asks the person to repeat. */
 export type RouteRefusal =
-  "unparseable" | "unknown-target" | "invalid-span" | "unavailable";
+  | "unparseable"
+  | "unknown-target"
+  | "invalid-span"
+  | "unavailable";
 
 /** A route checked against the directory: what the say loop executes. */
 export type RoutedDecision =

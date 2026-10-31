@@ -499,7 +499,8 @@ type ValidationOutcome = AuthIdentityValidationResult;
  * {@link AuthService.revalidateCurrentContext} tells the two apart.
  */
 export type LiveRevalidationOutcome =
-  ValidationOutcome | { readonly kind: "superseded" };
+  | ValidationOutcome
+  | { readonly kind: "superseded" };
 
 /**
  * The result of applying a same-user `rotate` outcome to the live session:

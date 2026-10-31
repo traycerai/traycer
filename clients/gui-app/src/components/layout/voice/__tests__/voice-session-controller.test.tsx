@@ -756,9 +756,10 @@ describe("an interruption whose ask is never delivered", () => {
 
     act(() => eventsOf(0).onInputTranscriptDelta("Run"));
     selectBotTab("bot-2");
-    expect(useVoiceSessionStore.getState().pendingAction?.askState).toBe(
-      "asking",
-    );
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "interrupted",
+      askState: "asking",
+    });
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(40_000);
@@ -791,9 +792,10 @@ describe("an ask given up during an utterance", () => {
 
     act(() => eventsOf(0).onInputTranscriptDelta("Delete "));
     selectBotTab("bot-2");
-    expect(useVoiceSessionStore.getState().pendingAction?.askState).toBe(
-      "asking",
-    );
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "interrupted",
+      askState: "asking",
+    });
 
     // Each unconfirmed append spends its confirm window; stop at the third.
     for (let step = 0; step < 400 && askCount() < 3; step += 1) {
@@ -802,9 +804,10 @@ describe("an ask given up during an utterance", () => {
       });
     }
     expect(askCount()).toBe(3);
-    expect(useVoiceSessionStore.getState().pendingAction?.askState).toBe(
-      "asking",
-    );
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "interrupted",
+      askState: "asking",
+    });
 
     // Just before the third window ends the person is still mid-utterance.
     await act(async () => {
@@ -814,9 +817,10 @@ describe("an ask given up during an utterance", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
-    expect(useVoiceSessionStore.getState().pendingAction?.askState).toBe(
-      "closing",
-    );
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "interrupted",
+      askState: "closing",
+    });
 
     await act(async () => {
       eventsOf(0).onDelegationCreated("d0");

@@ -802,9 +802,10 @@ describe("an interruption whose ask is not yet heard", () => {
     store.selectionChanged(OTHER_FOCUS);
     h.loop.onSelectionChanged();
     expect(h.asks).toEqual([MOVED_ASK_TEXT]);
-    expect(useVoiceSessionStore.getState().pendingAction?.askState).toBe(
-      "asking",
-    );
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "interrupted",
+      askState: "asking",
+    });
   }
 
   it("holds a boundary's words with the interrupted ones, and posts the next request normally once the ask is given up", async () => {
@@ -817,8 +818,11 @@ describe("an interruption whose ask is not yet heard", () => {
 
     expect(h.sends).toEqual([]);
     const held = useVoiceSessionStore.getState().pendingAction;
-    expect(held?.text).toBe("Run the new build.");
-    expect(held?.askState).toBe("asking");
+    expect(held).toMatchObject({
+      kind: "interrupted",
+      text: "Run the new build.",
+      askState: "asking",
+    });
 
     outcome.onGivenUp();
     expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
@@ -838,9 +842,10 @@ describe("an interruption whose ask is not yet heard", () => {
     interruptRun(h);
 
     h.outcomes[0]?.onDelivered();
-    expect(useVoiceSessionStore.getState().pendingAction?.askState).toBe(
-      "heard",
-    );
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "interrupted",
+      askState: "heard",
+    });
 
     useVoiceSessionStore.getState().appendInputSegment(" the new build.", 11);
     await h.loop.onDelegationCreated("d-1");
@@ -869,9 +874,10 @@ describe("an ask given up during an utterance", () => {
     store.appendInputSegment("the branch.", 2);
 
     h.outcomes[0]?.onGivenUp();
-    expect(useVoiceSessionStore.getState().pendingAction?.askState).toBe(
-      "closing",
-    );
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "interrupted",
+      askState: "closing",
+    });
 
     await h.loop.onDelegationCreated("d-1");
     expect(h.sends).toEqual([]);
