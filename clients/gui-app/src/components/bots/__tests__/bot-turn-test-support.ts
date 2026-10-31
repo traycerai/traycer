@@ -516,6 +516,7 @@ export function postThread(): BotThreadSummary {
       senderUserId: "user-viewer",
       sentAt: 1_000,
       resolvedAt: 1_001,
+      excerpt: null,
     },
     replyCount: 1,
     lastReplyAt: 2_000,

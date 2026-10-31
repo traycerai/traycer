@@ -633,6 +633,7 @@ describe("a routed verb on the queue", () => {
         senderUserId: VIEWER,
         sentAt: NOW - 1_000,
         resolvedAt: null,
+        excerpt: null,
       },
       replyCount: 1,
       lastReplyAt: NOW - 500,
