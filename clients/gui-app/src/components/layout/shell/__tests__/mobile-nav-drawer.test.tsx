@@ -163,7 +163,7 @@ vi.mock("@/stores/notifications/merged-notifications", () => ({
   useMergedNotificationUnreadCount: () => 0,
 }));
 vi.mock("@/hooks/notifications/use-open-mobile-notification-center", () => ({
-  useOpenMobileNotificationCenter: () => () => undefined,
+  useOpenMobileNotificationCenter: () => rowSpies.openNotifications,
 }));
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => ({ hostIds: [], resolved: true }),
@@ -178,10 +178,29 @@ vi.mock("@/providers/use-runner-host", () => ({
   }),
 }));
 
+// The Tracy row's bold, count and timer come from the bot's host streams; the
+// order of the rows is what these cases read.
+vi.mock("@/components/layout/tabs/use-tracy-entry-signals", () => ({
+  useTracyEntrySignals: () => ({
+    unread: false,
+    unreadCount: null,
+    working: false,
+    workingSince: null,
+    step: null,
+    idle: true,
+    muted: false,
+  }),
+}));
+
+const rowSpies = vi.hoisted(() => ({
+  openHistory: vi.fn(),
+  openNotifications: vi.fn(),
+}));
+
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({
     openSettings: () => testState.openSettings(),
-    openHistory: () => undefined,
+    openHistory: rowSpies.openHistory,
   }),
 }));
 
@@ -219,6 +238,13 @@ import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 import { useMobileNavStore } from "@/stores/layout/mobile-nav-store";
+import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import {
+  DEFAULT_LAYOUT_SNAPSHOT,
+  useLayoutStore,
+} from "@/stores/layout/layout-store";
+import { tabItemId } from "@/stores/tabs/layout";
+import { useTabsStore } from "@/stores/tabs/store";
 import { useFirstTaskGuideStore } from "@/stores/onboarding/first-task-guide-store";
 import { useHistorySearchStore } from "@/stores/home/history-search-store";
 import {
@@ -383,16 +409,96 @@ describe("MobileNavDrawer", () => {
       },
     });
     useDesktopDialogStore.getState().close();
+    rowSpies.openHistory.mockClear();
+    rowSpies.openNotifications.mockClear();
     queryClient.clear();
   });
   afterEach(() => {
     cleanup();
+    useBotTabsStore.setState({ tabs: {}, fixedBotId: null });
+    useTabsStore.setState(useTabsStore.getInitialState(), true);
+    useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
     vi.useRealTimers();
     useMobileNavStore.setState({ open: false });
     useAuthStore.setState({ profile: null, shareableTeams: [] });
     useAccountContextStore.setState({ accountContext: { type: "PERSONAL" } });
     setMobileApp(false);
     useDesktopDialogStore.getState().close();
+  });
+
+  describe("rows in the strip's order", () => {
+    beforeEach(() => {
+      useAuthStore.setState({ status: "signed-in" });
+      useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
+      useLayoutStore.getState().setRegionValues("homeTab", { shown: "shown" });
+      const ref = { kind: "bot", id: "bot-tracy" } as const;
+      useBotTabsStore.setState({
+        tabs: {
+          "bot-tracy": {
+            botId: "bot-tracy",
+            hostId: "host-a",
+            title: "Tracy",
+            openedAt: 1,
+          },
+        },
+        fixedBotId: "bot-tracy",
+      });
+      useTabsStore.setState({
+        items: [{ kind: "tab", id: tabItemId(ref), ref }],
+        activeItemId: null,
+      });
+      testState.items = [
+        historyItem({ id: "t1", title: "First task", updatedAtMs: NOW_MS }),
+      ];
+    });
+    afterEach(() => {
+      useAuthStore.setState({ status: "signed-out" });
+    });
+
+    it("lists Notifications, All tasks, Home, Tracy, New task, then the task list", async () => {
+      renderDrawer();
+
+      const rows = [
+        await screen.findByTestId("mobile-nav-notifications"),
+        screen.getByTestId("mobile-nav-all-tasks"),
+        screen.getByTestId("mobile-nav-home"),
+        screen.getByTestId("mobile-nav-tracy"),
+        screen.getByTestId("mobile-nav-new-task"),
+        await screen.findByTestId("mobile-nav-task-list"),
+      ];
+      rows.slice(1).forEach((row, index) => {
+        expect(
+          rows[index].compareDocumentPosition(row) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ).not.toBe(0);
+      });
+    });
+
+    it("opens the notification center from the Notifications row and closes the drawer", async () => {
+      renderDrawer();
+
+      fireEvent.click(await screen.findByTestId("mobile-nav-notifications"));
+
+      expect(rowSpies.openNotifications).toHaveBeenCalledTimes(1);
+      expect(useMobileNavStore.getState().open).toBe(false);
+    });
+
+    it("opens History from the All tasks row and closes the drawer", async () => {
+      renderDrawer();
+
+      fireEvent.click(await screen.findByTestId("mobile-nav-all-tasks"));
+
+      expect(rowSpies.openHistory).toHaveBeenCalledTimes(1);
+      expect(useMobileNavStore.getState().open).toBe(false);
+    });
+
+    it("draws no Notifications row while signed out", async () => {
+      useAuthStore.setState({ status: "signed-out" });
+      renderDrawer();
+
+      await screen.findByTestId("mobile-nav-all-tasks");
+      expect(screen.queryByTestId("mobile-nav-notifications")).toBeNull();
+    });
   });
 
   it("loads the task list when the drawer opens before the first task paint", async () => {
