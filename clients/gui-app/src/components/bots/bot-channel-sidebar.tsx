@@ -335,10 +335,10 @@ function SetupChannelRow(props: {
       aria-current={active ? "page" : undefined}
       onClick={props.onOpen}
       className={cn(
-        "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui-sm transition-colors focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2",
+        "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui-sm transition-colors focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
         active
-          ? "bg-primary text-primary-foreground"
-          : "text-muted-foreground hover:bg-foreground/6",
+          ? "bg-accent text-accent-foreground"
+          : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
       )}
     >
       <NamedBotAvatar botId={setup.botId} title={setup.title} size="sm" />
@@ -392,10 +392,12 @@ function ChannelRow(props: {
       aria-current={active ? "page" : undefined}
       onClick={onOpen}
       className={cn(
-        "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui-sm transition-colors focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2",
+        "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui-sm transition-colors focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
+        // The task panel's row arms (`chatRowClassName`), so the selected
+        // channel is the same quiet highlight as the selected agent.
         active
-          ? "bg-primary text-primary-foreground"
-          : "text-muted-foreground hover:bg-foreground/6",
+          ? "bg-accent text-accent-foreground"
+          : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
         bold && !active && "font-semibold text-foreground",
       )}
     >
@@ -411,7 +413,7 @@ function ChannelRow(props: {
         ) : null}
         {muted ? (
           <BotMutedGlyph
-            className={active ? "text-primary-foreground" : undefined}
+            className={active ? "text-accent-foreground" : undefined}
             testId="bot-channel-row-muted"
           />
         ) : null}
