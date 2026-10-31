@@ -319,16 +319,25 @@ describe("<HomeBotsGroupCard /> a team's main bot still to be set up", () => {
     );
   }
 
-  it("shows the bot as its main bot needing a host, with New bot still offered", () => {
+  it("shows the bot as its main bot, with no state label and New bot still offered", () => {
     mountBotlessTeam(SETUP);
 
     const row = screen.getByRole("button", { name: /^Tracy/ });
     expect(row.getAttribute("data-testid")).toBe("home-bot-setup-row");
     expect(row.getAttribute("data-bot-id")).toBe("bot-tracy-env");
-    expect(within(row).getByTestId("home-bot-setup-row-main")).toBeTruthy();
     expect(
-      within(row).getByTestId("home-bot-setup-row-needs-host").textContent,
-    ).toBe("Needs a host");
+      within(row).queryByTestId("home-bot-setup-row-needs-host"),
+    ).toBeNull();
+    // The name takes the row's width: its span is the row's last child and
+    // the flexible one, and the main badge is the last thing in it.
+    const name = within(row).getByText("Tracy").parentElement;
+    expect(row.lastElementChild).toBe(name);
+    expect(name?.classList.contains("flex-1")).toBe(true);
+    expect(
+      name?.lastElementChild?.contains(
+        within(row).getByTestId("home-bot-setup-row-main"),
+      ),
+    ).toBe(true);
     expect(screen.getByTestId("home-bots-create-toggle")).toBeTruthy();
     expect(screen.queryByText("No bots here yet.")).toBeNull();
   });

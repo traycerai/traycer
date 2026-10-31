@@ -163,8 +163,8 @@ export function HomeBotRow(props: {
 /**
  * A team's main bot still to be set up (`useTeamSetups`), on Home where its
  * team's card has no bot yet: the same entry as the channel sidebar's row,
- * marked as needing a host, opening the bot's tab, which shows the channel
- * where the team is set up.
+ * opening the bot's tab, which shows the channel where the team is set up
+ * and says the team needs a host.
  */
 export function HomeSetupBotRow(props: {
   readonly setup: TeamSetup;
@@ -190,13 +190,6 @@ export function HomeSetupBotRow(props: {
         </span>
         <MainBotBadge testId="home-bot-setup-row-main" tone="muted" />
       </span>
-      <Badge
-        variant="muted"
-        size="xs"
-        data-testid="home-bot-setup-row-needs-host"
-      >
-        Needs a host
-      </Badge>
     </button>
   );
 }

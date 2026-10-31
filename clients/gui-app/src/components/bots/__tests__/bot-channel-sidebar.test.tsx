@@ -1002,21 +1002,27 @@ describe("<BotChannelSidebar /> a team still to be set up", () => {
     mocks.state.reads["env-empty"] = setupRead("Tracy");
   });
 
-  it("shows the team's future main bot as a row marked as the main bot and as needing a host, in place of the empty section", () => {
+  it("shows the team's future main bot as a row marked as the main bot, with no state label, in place of the empty section", () => {
     mount("bot-release");
 
     const setup = within(section("env-empty")).getByTestId(
       "bot-channel-setup-row",
     );
     expect(setup.getAttribute("data-bot-id")).toBe(SETUP_BOT_ID);
-    expect(within(setup).getByText("Tracy")).toBeTruthy();
     expect(within(setup).getByTestId("bot-avatar")).toBeTruthy();
     expect(
-      within(setup).getByTestId("bot-channel-setup-row-main"),
-    ).toBeTruthy();
+      within(setup).queryByTestId("bot-channel-setup-row-needs-host"),
+    ).toBeNull();
+    // The name takes the row's width: its span is the row's last child and
+    // the flexible one, and the main badge is the last thing in it.
+    const name = within(setup).getByText("Tracy").parentElement;
+    expect(setup.lastElementChild).toBe(name);
+    expect(name?.classList.contains("flex-1")).toBe(true);
     expect(
-      within(setup).getByTestId("bot-channel-setup-row-needs-host").textContent,
-    ).toBe("Needs a host");
+      name?.lastElementChild?.contains(
+        within(setup).getByTestId("bot-channel-setup-row-main"),
+      ),
+    ).toBe(true);
     expect(
       within(section("env-empty")).queryAllByTestId("bot-channel-row"),
     ).toHaveLength(0);
@@ -1063,7 +1069,7 @@ describe("<BotChannelSidebar /> a team still to be set up", () => {
     },
   );
 
-  it("still shows the setup row, its Needs a host badge and the team's +, when the host could not read GitHub", async () => {
+  it("still shows the setup row and the team's +, when the host could not read GitHub", async () => {
     mocks.state.reads["env-empty"] = degradedSetupRead("Tracy");
     const user = userEvent.setup();
     mount("bot-release");
@@ -1072,9 +1078,6 @@ describe("<BotChannelSidebar /> a team still to be set up", () => {
       "bot-channel-setup-row",
     );
     expect(setup.getAttribute("data-bot-id")).toBe(SETUP_BOT_ID);
-    expect(
-      within(setup).getByTestId("bot-channel-setup-row-needs-host").textContent,
-    ).toBe("Needs a host");
 
     await user.click(
       within(section("env-empty")).getByRole("button", { name: "Open Tracy" }),
