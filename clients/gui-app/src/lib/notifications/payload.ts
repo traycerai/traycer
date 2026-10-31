@@ -864,10 +864,12 @@ function routeChatNotification(
   });
 }
 
-/** A bot's tab to open, and where to land it. */
+/** A bot's tab to open, where to land it, and the host the row names. */
 interface BotOpenTarget {
   readonly botId: string;
   readonly landing: BotTabLanding;
+  /** The row's own host (a chat search hit's answering host); `null` for none. */
+  readonly namedHostId: string | null;
 }
 
 /**
@@ -877,6 +879,7 @@ interface BotOpenTarget {
  * a thread or a session. `null` for an epic's chat.
  */
 function botTargetOf(payload: ChatNotificationPayload): BotOpenTarget | null {
+  const namedHostId = payload.hostId ?? null;
   const { bot } = payload;
   if (bot !== undefined) {
     return {
@@ -886,6 +889,7 @@ function botTargetOf(payload: ChatNotificationPayload): BotOpenTarget | null {
         threadId: bot.threadId,
         messageId: bot.messageId,
       },
+      namedHostId,
     };
   }
   if (!botIdSchema.safeParse(payload.epicId).success) return null;
@@ -893,6 +897,7 @@ function botTargetOf(payload: ChatNotificationPayload): BotOpenTarget | null {
     return {
       botId: payload.epicId,
       landing: { kind: "thread", threadId: null, messageId: null },
+      namedHostId,
     };
   }
   return {
@@ -902,24 +907,30 @@ function botTargetOf(payload: ChatNotificationPayload): BotOpenTarget | null {
       chatId: payload.chatId,
       messageId: payload.messageId ?? null,
     },
+    namedHostId,
   };
 }
 
-/** The host a bot's tab opens on: the open tab's, else the window's. */
+/**
+ * The host a bot's tab opens on: the open tab's, else the host the row names
+ * (a search hit's answering host, which just answered and so can be dialed),
+ * else the window's.
+ */
 function botTabHostId(
-  botId: string,
+  target: BotOpenTarget,
   effectiveHostId: string | null,
 ): string | null {
   return (
-    lookupBotTab(useBotTabsStore.getState().tabs, botId)?.hostId ??
+    lookupBotTab(useBotTabsStore.getState().tabs, target.botId)?.hostId ??
+    target.namedHostId ??
     effectiveHostId
   );
 }
 
 /**
  * Whether routing `payload` would open nothing because it is a bot's chat and
- * the window has no device to open the bot's tab on: no tab of the bot is
- * open and there is no effective host.
+ * no host is known to open the bot's tab on: no tab of the bot is open, the
+ * row names no host, and there is no effective host.
  */
 export function isBotChatWithoutDevice(
   payload: NotificationPayload,
@@ -927,13 +938,14 @@ export function isBotChatWithoutDevice(
 ): boolean {
   if (payload.kind !== "chat") return false;
   const bot = botTargetOf(payload);
-  return bot !== null && botTabHostId(bot.botId, effectiveHostId) === null;
+  return bot !== null && botTabHostId(bot, effectiveHostId) === null;
 }
 
 /**
  * Opens the bot's tab, landed where `target` asks once the tab can: the tab
- * already open keeps its host, and a new one is bound to the window's.
- * `false`, with nothing opened, while the window has no host to open it on.
+ * already open keeps its host, and a new one is bound to the host the row
+ * names, else the window's. `false`, with nothing opened, while no host is
+ * known.
  */
 function routeBotNotification(
   navigate: NotificationNavigate,
@@ -942,7 +954,7 @@ function routeBotNotification(
 ): boolean {
   const tabs = useBotTabsStore.getState();
   const existing = lookupBotTab(tabs.tabs, target.botId);
-  const hostId = botTabHostId(target.botId, effectiveHostId);
+  const hostId = botTabHostId(target, effectiveHostId);
   if (hostId === null) return false;
   // The tab names itself from the bot once it reads it.
   if (existing === null) {
