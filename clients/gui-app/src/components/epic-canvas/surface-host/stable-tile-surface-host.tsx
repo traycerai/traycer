@@ -21,7 +21,7 @@
  * drag shields/drop previews and document portals (which DO carry positive
  * z-index) always paint above every record without depending on DOM order.
  *
- * Presentation contract: the PLANE ROOT carries
+ * Presentation contract (slice-3 review finding 1): the PLANE ROOT carries
  * no `aria-hidden` of its own - an aria-hidden ancestor hides every
  * descendant regardless of the descendant's own `aria-hidden` value, which
  * would erase every future visible hosted body from the accessibility tree.

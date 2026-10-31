@@ -33,7 +33,7 @@
  * has already replaced it - the same compare-before-clear discipline
  * the geometry scheduler needed for its own StrictMode replay.
  *
- * A same-key re-registration unobserves the
+ * A same-key re-registration (slice-3 review finding 2) unobserves the
  * DISPLACED element before observing the new one, at replacement time -
  * the identity-guarded cleanup above correctly refuses to remove the new
  * mapping entry, but that guard alone left the old element observed

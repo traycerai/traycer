@@ -2743,9 +2743,9 @@ export default tseslint.config(
     // Bulk-delete batches N raw closeCanvasTab calls inside a hand-rolled
     // `prepare` closure passed to navigateNested, then commits ONE aggregate
     // post-batch focus target - the same raw-then-diff shape the store's own
-    // prepare*FocusTarget wrappers use internally, just batched. Owned by a
-    // sibling agent's in-progress bulk-delete fixup; re-verify this
-    // classification if that implementation changes shape.
+    // prepare*FocusTarget wrappers use internally, just batched.
+    // Re-verify this classification if the bulk-delete implementation
+    // changes shape.
     files: ["src/components/epic-canvas/sidebar/epic-sidebar.tsx"],
     rules: {
       "no-restricted-syntax": syntaxRestrictions({
