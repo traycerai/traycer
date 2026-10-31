@@ -1,6 +1,10 @@
 import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
-import { useNavigate } from "@tanstack/react-router";
-import { EllipsisVertical, ExternalLink, Plus } from "lucide-react";
+import {
+  EllipsisVertical,
+  ExternalLink,
+  MessagesSquare,
+  Plus,
+} from "lucide-react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { NamedBotAvatar } from "@/components/bots/bot-avatars";
@@ -36,6 +40,8 @@ import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bi
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { useBotChannelMuted } from "@/hooks/bots/use-bot-notification-level";
 import { useBotChannelBold } from "@/hooks/bots/use-bot-read-cursor";
+import { useBotFollowedThreads } from "@/hooks/bots/use-bot-followed-threads";
+import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
 import { BotMutedGlyph } from "@/components/bots/bot-muted-glyph";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { indicatorHasUnread } from "@/stores/notifications/notification-indicator-state";
@@ -47,12 +53,6 @@ import {
   createTeamDashboardUrl,
   hasNoTeamEnvironment,
 } from "@/lib/home-bots/create-team-dashboard";
-import { botTabIntent } from "@/lib/tab-navigation/intents";
-import { navigateToTabIntent } from "@/lib/tab-navigation";
-import {
-  rebindUnreachableBotTab,
-  useBotTabsStore,
-} from "@/stores/bots/bot-tabs-store";
 import { cn } from "@/lib/utils";
 
 const EMPTY_ENVIRONMENTS: ReadonlyArray<EnvironmentDescriptor> = [];
@@ -81,6 +81,11 @@ const SIDEBAR_ACTION_ROW_CLASS =
  * confirmation since making another bot main hands it back; a refusal is
  * stated under the row.
  *
+ * Above the sections, where Slack puts it, "Threads" shows the threads the
+ * person follows across every bot in place of the channel (decision 149),
+ * counting those with new replies; it is the current row while they show,
+ * and the tab's own channel row goes back to the channel.
+ *
  * Read through the tab's host: the lists are cloud-backed, so any host gives
  * the same answer. A channel opens that bot's tab, through this tab's host,
  * which asks where the bot is served and follows the answer.
@@ -88,8 +93,10 @@ const SIDEBAR_ACTION_ROW_CLASS =
 export function BotChannelSidebar(props: {
   readonly activeBotId: string;
   readonly hostId: string;
+  /** The tab's Threads view; `null` where the tab has no channel to swap it for. */
+  readonly threadsView: BotThreadsViewState | null;
 }): ReactNode {
-  const { activeBotId, hostId } = props;
+  const { activeBotId, hostId, threadsView } = props;
   const client = useTabHostClient();
   const environments = useEnvironmentListQuery(client, true);
   useRereadEnvironmentListOnFocus(true);
@@ -143,19 +150,17 @@ export function BotChannelSidebar(props: {
         : model.groups,
   });
 
-  const navigate = useNavigate();
-  const openBotTab = useBotTabsStore((s) => s.openBotTab);
+  const openBotChannel = useOpenBotChannel(hostId);
   const [newBot, setNewBot] = useState<NewBotTarget | null>(null);
   const openChannel = (channel: SidebarChannel): void => {
-    if (channel.botId === activeBotId) return;
-    rebindUnreachableBotTab(
-      channel.botId,
-      hostId,
-      connectable.resolved ? (id) => connectable.hostIds.includes(id) : null,
-    );
-    openBotTab({ botId: channel.botId, hostId, title: channel.title });
-    navigateToTabIntent(navigate, botTabIntent(channel.botId), undefined);
+    if (channel.botId === activeBotId) {
+      threadsView?.onLeave();
+      return;
+    }
+    openBotChannel(channel);
   };
+  // The tab's channel is the current row unless Threads shows in its place.
+  const currentBotId = threadsView?.shown === true ? null : activeBotId;
 
   return (
     <nav
@@ -163,11 +168,14 @@ export function BotChannelSidebar(props: {
       data-testid="bot-channel-sidebar"
       className="flex min-h-0 flex-col gap-3 overflow-y-auto px-2 py-3"
     >
+      {threadsView === null ? null : (
+        <ThreadsRow hostId={hostId} bots={botList} view={threadsView} />
+      )}
       {model.groups.map((group) => (
         <SidebarSection
           key={group.environmentId}
           group={group}
-          activeBotId={activeBotId}
+          activeBotId={currentBotId}
           unreadByBotId={unreadByBotId}
           canSetMainBot={canSetMainBot}
           setup={
@@ -194,9 +202,59 @@ export function BotChannelSidebar(props: {
 /** A channel the sidebar opens: a listed bot, or a team's main bot still to be set up. */
 type SidebarChannel = { readonly botId: string; readonly title: string };
 
+/** Whether the tab shows Threads in place of its channel, and the ways in and out. */
+export type BotThreadsViewState = {
+  readonly shown: boolean;
+  readonly onShow: () => void;
+  /** Back to the tab's channel, where it was. */
+  readonly onLeave: () => void;
+};
+
+/**
+ * "Threads": the threads the person follows across every bot, with how many
+ * have new replies, nothing at zero or where the host cannot list them.
+ */
+function ThreadsRow(props: {
+  readonly hostId: string;
+  readonly bots: ReadonlyArray<BotRecord>;
+  readonly view: BotThreadsViewState;
+}): ReactNode {
+  const { hostId, bots, view } = props;
+  const followed = useBotFollowedThreads(useTabHostClient(), hostId, bots);
+  const count = followed.kind === "listed" ? followed.newReplyCount : 0;
+  return (
+    <button
+      type="button"
+      data-testid="bot-channel-threads-row"
+      aria-current={view.shown ? "page" : undefined}
+      onClick={view.onShow}
+      className={cn(
+        "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui-sm transition-colors focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
+        view.shown
+          ? "bg-accent text-accent-foreground"
+          : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
+      )}
+    >
+      <MessagesSquare className="size-4 shrink-0" aria-hidden="true" />
+      <span className="min-w-0 flex-1 truncate">Threads</span>
+      {count === 0 ? null : (
+        <Badge
+          variant="secondary"
+          size="sm"
+          data-testid="bot-channel-threads-count"
+        >
+          <span className="tabular-nums">{count}</span>
+          <span className="sr-only"> with new replies</span>
+        </Badge>
+      )}
+    </button>
+  );
+}
+
 function SidebarSection(props: {
   readonly group: HomeBotsGroup;
-  readonly activeBotId: string;
+  /** The current channel's bot; `null` while Threads shows in its place. */
+  readonly activeBotId: string | null;
   readonly unreadByBotId: ReadonlyMap<string, number | null>;
   /** Whether the tab's host can make another bot main. */
   readonly canSetMainBot: boolean;

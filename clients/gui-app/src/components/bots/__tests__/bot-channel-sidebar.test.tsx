@@ -6,8 +6,9 @@
  * same; a team's + opens the team's main bot, which for a new team with no bot
  * is the one still to be set up (T67), drawn as a row marked as needing a
  * host. A person in no team is offered "Create a team". A bot that is not its
- * environment's main bot is made main from its row's menu.
- * The real sidebar, the real new-bot dialog and the real bot-tabs store run
+ * environment's main bot is made main from its row's menu. "Threads", above
+ * the sections, counts the followed threads with new replies across every
+ * bot (T103). The real sidebar, the real new-bot dialog and the real bot-tabs store run
  * over mocked reads; `bot.onboarding.read` answers per environment from a
  * script, the create form and the navigation helper are stubs, so the dialog's
  * focus on closing is read off the real thing.
@@ -30,7 +31,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BotReadCursorReadResponse,
   BotRecord,
+  BotThreadFollow,
 } from "@traycer/protocol/host/bot/schemas";
+import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import type {
   BotOnboardingReadResponse,
@@ -43,6 +46,12 @@ interface IndicatorState {
   unreadFailure: boolean;
   unreadCount: number | null;
 }
+
+type ThreadReads = {
+  threads: BotThreadSummary[];
+  follows: Record<string, BotThreadFollow>;
+  cursors: BotReadCursorReadResponse;
+};
 
 type ReadScript =
   | ({ setup: BotOnboardingSetup | null } & Partial<
@@ -60,6 +69,11 @@ const mocks = vi.hoisted(() => {
   const reads: Record<string, ReadScript | undefined> = {};
   /** The environments `bot.onboarding.read` was asked about, in order. */
   const readRequests: string[] = [];
+  /**
+   * What each bot's `bot.thread.list`, `bot.threadFollow.read` and
+   * `bot.readCursor.read` answer; a bot not named has no threads.
+   */
+  const threadReads: Record<string, ThreadReads> = {};
   return {
     client: { stub: "tab-host-client" },
     navigate: vi.fn(),
@@ -89,6 +103,7 @@ const mocks = vi.hoisted(() => {
       readCursor: undefined as BotReadCursorReadResponse | undefined,
       /** Methods the host does not advertise, whatever `support` says. */
       unsupported: new Set<string>(),
+      threadReads,
     },
     readRequests,
   };
@@ -111,6 +126,12 @@ vi.mock("@/providers/use-runner-host", () => ({
 vi.mock("@/lib/links/open-link", () => ({
   useOpenLink: () => mocks.openLink,
 }));
+vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/chats/use-cloud-chat-queries")
+  >()),
+  useCloudChatViewerId: () => "user-1",
+}));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
 }));
@@ -128,15 +149,43 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostSupportsMethod: () => true,
 }));
 // The host RPC boundary: `bot.onboarding.read` answers what the test scripted,
-// and a query that is not enabled reads as pending, as TanStack's does.
+// each bot's thread reads answer `threadReads`, and a query that is not
+// enabled reads as pending, as TanStack's does.
 vi.mock("@/hooks/host/use-host-queries", () => ({
   useHostQueries: (args: {
-    requests: ReadonlyArray<{ params: { environmentId: string } }>;
+    requests: ReadonlyArray<{
+      method: string;
+      params: { environmentId: string; botId: string };
+    }>;
     options: { enabled?: boolean } | null;
   }) =>
     args.requests.map((request) => {
       if (args.options?.enabled !== true) {
-        return { status: "pending", data: undefined };
+        return { status: "pending", isPending: true, data: undefined };
+      }
+      if (request.method !== "bot.onboarding.read") {
+        const reads = Object.hasOwn(
+          mocks.state.threadReads,
+          request.params.botId,
+        )
+          ? mocks.state.threadReads[request.params.botId]
+          : { threads: [], follows: {}, cursors: { cursors: {}, latest: {} } };
+        const answers: Record<string, unknown> = {
+          "bot.thread.list": {
+            threads: reads.threads,
+            trunkCostUsd: null,
+            threadAnchors: null,
+          },
+          "bot.threadFollow.read": { follows: reads.follows },
+          "bot.readCursor.read": reads.cursors,
+          "bot.notificationLevel.read": { levels: mocks.state.levels },
+        };
+        return {
+          status: "success",
+          isPending: false,
+          isError: false,
+          data: answers[request.method],
+        };
       }
       const { environmentId } = request.params;
       mocks.readRequests.push(environmentId);
@@ -212,7 +261,10 @@ vi.mock("@/components/home/bots/create-bot-form", () => ({
   ),
 }));
 
-import { BotChannelSidebar } from "@/components/bots/bot-channel-sidebar";
+import {
+  BotChannelSidebar,
+  type BotThreadsViewState,
+} from "@/components/bots/bot-channel-sidebar";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 
@@ -303,6 +355,13 @@ function row(botId: string): HTMLElement {
 }
 
 function mount(activeBotId: string): void {
+  mountWithThreads(activeBotId, null);
+}
+
+function mountWithThreads(
+  activeBotId: string,
+  threadsView: BotThreadsViewState | null,
+): void {
   const queryClient = new QueryClient();
   const seeded = queryOptions({
     queryKey: [...hostQueryKeys.methodScope(TAB_HOST, "environment.list"), {}],
@@ -313,7 +372,11 @@ function mount(activeBotId: string): void {
   });
   render(
     <QueryClientProvider client={queryClient}>
-      <BotChannelSidebar activeBotId={activeBotId} hostId={TAB_HOST} />
+      <BotChannelSidebar
+        activeBotId={activeBotId}
+        hostId={TAB_HOST}
+        threadsView={threadsView}
+      />
     </QueryClientProvider>,
   );
 }
@@ -342,6 +405,7 @@ beforeEach(() => {
   mocks.state.levels = {};
   mocks.state.readCursor = undefined;
   mocks.state.unsupported.clear();
+  mocks.state.threadReads = {};
   for (const key of Object.keys(mocks.state.reads)) {
     delete mocks.state.reads[key];
   }
@@ -754,6 +818,113 @@ describe("<BotChannelSidebar /> opening a channel", () => {
       lookupBotTab(useBotTabsStore.getState().tabs, "bot-triage")?.hostId,
     ).toBe(TAB_HOST);
     expect(mocks.navigateToTabIntent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("<BotChannelSidebar /> Threads", () => {
+  const FOLLOWING: BotThreadFollow = {
+    state: "following",
+    reason: "participated",
+  };
+
+  function thread(threadId: string, lastReplyAt: number): BotThreadSummary {
+    return {
+      threadId,
+      conversationId: "channel",
+      sessionChatId: `session-${threadId}`,
+      anchor: null,
+      replyCount: 1,
+      lastReplyAt,
+      openRequestCount: 0,
+      costUsd: null,
+    };
+  }
+
+  function view(shown: boolean): BotThreadsViewState {
+    return { shown, onShow: vi.fn(), onLeave: vi.fn() };
+  }
+
+  function threadsRow(): HTMLElement {
+    return screen.getByTestId("bot-channel-threads-row");
+  }
+
+  it("stands above the first section and counts the followed threads with new replies across every bot", () => {
+    // Two followed threads with new replies on two bots count; a caught-up
+    // one and an unfollowed one with new replies do not.
+    mocks.state.threadReads = {
+      "bot-release": {
+        threads: [thread("release-new", 2_000), thread("release-read", 2_000)],
+        follows: { "release-new": FOLLOWING, "release-read": FOLLOWING },
+        cursors: {
+          cursors: { "release-read": { messageId: "m-1", seq: 2_000 } },
+          latest: {},
+        },
+      },
+      "bot-notes": {
+        threads: [thread("notes-new", 3_000), thread("notes-other", 3_000)],
+        follows: {
+          "notes-new": FOLLOWING,
+          "notes-other": { state: "unfollowed", reason: "manual" },
+        },
+        cursors: { cursors: {}, latest: {} },
+      },
+    };
+    mountWithThreads("bot-release", view(false));
+
+    const nav = screen.getByTestId("bot-channel-sidebar");
+    expect(nav.firstElementChild).toBe(threadsRow());
+    expect(threadsRow().textContent).toBe("Threads2 with new replies");
+    expect(threadsRow().getAttribute("aria-current")).toBeNull();
+    expect(row("bot-release").getAttribute("aria-current")).toBe("page");
+  });
+
+  it("is the current row while Threads shows, the tab's channel row is not, and that row goes back to the channel", async () => {
+    const user = userEvent.setup();
+    const threads = view(true);
+    mountWithThreads("bot-release", threads);
+
+    expect(threadsRow().getAttribute("aria-current")).toBe("page");
+    expect(threadsRow().className).toContain("bg-accent");
+    expect(row("bot-release").getAttribute("aria-current")).toBeNull();
+    expect(screen.queryByTestId("bot-channel-threads-count")).toBeNull();
+
+    await user.click(row("bot-release"));
+
+    expect(threads.onLeave).toHaveBeenCalledTimes(1);
+    expect(mocks.navigateToTabIntent).not.toHaveBeenCalled();
+  });
+
+  it("shows Threads when chosen, and another bot's row opens that bot's tab and leaves this tab's Threads alone", async () => {
+    const user = userEvent.setup();
+    const threads = view(false);
+    mountWithThreads("bot-release", threads);
+
+    await user.click(threadsRow());
+    expect(threads.onShow).toHaveBeenCalledTimes(1);
+
+    await user.click(row("bot-triage"));
+    expect(threads.onLeave).not.toHaveBeenCalled();
+    expect(mocks.navigateToTabIntent).toHaveBeenCalledWith({
+      kind: "bot",
+      botId: "bot-triage",
+    });
+  });
+
+  it("draws no count on a host that cannot read follows, and no row on a tab with no channel to swap", () => {
+    mocks.state.unsupported.add("bot.threadFollow.read");
+    mocks.state.threadReads = {
+      "bot-release": {
+        threads: [thread("release-new", 2_000)],
+        follows: { "release-new": FOLLOWING },
+        cursors: { cursors: {}, latest: {} },
+      },
+    };
+    mountWithThreads("bot-release", view(false));
+    expect(threadsRow().textContent).toBe("Threads");
+    cleanup();
+
+    mount("bot-release");
+    expect(screen.queryByTestId("bot-channel-threads-row")).toBeNull();
   });
 });
 
