@@ -1780,7 +1780,7 @@ describe("oblique painters: fixup 6 rule 4 - one reserve label per storey, not o
       // where the chair tile does. Asserted against the desk-front THIS SAME
       // call drew rather than a re-typed offset, so moving the desk cannot
       // leave the lettering behind on its face. `y + 34` used to land
-      // mid-sprite, which is the exact bug feedback round 1 filed ("lower half
+      // mid-sprite, which is the exact bug filed ("lower half
       // of labels on some agents are cut out").
       expect(label.drawable.y).toBeGreaterThanOrEqual(deskFrontBottom);
       checked += 1;
@@ -2220,7 +2220,7 @@ describe("plaza civic rooms", () => {
 });
 
 /**
- * FINDING 5: a pod plate and its own team board used to print over each other
+ * A pod plate and its own team board used to print over each other
  * at close-up.
  *
  * The board stands on the pod's LAST tile, inside the plate's span, so the two

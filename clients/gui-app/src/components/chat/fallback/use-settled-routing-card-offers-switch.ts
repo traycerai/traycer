@@ -56,7 +56,7 @@ const emptySlice = create<SettledCardSlice>()(() => ({
  *
  * The SWITCH, not any button: the banner's one action is a switch, and a card
  * left with only Retry or a wait does not offer it - so the banner returns
- * beside those (review F4, 2026-09-27). Drawn counts even while greyed: a
+ * beside those (F4). Drawn counts even while greyed: a
  * press in flight and a reconnect both keep the trigger on screen, and both
  * end in a new attempt or a refusal, which this reads again.
  *

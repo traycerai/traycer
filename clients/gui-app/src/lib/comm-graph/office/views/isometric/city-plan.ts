@@ -109,8 +109,8 @@ const GROUP_COLS = 3;
  * `3 + min(11, floor(activity / 4))`: three storeys, then one per four
  * messages, to fourteen.
  *
- * IT USED TO BE `1 + min(6, …)`, and that is the whole of why feedback round 1
- * asked "does it represent high rises? but people are too large in front of
+ * IT USED TO BE `1 + min(6, …)`, and that is the whole of why the reading was
+ * "does it represent high rises? but people are too large in front of
  * the buildings". A storey is {@link ISO_STOREY_HEIGHT} = 8 sprite pixels and
  * a character is {@link OFFICE_CHARACTER_HEIGHT} = 20, so the FLOOR of that
  * range was a building 8 px tall standing next to a person two and a half

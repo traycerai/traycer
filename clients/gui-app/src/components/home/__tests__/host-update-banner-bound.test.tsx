@@ -733,7 +733,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
 
   // 5. The banner never blocks host controls.
   //
-  // G8 (independent cold review, finding 7): the ORIGINAL version of this
+  // G8: the ORIGINAL version of this
   // test mounted two arbitrary sibling `<button>`s and asserted their
   // `.disabled` property. That renders neither Restart, Diagnostics,
   // Activate nor the overflow menu — none of the production controls the

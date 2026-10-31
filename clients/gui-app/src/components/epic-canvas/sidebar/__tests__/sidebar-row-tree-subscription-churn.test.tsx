@@ -1,7 +1,7 @@
 /**
  * A sidebar row must not re-render because a DIFFERENT row's `updatedAt` moved.
  *
- * ## The defect this pins (epic-sync-overhaul finding 12)
+ * ## The defect this pins
  *
  * The host stamps an artifact record's `updatedAt` on every body write batch -
  * roughly 4/s under typing-shaped load. `TreeNode` carries `updatedAt`

@@ -12,7 +12,7 @@
  *
  * ```
  * ?officeBench=1000                          triage, the shape every estimate is quoted at
- * ?officeBench=1000&officeBenchShape=many-roots   the review's 101 MiB case
+ * ?officeBench=1000&officeBenchShape=many-roots   the 101 MiB case
  * ?officeBench=400&officeBenchShape=two-hosts&officeBenchScript=outbreak&officeBenchOutbreak=12
  *                                            twelve crash on one floor, then recover one by one
  * ?officeBench=400&officeBenchScript=waiting  more agents wait than the lounge seats

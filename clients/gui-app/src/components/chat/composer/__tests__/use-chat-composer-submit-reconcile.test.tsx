@@ -1,12 +1,12 @@
 /**
- * F4 (batch-1 review, P2): an image added DURING resolution could be sent
+ * F4: an image added DURING resolution could be sent
  * without ever trying to resolve its bytes. The hash list is captured once,
  * before the await; if hash A is resolving and a new hash-only image B
  * appears in the live document, the final re-read included B but the byte
  * map did not, so B was sent bare even though this client could resolve it.
  * The fix, `prepareDraftImageInlining`, reconciles the live document's
  * required hashes against the attempted set before the send. (Its
- * synchronous-commit contract - R2 of the re-review - is tested directly in
+ * synchronous-commit contract - R2 - is tested directly in
  * `draft-image-inlining.test.ts`; the annotation-ordering half is the R2(a)
  * block at the bottom of this file.)
  */
@@ -267,7 +267,7 @@ describe("F4: reconciled resolution (chat composer)", () => {
 });
 
 /**
- * R2(a) (re-review): the annotation leg used to run BESIDE the image leg in a
+ * R2(a): the annotation leg used to run BESIDE the image leg in a
  * `Promise.all`, so the image leg could finish resolving A while the
  * annotation crop read was still pending - and an image added during that
  * remaining wait was never asked for. The fix awaits the annotation read

@@ -164,8 +164,8 @@ export const REASON_ROW_NOTES: Readonly<
  * promise `togglePolicyOverrideRung` is built to keep.
  *
  * "Cancellation window", never "grace": the vocabulary table bans the latter -
- * though the rendered sentence now says "countdown to cancel", since a user-lens
- * review found "cancellation window" was itself unexplained vocabulary. The ban
+ * though the rendered sentence now says "countdown to cancel", since
+ * "cancellation window" was itself unexplained vocabulary. The ban
  * is on "grace"; plain words for the same thing are fine.
  *
  * The user-facing sentence also drops the D146 scope limit - *"this editor does not

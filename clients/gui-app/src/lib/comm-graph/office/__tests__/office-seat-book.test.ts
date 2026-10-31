@@ -2005,7 +2005,7 @@ describe("OfficeSeatBook fixup 8c - a fresh adoption (D66)", () => {
    * disagreement: cubby ids outlive a re-plan, so the agent that held one
    * keeps sitting in a cubby the new plan gave nobody, while the agent the
    * new plan gave it to gets no seat at all and lands in the shortfall. That
-   * is the cold reviewer's second finding, and it is this one call away.
+   * is the second defect, and it is this one call away.
    */
   it("takes a stable layout's own desks wholesale, leaving nobody in the shortfall", () => {
     const kept = "kept-cubby";

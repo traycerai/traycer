@@ -671,7 +671,7 @@ export type TestVerdictModel =
 /**
  * The verdict, from the tuple's routing and the answers in hand.
  *
- * Two tier lists, on purpose (review C1). `groups` is the live draft: the
+ * Two tier lists, on purpose (C1). `groups` is the live draft: the
  * header routes on it and the rows are its rows, so a rename reads through at
  * once. `committedGroups` is what the walk was ASKED about - the tiers as last
  * committed, since a tier name commits on blur and a walk per keystroke would
@@ -819,7 +819,7 @@ export function testStepsPhrase(steps: readonly FallbackRungKind[]): string {
 }
 
 /**
- * The verdict as ONE sentence, for the panel's polite status (review A1).
+ * The verdict as ONE sentence, for the panel's polite status (A1).
  *
  * The visible verdict is a tree of rows, pills and footers; announcing it
  * would read a run of fragments ("then", "then", "2 more") on every change.

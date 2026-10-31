@@ -1113,7 +1113,7 @@ describe("chat session viewport hydration: review fixes", () => {
   });
 
   it("applies the byte budget when a snapshot seats a new tail", () => {
-    // Codex P1 (#1459): `insertSpan` has exactly two callers - the snapshot
+    // `insertSpan` has exactly two callers - the snapshot
     // tail and a range response - and only the range path ran the budget. A
     // reader who hydrates scrollback and then stops scrolling still receives a
     // snapshot per completed turn, so the cache grew across snapshots with

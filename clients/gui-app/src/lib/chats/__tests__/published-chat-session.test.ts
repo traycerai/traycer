@@ -25,7 +25,7 @@ import {
  * shows less than the chat contains, which is the one failure the fidelity
  * rules exist to prevent.
  *
- * The fixture below is the shape a cold review reproduced through the real
+ * The fixture below is the shape reproduced through the real
  * publish -> assemble -> present path: an assistant message carrying
  * [text, file_change, plan, <future type>].
  */

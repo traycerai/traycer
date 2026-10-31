@@ -5541,8 +5541,8 @@ export function createChatSessionStoreWithNotificationDependencies(
      * write the host made.
      *
      * Counting EVERY write, rather than only the ones the client dropped, is
-     * what makes that implication hold - and it is the correction a cold review
-     * forced twice. An earlier version compared the held copy's
+     * what makes that implication hold. An earlier version
+     * compared the held copy's
      * `blocksVersion` before and after the fold to spot a write that overtook a
      * catch-up. That reading is a per-SEAT baseline, so one answer installing a
      * body reset it and the next answer read "unchanged" and discharged the
@@ -8995,7 +8995,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // its own pick would otherwise steal a slot that dispatch still needs,
         // and revive a choice the user superseded when they staged the newer
         // one. The restoration paths deliberately do NOT match on owner - they
-        // hand back a prompt, and round 10 proved the last consumer is not
+        // hand back a prompt, and the last consumer is not
         // necessarily the one whose prompt returns.
         //
         // Owning the mark is necessary but NOT sufficient, because the two
@@ -10090,8 +10090,8 @@ export function createChatSessionStoreWithNotificationDependencies(
           // reached this client ahead of the frame (a snapshot serialized in
           // the host's journal-then-broadcast gap) has already retired its
           // record exactly, and retiring "the earliest for this checkpoint"
-          // here would take a second attempt's record instead (Codex on
-          // ad9f99fb8). Otherwise retire ONE record, the earliest accepted,
+          // here would take a second attempt's record instead
+          // Otherwise retire ONE record, the earliest accepted,
           // which is the attempt the host reached first; a second attempt
           // accepted behind it keeps its own record until its own completion.
           const answered = consumeSettledRestoreCompletion(

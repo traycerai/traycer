@@ -440,7 +440,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   // (its own epic is on this disk), but must not spend that index through the
   // retained credential - so the request list is empty without a verdict,
   // while the local suggestions merged below (open handles, the cached task
-  // list, browser tabs) keep serving. Found in review.
+  // list, browser tabs) keep serving.
   const cloudAuthorized = useAuthStore((state) =>
     authorizesCloudCapability(state.status),
   );

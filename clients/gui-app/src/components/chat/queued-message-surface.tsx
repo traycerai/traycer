@@ -393,7 +393,7 @@ export function QueuedMessagePanel(props: QueuedMessagePanelProps) {
  * is still holding the queue is not something the absence of a routing card
  * can prove - a retry draws no card, and the frame is withdrawn while the
  * replacement runs - and even within one traversal a rejected row is not
- * released with the rest (review F9/F10, 2026-09-27).
+ * released with the rest (F9/F10).
  */
 function queuePausedAfterErrorTooltip(
   queue: ChatSessionState["queue"],
@@ -1021,7 +1021,7 @@ function QueuedMessageRowContent(props: {
       </div>
       {/* A folded agent row is one line, its held reason included: the
           reason comes back with the rest of the message when it is unfolded
-          (#2441, PR review). */}
+          (#2441). */}
       {compact ? null : (
         <QueuedMessageFallbackReason
           item={item}
@@ -1037,7 +1037,7 @@ function QueuedMessageRowContent(props: {
 /** A row's text at its usual three-line cap. */
 const CONTENT_SCROLL_FULL = "max-h-[calc(3lh+--spacing(1))] overflow-y-auto";
 /**
- * A folded agent row's box. NOT clipped (#2441 review F1): the sender chip
+ * A folded agent row's box. NOT clipped (#2441 F1): the sender chip
  * and the status toolbar float in this box and are taller than a text line,
  * so a one-line cap here cropped them, and at a narrow width wrapped them out
  * of sight altogether. `flow-root` contains the floats instead, and the one
@@ -1079,8 +1079,8 @@ function QueuedMessageRowText(props: {
   if (agentFoldCompact(props.agentFold)) {
     // Plain text, not the rich preview: a clamped rich preview still renders
     // every link in the message, so a link past the one visible line would be
-    // focusable and activatable with nothing on screen to show it (#2441, PR
-    // review). The folded row is something to click open, not to act inside.
+    // focusable and activatable with nothing on screen to show it (#2441).
+    // The folded row is something to click open, not to act inside.
     return (
       <QueuedMessageAgentFoldToggle fold={props.agentFold}>
         <div
@@ -1268,7 +1268,7 @@ function QueuedMessageProvenanceChip(props: {
     <span
       // `max-w-full`: a sender's name is a chat title and can be wider than a
       // narrow row, so the chip is held to the row and its name truncates
-      // rather than scrolling the whole list sideways (#2441 review F2).
+      // rather than scrolling the whole list sideways (#2441 F2).
       className="float-left mr-1 inline-flex max-w-full"
       data-testid="queued-message-provenance-chip"
     >
@@ -1867,7 +1867,7 @@ function QueuedMessageStatusBadge(props: {
           // `min-w-0` with the label's `truncate`: in a pane narrower than
           // the label ("Queued for next turn" is about 127px, a 239px pane
           // leaves the row about 117px) the pill ellipsizes inside the row
-          // instead of running past its edge (#2441 review F1).
+          // instead of running past its edge (#2441 F1).
           "inline-flex min-w-0 items-center gap-1 rounded-sm px-1.5 py-0.5 text-ui-xs font-medium text-muted-foreground",
           props.embedded ? null : "border border-border/60 bg-background/70",
         )}

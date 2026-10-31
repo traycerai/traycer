@@ -128,7 +128,7 @@ function lockNonSourceProfiles(
  *      rather than failing open while pending or after an RPC failure.
  *   3. Bulk admission resolved - the server's per-profile verdicts.
  * Plain-fork intent on a capable host falls through to `EMPTY_FORK_ADMISSION`
- * (picker stays fully open) - sound per the T5 review: submit-time preflight
+ * (picker stays fully open) - sound per T5: submit-time preflight
  * plus the authoritative `prepareLaunch` guard both still apply there.
  */
 function resolveDialogAdmission(input: {

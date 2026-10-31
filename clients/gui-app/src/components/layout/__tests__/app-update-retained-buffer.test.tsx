@@ -481,7 +481,7 @@ describe("app update install vs a retained unsynced buffer", () => {
   });
 
   it("a REJECTED app-wide check fails closed: prompts (naming the unchecked windows) instead of installing on this window's answer", async () => {
-    // Codex #1243 T-51: window A has nothing local; window B holds a retained
+    // Window A has nothing local; window B holds a retained
     // buffer; the IPC that would have said so rejects. The old fallback took
     // A's own "nothing" as the app's answer and installed - destroying B's
     // work. A failed check is not a clean check.
@@ -516,7 +516,7 @@ describe("app update install vs a retained unsynced buffer", () => {
   });
 
   it("a RESOLVED app-wide check that main marked incomplete also fails closed", async () => {
-    // Codex #1243 T-56, renderer half. The IPC did not reject - main answered,
+    // The renderer half: the IPC did not reject - main answered,
     // and answered "no unsyncable epics". What it ALSO said is that a window
     // missed its fresh-snapshot deadline and its cached row stood in, so that
     // empty list is a lower bound, not a census.

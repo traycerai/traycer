@@ -1803,7 +1803,7 @@ describe("useEpicArchiveChats", () => {
     );
   });
 
-  // Thread round 9: a selected child moved out of the parent while the
+  // A selected child moved out of the parent while the
   // archive was in flight is not archived with it. The request stands for
   // fewer rows at settlement than at the gesture, and the rows it no longer
   // covers are unconfirmed - never archived, never failed.

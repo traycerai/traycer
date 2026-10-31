@@ -188,7 +188,7 @@ describe("sanitizeUntrustedSvg style attribute forbid + serialize/reparse", () =
   }
 
   it("forbids style attributes including CSS-escaped url() beacons", () => {
-    // Review PoC: CSS escapes bypass a literal /url\s*\(/ strip on attribute values.
+    // PoC: CSS escapes bypass a literal /url\s*\(/ strip on attribute values.
     const source = svg(
       "<rect/>",
       'style="background-image:u\\000072l(https://attacker.example/pixel)"',

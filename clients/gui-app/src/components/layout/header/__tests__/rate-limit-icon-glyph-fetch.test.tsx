@@ -1,5 +1,5 @@
 /**
- * Proves the G6 review-A fix at the one level `rate-limit-icon.test.tsx`
+ * Proves the G6 fix at the one level `rate-limit-icon.test.tsx`
  * cannot reach: that file mocks `useStatusBarRateLimitSegments` at the
  * boundary, so it can only prove a trigger ASKS for `mode: "live"` - not that
  * asking for it actually starts a fetch. This file runs the real hook over a

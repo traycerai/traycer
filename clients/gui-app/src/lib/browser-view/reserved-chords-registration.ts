@@ -72,7 +72,7 @@ import {
  * rebound Find cannot borrow a shared token's exemption.
  *
  * The LANDING rows ride the same mechanism and keep their surface gate, which
- * on the streamed side is what round 7's rule asks for - the gate is in this
+ * on the streamed side is what the rule asks for - the gate is in this
  * function, so a canvas-armed tile is never offered them and its ⌘J stays the
  * page's. The plain APP-FORWARDED rows are surface-independent on both halves
  * alike, because the palette and epic/tab navigation have handlers wherever
@@ -137,7 +137,7 @@ export function isNativeOnlyBrowserAction(action: ActionId): boolean {
  * (`landing-terminal-panel.tsx`), minus the ones a browser-scoped row already
  * claims - `tab.new` (⌘T) and `tab.close` (⌘W), which belong to the tile - and
  * minus the ones {@link APP_FORWARDED_ACTIONS} already covers surface-
- * independently (`tab.next` / `tab.prev`). Round 13 added three of them and
+ * independently (`tab.next` / `tab.prev`). Three of them were added and
  * the omission of the other three was invisible for exactly the reason a
  * mechanism-shaped rule always is: nothing compares this list against the
  * panel's registrations. `forwards every chord the panel registers under the

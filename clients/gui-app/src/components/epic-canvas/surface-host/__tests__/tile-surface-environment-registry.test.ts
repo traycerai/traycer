@@ -631,7 +631,7 @@ describe("tile surface environment registry", () => {
     expect(getTileSurfaceMembership().has("chat-1")).toBe(true);
 
     // Simulate the registry module initializing (or being reset) while
-    // membership is already non-empty - the "normal shape" the review
+    // membership is already non-empty - the "normal shape" the suite
     // flagged, since the canvas/tabs stores are synchronously hydrated
     // before this module's own module-load-time snapshot runs.
     resetTileSurfaceEnvironmentRegistryForTesting();
