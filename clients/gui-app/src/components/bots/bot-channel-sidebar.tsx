@@ -79,8 +79,9 @@ const SIDEBAR_ACTION_ROW_CLASS =
  * channel. The sections list
  * channels and nothing else. A team's main bot is its channel from the
  * moment the team exists (T67): while the bot is still to be set up
- * (`useTeamSetups`) its row stands in the team's section, marked as needing
- * a host, and opens the channel where the team is set up. The + on a team's
+ * (`useTeamSetups`) its row stands in the team's section and opens the
+ * channel where the team is set up, which says the team needs a host; the
+ * row carries no state label. The + on a team's
  * header opens the team's main bot; on the person's own section it opens the
  * create form for one more bot there (`NewBotDialog`), which an empty
  * personal section offers once too. With no team at all, "Create a team"
@@ -594,8 +595,8 @@ function teamMainChannelOf(
 
 /**
  * A team's main bot while it is still to be set up: its picture and name,
- * marked as the main bot and as needing a host the team can use, opening the
- * channel where the team is set up.
+ * marked as the main bot, opening the channel where the team is set up. The
+ * channel says the team needs a host, so the row does not.
  */
 function SetupChannelRow(props: {
   readonly setup: TeamSetup;
@@ -625,13 +626,6 @@ function SetupChannelRow(props: {
           tone={active ? "current" : "muted"}
         />
       </span>
-      <Badge
-        variant="muted"
-        size="xs"
-        data-testid="bot-channel-setup-row-needs-host"
-      >
-        Needs a host
-      </Badge>
     </button>
   );
 }
