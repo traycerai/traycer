@@ -1,7 +1,7 @@
 /**
  * A team's setup channel re-reads `bot.onboarding.read` on the shared
- * on-screen cadence while it is on screen and the setup still needs a host
- * (Tracy Bots T67b): the team's host creating the bot rings the team's room,
+ * on-screen cadence while it is on screen and the setup still needs a host:
+ * the team's host creating the bot rings the team's room,
  * which reaches a member's bot list only while their host listens to that
  * room, so this read is the backstop for a missed ring. Through the real
  * query client, `HostClient` and policy table; only the host's answer is

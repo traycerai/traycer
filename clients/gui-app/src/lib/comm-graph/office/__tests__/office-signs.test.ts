@@ -2037,7 +2037,7 @@ describe("officeCivicSignText - the civic counter ladder", () => {
       (room) => room.kind === "help-desk",
     );
     if (desk === undefined) throw new Error("expected a help-desk room");
-    // C7: the queue in front of the desk IS the count. The real Floor
+    // The queue in front of the desk IS the count. The real Floor
     // help-desk has no seats, so a case that handed that room through
     // would get `null` from the empty-`seatIds` branch and never
     // exercise the help-desk rule. Seats and an occupancy entry make
@@ -2120,7 +2120,7 @@ describe("officeCivicSignText - the civic counter ladder", () => {
 
 /**
  * THE MEDBAY BEACON. Mission control has no street, so no ambulance can
- * come (C6): the light on the ward's own sign is the whole of the alarm
+ * come: the light on the ward's own sign is the whole of the alarm
  * there. A floor WITH a road keeps the light off, because the vehicle is
  * the alarm on that view.
  */
@@ -2262,7 +2262,7 @@ describe("officeSignsToDraw - the medbay beacon", () => {
     });
     // The sign still draws - a missing plate would also look like
     // `sirenFrame === null`. Occupied, so a roadless floor would be
-    // blinking; the road is what keeps the light off (C6).
+    // blinking; the road is what keeps the light off.
     expect(
       resolveBeacon({
         floor,
@@ -2448,7 +2448,7 @@ describe("officeSignsToDraw - lod 1 fixture lettering gate (feedback round 1)", 
       seatIds: ["bed-0", "bed-1", "bed-2", "bed-3"],
     });
     // ROADLESS: no ambulance can come, so the light on the sign is the whole
-    // of the alarm (C6) - it must survive even where the counter cannot.
+    // of the alarm - it must survive even where the counter cannot.
     const floor = emptyFloor({ road: null, civic: [room] });
     // NARROW: room for the bare word but not for "Infirmary · 3 of 4" -
     // `reports` comes back false, which is exactly the case a beacon has to

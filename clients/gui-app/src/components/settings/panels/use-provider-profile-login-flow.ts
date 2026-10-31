@@ -391,7 +391,7 @@ export interface ProviderProfileLoginFlow {
 }
 
 /**
- * Shared OAuth login-flow state machine (multi-profile UX overhaul, S10):
+ * Shared OAuth login-flow state machine (multi-profile UX overhaul):
  * owns the start -> starting -> waiting -> identity | failed transitions,
  * including cancellation before `startLogin` returns, and the three provider
  * login mutations shared by the add-profile dialog, the inline Settings

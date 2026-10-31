@@ -17,8 +17,8 @@ import { useBotIdentity } from "@/components/bots/bot-identity-context";
 type IdentityAvatarSize = "xs" | "sm" | "default" | "lg";
 
 /**
- * Who a picture is of, in a bot's channel and everywhere a bot appears
- * (Tracy Bots, T62): a person is a circle, a bot a squircle. Without a
+ * Who a picture is of, in a bot's channel and everywhere a bot appears:
+ * a person is a circle, a bot a squircle. Without a
  * picture it shows the initials on a colour hashed from who it is (a person
  * on the profile badges' palette, a bot on its two tones of those hues), so
  * two members with no picture still tell apart at a glance; the smallest size

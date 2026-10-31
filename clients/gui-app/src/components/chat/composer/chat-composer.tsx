@@ -238,7 +238,7 @@ interface ChatComposerProps {
   readonly ultracodeProtocolSupported: boolean;
   /**
    * Whether this chat's OWN live stream can materialize a hash-only draft image
-   * at send (T1's `chat.subscribe` 1.12 capability). Gates the hash-only send:
+   * at send (`chat.subscribe` 1.12 capability). Gates the hash-only send:
    * a bare hash on a stream that cannot resolve it is a refusal the user has to
    * read, so the flag is the chat's own, never an app-wide one.
    */

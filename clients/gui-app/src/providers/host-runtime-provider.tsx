@@ -428,7 +428,7 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
       // `buildRuntimeChangeScopeHandler` for which reasons and why. The filter
       // lives there rather than inline here so that it is a thing a test can
       // hold: this provider's startup path has no integration coverage, so an
-      // inline closure would be unobservable (redesign P4.2).
+      // inline closure would be unobservable.
       const runtimeTransportUnsubscribe = activeRuntime.hostClient.onChange(
         buildRuntimeChangeScopeHandler({
           resetMessenger: () => runtimeMessenger?.reset(),

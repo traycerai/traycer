@@ -272,7 +272,7 @@ function currentLayout(): PersistedTabStripLayout {
     );
   if (transactionDepth > 0 || matchesProjection) return layout;
   // Existing tests and unconverted flat callers can still seed `stripOrder`
-  // directly. Outside a coordinator transaction, treat that as the T1
+  // directly. Outside a coordinator transaction, treat that as the
   // compatibility write it is and rebuild the authoritative flat layout.
   return state.stripOrder.reduce(createLayoutItem, {
     version: 2,

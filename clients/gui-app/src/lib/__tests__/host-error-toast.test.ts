@@ -267,7 +267,7 @@ describe("toastFromHostError", () => {
       "Couldn't load epics.",
     );
 
-    // Policy changed deliberately (T5 item 5b): a transport cause no longer
+    // Policy changed deliberately: a transport cause no longer
     // renders through `reportableErrorToast` at all. The old assertion's
     // `cancel: null` was an artifact of `reportIssueAvailable` defaulting to
     // false under test - in the desktop app that flag is TRUE, so this path

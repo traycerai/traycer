@@ -158,7 +158,7 @@ export interface CreateTuiAgentInput {
   readonly title: string;
   /**
    * Explicit placement for the placeholder tile, or `null` to let the
-   * conversation tile-placement setting decide (C3, C8). Only the in-pane
+   * conversation tile-placement setting decide. Only the in-pane
    * PaneOpener names a pane.
    */
   readonly placement: ExplicitTilePlacement | null;

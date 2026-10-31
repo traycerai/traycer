@@ -112,7 +112,7 @@ export function TerminalTile(props: TerminalTileProps) {
   const sandboxDestroyed = sandboxEnd?.kind === "destroyed";
   // Invariant 6: the pre-bootstrap wait is bounded and it says which host it
   // is waiting on. This tile used to render a wordless skeleton for both
-  // `checking` and `host-starting` (audit S5) - indistinguishable from a
+  // `checking` and `host-starting` - indistinguishable from a
   // terminal that was about to appear, and it never ended.
   const hostLoad = useBoundedHostLoad({
     hostId,
@@ -204,7 +204,7 @@ export function TerminalTile(props: TerminalTileProps) {
   // permanent dead tile because its presence lease changed.
   useEffect(() => {
     if (reachability.status !== "unreachable") return;
-    // The BASIS gates the notification, not just the copy. Since F4 this
+    // The BASIS gates the notification, not just the copy. This
     // verdict also arrives from a starting host that overran its budget, and
     // that is the UI's patience expiring, not proof the PTY died - the tile
     // stops waiting (it must), but writing "permanently closed" into the feed
@@ -260,7 +260,7 @@ export function TerminalTile(props: TerminalTileProps) {
   // restart it announced. Rendering the dead banner there showed
   // "permanently closed" for terminals that were seconds from reconnecting -
   // so this stays a non-destructive wait, but a wait WITH WORDS and an end.
-  // Past its budget the reachability hook itself falls to `unreachable` (F4),
+  // Past its budget the reachability hook itself falls to `unreachable`,
   // which the arm above answers; `timed-out` here covers the directory that
   // never resolved at all.
   if (hostLoad.kind !== "ready") {

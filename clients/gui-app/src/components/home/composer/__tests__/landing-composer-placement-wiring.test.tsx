@@ -19,7 +19,7 @@ import type { WorktreeStagingKey } from "@/stores/worktree/worktree-intent-stagi
 import { LandingComposer } from "@/components/home/composer/landing-composer";
 
 /**
- * F4, wiring half: the landing composer must hand its actions the FROZEN
+ * The landing composer must hand its actions the FROZEN
  * submit target, not the mutable read one.
  *
  * `useComposerPlacement` freezing the client is worthless if the composer
@@ -449,7 +449,7 @@ vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => null,
   useHostClient: () => null,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => null,
 }));
 vi.mock(

@@ -188,7 +188,7 @@ describe("ComposerMobileToolbar", () => {
     expect(onSubmit).toHaveBeenCalled();
   });
 
-  // G6: this row used to render the bare `ComposerMicButton` /
+  // This row used to render the bare `ComposerMicButton` /
   // `ComposerMicPreparing` components directly, bypassing `ComposerMicSlot`'s
   // own `useRegionShown("mic")` read entirely. Routing through the slot is
   // what makes Layout's Microphone Shown switch reach the phone toolbar.

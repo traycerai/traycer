@@ -155,7 +155,7 @@ export function WorkspaceFileTile(props: {
   const isDeadTile = reachability.status === "unreachable";
 
   // A reveal target on a dead / inactive tile can never be consumed: the live
-  // preview that runs the consume effect (G4) never mounts. Drop it so these
+  // preview that runs the consume effect never mounts. Drop it so these
   // states don't strand entries on the channel (CL-5). Keyed on the target so a
   // fresh click while the tile stays dead still evicts.
   useEffect(() => {
@@ -744,8 +744,8 @@ function WorkspaceFileTileLive(props: {
     renderedContent !== null &&
     renderedContent.length > MAX_MARKDOWN_PREVIEW_CHARS;
   // A pending line target forces source view so the line is addressable -
-  // rendered markdown has none (G5). Purely derived: the child consumes the
-  // target right after the scroll (G4), so a markdown file the user had on
+  // rendered markdown has none. Purely derived: the child consumes the
+  // target right after the scroll, so a markdown file the user had on
   // preview returns to preview once the one-shot reveal completes. Line links
   // are almost always to code files, where source is the only view anyway.
   const effectiveViewMode = editing

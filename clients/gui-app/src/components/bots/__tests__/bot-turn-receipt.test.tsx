@@ -1,6 +1,6 @@
 /**
  * A reply's receipt beside a bot's channel (Tracy Bots T86), and the session
- * it opens (T93), through the REAL `BotChannelView`, `BotThreadPanel` and
+ * it opens, through the REAL `BotChannelView`, `BotThreadPanel` and
  * transcript: the receipts come from a real `bot.turn.locate` read over a
  * host client whose messenger answers it, and the rail's one slot is the real
  * open-thread store. A receipt, the reply sheet's choice or a thread's

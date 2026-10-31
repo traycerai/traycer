@@ -25,7 +25,7 @@ import type {
  * the fixed grammar order and one renderer draws them, which is what keeps the
  * docked inspector and the full-width `Settings > Layout` host the same form
  * (L-03). Every row is generic over the region id, so a row naming a key the
- * region does not have is a compile error rather than a runtime test (C-20).
+ * region does not have is a compile error rather than a runtime test.
  *
  * The regions themselves are the five per-surface tables beside this file; the
  * index that joins them is `layout-regions.ts`.

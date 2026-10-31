@@ -1,6 +1,6 @@
 /**
  * A bell row about one of the person's bots shows the bot's picture, a
- * squircle, where other rows show their glyph (Tracy Bots, T62). The real
+ * squircle, where other rows show their glyph. The real
  * `NotificationRow` under the real `NotificationBotsProvider`; the row and
  * the host's `bot.list` answer are the boundaries.
  */

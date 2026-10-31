@@ -265,7 +265,7 @@ describe("the mounted editor root", () => {
       "statusBar",
     );
 
-    // Off the bottom rung: Escape never closes the editor (audit F5).
+    // Off the bottom rung: Escape never closes the editor.
     act(() => {
       escape(document.body);
     });

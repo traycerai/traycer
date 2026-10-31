@@ -7027,7 +7027,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         //
         // This event is also a whole-transcript RESIDENCY claim, not merely a
         // decode buffer: `applyAuthoritativeSnapshot` retains both arrays in the
-        // replica. T5's process-wide accountant must charge that complete cost;
+        // replica. The process-wide accountant must charge that complete cost;
         // this line has no ordinal/range mechanism with which to evict part of
         // it and later recover it.
         applyAuthoritativeSnapshot(

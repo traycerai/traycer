@@ -1429,7 +1429,7 @@ export interface OfficeFrame {
  * SEAT BOOK's - it moves when a claim is made or released, and only the book
  * knows - while the archive's tally is the PARTITION's and the statuses', so
  * that it is right on the first frame and at any cursor rather than counting
- * the walk-outs somebody happened to watch (C5).
+ * the walk-outs somebody happened to watch.
  *
  * Outside the frame because a sign is not culled: the frame is built for the
  * view rect, and a counter on a sign two screens away is still the same

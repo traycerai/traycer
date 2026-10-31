@@ -313,7 +313,7 @@ export function isDraftBlobUnbridgeable(
 
 /**
  * Drop the "this host withholds blob methods" cache so the next put/read
- * re-probes. Same shape as T6's scope-cache invalidate: a reconnecting
+ * re-probes. Same shape as the scope-cache invalidate: a reconnecting
  * session (host upgraded mid-lifetime) is the signal, not a timer.
  */
 export function forgetBlobUnsupportedHost(hostId: string): void {

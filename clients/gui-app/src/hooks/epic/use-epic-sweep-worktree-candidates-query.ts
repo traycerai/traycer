@@ -61,7 +61,7 @@ export interface EpicSweepWorktreeRow {
   readonly disabled: boolean;
   readonly note: EpicSweepRowNote | null;
   /**
-   * T2 holder inventory from `worktree.listHolders`. Empty for idle rows
+   * Holder inventory from `worktree.listHolders`. Empty for idle rows
    * and for the unknown fallback (unsupported host / failed read /
    * inUse-with-empty race).
    */

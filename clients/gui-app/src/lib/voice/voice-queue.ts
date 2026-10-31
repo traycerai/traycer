@@ -35,7 +35,7 @@ import {
  *
  * A reply or a question that arrives while the session runs is offered in
  * one line under no delegation, through the speech scheduler, so it is said
- * at the first clear moment and never appended mid-speech (probe P1). What
+ * at the first clear moment and never appended mid-speech (probe). What
  * was already waiting when the session started was in the briefing and is
  * not offered again. Announcements and stopped answers are never offered.
  */

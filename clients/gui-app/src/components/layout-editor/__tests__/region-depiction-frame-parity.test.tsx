@@ -31,15 +31,14 @@ import {
 } from "@/stores/layout/layout-store";
 
 /**
- * The host frame against the surface it is a copy of (Risk 3, P2).
+ * The host frame against the surface it is a copy of (Risk 3).
  *
  * `HOST_CONTEXT_CLASS` copies four real composer surfaces by hand so a picture
  * of a region lands at the surface's own scale, fill and spacing. Every parity
  * suite this repo has compares a PICTURE with a LEAF under that frame, so all
  * of them keep passing while the frame itself drifts away from the surface -
- * they would be measuring the same wrong numbers on both sides. C1 and C2 moved
- * all four of these surfaces at once, which is exactly the round where that
- * would have happened unnoticed.
+ * they would be measuring the same wrong numbers on both sides. All four surfaces
+ * moved at once, which is exactly when that drift could have gone unnoticed.
  *
  * So this renders the real surface and the frame, and compares what they
  * RESOLVE TO rather than string literals: a restated string is the same copy

@@ -128,7 +128,7 @@ function lockNonSourceProfiles(
  *      rather than failing open while pending or after an RPC failure.
  *   3. Bulk admission resolved - the server's per-profile verdicts.
  * Plain-fork intent on a capable host falls through to `EMPTY_FORK_ADMISSION`
- * (picker stays fully open) - sound per T5: submit-time preflight
+ * (picker stays fully open) - submit-time preflight
  * plus the authoritative `prepareLaunch` guard both still apply there.
  */
 function resolveDialogAdmission(input: {
@@ -165,7 +165,7 @@ function resolveDialogAdmission(input: {
 }
 
 /**
- * `"fork"` is today's plain sibling-session fork. `"continue"` is the T5
+ * `"fork"` is today's plain sibling-session fork. `"continue"` is the
  * intent flag riding the SAME dialog: title/CTA copy
  * change and the profile strip gets emphasis + bulk-admission row disabling,
  * but the submit path, workspace handling, and every other mechanism are

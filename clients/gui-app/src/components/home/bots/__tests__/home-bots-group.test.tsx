@@ -8,7 +8,7 @@
  * accessible name and its attribution read from what it renders; the
  * directory hook and the hooks a row reads its live state from are stubs.
  * A team the person can add to offers "New bot" at once, whether or not it has
- * a bot yet (T67: nothing locks a new team's entry).
+ * a bot yet (nothing locks a new team's entry).
  */
 import { StrictMode } from "react";
 import { cleanup, render, screen, within } from "@testing-library/react";

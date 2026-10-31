@@ -779,7 +779,7 @@ export interface OpenEpicState {
    * answer therefore belongs to exactly one session: a rebuilt store is a
    * different cache entry, its first read is a real request, and no fence can
    * cross a generation in the first place. That also makes renderer parking
-   * (plan C, C1) honest - a park releases the session, and the show that
+   * honest - a park releases the session, and the show that
    * follows re-reads instead of replaying the pre-park answer.
    *
    * The hooks used to carry this alongside the fence and compare the two at

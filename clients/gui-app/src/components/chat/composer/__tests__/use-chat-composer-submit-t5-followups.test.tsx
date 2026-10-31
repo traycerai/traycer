@@ -1,5 +1,5 @@
 /**
- * T5 follow-ups (three P1/P2 findings in `use-chat-composer-submit.ts`, all
+ * Follow-ups (three P1/P2 findings in `use-chat-composer-submit.ts`, all
  * introduced by the PREVIOUS round's own fixes):
  *
  * R3 - the `/btw` re-inline used to run as a DETACHED submit phase, after the

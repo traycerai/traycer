@@ -32,7 +32,7 @@ import { landingLiveImageRootHashes } from "@/lib/composer/landing-image-budget"
 // Side-effect only: registers the composer-draft-row root source the real
 // app always has loaded by the time a chat tile runs. Without it this
 // file's isolated module graph has no reader for the RESTORED row, and the
-// F3 "custody transfers to the row" assertion would fail for a reason that
+// "custody transfers to the row" assertion would fail for a reason that
 // has nothing to do with `use-chat-queue-actions.ts`.
 import "@/lib/drafts/draft-mirror-coordinator";
 
@@ -229,7 +229,7 @@ describe("editQueuedItem seeds host-held custody", () => {
 });
 
 /**
- * F3: the composer draft saved underneath a queue edit
+ * The composer draft saved underneath a queue edit
  * has no image root of its own. `editQueuedItem` replaces the persisted row
  * with the queued prompt's content, so `draft-mirror-coordinator.ts`'s root
  * source (which reads the CURRENT row only) stops seeing the saved

@@ -110,7 +110,7 @@ const CHIP_STRIP_TOP = 160;
 /**
  * The dock's own shape, with the chip-sized rows drawn WHERE THE APP DRAWS
  * THEM - in the composer's compact strip, a container of its own with the
- * whole transcript between it and the dock (G3-01).
+ * whole transcript between it and the dock.
  */
 function mountDock(
   rows: ReadonlyArray<{
@@ -491,7 +491,7 @@ describe("dragging in the sidebar rail", () => {
 /**
  * The dock is the one group the app draws in TWO containers: a chip-sized row
  * stands in the composer's compact strip while its full-size siblings stay in
- * the dock, with the whole transcript between them (G3-01).
+ * the dock, with the whole transcript between them.
  */
 describe("a dock whose members are not all the same size", () => {
   it("reorders the rows drawn in the dock, leaving the chip where it stands", () => {

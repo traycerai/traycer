@@ -659,7 +659,7 @@ function envelopeStackOf(openRequests: number): OfficeSpriteName | null {
  * a column that rises eight pixels per storey and is centred on its
  * occupant's anchor rather than on its lot. The scene derived the region from
  * `hitTiles` alone and missed every roof in the City by up to 56 px, which is
- * the seam T2 closed by letting a seat say where it is actually painted.
+ * the seam closed by letting a seat say where it is actually painted.
  *
  * Both take the tile CORNER the painter starts from, so a caller that has an
  * origin but no projector can answer with `isoProjectAt`.

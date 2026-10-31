@@ -119,7 +119,7 @@ export function orderGroupHeaded(
 /**
  * The toolbar members the phone layout draws, in its own fixed order: Attach
  * image on the left; the model chip (no label, the same picker) and the
- * microphone on the right (C3).
+ * microphone on the right.
  */
 const PHONE_TOOLBAR: Readonly<
   Record<"toolbarLeft" | "toolbarRight", ReadonlyArray<ToolbarRegionId>>

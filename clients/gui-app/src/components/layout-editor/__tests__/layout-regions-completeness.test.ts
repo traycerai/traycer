@@ -36,7 +36,7 @@ import { DEFAULT_LAYOUT_SNAPSHOT } from "@/stores/layout/layout-store";
  * What the registry owes every caller that walks it.
  *
  * The reverse direction - a grammar row naming a key its region does not have
- * - is a compile error by construction (C-20), so it is deliberately not
+ * - is a compile error by construction, so it is deliberately not
  * tested here.
  */
 
@@ -71,7 +71,7 @@ const STATE_WORDS: ReadonlyArray<string> = [
   "Voice input off",
   "Bars",
   "Bars and text",
-  // Tool activity and Thinking's disclosure default (audit R1, R3).
+  // Tool activity and Thinking's disclosure default.
   "Open",
   "Closed",
 ];
@@ -86,7 +86,7 @@ const HEADER_KEYS: ReadonlySet<string> = new Set(["shown", "size"]);
 
 /**
  * `resourceMonitor.agentRows` tunes the SIDEBAR (the readings on each agent
- * and terminal row), not the monitor itself (G7): its control now lives on
+ * and terminal row), not the monitor itself: its control now lives on
  * `ResourceReadingsRow`, a Sidebar-surface row rather than one of this
  * region's own grammar rows. `model.toolbarStyle` styles the whole composer
  * toolbar rather than the model chip (C3), so it is the Composer area's
@@ -112,7 +112,7 @@ const EVERY_REGION_HIDDEN: LayoutOverrides = {
   background: { shown: "hidden" },
   todo: { shown: "hidden" },
   attachImage: { shown: "hidden" },
-  // Access, Model and Tool activity have no Shown (G6) - each floor is never
+  // Access, Model and Tool activity have no Shown - each floor is never
   // hidden.
   mic: { shown: "hidden" },
   railAgents: { shown: "hidden" },
@@ -419,7 +419,7 @@ describe("quick verbs", () => {
     expect(quickVerbToast("full", "changedFiles", "Changed files")).toBe(
       "Changed files is a full row",
     );
-    // Access's size reads as its own words, the ones its control uses (C11).
+    // Access's size reads as its own words, the ones its control uses.
     expect(quickVerbLabel("chip", "access", "Access")).toBe("Show icon only");
     expect(quickVerbLabel("full", "access", "Access")).toBe(
       "Show icon and label",

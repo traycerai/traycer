@@ -881,7 +881,7 @@ describe("<HostSettingsPanel /> local-maintenance CLI fallback", () => {
   });
 
   it("a host-restart doctor fix on a capability-false local host opens the page confirm, then dispatches on confirm", async () => {
-    // Discriminator: the P1 was a one-click `forceRestart.mutate()` from
+    // Discriminator: the defect was a one-click `forceRestart.mutate()` from
     // the Doctor sheet — skipping the same RestartHostConfirmDialog the
     // header uses. Click must open the dialog; confirm then fires the
     // page's forceRestart once. `onLocalFix` would land on `hostRunDoctor`.

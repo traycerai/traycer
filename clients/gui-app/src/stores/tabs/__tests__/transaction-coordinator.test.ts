@@ -1,5 +1,5 @@
 /**
- * T2 intermediate-state tests for the tab command coordinator.
+ * Intermediate-state tests for the tab command coordinator.
  *
  * Every affected store and the transaction ledger are subscribed during
  * commands. Each subscription-visible snapshot must keep visible refs unique

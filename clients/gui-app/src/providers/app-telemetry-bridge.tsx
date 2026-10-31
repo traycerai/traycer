@@ -26,7 +26,7 @@ import { useTabsStore } from "@/stores/tabs";
  * `layout_snapshot` is at most once per 24h per device, which is what the gate
  * keeps a remount from breaking. The window is claimed BEFORE the send,
  * because a second renderer must lose the race, and given back when the send
- * does not go out (L-83, G3-04).
+ * does not go out (L-83).
  */
 export function AppTelemetryBridge(): null {
   useEffect(

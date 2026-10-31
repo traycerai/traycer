@@ -122,7 +122,7 @@ export interface ComposerToolbarCatalogScope {
  * palette's "Switch model" / "Switch provider" items dispatch against this
  * composer.
  *
- * `seedSource` (S11: replaces the old positional `settingsSeed` +
+ * `seedSource` (replaces the old positional `settingsSeed` +
  * `client` + `seedIsAuthoritative` trio) decides both WHAT seeds the store
  * and WHETHER a dead `profileId` may be silently corrected to ambient - the
  * load-bearing distinction that keeps this validation from fighting the

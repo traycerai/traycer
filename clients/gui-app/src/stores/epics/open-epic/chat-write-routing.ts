@@ -15,7 +15,7 @@
  *
  * ## Two facts, in this order
  *
- * T9 ruled a doc-homed row's registry mutations must be gated.
+ * A doc-homed row's registry mutations must be gated.
  * `root-dnd-commits.ts` documented the opposite for chats - "`epic.reparentChat`
  * has routed chats since chats-off-YJS, and the host resolves a pre-migration
  * chat through the same storage seam". Both are right, about different hosts,

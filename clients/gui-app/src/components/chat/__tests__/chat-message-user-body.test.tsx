@@ -58,7 +58,7 @@ import { formatFullTimestamp, formatMessageTime } from "@/lib/relative-time";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 import { installFreshIndexedDb } from "@/lib/composer/__tests__/fake-idb";
 
-// T4: the inline edit composer now runs `reingestPendingImages` on mount and
+// The inline edit composer now runs `reingestPendingImages` on mount and
 // a real file paste through `putImage` - both write to the window's image
 // partition (IndexedDB), which this environment has none of by default.
 // Every test in this file that touches the edit composer needs one, the same
@@ -1046,7 +1046,7 @@ describe("<UserMessageBody /> agent messages", () => {
     expect(Array.from((await getImageBytes(hash)) ?? [])).toEqual([1, 2, 3]);
   });
 
-  // T4 format fallback: a declared MIME type outside the host's storable set
+  // Format fallback: a declared MIME type outside the host's storable set
   // (PNG/JPEG/GIF/WebP/SVG) is never hashed - it takes the inline path for that
   // file alone, and still arrives as `b64content` with a null `hash`.
   //
@@ -1093,7 +1093,7 @@ describe("<UserMessageBody /> agent messages", () => {
     ]);
   });
 
-  // T4: a storable PNG paste reads `file.arrayBuffer()` and `putImage`s the
+  // A storable PNG paste reads `file.arrayBuffer()` and `putImage`s the
   // bytes; `FileReader` is not involved on any paste path any more. The
   // "blocked until it finishes" contract still holds; only the mechanism under
   // it changed, so the delay is injected at `arrayBuffer()`.
@@ -1123,7 +1123,7 @@ describe("<UserMessageBody /> agent messages", () => {
     // appearing and the send button re-enabling are two different state
     // updates - and asserting the second synchronously after awaiting the
     // first raced the gap. That gap is real and correct: the button must stay
-    // disabled until ingest has genuinely settled, which since T4 includes the
+    // disabled until ingest has genuinely settled, which includes the
     // `putImage` write, not just the byte read.
     const readySend = await screen.findByRole("button", { name: "Send edit" });
     await waitFor(() => {
@@ -1812,7 +1812,7 @@ function plainUserMessage(content: string): ChatMessageModel {
 }
 
 function imageNode(id: string, fileName: string): JsonContent {
-  // A REAL base64 payload, not the bare id: T4's `reingestPendingImages` now
+  // A REAL base64 payload, not the bare id: `reingestPendingImages` now
   // runs on every editor mount and decodes any surviving `b64content` node
   // through `decodeValidatedPastedImage`, which rejects a non-base64 string
   // (the bare id used to contain a `-`, which is not in the standard
@@ -2435,7 +2435,7 @@ describe("<ChatMessage /> sender overline timestamp", () => {
     },
   );
 
-  // Layout > Chat > Timestamps (audit R1, R3): the stamp and the " · " that
+  // Layout > Chat > Timestamps: the stamp and the " · " that
   // joins it to the sender label are one region, and hiding it must not
   // strand the separator any more than an unrepresentable instant does above.
   it("renders the stamp and its ' · ' separator when Timestamps is shown, neither when hidden", () => {

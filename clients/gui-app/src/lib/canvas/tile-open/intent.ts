@@ -1,6 +1,6 @@
 /**
  * The one intent shape every tile open is expressed in, and the one plan shape
- * the resolver answers with (decisions C1-C7, C10).
+ * the resolver answers with.
  *
  * Nothing here touches a store: `resolve-tile-open.ts` turns an intent plus
  * settings/canvas/viewport into a {@link TileOpenPlan}, and the executor
@@ -25,9 +25,9 @@ export interface TileOpenModifiers {
 }
 
 /**
- * The category a tile KIND places under (C2, C3). Placement is configured per
+ * The category a tile KIND places under. Placement is configured per
  * category, never per tile kind, and every tile on the canvas belongs to
- * exactly one of these - they are what category affinity (C5) groups by.
+ * exactly one of these - they are what category affinity groups by.
  */
 export type TileCategory = "content" | "conversation" | "browser";
 
@@ -45,7 +45,7 @@ export type TilePlacementCategory = TileCategory | AnchoredTileCategory;
 
 /**
  * A placement the caller already decided: a drop position, a PaneOpener's own
- * pane, an Electron popup's originating pane. Overrides the setting (C7).
+ * pane, an Electron popup's originating pane. Overrides the setting.
  *
  * `beside` is the half-decided case: the caller names the pane the open is
  * relative to and the category whose setting row applies, and the setting
@@ -82,7 +82,7 @@ export interface TileOpenIntent {
   /** `null` for triggers with no event behind them (host, keyboard, DnD). */
   readonly modifiers: TileOpenModifiers | null;
   readonly placement: ExplicitTilePlacement | null;
-  /** `false` only for the PaneOpener's "open a second view" (C6). */
+  /** `false` only for the PaneOpener's "open a second view". */
   readonly dedupe: boolean;
   readonly source: AnalyticsSource;
 }
@@ -167,12 +167,12 @@ export type TileOpenPlan =
   | { readonly kind: "noop" };
 
 /**
- * The placement category of a tile kind (C2). A `Record` over `TileKindId`
+ * The placement category of a tile kind. A `Record` over `TileKindId`
  * rather than a switch: adding a kind fails the type-check here (same trick as
  * `isTileKind`) rather than silently landing in someone else's category.
  *
  * `blank` maps to `content`. It is keyboard-only and never routed through an
- * intent (C2), so the entry exists purely to keep the record total.
+ * intent, so the entry exists purely to keep the record total.
  */
 const TILE_CATEGORY_BY_KIND: Record<TileKindId, TileCategory> = {
   chat: "conversation",
@@ -206,7 +206,7 @@ export function tileCategoryOf(node: EpicCanvasTileRef): TileCategory {
 }
 
 /**
- * The modifier triple behind a real click (C4). Takes the structural shape
+ * The modifier triple behind a real click. Takes the structural shape
  * rather than `React.MouseEvent` so a native `MouseEvent` and a synthetic one
  * both fit, and so a test can hand it a literal.
  */

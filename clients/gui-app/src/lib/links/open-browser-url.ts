@@ -51,8 +51,8 @@ interface MatchedTab {
  * else this machine's own host, else the host of the tile the link is in.
  *
  * A tab already showing the same page is focused instead of opening a second
- * one - that is what keeps repeated link clicks from stacking tabs and splits
- * (P2). Only that host's tabs are matched: a tab showing the page on another
+ * one - that is what keeps repeated link clicks from stacking tabs and splits.
+ * Only that host's tabs are matched: a tab showing the page on another
  * machine is not where the person asked for it. Middle-click bypasses the
  * match on purpose: it means "another one, in the background" (B4).
  *
@@ -64,7 +64,7 @@ interface MatchedTab {
 export function useOpenBrowserUrl(): (input: OpenBrowserUrlInput) => void {
   // Read at CLICK time, not subscribed: this hook is mounted by every link
   // surface in the app and the sessions context is a fresh object per stream
-  // frame (C8).
+  // frame.
   const openSnapshot = useMaybeBrowserOpenSessionsSnapshot();
   const snapshot = useMaybeBrowserSessionsSnapshot();
   const binding = useHostBinding();
@@ -216,7 +216,7 @@ function openTabOnce(
  * `.current` access inside a `useCallback` as a ref dependency and then
  * refuses to preserve the manual memo. Passing the ref object to a function
  * keeps the callback's dependency the (stable) snapshot itself, which is the
- * whole point of reading sessions at click time (C8).
+ * whole point of reading sessions at click time.
  */
 function sessionsOf(
   snapshot: BrowserSessionsSnapshot | null,
@@ -249,8 +249,8 @@ function browserTileIntent(args: {
       tabId: args.tabId,
     }),
     target: args.target,
-    // A link click is one click, so it previews like every other single click
-    // (C4/C11); `middle` in the modifiers is what turns it into a background
+    // A link click is one click, so it previews like every other single click;
+    // `middle` in the modifiers is what turns it into a background
     // open.
     gesture: "single",
     modifiers: args.modifiers,

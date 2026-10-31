@@ -260,7 +260,7 @@ function restoreLandingDraft(draft: LandingDraftTab): void {
  * `clearDraft` upserts an EMPTY row rather than deleting one (it routes through
  * `replaceDraft`), which the read model hides by filtering empties - so the
  * host tombstone below is what actually removes the row, and it has to be sent
- * here because the chat whose draft this is, is not mounted (C1, G7).
+ * here because the chat whose draft this is, is not mounted (C1).
  */
 export function deleteComposerDraftRow(
   row: {

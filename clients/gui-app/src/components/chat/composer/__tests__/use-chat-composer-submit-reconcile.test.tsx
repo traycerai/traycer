@@ -6,7 +6,7 @@
  * map did not, so B was sent bare even though this client could resolve it.
  * The fix, `prepareDraftImageInlining`, reconciles the live document's
  * required hashes against the attempted set before the send. (Its
- * synchronous-commit contract - R2 - is tested directly in
+ * synchronous-commit contract is tested directly in
  * `draft-image-inlining.test.ts`; the annotation-ordering half is the R2(a)
  * block at the bottom of this file.)
  */
@@ -163,7 +163,7 @@ function mountSubmit(
       onSideChat: null,
       targetHostId: null,
       queueEditTargetId: null,
-      // T5's gate is off in these fixtures: they predate it and assert the
+      // The gate is off in these fixtures: they predate it and assert the
       // inline behaviour, which is what `false` preserves exactly.
       getDraftBlobBridgeSupported: () => false,
     }),

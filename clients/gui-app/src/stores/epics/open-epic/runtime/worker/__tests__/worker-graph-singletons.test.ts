@@ -241,7 +241,7 @@ function walk(entry: string): GraphWalk {
  * leaf (`host-binding-authority-error.ts`), which cut the chain while keeping
  * `instanceof` exactly as sharp.
  *
- * Both allowlists are now empty, which is the T14 gate. Keeping it empty is
+ * Both allowlists are now empty, which is the gate. Keeping it empty is
  * the point: an entry here is a singleton with permission to ship.
  */
 const RUNTIME_ALLOWED: ReadonlyMap<string, string> = new Map();

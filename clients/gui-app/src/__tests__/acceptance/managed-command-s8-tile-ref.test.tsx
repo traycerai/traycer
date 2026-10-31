@@ -1,17 +1,17 @@
 /**
- * Independent acceptance suite — seam S8 (GUI half).
+ * Independent acceptance suite — the output window's persisted shape (GUI half).
  *
- * S8 pins the output window's persisted shape:
+ * The output window's persisted shape:
  * a renderer-local pointer of exactly `{ id: commandId, instanceId, type,
  * hostId }`, with kind/description/status re-read live on restore, and
  * NOTHING written to the epic doc. The key-set assertion is the fence that
  * keeps state from creeping into storage later.
  *
- * S9's GUI half (CPU/mem readout chips on the Shells menu rows) went with the
+ * The GUI half (CPU/mem readout chips on the Shells menu rows) went with the
  * menu itself (product decision, 2026-08-15): the shell's readout now lives on
  * its owner row in the Resource Monitor. The old-peer fold and its frame
  * invariant are still proven host-side in
- * `traycer-host/.../managed-command-ui-acceptance.test.ts` (S9a-c).
+ * `traycer-host/.../managed-command-ui-acceptance.test.ts`.
  */
 import { cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

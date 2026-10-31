@@ -49,7 +49,7 @@ import type { RegionId } from "@/lib/layout/region-id";
  *
  * - The readings on agent rows sit beside the Resource monitor's values
  *   because the monitor's Metrics choice says WHICH readings (L-174), but the
- *   switch is a Sidebar row (G7).
+ *   switch is a Sidebar row.
  * - Toolbar style sits in the Model bag, but it styles every toolbar button,
  *   so it is a Composer area row (C3).
  */
@@ -137,7 +137,7 @@ const SURFACE_FIELDS_CHANGED: Readonly<
 /**
  * Whether one region's row differs from what shipped, which is what its dot
  * draws: its own values, its host and side, for Usage limits which providers
- * its Profiles list hides (P-6, P-7), and for Context usage the order its
+ * its Profiles list hides, and for Context usage the order its
  * Breakdown rows were dragged into (C2).
  *
  * Never a LIST order (T2): a row's place in a list is the list header's dot.

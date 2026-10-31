@@ -24,7 +24,7 @@ import { hostQueryKeys } from "@/lib/query-keys";
 
 vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => null,
 }));
 

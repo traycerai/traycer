@@ -1,4 +1,4 @@
-// T3 — Overview ▸ Updates tab: the single-row auto-update group, its work
+// Overview ▸ Updates tab: the single-row auto-update group, its work
 // while the host cannot be reached, the unreachable/not-manageable list
 // fallbacks, a refused install's two surfaces, and Check now (on the version
 // list's heading) sharing the answer card's own check.
@@ -771,7 +771,7 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     expect(screen.getByTestId("host-auto-update-host-a")).toBeTruthy();
   });
 
-  // T3: `versionConnecting` (`host-overview-panel.tsx`) never read
+  // `versionConnecting` (`host-overview-panel.tsx`) never read
   // `host.health.state === "restarting"`, so an expected restart fell through
   // to whatever the scope status or operation view said instead of the
   // loading shape every other region already gives a restart. Two arms, one

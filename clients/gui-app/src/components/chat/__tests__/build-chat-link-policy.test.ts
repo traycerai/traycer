@@ -144,7 +144,7 @@ let clickToken = 0;
 const openTile = vi.fn();
 
 /**
- * The intent every chat link open produces (C4): a single-click gesture into
+ * The intent every chat link open produces: a single-click gesture into
  * the chat's own tab, with placement left to the setting.
  */
 function chatLinkIntent(node: unknown): unknown {

@@ -12,7 +12,7 @@
  *     agent") - visible only when `activeTabId !== null`. They open the
  *     shared New Conversation modal seeded for the command's composer mode;
  *     the modal composes the first prompt and creates the result on submit,
- *     which lands wherever the conversation tile-placement setting says (C8).
+ *     which lands wherever the conversation tile-placement setting says.
  *
  * The "Select PC" row is landing-only (host is locked on existing
  * chats - final, not a v2 candidate).

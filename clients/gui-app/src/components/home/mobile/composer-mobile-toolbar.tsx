@@ -228,7 +228,7 @@ function ComposerMobileToolbarImpl(props: ComposerMobileToolbarProps) {
           embedding={null}
         />
         {/* The slot, not the bare button: it is what honours Layout's
-          Microphone switch, which this row used to ignore (G6). */}
+          Microphone switch, which this row used to ignore. */}
         <ComposerMicSlot
           dictation={dictation}
           dictationPreparing={dictationPreparing}

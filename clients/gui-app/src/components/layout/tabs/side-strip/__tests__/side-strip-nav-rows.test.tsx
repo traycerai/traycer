@@ -563,7 +563,7 @@ const RUNNING_DOTS_FRAMES: ReadonlyArray<string> = [
 ];
 
 /**
- * Running work on the strip's own rows (F3), read off the real
+ * Running work on the strip's own rows, read off the real
  * `SideTabStrip` with the host's activity plane seeded rather than the row's
  * props written by hand: the expanded row draws a running turn as the shared
  * spinning dots, and the collapsed tile draws it as the meter's turn pips and

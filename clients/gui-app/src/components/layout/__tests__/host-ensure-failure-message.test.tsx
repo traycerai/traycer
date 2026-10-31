@@ -514,7 +514,7 @@ describe("host-ensure-failure-message", () => {
     });
   });
 
-  // R5 cleanup: the Enable-background-service repair, gated on the
+  // The Enable-background-service repair, gated on the
   // ensure failure's code AND a known local host - neither alone is enough.
   describe("the Enable background service repair", () => {
     it("shows for E_SERVICE_REGISTRATION_DISABLED with a local host known, and clicking it dispatches register-service for that host", async () => {

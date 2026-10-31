@@ -149,7 +149,7 @@ export function flushDesktopTabsPersistence(): Promise<DesktopPerWindowStateUpda
  * failure (the update IPC rejecting, an unrecognizable acknowledgement, or
  * a stale revision) rather than "there was nothing to wait on." Callers
  * that only care about racing a specific mutation through to durability
- * (e.g. the T10 move barrier) should skip the flush/abort dance entirely
+ * (e.g. the move barrier) should skip the flush/abort dance entirely
  * when this is false: an absent controller, or one with nothing pending,
  * has nothing that could echo a stale snapshot back over that mutation.
  */
@@ -158,7 +158,7 @@ export function hasPendingDesktopTabsWrite(): boolean {
 }
 
 /**
- * Best-effort lifecycle drain. Unlike the T10 move barrier above, an absent
+ * Best-effort lifecycle drain. Unlike the move barrier above, an absent
  * controller means this renderer never negotiated tabs authority, so teardown
  * has nothing to wait for. A live controller still exposes its real failure to
  * the caller after it has drained its pending debounce.

@@ -167,7 +167,7 @@ function isChipSized(values: LayoutValues[RegionId]): boolean {
  *
  * A total `Record<RegionId, ...>` rather than a switch with a `default`: a
  * region added without a host is a compile error here, where a `default` used
- * to draw it in the sidebar and say nothing (G1-22).
+ * to draw it in the sidebar and say nothing.
  */
 const HOST_BY_REGION: Readonly<Record<RegionId, HostContextId>> = {
   homeTab: "top-bar",
@@ -241,9 +241,9 @@ export function depictRegion<K extends RegionId>(
  * so a picture of the mic under a preset or a Toolbar style example has to
  * carry the model's answer too, or it draws the live setting.
  *
- * It lives here and not in the registry: `regions/` is the registry layer
- * (G1-11), and a depiction import there closes a module cycle back through
- * the Settings surface (G3-08). The indirection through a locally annotated
+ * It lives here and not in the registry: `regions/` is the registry layer,
+ * and a depiction import there closes a module cycle back through
+ * the Settings surface. The indirection through a locally annotated
  * parameter is what lets the two indexed accesses resolve together for every
  * region at once.
  */
@@ -297,7 +297,7 @@ const READING_STYLE_CARD_PROFILES = 2;
  * frame of their own and then drew each row through `depictRegion`, which
  * frames it again, so every row came out inside two joined frames and the
  * "separate cards" treatment L-97 dropped was back in the two surfaces whose
- * whole claim is that they are a real picture of the app (R1-01).
+ * whole claim is that they are a real picture of the app.
  *
  * It is here rather than in either picture because the frame belongs to this
  * layer: `depictRegion` is deliberately the only way a region is drawn, so a
@@ -320,7 +320,7 @@ export function depictDockRows(
             // inside one frame now that the gap between two cards is gone.
             //
             // `undefined` and not `cn(null)`, which is the empty string: the
-            // first row was shipping a bare `class=""` (R2-10).
+            // first row was shipping a bare `class=""`.
             className={index === 0 ? undefined : "border-t border-border/50"}
           >
             {depictDockRow(regionId, values[regionId], arrangement)}
@@ -462,9 +462,9 @@ function depictedUsageProviders(
 }
 
 /**
- * EVERY shown provider that reports windows, in the arrangement's own order
- * (P2, R3-03): Detailed as one segment each, Compact as the one glyph over all
- * of them, as the live reading resolves its density at its spot.
+ * EVERY shown provider that reports windows, in the arrangement's own order:
+ * Detailed as one segment each, Compact as the one glyph over all of them, as
+ * the live reading resolves its density at its spot.
  *
  * The arrangement is the whole answer: a caller that wants only the watched
  * host's providers narrows it first (`useLiveUsageArrangement`), so a picture

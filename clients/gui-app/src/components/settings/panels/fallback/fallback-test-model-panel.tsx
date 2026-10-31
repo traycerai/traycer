@@ -330,7 +330,7 @@ export function FallbackTestModelPanel(
     labelFor,
   });
   // The host arms nothing with the master switch off; the dry run is still
-  // shown, under a lead that says so (P1).
+  // shown, under a lead that says so.
   const masterOff = !policy.enabled;
 
   return (
@@ -1132,8 +1132,7 @@ function RoutedVerdict(props: {
 /**
  * The routed tier's rows - or, when the host walked a DIFFERENT tier than the
  * one named above (its own catalog read gave the model another name), one
- * line saying so in place of rows that would otherwise all read empty
- * (C2).
+ * line saying so in place of rows that would otherwise all read empty.
  */
 function RoutedAnswerView(props: {
   readonly answer: TestRowsAnswer;
@@ -1190,7 +1189,7 @@ function ThenLine(props: { readonly verdict: RoutedTestVerdict }): ReactNode {
         <>
           <StepChain steps={verdict.then} /> (your fallback steps
           {/* "Another error" is answered only when every failure it stands
-              for agrees, so it says so (P2). */}
+              for agrees, so it says so. */}
           {verdict.failure === "other"
             ? ", the same for every other error"
             : ""}

@@ -1,5 +1,5 @@
 /**
- * T3 TabNavigationController envelope lifecycle.
+ * TabNavigationController envelope lifecycle.
  *
  * Drives the controller directly via `activateTabIntent` /
  * `tabNavigationController.observeLocation` — no production edits, no
@@ -1088,7 +1088,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     );
   });
 
-  // F2 (closure): open-epic-from-list must resolve/create INSIDE the controller,
+  // Open-epic-from-list must resolve/create INSIDE the controller,
   // after its snapshot, so a rejected navigation restores the genuine prior tab
   // - not the just-opened epic.
   it("rejecting an open-epic-from-list navigation restores the genuine prior tab", async () => {
@@ -1122,7 +1122,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(focusedRefKey()).toBe(tabRefKey(prior.ref));
   });
 
-  // F3 (closure): repair must replay the EXACT committed route - including the
+  // Repair must replay the EXACT committed route - including the
   // committed search (overlay-cleared / canonically normalized) - not a
   // freshly-derived tabRouteOptions(intent) that reintroduces stale search.
   it("stale superseded commit repairs to the exact committed search, not a stale one", () => {
@@ -1181,7 +1181,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(repairCall.to).toBe("/settings/providers");
   });
 
-  // F6 (closure, most serious): an envelope-free external PUSH must supersede a
+  // An envelope-free external PUSH must supersede a
   // still-PENDING internal token, so a late internal commit repairs to the
   // external authority instead of acknowledging - URL and layout must agree.
   it("external PUSH supersedes a pending internal token; late internal commit repairs (no URL/layout divergence)", () => {

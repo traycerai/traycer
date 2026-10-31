@@ -1676,7 +1676,7 @@ function isImageFile(file: File): boolean {
 }
 
 /**
- * The dialog's attachment target (T5): paste, drop, and
+ * The dialog's attachment target: paste, drop, and
  * click-to-browse all funnel into `attachments.addFiles`, which owns every
  * attach-time rejection (count/type/size/budget - see
  * `use-report-issue-attachments.ts`). The review-warning line renders only

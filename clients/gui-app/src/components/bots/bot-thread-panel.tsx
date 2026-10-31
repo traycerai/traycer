@@ -122,7 +122,7 @@ export type BotThreadPanelThread =
  *
  * A reply's receipt, and a failed post's, opens its turn's session in place
  * of the channel (`onOpenTurn`), and "Thread session" in the header opens the
- * thread's session there (`onOpenSession`), read-only (T93). The thread
+ * thread's session there (`onOpenSession`), read-only. The thread
  * session's routing card sits above the panel's box.
  *
  * A question card in the thread answers in the thread. A member whose answer

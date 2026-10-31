@@ -40,7 +40,7 @@ export function useSideTabJoin(
   const sidebarSide = useArrangementValue("sidebarSide");
   const collapsed = useMainPanelCollapsed(tab?.id ?? "");
   // The layout editor's session tab is its own solid amber object, never
-  // joined: the join's fill would paint over it (audit F2), and the top strip
+  // joined: the join's fill would paint over it, and the top strip
   // leaves it unjoined for the same reason (`TabChromeBackground`).
   const joins = edge !== null && active && tab?.kind !== "sample-workspace";
   const inList = useWhollyInTabStrip(node, joins);

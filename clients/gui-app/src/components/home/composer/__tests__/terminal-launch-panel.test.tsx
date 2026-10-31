@@ -10,7 +10,7 @@ const panelMocks = vi.hoisted(() => ({
   providers: [
     { providerId: "claude-code", terminalAgentArgs: "--from-settings" },
   ],
-  // S11 coverage (see the new "forwards a non-null hostId..." test below):
+  // Coverage (see the new "forwards a non-null hostId..." test below):
   // records every argument these mocks receive so a test can assert the
   // panel's `hostId` prop actually reaches the launch host's client, the
   // `providers.list` read, and the picker - not just that SOME client/host
@@ -352,7 +352,7 @@ describe("<TerminalLaunchPanel /> terminal-agent args handoff", () => {
     );
   });
 
-  // S11 coverage: a regression back to the app-wide default host would leave
+  // Coverage: a regression back to the app-wide default host would leave
   // `useHostClientForHostId`, `providers.list`, and the picker all pinned to
   // `null` regardless of the `hostId` prop - this asserts the non-null host
   // actually threads through every one of them, not just that the panel

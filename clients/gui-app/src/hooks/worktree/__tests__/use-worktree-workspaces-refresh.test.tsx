@@ -406,7 +406,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
     // already imported, so nothing here reaches for new fixture surface. (A
     // same-host TRANSPORT move reaches the same arm, but pinning it would couple
     // this test to whichever fields `sameHostTransport` happens to compare -
-    // machinery P4.1/P4.2 will move.)
+    // machinery the redesign will move.)
     //
     // The claim, and it is a different one than before: a cancellation with the
     // host UNMOVED is silent AND spawns nothing. `forceAgainstLiveHost` returns

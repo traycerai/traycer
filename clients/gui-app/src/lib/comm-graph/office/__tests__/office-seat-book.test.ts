@@ -56,7 +56,7 @@ function wake(roomId: string | null, floorIndex: number): OfficeSeatPreference {
 
 /**
  * A CIVIC claim: a seat of one kind, and a miss that never asks the plan to
- * grow the office (C2 - capacity is the cap).
+ * grow the office (capacity is the cap).
  */
 function civic(
   wants: OfficeSeatWant,
@@ -1145,7 +1145,7 @@ describe("OfficeSeatBook", () => {
 
     it("still refuses when the empty preference floor's host is not the one with the free desk", () => {
       // Floor 0 (empty, host-a) is where A wakes; the only free desk is on
-      // floor 1, but floor 1 belongs to host-b. F3's host scoping must
+      // floor 1, but floor 1 belongs to host-b. Host scoping must
       // survive N2's fix: reading the floor's own host must not turn into
       // reading ANY floor's host.
       const layout = buildLayout({
@@ -1231,7 +1231,7 @@ describe("OfficeSeatBook", () => {
   });
 
   it("reconciles the shortfall with a direct desk assignment, no further claim() call needed", () => {
-    // F6: a failed wake that later gets a REAL desk straight from the plan
+    // A failed wake that later gets a REAL desk straight from the plan
     // (not through another claim()) must leave needsCapacity, or a hot agent
     // already at a desk keeps demanding growth forever.
     const small = buildLayout({
@@ -1717,7 +1717,7 @@ describe("OfficeSeatBook", () => {
     const civicBook = new OfficeSeatBook();
     civicBook.adopt(withDesk, ["A"], "keep");
     expect(civicBook.claim("A", civic("bed", 0))).toBeNull();
-    // C2: a civic miss is the cap doing its job, not a floor that owes a
+    // A civic miss is the cap doing its job, not a floor that owes a
     // bed. The spare desk is still free; the miss must not ask the plan to
     // grow around it.
     expect(civicBook.needsCapacity()).toEqual([]);

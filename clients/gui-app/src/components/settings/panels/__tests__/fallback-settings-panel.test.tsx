@@ -215,7 +215,7 @@ vi.mock("@/hooks/providers/use-fallback-in-flight-count-query", () => ({
   useFallbackInFlightCountQuery: () => ({ data: undefined }),
 }));
 
-// The F20 catalog read is out of this suite's scope; zero options for both
+// The catalog read is out of this suite's scope; zero options for both
 // lookups is the documented "no answer" state under which the Model cell
 // still renders (a stored family shows PINNED and invalid-if-blank) and the
 // Effort cell stays on "Any effort" - none of this suite's assertions pick a
@@ -588,7 +588,7 @@ describe("FallbackSettingsPanel - reset reads from the refetch, never the mutati
     fallbackMocks.resetMutateAsync.mockImplementationOnce(() => {
       // Put the post-reset policy in the cache the panel is about to READ. The
       // panel performs its own `refetchPolicy()` after the mutation settles
-      // (R8: the mutation's invalidation neither refetches nor could report a
+      // (the mutation's invalidation neither refetches nor could report a
       // failure if it did), and the default `refetchMock` answers with whatever
       // `queryData` holds - so writing it here is what that read returns. This
       // body has nothing to await - it just mutates the mocked query's data
@@ -911,7 +911,7 @@ describe("FallbackSettingsPanel - F15 a disabled step's echo does not move it pa
     // A NONCANONICAL stored order, and deliberately one where the step being
     // disabled is not already next to `notify`.
     //
-    // R6: the earlier version of this test started from the canonical ladder
+    // The earlier version of this test started from the canonical ladder
     // and asserted only `tier < notify`, which its own stated falsifier cannot
     // break. Re-deriving from the echoed ladder `[profile, wait, notify]` puts
     // the disabled `tier` at the canonical disabled position - immediately
@@ -1211,7 +1211,7 @@ describe("FallbackSettingsPanel - R8 a confirmed reset whose read fails is not s
 });
 
 describe("FallbackSettingsPanel - R8 P2 a refusal after an unread reset must not call the pre-reset policy current", () => {
-  // Local rather than shared with the R1/R2 block: these two sequences care
+  // Local rather than shared with the R1 block: these two sequences care
   // about which BRANCH of `applySaveFailed` runs, so the error class is part of
   // the fixture and is stated where the fixture is.
   function refusedForTest(message: string): HostRpcError {
@@ -1821,16 +1821,16 @@ describe("FallbackSettingsPanel - F21 an ambiguous transport failure does not cl
 
   it("F21e: 'Check again' failing leaves the notice standing and leaks no unhandled rejection either", async () => {
     // The button path, which is a DIFFERENT `reconcileUnknownSave` call site
-    // from the one F21d covers (`checkSaveOutcomeAgain` vs `commit`), and the
+    // from the commit-path case (`checkSaveOutcomeAgain` vs `commit`), and the
     // one a person reaches deliberately.
     //
-    // F21c already clicks this same button - but with a RESOLVING refetch, so
+    // The sibling case clicks this same button with a RESOLVING refetch, so
     // it cannot see this: it exercises the settle, never the failure. Without
     // this test the button's reject path has no coverage at all, which is how
     // three of the four call sites kept an unowned rejection after the first
     // fix.
     //
-    // Capture and drain as in F21d: two macrotasks, and this test's own
+    // Capture and drain unhandled rejections: two macrotasks, and this test's own
     // listener is the only thing in the workspace that can fail on a leak
     // (`vitest.config.ts:116`, `test-browser-apis.ts:110-122`).
     const unhandled: unknown[] = [];
@@ -1945,7 +1945,7 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
   /**
    * A promise this test settles by hand, so two saves can genuinely overlap.
    *
-   * The R2 sequences are ORDERING bugs: they need A still unanswered while B is
+   * The sequences are ORDERING bugs: they need A still unanswered while B is
    * answered. `mockRejectedValueOnce` cannot express that - it settles on the
    * microtask after the call - so the order the reducer sees would be fixed by
    * the mock rather than by the test.
@@ -2188,7 +2188,7 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
   });
 
   it("R2d: an older save's refusal does not relabel a NEWER unjudged draft as refused, so the read-back leaves it in the field", async () => {
-    // The composition the earlier R2 pins never reach: they stop editing before
+    // The composition the earlier pins never reach: they stop editing before
     // B is refused, so `refusedDraft` is only ever written over a draft the
     // refused request actually carried. Here the user types WHILE B is in
     // flight, which moves the revision without sending anything (`editDraft`),
@@ -2425,7 +2425,7 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
     });
   }
 
-  /** As in the R1/R2 block: two saves cannot genuinely overlap without one. */
+  /** As in the R1 block: two saves cannot genuinely overlap without one. */
   function deferred(): {
     readonly promise: Promise<ProvidersFallbackPolicySetResponse>;
     resolveWith: (value: FallbackPolicy) => void;
@@ -2635,13 +2635,13 @@ describe("FallbackSettingsPanel - R9/R10 what the page SAYS when two obligations
     // Falsification (panel): restore the early
     // `if (localError !== null) return <p .../>` in `FallbackSaveStatus`. The
     // preserved validation error then masks the notice AND the only Check
-    // again, while the ticket it belongs to stays open - the R9 defect from
+    // again, while the ticket it belongs to stays open - the defect from
     // the other side, and the reason preserving `localError` had to be paired
     // with this render change rather than shipped alone.
     const hostAlert = screen.getByTestId("fallback-host-error");
     expect(hostAlert.textContent).toContain("may or may not have been saved");
     expect(screen.getByTestId("fallback-check-again")).toBeDefined();
-    // R10 (fifth pass): WHICH draft that uncertainty is about. The unanswered
+    // The uncertainty must name the right draft. The unanswered
     // request was A; what is on screen is the never-sent, invalid C. The
     // sentence used to open "This is your change, not a confirmed setting",
     // attaching A's uncertainty to an edit A never carried - and this is the

@@ -1,5 +1,5 @@
 /**
- * A channel the host has not created yet (Tracy Bots T57): a host that makes
+ * A channel the host has not created yet: a host that makes
  * the channel chat only on its first post closes the channel's subscribe
  * with `CHAT_NOT_VISIBLE`. The REAL `BotChatTranscript` draws that as the
  * empty channel with its intro, and re-subscribes once a send to the channel

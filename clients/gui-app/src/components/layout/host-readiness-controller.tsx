@@ -654,7 +654,7 @@ function useHostlessSandboxBootstrap(readiness: SurfaceReadiness): boolean {
  * speak. One speaker at every moment: this card shows only then, and yields the
  * instant the narrator can.
  *
- * The line is deliberately NOT from the F19 lane table - no lane is known to
+ * The line is deliberately NOT from the lane table - no lane is known to
  * be running yet; this is the window finding its authority, and claiming
  * "Starting local Traycer Host…" here would name a machine nothing has
  * resolved.
@@ -721,9 +721,9 @@ function AttachPendingCard(props: {
  * centring, same spinner rules; this frame adds only the message, the
  * optional detail line, a body slot and the action row.
  *
- * It took a `variant` until P3.2: `slot` was the bounded in-surface form, drawn
- * without a card because it sat inside a tab's frame. P2.2 deleted the per-pane
- * readiness boundaries that were its only producer, so the branch had no caller
+ * It formerly took a `variant`: `slot` was the bounded in-surface form, drawn
+ * without a card because it sat inside a tab's frame. The per-pane
+ * readiness boundaries that were its only producer were deleted, so the branch had no caller
  * left; tabs gate on their own host's lease now and render their own tile
  * states.
  */

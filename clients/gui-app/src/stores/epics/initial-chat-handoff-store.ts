@@ -42,7 +42,7 @@ export interface InitialChatHandoff {
   readonly worktreeIntent: WorktreeIntent | null;
   /**
    * Explicit placement for the eager-opened chat tile, or `null` to let the
-   * conversation tile-placement setting decide (C3, C8). Only the in-pane
+   * conversation tile-placement setting decide. Only the in-pane
    * PaneOpener names a pane; the sidebar `+`, the landing composer and the
    * palette pass `null`.
    */

@@ -148,7 +148,7 @@ function sliceBytes(slice: unknown): number {
 
 /**
  * The legacy (pre-windowed) chat arm's residency: the entire transcript,
- * replaced wholesale on every snapshot. T6 owns that adapter; this is the
+ * replaced wholesale on every snapshot. This is the
  * figure it should settle so the accountant can see an unbounded snapshot
  * as a whole-transcript claim rather than as a silent hole in the budget.
  */

@@ -548,7 +548,7 @@ function CliBinaryMissingNotice({
 }
 
 /**
- * S14: the CLI-path-management subsection of `ProviderDetail` (binary
+ * The CLI-path-management subsection of `ProviderDetail` (binary
  * selection table + "Add custom path" flow), extracted so the panel stays
  * orchestration.
  *
@@ -621,7 +621,7 @@ export function ProviderCliCandidatesSection({
   // (`undefined`), which reads identically to an explicit `null` everywhere
   // below.
   const managedInstallState = state.managedInstallState ?? null;
-  // P2/P4. Derived from the WHOLE row, which is the only place the fallback
+  // Derived from the WHOLE row, which is the only place the fallback
   // candidates live - the point of `providerPackPreparingForProvider` taking a
   // provider rather than a state. This section used to build its own
   // `ProviderPackPreparing` at the two render sites with `fallbackRunnable:

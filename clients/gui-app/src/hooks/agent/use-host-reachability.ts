@@ -368,7 +368,7 @@ export function useHostReachability(hostId: string): HostReachability {
     };
   }, [directoryVerdict, restartExpected]);
 
-  // F4/S2. `host-starting` was the one arm with no way out: the directory
+  // S2. `host-starting` was the one arm with no way out: the directory
   // cannot distinguish "this machine's host is three seconds from publishing"
   // from "it is never going to", and it answered the optimistic one FOREVER.
   // A chat bound to a host that never came back therefore sat behind

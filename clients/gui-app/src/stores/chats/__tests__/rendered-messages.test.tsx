@@ -4876,7 +4876,7 @@ describe("useRenderedMessages setup card integration", () => {
   });
 
   it("suppresses the Working indicator while a multi-repo window has a failed and a still-setting-up repo", () => {
-    // F3b regression: the rollup ranks `failed` above `setting-up`, so a
+    // Regression: the rollup ranks `failed` above `setting-up`, so a
     // multi-repo window with one failed + one in-flight repo rolls up to
     // `failed`. Suppression must key off any-workspace-setting-up, NOT the
     // aggregate, so the live card still stands in for the awaited turn (no

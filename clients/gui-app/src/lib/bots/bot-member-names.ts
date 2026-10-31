@@ -56,7 +56,7 @@ export function botMemberName(
 
 /**
  * A member a bot's Activity page names as the one who paused, stopped or ran
- * something (T92): as {@link botMemberName}, but "a member" where the
+ * something: as {@link botMemberName}, but "a member" where the
  * directory names no one, a member who has left included, never their id.
  */
 export function botActivityMemberName(

@@ -8,10 +8,10 @@
  * a second reference to one, and nothing in-process can observe the difference
  * because in-process there is only ever one copy.
  *
- * **This is not a mirror of T5.** A mirror restates someone else's contract and
+ * **This is not a mirror of the process-wide accountant.** A mirror restates someone else's contract and
  * rots against it. These members are named for what the RUNTIME does — settle
  * the root, settle a cold room, settle the command overlay, settle/charge/
- * release a hot doc — and T5's books are one implementation of them, living on
+ * release a hot doc — and the books are one implementation of them, living on
  * main. That is why the identity vocabulary is absent here: `bookKey`,
  * `runtimeToken` and the four holder-id families are how the ACCOUNTANT names
  * holders, so they belong to the implementation, not to the caller.

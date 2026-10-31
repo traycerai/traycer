@@ -8,7 +8,7 @@
  * host. A person in no team is offered "Create a team". A bot that is not its
  * environment's main bot is made main from its row's menu. "Threads", above
  * the sections, counts the followed threads with new replies across every
- * bot (T103). The real sidebar, the real new-bot dialog and the real bot-tabs store run
+ * bot. The real sidebar, the real new-bot dialog and the real bot-tabs store run
  * over mocked reads; `bot.onboarding.read` answers per environment from a
  * script, the create form and the navigation helper are stubs, so the dialog's
  * focus on closing is read off the real thing.

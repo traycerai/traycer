@@ -11,7 +11,7 @@ interface ImportedChatMarkerSegmentProps {
 
 /**
  * Provenance for a chat materialized from a CLI session the user ran before
- * Traycer saw it (spec T6).
+ * Traycer saw it.
  *
  * This row is the ONLY place an imported chat is marked. A badge in the task
  * list or on a tile would compete with the several other reasons a row gets an

@@ -50,7 +50,7 @@ import "@/lib/theme-applier";
 import "@/index.css";
 
 /**
- * THE VERTICAL STRIP'S DRAG GESTURE (S-11), in real Chrome with real mouse
+ * THE VERTICAL STRIP'S DRAG GESTURE, in real Chrome with real mouse
  * input.
  *
  * The real `SideTabStrip` at `?edge=left|right` inside the real

@@ -1050,7 +1050,7 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     expect(sonnerToastWarning).not.toHaveBeenCalled();
   });
 
-  // R7 `-oRs`: the recovery STRING is verbatim, but Sonner renders
+  // `-oRs`: the recovery STRING is verbatim, but Sonner renders
   // it as ordinary HTML - so the newlines and indentation the byte guarantee
   // exists to protect collapse on screen and on copy. The presentation layer
   // has to preserve them or the guarantee stops at the store boundary.
@@ -1085,7 +1085,7 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     );
   });
 
-  // R4-3: a retained record's DELIVERY state has to be as durable as the
+  // A retained record's DELIVERY state has to be as durable as the
   // record. `clientActionIds` is FIFO-bounded at 128 while the ring exemption
   // made the records themselves unbounded, so ordinary chat traffic evicts a
   // delivered last-copy id - and the very next notice re-traverses the ring,

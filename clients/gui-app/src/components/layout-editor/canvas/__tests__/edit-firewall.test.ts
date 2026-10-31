@@ -12,8 +12,7 @@ import { installEditFirewall } from "@/components/layout-editor/canvas/edit-fire
 /**
  * Named rather than read from the module's own list: a test that iterates the
  * same array cannot notice a gesture leaving it. The drag-and-drop and paste
- * five are here because the composer carries real handlers for all of them
- * (C-16).
+ * five are here because the composer carries real handlers for all of them.
  */
 const SWALLOWED_EVENT_TYPES = [
   "click",
@@ -156,7 +155,7 @@ describe("the edit firewall (4.4)", () => {
   });
 
   /**
-   * Audit F1. The Customizing tab is the session's own tab, not the app
+   * The Customizing tab is the session's own tab, not the app
    * acting: activating it is a no-op and its close is a way out of the
    * editor, so pointer gestures on it must reach the tab strip rather than
    * being swallowed like every other press on the column.

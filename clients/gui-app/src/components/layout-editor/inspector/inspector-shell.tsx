@@ -38,8 +38,7 @@ import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 /**
  * How the chrome leaves the editor: Done, Discard (the entry snapshot back
  * first), or the full-width page. Ending a session is the door's job, so the
- * caller owns all three. Escape is not one of them: it never closes the editor
- * (audit F5).
+ * caller owns all three. Escape is not one of them: it never closes the editor.
  */
 export type InspectorExit = "done" | "discard" | "open-settings";
 
@@ -217,7 +216,7 @@ function DoneButton(props: {
 }): ReactNode {
   const { onExit } = props;
   // A boolean the gesture paths maintain, never a selector that serialises the
-  // layout triple on every editor-store notification (G1-04).
+  // layout triple on every editor-store notification.
   const canDiscard = useLayoutEditorStore((state) => state.dirty);
   const [confirming, setConfirming] = useState(false);
   // Done's chord is whatever Close tab is bound to: that binding is what the

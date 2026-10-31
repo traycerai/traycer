@@ -1,5 +1,5 @@
 /**
- * A bot channel's typing signal (Tracy Bots T60/T64), through the REAL
+ * A bot channel's typing signal, through the REAL
  * `BotChannelView`: its transcript, thread panel and replying strips read
  * what the bot is doing through the real `useBotActivity`, which reads the
  * `activity` the bot's `bot.subscribe` snapshot carries; the case moves it

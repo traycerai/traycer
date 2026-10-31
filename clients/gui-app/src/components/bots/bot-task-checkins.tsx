@@ -26,7 +26,7 @@ const NO_IDS: ReadonlyArray<string> = [];
  * caught up, and one a member's Run now asked for names them. The newest few show, and "All N check-ins" the rest of the
  * week the host keeps. A check-in whose turn the bot's host still keeps
  * links to it: the turn's session opens in place of the channel, landed on
- * the check-in (T93). Nothing for a task with none.
+ * the check-in. Nothing for a task with none.
  */
 export function BotTaskCheckins(props: {
   readonly botId: string;

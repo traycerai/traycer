@@ -190,7 +190,7 @@ export function useArtifactLinkOpener(args: {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const epicHandle = useOpenEpicHandle();
-  // `isPending` guards the egress the way the anchors do (R10): each call
+  // `isPending` guards the egress the way the anchors do: each call
   // fires a fresh bridge request, so a double click would open two OS tabs.
   const { isPending: urlOpenPending, openLink: openUrl } =
     useOpenLinkWithPending();
@@ -254,7 +254,7 @@ export function useArtifactLinkOpener(args: {
         supersedePending();
         // An artifact document's external link is markdown egress like any
         // other (A1): the `markdown` setting decides in-app vs the OS browser,
-        // and the click's modifiers override it (A3, R7).
+        // and the click's modifiers override it (A3).
         void openUrl(link.url, "markdown", event);
         return;
       }

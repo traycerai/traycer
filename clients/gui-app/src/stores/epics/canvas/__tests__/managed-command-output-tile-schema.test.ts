@@ -13,7 +13,7 @@ import {
  * command it points at and the host that owns it - nothing else. Every label,
  * kind and status a viewer reads comes from the owning chat's live set, so a window
  * restored days later cannot show a stale description or a status the command
- * left long ago. This test is the fence around that (seam S8).
+ * left long ago. This test is the fence around that.
  */
 
 const HOST = "host-1";

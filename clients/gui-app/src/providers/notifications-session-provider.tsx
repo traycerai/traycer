@@ -881,8 +881,7 @@ function NotificationsSessionBody(
 
   /**
    * THE wake edge for a pinned activity lane whose capability went away and
-   * came back - the same-client, same-principal recovery the R2 dispatch class
-   * left open on this one surface.
+   * came back, including recovery on the same client and principal.
    *
    * A local-only lane is pinned at `agent.activity.subscribe@1.2`. The
    * capability that admits it is read at RENDER, from this connection's

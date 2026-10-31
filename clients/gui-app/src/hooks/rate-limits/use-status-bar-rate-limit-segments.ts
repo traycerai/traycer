@@ -577,7 +577,7 @@ function liveWindows(
  * A filter over the live list rather than a union of two lists, so the result
  * is in catalog order and a picked window is drawn once. An explicit pick that
  * matches nothing live is simply not there; when NONE of the selection is -
- * which includes Automatic, whose pick list is empty (R1-15) - the tightest
+ * which includes Automatic, whose pick list is empty - the tightest
  * stands in, because a provider whose every pick has gone stale should still
  * be judged rather than disappear.
  */
@@ -586,7 +586,7 @@ function shownWindows(
   selection: StatusBarProviderLimitSelection,
 ): ReadonlyArray<StatusBarRateLimitWindow> {
   const tightest = tightestRateLimitWindow(windows);
-  // An empty pick list IS Automatic (R1-15), so the tightest-only branch and
+  // An empty pick list IS Automatic, so the tightest-only branch and
   // the fallback below it are the same expression read twice.
   const shown = windows.filter((window) =>
     selection.limitKeys.includes(window.windowKey),
@@ -691,7 +691,7 @@ function toSegments(
     //
     // In the sample scene the invented snapshot takes the reading's place here,
     // before the catalog and the selection, so a sample segment draws the
-    // user's picked windows under their real keys (C12). A provider with no
+    // user's picked windows under their real keys. A provider with no
     // sample windows reads nothing rather than its real envelope, which drops
     // its segment: the scene never shows a real reading.
     const retained = context.sample

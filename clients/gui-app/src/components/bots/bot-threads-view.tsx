@@ -25,7 +25,7 @@ const EMPTY_BOTS: ReadonlyArray<BotRecord> = [];
 const NO_EPIC_IDS: ReadonlyArray<string> = [];
 
 /**
- * Threads, in place of a bot's channel (Tracy Bots T103, decision 149): every
+ * Threads, in place of a bot's channel (Tracy Bots, decision 149): every
  * thread the person follows across the bots the column lists, newest reply
  * first, each named by its bot and the post it hangs off, with its replies,
  * whether some are new, and how many of its notifications are unread.

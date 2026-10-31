@@ -1,5 +1,5 @@
 /**
- * Threads in place of a bot's channel (Tracy Bots T103, decision 149): every
+ * Threads in place of a bot's channel (Tracy Bots, decision 149): every
  * thread the person follows across the bots the column lists, newest reply
  * first, each named by its bot, with its new-replies mark and unread count;
  * choosing one asks its bot's tab to land it, and Unfollow drops it. The real

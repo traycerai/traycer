@@ -6,8 +6,8 @@ import { waitForStableBoxes, waitUntil } from "./waits.ts";
 import { nextFrames } from "../fixtures.ts";
 
 /**
- * The strip's foot: the readings row (staging round 1, F6) and the account
- * menu's Host section (F5, G4). What each read is, and the problems each finds
+ * The strip's foot: the readings row and the account
+ * menu's Host section. What each read is, and the problems each finds
  * in it, so a spec can poll them and a header spec can reuse the menu's.
  */
 
@@ -330,7 +330,7 @@ export const HOST_ROWS: ReadonlyArray<{
   { hostId: "fixture-host-studio", fullName: null },
 ];
 
-/** The menu's own cap (`max-w-64`, G4): a host name never widens it. */
+/** The menu's own cap (`max-w-64`): a host name never widens it. */
 const USER_MENU_MAX_WIDTH_PX = 256;
 
 interface HostMenuRow {
@@ -396,7 +396,7 @@ function opensTowardTrigger(toward: MenuToward, geo: MenuGeometry): boolean {
 }
 
 /**
- * G4: a menu's width whatever a host is called - no wider than 256px, inside
+ * A menu's width whatever a host is called - no wider than 256px, inside
  * the window, opening toward the content - and the long names truncate while
  * one that fits does not. Call with the menu open.
  */

@@ -2467,7 +2467,7 @@ function raceAgainstHang(waiter: Promise<unknown>): Promise<unknown> {
  * `buildRetentionHandle`-style construction (a real `openStoreForTest` store,
  * marked clean), but with the write gate actually OPEN and a `writeCommand`
  * that never settles - so a command enqueued against it stays genuinely in
- * flight, for R3-1's sibling: a clean outgoing handle that `replaceMounted`
+ * flight, for a clean outgoing handle that `replaceMounted`
  * disposes while it still has an outstanding write command.
  */
 function buildRetentionHandleWithNeverSettlingWrite(epicId: string): {

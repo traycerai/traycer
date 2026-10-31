@@ -938,7 +938,7 @@ export function useScreencastSession(
     const timer = window.setInterval(() => {
       // While the video plane paints, its decoded frames ARE the liveness
       // signal - the JPEG pump is off, so `lastFrameAt` would freeze at the
-      // last JPEG frame and flip a healthy tile to "stale" (G3).
+      // last JPEG frame and flip a healthy tile to "stale".
       const videoFrameAt = videoPlaneRef.current?.lastVideoFrameAt() ?? null;
       const lastFrameAt = videoFrameAt ?? controller.lastFrameAt();
       if (lastFrameAt === null) return;
@@ -1177,12 +1177,12 @@ function deriveScreencastPlaneView(input: {
   // A video tile paints no JPEG frame, so `notePresented` never runs and the
   // liveness the chrome reads has to come from the decoded video frames
   // instead. Degraded lifecycles still win - `stale` in particular is how a
-  // frozen video track surfaces (G3).
+  // frozen video track surfaces.
   const lifecycle = current ? streamState.lifecycle : "connecting";
   const upgradable =
     lifecycle === "waiting" || lifecycle === "idle" || lifecycle === "live";
   // The video plane's own geometry wins only while it is painting, so a
-  // fallback to JPEG reverts the hit-test box with no restore step (G4).
+  // fallback to JPEG reverts the hit-test box with no restore step.
   const jpegFrameSize = current ? streamState.frameSize : null;
   const frameSize = video.active
     ? ((current ? streamState.logicalViewport : null) ?? input.videoFrameSize)

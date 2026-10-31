@@ -1175,7 +1175,7 @@ describe("notification desktop-pass design corrections", () => {
     });
 
     it("does not synthetic-Escape the popover when the filter menu already closed itself first", async () => {
-      // Regression for the deferred onPointerDownOutside ordering P0: when
+      // Regression for the deferred onPointerDownOutside ordering: when
       // the menu's own outside handler closes it before the popover guard
       // runs, nestedMenuOpenRef is already false and the guard must NOT
       // dispatch Escape (which would hit the popover as the new topmost

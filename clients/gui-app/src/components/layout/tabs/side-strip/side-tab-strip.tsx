@@ -44,17 +44,17 @@ const DRAG_REGION_CLASS = "[-webkit-app-region:drag]";
 const NO_DRAG_REGION_CLASS = "[-webkit-app-region:no-drag]";
 
 /**
- * The task tabs as a vertical strip at the left or right edge (S-01, S-05):
+ * The task tabs as a vertical strip at the left or right edge:
  * the header's leading actions in the top block, the rows in a scrolling
  * column, the header's trailing actions in the foot, and a resize handle on
  * the content-facing edge.
  *
- * It never returns `null` (S-27): with no tabs, no Home and the landing route
+ * It never returns `null`: with no tabs, no Home and the landing route
  * only the row list is empty, and before the windows bridge hydrates the rows
  * are placeholders while the top block and the foot are live.
  *
  * `ownsTitleBar` is true only on macOS with the strip at the left, where the
- * top block's first row is the window's title bar (S-04).
+ * top block's first row is the window's title bar.
  */
 export function SideTabStrip(props: {
   readonly edge: EdgeSide;
@@ -106,9 +106,9 @@ export function SideTabStrip(props: {
           className={cn(
             "relative flex h-full min-h-0 shrink-0 flex-col bg-canvas text-canvas-foreground md:bg-transparent",
             collapsed ? undefined : SIDE_STRIP_MAX_WIDTH_CLASS,
-            // The rail never gets narrower than the traffic lights need (S-18),
+            // The rail never gets narrower than the traffic lights need,
             // and the expanded strip never narrower than the lights plus the title
-            // row's controls (S-43).
+            // row's controls.
             ownsTitleBar &&
               (collapsed
                 ? "wco:min-w-[var(--window-leading-inset)]"

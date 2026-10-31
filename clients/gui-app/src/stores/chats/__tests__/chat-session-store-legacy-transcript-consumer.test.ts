@@ -637,7 +637,7 @@ describe("chat-session-store - real windowed -> legacy transcript downgrade", ()
     }
   });
 
-  // F14-8: `findReadOrdinal` is reset at the SAME downgrade site as
+  // `findReadOrdinal` is reset at the SAME downgrade site as
   // `jumpTargetOrdinal` - both are "the rest of the windowed line's aux
   // state, back to its initial values" in the same `applyAuthoritativeSnapshot`
   // call (`chat-session-store.ts`, the windowed -> legacy downgrade branch).
@@ -689,8 +689,8 @@ describe("chat-session-store - real windowed -> legacy transcript downgrade", ()
       // Route the envelope through the windowed union deliberately: this makes
       // the REAL `ChatStreamClient` parse and deliver it, so the assertion is
       // about the store consumer's abandoned-line latch rather than about a
-      // legacy-schema rejection one layer earlier. T4 owns the independent
-      // retired-stream-generation guard.
+      // legacy-schema rejection one layer earlier. This does not exercise the
+      // independent retired-stream-generation guard.
       harness.session.negotiatedVersion = WINDOWED_VERSION;
       harness.session.fireServerFrame(strandedRangeEnvelope());
       unsubscribe();
@@ -704,7 +704,7 @@ describe("chat-session-store - real windowed -> legacy transcript downgrade", ()
   });
 });
 
-// ─── T5's process-wide chat-windows holder, driven by the same real frames ─
+// ─── The process-wide chat-windows holder, driven by the same real frames ─
 
 function sixWholeSetSlicesOf(state: ChatSessionState): ChatWholeSetSlices {
   return {

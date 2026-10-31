@@ -495,7 +495,7 @@ export function TabOverflowRow(props: AreaRowPlacement): ReactNode {
 }
 
 /**
- * The resource readings on each agent and terminal row in the sidebar (G7).
+ * The resource readings on each agent and terminal row in the sidebar.
  * Stored beside the Resource monitor's values, but a Sidebar setting: it works
  * whether or not the monitor is shown, so it never greys with it. WHICH
  * readings is the monitor's own Metrics choice (L-174), so the description

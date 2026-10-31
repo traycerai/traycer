@@ -760,7 +760,7 @@ interface RevealGeometryShim {
  * writes `scrollLeft` itself, and the amount it writes is the assertion.
  *
  * Two boxes, not one, and the pair is what makes the production walk
- * measurable (R4B-05). `tab-strip.tsx` deliberately climbs from the selected
+ * measurable. `tab-strip.tsx` deliberately climbs from the selected
  * NODE to the scroller's own child, because inside a split group the selected
  * node is one HALF of the member - so the shim gives the scroller's child the
  * member box and gives anything nested below it the member's leading half.
@@ -1090,7 +1090,7 @@ describe("<TabStrip />", () => {
   });
 
   /**
-   * The editing signal on the tab (L-87, L-138, L-163, F4): ACTIVE, the
+   * The editing signal on the tab (L-87, L-138, L-163): ACTIVE, the
    * editor's own tab IS the colour and wears none of it on its edge. The
    * fill is the colour the tab is handed, at full strength, and the border is
    * the ordinary canvas border every other active tab gets - so the frame

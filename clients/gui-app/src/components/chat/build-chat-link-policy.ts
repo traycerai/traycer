@@ -34,8 +34,8 @@ import type {
 /**
  * Every link this policy opens is a single-click on rendered markdown, so it
  * carries the `single` gesture and no explicit placement - the tile-placement
- * setting decides tab-vs-split, and dedupe focuses an already-open instance
- * (C4, C6, C11). Modifiers stay `null`: the markdown anchor hands the policy a
+ * setting decides tab-vs-split, and dedupe focuses an already-open instance.
+ * Modifiers stay `null`: the markdown anchor hands the policy a
  * link, not the mouse event.
  */
 function chatLinkOpenIntent(

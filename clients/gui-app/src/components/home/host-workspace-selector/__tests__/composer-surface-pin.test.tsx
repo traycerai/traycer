@@ -11,7 +11,7 @@ import { useLandingDraftStore } from "@/stores/home/landing-draft-store";
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
 /**
- * The landing composer's host picker is a SURFACE PIN (redesign P1.2),
+ * The landing composer's host picker is a SURFACE PIN,
  * not the app-wide selection.
  *
  * The behaviour under test is the one the redesign exists to fix: before this,
@@ -76,7 +76,7 @@ const HOST_ENTRIES = [
 vi.mock("@/lib/host", () => ({
   useHostBinding: () => ({ directory: { selectById: mocks.selectById } }),
   useHostClient: () => null,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => null,
 }));
 

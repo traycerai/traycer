@@ -87,7 +87,7 @@ let useStatusBarRateLimitSegmentsCalled = false;
 /**
  * The `mode` the icon last asked the selector for - `live` for every form,
  * the phone header's glyph included: each one owns its own fetching the way
- * the status bar's cluster does (G6). See `LiveRateLimitGlyph`.
+ * the status bar's cluster does. See `LiveRateLimitGlyph`.
  */
 let lastMode: StatusBarRateLimitMode | null = null;
 /** The `sample` flag `LiveRateLimitGlyph` last asked the selector for. */
@@ -1100,7 +1100,7 @@ describe("<RateLimitIconButton />", () => {
     },
   );
 
-  // The header glyph reads `useSampleScene()` itself (C12) - the same wiring
+  // The header glyph reads `useSampleScene()` itself - the same wiring
   // `StatusBarRateLimitCluster` gets from its caller - rather than the
   // sample scene routing through it another way.
   it.each([true, false])(

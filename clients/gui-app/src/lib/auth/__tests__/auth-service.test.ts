@@ -2559,7 +2559,7 @@ describe("AuthService", () => {
       const outcome = await service.revalidateCurrentContext();
       // The REQUEST is still rejected - a dead credential cannot authorize it.
       expect(outcome?.kind).toBe("rejected");
-      // ...but the SESSION is demoted, not cleared (P1-4). A mid-
+      // ...but the SESSION is demoted, not cleared. A mid-
       // session expiry is a verdict about the token; the person is still at the
       // keyboard and their epics are still on this disk.
       expect(useAuthStore.getState().status).toBe("unverified");
@@ -3376,7 +3376,7 @@ describe("AuthService", () => {
 
       const outcome = await service.revalidateCurrentContext();
       expect(outcome?.kind).toBe("rejected");
-      // Demoted rather than signed out - see the sibling test above and P1-4.
+      // Demoted rather than signed out - see the sibling test above.
       // The file was already kept before this change; what is new is that the
       // UI no longer throws the user out of local work while it happens.
       expect(useAuthStore.getState().status).toBe("unverified");
