@@ -1430,7 +1430,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     });
   });
 
-  // 9. The host-down window reaching THIS surface (Ticket 07 §5.2.7).
+  // 9. The host-down window reaching THIS surface (Ticket 07).
   //
   // The projector's record arm always returns `kind: "unknown"` carrying
   // `lastKnownKind`, and this banner's supersede predicate rejected `unknown`

@@ -1281,7 +1281,7 @@ function QueuedMessageProvenanceChip(props: {
  * digest, a backgrounded shell's completion digest). Distinct tone from
  * `ReceivedAgentBadge` so the two system-owned row kinds stay tellable apart.
  *
- * Also a door (`UI.md` §5): clicking it opens or focuses that shell's output
+ * Also a door: clicking it opens or focuses that shell's output
  * window, so a human who wants to see what the agent is about to read does not
  * have to find the row in the sidebar first. The label names the shell either
  * way; only the glyph waits on the monitor flag, which a delivery queued by an

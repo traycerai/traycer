@@ -1789,7 +1789,7 @@ const accountOperationAppWideReadExemptions = [
 ];
 
 // The dead-tile "open in editor" opener is a FOLLOWING surface with no picker
-// of its own (selection model §2), local-only by its own gate.
+// of its own, local-only by its own gate.
 const followingSurfaceAppWideReadExemptions = [
   "src/components/worktree/open-in-editor-button.tsx",
 ];
@@ -2403,7 +2403,7 @@ export default tseslint.config(
     },
   },
   {
-    // Plan §2/§3 puts source activation inside this reservation-first command.
+    // Source activation runs inside this reservation-first command.
     // The coordinator may call the two legacy source selectors while its
     // ledger is installed; raw registry.tabActivate remains banned here.
     files: ["src/stores/tabs/tab-command-coordinator.ts"],
@@ -2581,7 +2581,7 @@ export default tseslint.config(
     },
   },
   {
-    // These hooks build a remote host transport (Architecture §4 / S1's
+    // These hooks build a remote host transport (S1's
     // shared `(hostId, userId)` session cache) inside a `useEffect`,
     // deliberately NOT a `useMemo`: only an effect's cleanup is guaranteed to
     // pair with exactly the committed acquire (a `useMemo` factory can run

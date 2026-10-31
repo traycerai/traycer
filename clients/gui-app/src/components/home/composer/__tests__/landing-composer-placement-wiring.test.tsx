@@ -100,7 +100,7 @@ const testState = vi.hoisted(() => ({
   // `isPinned` would never actually take.
   composerIsPinned: true,
   /**
-   * The §54 refusal `useLandingComposerActions().submit` hands back - `null`
+   * The placement refusal `useLandingComposerActions().submit` hands back - `null`
    * for a create that goes through, `{message}` for a submit-time refusal.
    * Real refusal DERIVATION (`resolveLandingPlacement`) has its own unit
    * suite; this file only needs to pin that the composer's `hostNotice` slot
@@ -673,7 +673,7 @@ describe("landing composer G4 re-point", () => {
   });
 });
 
-// Codex review finding: a §54 refusal names the placement it refused, so ANY
+// Codex review finding: a placement refusal names the placement it refused, so ANY
 // change of the RESOLVED host retires it - a derivation move, or the picker
 // writing a new pin. Real refusal DERIVATION has its own unit suite
 // (`resolveLandingPlacement`); this only pins that the composer's own

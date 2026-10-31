@@ -24,7 +24,7 @@ import {
 import type { StreamMethodSupportSource } from "@/lib/host/stream-runtime-context";
 
 /**
- * The output window (`UI.md` §4): one interleaved timeline with timestamps,
+ * The output window: one interleaved timeline with timestamps,
  * opened at the tail, following live output until the human scrolls away, and
  * replaced by a single terminal notice once the command it watches is gone.
  */
@@ -432,7 +432,7 @@ describe("managed-command output window", () => {
     // tinted and a lifecycle record can be set apart without re-parsing text.
     expect(rowChannels()).toEqual(["lifecycle", "stdout", "stderr"]);
     expect(screen.getByText("warning: slow build")).not.toBeNull();
-    // Timestamps are on by default (§4) and carry seconds - a 3am restart is
+    // Timestamps are on by default and carry seconds - a 3am restart is
     // matched against other logs by time of day, not by minute. Asserted by
     // shape rather than by a literal, which would move with the runner's
     // locale and time zone.

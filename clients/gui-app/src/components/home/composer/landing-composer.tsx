@@ -197,7 +197,7 @@ export function LandingComposer(props: LandingComposerProps) {
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
   const createdUnboundDraftIdRef = useRef<string | null>(null);
   const [pickerStore] = useState(() => createComposerPickerStore());
-  // The composer's PLACEMENT (redesign P1.2, selection model §54): its own
+  // The composer's PLACEMENT (redesign P1.2): its own
   // window-keyed surface pin, or the effective host while it follows. Not the
   // app-wide selection - the picker no longer moves that - so every RPC this
   // surface makes, and every create it performs, resolves through here.
@@ -686,7 +686,7 @@ export function LandingComposer(props: LandingComposerProps) {
     claimsSend: false,
   });
 
-  // Submit-time refusal copy (selection model §54). The G4 re-point used to
+  // Submit-time refusal copy. The G4 re-point used to
   // share this slot; it narrates as a toast now, and only when it actually
   // reset staged intent — see the effect below.
   const {

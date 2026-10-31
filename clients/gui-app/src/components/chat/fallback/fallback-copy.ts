@@ -146,7 +146,7 @@ export const FRESH_SESSION_HELPER =
  * chain, so without this the user answering "Stay" lost the one fact that
  * argues against staying: the account they would be staying on is itself
  * running out. Taking the SLOT and dropping the SENTENCE is what MF09 found;
- * UX §2 asks for one banner carrying both facts, not a collision resolved by
+ * One banner carries both facts, not a collision resolved by
  * silence.
  *
  * The wording is the advisory banner's own, deliberately
@@ -154,7 +154,7 @@ export const FRESH_SESSION_HELPER =
  * same family qualifier): the user may see this clause here and the full
  * advisory a message later, and two wordings for one reading would read as two
  * different findings. A CLAUSE rather than a sentence - the headline joins it
- * to the reset with "and", which is the shape UX §2 spells out.
+ * to the reset with "and".
  *
  * `limitedFamilies` is empty when the triggering limit is shared or per-scope
  * data is unavailable; the copy is then profile-wide, exactly as the advisory's
