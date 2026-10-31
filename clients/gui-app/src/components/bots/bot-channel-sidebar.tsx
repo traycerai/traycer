@@ -413,7 +413,7 @@ function ChannelRow(props: {
         ) : null}
         {muted ? (
           <BotMutedGlyph
-            className={active ? "text-primary-foreground" : undefined}
+            className={active ? "text-accent-foreground" : undefined}
             testId="bot-channel-row-muted"
           />
         ) : null}

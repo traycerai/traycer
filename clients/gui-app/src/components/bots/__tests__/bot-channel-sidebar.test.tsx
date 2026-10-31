@@ -473,9 +473,12 @@ describe("<BotChannelSidebar /> muted channels", () => {
     };
     mount("bot-release");
 
-    expect(
-      within(row("bot-release")).getByTestId("bot-channel-row-muted"),
-    ).toBeTruthy();
+    // The channel in view: the glyph takes the quiet row's foreground.
+    const glyph = within(row("bot-release")).getByTestId(
+      "bot-channel-row-muted",
+    );
+    expect(glyph.classList.contains("text-accent-foreground")).toBe(true);
+    expect(glyph.classList.contains("text-primary-foreground")).toBe(false);
     for (const botId of ["bot-triage", "bot-notes", "bot-bare"]) {
       expect(
         within(row(botId)).queryByTestId("bot-channel-row-muted"),
