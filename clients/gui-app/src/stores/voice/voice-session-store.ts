@@ -116,11 +116,11 @@ export interface VoiceQueueDriver {
 /**
  * Words the voice holds instead of posting: the open utterance when the
  * person moved to another channel or thread mid-sentence. The voice asks
- * where they belong; the router (a later ticket) consumes the person's
- * answer through this action. Until then the next spoken request stands on
- * its own and the held words are let go.
+ * them to say the request again; until the ask is heard, words that reach a
+ * boundary are held with these, and the first boundary after it closes the
+ * interruption without posting.
  */
-export interface PendingAction {
+export interface InterruptedAction {
   readonly kind: "interrupted";
   readonly text: string;
   /** The delegation that was open when the person moved, if one was. */
@@ -138,6 +138,44 @@ export interface PendingAction {
    */
   readonly askState: "asking" | "heard" | "closing";
 }
+
+/**
+ * Where a routed action goes, as one immutable tuple: validated together
+ * against the directory when the action is bound, and again at execution.
+ * `threadId` `null` is the bot's channel (or the focus's own unresolved
+ * anchor, for a post to the focus).
+ */
+export interface VoiceTargetTuple {
+  readonly environmentId: string;
+  readonly botId: string;
+  readonly threadId: string | null;
+  readonly hostId: string;
+}
+
+/**
+ * A routed post the voice confirms before sending: the router was unsure of
+ * the destination, or it is a team's channel other than the focus. The words
+ * stay the action's; the person's next answer is consumed by it (yes posts
+ * them, anything else drops them) and is never posted itself.
+ */
+export interface ConfirmingAction {
+  readonly kind: "confirming";
+  readonly target: VoiceTargetTuple;
+  /** The words that post on a yes, verbatim. */
+  readonly text: string;
+  /** The delegation of the request being confirmed. */
+  readonly delegationId: string;
+  /** The selection generation the action was bound under. */
+  readonly selectionGeneration: number;
+  /**
+   * Whether the person has heard the question. Only once `"heard"` is a
+   * boundary's words the answer; words said before it answer nothing.
+   */
+  readonly askState: "asking" | "heard";
+}
+
+/** The one spoken request the voice holds instead of acting on at once. */
+export type PendingAction = InterruptedAction | ConfirmingAction;
 
 export type VoicePhase = "idle" | "connecting" | "live" | "ending";
 
@@ -279,6 +317,12 @@ export interface VoiceSessionState {
   readonly setFocus: (focus: VoiceFocus | null) => void;
   /** The person selected something else: the focus follows, the generation moves. */
   readonly selectionChanged: (focus: VoiceFocus | null) => void;
+  /**
+   * The person moved back to where the focus already is (while a voice
+   * navigation was out, the focus still names where the voice left): the
+   * focus stays, the generation moves.
+   */
+  readonly selectionReturned: () => void;
   readonly appendInputSegment: (text: string, at: number) => void;
   /** The open utterance: every unreserved segment, as said. */
   readonly openSpan: () => string;
@@ -401,6 +445,8 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
     if (sameFocus(get().focus, focus)) return;
     set({ focus, selectionGeneration: get().selectionGeneration + 1 });
   },
+  selectionReturned: () =>
+    set({ selectionGeneration: get().selectionGeneration + 1 }),
   appendInputSegment: (text, at) => {
     if (text.length === 0) return;
     const seq = nextSegmentSeq;

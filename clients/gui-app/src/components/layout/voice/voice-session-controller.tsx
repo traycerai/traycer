@@ -34,8 +34,10 @@ import {
   type VoiceSwitch,
 } from "@/hooks/voice/use-voice-queue-owner";
 import { useVoiceAvailabilityQuery } from "@/hooks/voice/use-voice-availability-query";
+import { useVoiceDirectory } from "@/hooks/voice/use-voice-directory";
 import {
   useVoiceMicrophoneAccessMutation,
+  useVoiceRouteMutation,
   useVoiceSessionEndMutation,
   useVoiceSessionMintMutation,
   useVoiceShellIndicatorMutation,
@@ -45,10 +47,11 @@ import { voiceQueryKeys } from "@/lib/query-keys";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
-import { navigateToTabIntent } from "@/lib/tab-navigation";
+import { activateTabIntent, navigateToTabIntent } from "@/lib/tab-navigation";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { mainBotOf } from "@/lib/bots/bot-main";
 import { watchAudioLevel, type AudioLevelWatch } from "@/lib/voice/audio-level";
+import { tupleHolds, type BoundTarget } from "@/lib/voice/directory";
 import { VoiceEngineError, type VoiceEngine } from "@/lib/voice/engine";
 import {
   baselineReplyWatchExcept,
@@ -64,10 +67,18 @@ import {
 } from "@/lib/voice/focused-replies";
 import { createBrowserGptLiveEngine } from "@/lib/voice/gpt-live-engine";
 import {
+  parseRouterResponse,
+  resolveRoute,
+  routerRequestBody,
+  type ControlVerb,
+  type RoutedDecision,
+} from "@/lib/voice/router";
+import {
   createSayLoop,
   type AcceptedRequest,
   type ReplyPlace,
   type ReplyPlacement,
+  type RouteRequest,
   type SayLoop,
 } from "@/lib/voice/say-loop";
 import {
@@ -92,6 +103,7 @@ import {
   useBotOpenThreadStore,
   useBotRail,
   type BotOpenThread,
+  type BotRail,
 } from "@/stores/bots/bot-open-thread-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
@@ -104,6 +116,30 @@ import {
   type VoiceEndReason,
   type VoiceFocus,
 } from "@/stores/voice/voice-session-store";
+
+/**
+ * A navigation by voice, until it settles: to another bot's tab, or to
+ * another thread (or the channel) of the bot whose tab is active.
+ */
+interface VoiceNavigation {
+  /** The bot whose tab was active when the voice moved; `null` for none. */
+  readonly fromBotId: string | null;
+  readonly toBotId: string;
+  /** The anchor the voice opens in the target's rail; `null` for its channel. */
+  readonly toAnchorMessageId: string | null;
+  /**
+   * `"pending"` while the tab's navigation is out; then whether it landed.
+   * Written once, when the navigation settles.
+   */
+  outcome: "pending" | "landed" | "failed";
+  /** The selection sync has seen the target showing; the departing view is left. */
+  arrived: boolean;
+  /**
+   * What that tab's rail held then (the anchor of its open thread, `null`
+   * for the channel): only that selection, still showing, is the voice's own.
+   */
+  readonly fromAnchorMessageId: string | null;
+}
 
 /**
  * One vendor session attempt: the engine and what the mint said about it.
@@ -155,6 +191,21 @@ export function VoiceSessionController(): ReactNode {
     useVoiceMicrophoneAccessMutation();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const navigateRef = useRef(navigate);
+  useEffect(() => {
+    navigateRef.current = navigate;
+  }, [navigate]);
+  /**
+   * A navigation by voice to another bot, until its tab is the active one:
+   * the selection sync does not read the tab it leaves as a move.
+   */
+  const voiceNavigationRef = useRef<VoiceNavigation | null>(null);
+  /** Counts voice navigations, so a settling one can tell whether a later one superseded it. */
+  const voiceNavigationSerialRef = useRef(0);
+  /** Gives each question the voice asks its own scheduler id, to withdraw it by. */
+  const askSerialRef = useRef(0);
+  /** The strip's own actions by voice; set once the session's controls exist. */
+  const controlRef = useRef<(verb: ControlVerb) => void>(() => undefined);
   // Whether this deployment offers voice, read once per window before Talk
   // is drawn; a dormant mint invalidates it, so the answer is read again.
   const availability = useVoiceAvailabilityQuery(true);
@@ -296,18 +347,24 @@ export function VoiceSessionController(): ReactNode {
     focus?.botId ?? "",
     focus !== null,
   );
-  const channelId = useMemo(() => {
+  // The focused bot's channel, named with the bot it is the channel of: the
+  // conversation list can still be the previous bot's for a render after a
+  // navigation by voice, and a send must never borrow it.
+  const channel = useMemo(() => {
     if (focus === null || conversations.data === undefined) return null;
     const appConversationChatId =
       bots.data?.bots.find((bot) => bot.botId === focus.botId)
         ?.appConversationChatId ?? null;
-    return (
-      channelConversation(
-        conversations.data.conversations,
-        appConversationChatId,
-      )?.conversationId ?? null
+    const rows = conversations.data.conversations.filter(
+      (row) => row.botId === focus.botId,
     );
+    const conversationId =
+      channelConversation(rows, appConversationChatId)?.conversationId ?? null;
+    return conversationId === null
+      ? null
+      : { botId: focus.botId, hostId: focus.hostId, conversationId };
   }, [bots.data, conversations.data, focus]);
+  const channelId = conversationIdOf(channel);
   useEffect(() => {
     noteChannel(channelId);
   }, [channelId, noteChannel]);
@@ -316,11 +373,18 @@ export function VoiceSessionController(): ReactNode {
   const sendRef = useRef<
     (focus: VoiceFocus, text: string) => Promise<BotConversationSendResponse>
   >(() => Promise.reject(new Error("not ready")));
+  const channelRef = useRef(channel);
   useEffect(() => {
+    channelRef.current = channel;
     sendRef.current = async (target, text) => {
-      if (channelId === null) {
+      if (
+        channel === null ||
+        channel.botId !== target.botId ||
+        channel.hostId !== target.hostId
+      ) {
         throw new Error("The bot's channel is not known yet.");
       }
+      const channelId = channel.conversationId;
       // Where the thread panel's box sends: into the thread by its id, or
       // under an anchor nobody has replied under as the reply that opens
       // its thread. A top-level post names neither.
@@ -336,11 +400,59 @@ export function VoiceSessionController(): ReactNode {
         answer: null,
       });
     };
-  }, [channelId, sendAsync]);
+  }, [channel, sendAsync]);
   const viewerRef = useRef(viewerUserId);
   useEffect(() => {
     viewerRef.current = viewerUserId;
   }, [viewerUserId]);
+
+  // ---- Routing ---------------------------------------------------------- //
+  // The router's directory, read while a session runs, and the router's one
+  // call per utterance. A route that names a thread outside the focused bot
+  // is checked against a directory read fresh, before anything navigates.
+  const directory = useVoiceDirectory(
+    appClient,
+    appHostId,
+    botsSupported && phase !== "idle",
+  );
+  const { mutateAsync: routeAsync } = useVoiceRouteMutation();
+  const decideRef = useRef<(request: RouteRequest) => Promise<RoutedDecision>>(
+    () => Promise.resolve({ kind: "refused", reason: "unavailable" }),
+  );
+  const recheckRef = useRef(directory.current);
+  useEffect(() => {
+    recheckRef.current = directory.current;
+    decideRef.current = async (request) => {
+      let snapshot = directory.current();
+      const answer = await routeAsync(
+        routerRequestBody(
+          snapshot,
+          {
+            segments: request.segments,
+            askedQuestion: request.askedQuestion,
+          },
+          Date.now(),
+        ),
+      );
+      if (answer.kind !== "ok") {
+        appLogger.warn("[voice] route did not answer", { kind: answer.kind });
+        return { kind: "refused", reason: "unavailable" };
+      }
+      const result = parseRouterResponse(answer.body);
+      const namedThread = result?.target.threadId ?? null;
+      if (
+        namedThread !== null &&
+        !snapshot.threads.some(
+          (thread) =>
+            thread.threadId === namedThread &&
+            thread.botId === snapshot.focus?.botId,
+        )
+      ) {
+        snapshot = await directory.refresh();
+      }
+      return resolveRoute(result, snapshot, request.segments.length);
+    };
+  }, [directory, routeAsync]);
 
   // One say loop per user session: its request bindings and in-flight actions
   // carry the store's session token, so a late acceptance from an ended or
@@ -370,12 +482,15 @@ export function VoiceSessionController(): ReactNode {
           onDelivered: null,
           onGivenUp: null,
         }),
-      ask: (text, outcome) =>
-        ensureSpeech().enqueue({
-          id: `ask:${Date.now()}`,
+      ask: (text, delegationId, outcome) => {
+        askSerialRef.current += 1;
+        const id = `ask:${askSerialRef.current}`;
+        const speech = ensureSpeech();
+        speech.enqueue({
+          id,
           priority: "ask",
           text,
-          delegationId: null,
+          delegationId,
           confirmWords: confirmationWords({
             botTitle: null,
             threadTitle: null,
@@ -383,7 +498,11 @@ export function VoiceSessionController(): ReactNode {
           }),
           onDelivered: outcome.onDelivered,
           onGivenUp: outcome.onGivenUp,
-        }),
+        });
+        // Taken back whatever its stage: a question already appended is never
+        // retried once its confirmation is gone.
+        return () => speech.withdraw(id);
+      },
       openThread: (target, response, text) => {
         if (response.threadId === null) return;
         useBotOpenThreadStore.getState().setRail(target.botId, {
@@ -403,10 +522,78 @@ export function VoiceSessionController(): ReactNode {
       },
       botTitle: (botId) => botTitleRef.current(botId),
       onAccepted: (request) => reconcileRef.current(request),
+      decide: (request) => decideRef.current(request),
+      recheck: (tuple) => tupleHolds(recheckRef.current(), tuple),
+      navigate: (target) => {
+        const from = selectHostFocusedRef(useTabsStore.getState());
+        const fromBotId = from !== null && from.kind === "bot" ? from.id : null;
+        // Recorded for a move within the active bot too: its rail changes at
+        // once, and the new anchor is the voice's, not the person's.
+        const navigation: VoiceNavigation = {
+          fromBotId,
+          toBotId: target.tuple.botId,
+          toAnchorMessageId:
+            target.tuple.threadId === null
+              ? null
+              : target.focus.anchorMessageId,
+          fromAnchorMessageId: railAnchorOf(fromBotId),
+          outcome: "pending",
+          arrived: false,
+        };
+        voiceNavigationRef.current = navigation;
+        voiceNavigationSerialRef.current += 1;
+        const serial = voiceNavigationSerialRef.current;
+        // Decided the moment the navigation settles, before the tab
+        // navigation puts a previous tab back for a failed one, so the
+        // selection sync never reads that restore as the person's move.
+        return openTarget(target, navigateRef.current, (settled) => {
+          // A navigation a later one superseded can still settle as landed
+          // (the tab navigation drops it without rejecting): it counts only
+          // while it is the latest voice navigation and the tab shows what
+          // it opened.
+          const landed =
+            settled &&
+            serial === voiceNavigationSerialRef.current &&
+            showsDestination(target);
+          navigation.outcome = landed ? "landed" : "failed";
+          return landed;
+        });
+      },
+      think: (text, delegationId) => {
+        const attempt = attemptRef.current;
+        if (attempt === null || attempt.cancelled || !attempt.started) return;
+        try {
+          attempt.engine.appendThinking(text, delegationId);
+        } catch (error) {
+          appLogger.warn("[voice] thinking append failed", {
+            error: describeLogError(error),
+          });
+        }
+      },
+      control: (verb) => controlRef.current(verb),
+      schedule: (fn, ms) => {
+        const handle = window.setTimeout(fn, ms);
+        return () => window.clearTimeout(handle);
+      },
+      canSend: (target) => {
+        const known = channelRef.current;
+        return (
+          known !== null &&
+          known.botId === target.botId &&
+          known.hostId === target.hostId
+        );
+      },
     });
     sayLoopRef.current = created;
     return created;
   }, [ensureSpeech]);
+
+  // A post the voice navigated for waits for the bot's channel: once it is
+  // known, the loop sends what waits.
+  useEffect(() => {
+    if (channel === null) return;
+    void sayLoopRef.current?.onFocusResolved();
+  }, [channel]);
 
   // ---- Session lifecycle ----------------------------------------------- //
   const micStreamRef = useRef<MediaStream | null>(null);
@@ -599,6 +786,9 @@ export function VoiceSessionController(): ReactNode {
       releaseAudio();
       resetQueue();
       speechRef.current?.reset();
+      // What the loop scheduled (a confirmation's answer window) dies with
+      // the session, so nothing of it reaches the next one.
+      sayLoopRef.current?.dispose();
       sayLoopRef.current = null;
       watchMemories.clear();
       setShellVoiceLive(false);
@@ -1006,6 +1196,27 @@ export function VoiceSessionController(): ReactNode {
   );
 
   useEffect(() => {
+    controlRef.current = (verb) => {
+      switch (verb) {
+        case "end":
+          end("ended");
+          return;
+        case "mute":
+          setMuted(true);
+          return;
+        case "resume":
+          setMuted(false);
+          return;
+        case "captions": {
+          const store = useVoiceSessionStore.getState();
+          store.setCaptions(!store.captions);
+          return;
+        }
+      }
+    };
+  }, [end, setMuted]);
+
+  useEffect(() => {
     const store = useVoiceSessionStore.getState();
     store.setDriver({
       start: () => {
@@ -1066,6 +1277,7 @@ export function VoiceSessionController(): ReactNode {
     <>
       {running ? (
         <VoiceSelectionSync
+          voiceNavigationRef={voiceNavigationRef}
           onManualChange={() => sayLoop().onSelectionChanged()}
           onResolved={() => void sayLoopRef.current?.onFocusResolved()}
           voiceSwitch={voiceQueue.voiceSwitch}
@@ -1108,6 +1320,34 @@ export function VoiceSessionController(): ReactNode {
       ) : null}
     </>
   );
+}
+
+/**
+ * Whether the app shows a routed destination now: its bot's tab is the
+ * active one, with its rail on the thread named (or on no thread for the
+ * channel).
+ */
+function showsDestination(target: BoundTarget): boolean {
+  const active = selectHostFocusedRef(useTabsStore.getState());
+  if (active === null || active.kind !== "bot") return false;
+  if (active.id !== target.tuple.botId) return false;
+  const expected =
+    target.tuple.threadId === null ? null : target.focus.anchorMessageId;
+  return railAnchorOf(target.tuple.botId) === expected;
+}
+
+/** The anchor of the thread open in `botId`'s rail; `null` for none. */
+function railAnchorOf(botId: string | null): string | null {
+  if (botId === null) return null;
+  const { byBotId } = useBotOpenThreadStore.getState();
+  const rail = Object.hasOwn(byBotId, botId) ? byBotId[botId] : null;
+  return rail !== null && rail.kind === "thread" ? rail.anchorMessageId : null;
+}
+
+function conversationIdOf(
+  channel: { readonly conversationId: string } | null,
+): string | null {
+  return channel === null ? null : channel.conversationId;
 }
 
 /**
@@ -1155,6 +1395,86 @@ function openMainBot(
 }
 
 /**
+ * The voice's rail writes per bot, by serial: a rollback of a move that did
+ * not land runs only for the latest one, so an older move never undoes a
+ * newer one's rail, even when both wrote the same value.
+ */
+const voiceRailWrites = new Map<string, number>();
+
+/**
+ * Opens a routed destination as the person would: the bot's tab (on the
+ * host it is bound to, or the target's), its rail on the thread named or
+ * on the channel, and the tab brought to the front. Resolves with what
+ * `decide` makes of the navigation's outcome, called as it settles: `false`
+ * for a refusal, or a route navigation that failed (the tab navigation
+ * puts the previous tab back right after). A move that does not land puts
+ * the rail back too, while it still holds what was set here.
+ */
+function openTarget(
+  target: BoundTarget,
+  navigate: UseNavigateResult<string>,
+  decide: (settled: boolean) => boolean,
+): Promise<boolean> {
+  const { botId, hostId, threadId } = target.tuple;
+  const anchorMessageId = target.focus.anchorMessageId;
+  const rails = useBotOpenThreadStore.getState();
+  const previousRail = Object.hasOwn(rails.byBotId, botId)
+    ? rails.byBotId[botId]
+    : null;
+  const rail: BotRail | null =
+    threadId === null || anchorMessageId === null
+      ? null
+      : {
+          kind: "thread",
+          anchorMessageId,
+          announcement: false,
+          anchorKind: null,
+          sent: null,
+        };
+  rails.setRail(botId, rail);
+  const write = (voiceRailWrites.get(botId) ?? 0) + 1;
+  voiceRailWrites.set(botId, write);
+  useBotTabsStore
+    .getState()
+    .openBotTab({ botId, hostId, title: target.botTitle });
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const settle = (outcome: boolean): void => {
+      if (settled) return;
+      settled = true;
+      const landed = decide(outcome);
+      // A move that did not land puts the bot's rail back as it was, but
+      // only while its write is still the latest the voice made to that
+      // rail (a newer move's write, a channel's null included, owns it
+      // then) and the person has not changed it since.
+      if (!landed && voiceRailWrites.get(botId) === write) {
+        const now = useBotOpenThreadStore.getState().byBotId;
+        const current = Object.hasOwn(now, botId) ? now[botId] : null;
+        if (current === rail) {
+          useBotOpenThreadStore.getState().setRail(botId, previousRail);
+        }
+      }
+      resolve(landed);
+    };
+    // The tab navigation reports a refusal, but not a route navigation
+    // that fails after it accepted (it puts the previous tab back): the
+    // first navigation it runs through this function is watched for that.
+    const watched: UseNavigateResult<string> = (options) => {
+      const run = navigate(options);
+      run.then(
+        () => settle(true),
+        () => settle(false),
+      );
+      return run;
+    };
+    const accepted = activateTabIntent(watched, botTabIntent(botId), {
+      onRejected: () => settle(false),
+    });
+    if (!accepted) settle(false);
+  });
+}
+
+/**
  * The app's selection as a focus: the active bot tab and what its rail
  * holds, or `null` when no bot tab is active. Read once, outside React, at
  * session start.
@@ -1181,12 +1501,15 @@ function readSelection(): VoiceFocus | null {
  * the person across tasks, and their words still go to the last bot.
  */
 function VoiceSelectionSync(props: {
+  /** The voice's own navigation to another bot, while its tab has not come up. */
+  readonly voiceNavigationRef: { current: VoiceNavigation | null };
   readonly onManualChange: () => void;
   /** The thread list resolved the anchor the focus already names. */
   readonly onResolved: () => void;
   readonly voiceSwitch: { current: VoiceSwitch | null };
 }): null {
-  const { onManualChange, onResolved, voiceSwitch } = props;
+  const { voiceNavigationRef, onManualChange, onResolved, voiceSwitch } =
+    props;
   const focusedRef = useTabsStore(selectHostFocusedRef);
   const activeBotId = focusedRef?.kind === "bot" ? focusedRef.id : null;
   const tab = useBotTabsStore((state) =>
@@ -1203,6 +1526,40 @@ function VoiceSelectionSync(props: {
   useEffect(() => {
     if (activeBotId === null || tab === null) return;
     const selection = focusOf(activeBotId, tab.hostId, thread, listed);
+    const navigation = voiceNavigationRef.current;
+    if (navigation !== null) {
+      voiceNavigationRef.current = null;
+      if (navigation.outcome === "pending") {
+        // While the voice's navigation is out, the tab it is opening showing
+        // the rail it opens, or the tab it is leaving still showing what it
+        // showed when the voice moved and not yet left, is not a move: the
+        // focus is written when the navigation settles. Anything else is
+        // the person's, a return to the departing view after the target
+        // showed included, and it is a move even when it lands back on the
+        // focus as it stands.
+        const anchor = thread?.anchorMessageId ?? null;
+        if (
+          activeBotId === navigation.toBotId &&
+          anchor === navigation.toAnchorMessageId
+        ) {
+          navigation.arrived = true;
+          voiceNavigationRef.current = navigation;
+          return;
+        }
+        if (
+          !navigation.arrived &&
+          activeBotId === navigation.fromBotId &&
+          anchor === navigation.fromAnchorMessageId
+        ) {
+          voiceNavigationRef.current = navigation;
+          return;
+        }
+        applyMoveDuringNavigation(selection, onManualChange);
+        return;
+      }
+    }
+    // A switch the queue made (`switch` from Waiting or the router) keeps
+    // the selections its own landing causes.
     if (followsVoiceSwitch(selection, voiceSwitch, listed)) return;
     applySelection(selection, onManualChange, onResolved);
   }, [
@@ -1212,6 +1569,7 @@ function VoiceSelectionSync(props: {
     onResolved,
     tab,
     thread,
+    voiceNavigationRef,
     voiceSwitch,
   ]);
 
@@ -1314,6 +1672,29 @@ function focusOf(
     ...anchored,
     anchorThread: thread.announcement ? "unopened" : "resolving",
   };
+}
+
+/**
+ * The person's own move while a voice navigation is out. The focus still
+ * names where the voice departed from, so a return there would read as no
+ * change: it is a move all the same (the generation moves, and an open
+ * utterance is interrupted). Anything else is applied as usual.
+ */
+function applyMoveDuringNavigation(
+  selection: VoiceFocus,
+  onManualChange: () => void,
+): void {
+  const store = useVoiceSessionStore.getState();
+  const current = store.focus;
+  const returned =
+    current !== null &&
+    current.botId === selection.botId &&
+    current.hostId === selection.hostId &&
+    current.anchorMessageId === selection.anchorMessageId;
+  const wasOpen = isUtteranceOpen(store);
+  if (returned) store.selectionReturned();
+  else store.selectionChanged(selection);
+  if (wasOpen) onManualChange();
 }
 
 /**
