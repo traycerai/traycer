@@ -433,7 +433,9 @@ export function useVoiceQueueOwner(input: {
       if (cardTargetOf(queue, verb.itemId) !== null) {
         return ensureDesk().open(verb.itemId, verb.delegationId);
       }
-      const item = queue.items().find((candidate) => candidate.id === verb.itemId);
+      const item = queue
+        .items()
+        .find((candidate) => candidate.id === verb.itemId);
       const surface = queue.surfaceOf(verb.itemId);
       if (
         item === undefined ||

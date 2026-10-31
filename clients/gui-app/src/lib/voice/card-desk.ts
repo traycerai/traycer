@@ -106,10 +106,9 @@ export interface CardFacts {
   readonly forwarded: (actionId: string) => BotSurfaceActionState | null;
 }
 
-/** A bot's question answered through the send. */
+/** A bot's question answered through the send: sent, or refused or failed (the send does not say which). */
 export type BotAnswerOutcome =
   | { readonly kind: "sent"; readonly delivery: BotConversationSendDelivery }
-  | { readonly kind: "already-settled" }
   | { readonly kind: "failed" };
 
 /** A surfaced card acted on: the host's answer, or none (the call failed unanswered). */
@@ -193,7 +192,8 @@ const REFUSAL_TEXT: Readonly<
   NOT_SUPPORTED:
     "That one has to be answered in the task, so nothing was sent from here.",
   NOT_FOUND: CARD_GONE_TEXT,
-  NOT_REACHABLE: "The task's machine could not be reached, so nothing was sent.",
+  NOT_REACHABLE:
+    "The task's machine could not be reached, so nothing was sent.",
 };
 
 /** The choices a card's list names, in order: a question's options and Skip, or Allow and Deny. */
@@ -246,7 +246,14 @@ const ORDINAL_PADDING = new Set([
 ]);
 const ALLOW_WORDS = new Set(["allow", "approve", "accept", "permit"]);
 const DENY_WORDS = new Set(["deny", "reject", "decline", "refuse"]);
-const VERB_PADDING = new Set(["it", "that", "this", "please", "the", "request"]);
+const VERB_PADDING = new Set([
+  "it",
+  "that",
+  "this",
+  "please",
+  "the",
+  "request",
+]);
 const SKIP_FORMS = new Set(["skip", "skip it", "skip that", "skip this one"]);
 
 /**
@@ -381,11 +388,7 @@ export function cardCandidateText(
 }
 
 /** Settled first by someone else: who, and how. */
-function settledText(
-  family: CardFamily,
-  by: string,
-  offered: boolean,
-): string {
+function settledText(family: CardFamily, by: string, offered: boolean): string {
   const verb = family === "approval" ? "decided" : "answered";
   const settled = `${capitalized(by)} already ${verb} it, so yours was not sent.`;
   return offered
@@ -618,8 +621,19 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     });
   };
 
-  /** A refusal for a card someone else settled first: said with who, the answer offered as a post. */
-  const settledFirst = (held: Desk, choice: CardChoice | null): void => {
+  /**
+   * A refusal for a card someone else settled first: said with who, the
+   * answer offered as a post. The refusal can arrive before the records say
+   * who: they are given a moment, then the voice says it without a name.
+   * `unsettled` is what a failure the records never explain is said as:
+   * settled by someone unnamed, or not sent at all (a bot's send says no
+   * more than that it failed, so only the records tell the two apart).
+   */
+  const settledFirst = (
+    held: Desk,
+    choice: CardChoice | null,
+    unsettled: "someone" | "failed",
+  ): void => {
     const content = held.content;
     if (content === null) {
       close(held);
@@ -628,13 +642,16 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     const questionIndex = card()?.questionIndex ?? 0;
     const by = held.facts?.settledBy(questionIndex) ?? null;
     if (by === null && !held.awaitingSettler) {
-      // The refusal can arrive before the records say who: they are given a
-      // moment, then the voice says it without a name.
       held.awaitingSettler = true;
       held.cancelSettlerWait = deps.schedule(() => {
         if (desk !== held || !held.awaitingSettler) return;
         held.awaitingSettler = false;
-        speakSettled(held, choice, "someone");
+        if (unsettled === "someone") {
+          speakSettled(held, choice, "someone");
+          return;
+        }
+        notify(held, CARD_FAILED_TEXT);
+        close(held);
       }, CARD_SETTLER_WAIT_MS);
       return;
     }
@@ -670,7 +687,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
   ): void => {
     setCard({ state: "refused" });
     if (code === "ALREADY_SETTLED") {
-      settledFirst(held, choice);
+      settledFirst(held, choice, "someone");
       return;
     }
     notify(held, REFUSAL_TEXT[code]);
@@ -701,14 +718,11 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
         );
         close(held);
         return;
-      case "already-settled":
-        setCard({ state: "refused" });
-        settledFirst(held, choice);
-        return;
       case "failed":
+        // Refused because someone answered first, as the records will show,
+        // or not sent at all.
         setCard({ state: "refused" });
-        notify(held, CARD_FAILED_TEXT);
-        close(held);
+        settledFirst(held, choice, "failed");
         return;
     }
   };
@@ -1066,9 +1080,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
         readCandidate(held, choice, "");
         return "handled";
       }
-      const verdict = sameAsCandidate
-        ? "yes"
-        : confirmationAnswer(words.text);
+      const verdict = sameAsCandidate ? "yes" : confirmationAnswer(words.text);
       if (verdict === "not-an-answer") return "route";
       answerYesNo(held, verdict, words.seqs);
       return "handled";

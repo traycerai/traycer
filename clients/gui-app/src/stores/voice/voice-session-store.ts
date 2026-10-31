@@ -252,7 +252,10 @@ export interface ActiveCard {
 /** What the router and the say loop ask of the card the voice holds; installed by the controller. */
 export interface VoiceCardDriver {
   /** Reads a queued question or surfaced prompt back, and makes it the active card. */
-  readonly open: (itemId: string, delegationId: string | null) => "appended" | "nothing";
+  readonly open: (
+    itemId: string,
+    delegationId: string | null,
+  ) => "appended" | "nothing";
   /** Whether the active card is waiting for the person's words (a choice, or a yes). */
   readonly awaitsAnswer: () => boolean;
   /**

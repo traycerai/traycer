@@ -16,7 +16,6 @@ import type {
   BotSurfaceActResponse,
 } from "@traycer/protocol/host/bot/surface-schemas";
 import type { OpenMessage } from "@traycer/protocol/host/agent/gui/open-harness-wire";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { openSurfaceOf } from "@/components/bots/bot-surface-card-view";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
@@ -81,8 +80,7 @@ export function VoiceCards(props: {
           card={activeCard}
           desk={desk}
           bot={
-            owner.bots.find((bot) => bot.botId === activeCard.ids.botId) ??
-            null
+            owner.bots.find((bot) => bot.botId === activeCard.ids.botId) ?? null
           }
           botTitle={botTitle(activeCard.ids.botId)}
           place={placeOf(activeCard.ids.botId, activeCard.ids.threadId)}
@@ -203,8 +201,8 @@ function VoiceCardWatch(props: {
     ): ReadonlyArray<BotInputNeeded> | null | undefined =>
       snapshot === null
         ? undefined
-        : (snapshot.tasks.find((task) => task.taskId === taskId)
-            ?.inputNeeded ?? null);
+        : (snapshot.tasks.find((task) => task.taskId === taskId)?.inputNeeded ??
+          null);
     return {
       ...surfaceFacts(row, said, {
         openSurfaces,
@@ -262,11 +260,8 @@ function VoiceCardWatch(props: {
             skipped,
           });
           return { kind: "sent", delivery: response.delivery };
-        } catch (error) {
-          return error instanceof HostRpcError &&
-            error.code === "QUESTION_ALREADY_SETTLED"
-            ? { kind: "already-settled" }
-            : { kind: "failed" };
+        } catch {
+          return { kind: "failed" };
         }
       },
       actSurface: async (action, actionId) => {

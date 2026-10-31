@@ -232,7 +232,10 @@ function renderUtterance(
     card === null
       ? ""
       : `<card>\n${[
-          fencedLine({ question: card.question, takesOwnWords: card.takesText }),
+          fencedLine({
+            question: card.question,
+            takesOwnWords: card.takesText,
+          }),
           ...card.choices.map((label, index) =>
             fencedLine({ choice: index, label }),
           ),

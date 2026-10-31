@@ -10,6 +10,7 @@ import {
 import {
   CARD_ANSWER_WINDOW_MS,
   CARD_DECLINED_TEXT,
+  CARD_FAILED_TEXT,
   CARD_GONE_TEXT,
   CARD_LOAD_TIMEOUT_MS,
   CARD_SETTLER_WAIT_MS,
@@ -756,12 +757,13 @@ describe("the router's answer to the card", () => {
 });
 
 describe("a card settled first by someone else", () => {
-  /** The act lands refused, as each family's API reports it. */
+  /**
+   * The act lands refused, as each family's API reports it: a bot's send
+   * only fails, and its records say whether someone answered first.
+   */
   function refuseAsSettled(h: Harness, family: CardFamily): void {
     if (family === "bot-question") {
-      h.api.answerBotQuestion.mockResolvedValueOnce({
-        kind: "already-settled",
-      });
+      h.api.answerBotQuestion.mockResolvedValueOnce({ kind: "failed" });
       return;
     }
     h.api.actSurface.mockResolvedValueOnce({
@@ -824,10 +826,10 @@ describe("a card settled first by someone else", () => {
   );
 
   it("is said as Someone when the records name nobody within the wait", async () => {
-    const h = setup(BOT_QUESTION);
+    const h = setup(AGENT_QUESTION);
     h.listen();
-    h.candidate("Staging");
-    refuseAsSettled(h, "bot-question");
+    h.candidate("main");
+    refuseAsSettled(h, "agent-question");
 
     h.say("yes");
     await vi.waitFor(() => expect(h.card()?.state).toBe("refused"));
@@ -840,7 +842,23 @@ describe("a card settled first by someone else", () => {
     expect(h.latest().text).toBe(settledElsewhere("Someone", "answered"));
     h.heard(h.latest());
     h.say("yes");
-    expect(h.api.postInThread).toHaveBeenCalledWith("Staging");
+    expect(h.api.postInThread).toHaveBeenCalledWith("main");
+  });
+
+  it("is not claimed for a bot's send that failed while the records show the question still open", async () => {
+    const h = setup(BOT_QUESTION);
+    h.listen();
+    h.candidate("Staging");
+    refuseAsSettled(h, "bot-question");
+
+    h.say("yes");
+    await vi.waitFor(() => expect(h.card()?.state).toBe("refused"));
+    h.advance(CARD_SETTLER_WAIT_MS);
+
+    expect(h.texts().at(-1)).toBe(CARD_FAILED_TEXT);
+    expect(h.texts().some((text) => text.includes("already"))).toBe(false);
+    expect(h.api.postInThread).not.toHaveBeenCalled();
+    expect(h.card()).toBeNull();
   });
 
   it("is said with the name once the records give it within the wait, and only once", async () => {

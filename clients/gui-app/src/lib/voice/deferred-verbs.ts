@@ -121,7 +121,8 @@ function newestOpenableOf(
         (!threadNamed || candidate.threadId === target.tuple.threadId)),
   );
   const card = waiting.find(
-    (candidate) => candidate.kind === "question" || candidate.kind === "surface",
+    (candidate) =>
+      candidate.kind === "question" || candidate.kind === "surface",
   );
   return (card ?? waiting.at(0))?.id ?? null;
 }

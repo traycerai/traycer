@@ -458,10 +458,14 @@ describe("a routed verb on the queue", () => {
         answers: [],
         prompts: { approvals: [], questions: [] },
       }),
+      onOfferHeard: () => undefined,
     });
     useVoiceSessionStore.setState({ phase: "live" });
     useVoiceSessionStore.getState().setQueueDriver({
-      run: (verb) => (verb.kind === "status" ? "nothing" : queue.run(verb)),
+      run: (verb) =>
+        verb.kind === "status" || verb.kind === "open"
+          ? "nothing"
+          : queue.run(verb),
       noteSwitched: (itemId) => queue.noteSwitched(itemId),
     });
     return { queue, enqueued, withdrawn };
