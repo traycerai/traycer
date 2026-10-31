@@ -7,7 +7,7 @@
  * `buildFloors` and the fold to `cols × rows`. Everything the plan does after
  * that - the walkable grid, the pods' flood fills, the errand spots, the
  * fittings - fills the grid in rather than sizing it, and it is where a
- * thousand-root plan spends most of its time.
+ * thousand-root plan was measured spending most of its time.
  */
 import { OFFICE_TILE } from "@/lib/comm-graph/office/office-types";
 import { officeFloorGrid } from "@/lib/comm-graph/office/office-layout";
