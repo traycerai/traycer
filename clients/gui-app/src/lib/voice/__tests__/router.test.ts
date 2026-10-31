@@ -26,6 +26,7 @@ import {
 import {
   MOVED_ASK_TEXT,
   createSayLoop,
+  type AskOutcome,
   type RouteRequest,
   type SayLoop,
 } from "../say-loop";
@@ -289,6 +290,8 @@ interface Harness {
   readonly sends: Array<{ focus: VoiceFocus; text: string }>;
   readonly notices: string[];
   readonly asks: string[];
+  /** The voice's last question was spoken and confirmed heard. */
+  heardLastAsk(): void;
   readonly thinks: string[];
   readonly navigations: BoundTarget[];
   readonly controls: ControlVerb[];
@@ -304,6 +307,7 @@ function harness(directory: VoiceDirectory): Harness {
   const sends: Harness["sends"] = [];
   const notices: string[] = [];
   const asks: string[] = [];
+  const outcomes: AskOutcome[] = [];
   const thinks: string[] = [];
   const navigations: BoundTarget[] = [];
   const controls: ControlVerb[] = [];
@@ -319,8 +323,9 @@ function harness(directory: VoiceDirectory): Harness {
     notify: (text) => {
       notices.push(text);
     },
-    ask: (text) => {
+    ask: (text, _delegationId, outcome) => {
       asks.push(text);
+      outcomes.push(outcome);
     },
     decide: async (request) => {
       requests.push(request);
@@ -359,6 +364,7 @@ function harness(directory: VoiceDirectory): Harness {
     sends,
     notices,
     asks,
+    heardLastAsk: () => outcomes.at(-1)?.onDelivered(),
     thinks,
     navigations,
     controls,
@@ -413,6 +419,7 @@ describe("a mis-heard request to the CI bot", () => {
       },
     });
 
+    h.heardLastAsk();
     speak(["Yes."]);
     await h.loop.onDelegationCreated("d-2");
 
@@ -427,6 +434,7 @@ describe("a mis-heard request to the CI bot", () => {
   it("a no posts nothing, says so, and the answer is spent with the held words", async () => {
     const h = await askedForConfirmation();
 
+    h.heardLastAsk();
     speak(["No, don't."]);
     await h.loop.onDelegationCreated("d-2");
 
@@ -483,6 +491,7 @@ describe("a request split across two boundaries to the release bot", () => {
       `Should I post that to Release bot's thread about "hold 1.5.1" in Acme? Say yes or no.`,
     ]);
 
+    h.heardLastAsk();
     speak(["Yes."]);
     await h.loop.onDelegationCreated("d-3");
 
@@ -686,6 +695,7 @@ describe("a corrected request", () => {
     await h.loop.onDelegationCreated("d-1");
 
     expect(h.asks).toHaveLength(1);
+    h.heardLastAsk();
     speak(["Yes."]);
     await h.loop.onDelegationCreated("d-2");
 

@@ -206,6 +206,8 @@ export interface SayLoop {
 interface Action {
   readonly actionId: string;
   readonly delegationId: string;
+  /** The destination the route bound; re-checked before every send. */
+  readonly tuple: VoiceTargetTuple;
   readonly focus: VoiceFocus;
   readonly text: string;
   readonly seqs: ReadonlyArray<number>;
@@ -250,12 +252,24 @@ interface Confirming {
   readonly entry: RoutingEntry;
   readonly target: BoundTarget;
   readonly text: string;
+  /** The question was confirmed spoken; only then is a boundary its answer. */
+  heard: boolean;
 }
 
 export const MOVED_ASK_TEXT =
   "You moved while you were talking, so I did not post that. When you are ready, say the whole request again.";
 
-const REFUSAL_TEXT: Record<RouteRefusal | "gone", string> = {
+/** Why a routed request is refused by the loop, beyond the route's own refusals. */
+type LoopRefusal =
+  | RouteRefusal
+  /** The bound destination no longer holds against the directory. */
+  | "gone"
+  /** The request was bound to the focus, and the voice has since moved elsewhere. */
+  | "moved-on"
+  /** Another post is already waiting for the person's yes or no. */
+  | "confirm-busy";
+
+const REFUSAL_TEXT: Record<LoopRefusal, string> = {
   unparseable:
     "Nothing was posted: the request was not clear enough to act on. The person can say it again.",
   "unknown-target":
@@ -265,6 +279,10 @@ const REFUSAL_TEXT: Record<RouteRefusal | "gone", string> = {
   unavailable:
     "Nothing was posted: the request could not be routed just now. The person can say it again.",
   gone: "Nothing was posted: that bot or thread is no longer available. The person can say it again.",
+  "moved-on":
+    "Nothing was posted: that request was for where the person was before the voice moved to another bot. The person can say it again.",
+  "confirm-busy":
+    "Nothing was posted: an earlier post is still waiting for the person's yes or no. The person can say this one again after answering.",
 };
 
 const DECLINED_TEXT = "Okay, I did not post it.";
@@ -294,6 +312,19 @@ function landedText(target: BoundTarget): string {
       ? `${target.botTitle}'s channel`
       : placeName(target);
   return `The person is now in ${where}, in ${target.environmentLabel}.`;
+}
+
+/**
+ * Whether the focus now is still the destination a route bound to the focus:
+ * the same bot, host and anchor, the anchor's thread at most resolved since.
+ */
+function stillDestination(now: VoiceFocus, bound: VoiceFocus): boolean {
+  return (
+    now.botId === bound.botId &&
+    now.hostId === bound.hostId &&
+    now.anchorMessageId === bound.anchorMessageId &&
+    (bound.threadId === null || now.threadId === bound.threadId)
+  );
 }
 
 const AFFIRMATIVE = new Set([
@@ -492,7 +523,10 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   }
 
   /** The words are spent and nothing is posted; the voice says why. */
-  function refuse(entry: RoutingEntry, reason: RouteRefusal | "gone"): void {
+  function refuse(
+    entry: Pick<RoutingEntry, "seqs" | "delegationId" | "engineGeneration">,
+    reason: LoopRefusal,
+  ): void {
     store.getState().consumeReservation(entry.seqs);
     settleDelegation(entry.delegationId);
     deps.notify(REFUSAL_TEXT[reason], delegationOf(entry));
@@ -504,8 +538,24 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     settleDelegation(entry.delegationId);
   }
 
-  /** Opens the target and makes it the focus; the selection follows, so the generation does not move. */
+  /**
+   * Opens the target and makes it the focus; the selection follows, so the
+   * generation does not move. A post still waiting for a destination the
+   * voice is leaving can no longer be sent there: it is dropped, and the
+   * voice says so.
+   */
   function goTo(target: BoundTarget): void {
+    const token = store.getState().sessionToken;
+    for (const waiting of unresolved.splice(0)) {
+      if (
+        waiting.sessionToken === token &&
+        !stillDestination(target.focus, waiting.focus)
+      ) {
+        refuse(waiting, "moved-on");
+      } else {
+        unresolved.push(waiting);
+      }
+    }
     deps.navigate(target);
     store.getState().setFocus(target.focus);
   }
@@ -524,13 +574,27 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       refuse(entry, "gone");
       return;
     }
-    if (!target.isFocus) goTo(target);
+    // The destination is the one the route bound, never the focus as it is
+    // now: another request may have navigated since. A request bound to the
+    // focus takes the focus only while it is still that destination (its
+    // anchor's thread may have resolved meanwhile); once the voice has moved
+    // elsewhere it is not sent there, and the voice says so.
+    let focus = target.focus;
+    if (target.isFocus) {
+      const now = store.getState().focus;
+      if (now === null || !stillDestination(now, target.focus)) {
+        refuse(entry, "moved-on");
+        return;
+      }
+      focus = now;
+    } else {
+      goTo(target);
+    }
     const action: Action = {
       actionId: entry.actionId,
       delegationId: entry.delegationId,
-      focus: target.isFocus
-        ? (store.getState().focus ?? target.focus)
-        : target.focus,
+      tuple: target.tuple,
+      focus,
       text,
       seqs: entry.seqs,
       selectionGeneration: entry.selectionGeneration,
@@ -618,20 +682,42 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
           await postRouted(entry, decision.target, text);
           return;
         }
-        confirming = { entry, target: decision.target, text };
+        // One confirmation at a time: a second route that needs one while an
+        // earlier question waits is dropped, so a yes can only ever answer
+        // the question the person heard.
+        if (confirming !== null) {
+          refuse(entry, "confirm-busy");
+          return;
+        }
+        const held: Confirming = {
+          entry,
+          target: decision.target,
+          text,
+          heard: false,
+        };
+        confirming = held;
         store.getState().setPendingAction({
           kind: "confirming",
           target: decision.target.tuple,
           text,
           delegationId: entry.delegationId,
           selectionGeneration: entry.selectionGeneration,
+          askState: "asking",
         });
-        const held = confirming;
         deps.ask(
           confirmQuestion(decision.target, decision.confirm === "uncertain"),
           delegationOf(entry),
           {
-            onDelivered: () => undefined,
+            onDelivered: () => {
+              if (confirming !== held) return;
+              held.heard = true;
+              const pending = store.getState().pendingAction;
+              if (pending?.kind === "confirming") {
+                store
+                  .getState()
+                  .setPendingAction({ ...pending, askState: "heard" });
+              }
+            },
             // The person never heard the question, so no answer is coming:
             // the post is dropped, and words said since stand on their own.
             onGivenUp: () => {
@@ -672,6 +758,9 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     // A boundary with no words answers nothing yet.
     if (answer === null) return;
     state.consumeReservation(answer.seqs);
+    // Words said before the question was heard answer nothing: they are let
+    // go, and the post waits for an answer to the question once it is heard.
+    if (!held.heard) return;
     confirming = null;
     state.setPendingAction(null);
     if (held.entry.sessionToken !== store.getState().sessionToken) return;
@@ -786,13 +875,18 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
           if (
             focus === null ||
             focus.anchorThread === "resolving" ||
-            focus.botId !== action.focus.botId ||
-            focus.anchorMessageId !== action.focus.anchorMessageId ||
+            !stillDestination(focus, action.focus) ||
             !deps.canSend(focus)
           ) {
             return;
           }
           unresolved.shift();
+          // Checked again at execution: the destination may have stopped
+          // holding while the request waited.
+          if (!deps.recheck(action.tuple)) {
+            refuse(action, "gone");
+            continue;
+          }
           const resumed: Action = { ...action, focus };
           inFlight.set(resumed.actionId, resumed);
           await post(resumed);

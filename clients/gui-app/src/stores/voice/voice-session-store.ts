@@ -122,6 +122,11 @@ export interface ConfirmingAction {
   readonly delegationId: string;
   /** The selection generation the action was bound under. */
   readonly selectionGeneration: number;
+  /**
+   * Whether the person has heard the question. Only once `"heard"` is a
+   * boundary's words the answer; words said before it answer nothing.
+   */
+  readonly askState: "asking" | "heard";
 }
 
 /** The one spoken request the voice holds instead of acting on at once. */
