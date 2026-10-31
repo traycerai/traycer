@@ -578,19 +578,21 @@ export interface IRunnerHost {
   ): Promise<readonly string[]>;
 
   /**
-   * Ensures OS microphone access before voice capture. On macOS this triggers
-   * the native permission prompt when the status is undetermined, and returns
-   * the existing decision otherwise (macOS never re-prompts a denied app - the
-   * caller then routes to `openMicrophoneSettings`). Shells without a native
-   * gate resolve `"granted"` and let `getUserMedia` drive the prompt.
+   * Ensures OS microphone access before voice capture. On macOS, iOS and
+   * Android this triggers the native permission prompt when the status is
+   * undetermined, and returns the existing decision otherwise (none of them
+   * re-prompts a denied app - the caller then routes to
+   * `openMicrophoneSettings`). Shells without a native gate resolve
+   * `"granted"` and let `getUserMedia` drive the prompt.
    */
   requestMicrophoneAccess(): Promise<MicrophoneAccessStatus>;
 
   /**
    * Opens the OS Privacy → Microphone settings pane so the user can re-grant
-   * mic access (used by the voice-input "denied" affordance). Desktop opens the
-   * native pane; shells without a settings deep link (mobile/web/tests)
-   * implement this as a resolved no-op.
+   * mic access (used by the voice-input and voice-session "denied"
+   * affordances). Desktop opens the native pane and the phone the app's own
+   * settings page; shells without a settings deep link (web, tests) implement
+   * this as a resolved no-op.
    */
   openMicrophoneSettings(): Promise<void>;
 
@@ -770,14 +772,20 @@ export interface IRunnerHost {
   onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable;
 
   /**
-   * Subscribes to the moments the person leaves the machine: the OS is about
-   * to sleep, or the screen locked. An open microphone must not outlive the
-   * person at the machine, so a live voice session ends on this signal.
-   * Desktop bridges Electron `powerMonitor` `suspend`/`lock-screen`; shells
-   * with no such signal (mobile, web, tests) install a no-op whose handler
-   * never fires.
+   * Subscribes to the moments the person leaves the machine, or the OS takes
+   * the sound away: the OS is about to sleep or the screen locked
+   * (`locked`), the app went to the background (`background`), or a call or
+   * another app interrupted a live voice session's audio (`interrupted`). An
+   * open microphone must not outlive the person at the machine, so a live
+   * voice session ends on this signal and says why. Desktop bridges Electron
+   * `powerMonitor` `suspend`/`lock-screen` as `locked`. Mobile raises
+   * `background` on the app's real background edge (which a screen lock is,
+   * and a transient overlay such as a permission prompt is not) and
+   * `interrupted` from the OS audio session while a session is live. Shells
+   * with no such signal (web, tests) install a no-op whose handler never
+   * fires.
    */
-  onSystemSuspended(handler: () => void): Disposable;
+  onSystemSuspended(handler: (cause: SystemSuspendCause) => void): Disposable;
 
   /**
    * Subscribes to the shell item's actions on this window's live session:
@@ -1312,6 +1320,9 @@ export interface RegisteredHostsChange {
 
 /** Outcome of `IRunnerHost.requestMicrophoneAccess()`. */
 export type MicrophoneAccessStatus = "granted" | "denied";
+
+/** Why `IRunnerHost.onSystemSuspended` fired. */
+export type SystemSuspendCause = "locked" | "background" | "interrupted";
 
 export interface IFileDropHost {
   resolveDroppedFilePaths(files: readonly File[]): Promise<readonly string[]>;
