@@ -347,7 +347,7 @@ interface WorktreeIntentStagingStore {
     Record<string, RemovedWorktreeRefs | undefined>
   >;
   /**
-   * Everything this session has seen swept, per HOST, and never cleared.
+   * Everything this session has seen swept, per HOST.
    *
    * `sweptRefsByKey` above cannot answer for a reader whose question outlives
    * a slot. It is recorded only against slots with a live dispatch mark, and
@@ -358,10 +358,9 @@ interface WorktreeIntentStagingStore {
    * copy when a later sweep replaces the record.
    *
    * A hand-back that has to state "the worktree you staged is gone" asks a
-   * question about a FROZEN ref, minutes after the fact. That question needs a
-   * source no staging mutation can take back, so this one only ever grows.
-   * Bounded by the number of worktrees actually removed while the app is
-   * open, which is small - and it is session state, not persisted.
+   * question about a FROZEN ref, minutes after the fact. Bounded by the
+   * number of worktrees actually removed while the app is open, which is
+   * small - and it is session state, not persisted.
    */
   readonly sessionSweptRefsByHost: Readonly<
     Record<string, RemovedWorktreeRefs | undefined>
@@ -658,11 +657,7 @@ export interface SweptIntentPartition {
 /**
  * Un-mark the paths a fresh staging names.
  *
- * `sessionSweptRefsByHost` only ever grows, which is what lets a frozen ref be
- * asked about long after the fact. The cost is that a worktree REMOVED and
- * then RECREATED at the same path stays marked gone forever, so the next send
- * staged against it is told to re-pick a directory that is sitting right
- * there. Staging a path is the user asserting it exists - better evidence than
+ * Staging a path is the user asserting it exists - better evidence than
  * a remembered deletion - so it clears that path's mark, and only that path's.
  * Other removals in the same record are untouched.
  */
