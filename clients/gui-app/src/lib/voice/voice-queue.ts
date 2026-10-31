@@ -253,6 +253,30 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
     });
   };
 
+  /** Whether a queued item already points at this surface. */
+  const surfaceTaken = (surfaceId: string | null): boolean =>
+    surfaceId !== null &&
+    Array.from(entries.values()).some(
+      (existing) => existing.item.surfaceId === surfaceId,
+    );
+
+  /**
+   * An announcement held for a row gives way to what the row is: it is
+   * removed, and what carries over is returned, how far the person got with
+   * it (heard, set aside) and a Read they asked of it, queued or being said,
+   * which stays theirs under its own delegation (the row is then not offered
+   * on top of it). `null` when no announcement holds the row.
+   */
+  const takeOverAnnouncement = (
+    messageId: string,
+  ): { readonly state: QueueItem["state"]; readonly readId: string | null } | null => {
+    const held = entries.get(messageId);
+    if (held?.item.kind !== "announcement") return null;
+    withdrawOffer(held);
+    entries.delete(messageId);
+    return { state: held.item.state, readId: held.readId };
+  };
+
   /** The item a verb names, or the newest waiting one. */
   const target = (itemId: string | null): Entry | null => {
     if (itemId !== null) return entries.get(itemId) ?? null;
@@ -296,26 +320,30 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
         threadTitle: null,
         text: entry.content ?? text,
       }),
+      // Settled on whichever entry holds the item when it is said: an
+      // announcement promoted to the reply it is carries its read along. A
+      // read taken back (`later`, a recovery) is no longer any entry's.
       onDelivered: () => {
-        // A read taken back (`later`) is no longer this item's to settle.
-        if (entry.readId !== id) return;
-        entry.readId = null;
-        setState(entry, "heard");
+        const holder = entries.get(item.id);
+        if (holder === undefined || holder.readId !== id) return;
+        holder.readId = null;
+        setState(holder, "heard");
         // A confirmed hearing of a reply marks its one chat read, as looking
         // does; a stopped answer has nothing of its own to mark.
-        if (entry.content !== null) {
+        if (holder.content !== null) {
           deps.markRead({
-            hostId: entry.item.hostId,
-            botId: entry.item.botId,
-            chatId: entry.item.chatId,
+            hostId: holder.item.hostId,
+            botId: holder.item.botId,
+            chatId: holder.item.chatId,
           });
         }
-        if (entry.item.messageId !== null) {
-          deps.noteHeard(entry.item.chatId, entry.item.messageId);
+        if (holder.item.messageId !== null) {
+          deps.noteHeard(holder.item.chatId, holder.item.messageId);
         }
       },
       onGivenUp: () => {
-        if (entry.readId === id) entry.readId = null;
+        const holder = entries.get(item.id);
+        if (holder !== undefined && holder.readId === id) holder.readId = null;
       },
     });
     return "appended";
@@ -380,28 +408,13 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
         settled.add(messageId);
         return;
       }
-      // An announcement held for this row gives way to what the row is,
-      // keeping how far the person got with it (heard, set aside).
-      const replaced = entries.get(messageId);
-      const keptState =
-        replaced?.item.kind === "announcement" ? replaced.item.state : null;
-      if (replaced !== undefined && keptState !== null) {
-        withdrawOffer(replaced);
-        withdrawRead(replaced);
-        entries.delete(messageId);
-      }
       // A surface is keyed by what it points at: a second post about the
       // same approval or question is the same thing waiting.
-      const surfaceId = entry.surfaceId;
-      if (
-        surfaceId !== null &&
-        Array.from(entries.values()).some(
-          (existing) => existing.item.surfaceId === surfaceId,
-        )
-      ) {
+      if (surfaceTaken(entry.surfaceId)) {
         settled.add(messageId);
         return;
       }
+      const carried = takeOverAnnouncement(messageId);
       const created: Entry = {
         item: {
           id: messageId,
@@ -416,12 +429,12 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
           author: entry.kind === "message" ? author : null,
           line: "",
           at: ref.at,
-          state: keptState ?? "queued",
+          state: carried?.state ?? "queued",
         },
         content: entry.content,
         options: entry.options,
         offerId: null,
-        readId: null,
+        readId: carried?.readId ?? null,
       };
       created.item = {
         ...created.item,
@@ -435,6 +448,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       if (
         waiting.offer &&
         created.item.state === "queued" &&
+        created.readId === null &&
         !deps.isFocused(ref.botId, ref.chatId)
       ) {
         offer(created);
