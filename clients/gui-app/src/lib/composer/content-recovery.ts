@@ -138,7 +138,7 @@ const LOSSY_NODE_TYPES: ReadonlyMap<string, ContentRecoveryLoss> = new Map([
  * Marks are invisible to a `node.type` walk, and these are not losses - but
  * the REASON changed, and the old one was wrong.
  *
- * Round 5 called them text-complete because the styling is visible in its
+ * They are text-complete because the styling is visible in its
  * absence and the user can retype it. That was answering the wrong question:
  * the serializer emits `**` / `*` / `` ` `` / `~~` on the wire, so those
  * delimiters are what the agent actually receives, and a recovery copy

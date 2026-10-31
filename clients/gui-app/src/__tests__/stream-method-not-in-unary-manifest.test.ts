@@ -19,9 +19,9 @@ import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
  * it just permanently withholds whatever capability it was asked about. It has
  * now been written twice:
  *
- *   - `chat.subscribe` in the composer's Auto gate (round 15), where building
+ *   - `chat.subscribe` in the composer's Auto gate, where building
  *     the "fix" this way would have disabled Auto on every host;
- *   - `sessionImport.run` in the import wizard (round 17), where a capable host
+ *   - `sessionImport.run` in the import wizard, where a capable host
  *     silently got `auto_accept_edits` instead of the user's `auto`.
  *
  * Both looked correct, and a test that pins the version into the
@@ -135,7 +135,7 @@ describe("a stream method is never looked up in the unary manifest", () => {
   });
 
   // The scan is only worth having if it can SEE the shape that shipped. This
-  // pins the regex against the exact four-line call from round 17, so a later
+  // pins the regex against that exact four-line call, so a later
   // "simplification" back to a line-oriented match fails here rather than
   // silently passing the whole tree.
   it("matches a call whose arguments span several lines", () => {

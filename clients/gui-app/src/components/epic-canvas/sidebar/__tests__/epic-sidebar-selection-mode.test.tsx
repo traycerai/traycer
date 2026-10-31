@@ -1690,7 +1690,7 @@ describe("epic sidebar selection mode", () => {
   });
 
   // Deletes go out deepest agent first; the notice's advice follows the
-  // selection (traycerai/traycer#2546, round 11, rows 5 and 7).
+  // selection (traycerai/traycer#2546, rows 5 and 7).
   it("lists refusal advice in selection order, not the order the deletes were sent", async () => {
     seedGuiChatTree();
     const toastError = vi.spyOn(toast, "error");

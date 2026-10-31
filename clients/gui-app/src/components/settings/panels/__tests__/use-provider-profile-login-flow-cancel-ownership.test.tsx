@@ -1005,8 +1005,8 @@ describe("useProviderProfileLoginFlow — a failed cancel RPC must not latch out
   it("with ownership: the next press releases a holder whose cancel from waiting failed", async () => {
     // A cancel pressed from the
     // settled `waiting` state (the started answer already landed) has no
-    // later start answer to retry it if its cancel RPC rejects - round 1
-    // only reopened the latch. Nothing else calls `cancelProfile` again for
+    // later start answer to retry it if its cancel RPC rejects - reopening
+    // the latch alone is not enough. Nothing else calls `cancelProfile` again for
     // this attempt, so with nothing retried the old holder's claim is never
     // released on the host, and the FIX owes it: the next press (and
     // unmount) sends it again, best effort, before minting a new holder.

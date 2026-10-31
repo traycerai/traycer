@@ -1329,7 +1329,7 @@ describe("useLandingDraftStore", () => {
     expect(parsed.state?.drafts?.[0]?.settings).toBeNull();
   });
 
-  // Mechanism A (round 5): the strip lives at the two SERIALIZATION seams — the
+  // Mechanism A: the strip lives at the two SERIALIZATION seams — the
   // localStorage `partialize` and the desktop projection — NOT in
   // `setDraftContent`. The in-memory draft is canonical and keeps a paste's
   // still-pending b64 node so a keyed remount / in-session navigate-back can

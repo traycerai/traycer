@@ -3302,7 +3302,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // Decision #29: dual-keys the global tool/subagent open
   // stores for this tab - seeds this tab's expanded cards from the durable
   // chat-key snapshot on a genuinely fresh (never-initialized) scope only.
-  // Round 3: the durable commit moved to the canvas sweep's promotion
+  // The durable commit moved to the canvas sweep's promotion
   // choke point - see the hook's own doc comment.
   useChatScopedOpenStoreDualKeySeed(
     useToolOpenStore,

@@ -6225,7 +6225,7 @@ describe("useChatTimelineFollowLatch", () => {
   // drop shrinks "distance from end" out from under the reader, so a later
   // drag that moves the view up could still read as closer to the (now
   // nearer) end than the press was, and "farther from the end" never held.
-  // PR #3048 round 2 fixed the helper to require only "up from the carried
+  // PR #3048 fixed the helper to require only "up from the carried
   // offset" once the view is off the strict bottom, with the distance half
   // applying only on the strict bottom. Regression test for that fix.
   it("departs a following reader whose drag moves up but lands closer to an end a mid-press pad drop shrank", () => {

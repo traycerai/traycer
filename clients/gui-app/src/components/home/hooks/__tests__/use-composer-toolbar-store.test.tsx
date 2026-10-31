@@ -1465,7 +1465,7 @@ describe("useComposerToolbarStore selection reconciliation", () => {
     // Models a fork dialog's seed transitioning from a stale non-null
     // profileId (persisted seed) to null - exactly what
     // `resolveSeededProfileId` now produces once `providers.list` settles
-    // empty (round 1's fix). The production fix uses `useLayoutEffect`
+    // empty. The production fix uses `useLayoutEffect`
     // (not a passive `useEffect`) for the re-seed, since only a layout
     // effect is guaranteed by React to complete before the next paint - the
     // real-world window a submit-on-click could otherwise land in. NOTE:
