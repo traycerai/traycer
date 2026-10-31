@@ -249,7 +249,7 @@ describe("browserGuestCssSheetAnchorName", () => {
   });
 });
 
-// D2 browser-tile risk (sheet-shell ticket 02): a guest's outer `sheetClipper`
+// D2 browser-tile risk (sheet-shell): a guest's outer `sheetClipper`
 // rounds it to the content sheet of the epic TAB it is presented on, so two
 // guests on two different tabs must never share - or cross-clip to - the
 // wrong sheet, and a guest dragged to a different tab must follow.

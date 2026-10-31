@@ -1,5 +1,5 @@
 /**
- * The viewer's half of the RTT-derived deadline table (ticket 18).
+ * The viewer's half of the RTT-derived deadline table.
  *
  * The host measures the control-plane round trip - it is the end that can,
  * since the stream transport owns `ping`/`pong` on both sides of this contract
