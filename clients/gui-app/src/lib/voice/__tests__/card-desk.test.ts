@@ -6,6 +6,7 @@ import {
   type ActiveCardIds,
   type CardChoice,
   type CardFamily,
+  type CardKey,
 } from "@/stores/voice/voice-session-store";
 import {
   CARD_ANSWER_WINDOW_MS,
@@ -23,9 +24,14 @@ import {
   type CardDesk,
   type CardFacts,
 } from "../card-desk";
-import type { SpeechItem } from "../scheduler";
+import {
+  OUTPUT_HANGOVER_MS,
+  createSpeechScheduler,
+  type SpeechItem,
+} from "../scheduler";
 
 const ITEM = "item-1";
+const OTHER_ITEM = "item-2";
 const IDS: ActiveCardIds = {
   itemId: ITEM,
   botId: "bot-1",
@@ -33,6 +39,11 @@ const IDS: ActiveCardIds = {
   threadId: "thread-1",
   chatId: "chat-1",
   messageId: "msg-1",
+};
+const OTHER_IDS: ActiveCardIds = {
+  ...IDS,
+  itemId: OTHER_ITEM,
+  messageId: "msg-2",
 };
 
 const BOT_QUESTION: CardContent = {
@@ -100,6 +111,22 @@ function settledElsewhere(who: string, verb: string): string {
   return `${who} already ${verb} it, so yours was not sent. Want me to post your answer in the thread instead? Say yes or no.`;
 }
 
+let wordsCount = 0;
+
+/** The person's words reach the card as the say loop hands them over. */
+function speakTo(cardDesk: CardDesk, text: string): "handled" | "route" {
+  useVoiceSessionStore.getState().appendInputSegment(text, 0);
+  wordsCount += 1;
+  const words = useVoiceSessionStore
+    .getState()
+    .reserveOpenSpan(`words:${wordsCount}`);
+  if (words === null) throw new Error("no open words");
+  const verdict = cardDesk.answer(words, "d-words");
+  // Words the card takes are spent; words routed elsewhere are spent by the request they start.
+  useVoiceSessionStore.getState().consumeReservation(words.seqs);
+  return verdict;
+}
+
 function option(index: number, label: string): CardChoice {
   return { kind: "option", index, label };
 }
@@ -121,6 +148,7 @@ function createTimers() {
         timer.live = false;
       };
     },
+    now: (): number => now,
     advance: (ms: number): void => {
       const target = now + ms;
       for (;;) {
@@ -161,6 +189,8 @@ interface Harness {
   readonly advance: (ms: number) => void;
   /** The watcher reads the records and hands them to the desk. */
   readonly deliver: () => void;
+  /** The same, for the card of another item. */
+  readonly deliverItem: (itemId: string) => void;
   /** The voice confirmed having said it. */
   readonly heard: (item: SpeechItem) => void;
   /** The newest thing the voice was given to say. */
@@ -171,6 +201,10 @@ interface Harness {
   readonly listen: () => SpeechItem;
   /** A choice named and its read-back heard: a yes is next. */
   readonly candidate: (choiceWords: string) => SpeechItem;
+  /** The router's answer, routed against the card as it stands now. */
+  readonly route: (choice: number | null, text: string) => boolean;
+  /** Words routed elsewhere, against the card as it stands now. */
+  readonly drop: () => void;
   readonly card: () => ActiveCard | null;
   readonly texts: () => ReadonlyArray<string>;
 }
@@ -187,10 +221,21 @@ function setup(content: CardContent): Harness {
     speech: {
       enqueue: (item) => spoken.push(item),
       withdraw: (itemId) => withdrawn.push(itemId),
+      activity: () => ({
+        inputActiveUntil: null,
+        outputPlaying: false,
+        ackPending: false,
+      }),
+      subscribe: () => () => undefined,
     },
     schedule: timers.schedule,
-    target: (itemId) =>
-      itemId === ITEM ? { family: content.family, ids: IDS } : null,
+    target: (itemId) => {
+      if (itemId === ITEM) return { family: content.family, ids: IDS };
+      if (itemId === OTHER_ITEM) {
+        return { family: content.family, ids: OTHER_IDS };
+      }
+      return null;
+    },
     newActionId: () => {
       actionCount += 1;
       return `act-${actionCount}`;
@@ -214,7 +259,7 @@ function setup(content: CardContent): Harness {
     ),
     postInThread: vi.fn<CardApi["postInThread"]>(() => Promise.resolve(true)),
   };
-  const deliver = (): void => {
+  const deliverItem = (itemId: string): void => {
     const facts: CardFacts = {
       content: records.content,
       settledBy: () => records.settledBy,
@@ -222,7 +267,10 @@ function setup(content: CardContent): Harness {
       forwarded: (actionId) =>
         records.forwarded?.actionId === actionId ? records.forwarded : null,
     };
-    cardDesk.observe(ITEM, facts, api);
+    cardDesk.observe(itemId, facts, api);
+  };
+  const deliver = (): void => {
+    deliverItem(ITEM);
   };
   const heard = (item: SpeechItem): void => {
     item.onDelivered?.();
@@ -232,17 +280,7 @@ function setup(content: CardContent): Harness {
     if (item === undefined) throw new Error("nothing was spoken");
     return item;
   };
-  const say = (text: string): "handled" | "route" => {
-    useVoiceSessionStore.getState().appendInputSegment(text, 0);
-    const words = useVoiceSessionStore
-      .getState()
-      .reserveOpenSpan(`words:${spoken.length}`);
-    if (words === null) throw new Error("no open words");
-    const verdict = cardDesk.answer(words, "d-words");
-    // Words the card takes are spent; words routed elsewhere are spent by the request they start.
-    useVoiceSessionStore.getState().consumeReservation(words.seqs);
-    return verdict;
-  };
+  const say = (text: string): "handled" | "route" => speakTo(cardDesk, text);
   const listen = (): SpeechItem => {
     cardDesk.open(ITEM, "d-open");
     deliver();
@@ -256,6 +294,11 @@ function setup(content: CardContent): Harness {
     heard(item);
     return item;
   };
+  const currentKey = (): CardKey => {
+    const active = useVoiceSessionStore.getState().activeCard;
+    if (active === null) throw new Error("no card is open");
+    return { opening: active.opening, questionIndex: active.questionIndex };
+  };
   return {
     desk: cardDesk,
     api,
@@ -264,11 +307,15 @@ function setup(content: CardContent): Harness {
     withdrawn,
     advance: timers.advance,
     deliver,
+    deliverItem,
     heard,
     latest,
     say,
     listen,
     candidate,
+    route: (choice, text) =>
+      cardDesk.answerRouted(choice, text, "d-routed", currentKey()),
+    drop: () => cardDesk.dropCandidate(currentKey()),
     card: () => useVoiceSessionStore.getState().activeCard,
     texts: () => spoken.map((item) => item.text),
   };
@@ -326,17 +373,19 @@ describe("the read-back of a card", () => {
     },
   );
 
-  it("takes no words before it was heard: they are the router's and send nothing", () => {
+  it("spends an exact choice, a yes or a no said before it was heard, chooses nothing, and leaves other words to the router", () => {
     const h = setup(BOT_QUESTION);
     h.desk.open(ITEM, "d-open");
     h.deliver();
 
-    expect(h.desk.awaitsAnswer()).toBe(false);
-    expect(h.say("Staging")).toBe("route");
-    expect(h.say("yes")).toBe("route");
+    expect(h.desk.awaitsAnswer()).toBe(true);
+    expect(h.say("Staging")).toBe("handled");
+    expect(h.say("yes")).toBe("handled");
+    expect(h.say("no")).toBe("handled");
+    expect(h.say("tell the CI bot hello")).toBe("route");
 
     expect(h.spoken).toHaveLength(1);
-    expect(h.card()?.candidate).toBeNull();
+    expect(h.card()).toMatchObject({ candidate: null, state: "proposed" });
     expect(h.api.answerBotQuestion).not.toHaveBeenCalled();
   });
 
@@ -532,7 +581,7 @@ describe("a move or an interjection while a candidate waits", () => {
     h.say("Staging");
     const readBack = h.latest();
 
-    h.desk.dropCandidate();
+    h.drop();
 
     expect(h.withdrawn).toEqual([readBack.id]);
     expect(h.card()?.candidate).toBeNull();
@@ -669,14 +718,14 @@ describe("the three families", () => {
 });
 
 describe("the router's answer to the card", () => {
-  it("is shown the question and the choices by number, with Skip last, only while the card waits", () => {
-    const question = setup(BOT_QUESTION);
-    question.desk.open(ITEM, "d-open");
-    question.deliver();
-    expect(question.desk.routerCard()).toBeNull();
+  it("is shown the question and the choices by number, with Skip last, from the moment its content is known", () => {
+    const h = setup(BOT_QUESTION);
+    h.desk.open(ITEM, "d-open");
+    expect(h.desk.routerCard()).toBeNull();
 
-    question.heard(question.latest());
-    expect(question.desk.routerCard()).toEqual({
+    h.deliver();
+    expect(h.desk.routerCard()).toEqual({
+      key: { opening: 1, questionIndex: 1 },
       question: "Which environment?",
       choices: ["Staging", "Production", "Skip"],
       takesText: false,
@@ -688,10 +737,30 @@ describe("the router's answer to the card", () => {
     h.listen();
 
     expect(h.desk.routerCard()).toEqual({
+      key: { opening: 1, questionIndex: 0 },
       question: "Allow or deny Bash?",
       choices: ["Allow", "Deny"],
       takesText: false,
     });
+  });
+
+  it("is not shown a card that cannot be answered from here", () => {
+    const h = setup({ ...BOT_QUESTION, actable: false });
+    h.desk.open(ITEM, "d-open");
+    h.deliver();
+
+    expect(h.desk.routerCard()).toBeNull();
+  });
+
+  it("chooses nothing when it arrives before the card could be answered", () => {
+    const h = setup(BOT_QUESTION);
+    h.desk.open(ITEM, "d-open");
+    h.deliver();
+
+    expect(h.route(1, "")).toBe(true);
+
+    expect(h.spoken).toHaveLength(1);
+    expect(h.card()?.candidate).toBeNull();
   });
 
   it.each([
@@ -708,7 +777,7 @@ describe("the router's answer to the card", () => {
       const h = setup(AGENT_QUESTION);
       h.listen();
 
-      expect(h.desk.answerRouted(choice, text, "d-routed")).toBe(true);
+      expect(h.route(choice, text)).toBe(true);
 
       expect(h.latest().text).toContain(readBack);
       expect(h.latest().delegationId).toBe("d-routed");
@@ -719,7 +788,7 @@ describe("the router's answer to the card", () => {
   it("sends the person's own words as custom text once confirmed", () => {
     const h = setup(AGENT_QUESTION);
     h.listen();
-    h.desk.answerRouted(null, "use the hotfix branch", "d-routed");
+    h.route(null, "use the hotfix branch");
     h.heard(h.latest());
 
     h.say("yes");
@@ -742,7 +811,7 @@ describe("the router's answer to the card", () => {
     const h = setup(content);
     h.listen();
 
-    expect(h.desk.answerRouted(choice, text, "d-routed")).toBe(true);
+    expect(h.route(choice, text)).toBe(true);
 
     expect(h.latest().text).toBe(CARD_WHICH_TEXT);
     expect(h.card()?.candidate).toBeNull();
@@ -751,7 +820,9 @@ describe("the router's answer to the card", () => {
   it("is not taken when no card waits", () => {
     const h = setup(BOT_QUESTION);
 
-    expect(h.desk.answerRouted(0, "", "d-routed")).toBe(false);
+    expect(
+      h.desk.answerRouted(0, "", "d-routed", { opening: 1, questionIndex: 0 }),
+    ).toBe(false);
     expect(h.spoken).toEqual([]);
   });
 });
@@ -1053,6 +1124,254 @@ describe("a card that is gone", () => {
     expect(h.say("yes")).toBe("route");
     expect(h.api.answerBotQuestion).not.toHaveBeenCalled();
     expect(h.api.actSurface).not.toHaveBeenCalled();
+  });
+});
+
+describe("a read-back confirmed by its first words", () => {
+  it("counts as heard only once its playback is over: a yes said over the rest of it sends nothing", () => {
+    const timers = createTimers();
+    const cancels = new Map<number, () => void>();
+    let handle = 0;
+    const scheduler = createSpeechScheduler({
+      append: () => undefined,
+      now: timers.now,
+      setTimer: (fn, ms) => {
+        handle += 1;
+        cancels.set(handle, timers.schedule(fn, ms));
+        return handle;
+      },
+      clearTimer: (timer) => {
+        if (typeof timer === "number") cancels.get(timer)?.();
+      },
+    });
+    scheduler.setReady(true);
+    scheduler.setLevelDetection(true);
+    const actSurface = vi.fn<CardApi["actSurface"]>(() =>
+      Promise.resolve({
+        kind: "answered",
+        response: { outcome: "settled", code: null },
+      }),
+    );
+    const api: CardApi = {
+      answerBotQuestion: () => Promise.resolve({ kind: "failed" }),
+      actSurface,
+      postInThread: () => Promise.resolve(true),
+    };
+    const cardDesk = createCardDesk({
+      store: useVoiceSessionStore,
+      speech: scheduler,
+      schedule: timers.schedule,
+      target: () => ({ family: "approval", ids: IDS }),
+      newActionId: () => "act-1",
+    });
+    const speak = (words: string): void => {
+      scheduler.noteOutputLevel(true);
+      scheduler.noteOutputTranscript(words);
+    };
+    const endPlayback = (): void => {
+      scheduler.noteOutputLevel(false);
+      timers.advance(OUTPUT_HANGOVER_MS * 3);
+    };
+
+    cardDesk.open(ITEM, null);
+    cardDesk.observe(
+      ITEM,
+      {
+        content: APPROVAL,
+        settledBy: () => null,
+        gone: false,
+        forwarded: () => null,
+      },
+      api,
+    );
+    speak("Bash. Allow or deny.");
+    endPlayback();
+    expect(scheduler.activity().outputPlaying).toBe(false);
+
+    speakTo(cardDesk, "approve");
+    expect(useVoiceSessionStore.getState().activeCard?.candidate).toEqual(
+      option(0, "Allow"),
+    );
+
+    // The read-back is confirmed by its first word while the rest still plays.
+    speak("Allow");
+    expect(scheduler.activity().outputPlaying).toBe(true);
+    speakTo(cardDesk, "yes");
+    expect(actSurface).not.toHaveBeenCalled();
+
+    endPlayback();
+    expect(scheduler.activity().outputPlaying).toBe(false);
+    speakTo(cardDesk, "yes");
+    expect(actSurface).toHaveBeenCalledTimes(1);
+    expect(actSurface).toHaveBeenCalledWith(
+      { kind: "decide", decision: { approved: true } },
+      "act-1",
+    );
+  });
+});
+
+describe("a card opened again while its act is out", () => {
+  /** An approval of the first item allowed, its act pending; another card opened, then the first again. */
+  function reopenedWhileOut(): {
+    readonly h: Harness;
+    readonly resolveAct: (response: "settled" | "forwarded") => void;
+  } {
+    const h = setup(APPROVAL);
+    let resolveAct: (response: "settled" | "forwarded") => void = () =>
+      undefined;
+    h.api.actSurface.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveAct = (outcome) =>
+            resolve({
+              kind: "answered",
+              response: { outcome, code: null },
+            });
+        }),
+    );
+    h.listen();
+    h.candidate("approve");
+    h.say("yes");
+    expect(h.api.actSurface).toHaveBeenCalledTimes(1);
+
+    h.desk.open(OTHER_ITEM, "d-other");
+    h.deliverItem(OTHER_ITEM);
+    h.desk.open(ITEM, "d-again");
+    h.deliver();
+    return { h, resolveAct: (response) => resolveAct(response) };
+  }
+
+  it("shows that act as sending, says it is on its way, and never sends a second one", () => {
+    const { h } = reopenedWhileOut();
+
+    expect(h.card()).toMatchObject({
+      state: "sending",
+      draft: [option(0, "Allow")],
+      ids: IDS,
+    });
+    expect(h.texts().at(-1)).toBe("Your answer to that is already on its way.");
+
+    h.say("approve");
+    h.say("yes");
+    expect(h.api.actSurface).toHaveBeenCalledTimes(1);
+    expect(h.card()?.state).toBe("sending");
+  });
+
+  it.each([
+    ["settles", "settled", null, "Sent: allowed."],
+    [
+      "is forwarded",
+      "forwarded",
+      "forwarded",
+      "Sent. It is on its way to the task's machine.",
+    ],
+  ] as const)(
+    "has its answer said on the current opening when it %s",
+    async (_name, outcome, cardState, text) => {
+      const { h, resolveAct } = reopenedWhileOut();
+      const opening = h.card()?.opening;
+
+      resolveAct(outcome);
+
+      await vi.waitFor(() => expect(h.latest().text).toBe(text));
+      expect(h.latest().id.startsWith(`card:${opening}:`)).toBe(true);
+      expect(h.card()?.state ?? null).toBe(cardState);
+    },
+  );
+});
+
+describe("a forwarded act that lost the race", () => {
+  it("is said with who decided first when one reading shows both their resolution and its refusal, and offers the post", async () => {
+    const h = setup(APPROVAL);
+    h.listen();
+    h.candidate("deny");
+    h.api.actSurface.mockResolvedValueOnce({
+      kind: "answered",
+      response: { outcome: "forwarded", code: null },
+    });
+    h.say("yes");
+    await vi.waitFor(() => expect(h.card()?.state).toBe("forwarded"));
+
+    h.records.content = null;
+    h.records.settledBy = "Alice";
+    h.records.forwarded = {
+      actionId: "act-1",
+      messageId: "msg-1",
+      state: "refused",
+      code: "ALREADY_SETTLED",
+    };
+    h.deliver();
+
+    expect(h.latest().text).toBe(settledElsewhere("Alice", "decided"));
+    expect(h.card()).not.toBeNull();
+    h.heard(h.latest());
+    h.say("yes");
+    expect(h.api.postInThread).toHaveBeenCalledWith("Deny");
+  });
+});
+
+describe("records that already carry the end of an act still out", () => {
+  /** Approval denied with its act pending, and the records read meanwhile. */
+  function actOutWhileRecordsRead(
+    h: Harness,
+    records: Pick<Records, "settledBy" | "forwarded">,
+  ): () => void {
+    let forward: () => void = () => undefined;
+    h.api.actSurface.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          forward = () =>
+            resolve({
+              kind: "answered",
+              response: { outcome: "forwarded", code: null },
+            });
+        }),
+    );
+    h.listen();
+    h.candidate("deny");
+    h.say("yes");
+    expect(h.card()?.state).toBe("sending");
+
+    h.records.content = null;
+    h.records.settledBy = records.settledBy;
+    h.records.forwarded = records.forwarded;
+    h.deliver();
+    expect(h.card()?.state).toBe("sending");
+    return () => forward();
+  }
+
+  it("closes the card when the call turns forwarded after the post already showed its resolution", async () => {
+    const h = setup(APPROVAL);
+    const forward = actOutWhileRecordsRead(h, {
+      settledBy: "Alice",
+      forwarded: null,
+    });
+
+    forward();
+
+    await vi.waitFor(() => expect(h.card()).toBeNull());
+  });
+
+  it("says who decided first and offers the post when the call turns forwarded after its refusal was already recorded", async () => {
+    const h = setup(APPROVAL);
+    const forward = actOutWhileRecordsRead(h, {
+      settledBy: "Alice",
+      forwarded: {
+        actionId: "act-1",
+        messageId: "msg-1",
+        state: "refused",
+        code: "ALREADY_SETTLED",
+      },
+    });
+
+    forward();
+
+    await vi.waitFor(() =>
+      expect(h.latest().text).toBe(settledElsewhere("Alice", "decided")),
+    );
+    h.heard(h.latest());
+    h.say("yes");
+    expect(h.api.postInThread).toHaveBeenCalledWith("Deny");
   });
 });
 

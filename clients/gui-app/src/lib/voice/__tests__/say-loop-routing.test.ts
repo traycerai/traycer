@@ -19,6 +19,12 @@ import {
   type BoundTarget,
   type VoiceDirectory,
 } from "../directory";
+import {
+  CARD_STALE_ANSWER_TEXT,
+  createCardDesk,
+  type CardApi,
+  type CardContent,
+} from "../card-desk";
 import { NOTHING_WAITING_NOTICE } from "../deferred-verbs";
 import { resolveRoute, type RouterResult } from "../router";
 import type { SpeechItem } from "../scheduler";
@@ -744,6 +750,7 @@ describe("a routed verb on the queue", () => {
 
 describe("the active card", () => {
   const CARD: RouterCard = {
+    key: { opening: 4, questionIndex: 0 },
     question: "Which environment?",
     choices: ["Staging", "Production", "Skip"],
     takesText: false,
@@ -791,7 +798,7 @@ describe("the active card", () => {
 
     expect(h.requests.map((request) => request.card)).toEqual([CARD]);
     expect(h.sends.map((focus) => focus.botId)).toEqual([TRACY]);
-    expect(driver.dropCandidate).toHaveBeenCalledTimes(1);
+    expect(driver.dropCandidate).toHaveBeenCalledExactlyOnceWith(CARD.key);
     expect(driver.answerRouted).not.toHaveBeenCalled();
   });
 
@@ -817,7 +824,12 @@ describe("the active card", () => {
     speak("hold", " it");
     await h.loop.onDelegationCreated("d-1");
 
-    expect(driver.answerRouted).toHaveBeenCalledWith(1, "hold it", "d-1");
+    expect(driver.answerRouted).toHaveBeenCalledWith(
+      1,
+      "hold it",
+      "d-1",
+      CARD.key,
+    );
     expect(driver.dropCandidate).not.toHaveBeenCalled();
     expect(h.sends).toEqual([]);
     expect(h.notices).toEqual([]);
@@ -873,5 +885,154 @@ describe("the active card", () => {
     h.loop.onSelectionChanged();
 
     expect(driver.invalidate).toHaveBeenCalledExactlyOnceWith("focus");
+  });
+});
+
+describe("the card desk behind the say loop", () => {
+  const APPROVAL: CardContent = {
+    family: "approval",
+    botTitle: "Release",
+    place: "in its channel",
+    questions: [],
+    questionIndex: 0,
+    approval: { tool: "Bash", summary: "delete production backups" },
+    postText: "A task needs your approval.",
+    actable: true,
+  };
+
+  /** The real desk, installed as the store's card driver, with the voice's speech captured. */
+  function installDesk() {
+    const spoken: SpeechItem[] = [];
+    const cardDesk = createCardDesk({
+      store: useVoiceSessionStore,
+      speech: {
+        enqueue: (item) => spoken.push(item),
+        withdraw: () => undefined,
+        activity: () => ({
+          inputActiveUntil: null,
+          outputPlaying: false,
+          ackPending: false,
+        }),
+        subscribe: () => () => undefined,
+      },
+      schedule: () => () => undefined,
+      target: (itemId) => ({
+        family: "approval",
+        ids: {
+          itemId,
+          botId: TRACY,
+          hostId: "host-1",
+          threadId: null,
+          chatId: "chat-1",
+          messageId: itemId,
+        },
+      }),
+      newActionId: () => "act-1",
+    });
+    const api: CardApi = {
+      answerBotQuestion: () => Promise.resolve({ kind: "failed" }),
+      actSurface: () => Promise.resolve({ kind: "failed" }),
+      postInThread: () => Promise.resolve(true),
+    };
+    useVoiceSessionStore.getState().setCardDriver(cardDesk);
+    return {
+      spoken,
+      /** The card of this item is opened and its records read. */
+      show: (itemId: string): void => {
+        cardDesk.open(itemId, null);
+        cardDesk.observe(
+          itemId,
+          {
+            content: APPROVAL,
+            settledBy: () => null,
+            gone: false,
+            forwarded: () => null,
+          },
+          api,
+        );
+      },
+      /** The voice confirmed having said the newest thing. */
+      heard: (): void => {
+        spoken.at(-1)?.onDelivered?.();
+      },
+    };
+  }
+
+  const activeCard = () => useVoiceSessionStore.getState().activeCard;
+
+  it("never posts an approval said before the list was heard, and shows the router the card for other words", async () => {
+    const desk = installDesk();
+    desk.show("a");
+    const h = build({ recheckHolds: true, canSend: true });
+    h.answers.push(() => Promise.resolve(route("post", null, null, 1)));
+
+    speak("approve");
+    await h.loop.onDelegationCreated("early");
+
+    expect(h.requests).toEqual([]);
+    expect(h.sends).toEqual([]);
+    expect(activeCard()?.candidate).toBeNull();
+
+    speak("what is the weather");
+    await h.loop.onDelegationCreated("other");
+
+    expect(h.requests).toHaveLength(1);
+    expect(h.requests[0]?.card).toMatchObject({
+      question: "Allow or deny Bash?",
+      choices: ["Allow", "Deny"],
+    });
+    expect(h.sends.map((focus) => focus.botId)).toEqual([TRACY]);
+  });
+
+  describe("a route made against a card that is no longer the open one", () => {
+    /** A request routes against card A, still out when B is opened and heard. */
+    function routeOutWhileAnotherOpens() {
+      const desk = installDesk();
+      desk.show("a");
+      desk.heard();
+      const h = build({ recheckHolds: true, canSend: true });
+      const out = heldAnswer();
+      h.answers.push(out.answer);
+      speak("please permit that operation");
+      const done = h.loop.onDelegationCreated("slow");
+      expect(h.requests).toHaveLength(1);
+      desk.show("b");
+      desk.heard();
+      return { desk, h, out, done };
+    }
+
+    it("chooses nothing on the other card when its answer arrives, and says so", async () => {
+      const { desk, h, out, done } = routeOutWhileAnotherOpens();
+
+      out.release({ ...route("answer", null, null, 1), choice: 0 });
+      await done;
+
+      expect(activeCard()).toMatchObject({
+        ids: { itemId: "b" },
+        candidate: null,
+      });
+      expect(desk.spoken.at(-1)?.text).toBe(CARD_STALE_ANSWER_TEXT);
+      expect(h.sends).toEqual([]);
+    });
+
+    it("leaves the other card's candidate alone when its words were posted", async () => {
+      const { h, out, done } = routeOutWhileAnotherOpens();
+      speak("approve");
+      await h.loop.onDelegationCreated("choose");
+      expect(activeCard()?.candidate).toEqual({
+        kind: "option",
+        index: 0,
+        label: "Allow",
+      });
+
+      out.release(route("post", null, null, 1));
+      await done;
+
+      expect(h.sends.map((focus) => focus.botId)).toEqual([TRACY]);
+      expect(activeCard()).toMatchObject({
+        ids: { itemId: "b" },
+        candidate: { kind: "option", index: 0, label: "Allow" },
+      });
+    });
   });
 });
