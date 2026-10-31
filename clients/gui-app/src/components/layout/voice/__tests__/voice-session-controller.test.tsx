@@ -529,9 +529,11 @@ vi.mock("@/lib/voice/audio-level", () => ({
 // The tab navigation's activation as the real one behaves for the voice: it
 // brings the bot's tab to the front at once and runs the route navigation
 // (whose outcome `navigateOutcome` decides), putting the previous tab back
-// when that navigation fails; or it queues the activation, or refuses it.
+// when that navigation fails unless a newer activation superseded it; or it
+// queues the activation, or refuses it.
 vi.mock("@/lib/tab-navigation", async (importOriginal) => {
   const { useTabsStore: tabs } = await import("@/stores/tabs/store");
+  let activations = 0;
   return {
     ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
     activateTabIntent: (
@@ -546,6 +548,10 @@ vi.mock("@/lib/tab-navigation", async (importOriginal) => {
       if (fake.tabActivation === "queued") return true;
       const before = tabs.getState();
       const botId = intent.botId ?? "";
+      // A newer activation supersedes this one: the tab navigation then
+      // drops it, and its failure later puts nothing back.
+      activations += 1;
+      const activation = activations;
       tabs.setState({
         items: [
           ...before.items.filter((item) => item.id !== `item-${botId}`),
@@ -554,6 +560,7 @@ vi.mock("@/lib/tab-navigation", async (importOriginal) => {
         activeItemId: `item-${botId}`,
       });
       void navigate({}).catch(() => {
+        if (activation !== activations) return;
         tabs.setState({
           items: before.items,
           activeItemId: before.activeItemId,
@@ -2497,5 +2504,83 @@ describe("a voice move to another thread of the active bot that fails", () => {
     expect(state.focus).toEqual(CHANNEL_FOCUS);
     expect(state.selectionGeneration).toBe(generation);
     expect(fake.sendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("a rail put back against a newer navigation", () => {
+  const THREAD_RAIL = {
+    kind: "thread",
+    anchorMessageId: "q-safari",
+    announcement: false,
+    anchorKind: null,
+    sent: null,
+  } as const;
+
+  function navigateToChannel(botId: string): unknown {
+    return {
+      output: [
+        {
+          type: "message",
+          content: [
+            {
+              type: "output_text",
+              text: JSON.stringify({
+                action: "navigate",
+                target: {
+                  environmentId: null,
+                  botId,
+                  threadId: null,
+                  itemId: null,
+                },
+                span: { fromSegment: 0, toSegment: 0 },
+                uncertain: false,
+                question: null,
+                control: null,
+              }),
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  async function startWithOtherBotOnAThread(): Promise<void> {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    // bot-2 already shows a thread, as the person left it.
+    act(() => useBotOpenThreadStore.getState().setRail("bot-2", THREAD_RAIL));
+    await bringLive();
+  }
+
+  it("an older failing move to a bot's channel does not put that bot's thread rail back over a newer move to the same channel that landed", async () => {
+    await startWithOtherBotOnAThread();
+    fake.routeAnswer = () => navigateToChannel("bot-2");
+    let rejectOlder: (error: Error) => void = () => undefined;
+    const outcomes: Array<() => Promise<void>> = [
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectOlder = reject;
+        }),
+      () => Promise.resolve(),
+    ];
+    fake.navigateOutcome = () =>
+      (outcomes.shift() ?? (() => Promise.resolve()))();
+    const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+    await say("Go to the release bot.", "d1");
+    await say("Go to the release bot please.", "d2");
+    // Precondition: the newer move landed on the channel.
+    expect(useBotOpenThreadStore.getState().byBotId["bot-2"]).toBeUndefined();
+
+    await act(async () => {
+      rejectOlder(new Error("blocked"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await settle();
+
+    expect(useBotOpenThreadStore.getState().byBotId["bot-2"]).toBeUndefined();
+    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
+      generation,
+    );
   });
 });

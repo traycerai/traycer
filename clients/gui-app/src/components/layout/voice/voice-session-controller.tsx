@@ -1344,6 +1344,13 @@ function openMainBot(
 }
 
 /**
+ * The voice's rail writes per bot, by serial: a rollback of a move that did
+ * not land runs only for the latest one, so an older move never undoes a
+ * newer one's rail, even when both wrote the same value.
+ */
+const voiceRailWrites = new Map<string, number>();
+
+/**
  * Opens a routed destination as the person would: the bot's tab (on the
  * host it is bound to, or the target's), its rail on the thread named or
  * on the channel, and the tab brought to the front. Resolves with what
@@ -1374,6 +1381,8 @@ function openTarget(
           sent: null,
         };
   rails.setRail(botId, rail);
+  const write = (voiceRailWrites.get(botId) ?? 0) + 1;
+  voiceRailWrites.set(botId, write);
   useBotTabsStore
     .getState()
     .openBotTab({ botId, hostId, title: target.botTitle });
@@ -1383,10 +1392,11 @@ function openTarget(
       if (settled) return;
       settled = true;
       const landed = decide(outcome);
-      // A move that did not land puts the bot's rail back as it was, unless
-      // something since (a newer navigation, the person) changed it from
-      // what the voice set.
-      if (!landed) {
+      // A move that did not land puts the bot's rail back as it was, but
+      // only while its write is still the latest the voice made to that
+      // rail (a newer move's write, a channel's null included, owns it
+      // then) and the person has not changed it since.
+      if (!landed && voiceRailWrites.get(botId) === write) {
         const now = useBotOpenThreadStore.getState().byBotId;
         const current = Object.hasOwn(now, botId) ? now[botId] : null;
         if (current === rail) {
