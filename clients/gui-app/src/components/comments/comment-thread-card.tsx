@@ -424,6 +424,7 @@ export function CommentThreadCard(props: CommentThreadCardProps) {
             isPending={replyPending}
             onSubmit={handleReplySubmit}
             onCancel={null}
+            leadingActions={null}
             className={undefined}
           />
 
@@ -576,6 +577,7 @@ function CommentEntry(props: CommentEntryProps) {
           isPending={isPending}
           onSubmit={onSubmitEdit}
           onCancel={onCancelEdit}
+          leadingActions={null}
           className={undefined}
         />
       ) : (

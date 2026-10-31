@@ -14,7 +14,10 @@ import {
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import type { CanvasBox, CanvasElement } from "@/lib/sandbox/canvas-bridge";
-import { clipCanvasBox, transformCanvasBox } from "./canvas-selection-geometry";
+import {
+  canvasSelectionCaptureRect,
+  clipCanvasBox,
+} from "./canvas-selection-geometry";
 import {
   useCanvasSelectionStore,
   isCanvasBoardRoot,
@@ -128,7 +131,6 @@ function SelectionOutline(props: {
 export function CanvasSelectionOverlay(props: {
   readonly controls?: ReactNode;
   readonly actionControls?: ReactNode;
-  readonly menuControls?: ReactNode;
   readonly hideAction?: boolean;
   readonly commenting?: boolean;
   readonly hideHandles?: boolean;
@@ -141,6 +143,8 @@ export function CanvasSelectionOverlay(props: {
   ) => void;
   readonly onRetire: (path: string) => void;
   readonly onEscape: () => void;
+  /** Shift+Enter on the shield; `null` where the selection cannot widen. */
+  readonly onSelectParent: (() => void) | null;
 }) {
   useSyncExternalStore(props.registry.subscribe, props.registry.getSnapshot);
   const entry = props.registry.get(props.boardPath);
@@ -320,36 +324,10 @@ export function CanvasSelectionOverlay(props: {
     selection?.element ?? null,
     dimensions,
   );
-  const captureRect = (): CanvasBox | null => {
-    if (
-      frame === null ||
-      box === null ||
-      frame.clientWidth === 0 ||
-      frame.clientHeight === 0
-    )
-      return null;
-    const bounds = frame.getBoundingClientRect();
-    const padded = clipCanvasBox(
-      {
-        x: box.x - 20,
-        y: box.y - 20,
-        width: box.width + 40,
-        height: box.height + 40,
-      },
-      { x: 0, y: 0, width: frame.clientWidth, height: frame.clientHeight },
-    );
-    return padded === null
+  const captureRect = (): CanvasBox | null =>
+    frame === null || box === null
       ? null
-      : clipCanvasBox(
-          transformCanvasBox(padded, {
-            x: bounds.x,
-            y: bounds.y,
-            scaleX: bounds.width / frame.clientWidth,
-            scaleY: bounds.height / frame.clientHeight,
-          }),
-          { x: 0, y: 0, width: window.innerWidth, height: window.innerHeight },
-        );
-  };
+      : canvasSelectionCaptureRect(frame, box);
   return (
     <div
       // XYFlow captures Shift-pointerdown before our shields can receive it.
@@ -365,12 +343,28 @@ export function CanvasSelectionOverlay(props: {
         )}
         tabIndex={-1}
         onKeyDown={(event) => {
-          if (event.key !== "Escape" || event.defaultPrevented) return;
-          // The node wrapper would otherwise deselect the board before the
-          // provider can clear just the element on the first Escape.
-          event.preventDefault();
-          event.stopPropagation();
-          props.onEscape();
+          if (event.defaultPrevented) return;
+          if (event.key === "Escape") {
+            // The node wrapper would otherwise deselect the board before the
+            // provider can clear just the element on the first Escape.
+            event.preventDefault();
+            event.stopPropagation();
+            props.onEscape();
+            return;
+          }
+          // Shift+Enter widens the selection to the parent element, as design
+          // tools do. There is no visible control for it: the hit test picks
+          // the deepest element, and this is the quiet way up.
+          if (
+            event.key === "Enter" &&
+            event.shiftKey &&
+            selection !== null &&
+            props.onSelectParent !== null
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            props.onSelectParent();
+          }
         }}
         onPointerDown={(event) => {
           if (event.button !== 0) return;
@@ -465,7 +459,6 @@ export function CanvasSelectionOverlay(props: {
         hideHandles={props.hideHandles}
         scope={props.scope}
         actionControls={props.actionControls}
-        menuControls={props.menuControls}
         captureRect={captureRect}
       />
       {props.controls}
@@ -481,7 +474,6 @@ function CanvasSelectionPaint(props: {
   readonly hideHandles: boolean | undefined;
   readonly scope: CanvasAnnotationScope;
   readonly actionControls: ReactNode;
-  readonly menuControls: ReactNode;
   readonly captureRect: () => CanvasBox | null;
 }) {
   return props.selection !== null && props.box !== null ? (
@@ -513,7 +505,6 @@ function CanvasSelectionPaint(props: {
             selection={props.selection}
             captureRect={props.captureRect}
           />
-          {props.menuControls}
         </SelectionActionBar>
       )}
     </>

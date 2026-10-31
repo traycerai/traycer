@@ -15,8 +15,10 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { realBridge, quotedSelection } from "./canvas-edit-test-support";
 import type { CommentThreadWire } from "@traycer/protocol/host/epic/unary-schemas";
 import {
+  CanvasCommentAction,
   CanvasCommentIndex,
   CanvasCommentPointPins,
 } from "@/components/canvas-artifact/canvas-comments";
@@ -28,6 +30,7 @@ import {
   clearCommentEditorRegistryForTests,
   requestCommentThreadAnchorReveal,
 } from "@/lib/comments/comment-editor-registry";
+import { openFrameCommentDraft } from "@/lib/comments/open-frame-comment-draft";
 import { createAppQueryClient } from "@/lib/query-client";
 import { useAnchorPositionsStore } from "@/stores/comments/anchor-positions-store";
 import { useCommentThreadsStore } from "@/stores/comments/comment-threads-store";
@@ -36,6 +39,13 @@ const EPIC_ID = "epic-1";
 const ARTIFACT_ID = "canvas-1";
 const THREAD_ID = "thread-1";
 const BOARD = "boards/a.html";
+
+vi.mock("@/hooks/comments/use-frame-comments-enabled", () => ({
+  useFrameCommentsEnabled: () => true,
+}));
+vi.mock("@/lib/comments/open-frame-comment-draft", () => ({
+  openFrameCommentDraft: vi.fn(() => Promise.resolve(null)),
+}));
 
 const mocks = vi.hoisted(() => ({
   threads: null as ReadonlyArray<CommentThreadWire> | null,
@@ -49,6 +59,7 @@ const scope = {
   epicId: EPIC_ID,
   artifactId: ARTIFACT_ID,
   artifactTitle: "Canvas",
+  artifactType: "canvas" as const,
   hostId: "host-1",
   viewTabId: "tab-1",
 };
@@ -201,5 +212,37 @@ describe("<CanvasCommentPointPins />", () => {
     expect(useCommentThreadsStore.getState().activeByEpicId[EPIC_ID]).toBe(
       "point-1",
     );
+  });
+});
+
+describe("<CanvasCommentAction />", () => {
+  it("opens one draft for the element without entering comment mode", () => {
+    const setCommenting = vi.fn<(enabled: boolean) => void>();
+    act(() =>
+      registry.setView({ ...viewWith(() => true, false), setCommenting }),
+    );
+    const frame = document.createElement("iframe");
+    registry.update(BOARD, { bridge: realBridge(), frame });
+    const selection = quotedSelection("Hello", 0, 5, { tid: "t" });
+
+    render(
+      <QueryClientProvider client={createAppQueryClient()}>
+        <CanvasCommentAction
+          scope={{ ...scope, artifactType: "html" }}
+          tileId="tile-1"
+          selection={{ ...selection, boardPath: BOARD }}
+          registry={registry}
+        />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+
+    expect(openFrameCommentDraft).toHaveBeenCalledOnce();
+    expect(vi.mocked(openFrameCommentDraft).mock.calls[0][0]).toMatchObject({
+      epicId: EPIC_ID,
+      artifactType: "html",
+      frame,
+    });
+    expect(setCommenting).not.toHaveBeenCalled();
   });
 });

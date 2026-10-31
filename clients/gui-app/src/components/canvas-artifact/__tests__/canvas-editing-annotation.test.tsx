@@ -30,6 +30,7 @@ import {
   BOARD_PATH,
   disposeBridges,
   pendingSaves,
+  canvasElement,
   quotedSelection,
   realBridge,
   registryServing,
@@ -153,6 +154,7 @@ const SCOPE = {
   epicId: "epic-1",
   artifactId: "canvas-1",
   artifactTitle: "Wiring",
+  artifactType: "canvas" as const,
   hostId: "host-1",
   viewTabId: "tab-1",
 };
@@ -234,6 +236,7 @@ function mountOverlay() {
       />
     </QueryClientProvider>,
   );
+  return bridge;
 }
 
 function select(selection: CanvasSelection): void {
@@ -441,6 +444,65 @@ describe("attaching a selected range to a chat", () => {
     await addToChat();
     expect(attachedRecord().elements[0]).toMatchObject({
       textRange: { quote: "BIG" },
+    });
+  });
+});
+
+describe("the selection bar and its keyboard", () => {
+  const shield = (): HTMLElement => {
+    const overlay = document.querySelector("[data-canvas-selection-overlay]");
+    const element = overlay?.firstElementChild;
+    if (!(element instanceof HTMLElement)) throw new Error("no shield");
+    return element;
+  };
+  const SECTION = canvasElement({
+    tid: "section",
+    tagName: "section",
+    selector: "section",
+    marker: 3,
+  });
+
+  it("offers Send to chat with no Element actions menu beside it", async () => {
+    mountOverlay();
+    select(LITERAL);
+    await screen.findByRole("button", { name: "Send to chat" });
+    expect(
+      screen.queryByRole("button", { name: "Element actions" }),
+    ).toBeNull();
+  });
+
+  it("selects the literal ancestor on Shift+Enter and ignores a plain Enter", async () => {
+    const bridge = mountOverlay();
+    const literalAncestor = vi
+      .spyOn(bridge, "literalAncestor")
+      .mockResolvedValue(SECTION);
+    select(LITERAL);
+    await screen.findByRole("button", { name: "Send to chat" });
+
+    fireEvent.keyDown(shield(), { key: "Enter" });
+    expect(literalAncestor).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(shield(), { key: "Enter", shiftKey: true });
+    await waitFor(() => {
+      expect(useCanvasSelectionStore.getState().selection?.element.tid).toBe(
+        "section",
+      );
+    });
+    expect(literalAncestor).toHaveBeenCalledOnce();
+    expect(useCanvasSelectionStore.getState().selection?.textRange).toBeNull();
+  });
+
+  it("clears the selection when the ancestor is the page body", async () => {
+    const bridge = mountOverlay();
+    vi.spyOn(bridge, "literalAncestor").mockResolvedValue(
+      canvasElement({ tagName: "body", selector: "body", tid: null }),
+    );
+    select(LITERAL);
+    await screen.findByRole("button", { name: "Send to chat" });
+
+    fireEvent.keyDown(shield(), { key: "Enter", shiftKey: true });
+    await waitFor(() => {
+      expect(useCanvasSelectionStore.getState().selection).toBeNull();
     });
   });
 });

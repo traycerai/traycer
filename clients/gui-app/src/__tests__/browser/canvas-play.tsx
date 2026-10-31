@@ -483,6 +483,7 @@ export function CanvasPlayFixture(): ReactNode {
           epicId={EPIC_ID}
           artifactId={ARTIFACT_ID}
           artifactTitle={artifact.title}
+          artifactType="canvas"
           hostId={HOST_ID}
           viewTabId={VIEW_TAB_ID}
         >
