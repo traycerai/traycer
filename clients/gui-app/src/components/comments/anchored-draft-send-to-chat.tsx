@@ -16,8 +16,10 @@ import {
 import { canvasSelectionCaptureRect } from "@/components/canvas-artifact/canvas-selection-geometry";
 import type { CanvasSelection } from "@/components/canvas-artifact/canvas-selection-store";
 import { useCanvasAnnotationChatTargets } from "@/components/canvas-artifact/use-canvas-annotation-chat-targets";
+import { useCanvasAnnotationNewChat } from "@/components/canvas-artifact/use-canvas-annotation-new-chat";
 import { useArtifactObjectTextQuery } from "@/hooks/files/use-artifact-object-text-query";
 import { canvasMutationKeys } from "@/lib/query-keys/canvas-mutation-keys";
+import type { CanvasBox } from "@/lib/sandbox/canvas-bridge";
 
 /** What the draft box needs from the surface to send its element to a chat. */
 export interface AnchoredDraftSendToChatSurface {
@@ -65,6 +67,7 @@ export function AnchoredDraftSendToChatSlot(
 function AnchoredDraftSendToChat(props: AnchoredDraftSendToChatProps) {
   const { scope, frameFor } = props.surface;
   const targets = useCanvasAnnotationChatTargets(scope);
+  const newChat = useCanvasAnnotationNewChat(scope);
   const revealChat = useRevealChatInTab(scope);
   const source = useArtifactObjectTextQuery(scope.hostId, {
     epicId: scope.epicId,
@@ -74,7 +77,7 @@ function AnchoredDraftSendToChat(props: AnchoredDraftSendToChatProps) {
   const menuClosed = useChatTargetMenuClosed(setMenuOpen);
   const send = useMutation({
     mutationKey: canvasMutationKeys.attach(scope.artifactId),
-    mutationFn: async (chatId: string) => {
+    mutationFn: async (chatId: string | null) => {
       // Read the text before anything moves: the capture and the attach are
       // async, and the box is gone once they land.
       const text = props.readDraft();
@@ -83,24 +86,27 @@ function AnchoredDraftSendToChat(props: AnchoredDraftSendToChatProps) {
         props.selection,
         source.data,
       );
-      await captureAndAttachCanvasAnnotation({
-        chatId,
-        record,
-        captureRect: () => {
+      const capture = {
+        captureRect: (): CanvasBox | null => {
           const frame = frameFor(props.selection.boardPath);
           return frame === null
             ? null
             : canvasSelectionCaptureRect(frame, props.selection.element.box);
         },
         awaitPickerClosed: menuClosed.awaitClosed,
-      });
+      };
+      if (chatId === null) {
+        await newChat.send({ ...capture, record, text });
+        return null;
+      }
+      await captureAndAttachCanvasAnnotation({ ...capture, chatId, record });
       appendCommentTextToDraft(chatId, text);
       return chatId;
     },
     onSuccess: (chatId) => {
       setMenuOpen(false);
       props.onSent();
-      revealChat(chatId);
+      if (chatId !== null) revealChat(chatId);
     },
     onError: (error: Error) => {
       setMenuOpen(false);
@@ -111,7 +117,7 @@ function AnchoredDraftSendToChat(props: AnchoredDraftSendToChatProps) {
     <ChatTargetMenu
       targets={targets}
       onSelectChat={(chatId) => send.mutate(chatId)}
-      onSelectNewChat={null}
+      onSelectNewChat={newChat.supported ? () => send.mutate(null) : null}
       open={menuOpen}
       onOpenChange={menuClosed.onOpenChange}
       onClosed={menuClosed.onClosed}
@@ -120,7 +126,11 @@ function AnchoredDraftSendToChat(props: AnchoredDraftSendToChatProps) {
           type="button"
           variant="ghost"
           size="sm"
-          disabled={props.disabled || send.isPending || targets.length === 0}
+          disabled={
+            props.disabled ||
+            send.isPending ||
+            (targets.length === 0 && !newChat.supported)
+          }
           aria-label="Send to chat"
         >
           {send.isPending ? (

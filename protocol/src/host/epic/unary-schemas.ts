@@ -2,6 +2,7 @@ import {
   chatRunSettingsSchema,
   chatRunSettingsStrictSchema,
 } from "@traycer/protocol/persistence/epic/foundation";
+import { browserAnnotationRecordSchema } from "@traycer/protocol/persistence/epic/messages";
 /**
  * Host ↔ client wire shapes for the `epic.*` RPC surface.
  *
@@ -3703,6 +3704,44 @@ export const createEpicRequestSchemaV14 = lazySchema(() =>
   }),
 );
 export type CreateEpicRequestV14 = z.infer<typeof createEpicRequestSchemaV14>;
+
+/**
+ * `@1.5`'s initial message: the composer's browser-annotation sidecar rides
+ * on the create exactly as it rides on a `chat.subscribe` `send` frame, so an
+ * element sent to a chat that does not exist yet arrives with the same card.
+ * The crop bytes travel as the content's image attachments, by hash or inline,
+ * on the same path every other image on a create takes; a record's `imageHash`
+ * names one of them. ABSENT MEANS NONE: `.optional()` rather than the send
+ * frame's `.default([])`, for the reason `attachmentsByHash` gives above - a
+ * default would make the key required in the inferred request type, and
+ * every create surface that carries no sidecar would have to name it.
+ */
+export const createChatInitialMessageSchemaV15 = lazySchema(() =>
+  createChatInitialMessageSchemaV14.extend({
+    browserAnnotations: z.array(browserAnnotationRecordSchema).optional(),
+  }),
+);
+export type CreateChatInitialMessageV15 = z.infer<
+  typeof createChatInitialMessageSchemaV15
+>;
+export const createChatRequestSchemaV15 = lazySchema(() =>
+  createChatRequestSchemaV14.extend({
+    initialMessage: createChatInitialMessageSchemaV15.nullable().optional(),
+  }),
+);
+export type CreateChatRequestV15 = z.infer<typeof createChatRequestSchemaV15>;
+export const createEpicChatSeedSchemaV15 = lazySchema(() =>
+  createEpicChatSeedSchemaV14.extend({
+    initialMessage: createChatInitialMessageSchemaV15.nullable(),
+  }),
+);
+export type CreateEpicChatSeedV15 = z.infer<typeof createEpicChatSeedSchemaV15>;
+export const createEpicRequestSchemaV15 = lazySchema(() =>
+  createEpicRequestSchemaV14.extend({
+    chat: createEpicChatSeedSchemaV15.nullable().optional(),
+  }),
+);
+export type CreateEpicRequestV15 = z.infer<typeof createEpicRequestSchemaV15>;
 export const updateChatRunSettingsRequestSchemaV12 = lazySchema(() =>
   updateChatRunSettingsRequestSchemaV11.extend({
     settings: chatRunSettingsStrictSchema,
