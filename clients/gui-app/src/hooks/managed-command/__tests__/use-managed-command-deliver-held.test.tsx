@@ -128,7 +128,7 @@ beforeEach(() => {
     findHostById: (hostId) =>
       hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
   });
-  // `bind()` died with the active slot: a requester over the spine is
+  // `bind()` died with the active slot (D17): a requester over the spine is
   // how a test addresses a host now; everything non-request proxies through.
   hostClient = spine.createRequester(mockLocalHostEntry);
   hostClient.setRequestContext(

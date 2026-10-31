@@ -215,7 +215,7 @@ describe("hostFailureReportIssueAction — the compat verdict word", () => {
   // no cover at all.
   //
   // It matters most now: the compat verdict no longer reaches a user through
-  // any surface (it is a lease input), so this diagnostic line is the
+  // any surface (D13 - it is a lease input), so this diagnostic line is the
   // only place a wrong verdict would ever show up, and it shows up in the bug
   // report someone files about something else entirely.
   const verdictCases = [

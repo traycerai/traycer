@@ -45,7 +45,7 @@ describe("useHostNegotiatedMethodVersion", () => {
       findHostById: (hostId) =>
         hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
     });
-    // `bind()` died with the active slot: address via a requester.
+    // `bind()` died with the active slot (D17): address via a requester.
     const client = spine.createRequester(mockLocalHostEntry);
     client.setRequestContext(
       createRequestContextFixture({

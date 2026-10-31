@@ -425,7 +425,7 @@ export function operationProgressPercent(view: FleetUpdateView): number | null {
  * attempts. The measured numbers still render, because a static "80 MB of
  * 200 MB" under an explicitly past-tense sentence claims nothing.
  *
- * A `restarting` kind projected from the DURABLE RECORD (an active
+ * A `restarting` kind projected from the DURABLE RECORD (D13 — an active
  * record whose holder a probe found alive, within the proof's five-second
  * life) draws the bar for the same reason the wire's `restarting` does, and
  * that is consistent rather than an exception: it is not a retained phase.

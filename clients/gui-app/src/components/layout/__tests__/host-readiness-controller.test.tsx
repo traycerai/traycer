@@ -105,7 +105,7 @@ describe("projectDefaultHostReadiness", () => {
     ).toEqual({ kind: "ready" });
   });
 
-  // P3.2: the compat verdict is a SELECTION input, and this projection is
+  // D13, P3.2: the compat verdict is a SELECTION input, and this projection is
   // where it used to be a readiness input instead. Every non-compatible verdict
   // is asserted, not just `incompatible`: `checking` held the window behind a
   // full-screen probe card and `failed` behind an error card, and re-adding any

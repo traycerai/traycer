@@ -65,7 +65,7 @@ export const HostRuntimeContext = runtime.HostRuntimeContext;
  *
  * NOT a host. It is what a host id is resolved AGAINST. It answers no host
  * identity at all: the active slot it used to answer from is gone (redesign
- * P4.2), so `getActiveHostId()` here is a constant `null`.
+ * D17 / P4.2), so `getActiveHostId()` here is a constant `null`.
  *
  * Its callers are the two EXPLICIT-host hooks in `hooks/host/`
  * (`use-host-client-for`, `use-host-client-for-host-id`), which name the host
@@ -86,7 +86,7 @@ export const useHostRuntimeClient = runtime.useHostClient;
  * The host client for THIS SUBTREE: the binding's own host when it names one,
  * and otherwise the selection layer's `effectiveHostId`, resolved through the
  * same pinned-requester mechanism a surface pin resolves its own host through
- * (redesign P2.1).
+ * (redesign D17 / P2.1).
  *
  * "This subtree" and "the app" are the same host everywhere except beneath a
  * re-provided `HostRuntimeContext` — the seven host-scoped surfaces listed on
@@ -96,7 +96,7 @@ export const useHostRuntimeClient = runtime.useHostClient;
  *
  * Before this, a window-global consumer held the spine itself and every call
  * it made read whatever host happened to be bound at that instant. That is
- * the privileged bound identity that was removed: it made "which host am I talking
+ * the privileged bound identity D17 removes: it made "which host am I talking
  * to" a property of app-wide state rather than of the caller, so an
  * activation elsewhere in the app re-aimed calls already in flight and every
  * consumer had to be defended against a move it never asked about.
@@ -185,7 +185,7 @@ export const getHostBindingSnapshot = runtime.getBindingSnapshot;
  * call sites, and a later fix to this chain must not land in only some.
  *
  * Reads the AUTHORITY's projection, not the spine. Asking the spine was the
- * original shape and it is now a permanent `null`: P4.2 removed the active
+ * original shape and it is now a permanent `null`: P4.2/D17 removed the active
  * slot, so `getActiveHostId()` answers ∅ for every host by design (see
  * `HostClient`). Every one of these callers keys a per-host bucket - global run
  * settings, workspace folders - so a silent `null` did not fail loudly; it

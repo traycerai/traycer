@@ -165,7 +165,7 @@ export function HostReadinessControllerProvider(props: {
   // folded into the intent - a shell with no local host is never booting one.
   // SURFACE, not capability - and worth stating what this still drives, because
   // its name outlived its old job. The automatic launch-time `convergeReady`
-  // was retired (C5), so this no longer arms any process: what `enabled`
+  // was retired (D14/C5), so this no longer arms any process: what `enabled`
   // reaches now is the removal-sentinel read in `useHostProvisioning`
   // (`useRunnerHostRemovalStateQuery`), which asks this machine's own disk
   // whether the user removed Traycer's background components. Every other
@@ -834,7 +834,7 @@ type GateTerminalReadiness = Exclude<
  * `loading-host`, `provisioning-host` and `unavailable-host` are absent because
  * `GateDrawnReadiness` excludes them - the window narrator speaks for all three.
  * Their renderers went with them: `loadingFallback` (its last live kind was the
- * compat probe, deleted with the rest of the compat readiness
+ * compat probe, deleted by D13 with the rest of the compat readiness
  * vocabulary), and `unavailableFallback` + `SlowHostFallback`, which had been
  * unreachable since the narrator landed and which nothing detected because
  * reachability was a predicate rather than a type.

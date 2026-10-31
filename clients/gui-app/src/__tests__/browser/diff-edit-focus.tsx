@@ -131,7 +131,7 @@ const spine = new HostClient({
   findHostById: (hostId) =>
     hostId === mockLocalHostEntry.hostId ? mockLocalHostEntry : null,
 });
-// `bind()` died with the active slot: address via a requester.
+// `bind()` died with the active slot (D17): address via a requester.
 const hostClient = spine.createRequester(mockLocalHostEntry);
 hostClient.setRequestContext(
   createRendererContextFixture({ bearerToken: "token" }),

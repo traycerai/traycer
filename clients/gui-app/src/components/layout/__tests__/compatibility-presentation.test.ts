@@ -24,7 +24,7 @@ import type { HostCompatibility } from "@/lib/host/compatibility-state";
  * every arm of `HostCompatibility`. A test that reaches for the report line
  * would reproduce exactly the mistake being corrected.
  *
- * What the mapping is FOR: a pre-filled failure report (P3.2). The verdict
+ * What the mapping is FOR: a pre-filled failure report (D13, P3.2). The verdict
  * reaches the user through the lease's `incompatible` arm — this shape exists so
  * triage can tell an unreachable probe from a rejected handshake, and a held
  * verdict from a fresh one.

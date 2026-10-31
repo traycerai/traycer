@@ -314,7 +314,7 @@ function hostStatusDetail(compatibility: HostCompatibility): string {
  * the bridge writes.
  *
  * WHY THESE TESTS ASSERT HERE RATHER THAN ON THE STATUS TEXT. An incompatible
- * host is `dead("incompatible")` FOR SELECTION (C4), so the authority
+ * host is `dead("incompatible")` FOR SELECTION (D13/C4), so the authority
  * drops it from derivation the moment the probe reports and `effectiveHostId`
  * goes null. `useHostCompatibility()` is keyed on the bound host, so with
  * nothing bound it has no verdict left to render and the status text falls

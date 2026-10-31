@@ -151,7 +151,7 @@ export interface FleetUpdateRecordObservation {
   readonly errorMessage: string | null;
   readonly errorCode: string | null;
   /**
-   * What the READER's own holder probe established, never something
+   * What the READER's own holder probe established (D13), never something
    * derived from the record's contents.
    *
    * This is the one fact the record cannot supply about itself: a file saying
@@ -192,7 +192,7 @@ export interface FleetUpdateRecordObservation {
 }
 
 /**
- * How long a POSITIVE holder probe may still be presented as proof.
+ * How long a POSITIVE holder probe may still be presented as proof (D13).
  *
  * Five seconds: comfortably above the 750 ms cadence a live record is
  * published at, so an ordinary publication always renews the proof before it
@@ -209,7 +209,7 @@ export const LOCAL_LIVENESS_PROOF_MS = 5_000;
  * How far a probe stamp may sit in this reader's FUTURE before it stops
  * counting as proof.
  *
- * The rule is `0 ≤ nowMs - livenessObservedAtMs`, and a strict `0`
+ * The rule D13 states is `0 ≤ nowMs - livenessObservedAtMs`, and a strict `0`
  * would be wrong here for a reason that has nothing to do with clocks
  * disagreeing: `nowMs` comes from a one-second renderer tick, so it lags real
  * time by up to that interval, while the stamp is written at the instant of
@@ -690,7 +690,7 @@ export function projectFleetUpdateView(
 }
 
 /**
- * What the DURABLE RECORD projects on its own.
+ * What the DURABLE RECORD projects on its own (D13).
  *
  * Two arms, and the split is exactly the difference between evidence and
  * inference:
@@ -918,7 +918,7 @@ function attemptOperationView(input: {
   // D-49: A TERMINAL attempt that is NOT `failed` does not occupy the
   // operation slot for the purpose of the record-derived parks.
   //
-  // The case: another actor delivered the requested version and the
+  // The case is D-47's: another actor delivered the requested version and the
   // host is not running it, so the executor ends the attempt `superseded` - no
   // error, nothing owed on the attempt itself - while `install.json` names X
   // and the runtime names Y. That IS an activation debt, and it is visible in
@@ -1253,11 +1253,11 @@ function phaseKind(
       //     now describes - showing the old one would put a dead target on
       //     screen beside the live one.
       //  2. The executor refused the request as not newer than what is
-      //     already installed (`E_HOST_UPDATE_NOT_NEWER`). It withdraws
+      //     already installed (`E_HOST_UPDATE_NOT_NEWER`, D-46). It withdraws
       //     its own marker rather than failing, because "you asked for a
       //     version you already have" is not a failure to report.
       //  3. Another actor delivered the requested version but the host is not
-      //     RUNNING it. Nothing failed; the remedy is a restart, and a
+      //     RUNNING it (D-47). Nothing failed; the remedy is a restart, and a
       //     record must not carry an `error` for that.
       //
       // `idle` is right for all three as far as THIS projection goes - there
@@ -1468,7 +1468,7 @@ function kindWarrantsFastPoll(kind: FleetUpdateViewKind): boolean {
 }
 
 /**
- * Precedence between a live read and the durable record.
+ * Precedence between a live read and the durable record (ordering per D13).
  *
  * A FRESH wire observation always wins: a running host reporting on itself is
  * strictly better evidence than a file describing what it last wrote, and the

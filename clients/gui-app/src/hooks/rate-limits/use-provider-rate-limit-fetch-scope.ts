@@ -16,7 +16,7 @@ import type { ProviderRateLimitFetchScope } from "@/lib/rate-limits/provider-rat
  * a read that re-aimed mid-flight would fetch host B and still write the answer
  * under A's cache key, showing one machine's usage on another's row.
  * `useHostClient()` already guarantees that - it hands back a requester PINNED
- * to the host it resolved (redesign P2.1), and a call already aimed at
+ * to the host it resolved (redesign D17 / P2.1), and a call already aimed at
  * the outgoing host completes against it - so this scope deliberately does NOT
  * re-pin through `useHostClientForHostId`. Doing so would also resolve a
  * directory client and discard the pinned client a host-scoped panel

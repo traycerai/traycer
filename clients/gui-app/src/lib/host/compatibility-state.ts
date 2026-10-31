@@ -468,7 +468,7 @@ export function useHostCompatibilityProbeForClient(
 
 /**
  * Feeds the compat probe's verdict to the selection authority (redesign
- * P1.3), which is what makes C4 real: a host whose probe reports a
+ * P1.3), which is what makes D13/C4 real: a host whose probe reports a
  * blocking version mismatch is `dead("incompatible")` for SELECTION - never a
  * failover candidate, refused by Activate, and given the ∅ modal's
  * "update host" variant - even though its socket is alive and Settings can

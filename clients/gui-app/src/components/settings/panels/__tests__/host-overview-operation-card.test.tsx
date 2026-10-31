@@ -938,7 +938,7 @@ describe("HostOverviewOperationCard — record-derived parks", () => {
 
   it("a TERMINAL superseded attempt beside real debt still renders the debt sentence AND Restart (D-49)", async () => {
     // The mounted end of `fleet-update-view.test.ts`'s D-49 pins, and the
-    // state behind it: another actor delivered rc.3, this host is still
+    // state D-47 produces: another actor delivered rc.3, this host is still
     // running rc.2, and the executor ended ITS attempt `superseded` - no
     // error, nothing owed on the attempt. The records are the only thing that
     // knows a restart is owed.

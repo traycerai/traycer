@@ -425,7 +425,7 @@ function useHostProvisioning(args: {
     );
   }, [queryClient, run, runnerHost.hostManagement]);
 
-  // THE AUTOMATIC LAUNCH-TIME `convergeReady` IS RETIRED (C5).
+  // THE AUTOMATIC LAUNCH-TIME `convergeReady` IS RETIRED (D14/C5).
   //
   // It used to fire here, once per session, whenever a signed-in local-host
   // shell had no reachable host. That made the renderer a SECOND process actor

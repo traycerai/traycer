@@ -1370,7 +1370,7 @@ describe("projectFleetUpdateView — the durable-record arm (host-down window)",
           message: "the service did not start",
           phase: "restarting",
         },
-        // A terminal record is never probed, so Desktop publishes
+        // A terminal record is never probed (D13), so Desktop publishes
         // `unknown` with no observation timestamp.
         liveness: "unknown",
         livenessObservedAtMs: null,
@@ -2184,7 +2184,7 @@ describe("projectFleetUpdateView — record-derived parks (legacyFacts)", () => 
  * record-derived parks — and yields it for the CHOICE only, falling back to
  * its own arm when the records say nothing.
  *
- * The rule exists for one settlement: another actor delivered the version,
+ * The rule exists for D-47's settlement: another actor delivered the version,
  * the host is not running it, the executor writes `superseded` with no error.
  * The attempt has nothing to say; `install.json` and the runtime do.
  */

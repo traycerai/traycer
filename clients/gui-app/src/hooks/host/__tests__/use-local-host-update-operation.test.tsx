@@ -72,7 +72,7 @@ function localAttempt(
     continuation: null,
     updatedAt: "2026-08-27T00:00:00.000Z",
     error: null,
-    // Desktop's probed liveness; `unknown` unless a case is about it.
+    // Desktop's probed liveness (D13); `unknown` unless a case is about it.
     liveness: "unknown",
     livenessObservedAtMs: null,
     ...overrides,
@@ -368,7 +368,7 @@ describe("useLocalHostUpdateOperation — F1 host-down window (Ticket 07 §5.2.7
 });
 
 /**
- * The 1s renderer-tick clock, exercised on the REAL hook. The
+ * The 1s renderer-tick clock (D13), exercised on the REAL hook. The
  * suite above fakes only `Date` (`toFake: ["Date"]`) because it never needs to
  * drive a timer; this pin needs the 1s `useNowMs` interval to actually fire on
  * a deadline it controls, so it fakes every timer instead
@@ -481,7 +481,7 @@ describe("useLocalHostUpdateOperation — the 1s renderer tick ages the live-res
  * mounted mirror — the Overview's lives in
  * `host-overview-lifecycle-gate.test.tsx`, and the banner's are here.
  *
- * The RECORD slot's mirror is the tick suite above, and it is a mirror in
+ * The RECORD slot's mirror is the D13 tick suite above, and it is a mirror in
  * both directions: feeding `recordNowMs` from `statusQuery.dataUpdatedAt`
  * (verified) fails its very first assertion, because in that fixture
  * `host.status` never resolves and `dataUpdatedAt` is `0` — the proof's age

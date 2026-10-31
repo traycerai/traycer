@@ -1582,7 +1582,7 @@ export interface ChatSessionState {
   readonly pendingReturn: PendingReturn | undefined;
   /**
    * The chat's latest terminal failure, when the host would admit a manual
-   * rung on it (`chat.subscribe@1.10`) - the error card's Retry /
+   * rung on it (`chat.subscribe@1.10`, D152/D156) - the error card's Retry /
    * Switch… / Wait-until affordances and nothing else.
    *
    * Same derived-per-frame contract and the same assign-straight-across rule
@@ -1591,7 +1591,7 @@ export interface ChatSessionState {
    *
    * **Never accumulate it.** `undefined` is what HIDES the affordances, and a
    * store that kept its last value would offer Retry on a turn that has since
-   * succeeded - the defect closed on the host, arriving through the
+   * succeeded - the defect D122 closed on the host, arriving through the
    * renderer instead.
    *
    * **`eligibleRungs: []` is a different fact from an absent value.** Absent

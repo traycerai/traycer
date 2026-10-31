@@ -12,7 +12,7 @@ import { admitsLocalPlane, type AuthStatus } from "@/stores/auth/auth-store";
 export type HostReadinessScope = "none" | "default-host" | "tab-host";
 
 /**
- * COMPATIBILITY IS NOT A READINESS KIND (P3.2).
+ * COMPATIBILITY IS NOT A READINESS KIND (D13, P3.2).
  *
  * There used to be three more members here - `compatibility-checking`,
  * `compatibility-error`, `incompatible-host` - and a `readinessForCompatibility`
