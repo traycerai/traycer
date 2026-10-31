@@ -173,8 +173,8 @@ export const LAUNCHD_EXIT_TIMEOUT_SECONDS = SYSTEMD_TIMEOUT_STOP_SECONDS;
 const LAUNCHCTL_RECYCLE_MARGIN_MS = LAUNCHCTL_CALL_TIMEOUT_MS;
 
 /**
- * The runner timeout for `launchctl bootout --wait`, which returns when the job
- * has exited: at worst the whole `ExitTimeOut`, then `launchctl` itself.
+ * One budget for `launchctl bootout` and the `print` polls until the job has
+ * exited: at worst the whole `ExitTimeOut`, then `launchctl` itself.
  */
 export const LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS =
   LAUNCHD_EXIT_TIMEOUT_SECONDS * 1_000 + LAUNCHCTL_RECYCLE_MARGIN_MS;
@@ -218,7 +218,7 @@ export const LAUNCHCTL_RECYCLE_TIMEOUT_MS =
  *
  * The install edge sits in front of the install's first write, so a refused
  * publication touches nothing (`atServiceInstallEdge`). After it: the
- * launcher and plist writes (local files, no subprocess), the `bootout --wait`
+ * launcher and plist writes (local files, no subprocess), the bootout and drain
  * of a loaded registration, then `bootstrap` (`RunAtLoad` launches the
  * supervisor from it). The bootout waits for the old job to exit - a bootstrap
  * over a job still draining its shutdown fails - so it can run to the job's
@@ -228,10 +228,10 @@ export const LAUNCHCTL_RECYCLE_TIMEOUT_MS =
  * kickstart comes last. Every step runs to its own timeout in the worst case,
  * so a launch can come as late as the kickstart's return:
  *
- *     bootout --wait (loaded registration)  57s
+ *     bootout + drain (loaded registration) 57s
  *   + bootstrap                             10s  (spawn edge 1)
  *   + print (race re-probe)                 10s
- *   + bootout --wait                        57s
+ *   + bootout + drain                       57s
  *   + bootstrap                             10s  (spawn edge 2)
  *   + print (post-race)                     10s
  *   + kickstart                             30s  (spawn edge 3)
@@ -422,7 +422,7 @@ export const SUPERVISOR_SPAWN_ACK_MARGIN_MS = 10_000;
  * every path's launch of the supervisor that consumes the grant, and over the
  * one return that comes later than every launch.
  *
- *   macOS install (install edge, bootout --wait,       184s  the max
+ *   macOS install (install edge, bootout + drain,      184s  the max
  *     reload race)
  *   Windows install's return (the launch below,      135.25s
  *     then the failed verify's late poll and

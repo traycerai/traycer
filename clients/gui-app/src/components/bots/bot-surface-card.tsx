@@ -113,7 +113,7 @@ function SurfaceCard(props: {
       entry !== null &&
       entry.phase === "unconfirmed" &&
       cards.hostAction(entry.actionId)?.state !== "refused" &&
-      sameAction(entry.action, action)
+      JSON.stringify(entry.action) === JSON.stringify(action)
         ? entry.actionId
         : uuidv4();
     const settle = (next: BotSurfaceActionEntry): void => {
@@ -390,8 +390,4 @@ function SurfaceDecision(props: {
       </Button>
     </div>
   );
-}
-
-function sameAction(a: BotSurfaceAction, b: BotSurfaceAction): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
 }

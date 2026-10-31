@@ -714,7 +714,6 @@ describe("HomeBotsSection team setup", () => {
 
     expect(latestGroupProps("env-team").setup).toEqual({
       environmentId: "env-team",
-      teamName: "acme",
       botId: SETUP.botId,
       title: SETUP.title,
     });

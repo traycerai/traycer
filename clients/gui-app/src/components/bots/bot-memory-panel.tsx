@@ -18,7 +18,6 @@ import {
 } from "@/hooks/bots/use-bot-memory";
 import {
   confirmedSinceWritten,
-  fillOf,
   fullnessOf,
   initialMemoryMarks,
   memorySections,
@@ -514,7 +513,7 @@ function MemoryMeter(props: {
   const { botTitle, usage } = props;
   const fullness = fullnessOf(usage);
   const over = usage.chars > usage.ceiling;
-  const percent = Math.round(fillOf(usage) * 100);
+  const percent = Math.round(Math.min(1, usage.chars / usage.ceiling) * 100);
   const count =
     fullness === null ? "none yet." : `${usage.entries}, ${fullness}.`;
   return (

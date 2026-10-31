@@ -62,8 +62,8 @@ const SKILL_READS = [
  * does not (each one's version, whether an update is available, the
  * built-ins it can restore), from the viewing host (`client`), which
  * answers `not_served` unless it serves the configuration. It reads what the
- * last check of each skill's source found; `useEnvironmentSkillsCheck`
- * checks again.
+ * last check of each skill's source found; `checkUpdates` from
+ * `useEnvironmentSkillHostMutations` checks again.
  */
 export function useEnvironmentSkillsStateQuery(
   client: HostClient<HostRpcRegistry> | null,

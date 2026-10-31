@@ -65,11 +65,6 @@ export function confirmedSinceWritten(entry: BotMemoryEntry): boolean {
   );
 }
 
-/** How full the tag is, from 0 to 1. */
-export function fillOf(usage: BotMemoryTagUsage): number {
-  return Math.min(1, usage.chars / usage.ceiling);
-}
-
 /**
  * How full the tag is, in words, from the share of its ceiling it uses:
  * "nearly empty", "less than half full", "about half full", "more than half
