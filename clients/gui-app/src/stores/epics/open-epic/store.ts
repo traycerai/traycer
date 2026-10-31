@@ -28,6 +28,7 @@ import type { ConfirmedChatMutation } from "@traycer-clients/shared/replica-runt
  * `replicaGeneration()` exists to tell us.
  */
 import type { EpicAdapterArm } from "./runtime/epic-adapter-selection";
+import { markRenameInFlight } from "./rename-in-flight";
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { replaceEqualDeep } from "@tanstack/react-query";
 import { persist, createJSONStorage } from "zustand/middleware";
@@ -1202,10 +1203,44 @@ export function isProjectionPatch(
   return typeof value === "object" && value !== null;
 }
 
+/**
+ * The title the projection currently shows for a node on any of the three
+ * record planes, `null` when none holds it. Read by the rename-in-flight
+ * release to tell a rolled-back overlay from one still displayed.
+ */
+function projectedNodeTitle(
+  state: OpenEpicState,
+  nodeId: string,
+): string | null {
+  if (Object.hasOwn(state.artifacts.byId, nodeId)) {
+    return state.artifacts.byId[nodeId].title;
+  }
+  if (Object.hasOwn(state.chats.byId, nodeId)) {
+    return state.chats.byId[nodeId].title;
+  }
+  if (Object.hasOwn(state.tuiAgents.byId, nodeId)) {
+    return state.tuiAgents.byId[nodeId].title;
+  }
+  return null;
+}
+
 export function createOpenEpicStore(
   options: OpenEpicStoreOptions,
 ): OpenEpicStoreHandle {
   const { epicId, userId, hostId } = options;
+  /**
+   * Renames stamped on the overlay whose outcome has not been applied, by
+   * request id. Each holds the `rename-in-flight.ts` mark for its node until
+   * the retire below releases it.
+   */
+  const renamesInFlight = new Map<
+    string,
+    {
+      readonly nodeId: string;
+      readonly title: string;
+      readonly release: () => void;
+    }
+  >();
   const mintedIngestFenceIdentity = nextIngestFenceIdentity;
   nextIngestFenceIdentity += 1;
 
@@ -2285,13 +2320,33 @@ export function createOpenEpicStore(
               : false;
           },
           beginRenameMutation: async (nodeId, nextTitle) => {
-            const result = await applyMutation({
-              kind: "begin-rename",
-              request: { nodeId, title: nextTitle },
+            // Marked BEFORE the stamp is sent: the worker republishes the
+            // optimistic projection before it answers, so a mark taken after
+            // the answer would leave a window in which a persisting reader
+            // (`rename-in-flight.ts`) sees the overlay with no mark on it.
+            const release = markRenameInFlight(epicId, nodeId);
+            let result: EpicMutationResult;
+            try {
+              result = await applyMutation({
+                kind: "begin-rename",
+                request: { nodeId, title: nextTitle },
+              });
+            } catch (cause: unknown) {
+              release();
+              throw cause;
+            }
+            const requestId =
+              result.kind === "begin-rename" ? result.value.requestId : null;
+            if (requestId === null) {
+              release();
+              return null;
+            }
+            renamesInFlight.set(requestId, {
+              nodeId,
+              title: nextTitle,
+              release,
             });
-            return result.kind === "begin-rename"
-              ? result.value.requestId
-              : null;
+            return requestId;
           },
           beginEpicTitleMutation: async (nextTitle) => {
             const result = await applyMutation({
@@ -2316,6 +2371,32 @@ export function createOpenEpicStore(
               kind: "retire-pending",
               request: { requestId, outcome },
             });
+            const rename = renamesInFlight.get(requestId);
+            if (rename !== undefined) {
+              renamesInFlight.delete(requestId);
+              // "landed" is proof the host holds the title, so the mark can
+              // go now. "failed" drops the overlay on the worker, which
+              // republishes before it answers - but that projection reaches
+              // this store on its own path, not ordered against the answer,
+              // so the mark holds until the refused title has actually left
+              // the projection.
+              if (
+                outcome === "landed" ||
+                projectedNodeTitle(get(), rename.nodeId) !== rename.title
+              ) {
+                rename.release();
+              } else {
+                const unsubscribe = api.subscribe((state) => {
+                  if (
+                    projectedNodeTitle(state, rename.nodeId) === rename.title
+                  ) {
+                    return;
+                  }
+                  unsubscribe();
+                  rename.release();
+                });
+              }
+            }
             return result.kind === "retire-pending"
               ? result.value.retired
               : false;

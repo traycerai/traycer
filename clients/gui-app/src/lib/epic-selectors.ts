@@ -2054,7 +2054,9 @@ function useArmChatTitle(
  * files, git diff, pre-hydration, a terminal session the host no longer
  * knows). Every render site (visible tab strip, drag overlay, ...) MUST read
  * through this hook - never the raw `node.name` - so the resolve cannot be
- * forgotten in one place.
+ * forgotten in one place. The tab strip also writes a record-backed tile's
+ * resolved title back into that snapshot, so a reader with no live source
+ * sees the last known title rather than the opening-time one.
  *
  * A chat tab whose record the projection does not hold at all reads the cloud
  * chat list next, before the snapshot. The sidebar renders exactly such a chat
