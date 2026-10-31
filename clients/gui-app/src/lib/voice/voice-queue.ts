@@ -203,10 +203,12 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       // announcement fallback, which can classify an answer that landed
       // before its request was resolved: the row is hydrated as what it is,
       // and replaces the announcement once it is.
+      // A row already being read, or already settled (said by the focused
+      // feed, or found not to be a reply), stays as it is.
+      if (pending.has(ref.messageId) || settled.has(ref.messageId)) continue;
       const existing = entries.get(ref.messageId);
       const announced = existing?.item.kind === "announcement";
-      if (!announced && known(ref.messageId)) continue;
-      if (pending.has(ref.messageId)) continue;
+      if (!announced && existing !== undefined) continue;
       pending.set(ref.messageId, {
         hydration: { ref, hostId: hostOf(ref) },
         offer,

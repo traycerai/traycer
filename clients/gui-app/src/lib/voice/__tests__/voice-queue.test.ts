@@ -773,6 +773,22 @@ describe("a reply's notification for a row held as an announcement", () => {
     expect(appended).toHaveLength(1);
   });
 
+  it("settled without a row is not asked for again, and the announcement stays as it was", () => {
+    queue.begin([], hostOf);
+    announce();
+    queue.ingestReplies([channelRef], hostOf);
+    queue.hydrated("a-1", null, null);
+    const held = queue.items();
+
+    queue.ingestReplies([channelRef], hostOf);
+
+    expect(queue.pendingHydrations()).toEqual([]);
+    expect(queue.items()).toEqual(held);
+    expect(queue.items().map((item) => [item.kind, item.state])).toEqual([
+      ["announcement", "queued"],
+    ]);
+  });
+
   it("keeps a set-aside announcement set aside, and offers nothing", () => {
     queue.begin([], hostOf);
     announce();
