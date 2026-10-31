@@ -254,8 +254,8 @@ describe("useFleetUpdateViews — per-host isolation (Ticket 06 subject F)", () 
 });
 
 // G3: per-host cadence, coalescing with the canonical `host.status` cache, and
-// retention across a declined read. The independent cold review's finding 2
-// (HIGH) was that a single fleet-shaped query applied ONE cadence to the whole
+// retention across a declined read. The defect
+// was that a single fleet-shaped query applied ONE cadence to the whole
 // list — an active host on one machine fast-polled every idle host — and that
 // selected/local reads issued a parallel fleet read instead of reusing the
 // canonical cache entry.

@@ -719,7 +719,7 @@ describe("composer paste core - onPaste", () => {
     ]);
   });
 
-  // Finding 5: collect via DataTransfer.files even when .items is empty.
+  // Collect via DataTransfer.files even when .items is empty.
   it("picks up a pasted file from clipboardData.files when items is empty", async () => {
     const inserted: ImageAttachmentAttrs[][] = [];
     const insertPaths = vi.fn((_paths: ReadonlyArray<string>) => undefined);
@@ -824,7 +824,7 @@ describe("composer paste core - onPaste", () => {
 });
 
 describe("composer paste core - isResolvingFilePaths / attachment pending", () => {
-  // Finding 3: pure-path resolution must gate submit via isResolvingFilePaths.
+  // Pure-path resolution must gate submit via isResolvingFilePaths.
   it("reports isResolvingFilePaths while a non-image file path is still resolving", async () => {
     let resolvePaths: ((paths: readonly string[]) => void) | null = null;
     const inserted: ImageAttachmentAttrs[][] = [];
@@ -887,7 +887,7 @@ describe("composer paste core - isResolvingFilePaths / attachment pending", () =
     expect(insertPaths).toHaveBeenCalledWith(["notes.txt"]);
   });
 
-  // Round-2 finding 5: a stalled `fileDrops` call must not permanently gate
+  // A stalled `fileDrops` call must not permanently gate
   // submit or leak the resolution - `withResolutionTimeout` races it and
   // falls back to `[]` (treated the same as any other unresolved failure).
   it("clears isResolvingFilePaths and reports the standard failure once a stalled resolveDroppedFilePaths call times out", async () => {
@@ -1369,7 +1369,7 @@ function makeFilesOnlyNoItemsTransfer(
   };
 }
 
-/** File object + uri-list + public.file-url for the same source (finding 8). */
+/** File object + uri-list + public.file-url for the same source. */
 function makeFileAndUriListTransfer(file: File, uri: string): FileTransferLike {
   return {
     files: [file],

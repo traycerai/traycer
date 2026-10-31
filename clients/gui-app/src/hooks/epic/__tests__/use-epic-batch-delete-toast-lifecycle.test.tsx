@@ -942,7 +942,7 @@ describe("the delete's progress toast", () => {
       expect(mocks.toastFromHostError).not.toHaveBeenCalled();
     });
 
-    // traycerai/traycer#2546 (Codex P2): reachability alone is not the
+    // traycerai/traycer#2546: reachability alone is not the
     // remedy when part of the selection was refused for the sign-in.
     it("names the sign-in refusal beside the unreachable host when the admitted local Task never reached it", async () => {
       useAuthStore.setState({ status: "unverified" });
@@ -988,7 +988,7 @@ describe("the delete's progress toast", () => {
       expect(mocks.toastFromHostError).not.toHaveBeenCalled();
     });
 
-    // traycerai/traycer thread taE6z, round 7: a generic error after the send
+    // traycerai/traycer thread taE6z: a generic error after the send
     // proves nothing about the admitted Task - the host can commit the purge
     // and then throw. Only the refused Task is said not deleted; the request's
     // failure gets the notice it gets with nothing refused.

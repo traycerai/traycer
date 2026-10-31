@@ -1150,7 +1150,7 @@ describe("useRetryUnansweredTaskPinReading", () => {
   });
 
   /**
-   * The chunk-exact match (PR 2150 cold review, production change 1). Before
+   * The chunk-exact match (production change 1). Before
    * this, the cloud arm's predicate matched ANY active `epic.getTaskContexts`
    * query whose `taskIds` merely CONTAINED the epic - so a retry for the tab
    * strip's own row also re-spent another surface's title-lookup batch that
