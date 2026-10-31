@@ -160,7 +160,7 @@ export interface DefaultHostReadinessPresentation {
      * `compatible` held from an earlier probe whose latest refetch failed.
      * A report says so - "compatible (degraded)" - because triage needs to
      * know the verdict was held rather than freshly answered. It is no longer
-     * a user-facing state of its own: a host that answered once and is
+     * a user-facing state of its own (D11): a host that answered once and is
      * being re-probed is still working, and the strip that narrated it is
      * gone.
      */
@@ -661,7 +661,7 @@ export function windowNarratorOwns(
  * This was a four-valued `PostLatchSurface` while the status strip existed:
  * two of its rows (`switching`, `error`) named which STRIP variant to draw
  * beside the children, and the strip was their only reader. With the strip
- * deleted, one reader is left asking one question, so it is asked
+ * deleted (D11) one reader is left asking one question, so it is asked
  * directly. `restoring-request-context` answering `false` here is the same
  * deliberate classification it had before: it fires whenever
  * `requestContextUserId` goes transiently null while signed in, and the gate's

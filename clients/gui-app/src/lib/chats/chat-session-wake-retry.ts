@@ -19,7 +19,7 @@ import { appLogger, describeLogError } from "@/lib/logger";
  * instead of one per owner. Re-exported here because this module's own
  * consumers and tests already name it.
  *
- * A RULING worth stating plainly at the code: R9 and R10 fold into the
+ * RULING D1, worth stating plainly at the code: R9 and R10 fold into the
  * PER-LEASE engine because their subject is a host. This one does not - a
  * `ChatSessionStoreHandle` carries no `hostId`, and the wake subscriber walks
  * the module-global chat-session registry deduping per HANDLE, process-wide.
@@ -102,7 +102,7 @@ export function subscribeChatSessionWakeRetry(
 ): () => void {
   const registry = getChatSessionRegistry();
   // The attempt dedupe is the ENGINE's episode primitive, not a private map
-  // One window, one claim/query API, declared once. The `wakeEpisodes`
+  // (D1): one window, one claim/query API, declared once. The `wakeEpisodes`
   // map below stays local because it carries a wake REASON alongside its
   // timestamp - state about THIS subject that the engine has no business
   // modelling - and folding it would have meant widening a shared primitive

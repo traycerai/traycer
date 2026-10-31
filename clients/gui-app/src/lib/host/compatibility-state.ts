@@ -76,7 +76,7 @@ const compatAnchorAtFailure = new Map<string, string | null>();
  * verdict, one render before the query re-keys".
  *
  * Its last such reader was the status strip's switch trigger, deleted with the
- * strip. It has one again - {@link useHostStatusReprobeOnRepoint}, which
+ * strip (D11). It has one again - {@link useHostStatusReprobeOnRepoint}, which
  * names the INCOMING host by definition and so cannot ask through
  * `useHostCompatibility()` - and the rule it reads through this export for is
  * unchanged: a per-host reader must not re-derive this key.
