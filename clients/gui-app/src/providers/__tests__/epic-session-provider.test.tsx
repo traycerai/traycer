@@ -4435,7 +4435,7 @@ describe("<TestEpicSessionTab />", () => {
   });
 
   it("hands a FRESH surface a new handle during the corpse window, before any Retry", async () => {
-    // The path finding 8's first fix could not reach. `retireDeadMounted` was
+    // The path the first fix could not reach. `retireDeadMounted` was
     // called from the acquire effect, gated on the surface ALREADY holding the
     // dead handle - so a second tab opening this epic between the fatal and any
     // Retry has no `current`, skips that gate entirely, and adopts the corpse

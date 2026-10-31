@@ -342,7 +342,7 @@ describe("projectFleetUpdateView — staleness", () => {
   });
 });
 
-// G4 (independent cold review, finding 4): staleness used to overwrite the
+// G4: staleness used to overwrite the
 // observed phase with `unknown` and drop it. `lastKnownKind` is what a surface
 // reads to say "last seen preparing v1.2.3" instead of a bare "offline" — and
 // the invariant that makes it SAFE to add beside `kind` is that it can never
@@ -636,7 +636,7 @@ describe("projectFleetUpdateView — a refused completion write is not a failure
     // announcing "Updated … Finalizing the update record." over an operation
     // that is still running and can still fail.
     //
-    // Found by reviewer C hoisting the route above that guard: all 173 stayed
+    // Hoisting the route above that guard: all 173 stayed
     // green, because every `finalizing-record` fixture here is interrupted and
     // every live `verifying` row uses a non-matching version, so "live +
     // verifying + already at target" existed in neither suite.
@@ -775,7 +775,7 @@ describe("projectFleetUpdateView — a refused completion write is not a failure
     expect(isQuietUpdateView(view)).toBe(false);
   });
 
-  // PR2069 (CodeRabbit): the `stale` branch used to read only the raw phase,
+  // The `stale` branch used to read only the raw phase,
   // so a wire that had concluded finalizing-record lost that conclusion the
   // instant it expired and fell back to the bare `verifying` phase.
   it("a stale wire read that concluded finalizing-record keeps that as its retained kind, not bare verifying", () => {
@@ -897,7 +897,7 @@ describe("projectFleetUpdateView — a host that refused the authenticated check
 
   it("survives a WIDENED finalizing-record phase set, at either running version", () => {
     // What this row actually holds, measured rather than assumed — the title
-    // used to claim it pinned the ORDER, and reviewer C showed it does not:
+    // used to claim it pinned the ORDER, and it does not:
     //
     //   - reorder alone (demote this route below Q11's, phase set untouched):
     //     fully green. Q11's predicate refuses a `failed` phase, so today the
@@ -954,7 +954,7 @@ describe("projectFleetUpdateView — a host that refused the authenticated check
   it("a STALE read carrying the code is not this state — freshness is a precondition", () => {
     // Symmetric with the terminal-phase row above, and the same class of gap
     // Y1 was: the route sits BELOW the stale arm, and nothing held it there.
-    // Reviewer C hoisted it above and all 140/41/41 stayed green.
+    // Hoisted above and all 140/41/41 stayed green.
     //
     // Why the position is load-bearing rather than incidental: the sentence
     // this kind renders says the host **is running** — present tense — and a
@@ -1074,7 +1074,7 @@ describe("projectFleetUpdateView — progress", () => {
     });
   });
 
-  // G5 (independent cold review, finding 5): the wire makes `percent`,
+  // G5: the wire makes `percent`,
   // `bytes` and `totalBytes` independently nullable, so an active operation
   // with no percentage can still have MEASURED bytes — a host streaming an
   // unsized body. The first shape of `projectProgress` discarded them the
@@ -1339,7 +1339,7 @@ function recordObservation(
 
 describe("projectFleetUpdateView — the durable-record arm (host-down window)", () => {
   it("a FAILED record projects unknown + lastKnownKind:'failed', never a live failure", () => {
-    // Codex round 3, end to end. The read boundary now lets `failed` through
+    // End to end: the read boundary now lets `failed` through
     // (it used to be dropped with every terminal phase), and this asserts what
     // it becomes: the retained-phase channel, not a live `kind`.
     //
@@ -2290,7 +2290,7 @@ describe("projectFleetUpdateView — terminal attempts yield to the record parks
     // not make a stage stop waiting any more than it makes an install stop
     // needing a restart. Falsification: narrow the fall-back to
     // `facts.activationDebt !== null` and this reddens while pin (1) stays
-    // green — which is exactly the asymmetry cold review C flagged as
+    // green — which is exactly the asymmetry flagged as
     // unpinned.
     const view = projectFleetUpdateView({
       observation: observation({

@@ -103,7 +103,7 @@ const ANCHOR: TileScrollAnchor = {
 };
 
 /**
- * Ticket 15 review round 3: the canvas close sweep now resolves a removed
+ * Ticket 15: the canvas close sweep now resolves a removed
  * tile's durable identity from the REAL canvas tree (`node.type === "chat"`,
  * `node.id` as chatId, `tabsById[tabId].epicId`) - so these tests use
  * `CHAT_A` (a real chat-kind fixture), not `SPEC_A`, and `epicId` must be
@@ -139,7 +139,7 @@ function seedTicket5PerTabState(epicId: string): void {
     .setOpen("activity-g1", true);
   getOrCreateA2AOpenStore(identity).getState().setSentOpen("a2a-sent", true);
   useToolOpenStore.getState().setOpen(CHAT_A.instanceId, "tool-1", true);
-  // Ticket 15 review round 3: the sweep's promotion is a no-op for a tab
+  // Ticket 15: the sweep's promotion is a no-op for a tab
   // scope that was never marked initialized (see
   // `chat-scoped-open-store-dual-key.ts`'s doc comment) - mark it here to
   // simulate a component that actually mounted and seeded this tab this
@@ -193,7 +193,7 @@ function expectTicket5TabKeysEvicted(epicId: string): void {
   // Tab-key half is gone (canvas close sweep). Durable chat-key half of the
   // dual-key registries still has the scroll/A2A/activity-group/
   // tool/subagent entries (ticket 15) - the SWEEP ITSELF promoted them
-  // (round 3), not a separate component/hook commit - so a reopen via
+  //, not a separate component/hook commit - so a reopen via
   // getOrCreate re-seeds from durable.
   expect(
     useToolOpenStore
@@ -222,7 +222,7 @@ function expectTicket5TabKeysEvicted(epicId: string): void {
   expect(
     getOrCreateA2AOpenStore(identity).getState().sentOpenIds.has("a2a-sent"),
   ).toBe(true);
-  // Ticket 15 review round 3: the sweep's promotion for tool/subagent must
+  // Ticket 15: the sweep's promotion for tool/subagent must
   // also have re-seeded a fresh mount - simulate one via getOrCreate-style
   // durable read is not directly exposed for these two (global stores), so
   // this is asserted through the dual-key test suite instead; here we only
@@ -230,7 +230,7 @@ function expectTicket5TabKeysEvicted(epicId: string): void {
   // above answer correctly, matching the ticket-5 sweep contract.
 }
 
-// Ticket 15 review round 3: uses the individual (non-tombstoning) per-epic
+// Ticket 15: uses the individual (non-tombstoning) per-epic
 // evict functions directly, NOT the orchestrated
 // `evictChatTabPersistenceForEpic` - that one is a TERMINAL deletion (it
 // tombstones the epic prefix, per the round-3 fence), which would

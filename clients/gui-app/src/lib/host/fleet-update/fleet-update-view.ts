@@ -933,7 +933,7 @@ function attemptOperationView(input: {
   // `projectUpdateOperation` withholds them is a projection detail that can
   // change under us. The debt sentence is derived from the RECORDS, so it has
   // to be reachable whenever the records say debt - deciding it from the wire
-  // leg's phase instead is the class of error findings 1/4/6 were.
+  // leg's phase instead is the same class of error.
   //
   // FALL-BACK, NOT REPLACEMENT: the substitution applies to THIS CHOICE only.
   // With no park the attempt arm below still runs and still answers, so

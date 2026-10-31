@@ -87,7 +87,7 @@ export function gitImageDiffSides(file: GitChangedFile): GitImageDiffSides {
 }
 
 /**
- * `<ImageDiffView>`'s `key` for a git-backed file (PR review P1): its own
+ * `<ImageDiffView>`'s `key` for a git-backed file: its own
  * `useFileAsset` request key covers `(path, stage)`, never `headSha`/
  * `stagedOid` - so a staged or HEAD-relative side that stays mounted through
  * a commit/amend/re-stage keeps showing the OLD bytes, since `(path, stage)`
@@ -100,7 +100,7 @@ export function gitImageDiffSides(file: GitChangedFile): GitImageDiffSides {
  * Mirrors `git-query-keys.ts`'s `fileDiff` key - the sibling TEXT-diff cache
  * key for the SAME file already includes all three.
  *
- * A null OID is not always "this side doesn't exist" (Codex re-review):
+ * A null OID is not always "this side doesn't exist":
  * ADR-0007's degraded-repo-mode fallback (`assessRepoMode`,
  * `computeStatusPipeline` in `git-service.ts`) skips OID computation
  * entirely under load, nulling `stagedOid`/`worktreeOid` for every changed

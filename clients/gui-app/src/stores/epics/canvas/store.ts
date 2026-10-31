@@ -2499,7 +2499,7 @@ export const useEpicCanvasStore = create<EpicCanvasStore>()(
 
         splitPaneWithNode: (tabId, targetPaneId, position, node) => {
           const before = canvasForExistingTab(get(), tabId);
-          // Ticket 20 (review round 1, finding 1): when the target pane's
+          // Ticket 20: when the target pane's
           // parent group runs perpendicular to `position` (or the target is
           // the bare root pane), inserting beside it WRAPS the target instead
           // of a flat insertion (`insertPaneAtEdge`) - the target's own
@@ -3643,7 +3643,7 @@ useEpicCanvasStore.subscribe((state) => {
 });
 
 /**
- * Ticket 15 review round 3: resolves the `(epicId, chatId)` identity a
+ * Ticket 15: resolves the `(epicId, chatId)` identity a
  * removed tile HAD, using the canvas/tab snapshots as they stood just
  * BEFORE this update - `tilesByInstanceId` lives on `canvasByTabId`, but
  * `epicId` lives on the PARALLEL `tabsById` map (`tabsById[tabId].epicId`),
@@ -3686,7 +3686,7 @@ let previousCanvasByTabId: Readonly<
 let previousTabsById: Readonly<Record<string, EpicViewTab | undefined>> | null =
   null;
 useEpicCanvasStore.subscribe((state) => {
-  // Ticket 15 review round 3: `tabsById` (epicId) and `canvasByTabId` (the
+  // Ticket 15: `tabsById` (epicId) and `canvasByTabId` (the
   // tile tree) can update in SEPARATE `set()` calls (e.g. `openEpicTab`
   // creates the tab record before any tile is opened into it) - tracking
   // this UNCONDITIONALLY, not gated behind the `canvasByTabId` equality
@@ -3705,7 +3705,7 @@ useEpicCanvasStore.subscribe((state) => {
   );
   previousTileInstanceIds = current;
   if (removed.length > 0) {
-    // Ticket 15 review round 3 (the ONE close-commit choke point): promote
+    // Ticket 15 (the ONE close-commit choke point): promote
     // each removed chat tile's live tab-side state to durable BEFORE any
     // of the eviction calls below run - this is the only place that can
     // commit for an INACTIVE (never-mounted) view's close, since it reads
@@ -3730,7 +3730,7 @@ useEpicCanvasStore.subscribe((state) => {
     evictPendingHydrationRestores(removed);
     evictActivityGroupOpenStores(removed);
     evictA2AOpenStores(removed);
-    // F4 (ticket 5 review): tile-find serves every tile kind, not just chat -
+    // F4 (ticket 5): tile-find serves every tile kind, not just chat -
     // a tile whose adapter unregistered while still live (switched-away, not
     // closed) is skipped by scheduleUiReclaim's own liveness check and never
     // revisited if it is later closed without remounting. This sweep is that
@@ -3739,7 +3739,7 @@ useEpicCanvasStore.subscribe((state) => {
     removed.forEach((instanceId) => {
       useToolOpenStore.getState().reset(instanceId);
       useSubagentOpenStore.getState().reset(instanceId);
-      // Ticket 15 review round 3: bounds the initialized-scope markers -
+      // Ticket 15: bounds the initialized-scope markers -
       // this tileInstanceId can never be seen again (a reopen always mints
       // a fresh one), so nothing else will ever need this entry.
       toolOpenInitializedScopes.delete(instanceId);
