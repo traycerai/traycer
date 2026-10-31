@@ -20,7 +20,7 @@ import {
 import { NOTHING_WAITING_NOTICE } from "../deferred-verbs";
 import { resolveRoute, type RouterResult } from "../router";
 import type { SpeechItem } from "../scheduler";
-import { createVoiceQueue } from "../voice-queue";
+import { createVoiceQueue, type VoiceQueue } from "../voice-queue";
 import {
   CONFIRM_ANSWER_WINDOW_MS,
   createSayLoop,
@@ -154,6 +154,7 @@ function buildFor(wiring: Wiring, directory: VoiceDirectory) {
   const sends: VoiceFocus[] = [];
   const notices: string[] = [];
   const noticeDelegations: Array<string | null> = [];
+  const navigations: BoundTarget[] = [];
   const asks: AskOutcome[] = [];
   const answers: Array<() => Promise<RouterResult>> = [];
   /** Timers the loop set, by the order it set them; run one with `.run()`. */
@@ -179,7 +180,10 @@ function buildFor(wiring: Wiring, directory: VoiceDirectory) {
       return resolveRoute(await next(), directory, request.segments.length);
     },
     recheck: (tuple) => wiring.recheckHolds && tupleHolds(directory, tuple),
-    navigate: (_target: BoundTarget) => Promise.resolve(true),
+    navigate: (target: BoundTarget) => {
+      navigations.push(target);
+      return Promise.resolve(true);
+    },
     think: () => undefined,
     control: () => undefined,
     canSend: () => wiring.canSend,
@@ -199,7 +203,16 @@ function buildFor(wiring: Wiring, directory: VoiceDirectory) {
     botTitle: (botId) => botId,
     onAccepted: () => undefined,
   });
-  return { loop, sends, notices, noticeDelegations, asks, answers, timers };
+  return {
+    loop,
+    sends,
+    notices,
+    noticeDelegations,
+    navigations,
+    asks,
+    answers,
+    timers,
+  };
 }
 
 /** A route the test answers when it chooses. */
@@ -610,16 +623,20 @@ describe("a routed verb on the queue", () => {
       costUsd: null,
     };
 
-    function directoryOfThreadB() {
-      const live = withWaitingItem("briefed", "thread-b");
+    /** The directory with the person in thread A of the CI bot, listing `queue`'s items. */
+    function focusedOnThreadA(queue: VoiceQueue) {
       useVoiceSessionStore.getState().setFocus(FOCUS_THREAD_A);
-      const directory = composeVoiceDirectory({
+      return composeVoiceDirectory({
         ...SOURCES,
         focus: FOCUS_THREAD_A,
         threadsByBot: new Map([[CI, [THREAD_A]]]),
-        queue: live.queue.items(),
+        queue: queue.items(),
       });
-      return { ...live, directory };
+    }
+
+    function directoryOfThreadB() {
+      const live = withWaitingItem("briefed", "thread-b");
+      return { ...live, directory: focusedOnThreadA(live.queue) };
     }
 
     function readNaming(threadId: string | null): RouterResult {
@@ -646,6 +663,42 @@ describe("a routed verb on the queue", () => {
         ["bot_ci said: The Safari fix landed in build forty.", "d-1"],
       ]);
       expect(h.notices).toEqual([]);
+    });
+
+    it("goes to the bot's channel for a channel item, not to the thread the focus is in, and does not say its offer", async () => {
+      const live = withWaitingItem("arrived", null);
+      const offers = live.enqueued.filter((item) =>
+        item.text.endsWith("Want it?"),
+      );
+      expect(offers).toHaveLength(1);
+      const h = buildFor(
+        { recheckHolds: true, canSend: true },
+        focusedOnThreadA(live.queue),
+      );
+      h.answers.push(() =>
+        Promise.resolve({
+          ...route("switch", null, null, 2),
+          target: {
+            environmentId: null,
+            botId: null,
+            threadId: null,
+            itemId: "r-1",
+          },
+        }),
+      );
+
+      speak("go", " there");
+      await h.loop.onDelegationCreated("d-1");
+
+      expect(
+        h.navigations.map((target) => [
+          target.tuple.botId,
+          target.focus.threadId,
+          target.focus.anchorMessageId,
+          target.isFocus,
+        ]),
+      ).toEqual([[CI, null, null, false]]);
+      expect(live.withdrawn).toEqual(offers.map((offer) => offer.id));
     });
 
     it("says that nothing is waiting when the route names the thread, which has none", async () => {

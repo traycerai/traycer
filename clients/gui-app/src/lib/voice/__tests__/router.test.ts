@@ -199,6 +199,7 @@ function threadSummary(fixture: ThreadFixture): BotThreadSummary {
 function directoryWith(
   fixtures: ReadonlyArray<ThreadFixture>,
   queue: ReadonlyArray<QueueItem>,
+  focus: VoiceFocus,
 ): VoiceDirectory {
   const threadsByBot = new Map<string, BotThreadSummary[]>();
   for (const fixture of fixtures) {
@@ -212,7 +213,7 @@ function directoryWith(
     threadsByBot,
     followedThreads: new Set(),
     viewerUserId: VIEWER,
-    focus: FOCUS_CHANNEL,
+    focus,
     queue,
     hostOf: (botId) => HOSTS.get(botId) ?? null,
     heldPostText: (botId, messageId) =>
@@ -222,7 +223,7 @@ function directoryWith(
   });
 }
 
-const DIRECTORY = directoryWith(THREAD_FIXTURES, []);
+const DIRECTORY = directoryWith(THREAD_FIXTURES, [], FOCUS_CHANNEL);
 
 type NamedIds = RouterResult["target"];
 
@@ -612,10 +613,14 @@ describe("a routed read of a queue item", () => {
       state: "queued",
     };
   }
-  const QUEUE_DIRECTORY = directoryWith(THREAD_FIXTURES, [
-    waiting("i-ci", CI, null),
-    waiting("i-tracy-thread", TRACY, "thr-safari-scroll"),
-  ]);
+  const QUEUE_DIRECTORY = directoryWith(
+    THREAD_FIXTURES,
+    [
+      waiting("i-ci", CI, null),
+      waiting("i-tracy-thread", TRACY, "thr-safari-scroll"),
+    ],
+    FOCUS_CHANNEL,
+  );
   const HEARD = "Read the CI bot's reply";
   const withItem = (named: NamedIds, itemId: string): RouterResult => ({
     ...routerResult("read", named, 0, words(HEARD).length - 1),
@@ -662,6 +667,37 @@ describe("a routed read of a queue item", () => {
       itemId: "i-tracy-thread",
       threadNamed: true,
     });
+  });
+
+  it("binds a switch to a channel item to the bot's channel, though the focus is in one of its threads", () => {
+    const inThread: VoiceFocus = {
+      botId: TRACY,
+      hostId: HOST_MAIN,
+      threadId: "thr-safari-scroll",
+      anchorMessageId: "msg-safari-scroll",
+      anchorThread: null,
+    };
+    const directory = directoryWith(
+      THREAD_FIXTURES,
+      [waiting("i-tracy-channel", TRACY, null)],
+      inThread,
+    );
+
+    const decision = resolveRoute(
+      {
+        ...routerResult("switch", ids(null, null, null), 0, 2),
+        target: { ...ids(null, null, null), itemId: "i-tracy-channel" },
+      },
+      directory,
+      3,
+    );
+
+    expect(decision.kind).toBe("switch");
+    expect(
+      decision.kind === "switch"
+        ? [decision.target.focus.threadId, decision.target.isFocus]
+        : null,
+    ).toEqual([null, false]);
   });
 
   it("does not take the thread a bot-only route is bound to for one the person named", () => {
@@ -1045,6 +1081,7 @@ describe("the request body", () => {
           : fixture,
       ),
       [],
+      FOCUS_CHANNEL,
     );
     const raw = routerRequestBody(
       hostile,
