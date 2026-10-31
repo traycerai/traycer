@@ -104,6 +104,18 @@ describe("composeBriefing", () => {
     expect(text.match(/Release bot answered in a thread/g)).toHaveLength(1);
   });
 
+  it("leaves out a reply the person set aside although its notification is still unread", () => {
+    const text = composeBriefing({
+      answers: [answerRef({ messageId: "i-1", botId: "bot-2", threadId: "thread-x" })],
+      prompts: NO_PROMPTS,
+      items: [queueItem({ state: "dismissed" })],
+      botTitle,
+      maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
+    });
+
+    expect(text).toBe(NOTHING_WAITING_TEXT);
+  });
+
   it("says that nothing waits when only heard and dismissed items remain", () => {
     const text = composeBriefing({
       answers: [],

@@ -454,6 +454,25 @@ describe("a bot's stopped answer", () => {
   });
 });
 
+describe("later, asked after a read that is still waiting to be said", () => {
+  it("takes the read back: it is never said, marks nothing, and the item stays set aside", () => {
+    queue.begin([replyRef({})], hostOf);
+    queue.hydrated("r-1", botRow("r-1", REPLY_TEXT));
+    scheduler.noteOutputLevel(true);
+
+    queue.run({ kind: "read", itemId: "r-1", delegationId: "d1" });
+    expect(appended).toEqual([]);
+    queue.run({ kind: "later", itemId: "r-1" });
+    scheduler.noteOutputLevel(false);
+    clock.advance(CONFIRM_WINDOW_MS * 10);
+    scheduler.noteOutputTranscript(" The Safari fix landed");
+
+    expect(appended).toEqual([]);
+    expect(markRead).not.toHaveBeenCalled();
+    expect(stateOf("r-1")).toBe("dismissed");
+  });
+});
+
 describe("switch", () => {
   it("opens the thread the item lives in, says nothing about it, and leaves the item waiting", () => {
     scheduler.noteInputTranscript();
