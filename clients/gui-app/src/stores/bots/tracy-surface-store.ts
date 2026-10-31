@@ -4,7 +4,10 @@ import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useBotSurfaceActionsStore } from "@/stores/bots/bot-surface-actions-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
-import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
+import {
+  useBotTabLandingStore,
+  type BotTabLanding,
+} from "@/stores/bots/bot-tab-landing-store";
 
 /**
  * The source store behind the one Tracy surface of a window (decision 150):
@@ -81,11 +84,15 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
         set({ hostId });
       },
       markVisited: (botId) => {
+        // The channel shows: its landing is its own to spend from here, and
+        // forgotten with it.
+        stagedLandings.delete(botId);
         const visited = get().visitedBotIds;
         if (visited.includes(botId)) return;
         set({ visitedBotIds: [...visited, botId] });
       },
       forgetBot: (botId) => {
+        stagedLandings.delete(botId);
         forgetBotState(botId);
         const visited = get().visitedBotIds;
         if (!visited.includes(botId)) return;
@@ -93,6 +100,9 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
       },
       closeSurface: () => {
         const state = get();
+        for (const [botId, landing] of [...stagedLandings]) {
+          releaseTracyLanding(botId, landing);
+        }
         for (const botId of state.visitedBotIds) forgetBotState(botId);
         if (!state.open && state.visitedBotIds.length === 0) return;
         set({ open: false, hostId: null, visitedBotIds: [] });
@@ -114,6 +124,42 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
     },
   ),
 );
+
+/**
+ * Landings the surface asked for, by bot id, for channels that have not shown
+ * since: a channel that shows owns its landing from then on (`markVisited`),
+ * one whose navigation never landed is released (`releaseTracyLanding`), and
+ * closing the surface releases every one left. Session-only.
+ */
+const stagedLandings = new Map<string, BotTabLanding>();
+
+/**
+ * Asks `botId`'s channel to land at `landing` when it shows, before the
+ * navigation to it is issued. A visited channel's landing is already the
+ * surface's to forget, so only an unvisited one is staged.
+ */
+export function stageTracyLanding(botId: string, landing: BotTabLanding): void {
+  if (!useTracySurfaceStore.getState().visitedBotIds.includes(botId)) {
+    stagedLandings.set(botId, landing);
+  }
+  useBotTabLandingStore.getState().request(botId, landing);
+}
+
+/**
+ * Withdraws a staged `landing` whose channel never showed: its navigation was
+ * refused or superseded, or the surface closed. A newer request for the same
+ * channel, staged or not, is left alone.
+ */
+export function releaseTracyLanding(
+  botId: string,
+  landing: BotTabLanding,
+): void {
+  if (stagedLandings.get(botId) !== landing) return;
+  stagedLandings.delete(botId);
+  if (useBotTabLandingStore.getState().byBotId[botId] === landing) {
+    useBotTabLandingStore.getState().clear(botId);
+  }
+}
 
 /**
  * A bot's rail, unsent drafts, surface actions and unspent landing: the state

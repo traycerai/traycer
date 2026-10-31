@@ -1,16 +1,19 @@
 import type { UseNavigateResult } from "@tanstack/react-router";
 import { activeHostIdOrNull } from "@/lib/host/runtime";
-import { activateTabIntent } from "@/lib/tab-navigation";
+import {
+  activateTabIntent,
+  subscribeTabNavigationPending,
+  tracyChannelNavigationPending,
+} from "@/lib/tab-navigation";
 import {
   botTabIntent,
   type TabNavigationIntent,
 } from "@/lib/tab-navigation/intents";
-import {
-  useBotTabLandingStore,
-  type BotTabLanding,
-} from "@/stores/bots/bot-tab-landing-store";
+import type { BotTabLanding } from "@/stores/bots/bot-tab-landing-store";
 import {
   rebindUnreachableTracySurface,
+  releaseTracyLanding,
+  stageTracyLanding,
   useTracySurfaceStore,
 } from "@/stores/bots/tracy-surface-store";
 
@@ -86,14 +89,46 @@ function openTracySurface(
     if (windowHostId === null) return false;
     surface.openSurface(windowHostId);
   }
-  if (intent.botId !== null && options.landing !== null) {
-    useBotTabLandingStore.getState().request(intent.botId, options.landing);
-  }
+  const { botId } = intent;
+  const landing = botId === null ? null : options.landing;
+  if (botId !== null && landing !== null) stageTracyLanding(botId, landing);
   const accepted = activateTabIntent(navigate, intent, {
     onRejected: options.onRejected ?? undefined,
   });
+  if (botId !== null && landing !== null) {
+    if (accepted) releaseLandingIfNeverLanded(botId, landing);
+    else releaseTracyLanding(botId, landing);
+  }
   if (!accepted && !wasOpen) useTracySurfaceStore.getState().closeSurface();
   return accepted;
+}
+
+/**
+ * Once no navigation to `botId`'s channel is in flight: if it was not
+ * acknowledged (refused, or superseded by another), the landing staged for
+ * it is withdrawn, so it never fires on a later visit. An acknowledged one
+ * shows the channel, which spends it.
+ */
+function releaseLandingIfNeverLanded(
+  botId: string,
+  landing: BotTabLanding,
+): void {
+  const settled = (): boolean => {
+    if (tracyChannelNavigationPending(botId)) return false;
+    if (useTracySurfaceStore.getState().botId !== botId) {
+      releaseTracyLanding(botId, landing);
+    }
+    return true;
+  };
+  if (settled()) return;
+  const unsubscribe = subscribeTabNavigationPending(() => {
+    // Once the controller's step that announced it is done: an arrival from
+    // outside supersedes the navigation in flight before it commits the
+    // channel it arrived at.
+    queueMicrotask(() => {
+      if (settled()) unsubscribe();
+    });
+  });
 }
 
 /**

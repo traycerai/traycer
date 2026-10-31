@@ -84,6 +84,11 @@ describe("routing a chat payload that names a bot", () => {
     messageId: "row-1",
   });
 
+  /** A router whose navigation is still in flight: not yet acknowledged. */
+  function inFlightNavigate(): Mock {
+    return vi.fn(() => new Promise<void>(() => undefined));
+  }
+
   function route(navigate: Mock, effectiveHostId: string | null): boolean {
     if (payload === null) throw new Error("the payload did not parse");
     // The window's host, as the route reads it and as the opener binds to it.
@@ -95,7 +100,7 @@ describe("routing a chat payload that names a bot", () => {
   }
 
   it("opens the surface on the window's host, requests the landing and navigates to the bot's channel", () => {
-    const navigate = vi.fn();
+    const navigate = inFlightNavigate();
 
     expect(route(navigate, "host-effective")).toBe(true);
 
@@ -115,7 +120,7 @@ describe("routing a chat payload that names a bot", () => {
 
   it("keeps the host of a surface that is already open", () => {
     useTracySurfaceStore.getState().openSurface("host-tab");
-    const navigate = vi.fn();
+    const navigate = inFlightNavigate();
 
     expect(route(navigate, "host-effective")).toBe(true);
 
@@ -129,7 +134,7 @@ describe("routing a chat payload that names a bot", () => {
 
   it("opens the open surface's channel with no window host: the surface's host serves it", () => {
     useTracySurfaceStore.getState().openSurface("host-tab");
-    const navigate = vi.fn();
+    const navigate = inFlightNavigate();
 
     expect(route(navigate, null)).toBe(true);
 
@@ -138,7 +143,7 @@ describe("routing a chat payload that names a bot", () => {
   });
 
   it("opens nothing without a host: no surface, no landing, and never the bot id as an epic", () => {
-    const navigate = vi.fn();
+    const navigate = inFlightNavigate();
 
     expect(route(navigate, null)).toBe(false);
 

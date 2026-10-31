@@ -199,17 +199,26 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 // The tab-navigation controller is the boundary: it commits a selection when
 // it acknowledges a navigation, which these cases read off the intents asked.
-vi.mock("@/lib/tab-navigation", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
-  activateTabIntent: (
-    _navigate: unknown,
-    intent: TabNavigationIntent,
-    _options: unknown,
-  ) => {
-    mocks.activateTabIntent(intent);
-    return true;
-  },
-}));
+// The controller accepts and acknowledges at once, as a history push does:
+// a Tracy channel is committed when its navigation lands.
+vi.mock("@/lib/tab-navigation", async (importOriginal) => {
+  const { useTracySurfaceStore: surfaceStore } =
+    await import("@/stores/bots/tracy-surface-store");
+  return {
+    ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
+    activateTabIntent: (
+      _navigate: unknown,
+      intent: TabNavigationIntent,
+      _options: unknown,
+    ) => {
+      mocks.activateTabIntent(intent);
+      if (intent.kind === "tracy") {
+        surfaceStore.getState().selectChannel(intent.botId);
+      }
+      return true;
+    },
+  };
+});
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: (hostId: string | null, method: string) => {
     mocks.supportQueries.push({ hostId, method });

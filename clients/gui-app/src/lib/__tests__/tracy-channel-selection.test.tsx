@@ -12,8 +12,14 @@ import {
 } from "@tanstack/react-router";
 import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
 import { openBotChannel } from "@/lib/bots/open-bot-channel";
-import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
-import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
+import {
+  __resetTabNavigationControllerForTesting,
+  tracyNavigationPending,
+} from "@/lib/tab-navigation";
+import {
+  useBotTabLandingStore,
+  type BotTabLanding,
+} from "@/stores/bots/bot-tab-landing-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { emptyTabStripLayout } from "@/stores/tabs/layout";
@@ -86,6 +92,48 @@ function open(navigate: UseNavigateResult<string>, botId: string): boolean {
     onRejected: null,
   });
 }
+
+function openWithLanding(
+  navigate: UseNavigateResult<string>,
+  botId: string,
+  landing: BotTabLanding | null,
+): boolean {
+  return openBotChannel(navigate, botId, {
+    landing,
+    isConnectable: null,
+    onRejected: null,
+  });
+}
+
+/**
+ * A navigation held until the test lets it go: the router is asked only on
+ * `release`, so the controller keeps it in flight, as it does while a real
+ * navigation is blocked on a loader.
+ */
+function holdNavigation(router: Mounted): {
+  readonly navigate: UseNavigateResult<string>;
+  readonly release: () => void;
+} {
+  let release: () => void = () => undefined;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return {
+    navigate: (options) => released.then(() => router.navigate(options)),
+    release,
+  };
+}
+
+const LANDING_B: BotTabLanding = {
+  kind: "thread",
+  threadId: "thread-b",
+  messageId: "message-b",
+};
+const LANDING_B_NEWER: BotTabLanding = {
+  kind: "thread",
+  threadId: "thread-b",
+  messageId: "message-b-newer",
+};
 
 function selection(router: Mounted): {
   readonly pathname: string;
@@ -265,6 +313,131 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
       botId: "bot-x",
       pathname: "/bot/bot-x",
       activeRef: [TRACY_TAB_REF],
+    });
+  });
+
+  describe("a landing staged for a channel that never shows", () => {
+    async function mountOnChannelA(): Promise<Mounted> {
+      const router = await mount("/");
+      act(() => {
+        open(router.navigate, "bot-a");
+      });
+      await waitFor(() => {
+        expect(selection(router)).toEqual({
+          pathname: "/bot/bot-a",
+          botId: "bot-a",
+        });
+      });
+      return router;
+    }
+
+    function landingOf(botId: string): BotTabLanding | undefined {
+      return useBotTabLandingStore.getState().byBotId[botId];
+    }
+
+    it("is withdrawn when the navigation is refused, so it does not fire when the channel is visited later", async () => {
+      const router = await mountOnChannelA();
+      const rejection = Promise.reject<void>(new Error("navigation refused"));
+      const rejecting: UseNavigateResult<string> = () => rejection;
+      await act(async () => {
+        openWithLanding(rejecting, "bot-b", LANDING_B);
+        await rejection.catch(() => undefined);
+      });
+
+      await waitFor(() => {
+        expect(landingOf("bot-b")).toBeUndefined();
+      });
+      expect(selection(router)).toEqual({
+        pathname: "/bot/bot-a",
+        botId: "bot-a",
+      });
+
+      act(() => {
+        useTracySurfaceStore.getState().closeSurface();
+      });
+      act(() => {
+        openWithLanding(router.navigate, "bot-b", null);
+      });
+      await waitFor(() => {
+        expect(selection(router)).toEqual({
+          pathname: "/bot/bot-b",
+          botId: "bot-b",
+        });
+      });
+      expect(landingOf("bot-b")).toBeUndefined();
+    });
+
+    it("is withdrawn when another channel is opened before it is acknowledged", async () => {
+      const router = await mountOnChannelA();
+      const held = holdNavigation(router);
+      act(() => {
+        openWithLanding(held.navigate, "bot-b", LANDING_B);
+      });
+      expect(landingOf("bot-b")).toBe(LANDING_B);
+
+      act(() => {
+        open(router.navigate, "bot-c");
+      });
+      await waitFor(() => {
+        expect(selection(router)).toEqual({
+          pathname: "/bot/bot-c",
+          botId: "bot-c",
+        });
+      });
+      await act(() => Promise.resolve(held.release()));
+
+      await waitFor(() => {
+        expect(tracyNavigationPending()).toBe(false);
+      });
+      expect(landingOf("bot-b")).toBeUndefined();
+      expect(selection(router)).toEqual({
+        pathname: "/bot/bot-c",
+        botId: "bot-c",
+      });
+    });
+
+    it("leaves a newer request for the same channel alone when the earlier one is superseded", async () => {
+      const router = await mountOnChannelA();
+      const earlier = holdNavigation(router);
+      const newer = holdNavigation(router);
+      act(() => {
+        openWithLanding(earlier.navigate, "bot-b", LANDING_B);
+        openWithLanding(newer.navigate, "bot-b", LANDING_B_NEWER);
+      });
+
+      await act(() => Promise.resolve(newer.release()));
+      await waitFor(() => {
+        expect(selection(router)).toEqual({
+          pathname: "/bot/bot-b",
+          botId: "bot-b",
+        });
+      });
+      await act(() => Promise.resolve(earlier.release()));
+
+      await waitFor(() => {
+        expect(tracyNavigationPending()).toBe(false);
+      });
+      expect(landingOf("bot-b")).toBe(LANDING_B_NEWER);
+    });
+
+    it("is released with the surface when it closes while the navigation is still pending, and stays gone when that navigation is released", async () => {
+      const router = await mountOnChannelA();
+      const held = holdNavigation(router);
+      act(() => {
+        openWithLanding(held.navigate, "bot-b", LANDING_B);
+      });
+      expect(landingOf("bot-b")).toBe(LANDING_B);
+
+      act(() => {
+        useTracySurfaceStore.getState().closeSurface();
+      });
+      expect(landingOf("bot-b")).toBeUndefined();
+
+      await act(() => Promise.resolve(held.release()));
+      await waitFor(() => {
+        expect(tracyNavigationPending()).toBe(false);
+      });
+      expect(landingOf("bot-b")).toBeUndefined();
     });
   });
 });
