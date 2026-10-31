@@ -236,6 +236,7 @@ function VoiceStoppedWatch(props: {
       hostId,
       channelChatId,
       stopped: stoppedAnswersOf(activity),
+      seenAt: Date.now(),
     });
   }, [activity, botId, channelChatId, hostId, queue]);
   return null;

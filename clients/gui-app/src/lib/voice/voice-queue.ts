@@ -104,12 +104,17 @@ export interface VoiceQueue {
     readonly chatId: string;
     readonly announcement: Announcement;
   }): void;
-  /** A bot's stopped answers as its activity says now; ones that recovered leave. */
+  /**
+   * A bot's stopped answers as its activity says now; ones that recovered
+   * leave. One whose start the stream does not say is dated `seenAt`, the
+   * moment the queue first sees it, and keeps that date for its life.
+   */
   syncStopped(input: {
     readonly botId: string;
     readonly hostId: string;
     readonly channelChatId: string;
     readonly stopped: ReadonlyArray<StoppedAnswer>;
+    readonly seenAt: number;
   }): void;
   /** Runs `read`, `switch`, `later` or `brief`; `status` is the controller's. */
   run(verb: Exclude<QueueVerb, { readonly kind: "status" }>): QueueVerbOutcome;
@@ -418,7 +423,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       });
       publish();
     },
-    syncStopped({ botId, hostId, channelChatId, stopped }) {
+    syncStopped({ botId, hostId, channelChatId, stopped, seenAt }) {
       let changed = false;
       const live = new Set(
         stopped.map((answer) => stoppedId(botId, answer.requestId)),
@@ -444,7 +449,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
           surfaceId: null,
           title: "",
           line: "",
-          at: answer.at,
+          at: answer.at ?? seenAt,
           state: "queued",
         };
         entries.set(id, {

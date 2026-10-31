@@ -203,7 +203,8 @@ export interface StoppedAnswer {
   readonly requestId: string;
   readonly threadId: string | null;
   readonly state: "failed" | "parked";
-  readonly at: number;
+  /** When the session started the answer; `null` when the stream does not say. */
+  readonly at: number | null;
 }
 
 /** The failed and parked sessions of a bot's activity snapshot, the trunk first. */
@@ -219,7 +220,7 @@ export function stoppedAnswersOf(
       requestId: session.requestId,
       threadId,
       state: session.state,
-      at: session.startedAt ?? 0,
+      at: session.startedAt,
     });
   };
   if (activity.trunk !== null) add(null, activity.trunk);

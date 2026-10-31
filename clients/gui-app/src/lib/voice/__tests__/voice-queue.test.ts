@@ -412,6 +412,7 @@ describe("a bot's stopped answer", () => {
       hostId: "host-a",
       channelChatId: "chan-2",
       stopped: answers,
+      seenAt: clock.now(),
     });
 
   it("is one item that waits without an offer, and leaves once the bot no longer reports it", () => {
