@@ -4374,8 +4374,8 @@ describe("ChatMessages scroll policy", () => {
       const originalScrollToIndex = list.scrollToIndex.bind(list);
       // `positionAtIndex` answers `number | undefined`, and withholds the
       // reading for a row the layout pass has not laid out -
-      // `expectedTimelineScrollTop` guards the same call at the top of this
-      // file. "unmeasured" models that row; "wrong" is a
+      // `expectedTimelineScrollTop` in `chat-messages.tsx` guards the same
+      // call the same way. "unmeasured" models that row; "wrong" is a
       // distinct, otherwise-plausible finite reading the row moves to next
       // (not its real one); "settled" is the real, final position.
       let measurementPhase: "unmeasured" | "wrong" | "settled" = "unmeasured";
