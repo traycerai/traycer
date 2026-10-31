@@ -54,9 +54,15 @@ export interface VoiceTrayItemsDeps {
   readonly returnTo: (windowId: string) => void;
 }
 
+/** Asking whether a tray exists, or building the item. */
+interface PendingItem {
+  readonly kind: "pending";
+  /** The latest indicator, applied once the item is built. */
+  indicator: VoiceSessionIndicator;
+}
+
 type ItemState =
-  /** Asking whether a tray exists, or building the item. */
-  | { readonly kind: "pending"; indicator: VoiceSessionIndicator }
+  | PendingItem
   | { readonly kind: "shown"; readonly view: VoiceTrayItemView }
   /** No tray to show it in, or it could not be built: nothing until the session ends. */
   | { readonly kind: "none" };
@@ -102,15 +108,15 @@ export class VoiceTrayItems {
 
   private add(window: VoiceAwayWindow): void {
     const { windowId } = window;
-    const state: ItemState = { kind: "pending", indicator: window.indicator };
+    const state: PendingItem = {
+      kind: "pending",
+      indicator: window.indicator,
+    };
     this.items.set(windowId, state);
     void this.build(windowId, state);
   }
 
-  private async build(
-    windowId: string,
-    state: Extract<ItemState, { kind: "pending" }>,
-  ): Promise<void> {
+  private async build(windowId: string, state: PendingItem): Promise<void> {
     const current = (): boolean =>
       !this.disposed && this.items.get(windowId) === state;
     const visible = await this.deps.trayVisible().catch(() => false);
