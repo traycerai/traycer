@@ -113,8 +113,8 @@ export interface SpeechScheduler {
    * dictation): the in-flight item goes back to the front of the queue as
    * if it had never been appended, its spent attempt refunded, and the
    * transcript of its silent speech confirms nothing. It is appended again
-   * as a fresh item once appends are taken again; one withdrawn while in
-   * flight is dropped instead. A no-op with nothing in flight.
+   * as a fresh item once appends are taken again. One withdrawn while in
+   * flight is left draining, never requeued. A no-op with nothing in flight.
    */
   suspendInFlight(): void;
   /**
@@ -484,14 +484,15 @@ export function createSpeechScheduler(
     suspendInFlight() {
       const current = inFlight;
       if (current === null) return;
+      // A withdrawn item keeps draining through the pause: silencing the
+      // track cancels neither its response nor its transcript, so its words
+      // may still arrive, and they must not land on the item appended next.
+      // It is never retried.
+      if (current.withdrawn) return;
       inFlight = null;
       if (current.timer !== null) deps.clearTimer(current.timer);
-      // A withdrawn item was taken back for good: suspending ends its drain
-      // and nothing comes back.
-      if (!current.withdrawn) {
-        current.queued.attempts = Math.max(0, current.queued.attempts - 1);
-        queue.unshift(current.queued);
-      }
+      current.queued.attempts = Math.max(0, current.queued.attempts - 1);
+      queue.unshift(current.queued);
       notify();
     },
     handoff() {
