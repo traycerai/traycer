@@ -10607,7 +10607,7 @@ describe("ChatMessages scroll policy", () => {
       // Simulate the static maintainScrollAtEnd configuration moving the
       // viewport to the new (post-growth) bottom with zero reader input -
       // demonstrably past the OLD, pre-growth issued target, exactly the
-      // false positive the review's P1 #2 finding describes. Race it the
+      // false positive this test pins. Race it the
       // same way a genuine reader-motion race is proven in the tests above.
       const scrollNode = getScrollNode();
       for (let frame = 0; frame < 8; frame += 1) {

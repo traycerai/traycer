@@ -721,7 +721,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
   });
 
   // -----------------------------------------------------------------------
-  // 2. Core no-rerender proof (review's central finding)
+  // 2. Core no-rerender proof
   // -----------------------------------------------------------------------
 
   describe("silent detach then layout callbacks with no ChatTimeline rerender", () => {

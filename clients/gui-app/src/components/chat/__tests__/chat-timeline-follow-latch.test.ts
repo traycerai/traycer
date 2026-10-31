@@ -6712,7 +6712,7 @@ describe("useChatTimelineFollowLatch", () => {
   });
 
   // P8 - three refusals of the maintenance-read arrival (P7's mechanism),
-  // plus a fourth case from CodeRabbit. A stale-generation refusal is not
+  // plus a fourth case. A stale-generation refusal is not
   // listed here: every call that bumps `readerGestureGenerationRef` also
   // replaces or nulls `readerEndCandidateRef` in the same act
   // (`noteReaderGesture`, `handleTouchStart`), so a candidate whose own
@@ -6768,7 +6768,7 @@ describe("useChatTimelineFollowLatch", () => {
       expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
     });
 
-    // CodeRabbit: the candidate is read fresh every call, so a reader who
+    // The candidate is read fresh every call, so a reader who
     // moves away for real between the clamp and the maintenance read is
     // judged by where they ended up, not by a momentary match the clamp
     // alone would have produced.
