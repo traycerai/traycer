@@ -393,7 +393,7 @@ export function ChatCatchingUpBanner(
 
 /**
  * Four distinct causes land on this ONE banner, and no two of them are the
- * same sentence (chat-sync-v2 tickets 35 and 49):
+ * same sentence (chat-sync-v2):
  *
  * - `host-offline` - the bound host is genuinely unreachable. Nothing was
  *   asked and nothing answered, so the host is what has to come back.

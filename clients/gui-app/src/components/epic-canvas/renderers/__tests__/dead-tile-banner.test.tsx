@@ -272,7 +272,7 @@ describe("<ChatDeadTileBanner />", () => {
     expect(text).toContain("mac-mini");
   });
 
-  // tickets 47/48: the same "not here" answer, from the host this device is
+  // The same "not here" answer, from the host this device is
   // CONNECTED to. Both sentences above would print the reader's own machine
   // as somewhere their history is unavailable / stays bound to - the copy
   // that sent two live debugging sessions after a healthy host on

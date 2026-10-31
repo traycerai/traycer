@@ -334,8 +334,8 @@ export interface EpicRecordsReplica extends Replica<
    * landing rather than a second replica: everything ABOVE the raw populations
    * - the two record tables, the optimistic overlay, the projector's identity
    * reconcile, the change gates - is identical on both arms, and duplicating it
-   * is how the two heads would start disagreeing about what a chat is. Phase 5
-   * retires the doc with the legacy adapter.
+   * is how the two heads would start disagreeing about what a chat is. The
+   * sunset retires the doc with the legacy adapter.
    */
   attachLaneHead(): void;
   /**

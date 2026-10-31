@@ -1572,7 +1572,7 @@ export function projectTreeSlice(
  * make such an epic render empty - not degraded, empty - which is why they
  * survive the cutover.
  *
- * **Their deletion is a Phase 5 follow-up**, on the same support-horizon
+ * **Their deletion is a follow-up**, on the same support-horizon
  * decision that retires the `@1` legacy adapters: this is retained code with a
  * named sunset, not an oversight. On the LANE path both members are `false` by
  * construction - a lane-serving host serves `@1.1` on both methods - so the

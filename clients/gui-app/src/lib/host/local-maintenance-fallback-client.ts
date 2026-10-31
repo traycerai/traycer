@@ -151,7 +151,7 @@ export function mapInstallVersionOutcome(
       // writes no schema-v2 record — so there is genuinely no attempt to name
       // here. `null` is exactly that statement.
       //
-      // ⚠ THIS NULL IS PERMANENT. DO NOT FLIP IT AT THE TICKET-07 CUTOVER.
+      // ⚠ THIS NULL IS PERMANENT. DO NOT FLIP IT AT THE CUTOVER.
       //
       // There are two unrelated `attemptId: null`s in this codebase and they
       // are one refactor apart from being confused:
