@@ -3561,8 +3561,13 @@ describe("a bot's tab closed and reopened under a live session", () => {
 
 describe("a bot's question answered elsewhere while it waits in the queue", () => {
   it("leaves the queue unsaid: its pending offer is never said", async () => {
-    const asking = (settlement: BotQuestionSettlement | null): ReplyRow => ({
-      ...botRow("q-1", "Ready to release. Ship or hold?"),
+    const asking = (
+      settlement: BotQuestionSettlement | null,
+    ): Extract<ReplyRow, { readonly role: "assistant" }> => ({
+      role: "assistant",
+      messageId: "q-1",
+      timestamp: Date.now(),
+      blocks: [textBlock("Ready to release. Ship or hold?")],
       question: {
         requestId: "req-q",
         questions: [

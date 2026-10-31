@@ -623,7 +623,8 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       entries.delete(itemId);
       settled.add(itemId);
       settledPrompts.add(itemId);
-      if (entry.item.surfaceId !== null) settledPrompts.add(entry.item.surfaceId);
+      if (entry.item.surfaceId !== null)
+        settledPrompts.add(entry.item.surfaceId);
       publish();
     },
     settledPromptIds() {
