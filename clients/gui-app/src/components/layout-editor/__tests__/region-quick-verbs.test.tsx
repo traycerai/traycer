@@ -150,7 +150,7 @@ describe("offeredQuickVerbs", () => {
   });
 
   it("offers the size a region is NOT in, for a size-only region with no hide/show pair", () => {
-    // Access (G6): size-only, so the size verb is the one thing left.
+    // Access: size-only, so the size verb is the one thing left.
     expect(
       offeredQuickVerbs(SIZE_ONLY_VERBS, { hidden: false, chip: false }),
     ).toEqual(["chip"]);

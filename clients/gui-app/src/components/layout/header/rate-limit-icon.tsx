@@ -251,7 +251,7 @@ function usageButtonLook(
  * Every form owns its fetching the way the status bar's cluster does, the
  * phone header's glyph included: the phone footer is opt-in and off by
  * default, and HTTP providers are not in the background poll, so a glyph that
- * left fetching to the footer read a cold cache (G6). When the footer
+ * left fetching to the footer read a cold cache. When the footer
  * is on too, the query cache and `fetchProviderRateLimits` share one request.
  */
 function LiveRateLimitGlyph({

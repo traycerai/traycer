@@ -122,7 +122,7 @@ export interface SizedValues extends ShownValues {
 
 /**
  * The permission picker: a size and no Shown. It reports the permission the
- * next send runs under, so the chip is its floor and it is never hidden (G6).
+ * next send runs under, so the chip is its floor and it is never hidden.
  */
 export interface AccessValues {
   readonly size: RegionSize;

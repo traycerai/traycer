@@ -339,7 +339,7 @@ describe("computeStableChatTimelineRows", () => {
     expect(afterSameTurn).toBe(state);
   });
 
-  // F11's projection seam (`withManualRungAnchor`) writes this field on the
+  // The projection seam (`withManualRungAnchor`) writes this field on the
   // ROW, so it needs the same positive/control pair `turnId` above got - the
   // compile-exhaustive field table forced its addition, but nothing had
   // exercised it as a comparator yet.

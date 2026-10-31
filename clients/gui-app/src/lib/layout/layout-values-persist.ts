@@ -284,7 +284,7 @@ function contextUsagePatch(value: unknown): Partial<ContextUsageValues> {
 }
 
 /**
- * Access and Model have no Shown (G6), so a `shown` an earlier build stored is
+ * Access and Model have no Shown, so a `shown` an earlier build stored is
  * not read - the pickers always drew, whatever it said.
  */
 function accessPatch(value: unknown): Partial<AccessValues> {

@@ -189,7 +189,7 @@ export const ACCESS_REGION: LayoutRegion<"access"> = {
   rows: [TOOLBAR_LEFT_ORDER_ROW],
   shellGate: alwaysAvailable,
   availability: alwaysLive,
-  // No Hide: the pill is a floor, never hidden (G6).
+  // No Hide: the pill is a floor, never hidden.
   quickVerbs: SIZE_ONLY_VERBS,
   stateWord: accessStateWord,
 };

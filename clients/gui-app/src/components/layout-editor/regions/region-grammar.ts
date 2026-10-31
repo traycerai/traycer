@@ -219,7 +219,7 @@ export const DOCK_DISPLAY_OPTIONS: ReadonlyArray<SegmentOption> = [
   { value: "hidden", label: "Hidden" },
 ];
 
-/** Access's `size`, which has no Hidden (G6). */
+/** Access's `size`, which has no Hidden. */
 export const ACCESS_DISPLAY_OPTIONS: ReadonlyArray<SegmentOption> = [
   { value: "full", label: "Icon and label" },
   { value: "chip", label: "Icon only" },
@@ -325,5 +325,5 @@ export const SIZED_VERBS: ReadonlyArray<QuickVerbId> = [
   "chip",
   "full",
 ];
-/** A region that resizes but never hides: the Access pill (G6). */
+/** A region that resizes but never hides: the Access pill. */
 export const SIZE_ONLY_VERBS: ReadonlyArray<QuickVerbId> = ["chip", "full"];

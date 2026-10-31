@@ -1,7 +1,7 @@
 /**
  * Resolver-level coverage for `office-signs.ts` - the sign anchor projection
- * (F5), the LOD-0 sign/host-label gate (F10), and board roster filtering
- * (F11), all without a camera or a canvas in the way. The component's own
+ * (F5), the LOD-0 sign/host-label gate (F10), and board roster filtering,
+ * all without a camera or a canvas in the way. The component's own
  * suite keeps one integration case per finding; these pin the rule itself so
  * a camera-only regression there cannot be mistaken for a projection defect
  * here, and vice versa.

@@ -303,7 +303,7 @@ describe("state words", () => {
   it("says Hidden wherever the region is switched off", () => {
     const hidden = effectiveLayoutValues("default", EVERY_REGION_HIDDEN);
     for (const id of LAYOUT_REGION_IDS) {
-      // Access and Model have no Shown (G6) - never reads Hidden.
+      // Access and Model have no Shown - never reads Hidden.
       if (!("shown" in SHIPPED_DEFAULT_VALUES[id])) continue;
       expect(regionStateWord(id, hidden, DEFAULT_ARRANGEMENT, FACTS), id).toBe(
         "Hidden",

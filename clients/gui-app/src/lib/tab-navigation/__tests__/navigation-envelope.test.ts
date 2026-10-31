@@ -2012,17 +2012,16 @@ describe("activateTabIntent / navigateToTabIntent seam", () => {
   });
 });
 
-// T10 Area 3: a new desktop window opened via
-// `deps.bridge.requestNew(tab.route)` for a History/Settings tab boots with
-// a truly EMPTY layout (`resetStores()` below matches that exactly) and an
-// initial router location equal to the source tab's route. That is
-// architecturally identical to any other cold external navigation this
-// controller already resolves - `resolveExternalSystem` (reached through
-// the same `observeLocation` classification `TabNavigationRouteBridge` uses
-// at boot) materializes the system tab and focuses it. These tests prove
-// that path exists and stays wired for history/settings specifically -
-// "copy" new-window semantics need no new production code, only this
-// coverage.
+// A new desktop window opened via `deps.bridge.requestNew(tab.route)` for
+// a History/Settings tab boots with a truly EMPTY layout (`resetStores()`
+// below matches that exactly) and an initial router location equal to the
+// source tab's route. That is architecturally identical to any other cold
+// external navigation this controller already resolves -
+// `resolveExternalSystem` (reached through the same `observeLocation`
+// classification `TabNavigationRouteBridge` uses at boot) materializes
+// the system tab and focuses it. These tests prove that path exists and
+// stays wired for history/settings specifically - "copy" new-window
+// semantics need no new production code, only this coverage.
 describe("T10 Area 3: external boot into a system-tab route (new-window copy)", () => {
   beforeEach(async () => {
     resetStores();

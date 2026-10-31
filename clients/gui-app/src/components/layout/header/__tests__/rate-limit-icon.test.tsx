@@ -1089,7 +1089,7 @@ describe("<RateLimitIconButton />", () => {
   // Every form, the phone header's glyph included, owns its own fetching the
   // way the status bar's cluster does: HTTP providers are not in the
   // background poll, and the phone footer is opt-in and off by default, so a
-  // glyph that left fetching to the footer read a cold cache (G6).
+  // glyph that left fetching to the footer read a cold cache.
   // The glyph's own fetch is proven over the real selector in
   // `rate-limit-icon-glyph-fetch.test.tsx`.
   it.each(["tile", "readout", "inline"] as const)(
