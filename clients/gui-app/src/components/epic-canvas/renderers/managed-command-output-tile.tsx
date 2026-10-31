@@ -1,5 +1,5 @@
 /**
- * The output window (`UI.md` §4): a read-only view of one managed command's
+ * The output window: a read-only view of one managed command's
  * log. Deliberately NOT a terminal - managed commands are spawned over pipes
  * with no PTY, so there are no escape sequences to emulate and the lines arrive
  * already framed. A text view is truer and cheaper than an xterm.

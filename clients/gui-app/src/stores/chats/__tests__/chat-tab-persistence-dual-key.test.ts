@@ -1110,7 +1110,7 @@ describe("ticket 15 review round 4: real close order drives the canvas sweep (F3
     //
     // A's own `getOrCreate*`/seed calls below legitimately INHERIT B's
     // just-closed state (restore-first, decision #29 - the whole point of
-    // this ticket) - a fresh A2A/activity-group/tool/subagent store for the
+    // this change) - a fresh A2A/activity-group/tool/subagent store for the
     // SAME chat starts from B's durable snapshot, not empty. So proving A's
     // LATER close wins isn't "does B's key vanish" (it wouldn't, even under
     // correct behavior, since A never touched it) - it's "does A's own

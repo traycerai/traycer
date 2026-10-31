@@ -1356,7 +1356,7 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
   });
 
   describe("Enable cloud", () => {
-    /** The configuration's defaults: none set means the spec's shape. */
+    /** The configuration's defaults: none set means the built-in shape. */
     const TEAM_DEFAULTS = {
       os: "linux",
       cpus: 4,

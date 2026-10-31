@@ -9,7 +9,7 @@ import {
 
 /**
  * Pure priority-table tests for the mapping every output-window state comes
- * from - `UI.md` §4's "one word for what happened" replacing four call sites
+ * from - "one word for what happened" replacing four call sites
  * that used to drift (every fatal close reading as "deleted", an old host
  * blamed for a deletion, an empty log indistinguishable from a dead one).
  */

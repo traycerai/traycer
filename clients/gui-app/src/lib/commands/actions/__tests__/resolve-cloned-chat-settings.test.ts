@@ -500,7 +500,7 @@ describe("resolveClonedChatSettings clamps auto against the target catalog", () 
     });
   });
 
-  // THE REGRESSION this ticket exists for: `permissionModeForTarget` used to
+  // THE REGRESSION under test: `permissionModeForTarget` used to
   // read the target row with a bare `targetRow.supportedPermissionModes
   // .includes("auto")`. An EMPTY array is a harness that answered and
   // declared no constraint (the host's own

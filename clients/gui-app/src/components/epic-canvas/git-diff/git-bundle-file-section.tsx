@@ -147,7 +147,7 @@ interface BundleFileSectionBodyProps {
 
 function BundleFileSectionBody(props: BundleFileSectionBodyProps): ReactNode {
   const bundleFindRegistration = useBundleDiffFindRegistrationContext();
-  // `.svg` is never `isBinary` to git (image-preview decision log, decision
+  // `.svg` is never `isBinary` to git (decision
   // #5) but still has no searchable diff text once it routes to the image
   // view, so it shares the same "binary" find-coverage state as a true
   // binary image - see `gitImageDiffRouting` for the routing decision

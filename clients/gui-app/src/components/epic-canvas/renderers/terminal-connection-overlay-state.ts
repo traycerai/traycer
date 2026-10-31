@@ -11,7 +11,7 @@ export type TerminalConnectionOverlayState =
  * its session status. `null` means connected/healthy - no overlay. A "lost"
  * session (recoverable - see `TerminalLifecycleStatus`) shows the
  * automatic-recovery spinner until recovery is exhausted, then the manual
- * Reconnect prompt ("reattachable", Architecture §8). "Reaped" is equally
+ * Reconnect prompt ("reattachable"). "Reaped" is equally
  * terminal for the current handle, but not for the durable terminal identity:
  * the host may already have restored it, so it follows the same bounded
  * recovery path. A running session whose transport is mid-reconnect shows the

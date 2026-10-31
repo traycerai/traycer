@@ -244,7 +244,7 @@ describe("selectUnfoldedCloudChats", () => {
 
     it("renders exactly two rows, never three", () => {
       // The local tree contributes "Walkthrough"; this must contribute exactly
-      // one more. Three rows was the shipped behaviour this ticket replaces.
+      // one more. Three rows was the shipped behaviour this change replaces.
       expect(selectUnfoldedCloudChats(inputs)).toHaveLength(1);
     });
 

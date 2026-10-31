@@ -1,6 +1,7 @@
 import type { BotConversationSendResponse } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { StoreApi } from "zustand";
 import { executeDeferredVerb } from "@/lib/voice/deferred-verbs";
+import { noteVoiceQueueSwitch } from "@/lib/voice/queue-verbs";
 import type { BoundTarget } from "@/lib/voice/directory";
 import type {
   ControlVerb,
@@ -901,18 +902,25 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       case "deferred": {
         store.getState().consumeReservation(entry.seqs);
         settleDelegation(entry.delegationId);
-        const outcome = executeDeferredVerb(
-          decision.verb,
-          decision.target,
-          decision.span,
-        );
+        const outcome = executeDeferredVerb({
+          verb: decision.verb,
+          target: decision.target,
+          itemId: decision.itemId,
+          threadNamed: decision.threadNamed,
+          delegationId: delegationOf(entry),
+        });
         if (outcome.kind === "refused") {
           deps.notify(outcome.say, delegationOf(entry));
         }
         return;
       }
       case "navigate":
+        await move(entry, decision.target);
+        return;
       case "switch":
+        // The queue's side of the switch, as the Waiting control's Switch
+        // has it: the item's offer is not said once the person goes to it.
+        noteVoiceQueueSwitch(decision.itemId);
         await move(entry, decision.target);
         return;
       case "post": {

@@ -97,7 +97,7 @@ export const FALLBACK_SETTINGS_SECTION_ID =
 /**
  * What a section BELONGS to — the organising idea of the whole surface.
  *
- * One rule, said beside the map (the environments core flows' Settings map):
+ * One rule, said beside the map:
  * if it varies by computer it sits under the host picker; if it is a
  * configuration's (Personal's, a team's) it sits under Environment; if it is
  * about your account rather than your settings it sits under Account; the rest

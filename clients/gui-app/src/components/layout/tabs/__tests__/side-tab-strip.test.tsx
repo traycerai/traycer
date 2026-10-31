@@ -3222,7 +3222,7 @@ describe("<SideTabStrip />", () => {
       generating: false,
     } as const;
 
-    // The spec's table, top row first: what each state shows on an inactive
+    // The status table, top row first: what each state shows on an inactive
     // row, and the states that a row above it outranks.
     const STATUS_CASES: ReadonlyArray<StatusCase> = [
       {

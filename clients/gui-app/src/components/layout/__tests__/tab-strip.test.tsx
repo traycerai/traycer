@@ -191,7 +191,7 @@ vi.mock("@/hooks/epic/use-epic-set-pinned-mutation", async (importOriginal) => {
  * outside a `<HostRuntimeProvider>` - absent everywhere in this file.
  * Defaults to `false` (reset every test): every legacy pin case in this file
  * predates lane 9 item 5 and pins the pre-`@1.1` reading (`local-home`
- * permanently unavailable). The §3.2 cases (lane 9 evidence artifact) flip
+ * permanently unavailable). The `unverified` carve-out cases flip
  * this to `true` for the duration of one test to exercise the negotiated
  * `@1.1` local-home pin path through the tab strip's two dispatch edges.
  */
@@ -2815,8 +2815,8 @@ describe("<TabStrip />", () => {
   });
 
   /**
-   * `06641bf75` - the `unverified` local-home carve-out's tab-strip half
-   * (lane 9 evidence artifact, §3.2). The desktop-History/mobile-tray half
+   * `06641bf75` - the `unverified` local-home carve-out's tab-strip half.
+   * The desktop-History/mobile-tray half
    * is `use-epic-set-pinned-mutation.test.tsx`'s "refuses at dispatch"
    * case; this pins the tab strip's own two entry points into the SAME
    * `epicPinDispatchAdmitted` gate - the menu select and the toast's Undo

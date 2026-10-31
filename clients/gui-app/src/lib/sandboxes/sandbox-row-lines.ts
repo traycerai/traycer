@@ -566,7 +566,7 @@ function idleMinutesOf(summary: SandboxSummary): number {
 }
 
 /**
- * The three frozen causes, each its own sentence (Flow 5). The payer whose
+ * The three frozen causes, each its own sentence. The payer whose
  * credits ran out is the row's last payer; the third cause (the payer left
  * the team) is not on the summary, so it reads as the second.
  */
@@ -648,7 +648,7 @@ function joinParts(...items: ReadonlyArray<string | null>): string {
 }
 
 /**
- * The row's clock line, per state (Flow 6 › The page). A destroy in flight
+ * The row's clock line, per state. A destroy in flight
  * reads `Destroying · pending`: the row's clock and its keep promise no longer
  * hold.
  */
@@ -945,7 +945,7 @@ export function sandboxSessionsLine(
   }
 }
 
-// ── Actions (Flow 6's matrix) ───────────────────────────────────────────────
+// ── Actions ─────────────────────────────────────────────────────────────────
 
 export type SandboxRowAction =
   | "suspend"

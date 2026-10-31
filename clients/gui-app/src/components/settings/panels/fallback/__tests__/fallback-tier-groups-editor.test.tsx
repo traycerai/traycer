@@ -1561,10 +1561,10 @@ describe("FallbackTierGroupsEditor - R5: a get@1.0 host keeps the released popul
 });
 
 /**
- * The ticket's Done-when lines, end to end, against the real seeded policy
+ * The tier editor, end to end, against the real seeded policy
  * (`fallback-tier-seed.ts`'s literals) and the real `fallbackTierConflicts` -
  * not a hand-built `TierConflict`, so this cannot silently drift from what
- * the protocol actually computes. Every test here fails on the pre-ticket
+ * the protocol actually computes. Every test here fails on the earlier
  * editor: it has no combobox at all (the Model cell was a bare `Select`), no
  * `role="status"` announcement span, and "group"/"family" copy instead of
  * "tier"/"pattern".
@@ -1647,7 +1647,7 @@ describe("FallbackTierGroupsEditor - seeded three-tier policy, end to end", () =
    * The seeded three tiers, exactly `fallback-tier-seed.ts`'s literals, with
    * an optional extra blank row appended to `standard` - the "blank codex
    * row" the picker pins below need, seeded directly rather than added
-   * through "Add model or pattern" (equivalent per the ticket's own wording,
+   * through "Add model or pattern" (equivalent,
    * and it sidesteps switching the new row's Provider select away from the
    * global `firstHarnessId` default).
    */
@@ -1765,7 +1765,7 @@ describe("FallbackTierGroupsEditor - seeded three-tier policy, end to end", () =
     const cardTestIds = screen
       .getAllByTestId(/^fallback-tier-group-(frontier|flagship|standard)$/)
       .map((card) => card.getAttribute("data-testid"));
-    // Falsification: the pre-ticket editor renders "group"-copy cards with no
+    // Falsification: the earlier editor renders "group"-copy cards with no
     // such testids at all - this whole suite reddens on it. Kept precise
     // (exact order, exactly these three) so a future seed reorder is also
     // caught here, not only in the host-side seed test.

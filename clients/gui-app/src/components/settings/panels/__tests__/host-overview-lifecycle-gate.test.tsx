@@ -749,7 +749,7 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
     // Falsifies: `recordObservationView` reaching its qualified-stale arm
     // instead of the live `restarting` one for a fresh, valid `live` proof —
     // or the panel still calling `projectFleetUpdateView` directly with no
-    // `localAttempt` leg at all (the invariant §19 of the ticket names).
+    // `localAttempt` leg at all.
     await waitFor(() => {
       expect(
         screen.getByTestId("host-overview-operation-phase").textContent,
@@ -804,7 +804,7 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
   });
 
   it("INTEGRATION: the lifecycle gate releases on the renderer TICK, host.status failing throughout and the scope itself unreachable", async () => {
-    // The pin the ticket calls out by name as needing the MOUNTED Overview
+    // The pin that needs the MOUNTED Overview
     // rather than the pure projector: `fleet-update-view.test.ts` supplies
     // `nowMs` directly and can never observe whether the panel is feeding it
     // from a real ticking clock. Falsifies: wiring the panel's `nowMs` from

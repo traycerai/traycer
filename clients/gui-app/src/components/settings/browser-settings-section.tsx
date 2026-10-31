@@ -233,7 +233,7 @@ function BrowserDevOriginsControl(props: {
 }
 
 /**
- * Settings > Browser's saved-logins group (spec section 7.3, decision #26).
+ * Settings > Browser's saved-logins group (decision #26).
  * The one place a privacy-minded person sees where their website logins are
  * kept, turns them off, forgets them, and sees which sites they cover.
  *

@@ -1,17 +1,13 @@
+import { VOICE_SESSION_INPUT_MAX_CHARS } from "@/lib/voice/briefing";
 import type { QueueItem, VoiceFocus } from "@/stores/voice/voice-session-store";
-
-/**
- * What a session opens knowing, sent with the mint because the vendor
- * accepts startup input only at creation. The briefing a later ticket
- * composes (unread answers by bot and thread, open questions) goes here; until
- * then one line, so the contract is exercised end to end.
- */
-export const FIRST_SESSION_INPUT = "Listening.";
 
 /**
  * The replacement session's seed: one paragraph of what the person was doing
  * and what is waiting, so the new engine carries on where the old one left
- * off. Nothing is replayed: posts already landed are rows.
+ * off, bounded to the mint's input cap. Nothing is replayed: posts already
+ * landed are rows. (A first session opens knowing the briefing instead,
+ * `composeBriefing`; both go with the mint because the vendor accepts
+ * startup input only at creation.)
  */
 export function remintInput(input: {
   readonly focus: VoiceFocus | null;
@@ -27,12 +23,26 @@ export function remintInput(input: {
         : `The person is in a thread with ${bot}.`,
     );
   }
-  if (input.queue.length > 0) {
+  // The queue's one-liners, newest first: what is still waiting (queued, or
+  // offered and not taken up), announcements among them. What was heard or
+  // set aside is not carried.
+  const waiting = input.queue
+    .filter((item) => item.state === "queued" || item.state === "offered")
+    .sort((a, b) => b.at - a.at);
+  if (waiting.length > 0) {
     parts.push(
-      `Waiting to be read: ${input.queue.map((item) => item.line).join("; ")}.`,
+      `Waiting to be read: ${waiting.map((item) => item.line).join("; ")}.`,
     );
   }
-  return parts.join(" ");
+  return truncateAtSentence(parts.join(" "), VOICE_SESSION_INPUT_MAX_CHARS);
+}
+
+/** `text` cut to `maxChars` at the last sentence or clause end that fits. */
+function truncateAtSentence(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const cut = text.slice(0, maxChars);
+  const end = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("; "));
+  return end > 0 ? `${cut.slice(0, end)}.` : cut;
 }
 
 /**

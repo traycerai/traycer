@@ -360,8 +360,8 @@ function deriveGateFlags(input: {
   const locationSatisfiesGate =
     input.form.type === "bug" && input.form.locationChanged;
   const intentSatisfiesGate = input.form.intent.trim().length > 0;
-  // Flow 1/2's evidence gate: a sentence, an image, or (bug-only) an
-  // actively-changed location - any one satisfies it (tech-plan T4/T5).
+  // The evidence gate: a sentence, an image, or (bug-only) an
+  // actively-changed location - any one satisfies it (T4/T5).
   const gateSatisfied =
     !gateApplies ||
     intentSatisfiesGate ||
@@ -449,7 +449,7 @@ export function ReportIssueDialog(
   const { cause, fingerprint, hasErrorEnvelope } =
     errorEnvelopeFromContext(draftContext);
 
-  // ADV-L6: a plain manual open (Flow 2) never assembles a `draftContext` at
+  // ADV-L6: a plain manual open never assembles a `draftContext` at
   // all (`openReportIssue()` sets it to null - there is no error to capture),
   // so the location selector's current-location option had nothing to read
   // and fell back to a hardcoded "Current location" string instead of the
@@ -659,7 +659,7 @@ export function ReportIssueDialog(
   // "Report on GitHub instead" fallback, and the no-DSN "Open a GitHub issue"
   // fallback all fetch the same preview before anything opens, so the preview
   // is the consent event for public exposure everywhere, not just the
-  // opt-in path (publish flow, Flow 3b).
+  // opt-in path (publish flow).
   const buildDraftMutation = useMutation({
     mutationKey: runnerMutationKeys.supportBuildPublicDraft(),
     mutationFn: async (): Promise<DesktopSupportBuildPublicDraftResult> => {

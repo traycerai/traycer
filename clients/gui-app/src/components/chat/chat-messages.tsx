@@ -3561,7 +3561,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // reader should perceive happening). Find does NOT go through this
   // function at all - `use-chat-find-controller.ts`'s own
   // `scrollToMessageForFind` independently builds its location with
-  // `animated: false` already, unchanged by this ticket. The late-hydration
+  // `animated: false` already. The late-hydration
   // catch-up effect below is different from either: it is a RESTORE landing
   // where the transcript simply grew to finally contain a position already
   // decided at mount, not a fresh navigation the reader initiated - it must

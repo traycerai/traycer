@@ -1,6 +1,10 @@
-import type { BotConversationSendResponse } from "@traycer/protocol/host/bot/conversation-schemas";
+import type {
+  BotConversationSendResponse,
+  BotThreadSummary,
+} from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
+import type { OpenTextBlock } from "@traycer/protocol/persistence/epic/open-harness-records";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   useVoiceSessionStore,
@@ -9,10 +13,14 @@ import {
 import {
   composeVoiceDirectory,
   tupleHolds,
+  type DirectorySources,
   type BoundTarget,
   type VoiceDirectory,
 } from "../directory";
+import { NOTHING_WAITING_NOTICE } from "../deferred-verbs";
 import { resolveRoute, type RouterResult } from "../router";
+import type { SpeechItem } from "../scheduler";
+import { createVoiceQueue, type VoiceQueue } from "../voice-queue";
 import {
   CONFIRM_ANSWER_WINDOW_MS,
   createSayLoop,
@@ -78,7 +86,7 @@ const FOCUS_TRACY: VoiceFocus = {
   anchorThread: null,
 };
 
-const DIRECTORY: VoiceDirectory = composeVoiceDirectory({
+const SOURCES: DirectorySources = {
   environments: [environment(PERSONAL, "personal"), environment(ACME, "team")],
   bots: [bot(TRACY, PERSONAL), bot(CI, PERSONAL), bot(RELEASE, ACME)],
   threadsByBot: new Map(),
@@ -88,7 +96,9 @@ const DIRECTORY: VoiceDirectory = composeVoiceDirectory({
   queue: [],
   hostOf: (botId) => HOSTS.get(botId) ?? null,
   heldPostText: () => null,
-});
+};
+
+const DIRECTORY: VoiceDirectory = composeVoiceDirectory(SOURCES);
 
 function route(
   action: RouterResult["action"],
@@ -136,8 +146,15 @@ interface Wiring {
  * model's answers are queued by hand, so two routes can be out at once.
  */
 function build(wiring: Wiring) {
+  return buildFor(wiring, DIRECTORY);
+}
+
+/** {@link build} over a directory the test composed. */
+function buildFor(wiring: Wiring, directory: VoiceDirectory) {
   const sends: VoiceFocus[] = [];
   const notices: string[] = [];
+  const noticeDelegations: Array<string | null> = [];
+  const navigations: BoundTarget[] = [];
   const asks: AskOutcome[] = [];
   const answers: Array<() => Promise<RouterResult>> = [];
   /** Timers the loop set, by the order it set them; run one with `.run()`. */
@@ -148,8 +165,9 @@ function build(wiring: Wiring) {
       sends.push(focus);
       return Promise.resolve(SEND_RESPONSE);
     },
-    notify: (text) => {
+    notify: (text, delegationId) => {
       notices.push(text);
+      noticeDelegations.push(delegationId);
     },
     ask: (_text, _delegationId, outcome) => {
       asks.push(outcome);
@@ -159,10 +177,13 @@ function build(wiring: Wiring) {
       const next = answers.shift();
       if (next === undefined) throw new Error("no answer queued");
       // The directory is read when the route is made, as the real one does.
-      return resolveRoute(await next(), DIRECTORY, request.segments.length);
+      return resolveRoute(await next(), directory, request.segments.length);
     },
-    recheck: (tuple) => wiring.recheckHolds && tupleHolds(DIRECTORY, tuple),
-    navigate: (_target: BoundTarget) => Promise.resolve(true),
+    recheck: (tuple) => wiring.recheckHolds && tupleHolds(directory, tuple),
+    navigate: (target: BoundTarget) => {
+      navigations.push(target);
+      return Promise.resolve(true);
+    },
     think: () => undefined,
     control: () => undefined,
     canSend: () => wiring.canSend,
@@ -182,7 +203,16 @@ function build(wiring: Wiring) {
     botTitle: (botId) => botId,
     onAccepted: () => undefined,
   });
-  return { loop, sends, notices, asks, answers, timers };
+  return {
+    loop,
+    sends,
+    notices,
+    noticeDelegations,
+    navigations,
+    asks,
+    answers,
+    timers,
+  };
 }
 
 /** A route the test answers when it chooses. */
@@ -394,5 +424,309 @@ describe("a confirmation whose answer never closes an utterance", () => {
 
     expect(h.sends.map((focus) => focus.botId)).toEqual([CI]);
     expect(h.notices).toEqual([]);
+  });
+});
+
+describe("a routed verb on the queue", () => {
+  /** The real voice queue under the store's driver, over a scheduler that records what it is given. */
+  function liveQueue() {
+    const enqueued: SpeechItem[] = [];
+    const withdrawn: string[] = [];
+    const queue = createVoiceQueue({
+      scheduler: {
+        enqueue: (item) => {
+          enqueued.push(item);
+        },
+        withdraw: (itemId) => {
+          withdrawn.push(itemId);
+        },
+      },
+      publish: (items) => useVoiceSessionStore.getState().setQueue(items),
+      botTitle: (botId) => botId,
+      markRead: () => undefined,
+      noteHeard: () => undefined,
+      switchTo: () => undefined,
+      isFocused: () => false,
+      attention: () => ({
+        answers: [],
+        prompts: { approvals: [], questions: [] },
+      }),
+    });
+    useVoiceSessionStore.setState({ phase: "live" });
+    useVoiceSessionStore.getState().setQueueDriver({
+      run: (verb) => (verb.kind === "status" ? "nothing" : queue.run(verb)),
+      noteSwitched: (itemId) => queue.noteSwitched(itemId),
+    });
+    return { queue, enqueued, withdrawn };
+  }
+
+  function routedItem(
+    action: "read" | "later",
+    itemId: string | null,
+  ): RouterResult {
+    return {
+      ...route(action, null, null, 2),
+      target: { environmentId: null, botId: null, threadId: null, itemId },
+    };
+  }
+
+  const readOf = (itemId: string | null): RouterResult =>
+    routedItem("read", itemId);
+
+  /**
+   * The live queue holding one waiting reply, `r-1` of the CI bot in
+   * `threadId` (its channel for `null`), and the directory that lists it. `briefed`: it was waiting when the session
+   * began; `arrived`: it came while the session ran, so it is offered.
+   */
+  function withWaitingItem(
+    arrival: "briefed" | "arrived",
+    threadId: string | null,
+  ) {
+    const live = liveQueue();
+    const text: OpenTextBlock = {
+      blockId: "block-1",
+      status: "completed",
+      timestamp: 1,
+      parentBlockId: null,
+      type: "text",
+      text: "The Safari fix landed in build forty.",
+      providerNotice: null,
+    };
+    const ref = {
+      messageId: "r-1",
+      botId: CI,
+      threadId,
+      chatId: threadId ?? "chan-ci",
+      originHostId: "host-1",
+      at: NOW,
+      blocking: false,
+    };
+    if (arrival === "briefed") live.queue.begin([ref], () => "host-1");
+    else live.queue.ingestReplies([ref], () => "host-1");
+    live.queue.hydrated(
+      "r-1",
+      { role: "assistant", messageId: "r-1", blocks: [text] },
+      null,
+    );
+    const directory = composeVoiceDirectory({
+      ...SOURCES,
+      queue: live.queue.items(),
+    });
+    return { ...live, directory };
+  }
+
+  it("reads the item it names, under the request's delegation, and posts nothing", async () => {
+    const { enqueued, directory } = withWaitingItem("briefed", null);
+    const h = buildFor({ recheckHolds: true, canSend: true }, directory);
+    h.answers.push(() => Promise.resolve(readOf("r-1")));
+
+    speak("read", " it");
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(enqueued.map((item) => [item.text, item.delegationId])).toEqual([
+      ["bot_ci said: The Safari fix landed in build forty.", "d-1"],
+    ]);
+    expect(h.sends).toEqual([]);
+    expect(h.notices).toEqual([]);
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+
+  it("does not read an item the person set aside while the route was being made", async () => {
+    const { queue, enqueued, directory } = withWaitingItem("briefed", null);
+    const h = buildFor({ recheckHolds: true, canSend: true }, directory);
+    const held = heldAnswer();
+    h.answers.push(held.answer);
+
+    speak("read", " it");
+    const done = h.loop.onDelegationCreated("d-1");
+    queue.run({ kind: "later", itemId: "r-1" });
+    held.release(readOf("r-1"));
+    await done;
+
+    expect(enqueued).toEqual([]);
+    expect(h.notices).toEqual([NOTHING_WAITING_NOTICE]);
+    expect(h.noticeDelegations).toEqual(["d-1"]);
+    expect(h.sends).toEqual([]);
+  });
+
+  it("does not set aside an item that was heard while the route was being made", async () => {
+    const { queue, enqueued, directory } = withWaitingItem("briefed", null);
+    const h = buildFor({ recheckHolds: true, canSend: true }, directory);
+    const held = heldAnswer();
+    h.answers.push(held.answer);
+
+    speak("put", " it off");
+    const done = h.loop.onDelegationCreated("d-1");
+    queue.run({ kind: "read", itemId: "r-1", delegationId: null });
+    enqueued[0]?.onDelivered?.();
+    expect(queue.items().map((item) => item.state)).toEqual(["heard"]);
+    held.release(routedItem("later", "r-1"));
+    await done;
+
+    expect(queue.items().map((item) => item.state)).toEqual(["heard"]);
+    expect(h.notices).toEqual([NOTHING_WAITING_NOTICE]);
+    expect(h.noticeDelegations).toEqual(["d-1"]);
+  });
+
+  it("does not say the offer of an item the person is routed to", async () => {
+    const { queue, enqueued, withdrawn, directory } = withWaitingItem(
+      "arrived",
+      null,
+    );
+    const offers = enqueued.filter((item) => item.text.endsWith("Want it?"));
+    expect(offers).toHaveLength(1);
+    const h = buildFor({ recheckHolds: true, canSend: true }, directory);
+    h.answers.push(() =>
+      Promise.resolve({
+        ...route("switch", null, null, 2),
+        target: {
+          environmentId: null,
+          botId: null,
+          threadId: null,
+          itemId: "r-1",
+        },
+      }),
+    );
+
+    speak("go", " there");
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(withdrawn).toEqual(offers.map((offer) => offer.id));
+    expect(queue.items().map((item) => [item.id, item.state])).toEqual([
+      ["r-1", "queued"],
+    ]);
+    expect(h.sends).toEqual([]);
+  });
+
+  describe("on the CI bot focused in thread A, with a reply of its in thread B only", () => {
+    const FOCUS_THREAD_A: VoiceFocus = {
+      botId: CI,
+      hostId: "host-1",
+      threadId: "thread-a",
+      anchorMessageId: "msg-a",
+      anchorThread: null,
+    };
+    const THREAD_A: BotThreadSummary = {
+      threadId: "thread-a",
+      conversationId: "conv-a",
+      sessionChatId: "chat-a",
+      anchor: {
+        messageId: "msg-a",
+        requestId: "req-a",
+        senderUserId: VIEWER,
+        sentAt: NOW - 1_000,
+        resolvedAt: null,
+      },
+      replyCount: 1,
+      lastReplyAt: NOW - 500,
+      openRequestCount: 0,
+      costUsd: null,
+    };
+
+    /** The directory with the person in thread A of the CI bot, listing `queue`'s items. */
+    function focusedOnThreadA(queue: VoiceQueue) {
+      useVoiceSessionStore.getState().setFocus(FOCUS_THREAD_A);
+      return composeVoiceDirectory({
+        ...SOURCES,
+        focus: FOCUS_THREAD_A,
+        threadsByBot: new Map([[CI, [THREAD_A]]]),
+        queue: queue.items(),
+      });
+    }
+
+    function directoryOfThreadB() {
+      const live = withWaitingItem("briefed", "thread-b");
+      return { ...live, directory: focusedOnThreadA(live.queue) };
+    }
+
+    function readNaming(threadId: string | null): RouterResult {
+      return {
+        ...route("read", CI, PERSONAL, 2),
+        target: {
+          environmentId: PERSONAL,
+          botId: CI,
+          threadId,
+          itemId: null,
+        },
+      };
+    }
+
+    it("reads the bot's reply of another thread when the route names only the bot", async () => {
+      const { enqueued, directory } = directoryOfThreadB();
+      const h = buildFor({ recheckHolds: true, canSend: true }, directory);
+      h.answers.push(() => Promise.resolve(readNaming(null)));
+
+      speak("read", " ci");
+      await h.loop.onDelegationCreated("d-1");
+
+      expect(enqueued.map((item) => [item.text, item.delegationId])).toEqual([
+        ["bot_ci said: The Safari fix landed in build forty.", "d-1"],
+      ]);
+      expect(h.notices).toEqual([]);
+    });
+
+    it("goes to the bot's channel for a channel item, not to the thread the focus is in, and does not say its offer", async () => {
+      const live = withWaitingItem("arrived", null);
+      const offers = live.enqueued.filter((item) =>
+        item.text.endsWith("Want it?"),
+      );
+      expect(offers).toHaveLength(1);
+      const h = buildFor(
+        { recheckHolds: true, canSend: true },
+        focusedOnThreadA(live.queue),
+      );
+      h.answers.push(() =>
+        Promise.resolve({
+          ...route("switch", null, null, 2),
+          target: {
+            environmentId: null,
+            botId: null,
+            threadId: null,
+            itemId: "r-1",
+          },
+        }),
+      );
+
+      speak("go", " there");
+      await h.loop.onDelegationCreated("d-1");
+
+      expect(
+        h.navigations.map((target) => [
+          target.tuple.botId,
+          target.focus.threadId,
+          target.focus.anchorMessageId,
+          target.isFocus,
+        ]),
+      ).toEqual([[CI, null, null, false]]);
+      expect(live.withdrawn).toEqual(offers.map((offer) => offer.id));
+    });
+
+    it("says that nothing is waiting when the route names the thread, which has none", async () => {
+      const { enqueued, directory } = directoryOfThreadB();
+      const h = buildFor({ recheckHolds: true, canSend: true }, directory);
+      h.answers.push(() => Promise.resolve(readNaming("thread-a")));
+
+      speak("read", " thread a");
+      await h.loop.onDelegationCreated("d-1");
+
+      expect(enqueued).toEqual([]);
+      expect(h.notices).toEqual([NOTHING_WAITING_NOTICE]);
+      expect(h.noticeDelegations).toEqual(["d-1"]);
+    });
+  });
+
+  it("says that nothing is waiting, under the request's delegation, when there is nothing to read", async () => {
+    const { enqueued } = liveQueue();
+    const h = build({ recheckHolds: true, canSend: true });
+    h.answers.push(() => Promise.resolve(readOf(null)));
+
+    speak("read", " it");
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(h.notices).toEqual([NOTHING_WAITING_NOTICE]);
+    expect(h.noticeDelegations).toEqual(["d-1"]);
+    expect(h.sends).toEqual([]);
+    expect(enqueued).toEqual([]);
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
   });
 });

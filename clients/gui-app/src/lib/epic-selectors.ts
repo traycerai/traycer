@@ -2174,7 +2174,7 @@ export function useEpicLiveArtifactTitleGenerating(
 /**
  * Returns the live `Y.XmlFragment` backing an artifact's body. The fragment
  * resolves through the artifact's assigned artifact-room doc (`artifact-body:{id}`),
- * not the root Epic doc - see B6 in the artifact-room approach spec.
+ * not the root Epic doc (B6).
  *
  * Selects the resolved fragment itself so any store write that makes the
  * artifact-room replica available wakes the editor, even when the room id and

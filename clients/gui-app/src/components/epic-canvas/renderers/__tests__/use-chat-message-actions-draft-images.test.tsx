@@ -4,7 +4,7 @@
  * hash-only node TODAY (the other is queue-edit) - the edit composer is seeded
  * from the SENT message's own `structuredContent`, whose images are already
  * epic attachments. Proving those travel bare, unconditionally, is the
- * regression guard for "no user-visible behaviour change" this ticket promises.
+ * regression guard for "no user-visible behaviour change".
  *
  * ## The default here is BRIDGE DOWN
  *

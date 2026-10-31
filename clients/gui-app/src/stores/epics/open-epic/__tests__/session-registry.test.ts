@@ -2803,7 +2803,7 @@ describe("retained unsynced buffers across a host re-point (F10)", () => {
   // The ordering is structural today (disposal is a CONSEQUENCE of
   // `replaceMounted`, reached through the registry's own replace path), so
   // this pin exists to keep it that way when the flip moves the tail around:
-  // §8's constraint was that `replaceMounted` precedes dispose in the async
+  // The constraint is that `replaceMounted` precedes dispose in the async
   // tail, and an async tail is exactly where an await lands in front of it.
   it("still retains when the outgoing store would read CLEAN after teardown", () => {
     // ONE pin, not two. A companion asserting "a dirty handle is retained"

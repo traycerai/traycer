@@ -1,6 +1,6 @@
 /**
  * Low-contrast checkerboard behind transparent image regions
- * (image-preview decision log, decision #16). Built from `--canvas` /
+ * (decision #16). Built from `--canvas` /
  * `--muted` - the app's own theme tokens already redefine both together for
  * every preset (`:root`, `.dark`, and each named `[data-theme]` override), so
  * this never needs a per-theme override of its own and never inverts an

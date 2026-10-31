@@ -385,7 +385,7 @@ function sceneInputFor(
  * The view contract's invariants (`view-contract/index.md` "Invariants"),
  * spelled out against one layout. `office-layout-contract.test.ts` pins the
  * same list against `layoutOffice`; this is that list again against a plan
- * this ticket owns, which is why it is not shared.
+ * this file owns, which is why it is not shared.
  */
 function checkContract(
   layout: OfficeLayout,
@@ -1847,7 +1847,7 @@ describe("planCampus", () => {
       // does; Campus draws it from the plan.
       if (seat.civicRoomId !== null) continue;
       const occupantId = occupantBySeatId.get(seat.seatId) ?? null;
-      // Occupied, not sheeted, `openRequests: 3` - the union the ticket
+      // Occupied, not sheeted, `openRequests: 3` - the union this test
       // measures the box against.
       const occupiedBoxes = spriteBoxesOf(layout, seat, {
         agentId: occupantId,

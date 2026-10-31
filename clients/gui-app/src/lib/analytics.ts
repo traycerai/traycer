@@ -1143,7 +1143,7 @@ export interface AnalyticsEventProperties {
     readonly surface: string | null;
   };
   // Which report type's gate blocked the attempt (ticket 07's evidence gate,
-  // Flow 2 manual opens only) - downstream funnels join this against a later
+  // manual opens only) - downstream funnels join this against a later
   // `ReportIssuePrivateSubmit` (or its absence) to compute abandon-after-block.
   // `blocked_action` - the gate guards every report-
   // producing action, not just Send, so this says which one the user hit.

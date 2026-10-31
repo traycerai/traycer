@@ -25,7 +25,7 @@
  *   is mandatory: `tile-surface-membership.ts` decides which hosted chat
  *   RECORDS exist from the same policy, and a record whose slot stopped
  *   rendering freezes at its last published environment and paints over the
- *   pane's real selection. This supersedes decision log #17 ("a chat mounts
+ *   pane's real selection. This supersedes decision #17 ("a chat mounts
  *   only while it is the active tab"), whose remount is what made an inner
  *   tab switch visibly re-converge the transcript; a retained chat now takes
  *   the same hide/show path a backgrounded top-level tab already took, and
