@@ -6,7 +6,8 @@
  * back into view, the tab closing when the bot is gone from `bot.list`, and a
  * team's main bot still to be set up (T67): a tab on its id shows the channel
  * where the team is set up, with nothing opened, subscribed or closed (the
- * real hook, over a scripted `bot.onboarding.read`).
+ * real hook, over a scripted `bot.onboarding.read`). Its Enable cloud (T100)
+ * runs the real sandbox reads and create over a scripted control plane.
  * The three views and the bot's session view (T93) are replaced by stubs
  * that expose their props, so what the surface PASSES them is what is
  * asserted. The tab strip's Activity label
@@ -14,9 +15,45 @@
  */
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { StrictMode, type ReactNode } from "react";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import type {
+  SandboxCatalogueFetchResult,
+  SandboxCreateFetchResult,
+  SandboxListFetchResult,
+  TraycerModelsFetchResult,
+} from "@traycer-clients/shared/host-client/sandbox-control";
+import {
+  SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT,
+  type SandboxCatalogue,
+  type SandboxCreateRequest,
+} from "@traycer/protocol/host/sandbox-control";
+import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
+import type { SandboxDefaultsRead } from "@/hooks/sandboxes/use-sandbox-defaults";
+import {
+  createFakeSandboxBinding,
+  refusal,
+  type FakeSandboxAuth,
+  type FakeSandboxBinding,
+} from "@/hooks/sandboxes/__tests__/sandbox-binding-fixture";
+import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import type {
   BotOpenPausedReason,
   BotOpenResponse,
@@ -47,8 +84,22 @@ type OpenResult =
 
 type ReadScript = { setup: BotOnboardingSetup | null } | "fails";
 
+/** The control plane a team's Enable cloud reads and creates through. */
+interface TeamCloudBinding extends FakeSandboxBinding {
+  readonly auth: FakeSandboxAuth & {
+    readonly getTraycerModels: Mock<() => Promise<TraycerModelsFetchResult>>;
+    readonly getSandboxCatalogue: Mock<
+      () => Promise<SandboxCatalogueFetchResult>
+    >;
+  };
+}
+
 const mocks = vi.hoisted(() => ({
   hostClient: { stub: "tab-host-client" },
+  /** The app's host binding; `null` (none) unless a case scripts one. */
+  binding: null as TeamCloudBinding | null,
+  /** What every configuration's `sandbox_defaults` read answers. */
+  sandboxDefaults: { kind: "pending" } as SandboxDefaultsRead,
   resubscribe: vi.fn<() => void>(),
   open: vi.fn<(variables: { botId: string }) => void>(),
   openMutation: {
@@ -172,6 +223,17 @@ vi.mock("@/hooks/host/use-host-queries", () => ({
         dataUpdatedAt: mocks.state.readAt,
       };
     }),
+}));
+vi.mock("@/lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/host")>()),
+  useHostBinding: () => mocks.binding,
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-defaults", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/sandboxes/use-sandbox-defaults")
+  >()),
+  useSandboxDefaults: (environmentIds: readonly string[]) =>
+    new Map(environmentIds.map((id) => [id, mocks.sandboxDefaults])),
 }));
 vi.mock("@/hooks/bots/use-host-environment-bindings-query", () => ({
   useHostEnvironmentBindings: () => ({
@@ -512,6 +574,7 @@ import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
+import { useTeamCloudCreateStore } from "@/stores/bots/team-cloud-create-store";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
@@ -540,6 +603,57 @@ const NEEDS_HOST_SETUP: BotOnboardingSetup = {
 };
 const TAB_HOST = "host-tab";
 const BOUND_HOST = "host-bound";
+/** A model a team sandbox runs. */
+const TRAYCER_MODEL: GuiAgentModelOption = {
+  harnessId: "traycer",
+  slug: "first-model",
+  label: "First model",
+  description: null,
+  contextWindow: null,
+  maxOutputTokens: null,
+  defaultReasoningEffort: null,
+  supportedReasoningEfforts: [],
+  defaultServiceTier: null,
+  supportedServiceTiers: [],
+  metadata: {},
+};
+/** One provider in one region, with room for the team's default shape. */
+const CATALOGUE: SandboxCatalogue = {
+  providers: [
+    {
+      provider: "tensorlake",
+      os: ["linux"],
+      shape: {
+        cpuMin: 1,
+        cpuMax: 16,
+        cpuStep: 1,
+        memoryPerCpuMinMb: 1024,
+        memoryPerCpuMaxMb: 8192,
+        memoryMinMb: 1024,
+        memoryMaxMb: 65536,
+        memoryStepMb: 512,
+        diskMinMb: 10240,
+        diskMaxMb: 102400,
+        diskDefaultMb: 20480,
+      },
+      suspendFidelity: "memory",
+      stoppedStorage: "snapshot",
+      wakeClass: "resume",
+      shapes: null,
+      dockerInGuest: true,
+      creatable: true,
+      notCreatableReason: null,
+      regions: [
+        {
+          id: "us-east",
+          label: "US East",
+          fromPriceMcPerHour: { awakeMc: 120, suspendedMc: 4, stoppedMc: 2 },
+          pricing: null,
+        },
+      ],
+    },
+  ],
+};
 
 const BOT: BotRecord = {
   botId: BOT_ID,
@@ -600,10 +714,14 @@ function answer(outcome: BotOpenResponse["outcome"]): OpenResult {
   return { kind: "answer", response: { bot: BOT, outcome } };
 }
 
+let queryClient = new QueryClient();
+
 function surfaceFor(botId: string): ReactNode {
   return (
     <StrictMode>
-      <BotTabSurface botId={botId} hostId={TAB_HOST} />
+      <QueryClientProvider client={queryClient}>
+        <BotTabSurface botId={botId} hostId={TAB_HOST} />
+      </QueryClientProvider>
     </StrictMode>
   );
 }
@@ -628,6 +746,11 @@ function tabHostIdInStore(): string | null {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  mocks.binding = null;
+  mocks.sandboxDefaults = { kind: "pending" };
   mocks.supportQueries.length = 0;
   mocks.membersQueries.length = 0;
   mocks.state.membersSupport = true;
@@ -666,16 +789,24 @@ beforeEach(() => {
   for (const key of Object.keys(mocks.reads)) delete mocks.reads[key];
   useBotTabsStore.setState({ tabs: {} });
   useBotOpenThreadStore.setState({ byBotId: {} });
+  useTeamCloudCreateStore.setState({ byEnvironmentId: {} });
   __resetAgentActivityStoreForTests();
   useBotTabsStore
     .getState()
     .openBotTab({ botId: BOT_ID, hostId: TAB_HOST, title: "Release Bot" });
 });
 
+const AUTH_AT_START = useAuthStore.getState();
+
 afterEach(() => {
   cleanup();
+  queryClient.clear();
   // A case that signs a viewer in leaves no one signed in for the next.
-  useAuthStore.setState({ profile: null });
+  useAuthStore.setState({
+    profile: null,
+    status: AUTH_AT_START.status,
+    contextMetadata: AUTH_AT_START.contextMetadata,
+  });
 });
 
 describe("<BotTabSurface /> on a host without bot.open", () => {
@@ -765,27 +896,19 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
   });
 
-  it("draws each way to get a host with its button disabled and a line saying it is not available yet, and a click does nothing", async () => {
+  it("draws the machine option's button disabled with a line saying it is not available yet, and a click does nothing", async () => {
     const user = userEvent.setup();
     render(surfaceFor(SETUP_BOT_ID));
 
-    const card = screen.getByTestId("team-host-options");
-    const buttons = within(card).getAllByRole("button");
-    expect(
-      buttons.map((button) => [
-        button.textContent,
-        button.hasAttribute("disabled"),
-        button.getAttribute("aria-describedby") === null
-          ? null
-          : document.getElementById(
-              button.getAttribute("aria-describedby") ?? "",
-            )?.textContent,
-      ]),
-    ).toEqual([
-      ["Enable cloud", true, "Not available yet."],
-      ["Create team host", true, "Not available yet."],
-    ]);
-    for (const button of buttons) await user.click(button);
+    const option = screen.getByTestId("team-host-option-machine");
+    const button = within(option).getByRole("button");
+    expect([
+      button.textContent,
+      button.hasAttribute("disabled"),
+      document.getElementById(button.getAttribute("aria-describedby") ?? "")
+        ?.textContent,
+    ]).toEqual(["Create team host", true, "Not available yet."]);
+    await user.click(button);
 
     expect(mocks.open).not.toHaveBeenCalled();
     expect(screen.getByTestId("team-setup-channel")).toBeTruthy();
@@ -1198,6 +1321,425 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
     expect(screen.queryByTestId("team-setup-channel")).toBeNull();
     expect(mocks.open).toHaveBeenCalledWith({ botId: SETUP_BOT_ID });
     expect(screen.getByTestId("stub-channel")).toBeTruthy();
+  });
+
+  describe("Enable cloud", () => {
+    /** The configuration's defaults: none set means the spec's shape. */
+    const TEAM_DEFAULTS = {
+      os: "linux",
+      cpus: 4,
+      memoryMb: 8192,
+      diskMb: 40960,
+      idleMinutes: 45,
+      restingMinutes: 1_440,
+    } as const;
+
+    beforeEach(() => {
+      const base = createFakeSandboxBinding();
+      mocks.binding = {
+        ...base,
+        auth: {
+          ...base.auth,
+          getTraycerModels: vi.fn(() =>
+            Promise.resolve<TraycerModelsFetchResult>({
+              kind: "ok",
+              models: [TRAYCER_MODEL],
+            }),
+          ),
+          getSandboxCatalogue: vi.fn(() =>
+            Promise.resolve<SandboxCatalogueFetchResult>({
+              kind: "ok",
+              catalogue: CATALOGUE,
+            }),
+          ),
+        },
+      };
+      mocks.sandboxDefaults = {
+        kind: "ready",
+        value: { defaults: TEAM_DEFAULTS, revision: 3 },
+      };
+      useAuthStore.setState({
+        status: "signed-in",
+        contextMetadata: { userId: "user-viewer", username: "olive" },
+      });
+    });
+
+    function auth(): TeamCloudBinding["auth"] {
+      if (mocks.binding === null) throw new Error("no binding scripted");
+      return mocks.binding.auth;
+    }
+
+    function cloudOption(): HTMLElement {
+      return screen.getByTestId("team-host-option-cloud");
+    }
+
+    function enableButton(): HTMLElement {
+      return within(cloudOption()).getByRole("button", {
+        name: "Enable cloud",
+      });
+    }
+
+    it("creates the team's kept sandbox in the team's environment, in the configuration's default shape and region, holding the button while it is created", async () => {
+      const user = userEvent.setup();
+      let answer: (result: SandboxCreateFetchResult) => void = () => undefined;
+      auth().createSandbox.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
+      render(surfaceFor(SETUP_BOT_ID));
+
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+      await user.click(enableButton());
+
+      expect(auth().createSandbox.mock.calls).toEqual([
+        [
+          {
+            os: "linux",
+            cpus: 4,
+            memoryMb: 8192,
+            diskMb: 40960,
+            region: "us-east",
+            displayName: "Team bots",
+            idleMinutes: 45,
+            burst: false,
+            createdByHostId: null,
+            createdByAgentId: null,
+            environmentId: "env-new",
+            destroyAfterRestingMinutes: 1_440,
+            createdByTaskId: null,
+            clientRequestId: expect.any(String),
+          } satisfies Record<keyof SandboxCreateRequest, unknown>,
+        ],
+      ]);
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", true),
+      );
+      await user.click(enableButton());
+      expect(auth().createSandbox).toHaveBeenCalledTimes(1);
+
+      // The created sandbox is listed once the create is answered.
+      auth().listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: {
+          sandboxes: [
+            sandboxSummaryFixture({
+              environmentId: "env-new",
+              state: "creating",
+              burst: false,
+            }),
+          ],
+        },
+      });
+      act(() => {
+        answer({
+          kind: "ok",
+          accepted: {
+            sandboxId: "sbx_1",
+            hostId: "host-sbx-1",
+            sandbox: sandboxSummaryFixture({ environmentId: "env-new" }),
+          },
+        });
+      });
+
+      await waitFor(() =>
+        expect(
+          within(cloudOption()).getByTestId("team-host-option-cloud-note")
+            .textContent,
+        ).toBe(
+          "The team has a cloud sandbox. Its bots start once it's running.",
+        ),
+      );
+      expect(enableButton()).toHaveProperty("disabled", true);
+    });
+
+    it.each([
+      [
+        "is still out",
+        (): Promise<SandboxListFetchResult> => new Promise(() => undefined),
+        "The team has a cloud sandbox. Its bots start once it's running.",
+      ],
+      [
+        "fails",
+        (): Promise<SandboxListFetchResult> =>
+          Promise.resolve({ kind: "network-error", detail: "offline" }),
+        "Couldn't reach Traycer. Try again in a moment.",
+      ],
+    ] as const)(
+      "keeps the button held after the create is accepted while the list's next read %s, so a second press creates nothing",
+      async (_case, nextList, sentence) => {
+        const user = userEvent.setup();
+        auth().createSandbox.mockResolvedValue({
+          kind: "ok",
+          accepted: {
+            sandboxId: "sbx_1",
+            hostId: "host-sbx-1",
+            sandbox: sandboxSummaryFixture({ environmentId: "env-new" }),
+          },
+        });
+        render(surfaceFor(SETUP_BOT_ID));
+        await waitFor(() =>
+          expect(enableButton()).toHaveProperty("disabled", false),
+        );
+        auth().listSandboxes.mockImplementation(nextList);
+
+        await user.click(enableButton());
+        await waitFor(() =>
+          expect(
+            document.getElementById(
+              enableButton().getAttribute("aria-describedby") ?? "",
+            )?.textContent,
+          ).toBe(sentence),
+        );
+        expect(enableButton()).toHaveProperty("disabled", true);
+        await user.click(enableButton());
+
+        expect(auth().createSandbox).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it("keeps a remounted card held while the list has not caught up with an accepted create, so a press there creates nothing", async () => {
+      const user = userEvent.setup();
+      auth().createSandbox.mockResolvedValue({
+        kind: "ok",
+        accepted: {
+          sandboxId: "sbx_team",
+          hostId: "host-sbx-team",
+          sandbox: sandboxSummaryFixture({ environmentId: "env-new" }),
+        },
+      });
+      const first = render(surfaceFor(SETUP_BOT_ID));
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+      let answerList: (result: SandboxListFetchResult) => void = () =>
+        undefined;
+      auth().listSandboxes.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            answerList = resolve;
+          }),
+      );
+      await user.click(enableButton());
+      await waitFor(() =>
+        expect(
+          within(cloudOption()).queryByTestId("team-host-option-cloud-note")
+            ?.textContent,
+        ).toBe(
+          "The team has a cloud sandbox. Its bots start once it's running.",
+        ),
+      );
+      first.unmount();
+
+      // The same app, the card mounted again: the list still holds the read
+      // from before the create.
+      render(surfaceFor(SETUP_BOT_ID));
+      expect(
+        within(cloudOption()).getByTestId("team-host-option-cloud-note")
+          .textContent,
+      ).toBe("The team has a cloud sandbox. Its bots start once it's running.");
+      expect(enableButton()).toHaveProperty("disabled", true);
+      await user.click(enableButton());
+      expect(auth().createSandbox).toHaveBeenCalledTimes(1);
+
+      // Once the list carries the sandbox, it speaks for the team.
+      act(() => {
+        answerList({
+          kind: "ok",
+          response: {
+            sandboxes: [
+              sandboxSummaryFixture({
+                id: "sbx_team",
+                environmentId: "env-new",
+                state: "creating",
+              }),
+            ],
+          },
+        });
+      });
+      await waitFor(() =>
+        expect(
+          useTeamCloudCreateStore.getState().byEnvironmentId["env-new"],
+        ).toBeUndefined(),
+      );
+      expect(enableButton()).toHaveProperty("disabled", true);
+    });
+
+    it("lets the team make another sandbox once a list read sent after the accepted create no longer carries it, and never on a read sent before", async () => {
+      const user = userEvent.setup();
+      // Only the clock is held, so which read was sent after the answer is
+      // decided by the test, not by how fast it ran.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(1_000_000);
+        auth().createSandbox.mockResolvedValue({
+          kind: "ok",
+          accepted: {
+            sandboxId: "sbx_team",
+            hostId: "host-sbx-team",
+            sandbox: sandboxSummaryFixture({ environmentId: "env-new" }),
+          },
+        });
+        render(surfaceFor(SETUP_BOT_ID));
+        await waitFor(() =>
+          expect(enableButton()).toHaveProperty("disabled", false),
+        );
+
+        // The create's own refresh is sent no later than its answer is heard:
+        // the row's absence there settles nothing.
+        await user.click(enableButton());
+        await waitFor(() =>
+          expect(auth().listSandboxes.mock.calls.length).toBeGreaterThan(1),
+        );
+        await waitFor(() =>
+          expect(
+            within(cloudOption()).queryByTestId("team-host-option-cloud-note")
+              ?.textContent,
+          ).toBe(
+            "The team has a cloud sandbox. Its bots start once it's running.",
+          ),
+        );
+        expect(
+          useTeamCloudCreateStore.getState().byEnvironmentId["env-new"]
+            ?.acceptedSandboxId,
+        ).toBe("sbx_team");
+
+        // The sandbox is destroyed elsewhere before this app lists it; the
+        // next read, sent later, does not carry it.
+        vi.setSystemTime(1_000_100);
+        await act(() => queryClient.invalidateQueries());
+        await waitFor(() =>
+          expect(enableButton()).toHaveProperty("disabled", false),
+        );
+        expect(
+          useTeamCloudCreateStore.getState().byEnvironmentId["env-new"],
+        ).toBeUndefined();
+
+        await user.click(enableButton());
+        await waitFor(() =>
+          expect(auth().createSandbox).toHaveBeenCalledTimes(2),
+        );
+        const keys = auth().createSandbox.mock.calls.map(
+          ([request]) => request.clientRequestId,
+        );
+        expect(new Set(keys).size).toBe(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("keeps a remounted card held while its create is still out, and sends no second create", async () => {
+      const user = userEvent.setup();
+      auth().createSandbox.mockImplementation(
+        () => new Promise(() => undefined),
+      );
+      const first = render(surfaceFor(SETUP_BOT_ID));
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+      await user.click(enableButton());
+      first.unmount();
+
+      render(surfaceFor(SETUP_BOT_ID));
+      expect(enableButton()).toHaveProperty("disabled", true);
+      await user.click(enableButton());
+      expect(auth().createSandbox).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      [
+        "answers no model",
+        { kind: "ok", models: [] },
+        "No model is available for team sandboxes yet.",
+      ],
+      [
+        "cannot be read",
+        { kind: "network-error", detail: "offline" },
+        "Couldn't reach Traycer. Try again in a moment.",
+      ],
+    ] as const)(
+      "keeps the button disabled, saying why, when the team sandbox model list %s",
+      async (_case, models, sentence) => {
+        const user = userEvent.setup();
+        auth().getTraycerModels.mockResolvedValue(models);
+        render(surfaceFor(SETUP_BOT_ID));
+
+        await waitFor(() =>
+          expect(
+            document.getElementById(
+              enableButton().getAttribute("aria-describedby") ?? "",
+            )?.textContent,
+          ).toBe(sentence),
+        );
+        expect(enableButton()).toHaveProperty("disabled", true);
+        await user.click(enableButton());
+        expect(auth().createSandbox).not.toHaveBeenCalled();
+      },
+    );
+
+    it("keeps the button disabled, saying so, when the team already has its sandbox", async () => {
+      const user = userEvent.setup();
+      auth().listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: {
+          sandboxes: [
+            // Another team's kept sandbox and this team's job sandbox host
+            // no bot of this team's.
+            sandboxSummaryFixture({
+              id: "sbx_other",
+              environmentId: "env-team",
+            }),
+            sandboxSummaryFixture({
+              id: "sbx_job",
+              environmentId: "env-new",
+              burst: true,
+            }),
+            sandboxSummaryFixture({
+              id: "sbx_team",
+              environmentId: "env-new",
+              state: "suspended",
+            }),
+          ],
+        },
+      });
+      render(surfaceFor(SETUP_BOT_ID));
+
+      await waitFor(() =>
+        expect(
+          document.getElementById(
+            enableButton().getAttribute("aria-describedby") ?? "",
+          )?.textContent,
+        ).toBe(
+          "The team has a cloud sandbox. Its bots start once it's running.",
+        ),
+      );
+      expect(enableButton()).toHaveProperty("disabled", true);
+      await user.click(enableButton());
+      expect(auth().createSandbox).not.toHaveBeenCalled();
+    });
+
+    it("says a refusal for want of the team's credit under the button, and lets the person press it again", async () => {
+      const user = userEvent.setup();
+      auth().createSandbox.mockResolvedValue({
+        ...refusal(402, SANDBOX_REFUSAL_CODE_INSUFFICIENT_CREDIT),
+        creditSource: "team",
+      });
+      render(surfaceFor(SETUP_BOT_ID));
+
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+      await user.click(enableButton());
+
+      const alert = await within(cloudOption()).findByRole("alert");
+      expect(alert.textContent).toBe(
+        "The team's credits don't cover an hour of this sandbox.",
+      );
+      expect(enableButton()).toHaveProperty("disabled", false);
+    });
   });
 });
 
