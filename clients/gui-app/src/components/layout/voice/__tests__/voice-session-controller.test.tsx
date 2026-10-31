@@ -3157,3 +3157,61 @@ describe("a rail put back against a newer navigation", () => {
     );
   });
 });
+
+describe("an answer that lands before its post's request names it", () => {
+  it("is held as an announcement, then read on the focused channel once the request resolves to it", async () => {
+    const channel = addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    focusOn(CHANNEL_FOCUS);
+    await bringLive();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    const commentary = fake.engines[0]?.appendCommentary;
+    const answer = botRow("a-9", "The nightly build is green.");
+
+    // A typed post's answer: nothing says yet which request it answers.
+    act(() => {
+      channel.setState({ snapshotLoaded: true, messages: [answer] });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(commentary).not.toHaveBeenCalled();
+    expect(
+      useVoiceSessionStore.getState().queue.map((item) => [item.id, item.kind]),
+    ).toEqual([["a-9", "announcement"]]);
+
+    act(() => {
+      channel.setState({
+        snapshotLoaded: true,
+        messages: [requestRow("u-1", "r-typed", "a-9"), answer],
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(commentary).toHaveBeenCalledTimes(1);
+    expect(commentary).toHaveBeenCalledWith(
+      expect.stringContaining("The nightly build is green."),
+      null,
+    );
+    expect(
+      useVoiceSessionStore.getState().queue.map((item) => item.kind),
+    ).not.toContain("announcement");
+    act(() =>
+      eventsOf(0).onOutputTranscriptDelta("The nightly build is green"),
+    );
+
+    act(() => {
+      channel.setState({
+        snapshotLoaded: true,
+        messages: [requestRow("u-1", "r-typed", "a-9"), answer],
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+    expect(commentary).toHaveBeenCalledTimes(1);
+  });
+});
