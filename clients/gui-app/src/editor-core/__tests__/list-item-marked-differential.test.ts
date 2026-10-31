@@ -562,7 +562,7 @@ describe("a task item reads the same in a mixed list as in a list of tasks", () 
     [
       ["a checked task of one extra space", "- x\n- [x]  ", true, ""],
       ["an unchecked task of one extra space", "- x\n- [ ]  ", false, ""],
-      // The cold reviewer's input (29162a99): marked trims the last item's
+      // Marked trims the last item's
       // no-break space away, the one reader keeps it.
       [
         "a checked task of a no-break space",
@@ -755,7 +755,7 @@ describe("a plain-text ordered paste reads as marked reads it", () => {
   });
 });
 
-// ---- the cold reviewer's rows
+// ---- the added rows
 
 describe("a continuation line's tabs read as marked reads them", () => {
   const ROWS: ReadonlyArray<readonly [string, string]> = [

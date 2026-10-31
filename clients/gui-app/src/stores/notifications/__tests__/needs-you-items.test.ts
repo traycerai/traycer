@@ -190,7 +190,7 @@ describe("groupNeedsYouByEpic", () => {
 
 /**
  * `useNeedsYouItems` against a real `useCloudNotificationsStore` snapshot
- * (finding 3): the cloud store keys its rows by `cloudNotificationFeedId`,
+ * The cloud store keys its rows by `cloudNotificationFeedId`,
  * not by the bare `entryId`, so this exercises the actual wiring the pure
  * selector's hand-built rows above cannot catch.
  */

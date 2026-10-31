@@ -1069,7 +1069,7 @@ describe("<SignInButton />", () => {
         { id: "auth-session:expired", cancel: null },
       );
     });
-    // Cold-review P1-4: a live refresh rejection is a verdict about the TOKEN,
+    // P1-4: a live refresh rejection is a verdict about the TOKEN,
     // so the session is DEMOTED and the local plane survives - it is no longer
     // torn down out from under whatever the user was editing.
     expect(useAuthStore.getState().status).toBe("unverified");

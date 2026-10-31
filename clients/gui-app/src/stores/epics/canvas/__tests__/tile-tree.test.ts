@@ -568,7 +568,7 @@ describe("paneRemovalDissolveHandoffTargets", () => {
   });
 
   /**
-   * Review round 1, finding 4: the original version of this test only
+   * The original version of this test only
    * checked `result.root?.kind` (pane vs group) - it would stay green even
    * if the helper flushed the WRONG pane's tabs, or missed panes nested
    * under a multi-pane survivor, as long as the root's shape matched.

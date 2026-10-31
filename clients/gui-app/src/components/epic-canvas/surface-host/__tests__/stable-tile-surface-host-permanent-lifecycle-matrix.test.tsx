@@ -677,7 +677,7 @@ afterEach(() => {
       chatTabPersistenceTabKey({ tileInstanceId: chat.instanceId }),
     ),
   );
-  // Review P2: the pending-hydration registry is module-scope and private to
+  // The pending-hydration registry is module-scope and private to
   // chat-messages.tsx, so it survives an ordinary cache eviction. Rows 16
   // onward reuse the fixed CHAT_TRACKED/CHAT_SIBLING instance ids - without
   // this, a missing-anchor mount in one row can leave a pending entry a
@@ -1206,7 +1206,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 3b - two-pane occupied-target move: the dragged chat survives, the displaced destination chat is retained rather than remounted, and the emptied source pane dissolves", async () => {
-    // Review finding 2: row 3 only drives an empty-target move; row 11 only
+    // Row 3 only drives an empty-target move; row 11 only
     // drives `setActiveTileTab` (a plain in-pane switch), never
     // `moveTabOnTabStrip` across two panes. Neither composes the real drop's
     // three simultaneous consequences a genuine drag-onto-an-occupied-pane
@@ -1318,7 +1318,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     await waitForHostedChatLoaded(container, CHAT_SIBLING.instanceId);
     const trackedBefore = captureRefs(container, CHAT_TRACKED.instanceId);
     // The chat the flat split actually MOVES - this is the row's real
-    // subject. Review finding 1: an earlier version of this row loaded and
+    // subject. An earlier version of this row loaded and
     // asserted only the untouched bystander (tracked), so it never proved
     // content continuity through the same-axis insertion it claims to
     // cover - a `Suspense` boundary keyed by `environment.placement.paneId`
@@ -1607,7 +1607,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 11b - the retained record is genuinely unpainted, through the REAL store -> slot -> publish path", async () => {
-    // Cold review F3: the presentation guard's only other coverage builds
+    // F3: the presentation guard's only other coverage builds
     // `canvasActivity: { tabSelected: false }` by hand, so a regression in
     // `ActiveTabBody`'s `tabSelected={props.selected}` wiring - the thing that
     // actually produces that field in production - would ship green. This row
@@ -1801,7 +1801,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 14 - production visibility boundary: topLevelVisible handoff through real hosted chain restores free-reading position", async () => {
-    // Review P2: every existing visibility-handoff
+    // Every existing visibility-handoff
     // case in `chat-messages.test.tsx` drives `ChatMessages.visible` via a
     // direct prop re-render, so a broken
     // `environment.presentation.topLevelVisible` bridge would still pass.

@@ -1796,7 +1796,7 @@ describe("useGitListChangedFilesSubscription", () => {
     });
 
     it("clears watcher health when the connection renegotiates below 1.3", async () => {
-      // Cold-review finding: writing `lastWatcherStatus` only when the field
+      // Writing `lastWatcherStatus` only when the field
       // is PRESENT makes it a latch. The same client instance can reconnect to
       // a restarted or rolled-back host and negotiate down, and then no frame
       // is able to clear a notice describing a host generation that is gone.

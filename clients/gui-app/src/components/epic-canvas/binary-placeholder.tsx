@@ -41,7 +41,7 @@ export function BinaryPlaceholder(props: BinaryPlaceholderProps) {
       />
       {props.compact ? null : (
         // "Binary File" above "This PDF is too large..." reads as a
-        // contradiction (live-testing review) - name the type we know.
+        // contradiction - name the type we know.
         <h3 className="text-base font-semibold">
           {documentKind === null
             ? "Binary File"

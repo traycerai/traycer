@@ -243,7 +243,7 @@ export function subscribeEpicOwnershipReleased(
 //
 // Deleted rather than left dead, because its doc comment asserted a design
 // that no longer exists and had already been read as current twice - it is
-// what a review finding asking to "derive the producer set from open tabs'
+// what a request to "derive the producer set from open tabs'
 // lifetime host bindings" was written against, which at HEAD would rebuild
 // exactly the fan-out #906 removed. A dead function is harmless; a dead
 // function whose comment describes a removed design is a source of false

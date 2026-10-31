@@ -768,7 +768,7 @@ export class AuthService {
   private sessionRecoveryDelayMs: number = SESSION_RECOVERY_INITIAL_DELAY_MS;
   private sessionRecoveryAttempt: number = 0;
   // Single-flight for the ASYNC probe, distinct from `sessionRecoveryTimer`
-  // which only covers the WAIT before it (cold review P2-6). The timer nulls
+  // which only covers the WAIT before it (P2-6). The timer nulls
   // itself the instant it fires, so between that and the probe settling there
   // is a window - three `withAuthNetworkRetry` attempts wide - in which the
   // loop looks idle to anything that checks the timer. A wake landing there
@@ -3850,7 +3850,7 @@ export class AuthService {
   /**
    * The ordinary mid-session expiry: a signed-in user editing local work whose
    * refresh authn rejects with a verdict about the TOKEN. This arm used to
-   * `clearUiSession()`, which is cold-review P1-4 - it produced a real
+   * `clearUiSession()`, which is P1-4 - it produced a real
    * `signed-out`, redirecting the shell out from under the work and firing
    * `useAuthIdentityTransition`'s destructive arm (which PURGES account-scoped
    * persisted state; reading positions are deleted from disk). The
@@ -5302,7 +5302,7 @@ export class AuthService {
    * announcement — but not because nothing reads it there. This comment used
    * to claim "no synchronous listener path reads auth state from there", and
    * that claim is FALSE. It is stated as a correction rather than deleted
-   * because it is the specific artifact that let a real defect survive review:
+   * because it is the specific artifact that let a real defect through:
    *
    *   `setSignedIn` announces synchronously -> `HostRuntime` ->
    *   `directory.refreshForEra(era)` -> the auth-bound fetcher ->
@@ -5597,8 +5597,8 @@ export class AuthService {
    * from the live profile rather than the credentials file.
    *
    * Shared by every live-path intake that can land on a terminal verdict, which
-   * is the point: three of them existed and only one held the plane. Each was a
-   * separate reviewer finding, and they were the same defect — an intake path
+   * is the point: three of them existed and only one held the plane. Each was
+   * found separately, and they were the same defect — an intake path
    * that reaches a rejection and leaves the store `signed-in` on a credential
    * the server has refused. Adding a fourth caller should mean calling this,
    * not re-deriving it.
@@ -5647,7 +5647,7 @@ export class AuthService {
    * shell out from under someone editing local work AND made
    * `useAuthIdentityTransition` run its destructive arm, purging account-scoped
    * persisted state (reading positions are deleted from disk outright). That
-   * was cold-review P1-4.
+   * was P1-4.
    *
    * Deliberately bypasses {@link applyUnverifiedSession}'s live-session guard
    * rather than weakening it, because the two callers mean opposite things by
@@ -5710,7 +5710,7 @@ export class AuthService {
     // projects: `retired` means the identity is gone and PURGES account-scoped
     // state (reading positions are deleted from disk). Nothing about a refused
     // refresh token says the account is gone, and the person may sign straight
-    // back in. This keeps cold-review P1-4's ruling - a server verdict must not
+    // back in. This keeps P1-4's ruling - a server verdict must not
     // destroy local state - on the shell where the rest of that fix (holding
     // the plane) has nothing to act on.
     const projected = this.shellServesLocalPlane()

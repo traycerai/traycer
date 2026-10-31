@@ -2695,7 +2695,7 @@ describe("ticket 20: pre-structural-mutation viewport handoff wiring", () => {
   });
 
   /**
-   * Review round 1, finding 1 (CONFIRMED HIGH): `splitPaneAtEdge`
+   * `splitPaneAtEdge`
    * resolves a `node` source whose content is ALREADY OPEN elsewhere into a
    * `tab`-kind cross-pane MOVE before doing anything else - the same
    * "already open" resolution `insertNodeOnTabStrip` performs - but this

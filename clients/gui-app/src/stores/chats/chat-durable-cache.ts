@@ -39,7 +39,7 @@ export function createChatDurableCache<T>(limit: number): ChatDurableCache<T> {
     get: (identity) => {
       const key = chatTabPersistenceChatKey(identity);
       const value = cache.get(key);
-      // Review (F6): a get() must also refresh recency - without
+      // F6: a get() must also refresh recency - without
       // this, insertion order alone means an entry read every reopen but
       // never re-saved (e.g. a chat that is only ever browsed, never
       // scrolled) still ages out on schedule while genuinely idle entries
@@ -52,7 +52,7 @@ export function createChatDurableCache<T>(limit: number): ChatDurableCache<T> {
     },
     set: (identity, value) => {
       const key = chatTabPersistenceChatKey(identity);
-      // Review round 3: a terminally deleted chat/epic refuses
+      // A terminally deleted chat/epic refuses
       // every future write regardless of who runs last - the sweep's
       // promotion and the deletion mutation's own eviction race (the sweep
       // fires synchronously on tab close; the deletion's `onSuccess` fires

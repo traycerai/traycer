@@ -1734,7 +1734,7 @@ describe("epic-parking - document hidden but the epic is visible in another wind
   });
 });
 
-// ── Codex review pins 1-4: canPark/park now consult the chat plane, and a
+// ── canPark/park now consult the chat plane, and a
 // missing OpenEpicSessionRegistry entry no longer short-circuits to "yes" ──
 //
 // Before this fix, `canPark` read only the epic store (`holdsNothingToLose`)
@@ -2085,7 +2085,7 @@ describe("epic-parking - chat plane gating & missing-entry safeguard (Codex revi
   });
 });
 
-// ── Codex review pin 5: the deferred-park retry actually fires ─────────────
+// ── The deferred-park retry actually fires ─────────────────────────────────
 //
 // `waitForEligibility`'s watch listens to the OPEN-EPIC registry, which is
 // silent for an epic with no session entry - exactly the population whose
@@ -2648,7 +2648,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
     }
   });
 
-  // Pin 8c (CodeRabbit on 343f6cc0b9): a `completed` slot PERSISTS for toast
+  // Pin 8c: a `completed` slot PERSISTS for toast
   // and dialog consumers, so with checkpoint A completed, a restore of B
   // accepted afterwards used to read A's slot as its own settlement and park
   // before B's `restoreStarted` arrived. The record now holds by EXISTENCE and
@@ -2729,7 +2729,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
     }
   });
 
-  // Pin 8d (CodeRabbit on 7f3f67441): pin 8c's fix matched the slot's
+  // Pin 8d: pin 8c's fix matched the slot's
   // checkpoint id against the action's, which a REPEAT restore of the SAME
   // checkpoint defeats - A's completed slot names A, so a second restore of A
   // accepted afterwards read that older slot as its own settlement and the
@@ -2878,7 +2878,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
     }
   });
 
-  // Pin 8f (Codex on 7f3f67441): two restores of the SAME checkpoint accepted
+  // Pin 8f: two restores of the SAME checkpoint accepted
   // back to back - the composer's gate reads `pendingActions`, so the first
   // ack re-opens it - are two attempts the host runs serially. One
   // `restoreStarted` used to retire BOTH records, and the first attempt's
@@ -2970,7 +2970,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
     }
   });
 
-  // Pin 8l (Codex on ad9f99fb8): the host broadcasts `restoreCompleted`
+  // Pin 8l: the host broadcasts `restoreCompleted`
   // before the durable `checkpoint.restored` event, but the outcome is
   // journaled across an await, and a legacy snapshot serialized in that gap
   // carries it AHEAD of the frame. The event door retires the first
@@ -3075,7 +3075,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
     }
   });
 
-  // Pin 8g (Codex on b63aa85d7): a restore still RUNNING across a transport
+  // Pin 8g: a restore still RUNNING across a transport
   // reconnect. The in-flight slot is frame-driven and the post-reconnect
   // snapshot sweeps it (`sweepStaleRestoreSlot`), and with the record retired
   // at the start that sweep left no hold: the registry's synchronous retry
@@ -3258,7 +3258,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
     }
   });
 
-  // Pin 8j (Codex on ac6c4eca1): the WINDOWED line's reconnect snapshot
+  // Pin 8j: the WINDOWED line's reconnect snapshot
   // cannot carry the outcome at all - its tail is hydrated transcript rows,
   // and a restore outcome is not one - so pin 8h's door never opens there
   // and a completed restore's record would hold until the tab closed. The
@@ -3387,7 +3387,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
     }
   });
 
-  // Pin 8k (Codex on ad9f99fb8): an OBSERVER window - one that saw
+  // Pin 8k: an OBSERVER window - one that saw
   // `restoreStarted` for a restore another window dispatched - has no
   // accepted record, so the record-matched settlement could not reach its
   // spinner: with the completion frame lost and the live outcome event
@@ -3458,8 +3458,8 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
   // Pin 8i: the same outcome arriving LIVE as an appended event (the host
   // broadcasts the event alongside the frame), an error notice naming the
   // action, and a rejected ack naming it (the host refusing a retransmit) -
-  // the other doors, each retiring by id. After a REAL start (Codex on
-  // ac6c4eca1): the in-flight slot is a parking hold of its own
+  // the other doors, each retiring by id. After a REAL start:
+  // the in-flight slot is a parking hold of its own
   // (`hasUnsettledChatWork`), and retiring the record while the spinner
   // stayed in flight held the epic until a reconnect happened to sweep it.
   // Each door settles the retired attempt's slot too: the outcome completes
@@ -3616,7 +3616,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
     }
   });
 
-  // Pin 9c (Codex on 4df091443, reproduced through the real toaster and
+  // Pin 9c (reproduced through the real toaster and
   // handoff driver): the hold's release read `deliveredNoticeActionIds`,
   // which answers "did ANY speaker for this action reach the user". A
   // rejection's own `ACTION_REJECTED` toast, shown while the pane was
@@ -3757,7 +3757,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
     }
   });
 
-  // Pin 9d (Codex on 4df091443, reproduced through the real toaster): the
+  // Pin 9d (reproduced through the real toaster): the
   // action-wide delivery set is a 128-entry FIFO, and the last-copy record
   // it was guarding is never evicted from the ring. A flood of ordinary
   // notices after the draft WAS shown forgot the delivery while the record
@@ -3878,7 +3878,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
     }
   });
 
-  // Pin 9b (Codex on ac6c4eca1): the restoration slot is not the only home a
+  // Pin 9b: the restoration slot is not the only home a
   // failed send's text ends up in. When the composer already holds a newer
   // draft, `stateFailedSendRestoration` clears the slot and STATES the
   // displaced prompt in a `SEND_NOT_RECORDED` notice whose message body is
@@ -3945,7 +3945,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
 
       // The rejection's OWN toast reaching the user is a different speaker
       // for the same action - it says nothing about the draft, so the hold
-      // stays (Codex on 4df091443).
+      // stays.
       chat.handle.store
         .getState()
         .markNoticeDelivered(noticeFor("ACTION_REJECTED"));
@@ -3989,7 +3989,7 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
 
   // Pin 10a, positive (P1 - age eviction). An unconfirmed accepted send
   // survives past the 5-minute retention window once a frame actually RUNS
-  // pruning - an empty same-connection `queueChanged`, the reviewer's exact
+  // pruning - an empty same-connection `queueChanged`, the exact
   // repro. `acceptedActionHoldsUnrecoveredSend` is what keeps it out of the
   // prunable set; without it the record would be gone and nothing would hold
   // the park.
@@ -4354,7 +4354,7 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
     }
   });
 
-  // Pin 12c (CodeRabbit on 343f6cc0b9): a pause that SETTLED must not come
+  // Pin 12c: a pause that SETTLED must not come
   // back as a veto when the queue is later resumed. Judged from live state
   // alone, a retained `pauseQueue` record reads unsettled again the moment
   // the status is no longer `paused`, which held the epic resident until the
@@ -4408,7 +4408,7 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
     }
   });
 
-  // Pin 12d (Codex on 7f3f67441): a resume is settled by the ROWS, not by the
+  // Pin 12d: a resume is settled by the ROWS, not by the
   // derived `status`. The host computes `status` from the rows - `running`
   // while any row is runnable - and the header offers Resume on
   // `items.some(paused)` regardless of it, so a queue can carry paused rows

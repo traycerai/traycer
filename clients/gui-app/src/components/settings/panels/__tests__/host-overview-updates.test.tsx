@@ -1838,7 +1838,7 @@ describe("<HostSettingsPanel /> Overview updates — version picker", () => {
    * The state under test is the one a boolean could not express: a host whose
    * DEFAULT catalog already includes release candidates, where "unchecked" and
    * "never touched" have to reach the host as different requests or unticking
-   * the box does nothing at all (critique finding 7).
+   * the box does nothing at all.
    */
   it("sends an explicit exclude when the box is unticked on a host whose default includes RCs", async () => {
     const requests: Array<boolean | undefined> = [];
@@ -3577,7 +3577,7 @@ describe("Overview updates — stagedEntryOfferable", () => {
   });
 
   it("an unresolved platform asset (null platformKey against a multi-platform entry) is not offerable, and reads as 'couldn't verify'", async () => {
-    // CodeRabbit r3944197329: a `platformKey` this page cannot resolve is
+    // A `platformKey` this page cannot resolve is
     // NOT the same claim as "the release can't install here" - it is a
     // claim this page cannot make at all, so the refusal text has to be the
     // generic "couldn't verify" catch-all, never the asset-unavailable text

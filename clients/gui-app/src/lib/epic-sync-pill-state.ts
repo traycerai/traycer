@@ -446,7 +446,7 @@ function cloudDownState(inputs: EpicSyncPillInputs): EpicSyncPillState {
  * - `durability: "cloud"` is the POSITIVE cloud-durable statement the `@1.6`
  *   enum now carries, and it is the ONLY durability value that licenses calm.
  *   An absent `durability` from a `@1.6` peer means UNKNOWN - the frame's own
- *   absence rule - and review found the earlier reading here (absence beside
+ *   absence rule - and the earlier reading here (absence beside
  *   `armed` as the calm arm) resolving a schema-permitted omission into
  *   exactly the silence-as-reassurance this minor exists to break.
  * - Every OTHER stated durability value says the epic is not simply sitting

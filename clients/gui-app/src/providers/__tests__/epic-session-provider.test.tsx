@@ -1287,7 +1287,7 @@ describe("<TestEpicSessionTab />", () => {
   });
 
   // ── `handleHostClients` stamping ──────────────────────────────────────────
-  // Oracle for the risk review's "`releaseMounted` on unmount;
+  // Oracle for the risk analysis's "`releaseMounted` on unmount;
   // `handleHostClients` stamping; imported-unseen `markSeen`" untested list.
   // The stamp is read by imperative callers OUTSIDE this subtree (the DnD
   // reparent commit); nothing in this suite reads it today.
@@ -1611,7 +1611,7 @@ describe("<TestEpicSessionTab />", () => {
   });
 
   it("keys the session identity on the canonical user id, so two accounts sharing an email do NOT share a session", async () => {
-    // Codex #1243 T-66. The arm above seeds `userId: email`, so it is green
+    // The arm above seeds `userId: email`, so it is green
     // whether the provider reads the id or the address - it cannot tell them
     // apart. This one seeds DIFFERENT canonical ids behind ONE address, which
     // is the real-world shape: keyed on the email the identity comparison saw
@@ -4435,7 +4435,7 @@ describe("<TestEpicSessionTab />", () => {
   });
 
   it("hands a FRESH surface a new handle during the corpse window, before any Retry", async () => {
-    // The path finding 8's first fix could not reach. `retireDeadMounted` was
+    // The path the first fix could not reach. `retireDeadMounted` was
     // called from the acquire effect, gated on the surface ALREADY holding the
     // dead handle - so a second tab opening this epic between the fatal and any
     // Retry has no `current`, skips that gate entirely, and adopts the corpse

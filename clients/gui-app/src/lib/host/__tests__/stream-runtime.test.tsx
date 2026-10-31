@@ -889,7 +889,7 @@ describe("HostStreamProvider", () => {
   });
 
   // R-1: the owner-layer discriminator the S1 cache test cannot provide (see
-  // `active-remote-sessions.test.ts` "review finding #2" for the cache-layer
+  // `active-remote-sessions.test.ts` for the cache-layer
   // half). Drives the REAL production chain end to end - the directory row
   // move, the registry's row-changed signal, this provider's
   // `remoteAwareOwnerIdentity` `identityKey`, and the shared

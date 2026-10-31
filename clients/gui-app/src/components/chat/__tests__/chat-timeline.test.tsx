@@ -637,7 +637,7 @@ describe("ChatTimeline", () => {
    * (confirmed empirically, including with `IS_REACT_ACT_ENVIRONMENT`
    * disabled and with `flushSync`) fully settles BOTH `useLayoutEffect` AND
    * `useEffect` synchronously in this React version, which hides the exact
-   * regression finding 1 covers. Calling the exposed setters directly, with
+   * regression this file pins. Calling the exposed setters directly, with
    * the act-environment flag OFF (see `withActEnvironmentDisabled`), lets a
    * PLAIN state update go through React's ordinary (non-test) scheduling,
    * where a passive effect's flush is a real, separately-scheduled task
@@ -720,7 +720,7 @@ describe("ChatTimeline", () => {
     await vi.advanceTimersByTimeAsync(16);
   }
 
-  // Finding 1's "row mounting in the stale window" sub-case was investigated
+  // The "row mounting in the stale window" sub-case was investigated
   // specifically for a row that mounts because `messages` GROWS (a new
   // message arrives) in the same update as a highlight change. Empirically
   // (verified with fine-grained per-tick polling, both against this fix and

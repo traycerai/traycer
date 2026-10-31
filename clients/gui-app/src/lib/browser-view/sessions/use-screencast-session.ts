@@ -289,7 +289,7 @@ function scopeEpicId(scope: HostResourceScope): string | null {
  * (`MobileRunnerHost.browserView = null`) answer `null`.
  *
  * Everything else is a `"viewer"`: it watches the tab, and the host refuses
- * its `arm` and its input frames outright (security review root cause G). The
+ * its `arm` and its input frames outright (root cause G). The
  * declaration is what the host acts on, so a modified client can still claim
  * `"tile"` - the tier bounds a cooperating viewer, it does not authorize one.
  */

@@ -372,7 +372,7 @@ function FallbackSettingsPanelBody(props: {
   return (
     // Which tier conflicts have been announced, for exactly the editor's
     // lifetime - the same key - so leaving the Equivalent models tab and
-    // coming back does not read every conflict out again (review R2).
+    // coming back does not read every conflict out again (R2).
     <FallbackConflictAnnouncementsProvider key={editorKey}>
       <FallbackPolicyEditor
         key={editorKey}
@@ -1465,7 +1465,7 @@ function unrefreshedResetBody(subject: UnrefreshedResetSubject): string {
  * question the unknown-outcome notice asks - what did the host store? - is
  * already answered here, and only the read is outstanding.
  *
- * It was "Try again" until a user-lens review pointed out that the nearest
+ * It was "Try again" until it was pointed out that the nearest
  * antecedent for "again" is the RESET - so on a banner that appears precisely
  * because a reset just succeeded, the button read as an offer to re-run the
  * destructive thing. The distinction this comment draws, between checking an

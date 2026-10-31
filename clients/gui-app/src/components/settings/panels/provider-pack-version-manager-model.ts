@@ -46,7 +46,7 @@ export type VersionDownloadEligibility =
  * host-ineligible / uncertified are never downloadable.
  *
  * Error rows share the Retry allow-list: non-retryable errors must not be
- * relabelled as an enabled Download (finding 1).
+ * relabelled as an enabled Download.
  */
 export function versionDownloadEligibility(
   version: ProviderPackVersion,
@@ -419,7 +419,7 @@ export function certificationMetaLine(
     case "yanked":
       return "Withdrawn by publisher";
     case "uncertified":
-      // Do not claim "still usable" — install-state is a separate axis (finding 7).
+      // Do not claim "still usable" — install-state is a separate axis.
       return "No longer published · remains on disk";
     case "below-security-floor":
       return "Below the publisher's security minimum";

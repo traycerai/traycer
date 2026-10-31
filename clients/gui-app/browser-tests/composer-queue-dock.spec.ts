@@ -397,7 +397,7 @@ test("compact preset: a lone pill arrives fully drawn, starting at the composer'
 });
 
 // A folded agent row clips its PROSE to one line and never its chrome (#2441
-// review F1): the sender chip and the status toolbar float in the row, are
+// F1): the sender chip and the status toolbar float in the row, are
 // taller than a text line, and wrap below it in a narrow pane. 239px is the
 // canvas's documented minimum pane width.
 interface Rect {
@@ -482,7 +482,7 @@ function insideRect(inner: Rect, outer: Rect): boolean {
   );
 }
 
-// A sender's name is a chat title, so it can be long (review F2).
+// A sender's name is a chat title, so it can be long (F2).
 const LONG_SENDER = "Fix #2441 compact queued-message panel";
 
 for (const [width, sender] of [

@@ -462,7 +462,7 @@ describe("auth-era composition — the credential a refresh actually uses", () =
     // The production accessor the directory's fence is wired to - not a local
     // counter standing in for it. This is the assertion the previous round's
     // test could not make, and its absence is why an identity-transition
-    // counter sat in that slot through a full review.
+    // counter sat in that slot unnoticed.
     expect(composition.auth.getCredentialGeneration()).toBe(
       credentialBefore + 1,
     );

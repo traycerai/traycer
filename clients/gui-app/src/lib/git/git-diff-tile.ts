@@ -86,7 +86,7 @@ export function gitImageDiffSides(file: GitChangedFile): GitImageDiffSides {
 }
 
 /**
- * `<ImageDiffView>`'s `key` for a git-backed file (PR review P1): its own
+ * `<ImageDiffView>`'s `key` for a git-backed file: its own
  * `useFileAsset` request key covers `(path, stage)`, never `headSha`/
  * `stagedOid` - so a staged or HEAD-relative side that stays mounted through
  * a commit/amend/re-stage keeps showing the OLD bytes, since `(path, stage)`
@@ -99,7 +99,7 @@ export function gitImageDiffSides(file: GitChangedFile): GitImageDiffSides {
  * Mirrors `git-query-keys.ts`'s `fileDiff` key - the sibling TEXT-diff cache
  * key for the SAME file already includes all three.
  *
- * A null OID is not always "this side doesn't exist" (Codex re-review):
+ * A null OID is not always "this side doesn't exist":
  * The degraded-repo-mode fallback (`assessRepoMode`,
  * `computeStatusPipeline` in `git-service.ts`) skips OID computation
  * entirely under load, nulling `stagedOid`/`worktreeOid` for every changed
@@ -158,10 +158,9 @@ export interface GitImageDiffRouting {
 /**
  * Extension gate before any diff-text fetch: a binary image extension,
  * or `.svg` (never `isBinary` to git), routes to `ImageDiffView`.
- * A rename's CURRENT path
- * alone is not enough (pre-landing review, P0: `old.png -> new.txt` must
+ * A rename's CURRENT path alone is not enough (`old.png -> new.txt` must
  * still route for its old side) - route when EITHER the current or previous
- * path is allowlisted, and (re-review P1) OR the previous path into the SVG
+ * path is allowlisted, and OR the previous path into the SVG
  * check too (`old.svg -> new.txt` is text to git on the rename). A
  * conflicted file is exempted from the `isBinary` check entirely (a live
  * E2E finding): the host's bulk `listChangedFiles` numstat pipeline

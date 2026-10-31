@@ -257,7 +257,7 @@ describe("partitionOfficePopulation", () => {
   });
 
   it("gives a different seed a different solo count at the same scale", () => {
-    // The reviewer measured 220 solos at 309 agents for seed 2 - verified
+    // 220 solos at 309 agents for seed 2, measured - verified
     // here rather than trusted, since team sizes (and so the solo count)
     // depend on the seed's own random draws.
     const epic = makeTestEpic("triage", 309, 2);
@@ -487,7 +487,7 @@ describe("partitionOfficePopulation", () => {
 
   it("N1a: an arrival under a frozen solo is a solo, and no team is fabricated around its lead", () => {
     // S is a direct leaf of HQ, so it is a solo by construction. Appending C
-    // under it and re-partitioning with `previous` is the reviewer's exact
+    // under it and re-partitioning with `previous` is the exact
     // N1 sequence: fresh topology alone would read S as now leading a team,
     // but S is a KNOWN agent and stays frozen as a solo - so C, the arrival,
     // must be classified against that settled fact rather than against the

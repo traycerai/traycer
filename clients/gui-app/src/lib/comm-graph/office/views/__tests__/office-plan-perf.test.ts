@@ -88,7 +88,7 @@ const CANVAS: OfficeSize = { width: 1040, height: 700 };
  * spare - the oblique, amphitheatre and isometric packers all plan a thousand
  * agents in single-digit milliseconds - and the sixth is the Floor, whose plan
  * IS today's `layoutOffice`, moved behind the seam and not rewritten by this
- * work. The review's own probe measured that packer at 166 ms for a thousand
+ * work. The original probe measured that packer at 166 ms for a thousand
  * independent roots before any of this existed; on `triage` it runs about 60
  * to 110 ms here. So the Floor carries its own allowance, with the headroom a
  * loaded machine needs, and the number is a ceiling on the packer as it stands
@@ -138,8 +138,8 @@ const BUDGET_RUNS = 3;
  * CITY'S IS CONTENT RATHER THAN SLACK, and it is not a small amount of
  * content. A City building is `citySeatProps` (iso-painter.ts) drawing four
  * sprites a storey - two wall slabs and a window on each face - plus one roof,
- * so a seat's cost is linear in how tall its building stands. Feedback round 1
- * moved that range from 1..7 storeys to 3..14, and the number that matters is
+ * so a seat's cost is linear in how tall its building stands. That range
+ * moved from 1..7 storeys to 3..14, and the number that matters is
  * the FLOOR, not the ceiling: at a thousand agents almost every agent is a
  * quiet one sitting at the minimum, so a quiet building went from 5 sprites to
  * 13 and the common case roughly doubled. City now costs about TWICE the next
@@ -1107,7 +1107,7 @@ describe.each(["campus", "city"] as const)(
     it("covers a storey block pinned near the lower-right corner of a partial frame", () => {
       // THE REAL REGRESSION, not a synthetic one: a 1280x700 CSS canvas at
       // zoom 0.5 panned so a storey block sits in the lower-right corner of
-      // the camera, on the review's real thousand-agent Campus fixture. A
+      // the camera, on the real thousand-agent Campus fixture. A
       // WHOLE-WORLD block count cannot show this either - `frame(0, ...)`
       // over the whole world returns blocks whether or not the corner query
       // is broken - so the case has to use this partial rect. Before the

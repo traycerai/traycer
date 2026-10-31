@@ -217,7 +217,7 @@ describe("tab navigation single-path contract", () => {
     expect(recorded.intents).toHaveLength(1);
   });
 
-  // Cold review #4: empty/fillable focus must still allow strip digit +
+  // Empty/fillable focus must still allow strip digit +
   // next/prev traversal, while member-specific close no-ops when host focus
   // is not on a concrete epic member.
   it("fillable empty focus still allows digit strip selection", () => {

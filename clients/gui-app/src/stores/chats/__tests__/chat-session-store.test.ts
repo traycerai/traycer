@@ -5675,7 +5675,7 @@ describe("createChatSessionStore", () => {
     ).toEqual(sendIntent);
   });
 
-  // R13 `-BtWD`: the consume-site mirror of round 12's terminal-claim rule. An
+  // R13 `-BtWD`: the consume-site mirror of the terminal-claim rule. An
   // intent-FREE send skipped `consumeForDispatch` entirely, so the mark stayed
   // owned by an earlier edit - and that edit's rejection handed E back even
   // though a later send had superseded it. A dispatch's state is authoritative
@@ -6534,7 +6534,7 @@ describe("createChatSessionStore", () => {
     expect(notice.message).not.toContain("no recoverable content");
   });
 
-  // R5 `-LSI`: the slot LOSER's worktree. Round 4 gave the winner its binding
+  // R5 `-LSI`: the slot LOSER's worktree. The winner gets its binding
   // back; a send that loses the race is STATED, and its intent dies with the
   // row. The staging slot is single and the winner holds it, so this cannot be
   // a restore - it is a statement obligation, and the branch name is the part

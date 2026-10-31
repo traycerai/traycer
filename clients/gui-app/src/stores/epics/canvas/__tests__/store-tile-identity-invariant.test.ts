@@ -881,7 +881,7 @@ describe("canvas tile identity invariant: desktop-projection ingress", () => {
   });
 
   it("throws when a desktop projection changes only a tab's epicId while its canvas stays identical (round-2 adversarial probe)", () => {
-    // Round 1's shape-based allowance let exactly this through: same tab id,
+    // A shape-based allowance let exactly this through: same tab id,
     // identical canvas/instanceIds, only the projected epicId differs - a
     // stale or malformed desktop projection producing the same shape as a
     // legitimate coordinator resolution. Desktop projection has no route to

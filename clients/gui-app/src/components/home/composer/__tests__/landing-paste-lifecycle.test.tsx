@@ -7,7 +7,7 @@
  * key only changes when switching between existing drafts, so the null→id
  * flip does not remount the editor). Fakes only idb-keyval timing (putImage
  * durable write). Does NOT re-implement ingest on a bare Editor — that is
- * exactly why round 4 missed the store/remount defect.
+ * exactly why the store/remount defect was missed.
  */
 import {
   act,

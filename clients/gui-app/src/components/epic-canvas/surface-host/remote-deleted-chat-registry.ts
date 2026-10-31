@@ -1,5 +1,5 @@
 /**
- * Fix round, finding 2: reports which chat `instanceId`s
+ * Reports which chat `instanceId`s
  * are currently remote-deleted, per `ActiveTabBody`'s own
  * `computeIsRemoteDeleted` - an epic-session-scoped React computation
  * (`useEpicSnapshotLoaded`/`useEpicArtifact` read the CURRENT epic's Y.Doc

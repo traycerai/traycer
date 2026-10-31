@@ -289,14 +289,14 @@ function iceTrickleBatchMs(rttMs: number | null): number {
 }
 
 /**
- * Blocker fix (batch-3a review): `connectionState: "failed"` is potentially
+ * Blocker fix: `connectionState: "failed"` is potentially
  * recoverable - the host may drive a same-id ICE restart on this SAME peer
  * (see `acceptOffer`'s `===` branch) - so it must not fail the round the
  * instant it fires; that races the host's restart and always wins, tearing
  * the peer down before the restart offer can land. This is how long the
  * client waits for the connection to recover on its own before giving up and
  * reporting failure. `VIEWER_CONTROL_PLANE_DEADLINES.firstFrame` is "the
- * negotiation deadline spec" the review named as the right bound: its floor
+ * negotiation deadline spec" is the right bound: its floor
  * alone (no RTT reading is available at peer-creation time) already covers
  * the host's own restart window, which that same spec sizes.
  */
@@ -318,7 +318,7 @@ interface ActiveRound {
   readonly peer: MediaPeer;
   /**
    * The offer SDP this round last negotiated against - lets a same-id
-   * ICE-restart re-offer (blocker fix, batch-3a review) tell a genuine
+   * ICE-restart re-offer (blocker fix) tell a genuine
    * restart from a duplicate resend of the SDP it already answered.
    */
   lastOfferSdp: string;
@@ -524,7 +524,7 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
   /**
    * Runs one `answerOffer` round against `started`, whether this is its
    * FIRST offer or a same-id ICE-restart re-offer on the SAME peer (blocker
-   * fix, batch-3a review: the host restarts under the SAME `negotiationId`
+   * fix: the host restarts under the SAME `negotiationId`
    * rather than minting a new one, so the round is reused, not recreated).
    * Arms the A12 batch/flush machinery fresh each call.
    */
@@ -596,7 +596,7 @@ function createRecord(createPeer: MediaPeerFactory): RegistryRecord {
     acceptOffer: ({ negotiationId, sdp, port, iceServers }) => {
       if (round !== null && negotiationId < round.negotiationId) return;
       if (round !== null && negotiationId === round.negotiationId) {
-        // Blocker fix (batch-3a review): the staleness guard used to drop
+        // Blocker fix: the staleness guard used to drop
         // this outright, silently swallowing the host's same-id ICE-restart
         // re-offer. A bit-for-bit resend of the SDP this round already
         // answered is the one degenerate case left to drop - nothing
@@ -852,7 +852,7 @@ export function createBrowserMediaPeer(
   /** A4/F6: the video receiver, captured here so the stats sampler can tune its `jitterBufferTarget`. */
   let videoReceiver: RTCRtpReceiver | null = null;
   /**
-   * Blocker fix (batch-3a review): armed the moment `connectionState` reads
+   * Blocker fix: armed the moment `connectionState` reads
    * "failed", cleared the moment it reads anything else. "failed" is
    * potentially recoverable - the host may drive a same-id ICE restart on
    * this SAME peer - so it must not report failure the instant it fires;

@@ -29,7 +29,7 @@ export interface ChatTimelineScrollGeometry {
  * scrollHeight=clientHeight=0`. That is UNKNOWN geometry, never a confirmed
  * edge - treating it as "at the bottom" would let a restored free-reading
  * position get silently overwritten the moment the pane becomes visible
- * again (review P1 finding 3).
+ * again.
  */
 export function isChatTimelineGeometryMeasurable(
   geometry: ChatTimelineScrollGeometry,
@@ -1323,7 +1323,7 @@ function canReaderGestureMove(
  * that only the library's own (rAF-coalesced) scroll processing refreshes -
  * never a fresh geometry read. A previous fix tried to keep the library's
  * own `maintainScrollAtEnd` and gate the PROP value by a React-render-time
- * check; review rejected it for three independent reasons: (1) item-size,
+ * check; it was rejected for three independent reasons: (1) item-size,
  * footer-size, and viewport-layout measurement all call
  * `doMaintainScrollAtEnd` directly, with no intervening `ChatTimeline`
  * render to re-evaluate a render-gated prop; (2) a numeric "did scrollTop

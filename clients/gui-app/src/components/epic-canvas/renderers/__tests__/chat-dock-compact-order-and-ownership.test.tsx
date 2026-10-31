@@ -4,7 +4,7 @@ import type { ReactElement, ReactNode } from "react";
 import type { ChatQueuedItem } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
- * Wave-3 regression (review w3):
+ * Wave-3 regression:
  *
  * - Should-fix 5 ("compact dock chips ignore dockOrder"): the compact chip
  *   row used to build chips in a fixed Files -> Agents -> Background order and
@@ -12,7 +12,7 @@ import type { ChatQueuedItem } from "@traycer/protocol/host/agent/gui/subscribe"
  *   folding them changed the order back. `chips` in `useChatDockChrome` is now
  *   sorted through the same `arrangement.dock` (`useArrangementValue("dock")`).
  *
- * Blocking 8 of that same review - "a temporarily expanded compact section
+ * Blocking 8 - "a temporarily expanded compact section
  * attaches one callback ref to two nodes" - was the other half of this file.
  * It went with its subject: a real chat tile registers no Customize region at
  * all now (L-87), because the editor's canvas is always the sample workspace

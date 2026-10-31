@@ -123,7 +123,7 @@ export interface HostStreamClientBinding {
    */
   readonly transportKey: string;
   /**
-   * Opt-in transport lease (Codex re-review, image-preview coalescing).
+   * Opt-in transport lease (image-preview coalescing).
    *
    * A caller that hands `client` to a consumer outliving this hook instance -
    * a stream a sibling instance also reads from - must `pin()` it first and

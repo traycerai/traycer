@@ -824,7 +824,7 @@ function usePublishedChatFallbackRef(args: {
    * builds) so the substitution mount can thread `ownerUserId` - the owner
    * the OPENING ROW resolved - into the banner instead of leaving the
    * banner's container to re-derive it from a second cloud lookup that can
-   * fail independently (cold-review finding).
+   * fail independently.
    */
   readonly fallbackRef: PublishedChatTileRef | null;
   readonly ownerHostLabel: string | null;
@@ -1055,7 +1055,7 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
   // chat instanceIds. Unregisters (reports false) on unmount so a closed
   // tab's entry never lingers.
   //
-  // A LAYOUT effect, not a passive one (design-review slice-4 F2 residual):
+  // A LAYOUT effect, not a passive one (F2 residual):
   // this render already commits to the inline `DeletedArtifactBody` branch
   // below for a remote-deleted chat, but that alone doesn't remove the
   // hosted owner - `tile-surface-membership.ts`, `tile-surface-environment-
@@ -1083,7 +1083,7 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
     // Without it, membership keeps the instance, the environment registry
     // ("removal only by membership") retains a stale visible/anchored
     // snapshot from the unmounted slot, and the hosted live body paints over
-    // the copy - the exact two-owners drift design-review slice-4 finding 2
+    // the copy - the exact two-owners drift this report
     // exists to prevent. Reported through the deletion registry rather than a
     // parallel one so membership has ONE inline-takeover input.
     reportChatRemoteDeletionState(

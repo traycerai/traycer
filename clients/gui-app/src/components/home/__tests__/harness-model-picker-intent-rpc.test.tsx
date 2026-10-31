@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // NOT mocked here - the whole point of this suite is to exercise the real
 // query hooks against a mocked host transport so an actual RPC undercount (or
 // overcount) is observable, which a wholesale hook mock structurally cannot
-// catch (see the review comment on PR #331).
+// catch.
 vi.mock("@/stores/tabs/use-system-tab-modal", () => ({
   useSystemTabModalActions: () => ({
     openSettings: vi.fn(),

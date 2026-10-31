@@ -103,7 +103,7 @@ export const NOTHING_COULD_BE_TRIED_LABEL = "Nothing could be tried";
  * `turn_error`.
  *
  * The tooltip says why the row is held and how to send it, and promises no
- * more (review sweep, 2026-09-27, replacing the earlier "Retry or switch sends
+ * more (replacing the earlier "Retry or switch sends
  * it after; Resume sends it now"): a successful manual Retry or Switch leaves
  * the held rows paused - the host's own notice says "still paused - resume the
  * queue to send them" - and while one is in flight Resume is gated rather than

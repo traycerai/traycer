@@ -41,11 +41,11 @@ export const useSubagentOpenStore = create<SubagentOpenState>((set) => ({
 export const subagentOpenDurableCache =
   createChatDurableCache<ReadonlySet<string>>(200);
 
-// Review round 3: see `toolOpenInitializedScopes`'s twin comment
+// See `toolOpenInitializedScopes`'s twin comment
 // in tool-open-store.ts.
 export const subagentOpenInitializedScopes = new Set<string>();
 
-/** Review round 3: see `promoteToolOpenToDurable`'s twin comment
+/** See `promoteToolOpenToDurable`'s twin comment
  *  in tool-open-store.ts. */
 export function promoteSubagentOpenToDurable(
   identity: ChatTabPersistenceIdentity,

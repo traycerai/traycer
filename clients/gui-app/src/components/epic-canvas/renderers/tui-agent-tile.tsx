@@ -662,7 +662,7 @@ function TuiAgentTileLive(
     // resuming the conversation. The reaped tile falls to the unavailable
     // banner instead, and the agent is restarted where it lives.
     //
-    // DEFENSIVE, and stated as such after a review asked why no test can make
+    // DEFENSIVE, and stated as such because no test can make
     // it fail: `adoptOnly` above already shuts the create effect permanently,
     // and `bootstrap.retry` only clears the dispatch latch and refetches the
     // session list - it never creates on its own. So removing this line does

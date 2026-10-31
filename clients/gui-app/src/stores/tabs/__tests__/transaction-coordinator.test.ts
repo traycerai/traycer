@@ -903,7 +903,7 @@ describe("tab command coordinator transactions", () => {
       .getState()
       .drafts.map((d) => d.id);
 
-    // Simulate the review failure mode: Zustand draft state is committed, then
+    // Simulate the failure mode: Zustand draft state is committed, then
     // the synchronous persistence write throws before layout apply. Wrapping
     // createDraftWithId is more reliable than localStorage spies under the
     // test env (and matches "in-memory source exists, applySources throws").

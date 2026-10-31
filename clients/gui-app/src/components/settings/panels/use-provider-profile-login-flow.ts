@@ -184,7 +184,7 @@ function refusedAwaitResult(
  * Ambient reauth (no profile picker - the in-chat banner's OAuth reconnect)
  * has no profile row to check: the re-probed top-level auth status is the
  * only success signal, since `providers.list` keeps a profile row present
- * even when it is signed out (review finding 2 - presence alone is
+ * even when it is signed out (presence alone is
  * not success). A non-definitive top-level status with the probe still in
  * flight is "not settled yet" (see `AMBIENT_AUTH_PENDING_REPOLL_CAP`).
  */
@@ -416,7 +416,7 @@ export interface ProviderProfileLoginFlow {
  * `settleAttempt` is the two-sided join
  * that decides what a `waiting` attempt resolves to once `awaitLogin` and
  * `submitLoginCode` have both had a chance to weigh in - see its own doc
- * comment for the exact rules (review findings 1 and 2).
+ * comment for the exact rules.
  *
  * Callers render their own UI per `state.kind`; profile naming/coloring stays
  * outside this machine. Callers remain conditionally mounted so closing
@@ -805,8 +805,8 @@ export function useProviderProfileLoginFlow(
   );
 
   /**
-   * Two-sided settlement join for the current attempt (review
-   * finding 1): `awaitLogin` and `submitLoginCode` can resolve in either
+   * Two-sided settlement join for the current attempt:
+   * `awaitLogin` and `submitLoginCode` can resolve in either
    * order, and neither side may act alone on a `noActiveLogin`/not-yet-
    * authenticated verdict - only this shared arbiter decides, after both
    * sides have latched what they know into `awaitOutcomeRef` /
@@ -817,7 +817,7 @@ export function useProviderProfileLoginFlow(
    * - `awaitOutcomeRef` unset: `awaitLogin` hasn't resolved yet - nothing to
    *   decide regardless of `submitOutcomeRef`.
    * - `"authenticated"`: terminal success, always - resolves immediately and
-   *   ignores `submitOutcomeRef` entirely (review finding 2: this is
+   *   ignores `submitOutcomeRef` entirely (this is
    *   the host's re-probed auth status, explicitly checked in `beginLogin`,
    *   never just "a profile row is present" - `providers.list` keeps rows
    *   for signed-out profiles too).
@@ -1317,7 +1317,7 @@ export function useProviderProfileLoginFlow(
       // Marks this attempt's submit verdict in flight *before* the request
       // goes out: if `awaitLogin` resolves not-authenticated while this is
       // still pending, `settleAttempt` must wait for the real verdict
-      // instead of failing early (review finding 1's lost-update race).
+      // instead of failing early (the lost-update race).
       submitOutcomeRef.current = "pending";
       submitLoginCode.mutate(
         { providerId, profileId: state.profileId, code },

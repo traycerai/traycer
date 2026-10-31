@@ -1934,7 +1934,7 @@ describe("useLandingComposerActions", () => {
   });
 
   it("never lets a ghost folder from corrupt persisted state reach the launch payload or intent restamp", async () => {
-    // The reviewer's corrupt-persistence scenario, end to end: a persisted
+    // The corrupt-persistence scenario, end to end: a persisted
     // payload whose folder array carries a ghost path with no metadata, a
     // staged intent still naming that ghost as primary - after rehydration
     // + submit, neither the associations nor the intent may carry the ghost,

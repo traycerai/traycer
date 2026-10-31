@@ -727,7 +727,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
             // placed a thousandth of a pixel apart is on the plan's open list.
             // What is not sample-bound is the RATIO - 0.01 px is 8.8e10 times
             // the largest residual measured, and 120x smaller than 1.2 px, the
-            // smallest REAL overprint this suite has caught (finding 5's board
+            // smallest REAL overprint this suite has caught (the pod plate's board
             // at close-up; the rest ran 2.8 to 8.4 px).
             //
             // Exact tangency is NOT a defect and must not be "fixed" by nudging
@@ -1587,7 +1587,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
    * pokes almost entirely outside the bounds as long as its top-left corner
    * still touches them. Decorate the REAL painter to append one of its own
    * real sprite parts at `(bounds.right - 1, bounds.bottom - 1)` - the exact
-   * reproduction the reviewer used - and prove two things about it: it is
+   * reproduction - and prove two things about it: it is
    * genuinely present in the real frame (so the probe above is reading real
    * painter output, not a dropped part), and the containment predicate the
    * case above uses rejects it.

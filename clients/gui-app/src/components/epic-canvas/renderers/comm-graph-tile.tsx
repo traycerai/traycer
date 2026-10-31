@@ -81,7 +81,7 @@ const NEUTRAL_CAMERA: CommGraphTileCamera = {
  * Building, reopened while the default is Floor, carries
  * `officeCameraView: "building"` over a camera nothing has touched). That was
  * the defect, and no cleverer key fixes it: a camera-object key leaks
- * on the two the reviewer named - `officeCamera: null` is a legitimate armed
+ * on the two above - `officeCamera: null` is a legitimate armed
  * value, so `null` cannot also be the unarmed sentinel, and a write the store
  * collapses by value produces no new reference to notice.
  *
@@ -374,7 +374,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
    * Kept as its own rule beside the record below, because the two answer
    * different questions. This one knows the default moved just now, so it
    * resets whatever the record says - including a tile from before the record
-   * existed, which is the reviewer's own reproduction. The record answers the
+   * existed, which is the original reproduction. The record answers the
    * case nobody was here to see.
    *
    * This is the STORE side of that move; the witness above has already handed

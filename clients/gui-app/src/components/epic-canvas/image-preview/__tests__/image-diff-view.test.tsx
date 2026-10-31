@@ -21,7 +21,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock("@/hooks/assets/use-file-asset", () => ({
   useFileAsset: (request: FileAssetRequest | null) => {
-    // Dedupe by reference (round-2 review finding #4: `ImageDiffView` now
+    // Dedupe by reference (`ImageDiffView` now
     // fires one legitimate extra render on mount, learning each side's
     // real initial bounds from `onInit` - the SAME memoized `request`
     // object is passed to this hook again on that render, not a new fetch)
@@ -38,7 +38,7 @@ vi.mock("@/hooks/assets/use-file-asset", () => ({
     // real hook always reports `"loading"` for a null request (its
     // `requestKey`/`resolved.key` comparison can never match), so a test
     // exercising a Deleted/non-image side must see that too, not silently
-    // read the OTHER side's `"ready"` state (CodeRabbit finding: this hid
+    // read the OTHER side's `"ready"` state (this hid
     // a raw-status check that should have gated on `oldActive`/`newActive`).
     if (request === null) {
       return {

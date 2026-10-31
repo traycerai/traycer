@@ -66,7 +66,7 @@ describe("harnessHonorsPermissionMode", () => {
   });
 });
 
-// FIX 2 (P1): the ROW's constraint and the HOST's own line are two different
+// FIX 2: the ROW's constraint and the HOST's own line are two different
 // questions - a pre-`auto` host serves unconstrained rows like any other, so
 // the row predicate alone lit up an option the wire cannot carry.
 describe("composerOffersPermissionMode", () => {
@@ -156,7 +156,7 @@ describe("normalizePermissionMode", () => {
     );
   });
 
-  // FIX 2 (P1): the HOST proof runs FIRST and is not foldable into the row
+  // FIX 2: the HOST proof runs FIRST and is not foldable into the row
   // walk - a pre-`auto` host's rows are routinely unconstrained, so `auto`
   // would satisfy `harnessHonorsPermissionMode` and return on the first
   // branch without ever reaching a fallback. `null` here models exactly that:

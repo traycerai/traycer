@@ -87,7 +87,7 @@ const defaultStreamBindingRef = vi.hoisted(() => ({
 
 vi.mock("@/hooks/host/use-host-stream-client-for", () => ({
   useHostStreamClientFor: () => wsStreamClientRef.value,
-  // `useFileAsset` now takes the full binding (Codex re-review, transport
+  // `useFileAsset` now takes the full binding (transport
   // pin/unpin) - `pin`/`unpin` are no-ops here since the mock's single
   // shared `wsStreamClientRef.value` never actually tears down regardless;
   // tests exercising the pin/unpin CONTRACT itself construct their own
@@ -1127,7 +1127,7 @@ describe("useFileAsset", () => {
     );
   });
 
-  // Rename case (sol re-review): the old side of a rename must classify by
+  // Rename case: the old side of a rename must classify by
   // its PREVIOUS path, not the new one - `docs/report.bin` alone would read
   // as a generic binary and lose the PDF-specific fallback copy/telemetry.
   it("classifies a git rename's old side as a document by its previous PDF path", async () => {

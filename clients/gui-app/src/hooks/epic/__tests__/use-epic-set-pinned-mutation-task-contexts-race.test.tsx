@@ -13,7 +13,7 @@ import type {
 import { hostQueryKeys } from "@/lib/query-keys";
 
 /**
- * PR 2150 cold-review fix: a menu-open retry can put an `epic.getTaskContexts`
+ * A menu-open retry can put an `epic.getTaskContexts`
  * refetch in flight BEFORE a sibling tab's pin write, and that refetch can
  * still be running when the write's own RPC comes back - so without
  * intervention its stale response lands AFTER the commit and puts the
@@ -241,7 +241,7 @@ describe("useEpicSetPinned - task-contexts cache race (PR 2150 cold review)", ()
   });
 
   /**
-   * Small review fix on top of the above: the committed-bit re-patch in
+   * On top of the above: the committed-bit re-patch in
    * `onSuccess` now scopes `setEpicPinnedInTaskContextsCaches` with
    * `hostId: null` - every host's task-contexts cache for this user, not just
    * the dispatch host's. Before, an unpin dispatched to host-1 left a SECOND
@@ -324,7 +324,7 @@ describe("useEpicSetPinned - task-contexts cache race (PR 2150 cold review)", ()
   });
 
   /**
-   * Review fix on top of the above two: `onSuccess` now also calls
+   * On top of the above two: `onSuccess` now also calls
    * `restartInFlightFirstTaskContextsReads`. `cancelInFlightTaskContextsReads`
    * (the helper the first test in this file exercises) deliberately skips a
    * FIRST fetch - one that holds no data yet - because cancelling it alone
@@ -498,7 +498,7 @@ describe("useEpicSetPinned - task-contexts cache race (PR 2150 cold review)", ()
 
   /**
    * Follow-up fix: `cancelInFlightTaskContextsReads` now cancels with
-   * `revert: true` (was `false`). A cold review ran this against query-core
+   * `revert: true` (was `false`). This was run against query-core
    * 5.101.4 and found that cancelling a query that HOLDS DATA with
    * `revert: false` does not quietly keep that data - it dispatches the
    * cancellation as a query ERROR (`status: "error"`, a `CancelledError`,
@@ -679,7 +679,7 @@ describe("useEpicSetPinned - task-contexts cache race (PR 2150 cold review)", ()
   });
 
   /**
-   * Cold-review gap in the "onMutate's cancel ... never errors" test above:
+   * Gap in the "onMutate's cancel ... never errors" test above:
    * its own end-state assertions (data, `isInvalidated`) pass even under
    * `revert: false`, because the optimistic patch's `setQueryData` a few
    * lines later resets the query back to `status: "success"` regardless -
@@ -689,7 +689,7 @@ describe("useEpicSetPinned - task-contexts cache race (PR 2150 cold review)", ()
    * over a stuck error), and the in-flight query being cancelled here is on
    * host-2 - a host `onError`'s own rollback (`applyPinnedPatch`, scoped to
    * the DISPATCH host) never touches - so nothing downstream of the cancel
-   * can repair a wrong outcome. Ported from the reviewer's own probe
+   * can repair a wrong outcome. Ported from the original probe
    * (`sticky-probe.test.tsx`, "PROBE sticky: failed write, other-host
    * refetch in flight"), which is why the shape matches it rather than this
    * file's other tests.

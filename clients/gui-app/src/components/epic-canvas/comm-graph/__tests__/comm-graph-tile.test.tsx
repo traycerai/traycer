@@ -367,7 +367,7 @@ function seedEmptyDoc(doc: Y.Doc): void {
  * Every agent predates `Chat.hostId` / `TuiAgent.hostId` - a fully legacy
  * epic, never attributed to any host, unlike `seedDoc`'s mix. `useCommGraphAgents`
  * excludes a null `hostId` from `hostIds`, so this fixture drives that set to
- * empty while still populating real, drawable agents (Finding 38).
+ * empty while still populating real, drawable agents.
  */
 function seedAllHostlessDoc(doc: Y.Doc): void {
   const epic = doc.getMap("epic");
@@ -928,7 +928,7 @@ function lastFrameAndBounds(
  * render-time decision this change added reads `agents.length` nowhere, so
  * the real risk is a probe that never reaches a truthful `drawReady`
  * because the office canvas measured before agents existed. Loading first is
- * what the reviewer's own probe does to rule that out.
+ * what the original probe does to rule that out.
  */
 function LoadedTileGate(props: { readonly show: boolean }) {
   const { nodes } = useCommGraphAgents();
@@ -2259,7 +2259,7 @@ describe("CommGraphTile", () => {
      * proves the drawn floor does too, which it did not: the agent set does
      * not change when a status finally arrives, and a status flip alone
      * deliberately never re-plans, so the rendered plan stayed the draft for
-     * the life of the mount. That is the cold reviewer's P2, reproduced here
+     * the life of the mount. That is reproduced here
      * through the real tile.
      *
      * Read off the PLANNER's own calls rather than the store or the frame:
@@ -2384,8 +2384,8 @@ describe("CommGraphTile", () => {
     });
 
     it("letters a drawn office that is still behind its feed with no status line at all", async () => {
-      // THE CHIP THIS USED TO PIN IS GONE, asked for by name in feedback
-      // round 2: "why do we still have this Catching up label above the zoom
+      // THE CHIP THIS USED TO PIN IS GONE, asked for by name:
+      // "why do we still have this Catching up label above the zoom
       // buttons? We were supposed to remove all those labels!". The wait it
       // described is real - the floor draws from the agent list and fills in
       // who is BUSY as the feed replays - and the ruling is that it is not

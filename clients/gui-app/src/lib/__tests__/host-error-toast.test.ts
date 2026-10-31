@@ -370,7 +370,7 @@ describe("toastFromHostError", () => {
     );
   });
 
-  // Review #1297 finding 2: host detail is unbounded by construction. The
+  // Host detail is unbounded by construction. The
   // producer that motivated forwarding it - `worktreeCreateFailed` - joins one
   // line per failed workspace, each an absolute path plus raw git stderr, so
   // appended verbatim it is an arbitrarily tall toast.

@@ -438,7 +438,7 @@ describe("<ChatDeadTileBanner />", () => {
       expect(screen.queryByRole("button", { name: "Clone agent" })).toBeNull();
     });
 
-    // Cold-review finding: the first cut claimed "showing the last published
+    // The first cut claimed "showing the last published
     // copy" unconditionally, but the live tile mounts this banner above a
     // load state or a cached live session - the claim must follow the
     // mounting surface's presentation, not the reason.
@@ -465,7 +465,7 @@ describe("<ChatDeadTileBanner />", () => {
       expect(screen.getByRole("button", { name: "Clone agent" })).toBeTruthy();
     });
 
-    // Cold-review finding: `chat-not-visible` / `chat-not-on-this-host` are
+    // `chat-not-visible` / `chat-not-on-this-host` are
     // picked only after a reachable host ANSWERED, so the foreign sentence
     // must keep the missing-history fact there - "isn't connected" would
     // invert the evidence.

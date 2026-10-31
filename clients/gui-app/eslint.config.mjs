@@ -1824,7 +1824,7 @@ const appChromeAppWideReadExemptions = [
 // was invisible to `readPath`: the fence only sees a file's own imports, so
 // a wrapper hook resolving `useHostClient()` on behalf of an Epic surface
 // passed it. Re-impose `readPath` here so a new wrapper cannot re-open that
-// channel (PR #1243 round 6, the hook-INDIRECTION half of the class).
+// channel (PR #1243, the hook-INDIRECTION half of the class).
 const hookDirectoriesRepointedToCallerClients = [
   "src/hooks/comments/**/*.{ts,tsx}",
   "src/hooks/snapshots/**/*.{ts,tsx}",

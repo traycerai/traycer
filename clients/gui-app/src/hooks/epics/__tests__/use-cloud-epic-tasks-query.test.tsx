@@ -1138,7 +1138,7 @@ describe("useCloudEpicTasksQuery", () => {
     expect(result.current.hasNextPage).toBe(true);
 
     // Start the FIRST "Show more" tail request for this identity through the
-    // production `fetchNextPage` - the exact call path review finding 2
+    // production `fetchNextPage` - the exact call path
     // reproduced (`traycer/clients/gui-app/src/hooks/epics/use-cloud-epic-tasks-query.ts`).
     act(() => {
       result.current.fetchNextPage();
@@ -1463,7 +1463,7 @@ describe("useCloudEpicTasksQuery", () => {
   });
 
   it("carries visible rows across a modal-to-tab observer remount while the promoted request is still unsettled", async () => {
-    // Reproduces review finding 2: promotion happens during the search
+    // Promotion happens during the search
     // debounce / while a structured-filter request is still pending, so the
     // promoted tab's request has never settled. The modal and the promoted
     // tab render `EpicsListPanel` separately, so promotion destroys one

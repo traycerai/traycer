@@ -5348,8 +5348,8 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
       if (front === undefined || front.drawable.kind !== "sprite") {
         throw new Error(`expected reserve desk front at lod ${lod}`);
       }
-      // EMPTY_FURNITURE_ALPHA (oblique-painter.ts), raised 0.45 -> 0.72 in the
-      // office feedback-round-1 pass so an empty desk reads closer to a live
+      // EMPTY_FURNITURE_ALPHA (oblique-painter.ts), raised 0.45 -> 0.72
+      // so an empty desk reads closer to a live
       // one instead of near-invisible.
       expect(front.drawable.alpha).toBe(0.72);
       if (lod === 2) {
@@ -5789,7 +5789,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
   }
 
   /**
-   * READ O'S FINDING 3: the bench, from the other side.
+   * The bench, from the other side.
    *
    * `OfficeErrandSpot.seatId` stopped a STROLL being sent to a bench somebody is
    * sitting in. It did nothing about the reverse - a waiting agent being seated
@@ -7424,7 +7424,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
   });
 
   /**
-   * FINDING 7's fixture: alpha seated in a lounge chair (`awaiting`) at
+   * The fixture: alpha seated in a lounge chair (`awaiting`) at
    * cursor 100, archived at cursor 900 - the archived-agent precedent above,
    * plus a civic claim to release. Local, not inline in the `it`, so the
    * two motion modes below stay a two-line call each rather than doubling
@@ -11692,7 +11692,7 @@ describe("OfficeScene leads audience", () => {
   });
 });
 
-// ---- T2: cold-review findings F1-F9 --------------------------------- //
+// ---- T2: findings F1-F9 --------------------------------------------- //
 
 /** A projector whose x axis is offset far from the identity mapping. */
 const SHIFTED_PROJECTOR: OfficeProjector = {
@@ -13102,7 +13102,7 @@ describe("OfficeScene fixup 1 - F17 isometric growth reports a projected shift",
   });
 });
 
-// ---- T2: the reviewer's residuals ------------------------------------ //
+// ---- T2: the residuals ----------------------------------------------- //
 
 describe("OfficeScene fixup 2 - F2 a remembered errand tile follows the shift", () => {
   /**
@@ -13852,7 +13852,7 @@ describe("OfficeScene fixup 8c - the plan the settled feed owes (P2)", () => {
    *
    * Nothing used to replace it. The agent set does not change when a status
    * arrives, and a status flip alone deliberately never re-plans, so the draft
-   * was the floor for the life of the mount - the cold reviewer's P2. The feed
+   * was the floor for the life of the mount. The feed
    * settling is now a trigger of its own, and this is the shape of the floor
    * it owes: not "somebody got a desk", but the same floor a scene that had
    * waited for the feed would have planned in the first place.
@@ -14331,7 +14331,7 @@ describe("OfficeScene fixup 8c - the settle plan walks people, it does not pop t
 
 describe("OfficeScene fixup 8c - the book settles with the plan (D66)", () => {
   /**
-   * The fixture the cold reviewer's second finding was reproduced on, and the
+   * The fixture the second defect was reproduced on, and the
    * two things every case here needs: the provisional input, and the settled
    * one that follows it.
    */
@@ -14407,7 +14407,7 @@ describe("OfficeScene fixup 8c - the book settles with the plan (D66)", () => {
    * get their desks and the damage was elsewhere - seventeen agents keeping
    * cubby ids the settle plan had reassigned, and the seventeen it reassigned
    * them to left with no seat at all. `team-1-lead` holding nothing while
-   * `leaf-8` kept `unattributed/4/cubby/0` is the reviewer's own example.
+   * `leaf-8` kept `unattributed/4/cubby/0` is the worked example.
    *
    * UNDER REDUCED MOTION, and that is not a dodge. `locate` and `whereabouts`
    * answer from the CHARACTER while it is out of its chair, which is what the
@@ -14454,7 +14454,7 @@ describe("OfficeScene fixup 8c - the book settles with the plan (D66)", () => {
         differentWhereabouts.push(agent.id);
       }
     }
-    // Named in the messages because these two are the reviewer's example: the
+    // Named in the messages because these two are the worked example: the
     // lead left with no seat, and the leaf holding the cubby that had been
     // reassigned to it.
     expect(
@@ -14634,7 +14634,7 @@ describe("OfficeScene fixup 8 - a seated agent's name tag is fitted to its seat"
 });
 
 /**
- * The two cold-review fixes: the arrival queue keyed at the
+ * The two fixes: the arrival queue keyed at the
  * pool's own granularity (host, not floor), and a claim that will not answer
  * a request with a seat of the wrong kind.
  *
@@ -15066,8 +15066,8 @@ describe("OfficeScene fixup 8d - the queue and the claim answer the right pool",
 });
 
 /**
- * Finding 3 (the instant-seating gate was too narrow) and finding
- * 6 (an instant seat walk never moved the character's own tile).
+ * The instant-seating gate was too narrow, and an instant seat
+ * walk never moved the character's own tile.
  *
  * Standalone for the same reason 8d is: these build scenes directly off
  * `OFFICE_VIEWS.floor`, with local helpers rather than `describe.each`'s.
@@ -15121,11 +15121,11 @@ describe("OfficeScene fixup 8e - the instant-seating gate, and the tile it seats
   }
 
   /**
-   * CASE 1 - FINDING 3, the `startCivicWalk` leg. A PLAYING scene steps
+   * CASE 1 - the instant-seating gate, `startCivicWalk` leg. A PLAYING scene steps
    * across an idle -> awaiting transition. `civicWantOf` reads `awaiting` as
    * "wants a lounge chair" whether the cursor is live or historical, so this
    * is the civic claim path (`updateCivicClaims` -> `startCivicWalk`), and
-   * `playing` is the leg of `motionSuppressed()` finding 3 added to it -
+   * `playing` is the leg the fix added to `motionSuppressed()` -
    * pre-fix, `startCivicWalk` gated on `reducedMotion` alone, so a playing
    * scene walked a real, multi-tick path here instead of seating at once.
    *
@@ -15133,7 +15133,7 @@ describe("OfficeScene fixup 8e - the instant-seating gate, and the tile it seats
    * true because nothing moved, not because a fast walk finished. `seated`
    * (read through `awayAgentIds`) is what a genuine walk starts by clearing,
    * so it is the discriminator - not the exact painted rect, which is
-   * finding 6's question and the one CASE 4 below asks. A claim already
+   * the painted-tile question CASE 4 below asks. A claim already
    * reads "lounge" the instant it is granted whether or not the walk is
    * instant, so it alone would not tell the two apart either.
    */
@@ -15164,12 +15164,12 @@ describe("OfficeScene fixup 8e - the instant-seating gate, and the tile it seats
   });
 
   /**
-   * CASE 2 - FINDING 3, the `walkTo` leg via a BACKWARD SCRUB. Leaving live
+   * CASE 2 - the same gate, the `walkTo` leg via a BACKWARD SCRUB. Leaving live
    * for history (`cursorMs` going from `null` to non-`null`) is itself a
    * rewind (`cursorRewoundBy`), which re-derives every claim from scratch
    * (`recomputeClaimsFromStatuses`) and rehomes whoever's seat changed
    * (`rehomeCharacters` -> `returnToDesk` -> `walkTo`). `walkTo` is the
-   * function finding 3 named directly in its own gate - it read
+   * function the gate named directly - it read
    * `this.reducedMotion` alone before the fix, so a scrub with motion NOT
    * reduced started a real walk instead of a still photograph.
    */
@@ -15197,7 +15197,7 @@ describe("OfficeScene fixup 8e - the instant-seating gate, and the tile it seats
   });
 
   /**
-   * CASE 3 - FINDING 3, the `walkTo` leg via a FEED SETTLE. The
+   * CASE 3 - the same gate, the `walkTo` leg via a FEED SETTLE. The
    * provisional/settled idiom from "fixup 8c - the book settles with the
    * plan": a provisional sync, then one with `feedSettled: true`, which is
    * `settling` (`input.feedSettled && !this.feedSettled && !firstSync`) and
@@ -15207,7 +15207,7 @@ describe("OfficeScene fixup 8e - the instant-seating gate, and the tile it seats
    * feed can settle while a scrubbed playback is still running, and that
    * combination is what this case stands for. Reusing `reducedMotion`
    * instead would still pass pre-fix (it was always one of the OR's legs),
-   * so it would prove nothing about finding 3's addition of `playing`.
+   * so it would prove nothing about the gate's addition of `playing`.
    */
   it("seats an awaiting agent instantly when the feed settles during playback, not mid-walk (finding 3: feed-settle + playing)", () => {
     const { agents, visibleAgentIds, idle } = floorFixture();
@@ -15232,15 +15232,15 @@ describe("OfficeScene fixup 8e - the instant-seating gate, and the tile it seats
   });
 
   /**
-   * CASE 4 - FINDING 6, directly, and the one the other three (and every
+   * CASE 4 - the painted tile, directly, and the one the other three (and every
    * civic case in "fixup 8d" above) miss: they all read the claim and the
    * `seated`/`awayAgentIds` flags, which `settleInChair` sets correctly on
-   * its own. Finding 6 is that the character's PAINTED tile - `col`/`row`,
+   * its own. The defect is that the character's PAINTED tile - `col`/`row`,
    * which only `seatInstantlyAt` touches - was never one of those things.
    * `characterRect` against the claimed seat's own `chairTile` is the one
    * assertion that can see it; `seatedHead`, which reads the agent's DESK
    * out of `AGENTS_LAYOUT`, is deliberately not what is asserted here - a
-   * civic occupant painted at its desk is exactly finding 6.
+   * civic occupant painted at its desk is exactly that defect.
    *
    * Two sub-cases: a reduced-motion FIRST live sync where
    * the agent already wants a civic seat, and a live TRANSITION into one.
@@ -16019,7 +16019,7 @@ describe("OfficeScene evidence - civic wanter under full beds and reserves", () 
 });
 
 /**
- * Finding 7b - a civic holder that flips to `attention` is sent to the
+ * A civic holder that flips to `attention` is sent to the
  * counter, and `updateCivicClaims` ends the claim without redirecting
  * because the queue walk is already under way. Nothing then calls
  * `vacated`, so the bed or chair stays in `occupancy()` for as long as
@@ -16593,7 +16593,7 @@ describe("towers: an archived agent leaves by its own building's records door", 
 });
 
 /**
- * Finding 3b - settleCivicWalks keys on `errand === "civic-out"`, but a
+ * settleCivicWalks keys on `errand === "civic-out"`, but a
  * feed-settle civic rehome travels as `returning`. Playback and a paused
  * cursor therefore leave that walker crossing the floor.
  */
@@ -16791,7 +16791,7 @@ describe("OfficeScene finding 3b - a civic rehome is settled when motion stills"
 });
 
 /**
- * Finding 3c - settlement runs before the passes that create walks, so a
+ * Settlement runs before the passes that create walks, so a
  * civic arrival spawned on the same sync that enters suppression is never
  * settled. `spawnAtDoor` is the one walk-creating site that is not gated.
  */

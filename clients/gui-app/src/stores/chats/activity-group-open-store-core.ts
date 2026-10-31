@@ -79,7 +79,7 @@ const activityGroupOpenStoreRegistry = new Map<
 // groups come back. Last-writer-wins across multiple open views of the same
 // chat.
 //
-// Review round 3: promoted explicitly from the canvas close
+// Promoted explicitly from the canvas close
 // sweep's choke point (store.ts) - see the matching comment in
 // a2a-open-store-context.ts for why (covers active AND inactive/
 // never-mounted views alike).
@@ -105,7 +105,7 @@ export function evictActivityGroupOpenStores(
   tileInstanceIds.forEach((id) => activityGroupOpenStoreRegistry.delete(id));
 }
 
-/** Review round 3: promotes this tab's CURRENT state to durable -
+/** Promotes this tab's CURRENT state to durable -
  *  called from the canvas close sweep for every removed chat tile, BEFORE
  *  `evictActivityGroupOpenStores` drops the registry entry. A no-op if no
  *  store was ever created for this tab (never mounted). */

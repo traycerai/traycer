@@ -757,7 +757,7 @@ function assertTrueBottomGeometry(): void {
  * (viewport * 0.1) but more than 1px from the strict edge - the zone where
  * maintainScrollAtEndThreshold=0.1 would have reattached, and threshold=0
  * must not. `enterFreeScrollingAwayFromEnd` parks at scrollTop=0; this
- * covers the near-end gap the review called out.
+ * covers the near-end gap.
  *
  * LegendList's distanceFromEnd is
  * `contentLength - scroll - scrollLength - contentInsetEnd` (composer
@@ -6852,7 +6852,7 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("near-end (inside former 10% band, >1px from edge) does not follow growth", async () => {
-      // Review P2: the previous "near-end" case parked at scrollTop=0 via
+      // The previous "near-end" case parked at scrollTop=0 via
       // enterFreeScrollingAwayFromEnd. This parks 40px from the edge - more
       // than the 1px strict epsilon, inside the library's default 10% band
       // (0.1 * 700 = 70) - and proves threshold=0 does not reattach.
@@ -9781,7 +9781,7 @@ describe("ChatMessages scroll policy", () => {
           // reader asked for the END, so this must actually deliver one.
           // Without this spy a regression that cancelled 801 and then
           // dropped the end scroll would still pass every assertion below
-          // (CodeRabbit on #3148): nothing else here calls `scrollToEnd`.
+          // - nothing else here calls `scrollToEnd`.
           const scrollToEnd = vi.spyOn(list, "scrollToEnd");
           try {
             rerenderWith({ scrollRequest: { kind: "end", requestId: 802 } });
@@ -9875,7 +9875,7 @@ describe("ChatMessages scroll policy", () => {
           // the reader asked for the END, so this must actually deliver
           // one. Without this spy a regression that cancelled 901 and then
           // dropped the end scroll would still pass every assertion below
-          // (CodeRabbit on #3148, same class as the sibling witness above).
+          // - the same class as the sibling witness above.
           const scrollToEnd = vi.spyOn(list, "scrollToEnd");
           try {
             rerenderWith({ scrollRequest: { kind: "end", requestId: 902 } });
@@ -10083,7 +10083,7 @@ describe("ChatMessages scroll policy", () => {
         fullMessages[missingAnchorIndexInFull]?.id ?? null;
       expect(missingAnchorId).toBeTruthy();
       // Genuinely absent at mount - not yet arrived, per the "missing row"
-      // scenario the review's regression (a) describes. Everything else
+      // scenario regression (a) describes. Everything else
       // (before AND after it) is intact, so the clamped restore lands
       // mid-list, not coincidentally at the tail.
       let messages: ReadonlyArray<ChatMessageModel> = fullMessages.filter(
@@ -10612,7 +10612,7 @@ describe("ChatMessages scroll policy", () => {
       // (row top aligned to viewport top), which for a short tail can
       // exceed the natural scrollHeight-clientHeight max - the post-growth
       // natural max must clearly exceed that frozen target for this to
-      // genuinely race the false-positive the review's P1 #2 describes,
+      // genuinely race the false-positive this test pins,
       // not just fall short of it regardless of geometry protection.
       for (let extra = 0; extra < 40; extra += 1) {
         partialMessages = appendAssistant(
@@ -10629,7 +10629,7 @@ describe("ChatMessages scroll policy", () => {
       // Simulate the static maintainScrollAtEnd configuration moving the
       // viewport to the new (post-growth) bottom with zero reader input -
       // demonstrably past the OLD, pre-growth issued target, exactly the
-      // false positive the review's P1 #2 finding describes. Race it the
+      // false positive this test pins. Race it the
       // same way a genuine reader-motion race is proven in the tests above.
       const scrollNode = getScrollNode();
       for (let frame = 0; frame < 8; frame += 1) {
@@ -10683,7 +10683,7 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("message reorder during free-restore settle retains pending transaction, never following-end on close", async () => {
-      // Review P1#2 explicitly lists reorder (not only append/growth) as a
+      // Reorder (not only append/growth) as a
       // content change that must retain the pending hydration transaction.
       // Mid-list missing anchor: the clamped restore lands mid-list, so a
       // later force to true bottom is numerically past the issued target -

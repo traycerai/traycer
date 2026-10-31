@@ -69,12 +69,12 @@ import type {
  * loading skeleton under `unverified` rather than the local rows the host
  * would happily serve", scoped OUT of `s6-renderer-local-admission`.
  *
- * That was accurate, and it was the P1 an external reviewer later filed
- * against this branch — written down here, in prose, before the review
+ * That was accurate, and it was the defect later filed
+ * against this branch — written down here, in prose, before the filing
  * existed. It sat because a limitation recorded in a comment has no owner
  * and no trigger; the same night, the `it.skip` in
  * `hooks/epics/__tests__/use-cloud-epic-tasks-query.test.tsx` recorded the
- * same gap a second time and was un-skipped only after the reviewer found it.
+ * same gap a second time and was un-skipped only after it was found.
  *
  * `resolveCloudTasksUserId` now gates on `admitsLocalPlane` and issues the
  * `localFirstPhase: "initial"` leg for an admitted identity, so the

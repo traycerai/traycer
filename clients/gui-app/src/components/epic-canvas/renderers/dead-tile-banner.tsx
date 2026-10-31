@@ -642,7 +642,7 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
  *
  * Shared by the foreign-owner sentence and its report metadata deliberately:
  * they were split before, and the report went on claiming a disconnected host
- * under a sentence that said the opposite (CodeRabbit's finding on this PR).
+ * under a sentence that said the opposite.
  * One predicate means the two cannot disagree again.
  */
 function hostAnsweredForReason(reason: ChatDeadTileBannerReason): boolean {
@@ -651,7 +651,7 @@ function hostAnsweredForReason(reason: ChatDeadTileBannerReason): boolean {
 
 /**
  * The sentence for a collaborator's chat, composed from three independently
- * true clauses rather than one blanket claim (cold-review finding: the first
+ * true clauses rather than one blanket claim (the first
  * cut collapsed presentation state and failure reason into a sentence that
  * could describe content not on screen, or contradict a host that answered).
  *

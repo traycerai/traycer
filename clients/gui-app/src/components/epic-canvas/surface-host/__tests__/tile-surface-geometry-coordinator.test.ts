@@ -355,7 +355,7 @@ describe("displaced-element unobserve (design-review F2)", () => {
     stubRect(newSlot, { left: 0, top: 0, width: 200, height: 200 });
     registerTileSurfaceGeometrySlot("chat-1", newSlot, () => {});
 
-    // New registration survives (the reviewer's own phrasing)...
+    // New registration survives...
     expect(soleObserver().observed.has(newSlot)).toBe(true);
     // ...and the displaced target is no longer observed.
     expect(soleObserver().observed.has(oldSlot)).toBe(false);

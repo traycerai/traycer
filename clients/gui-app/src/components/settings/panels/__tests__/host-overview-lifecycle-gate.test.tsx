@@ -93,7 +93,7 @@ import { LOCAL_LIVENESS_PROOF_MS } from "@/lib/host/fleet-update/fleet-update-vi
 
 /**
  * G1 — the selected-Overview lifecycle-gate matrix. This is the independent
- * cold review's finding 1 (HIGH): the Overview used to build its update
+ * The Overview used to build its update
  * projection with `freshUntilMs: Infinity` / `nowMs: dataUpdatedAt` /
  * `connected: true` — three ways of asserting a retained read is current — so
  * a host that reported `downloading` and then went unreachable stayed
@@ -104,7 +104,7 @@ import { LOCAL_LIVENESS_PROOF_MS } from "@/lib/host/fleet-update/fleet-update-vi
  * The fix (`observationFromCanonicalRead`, exercised directly in
  * `canonical-status-observation.test.ts`) makes the deadline DERIVED from the
  * read's own health. This file is the integration proof at the seam the
- * review asked for: the real `HostOverviewPanel`, mounted, reading a real
+ * proof asked for: the real `HostOverviewPanel`, mounted, reading a real
  * `HostClient`.
  */
 
@@ -894,7 +894,7 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
 });
 
 /**
- * C-H3 (cold review C, round 4): the MOUNTED mirror for the WIRE slot of
+ * C-H3: the MOUNTED mirror for the WIRE slot of
  * `LocalUpdateClock`.
  *
  * The record slot already has one — the tick-fed integration pin above — so a

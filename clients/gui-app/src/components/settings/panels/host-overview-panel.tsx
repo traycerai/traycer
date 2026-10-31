@@ -2557,7 +2557,7 @@ function deriveAttemptControl(input: {
  * What a bound dispatch's confirmation says, by intent.
  *
  * WHAT DEFER PROMISES IS THE PART THAT DIFFERS, and the two arms differ
- * because the evidence does. Round 11 rewrote the staged-wait force's Defer
+ * because the evidence does. The staged-wait force's Defer was rewritten
  * (`forceUpdateMessage` below) for exactly this reason: a stage on disk has
  * nobody scheduled to install it, so "it continues on its own" was a promise
  * this page had no evidence of. The lesson is the unevidenced promise, not

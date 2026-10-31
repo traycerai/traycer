@@ -515,7 +515,7 @@ describe("new-conversation modal: a rejected create leaves no live pending tab",
     expect(settled?.failureReason).toBe("Couldn't create the agent.");
   });
 
-  // Review #1297 finding 3, the symmetric case. `markInitialTurnStarted` was
+  // The symmetric case. `markInitialTurnStarted` was
   // dead for the SAME observer-unmount reason as the failure arm: the host has
   // already kicked the provider turn from `initialMessage`, and this is what
   // tells the handoff driver not to send it again. A regression leaves the

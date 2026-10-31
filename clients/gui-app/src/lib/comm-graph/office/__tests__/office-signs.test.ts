@@ -170,7 +170,7 @@ function unacceptableBoardRungReason(text: string): string | null {
   return `"${text}" is neither a name, a number, the overflow glyph, nor empty`;
 }
 
-/** A projector that shifts every projected x by +2048px - the review's own F5 recipe. */
+/** A projector that shifts every projected x by +2048px - the F5 recipe. */
 const SHIFTED_PROJECTOR: OfficeProjector = {
   project: (col, row) => ({
     x: 2048 + col * OFFICE_TILE,
@@ -281,7 +281,7 @@ describe("officeSignsToDraw - F5 projected anchor", () => {
     // Projected tile (2,2): x = 2048 + 2*16 = 2080, y = 2*16 = 32.
     expect(resolved.anchor).toEqual({ x: 2080, y: 32 });
     // Centre of a two-tile board hanging off that anchor: 2080 + 16 = 2096 -
-    // the same value the review's own reproduction and the component's
+    // the same value the original reproduction and the component's
     // integration case (plus its fixed camera) both pin.
     expect(officeSignCenterX(resolved)).toBe(2096);
   });
@@ -439,7 +439,7 @@ describe("officeBoardText - F11 roster filtering and width", () => {
 });
 
 describe("officeBoardText - F11 five HQ names, laid out to the board", () => {
-  /** The reviewer's own fixture: six agents, ordinary two-word names. */
+  /** The fixture: six agents, ordinary two-word names. */
   const ROSTER = ["a", "b", "c", "d", "e", "f"];
   const STATUS_BY_ID = new Map<string, OfficeAgentStatus>([
     ["a", "attention"],
@@ -832,7 +832,7 @@ describe("officeBoardText - fixup 3 F11 the ladder never overflows its board", (
   const visible = new Set(FIVE);
 
   /**
-   * The reviewer's first reproduction: five SINGLE-WORD names on the eight-tile
+   * The first reproduction: five SINGLE-WORD names on the eight-tile
    * board a real HQ has. The old ladder held every one-word name whole at all
    * three rungs, so the separators were the only width it could give back, and
    * the widest reading was also the narrowest: 212.61px against 128.
@@ -879,7 +879,7 @@ describe("officeBoardText - fixup 3 F11 the ladder never overflows its board", (
   });
 
   /**
-   * The reviewer's other two: zoom 0.7, the included lower boundary of lod 1,
+   * The other two: zoom 0.7, the included lower boundary of lod 1,
    * where every rung the ladder had ran wider than the board.
    */
   it("steps a six-tile count board below its last rung at the 0.7 zoom boundary", () => {
@@ -1598,7 +1598,7 @@ describe("officeSignsToDraw - fixup 6 rule 3: bullpen and solo plates come down 
 });
 
 /**
- * FEEDBACK ROUND 1: fixture lettering ("SOLO DESKS", "CAFETERIA", a
+ * Fixture lettering ("SOLO DESKS", "CAFETERIA", a
  * counterless "FRONT DESK") waits for close-up now; lettering that reports
  * something - a count, a name, which machine this is - still shows at office
  * zoom. `officeSignLetteredAt` is the rule alone, with no camera or resolver
@@ -1699,7 +1699,7 @@ describe("officeSignLetteredAt - fixture lettering waits for close-up", () => {
         }),
       ).toBe(true);
       // No owner: the plan's own written summary ("Solo desks", "Bullpen ·
-      // N live solos") is the repetition feedback round 1 pointed at, and
+      // N live solos") is the repetition at issue, and
       // the BOARD beside it still carries the count at this band.
       expect(
         officeSignLetteredAt({
@@ -1856,7 +1856,7 @@ describe("officeCivicSignText - the civic counter ladder", () => {
   });
 
   it("says the counter rung at lod 1 too, now that a civic sign reports at office zoom (OFFICE_SIGN_COUNTER_LOD)", () => {
-    // Feedback round 1 named a ward's counter-less reading ("FRONT DESK")
+    // A ward's counter-less reading ("FRONT DESK") was named
     // as prominent and not adding value - the counter is what makes the
     // sign worth its pixels, so the band that draws the sign and the band
     // that draws its number are the same band by construction now. This

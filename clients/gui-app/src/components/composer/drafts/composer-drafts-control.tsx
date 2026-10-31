@@ -329,7 +329,7 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
       aria-label={draftsTriggerLabel(currentCount)}
       className="rounded-full shadow-sm"
       // Desktop keeps the editor focused behind the open list; vaul needs the
-      // pointer sequence it would otherwise lose (critique G6).
+      // pointer sequence it would otherwise lose (G6).
       onPointerDown={mobile ? undefined : (event) => event.preventDefault()}
     >
       <LayersPlus className="size-3.5" aria-hidden />

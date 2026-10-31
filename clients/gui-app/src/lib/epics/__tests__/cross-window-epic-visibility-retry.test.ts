@@ -401,7 +401,7 @@ describe("installCrossWindowEpicVisibility - failed-report retry (fixup 2, item 
 /**
  * The class sweep: the INBOUND startup read retries too.
  *
- * CodeRabbit flagged the outbound `report`; the `snapshot()` leg one line down
+ * The outbound `report` was not alone; the `snapshot()` leg one line down
  * was the same fire-and-forget shape, and it is the worse of the two. A dropped
  * report is corrected by the next visibility edge; a dropped snapshot is not
  * corrected by anything this window does, because what it is missing is what

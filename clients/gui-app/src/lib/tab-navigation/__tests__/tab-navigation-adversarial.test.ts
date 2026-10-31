@@ -1860,7 +1860,7 @@ describe("adversarial navigation: coordinator ledger & structural restore", () =
     // tab-command-coordinator.ts), so this racer wins BEFORE this
     // activation's own resolution call ever runs - its own resolution then
     // finds a stale `expectedCurrentEpicId` and rejects at that precondition.
-    // This is the pre-commit window (closed since round 1/2), not the
+    // This is the pre-commit window (now closed), not the
     // round-3 window - see the pin below this one for a listener that races
     // the commit itself via a raw `useEpicCanvasStore.subscribe`. Both are
     // real, both must hold: this one still exercises "must not silently

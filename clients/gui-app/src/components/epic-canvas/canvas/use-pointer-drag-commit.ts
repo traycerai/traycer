@@ -32,7 +32,7 @@
  * native event's normal bubble phase, independent of which element the
  * browser ends up treating as the authoritative pointer-capture target.
  *
- * Fix-round 2 (same live pass): moving ownership to imperative `window`
+ * Moving ownership to imperative `window`
  * listeners means THIS hook alone is responsible for every terminal path,
  * not just pointerup/pointercancel:
  * - Blur must be a terminal event the hook itself owns (not just observed
@@ -176,7 +176,7 @@ export function usePointerDragCommit(
   const horizontal = axis === "horizontal";
   const dragRef = useRef<ActivePointerDrag | null>(null);
 
-  // Unmount safety net (fix-round 2, F2): a drag active when this component
+  // Unmount safety net (F2): a drag active when this component
   // unmounts (e.g. a structural op removes the pane mid-gesture) would
   // otherwise leak its window listeners and let a LATER pointerup commit
   // through a dead component. `drag.cancel` was captured at drag-start with
@@ -226,7 +226,7 @@ export function usePointerDragCommit(
       }
       finish(false);
     }
-    // Blur is a terminal event this hook owns directly (fix-round 2, F1):
+    // Blur is a terminal event this hook owns directly (F1):
     // `beginPanelResizeInteraction`'s own blur listener only clears the
     // shared interaction id for the panel-resize CSS class - it has no
     // knowledge of `dragRef` and cannot stop this hook from continuing to

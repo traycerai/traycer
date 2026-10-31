@@ -639,8 +639,8 @@ function hostedGroupView(
 }
 
 /**
- * Design-review slice-4 F2 residual: the four-way ownership shape the
- * reviewer's own probe used, resampled on demand.
+ * F2 residual: the four-way ownership shape the
+ * original probe used, resampled on demand.
  */
 interface OwnershipSnapshot {
   readonly deleted: boolean;
@@ -663,9 +663,9 @@ function ownershipSnapshot(instanceId: string): OwnershipSnapshot {
 }
 
 /**
- * Design-review slice-4 F2 residual: a genuine sibling `useLayoutEffect`
+ * F2 residual: a genuine sibling `useLayoutEffect`
  * (no deps array - it re-samples on EVERY commit that touches this tree)
- * captures the four-way ownership shape the reviewer's own probe used.
+ * captures the four-way ownership shape the original probe used.
  * Rendered as the LAST sibling after `TabGroupView` and
  * `StableTileSurfaceHost`, its layout effect only runs once React has
  * finished processing every earlier sibling's own layout effects for the
@@ -1202,7 +1202,7 @@ describe("<TabGroupView /> stable tile surface host routing (switch ON)", () => 
     // `TabGroupView`'s own layout effect (and the synchronous registry/
     // membership chain it calls directly) has already completed for that
     // same commit - a passive-effect report would not have run yet at this
-    // point, reproducing the reviewer's exact `{ deleted: false, member:
+    // point, reproducing the exact `{ deleted: false, member:
     // true, inline: true, hosted: true }` red shape under the useEffect
     // mutation below.
     expect(snapshots[0].deleted).toBe(true);
