@@ -488,6 +488,40 @@ function armAwaitsScrollAway(
   );
 }
 
+/** A scrollbar press still held. It publishes a reading position but no
+ *  direction, so `canReaderGestureMove` reports it movable and it always
+ *  blocks correction: the flag would say nothing here, and the direction is
+ *  what names the contact. */
+function armHoldsPressContact(
+  arm: ArmedReaderDeparture,
+): arm is ReaderGestureArm {
+  return arm?.source === "gesture" && arm.direction === "indeterminate";
+}
+
+/** Whether a gesture intent replaces the contact standing before it.
+ *
+ *  A touch contact outlives every intent during it: neither a delivered
+ *  `touchmove` nor a pointer preflight ends it. Replacing it with a gesture
+ *  arm would let a strict-bottom report release that arm, leaving the rest of
+ *  the contact - which iOS may deliver as bare scroll reports - unprotected.
+ *  Only the lift ends the contact.
+ *
+ *  A held press outlives an intent that cannot move the view. The button is
+ *  still down, and a key that moves nothing at the edge is not the reader
+ *  letting go of it: at the end a toward-end key steps nowhere, so it leaves
+ *  no report to judge the press by. Replacing the press's arm there drops it -
+ *  toward the end `readerGestureArm` returns none at all while follow holds -
+ *  and the drag that follows then reads as layout-owned, its report correcting
+ *  the view away from where the press stands. An intent that can move the view
+ *  is the reader's own movement, and takes the arm as any gesture does. */
+function intentReplacesArm(
+  arm: ArmedReaderDeparture,
+  blocksAutomaticCorrection: boolean,
+): boolean {
+  if (arm?.source === "touch") return false;
+  return !(armHoldsPressContact(arm) && !blocksAutomaticCorrection);
+}
+
 /** The arm a gesture outside a touch contact leaves: none for one that
  *  publishes no reading position, or that continues follow. */
 function readerGestureArm(
@@ -1552,12 +1586,12 @@ export function useChatTimelineFollowLatch(
         permissionRef.current &&
         intent.direction === "toward-end" &&
         !isTouchContact;
-      // A touch contact outlives every intent during it: neither a delivered
-      // `touchmove` nor a pointer preflight ends it. Replacing it with a
-      // gesture arm would let a strict-bottom report release that
-      // arm, leaving the rest of the contact - which iOS may deliver as bare
-      // scroll reports - unprotected. Only the lift ends the contact.
-      if (!isTouchContact) {
+      if (
+        intentReplacesArm(
+          armedReaderDepartureRef.current,
+          blocksAutomaticCorrection,
+        )
+      ) {
         armedReaderDepartureRef.current = readerGestureArm(
           intent,
           continuesFollow,
