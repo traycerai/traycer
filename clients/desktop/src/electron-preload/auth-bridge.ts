@@ -43,6 +43,7 @@ import type {
   UpdateHostVersionPolicyInput,
   VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
+  VoiceSessionIndicator,
   VoiceSessionMintFetchResult,
   VoiceSessionMintRequest,
 } from "../ipc-contracts/host-types";
@@ -153,6 +154,7 @@ export interface AuthBridgeSurface {
     voiceSessionId: string,
   ): Promise<VoiceSessionEndFetchResult>;
   setVoiceSessionLive(live: boolean): Promise<void>;
+  setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void>;
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -345,6 +347,12 @@ export function buildAuthBridge(): AuthBridgeSurface {
       ipcRenderer.invoke(
         RunnerHostInvoke.setVoiceSessionLive,
         live,
+      ) as Promise<void>,
+
+    setVoiceSessionIndicator: (indicator) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setVoiceSessionIndicator,
+        indicator,
       ) as Promise<void>,
 
     getTraycerModels: (bearerToken) =>

@@ -8,6 +8,7 @@ import type {
   LocalHostUnresponsive,
   LocalHostUnresponsiveOffer,
   RegisteredHostsPush,
+  VoiceTrayAction,
 } from "../ipc-contracts/host-types";
 import type { HostRestartRequestResult } from "../ipc-contracts/host-management-types";
 import { subscribe, type Disposable, type Listener } from "./subscribe";
@@ -173,6 +174,7 @@ export interface HostBridgeSurface {
   ): Disposable;
   onSystemResumed(handler: () => void): Disposable;
   onSystemSuspended(handler: () => void): Disposable;
+  onVoiceTrayAction(handler: Listener<VoiceTrayAction>): Disposable;
   requestHostRespawn(): Promise<HostRestartRequestResult>;
   forceRestartUnresponsiveHost(
     offer: LocalHostUnresponsiveOffer,
@@ -208,6 +210,10 @@ export function buildHostBridge(): HostBridgeSurface {
     // The matching "the person is leaving" pulse: sleep or screen lock.
     onSystemSuspended: (handler) =>
       subscribe<void>(RunnerHostEvent.systemSuspended, handler),
+
+    // The voice item's Mute, Unmute or End, for this window's session.
+    onVoiceTrayAction: (handler) =>
+      subscribe<VoiceTrayAction>(RunnerHostEvent.voiceTrayAction, handler),
 
     requestHostRespawn: () =>
       ipcRenderer.invoke(

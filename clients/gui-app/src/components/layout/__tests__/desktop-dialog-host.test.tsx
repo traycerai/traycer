@@ -425,6 +425,7 @@ function createBaseRunnerHost(): IRunnerHost {
     onLocalHostUnresponsive: () => ({ dispose: () => undefined }),
     onSystemResumed: () => ({ dispose: () => undefined }),
     onSystemSuspended: () => ({ dispose: () => undefined }),
+    onVoiceTrayAction: () => ({ dispose: () => undefined }),
     onNetworkPathChanged: () => ({ dispose: () => undefined }),
     getVoiceAvailability: () =>
       Promise.resolve({ kind: "ok" as const, available: false }),
@@ -432,6 +433,7 @@ function createBaseRunnerHost(): IRunnerHost {
     endVoiceSession: () =>
       Promise.resolve({ kind: "ok" as const, closedAt: null }),
     setVoiceSessionLive: () => Promise.resolve(),
+    setVoiceSessionIndicator: () => Promise.resolve(),
     requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
     forceRestartUnresponsiveHost: () =>
       Promise.resolve({ kind: "restarted" as const }),

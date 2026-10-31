@@ -32,6 +32,7 @@ import {
   useVoiceMicrophoneAccessMutation,
   useVoiceSessionEndMutation,
   useVoiceSessionMintMutation,
+  useVoiceShellIndicatorMutation,
   useVoiceShellLiveMutation,
 } from "@/hooks/voice/use-voice-session-mutations";
 import { voiceQueryKeys } from "@/lib/query-keys";
@@ -139,6 +140,7 @@ export function VoiceSessionController(): ReactNode {
   const { mutateAsync: mintAsync } = useVoiceSessionMintMutation();
   const { mutateAsync: endAsync } = useVoiceSessionEndMutation();
   const { mutateAsync: shellLiveAsync } = useVoiceShellLiveMutation();
+  const { mutateAsync: shellIndicatorAsync } = useVoiceShellIndicatorMutation();
   const { mutateAsync: microphoneAccessAsync } =
     useVoiceMicrophoneAccessMutation();
   const queryClient = useQueryClient();
@@ -371,6 +373,7 @@ export function VoiceSessionController(): ReactNode {
   // ---- Session lifecycle ----------------------------------------------- //
   const micStreamRef = useRef<MediaStream | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
   const levelWatchRef = useRef<AudioLevelWatch | null>(null);
   const expiryTimerRef = useRef<number | null>(null);
   const remintWhenClearRef = useRef<(() => void) | null>(null);
@@ -398,15 +401,47 @@ export function VoiceSessionController(): ReactNode {
   const requestRemintWhenClearRef = useRef<() => void>(() => undefined);
   const endRef = useRef<(reason: VoiceEndReason) => void>(() => undefined);
 
-  const setShellVoiceLive = useCallback(
-    (live: boolean) => {
-      void shellLiveAsync(live).catch((error: unknown) => {
-        appLogger.warn("[voice] shell live flag failed", {
+  /** What the shell's voice item shows for this window's live session. */
+  const reportShellIndicator = useCallback(() => {
+    const { muted, pausedForDictation } = useVoiceSessionStore.getState();
+    void shellIndicatorAsync({ muted, pausedForDictation }).catch(
+      (error: unknown) => {
+        appLogger.warn("[voice] shell indicator failed", {
           error: describeLogError(error),
         });
-      });
+      },
+    );
+  }, [shellIndicatorAsync]);
+
+  const setShellVoiceLive = useCallback(
+    (live: boolean) => {
+      // The shell keeps an indicator only for a live window, so a session
+      // going live reports it once the flag has landed.
+      void shellLiveAsync(live)
+        .then(() => {
+          if (live) reportShellIndicator();
+        })
+        .catch((error: unknown) => {
+          appLogger.warn("[voice] shell live flag failed", {
+            error: describeLogError(error),
+          });
+        });
     },
-    [shellLiveAsync],
+    [reportShellIndicator, shellLiveAsync],
+  );
+  useEffect(
+    () =>
+      useVoiceSessionStore.subscribe((state, previous) => {
+        if (state.phase !== "live") return;
+        if (
+          state.muted === previous.muted &&
+          state.pausedForDictation === previous.pausedForDictation
+        ) {
+          return;
+        }
+        reportShellIndicator();
+      }),
+    [reportShellIndicator],
   );
 
   /** Stops local capture and playback at once; nothing async. */
@@ -419,6 +454,7 @@ export function VoiceSessionController(): ReactNode {
       audio.srcObject = null;
       audioRef.current = null;
     }
+    remoteStreamRef.current = null;
     const stream = micStreamRef.current;
     if (stream !== null) {
       for (const track of stream.getTracks()) track.stop();
@@ -436,17 +472,26 @@ export function VoiceSessionController(): ReactNode {
   }, []);
 
   /**
-   * What the microphone carries: nothing while the person muted it, and
-   * nothing while dictation holds the microphone (`pausedForDictation`, set
-   * by the dictation hook; VT6 arbitrates further). The mute is the
-   * person's own and outlives the pause.
+   * What the microphone carries and what the speaker plays, both switched
+   * locally with no network wait. The microphone carries nothing while the
+   * person muted it or while the voice is paused for dictation
+   * (`pausedForDictation`); the voice's sound is silent while paused, so it
+   * never reaches the dictation capture. The mute is the person's own and
+   * outlives the pause.
    */
   const applyCapture = useCallback(() => {
-    const stream = micStreamRef.current;
-    if (stream === null) return;
     const { muted, pausedForDictation } = useVoiceSessionStore.getState();
-    for (const track of stream.getAudioTracks()) {
-      track.enabled = !muted && !pausedForDictation;
+    const stream = micStreamRef.current;
+    if (stream !== null) {
+      for (const track of stream.getAudioTracks()) {
+        track.enabled = !muted && !pausedForDictation;
+      }
+    }
+    const remote = remoteStreamRef.current;
+    if (remote !== null) {
+      for (const track of remote.getAudioTracks()) {
+        track.enabled = !pausedForDictation;
+      }
     }
   }, []);
   useEffect(
@@ -454,10 +499,21 @@ export function VoiceSessionController(): ReactNode {
       useVoiceSessionStore.subscribe((state, previous) => {
         if (state.pausedForDictation === previous.pausedForDictation) return;
         applyCapture();
+        // Nothing is appended while paused: an item spoken into a silent
+        // speaker would read as delivered from its transcript alone. The
+        // item being spoken when the pause began goes back to wait, so its
+        // silenced words confirm nothing and it is spoken again after
+        // Resume. The engine takes appends again on Resume, once it has
+        // started.
+        if (state.pausedForDictation) speechRef.current?.suspendInFlight();
+        const attempt = attemptRef.current;
+        if (attempt !== null && attempt.started && !attempt.cancelled) {
+          speechRef.current?.setReady(!state.pausedForDictation);
+        }
         // Words said before dictation took the microphone and not closed
         // yet are let go: their boundary, if it comes, falls in the pause,
         // and the next request must not inherit them. A request already
-        // sent finishes on its own. (VT6 decides what the voice says here.)
+        // sent finishes on its own.
         if (state.pausedForDictation) state.dropOpenSpan();
       }),
     [applyCapture],
@@ -616,6 +672,8 @@ export function VoiceSessionController(): ReactNode {
             audioRef.current = audio;
             audio.autoplay = true;
             audio.srcObject = remote;
+            remoteStreamRef.current = remote;
+            applyCapture();
             // Sound that cannot play is a session nobody can hear: it ends,
             // and says so, rather than confirming deliveries by transcript.
             void audio.play().catch((error: unknown) => {
@@ -719,7 +777,9 @@ export function VoiceSessionController(): ReactNode {
         expiresAt: attempt.expiresAt,
         engine: attempt.engine,
       });
-      ensureSpeech().setReady(true);
+      ensureSpeech().setReady(
+        !useVoiceSessionStore.getState().pausedForDictation,
+      );
       setShellVoiceLive(true);
       clearTimers();
       const untilRemint =
@@ -734,6 +794,7 @@ export function VoiceSessionController(): ReactNode {
       return true;
     },
     [
+      applyCapture,
       clearTimers,
       endAsync,
       ensureSpeech,
@@ -918,6 +979,21 @@ export function VoiceSessionController(): ReactNode {
       useVoiceSessionStore.getState().setDriver(null);
     };
   }, [end, setMuted, start]);
+
+  // The shell's voice item, shown while this window is away: its Mute or
+  // Unmute and its End act on this window's session as the strip's do.
+  useEffect(() => {
+    const subscription = runnerHost.onVoiceTrayAction((action) => {
+      if (action.kind === "end") {
+        end("ended");
+        return;
+      }
+      if (useVoiceSessionStore.getState().phase === "live") {
+        setMuted(action.muted);
+      }
+    });
+    return () => subscription.dispose();
+  }, [end, runnerHost, setMuted]);
 
   // Lock, sleep and the page going away all end the session through the
   // one latch: the store's tokens move first, so a microphone prompt still
