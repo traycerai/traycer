@@ -3083,6 +3083,63 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       expect(useBotTabLandingStore.getState().byBotId).toEqual({});
     });
 
+    it("spends a waiting sender landing unlanded when the person moves the tab, and opens no thread when the list answers", async () => {
+      const user = userEvent.setup();
+      const NEW_THREAD: BotThreadSummary = {
+        ...LISTED_THREAD,
+        threadId: "thread-2",
+        sessionChatId: "session-thread-2",
+        anchor: {
+          messageId: "post-8",
+          requestId: "req-8",
+          senderUserId: "user-1",
+          sentAt: 3_000,
+          resolvedAt: null,
+          excerpt: null,
+        },
+      };
+      const { rerender } = render(surface());
+
+      // The held list lacks the sender's thread, and a read of it starts.
+      mocks.state.threadsFetching = true;
+      rerender(surface());
+      act(() =>
+        useBotTabLandingStore
+          .getState()
+          .request(BOT_ID, { kind: "sender", chatId: "session-thread-2" }),
+      );
+      expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
+        kind: "sender",
+        chatId: "session-thread-2",
+      });
+
+      // The person opens Activity while the landing waits.
+      await user.click(screen.getByRole("tab", { name: /^Activity/ }));
+
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+      expect(
+        screen.getByRole("tab", { name: /^Activity/, selected: true }),
+      ).toBeTruthy();
+
+      // The read answers with the thread.
+      mocks.state.threads = [LISTED_THREAD, NEW_THREAD];
+      mocks.state.threadsFetching = false;
+      rerender(surface());
+
+      expect(
+        screen.getByRole("tab", { name: /^Activity/, selected: true }),
+      ).toBeTruthy();
+      expect(screen.getByTestId("stub-activity")).toBeTruthy();
+      expectNoSession();
+
+      await user.click(screen.getByRole("tab", { name: /^Messages/ }));
+
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-open-thread")).toBe("none");
+      expect(channel.getAttribute("data-land-on")).toBe("none");
+      expectNoSession();
+    });
+
     it("lands the channel, with no thread or session, for a sender landing on the trunk chat", () => {
       useBotTabLandingStore
         .getState()

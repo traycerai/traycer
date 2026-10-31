@@ -48,7 +48,10 @@ import {
 import { useTeamSetupHistory } from "@/hooks/bots/use-team-setup-history";
 import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
-import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
+import {
+  useBotTabLandingStore,
+  type BotTabLanding,
+} from "@/stores/bots/bot-tab-landing-store";
 import {
   BotChannelView,
   type BotChannelLanding,
@@ -638,6 +641,50 @@ function useBotTabSession(args: {
   };
 }
 
+/** Where the tab is: its view, the session shown, and the channel's state. */
+type BotTabPlace = {
+  readonly view: BotTabView;
+  readonly session: BotOpenSession | null;
+  readonly openThread: BotOpenThread | null;
+  readonly channelLanding: BotChannelLanding | null;
+};
+
+/** A landing kept for a read of the thread list, and where the tab was then. */
+type WaitingLanding = {
+  readonly landing: BotTabLanding;
+  readonly place: BotTabPlace;
+};
+
+/**
+ * A `sender` landing: the thread whose session sent beside the channel, or
+ * the channel, once no read of the list is in flight that may bring the
+ * thread. A move of the tab while it waits spends it unlanded.
+ */
+function spendSenderLanding(input: {
+  readonly botId: string;
+  readonly landing: Extract<BotTabLanding, { kind: "sender" }>;
+  readonly threads: ReadonlyArray<BotThreadSummary>;
+  readonly threadsFetching: boolean;
+  readonly place: BotTabPlace;
+  readonly waiting: { current: WaitingLanding | null };
+  readonly landChannel: (messageId: string | null) => void;
+  readonly showThread: (threadId: string, messageId: string | null) => void;
+}): void {
+  const { landing, threads, place, waiting } = input;
+  const held = waiting.current?.landing === landing ? waiting.current : null;
+  const thread = threads.find((t) => t.sessionChatId === landing.chatId);
+  const moved = held !== null && held.place !== place;
+  if (!moved && thread === undefined && input.threadsFetching) {
+    waiting.current = held ?? { landing, place };
+    return;
+  }
+  waiting.current = null;
+  useBotTabLandingStore.getState().clear(input.botId);
+  if (moved) return;
+  if (thread === undefined) input.landChannel(null);
+  else input.showThread(thread.threadId, null);
+}
+
 /**
  * Lands the tab where it was asked to from outside, once the thread list has
  * answered, since a thread opens by the post it hangs off. Each request is
@@ -650,7 +697,8 @@ function useBotTabSession(args: {
  * of these lands nowhere, and the tab stays as it is. A `sender` landing
  * (a sender chip) shows the thread whose session sent beside the channel, or
  * the channel for any other session once the list being read has answered:
- * a thread the held list lacks may be in that answer.
+ * a thread the held list lacks may be in that answer. Where the person takes
+ * the tab while it waits stands: the landing is then spent unlanded.
  */
 function useSpendTabLanding(args: {
   readonly botId: string;
@@ -660,6 +708,8 @@ function useSpendTabLanding(args: {
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
   /** A read of the list is in flight, over `threads` when they are held. */
   readonly threadsFetching: boolean;
+  /** Where the tab is; a new value is a move, the person's or a landing's. */
+  readonly place: BotTabPlace;
   readonly landChannel: (messageId: string | null) => void;
   readonly showThread: (threadId: string, messageId: string | null) => void;
   readonly openSession: BotSessionOpen;
@@ -667,18 +717,24 @@ function useSpendTabLanding(args: {
   readonly onViewChange: (view: BotTabView) => void;
 }): void {
   const { botId, channelChatId, trunkChatId, threads, threadsFetching } = args;
-  const { landChannel, showThread, openSession, onViewChange } = args;
+  const { landChannel, showThread, openSession, onViewChange, place } = args;
   const landing = useBotTabLandingStore((state) =>
     Object.hasOwn(state.byBotId, botId) ? state.byBotId[botId] : null,
   );
+  const waiting = useRef<WaitingLanding | null>(null);
   useEffect(() => {
     if (landing === null || threads === null) return;
     if (landing.kind === "sender") {
-      const thread = threads.find((t) => t.sessionChatId === landing.chatId);
-      if (thread === undefined && threadsFetching) return;
-      useBotTabLandingStore.getState().clear(botId);
-      if (thread === undefined) landChannel(null);
-      else showThread(thread.threadId, null);
+      spendSenderLanding({
+        botId,
+        landing,
+        threads,
+        threadsFetching,
+        place,
+        waiting,
+        landChannel,
+        showThread,
+      });
       return;
     }
     useBotTabLandingStore.getState().clear(botId);
@@ -717,6 +773,7 @@ function useSpendTabLanding(args: {
     landing,
     onViewChange,
     openSession,
+    place,
     showThread,
     threads,
     threadsFetching,
@@ -870,12 +927,17 @@ function BotTabContent(props: {
     landChannel,
     showThread,
   } = useBotTabSession({ threads, onViewChange, setOpenThread });
+  const place = useMemo(
+    (): BotTabPlace => ({ view, session, openThread, channelLanding }),
+    [channelLanding, openThread, session, view],
+  );
   useSpendTabLanding({
     botId,
     channelChatId: snapshot.bot.appConversationChatId,
     trunkChatId: snapshot.bot.trunkChatId,
     threads,
     threadsFetching: threadList.isFetching,
+    place,
     landChannel,
     showThread,
     openSession,
