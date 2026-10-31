@@ -183,13 +183,15 @@ function TabStripBody() {
     [surfaceRef],
   );
 
-  // On the empty landing route the strip draws nothing; the header's own
-  // actions stay, so no control is lost. Its sections are still read: the
-  // bell counts the tasks that need the person as the sidebar would.
+  // On the empty landing route the strip draws no tabs; the header's own
+  // actions stay, so no control is lost, and Talk stays with them: it is the
+  // one way to start voice there, and a live session's one way to end it.
+  // Its sections are still read: the bell counts the tasks that need the
+  // person as the sidebar would.
   if (controller.isEmptyLanding) {
     return (
       <TabStripSectionsScope controller={controller}>
-        {null}
+        <TalkControl compact={false} />
       </TabStripSectionsScope>
     );
   }

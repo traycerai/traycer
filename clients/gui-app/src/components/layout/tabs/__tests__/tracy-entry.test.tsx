@@ -1248,6 +1248,24 @@ describe("Talk without the fixed Tracy entry", () => {
     expect(screen.queryByRole("tab", { name: "Tracy" })).toBeNull();
   });
 
+  it("is drawn on the empty landing route, where the strip draws no tabs, idle and through a live session", async () => {
+    // Show Tracy off, Home off, no tabs, route "/": the strip's empty landing.
+    setHomeTabEnabled(false);
+    mountTopStrip("/");
+
+    const talk = await screen.findByRole("button", { name: "Talk" });
+    expect(talk.getAttribute("data-state")).toBe("idle");
+    expect(screen.queryByTestId("tab-strip")).toBeNull();
+
+    act(() => {
+      useVoiceSessionStore.setState({ phase: "live" });
+    });
+    const live = screen.getAllByRole("button", { name: "Talk" });
+    expect(live).toHaveLength(1);
+    expect(live[0]?.getAttribute("data-state")).toBe("live");
+    expect(live[0]?.getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("is drawn in the vertical strip's top block, expanded and collapsed", async () => {
     openEpicTabs(["Alpha"]);
     mountSideStrip("/epics/e-alpha/e-alpha");
