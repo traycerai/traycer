@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
   useVoiceSessionStore,
+  type QueueItem,
   type VoiceFocus,
 } from "@/stores/voice/voice-session-store";
 import {
@@ -195,7 +196,10 @@ function threadSummary(fixture: ThreadFixture): BotThreadSummary {
 }
 
 /** The directory the real composer builds from the fixture reads. */
-function directoryWith(fixtures: ReadonlyArray<ThreadFixture>): VoiceDirectory {
+function directoryWith(
+  fixtures: ReadonlyArray<ThreadFixture>,
+  queue: ReadonlyArray<QueueItem>,
+): VoiceDirectory {
   const threadsByBot = new Map<string, BotThreadSummary[]>();
   for (const fixture of fixtures) {
     const summaries = threadsByBot.get(fixture.botId) ?? [];
@@ -209,7 +213,7 @@ function directoryWith(fixtures: ReadonlyArray<ThreadFixture>): VoiceDirectory {
     followedThreads: new Set(),
     viewerUserId: VIEWER,
     focus: FOCUS_CHANNEL,
-    queue: [],
+    queue,
     hostOf: (botId) => HOSTS.get(botId) ?? null,
     heldPostText: (botId, messageId) =>
       fixtures.find(
@@ -218,7 +222,7 @@ function directoryWith(fixtures: ReadonlyArray<ThreadFixture>): VoiceDirectory {
   });
 }
 
-const DIRECTORY = directoryWith(THREAD_FIXTURES);
+const DIRECTORY = directoryWith(THREAD_FIXTURES, []);
 
 type NamedIds = RouterResult["target"];
 
@@ -586,6 +590,80 @@ describe("a verb a later ticket builds", () => {
   });
 });
 
+describe("a routed read of a queue item", () => {
+  function waiting(
+    id: string,
+    botId: string,
+    threadId: string | null,
+  ): QueueItem {
+    return {
+      id,
+      kind: "reply",
+      botId,
+      hostId: HOST_MAIN,
+      threadId,
+      chatId: threadId ?? `chan-${botId}`,
+      messageId: id,
+      surfaceId: null,
+      title: "A title",
+      author: null,
+      line: `A line of ${id}`,
+      at: NOW,
+      state: "queued",
+    };
+  }
+  const QUEUE_DIRECTORY = directoryWith(THREAD_FIXTURES, [
+    waiting("i-ci", CI, null),
+    waiting("i-tracy-thread", TRACY, "thr-safari-scroll"),
+  ]);
+  const HEARD = "Read the CI bot's reply";
+  const withItem = (named: NamedIds, itemId: string): RouterResult => ({
+    ...routerResult("read", named, 0, words(HEARD).length - 1),
+    target: { ...named, itemId },
+  });
+
+  it.each([
+    [
+      "an item of another bot than the one named",
+      ids(null, CI, null),
+      "i-tracy-thread",
+    ],
+    [
+      "an item of another thread than the one named",
+      ids(null, TRACY, "thr-worktrees"),
+      "i-tracy-thread",
+    ],
+  ])(
+    "naming %s is refused: the voice says so, nothing is posted, and the words are spent",
+    async (_name, named, itemId) => {
+      const h = harness(QUEUE_DIRECTORY);
+      speak(words(HEARD));
+      h.model(recorded(withItem(named, itemId)));
+
+      await h.loop.onDelegationCreated("d-1");
+
+      expect(h.sends).toEqual([]);
+      expect(h.notices).toHaveLength(1);
+      expect(h.notices[0]).toContain("not one the person has");
+      expect(useVoiceSessionStore.getState().segments).toEqual([]);
+    },
+  );
+
+  it("is accepted when the bot and the thread it names are the item's own", () => {
+    const decision = resolveRoute(
+      withItem(ids(null, TRACY, "thr-safari-scroll"), "i-tracy-thread"),
+      QUEUE_DIRECTORY,
+      words(HEARD).length,
+    );
+
+    expect(decision).toMatchObject({
+      kind: "deferred",
+      verb: "read",
+      itemId: "i-tracy-thread",
+    });
+  });
+});
+
 describe("a switch that matches two threads", () => {
   const QUESTION = `Which Safari thread: Tracy's "Safari scroll bug" or CI bot's "Safari fix in tonight's train"?`;
 
@@ -950,6 +1028,7 @@ describe("the request body", () => {
           ? { ...fixture, text: INJECTION }
           : fixture,
       ),
+      [],
     );
     const raw = routerRequestBody(
       hostile,
