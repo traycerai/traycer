@@ -112,7 +112,7 @@ export interface FallbackTierGroupsEditorProps {
    * by construction - it is `data-or-null`, and a null renders no verdict line -
    * so a failed check looked exactly like a host that had never been asked. The
    * user got no answer and no way to ask again, on the one surface whose job is
-   * to say what a row will do. The null OMISSION is accepted as a fidelity
+   * to say what a row will do. D159 accepts the null OMISSION as a fidelity
    * rule (never guess a verdict in the client); this is the usability half on
    * top of it, and it deliberately does not put an error on any ROW - the
    * failure is one request covering every row, so it is stated once for the
@@ -638,7 +638,7 @@ function DefaultGroupSelect(props: {
  * printing "couldn't check" beside its own spinner would be describing the
  * state before the button was pressed. `previewPending` is the query's
  * `isFetching`, which covers the retry, so this remains the single pending
- * indicator required here.
+ * indicator D159 asks for.
  *
  * That exclusion used to be the ORDER of two early returns, which is why the
  * older wording here claimed it held "by construction rather than by a second

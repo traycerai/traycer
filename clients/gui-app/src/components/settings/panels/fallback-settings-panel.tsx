@@ -1472,7 +1472,7 @@ function unrefreshedResetBody(subject: UnrefreshedResetSubject): string {
       return "This page still shows the settings from before the reset. Select Reload settings to show what's now saved on this host.";
     case "own-edit":
       return "These are your edits. Select Reload settings to show what's now saved on this host.";
-    // The notice under the control already says where these values came
+    // D327: the notice under the control already says where these values came
     // from ("your last saved settings are back on screen", or that they still
     // predate the reset). The banner's subject is the RESET, so here it says
     // only that, and the two stop making the same decision in two places.
@@ -1489,8 +1489,8 @@ function UnrefreshedResetNotice(props: {
    * `pre-reset-values` is the only case where the banner names the displayed
    * values as out of date. Once anything has been submitted since the reset
    * went out, that is the user's own draft, which a save since may have stored;
-   * and once a refusal has rolled the display back, the provenance sentence
-   * belongs to the save notice, leaving this banner with its own subject -
+   * and once a refusal has rolled the display back, D327 gives the provenance
+   * sentence to the save notice and leaves this banner with its own subject -
    * the reset - alone. Two places describing one set of values is how the two
    * of them came to disagree.
    */

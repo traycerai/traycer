@@ -834,7 +834,7 @@ describe("FallbackTierGroupCard - row status line (rowStatusLine / RowStatus)", 
     });
     // Falsification: always point `aria-describedby` at the preview id even
     // when nothing is informative enough to render - a dangling reference to
-    // an element that does not exist, which is worse than no
+    // an element that does not exist, which D159 treats as worse than no
     // description at all.
     expect(screen.queryByTestId("fallback-tier-candidate-preview")).toBeNull();
     expect(

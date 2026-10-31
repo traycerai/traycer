@@ -2180,7 +2180,7 @@ describe("projectFleetUpdateView — record-derived parks (legacyFacts)", () => 
 });
 
 /**
- * A TERMINAL, non-`failed` attempt yields the operation slot to the
+ * D-49: a TERMINAL, non-`failed` attempt yields the operation slot to the
  * record-derived parks — and yields it for the CHOICE only, falling back to
  * its own arm when the records say nothing.
  *
@@ -2285,7 +2285,7 @@ describe("projectFleetUpdateView — terminal attempts yield to the record parks
   });
 
   it("(H2) the STAGED WAIT park reaches the fall-back too - it is the record parks, plural", () => {
-    // `legacyPark` answers for both parks, and the rule is about the
+    // `legacyPark` answers for both parks, and D-49's decision is about the
     // record parks rather than about the debt one: a terminal attempt does
     // not make a stage stop waiting any more than it makes an install stop
     // needing a restart. Falsification: narrow the fall-back to

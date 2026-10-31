@@ -1705,7 +1705,7 @@ function applySaveFailed(
  * Exported for the staleness banner, which needs the same distinction for a
  * different reason: it names what is on screen only when what is on screen is
  * the user's own live edit. A rollback is neither that nor the pre-reset
- * policy, and the banner says nothing about provenance there - the
+ * policy, and under D327 the banner says nothing about provenance there - the
  * save notice under the control already owns that sentence.
  *
  * The distinction matters because `revision` alone cannot make it: a revert

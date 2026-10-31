@@ -687,7 +687,7 @@ function CandidateRow(props: {
             // this cell's DESCRIPTION (AX8). Dropped when there is no line
             // rather than pointing at an element that is not rendered: a
             // dangling `aria-describedby` is a promise of detail with nothing
-            // behind it, and the absence is itself meaningful here.
+            // behind it, and the absence is itself meaningful here (D159).
             describedBy={status === null ? undefined : previewId}
             onChange={commitModel}
             onAnnounce={onAnnounce}

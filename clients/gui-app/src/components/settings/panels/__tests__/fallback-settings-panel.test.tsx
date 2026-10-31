@@ -2987,8 +2987,8 @@ describe("FallbackSettingsPanel - R8/R10 fifth pass: the page's claims match the
     // `displaySubject` expression, leaving the two-way form. The banner then
     // calls the rollback "your own edit" while the notice immediately below it
     // calls the same values "still the settings from before the reset" - two
-    // alerts contradicting each other about one set of values, which was
-    // removed by giving provenance to the notice alone.
+    // alerts contradicting each other about one set of values, which is what
+    // D327 removed by giving provenance to the notice alone.
     expect(rolledBack.textContent).not.toContain("your own edit");
     expect(rolledBack.textContent).not.toContain("before the reset");
     // The banner keeps its own subject, and only that.

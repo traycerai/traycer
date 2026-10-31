@@ -1966,7 +1966,7 @@ const CLI_TOO_OLD_MESSAGE =
   "This computer's Traycer CLI is too old to resume the update. Update the CLI, then try again.";
 
 /**
- * What a `dispatch-indeterminate` reason means to a person.
+ * What a `dispatch-indeterminate` reason means to a person (D18).
  *
  * The host names a reason from a closed grammar, and three of those reasons are
  * not really "we could not confirm" at all — they are definite answers about

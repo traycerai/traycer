@@ -677,7 +677,7 @@ export function projectFleetUpdateView(
 
   // THE ATTEMPT ARM, in its own function beside the other three
   // (`coarseProgressView`, `legacyFactsView`, `recordObservationView`). It is
-  // the last arm that was still inline, and the terminal fall-back is what
+  // the last arm that was still inline, and D-49's terminal fall-back is what
   // made that worth changing: the rule is a statement about which LEG answers,
   // so it belongs where the legs are chosen from rather than buried in the
   // middle of the longest branch.
@@ -902,7 +902,7 @@ function legacyFactsView(
 
 /**
  * What a REPORTED attempt projects to: the phase, qualified by staleness and
- * by the host's own liveness conclusion — plus one exception, where a
+ * by the host's own liveness conclusion — plus D-49's one exception, where a
  * terminal attempt steps aside for the record-derived parks.
  *
  * Extracted from {@link projectFleetUpdateView} so every arm is a named
@@ -916,7 +916,7 @@ function attemptOperationView(input: {
   readonly connected: boolean;
 }): FleetUpdateView {
   const { operation, observation, stale } = input;
-  // A TERMINAL attempt that is NOT `failed` does not occupy the
+  // D-49: A TERMINAL attempt that is NOT `failed` does not occupy the
   // operation slot for the purpose of the record-derived parks.
   //
   // The case: another actor delivered the requested version and the
@@ -1270,7 +1270,7 @@ function phaseKind(
       // answer is deliberately NOT here: `install.json` names the delivered
       // version and the runtime does not, which is the activation-debt park,
       // and `legacyFactsView` renders it with its Restart from the RECORDS
-      // alone. Reaching that arm is not left to the host: the terminal
+      // alone. Reaching that arm is not left to the host: D-49's terminal
       // fall-through above consults the parks BEFORE this mapping is ever
       // used, so the debt speaks whether or not the peer is still reporting
       // the terminal attempt. This `idle` is what remains when the records
