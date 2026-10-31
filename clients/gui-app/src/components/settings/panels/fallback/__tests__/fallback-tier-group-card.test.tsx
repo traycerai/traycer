@@ -781,7 +781,7 @@ describe("FallbackTierGroupCard - row status line (rowStatusLine / RowStatus)", 
     // even when the catalog knows its label - "claude-sonnet-5" would render
     // in the try step instead of the human-readable name.
     expect(line.textContent).toContain("Claude Sonnet 5");
-    // The account is named, never its id - a raw "acct-1" id string is
+    // The account is named, never its id (D118) - a raw "acct-1" id string is
     // exactly what `labelFor` is meant to translate; this fixture's `LABEL_FOR`
     // is the identity function, so the id itself is what should appear.
     expect(line.textContent).toContain("acct-1");

@@ -86,7 +86,7 @@ export interface FallbackTierGroupsEditorProps {
    * has not landed.
    */
   readonly preview: readonly TierCandidatePreview[] | null;
-  /** Names the account a preview row resolved on - never its raw id. */
+  /** Names the account a preview row resolved on - never its raw id (D190). */
   readonly labelFor: FallbackSettingsProfileLabel;
   /** The catalogs each row's Model and Effort cells draw from; see `fallback-catalog-options.ts`. */
   readonly catalog: FallbackCatalogOptions;

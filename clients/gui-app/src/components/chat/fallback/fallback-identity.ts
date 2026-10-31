@@ -44,7 +44,7 @@ export const TERMINAL_ACCOUNT_LABEL = "Terminal account";
 /**
  * How much of a profile id stands in for a label that cannot be resolved.
  *
- * Mirrors the host's `FALLBACK_PROFILE_ID_PREFIX_LENGTH`. Kept in step
+ * Mirrors the host's `FALLBACK_PROFILE_ID_PREFIX_LENGTH` (D118). Kept in step
  * deliberately: the same profile can be named by a host-written transcript
  * notice and by a card rendered here, and two different truncations of one id
  * read as two different accounts.
@@ -56,7 +56,7 @@ const PROFILE_ID_PREFIX_LENGTH = 8;
  *
  * Split out of {@link useFallbackProfileLabels} so a surface that ALREADY holds
  * a providers read can apply this rule without taking a second one - Settings ▸
- * Fallback's per-row preview is the case. Pulling it out rather than
+ * Fallback's per-row preview is the case (D190). Pulling it out rather than
  * restating it in the other tree is the whole point: two implementations of the
  * disambiguation would be two ways to name one account, and two truncations of
  * one id read as two different accounts.
@@ -87,8 +87,8 @@ export function buildFallbackProfileLabels(
 /**
  * One id against a built map, with the host's own degradation.
  *
- * An unresolvable id becomes a short PREFIX rather than the full identifier:
- * a profile deleted mid-traversal still has to be named on the surface
+ * An unresolvable id becomes a short PREFIX rather than the full identifier
+ * (D118): a profile deleted mid-traversal still has to be named on the surface
  * describing it, and a prefix stays recognisable against Settings without
  * printing a raw uuid at a person.
  */
@@ -221,8 +221,8 @@ export interface FallbackTupleIdentity {
  * tuples, the return banner's preferred and fallback pair, a menu's worth of
  * rows - and a hook per tuple would issue a query per chip.
  *
- * Unresolvable ids degrade to a short PREFIX, matching the host's own rule:
- * a profile the user deleted mid-traversal still has to be named on the
+ * Unresolvable ids degrade to a short PREFIX, matching the host's own rule
+ * (D118): a profile the user deleted mid-traversal still has to be named on the
  * card that is describing it, and a prefix stays recognisable against Settings
  * without printing a full identifier into the UI. Duplicate labels are
  * disambiguated the same way the host does, so a chat showing two accounts

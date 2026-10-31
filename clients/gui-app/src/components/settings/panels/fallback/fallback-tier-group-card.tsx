@@ -97,7 +97,7 @@ export interface FallbackTierGroupCardProps {
   readonly preview: readonly TierCandidatePreview[] | null;
   /**
    * Names the account a row resolved on. Threaded rather than resolved per card
-   * so one providers read builds one label map.
+   * so one providers read builds one label map (D190).
    */
   readonly labelFor: FallbackSettingsProfileLabel;
   /**

@@ -493,7 +493,7 @@ function FallbackPolicyEditor(props: {
    * line for it would be an unrelated surface going dark.
    */
   // Resolved once for the whole editor: one providers read builds one label
-  // map, rather than each card rebuilding it.
+  // map, rather than each card rebuilding it (D190).
   const profileLabelFor = useFallbackSettingsProfileLabels();
   // Same shape, same reason: one model-catalog read per distinct harness in the
   // draft serves every row's Model and Effort cells.
