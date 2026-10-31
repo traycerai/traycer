@@ -466,6 +466,20 @@ export function useVoiceQueueOwner(input: {
     [ensureDesk],
   );
 
+  // `later`: the item is set aside in the queue, and a card of it still
+  // waiting for the person's answer stops listening.
+  const setAside = useCallback(
+    (queue: VoiceQueue, named: string | null): QueueVerbOutcome => {
+      const itemId = named ?? newestWaiting(queue);
+      const outcome = queue.run({ kind: "later", itemId });
+      if (outcome === "dismissed" && itemId !== null) {
+        ensureDesk().dismiss(itemId);
+      }
+      return outcome;
+    },
+    [ensureDesk],
+  );
+
   // The queue's executor: `runVoiceQueueVerb` reaches it, for the router's
   // spoken verbs and the Waiting control's buttons alike.
   useEffect(() => {
@@ -475,6 +489,7 @@ export function useVoiceQueueOwner(input: {
         const queue = ensureQueue();
         if (verb.kind === "read") return readItem(queue, verb);
         if (verb.kind === "open") return openItem(queue, verb);
+        if (verb.kind === "later") return setAside(queue, verb.itemId);
         if (verb.kind !== "status") return queue.run(verb);
         const now = useVoiceSessionStore.getState();
         const botId = verb.botId ?? now.focus?.botId ?? null;
@@ -502,7 +517,7 @@ export function useVoiceQueueOwner(input: {
     return () => {
       useVoiceSessionStore.getState().setQueueDriver(null);
     };
-  }, [appHostId, ensureQueue, openItem, readItem]);
+  }, [appHostId, ensureQueue, openItem, readItem, setAside]);
 
   const stoppedRef = useRef(new Map<string, StoppedFacts>());
   const noteStopped = useCallback((facts: StoppedFacts) => {

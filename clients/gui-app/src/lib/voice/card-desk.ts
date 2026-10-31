@@ -156,6 +156,12 @@ export interface CardDeskDeps {
 export interface CardDesk extends VoiceCardDriver {
   /** The watcher's reading of the active card's records, and its APIs; `null` APIs while the host cannot take them. */
   observe(itemId: string, facts: CardFacts, api: CardApi | null): void;
+  /**
+   * The person set the item aside (`later`): an opening of it still waiting
+   * for their answer closes, its read-back and candidate taken back, so a
+   * later yes sends nothing. An act already out on it is not taken back.
+   */
+  dismiss(itemId: string): void;
   /** The session ended: everything is forgotten, nothing more is said. */
   reset(): void;
 }
@@ -1408,6 +1414,16 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
       }
       if (active.state !== "proposed" || active.candidate === null) return;
       readCandidate(held, active.candidate, prefix);
+    },
+
+    dismiss(itemId) {
+      const held = desk;
+      const active = card();
+      if (held === null || active === null || active.ids.itemId !== itemId) {
+        return;
+      }
+      if (held.offer === null && active.state !== "proposed") return;
+      close(held);
     },
 
     reset() {
