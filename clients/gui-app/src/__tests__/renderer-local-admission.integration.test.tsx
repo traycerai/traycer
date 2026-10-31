@@ -52,7 +52,7 @@ import type {
 /**
  * Cross-seam coverage for `s6-renderer-local-admission`.
  *
- * The composition this ticket fixes has no other test owner: host Vitest
+ * The composition this change fixes has no other test owner: host Vitest
  * globally stubs auth, and GUI tests mock the host away. This file drives
  * the REAL `AuthService` (constructed internally by the REAL
  * `HostRuntimeProvider`, exactly as production boots it) through a faked
@@ -514,7 +514,7 @@ function mountHarness(opts: {
           invalidator={null}
           requestId={null}
           // `null` installs the REAL `buildDefaultRemoteFetcher` (via
-          // `createAuthBoundHostDirectory`) — the path this ticket's fix
+          // `createAuthBoundHostDirectory`) — the path the fix
           // lives on. A stubbed fetcher here would suppress `GET
           // /api/v3/hosts` itself, making the absence assertions below
           // vacuous; see the file header.
@@ -532,7 +532,7 @@ function mountHarness(opts: {
       {/* Persistent, routing-independent admission sentinel: the REAL
           `RootLandingPage`, driven by the REAL store. It renders the REAL
           `AuthLandingPage` whenever `!admitsLocalPlane(status)` and `null`
-          otherwise — this is the mechanism the ticket fixes, not a stand-in
+          otherwise — this is the mechanism the fix is for, not a stand-in
           for it. */}
       <div data-testid="admission-sentinel">
         <RootLandingPage />

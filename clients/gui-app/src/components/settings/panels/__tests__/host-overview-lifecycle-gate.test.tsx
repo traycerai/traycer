@@ -804,7 +804,7 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
   });
 
   it("INTEGRATION: the lifecycle gate releases on the renderer TICK, host.status failing throughout and the scope itself unreachable", async () => {
-    // The pin the ticket calls out by name as needing the MOUNTED Overview
+    // The pin that needs the MOUNTED Overview
     // rather than the pure projector: `fleet-update-view.test.ts` supplies
     // `nowMs` directly and can never observe whether the panel is feeding it
     // from a real ticking clock. Falsifies: wiring the panel's `nowMs` from

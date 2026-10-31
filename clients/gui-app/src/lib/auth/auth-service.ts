@@ -776,7 +776,7 @@ export class AuthService {
   // is a window - three `withAuthNetworkRetry` attempts wide - in which the
   // loop looks idle to anything that checks the timer. A wake landing there
   // would start a second, concurrent probe, and repeated wakes would keep
-  // doing so, which is how the ticket's "18 calls in minute one, 5.7/min at
+  // doing so, which is how the "18 calls in minute one, 5.7/min at
   // cap" stopped being a ceiling.
   private sessionRecoveryInFlight: boolean = false;
   // A wake that arrived DURING a probe. The probe re-arms from the floor when
@@ -1715,7 +1715,7 @@ export class AuthService {
    * true for a token revoked an hour ago.
    *
    * WHY THIS IS A METHOD AND NOT A GUARD AT EACH CALLER: eight of the nine
-   * callers were unreachable before this ticket. Admitting the local plane
+   * callers were unreachable before this change. Admitting the local plane
    * mounted the app shell (`root-route-components.tsx#isStandalone`) and the
    * settings surfaces (`settings-layout.tsx`) under `unverified`, which is what
    * put `devices-sessions-panel`, the hosts panel and
@@ -2908,7 +2908,7 @@ export class AuthService {
     // else. This method cannot READ its bearer from that accessor - the repair
     // path below needs the whole `LiveSessionAuthority` to fence its rotation
     // on - but it is a cloud product read like the eight that do, and the
-    // panel that drives it mounts under `unverified` since this ticket
+    // panel that drives it mounts under `unverified` since this change
     // admitted the settings surfaces.
     //
     // Refusing here also keeps an unverified session out of the REPAIR, which
@@ -3101,7 +3101,7 @@ export class AuthService {
    * the read path does, so its refusal has to be loud enough to reach the user.
    *
    * TWO states reach that throw and only one of them is a caller bug. Signed-out
-   * is — nothing should offer this. `unverified` is NOT: this ticket admits the
+   * is — nothing should offer this. `unverified` is NOT: the app admits the
    * settings surfaces without a `/api/v3/user` verdict, so the hosts panel
    * genuinely mounts for someone holding a token nothing has confirmed, and the
    * button is genuinely pressable. The copy already says the right thing to
@@ -5740,7 +5740,7 @@ export class AuthService {
     //
     // `retireAllRemoteSessions` force-closes entries a consumer still HOLDS,
     // which is the property this call site needs and the one it did not have
-    // until this ticket: an open tab is exactly such a holder. Local-host
+    // until this change: an open tab is exactly such a holder. Local-host
     // sessions are untouched by construction - that cache holds remote
     // sessions only, so the plane `unverified` exists to protect is out of its
     // reach.
@@ -5855,7 +5855,7 @@ export class AuthService {
     // requests and resets the messenger. On a cold start that costs nothing -
     // there is no context yet. On a DEMOTION it tears down the host runtime
     // serving the very local work this state exists to protect, which is the
-    // ticket's own line - "refresh-token rejection must not abort in-progress
+    // rule - "refresh-token rejection must not abort in-progress
     // local access" - broken by the mechanism meant to honour it.
     //
     // A same-user demotion is a credential change, not an identity change, so

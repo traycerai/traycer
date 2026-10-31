@@ -357,7 +357,7 @@ function lastPathSegment(path: string): string {
  * function's complexity count - `summary.isGitRepo`, the just-saved state,
  * and the offer's visibility are all local to this one concern.
  *
- * Non-Git folders contractually have no repository override (the ticket:
+ * Non-Git folders contractually have no repository override (the contract:
  * "Non-Git folders have no repository override and use the global
  * fallback") - never render an editor that could offer to write one, and
  * never let a stale/vanished-checkout `updated: false` response (handled

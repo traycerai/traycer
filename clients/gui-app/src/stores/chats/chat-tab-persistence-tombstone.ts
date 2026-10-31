@@ -47,7 +47,7 @@
  * own response. Reopening therefore needs the deleted chatId to still look
  * live in the LOCAL doc for the whole round-trip - a narrow window, and
  * shrinking it further would mean touching the delete-mutation's request
- * ordering or the epic-doc sync path, both outside this ticket's persistence
+ * ordering or the epic-doc sync path, both outside this persistence
  * mechanism (tombstone set + initialized-marker set only).
  *
  * Ticket 15 review round 5 (item 2): a fence must survive its own

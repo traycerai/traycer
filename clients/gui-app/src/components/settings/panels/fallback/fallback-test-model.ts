@@ -46,7 +46,7 @@ import type { FallbackSettingsProfileLabel } from "@/components/settings/panels/
  * are, and how the host's dry run reads row by row.
  *
  * Routing is the protocol's `routeTierGroupForFailedTuple` over the DRAFT with
- * the editor's cached catalog - the readable-catalog answer the spec names -
+ * the editor's cached catalog - the readable-catalog answer -
  * and the per-match walk is the host's (`previewTierGroups@1.1` with
  * `blocked`). This module only arranges the two; it never re-decides either.
  *

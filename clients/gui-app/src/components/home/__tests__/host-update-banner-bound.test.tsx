@@ -22,7 +22,7 @@ vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
 // / 68 tests takes the UNBOUND arm exclusively. None of them touch
 // `BoundHostUpdateBanner`, `OperationContent`, `describeUpdateOperation`, or
 // `LocalHostRestartFlow`'s cooperative arm - this file is what actually
-// exercises that code, which is the coverage gap the ticket flagged.
+// exercises that code.
 interface HostBindingFixture {
   readonly directory: {
     readonly getLocalEntry: () => HostDirectoryEntry | null;

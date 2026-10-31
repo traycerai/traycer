@@ -4588,7 +4588,7 @@ describe("ResourceMonitorPopover · stopping a shell rather than killing it", ()
   }
 
   it("routes a terminal-agent owner row's action through terminal.kill, not resources.kill", () => {
-    // The ticket's named acceptance case: `ownerSnapshotActionTarget` routes
+    // The acceptance case: `ownerSnapshotActionTarget` routes
     // BOTH terminal kinds (`terminal`, `terminal-agent`) to `stopAgent`, keyed
     // by the SESSION id (`ResourceOwnerRef.ownerId`), not the pids.
     openWith([terminalAgentOwner()]);

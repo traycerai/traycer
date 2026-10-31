@@ -943,7 +943,7 @@ function resolveCurrentEffectiveBranch(
 
 /**
  * Editing preview: live draft example while the draft is valid, or the
- * unchanged current/staged value (relabeled) while invalid - see the ticket's
+ * unchanged current/staged value (relabeled) while invalid - the
  * "preserve the currently saved effective result" requirement. Labels stay
  * short: Example / Staged branch / Current example / Current staged.
  */

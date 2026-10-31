@@ -112,7 +112,7 @@ vi.mock(
 
 // Fixed copy the runner supplies where the stream carries no reason of its own.
 // Asserted literally: a `deleted: false` decline reaching the toast as
-// `undefined` is the exact regression this ticket exists to prevent.
+// `undefined` is the exact regression this test exists to prevent.
 const DECLINED_REASON = "The host declined the deletion.";
 const NEVER_REACHED_HOST_REASON =
   "Couldn't reach the host to start the deletion.";

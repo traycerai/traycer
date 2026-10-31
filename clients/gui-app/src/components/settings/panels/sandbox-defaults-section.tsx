@@ -140,7 +140,7 @@ function defaultsCardBody(
 
 /**
  * The configuration's defaults for new sandboxes: its shared
- * `sandbox_defaults` item, the spec's defaults while none is set. Editors and
+ * `sandbox_defaults` item, the built-in defaults while none is set. Editors and
  * admins change them here; a viewer reads them with the people who can. The
  * gear on a New row changes one sandbox only and never shows here.
  */

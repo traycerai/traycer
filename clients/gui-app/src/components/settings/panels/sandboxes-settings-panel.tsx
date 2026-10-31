@@ -214,7 +214,7 @@ function configurationMemoryKey(
 
 /**
  * The shape a configuration's New row stages when nobody opens its gear: the
- * configuration's defaults, else the spec's; `null` before the catalogue
+ * configuration's defaults, else the built-in defaults; `null` before the catalogue
  * answers. The person's remembered gear pick seeds only their gear.
  */
 function useConfigurationStageShape(configuration: SandboxPageConfiguration): {

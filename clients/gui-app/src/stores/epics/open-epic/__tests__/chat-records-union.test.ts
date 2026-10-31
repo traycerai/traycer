@@ -976,7 +976,7 @@ describe("applyChatRecordDelta pushes into the same table the poll fills", () =>
 describe("pending chat creations", () => {
   it("survives the poll's omission retraction when the answer does not include it yet", () => {
     signedInAs("user-a");
-    // Ablation: this is the whole point of the ticket. Fold the union out of
+    // Ablation: this is the whole point of the test. Fold the union out of
     // `publishChatRecords` and the second `applyChatRecords` below - which
     // reconciles `chatRecordRows` against what the answer carries and knows
     // nothing about "just-created" - evicts it exactly like any other stale

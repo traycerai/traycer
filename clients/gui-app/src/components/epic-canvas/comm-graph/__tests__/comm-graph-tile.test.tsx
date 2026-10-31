@@ -1353,7 +1353,7 @@ describe("CommGraphTile", () => {
           .setAgentOfficeDefaultView(kind === "mounted" ? "floor" : "building");
         // D68: the camera the office runtime actually reads is
         // `officeCamera`, not the top-level fields (the graph's now) -
-        // seeded there so this is a real test of the runtime this ticket is
+        // seeded there so this is a real test of the runtime this test is
         // about, not of a field nothing reads in office mode.
         await renderSeededOfficeInLoadedSession({
           ...DEFAULT_COMM_GRAPH_VIEW,
@@ -1490,7 +1490,7 @@ describe("CommGraphTile", () => {
       step();
 
       // A genuinely different view is a genuinely different canvas
-      // instance, same as every other reset in this ticket.
+      // instance, same as every other reset.
       expect(screen.getByTestId("comm-graph-office-canvas")).not.toBe(
         beforeElement,
       );

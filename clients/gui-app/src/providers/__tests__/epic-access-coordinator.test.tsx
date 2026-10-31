@@ -678,7 +678,7 @@ describe("EpicAccessCoordinator", () => {
     // routed through ONE coordinated command, not one `handleEpicAccessLoss`
     // call per epic: firing a separate coordinator transaction (and a
     // separate persistence flush) per epic for what is semantically one
-    // event is exactly the bypass this ticket closes.
+    // event is exactly the bypass this change closes.
     dispatchDeletedEpicStorageEvent(
       "user-1",
       ["epic-left", "epic-right"],

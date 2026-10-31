@@ -1326,7 +1326,7 @@ function clampPercent(percent: number): number {
  * no live source, and offering to end work we cannot count is how a button
  * promises "ends 2 sessions" and ends five.
  *
- * This never gates the host's own Restart control. Per the ticket's standing
+ * This never gates the host's own Restart control. As a standing
  * rule, update state is not a host-action mutex — the overflow Restart stays
  * available whatever this returns.
  */
@@ -1351,7 +1351,7 @@ export function offersForceRestart(view: FleetUpdateView): boolean {
  * then locks it for the entire life of the park, and `waiting-to-activate` is
  * designed to survive a reboot and sit for a week.
  *
- * The result would be the exact inversion the ticket forbids twice: a parked
+ * The result would be the exact inversion that must not happen: a parked
  * update disabling Restart, Diagnostics and the service verbs — while the
  * restart it is waiting for is the user's only way out. A banner may inform and
  * may offer **Force restart…**; it may never be the thing standing between a

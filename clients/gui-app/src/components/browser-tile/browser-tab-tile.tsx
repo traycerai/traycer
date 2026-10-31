@@ -908,7 +908,7 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
   });
   // A LAYOUT effect, and that one word is the whole ordering guarantee.
   //
-  // On the activation this ticket exists for - a dormant tab, in the window
+  // On the activation this effect exists for - a dormant tab, in the window
   // that is not the scope's default route - the surface renders the peek
   // branch, and the peek tile's screencast subscription is what funnels the
   // tab into the host's `ensureTabAttached`. That subscribe is a PASSIVE

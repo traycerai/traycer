@@ -5,7 +5,7 @@
 // each of the three settled-failure bodies of THIS machine's host. It must
 // never show while an ensure is in flight.
 //
-// Real provider chains throughout (per the brief): `HostControllerStatus`
+// Real provider chains throughout: `HostControllerStatus`
 // travels from the mocked `IHostManagement.getHostControllerStatus()` through
 // the REAL `HostProvisioningController` / `HostReadinessControllerProvider` /
 // `DefaultHostReadyGate` / `WindowHostModalHost` stack, exactly as
@@ -487,7 +487,7 @@ describe("host-ensure-failure-message", () => {
     // Step 3: the retry resolves failed, and desktop main pushes a fresh
     // status carrying the fixture again. This suite mounts no
     // `HostControllerStatusListener` (the earlier cases don't need one either), so -
-    // per the brief - that push is modelled directly as a `setQueryData` on
+    // that push is modelled directly as a `setQueryData` on
     // the exact key the real listener writes into
     // (`host-controller-status-listener.tsx`'s `onChange` handler).
     converge.resolve?.({

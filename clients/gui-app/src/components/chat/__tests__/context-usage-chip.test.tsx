@@ -1065,7 +1065,7 @@ describe("ContextUsageChip indicator styles", () => {
     },
   );
 
-  // The consistency this ticket exists to buy: one primitive at every place
+  // The consistency at stake: one primitive at every place
   // the percentage appears, so a turn that moves the reading moves all four
   // the same way. Each site is asserted through the primitive's OWN test id,
   // which is absent if a site went back to printing `{percent}` itself.

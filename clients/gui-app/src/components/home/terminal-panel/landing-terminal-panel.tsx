@@ -2422,7 +2422,7 @@ function useLandingTerminalShortcuts(args: {
   }, [landingPageId, onCloseAllTabs, surfaceActive]);
   // Indexed over the STRIP's rows, not over `state.tabs`: the placeholder is a
   // rendered row and can sit anywhere among them, so two projections would be
-  // two orders. Skipping it is the ticket's intent; landing on the neighbour
+  // two orders. Skipping it is intended; landing on the neighbour
   // the user can SEE is what the projection buys.
   const activateAdjacentTab = useCallback(
     (delta: 1 | -1) => {

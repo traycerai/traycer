@@ -1635,7 +1635,7 @@ export interface ProjectionInputs {
   /**
    * Whether the doc is still a record source, per population. Required and
    * never defaulted: an absent-means-`true` convention would silently restore
-   * the double-count this ticket removes on every caller someone forgets, and
+   * the double-count this change removes on every caller someone forgets, and
    * an absent-means-`false` one would silently empty a released-floor host's
    * epic. See {@link EpicDocRecordArms}.
    */

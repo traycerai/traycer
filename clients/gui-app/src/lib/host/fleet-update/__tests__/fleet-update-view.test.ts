@@ -1580,7 +1580,7 @@ describe("projectFleetUpdateView — probed local liveness on a `restarting` rec
 
   it("a NEGATIVE age beyond the clock-slack bound projects unknown, gate released", () => {
     // Falsifies: dropping the lower bound entirely from
-    // `localLivenessProofHolds` (the ticket's own ablation) — a wall-clock
+    // `localLivenessProofHolds` — a wall-clock
     // step backward would otherwise read as "even fresher than new" to a
     // check that only looks at the upper bound. Stepped back well past
     // `LOCAL_LIVENESS_CLOCK_SLACK_MS` (1s) rather than by ~500ms, because a
@@ -2367,7 +2367,7 @@ describe("projectFleetUpdateView — terminal attempts yield to the record parks
  *
  * ## Why the pairing is pinned rather than the null arm
  *
- * The brief asked for a row where an observation with NO identity sends no
+ * The null arm is a row where an observation with NO identity sends no
  * `expected`. Through the panel that state does not exist: `deriveAttemptControl`
  * returns no offer unless `view.attemptId !== null`, and every site that builds
  * a view sets the two together — so a null position never reaches a dispatch.

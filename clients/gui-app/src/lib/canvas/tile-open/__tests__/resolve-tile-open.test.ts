@@ -1,6 +1,6 @@
 /**
  * The resolver IS the placement spec (decisions C3-C7,
- * C10), so this suite is the spec's executable form: one case per rule, built
+ * C10), so this suite is its executable form: one case per rule, built
  * on the real canvas fixtures the store suites use.
  */
 import { describe, expect, it } from "vitest";
