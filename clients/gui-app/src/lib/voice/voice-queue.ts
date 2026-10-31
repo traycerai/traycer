@@ -1,3 +1,4 @@
+import type { BotSurfaceReference } from "@traycer/protocol/persistence/epic/messages";
 import {
   composeBriefing,
   itemLineOf,
@@ -9,6 +10,7 @@ import {
 import {
   hydratedEntryOf,
   type Announcement,
+  type HydratedEntry,
   type AttentionPrompts,
   type HydrationRow,
   type ReplyRef,
@@ -80,6 +82,11 @@ export interface VoiceQueueDeps {
     readonly answers: ReadonlyArray<ReplyRef>;
     readonly prompts: AttentionPrompts;
   };
+  /**
+   * An item's one-line offer ("want it?") was heard: a yes said now answers
+   * the offer, so a card's candidate waiting for one is offered again.
+   */
+  readonly onOfferHeard: () => void;
 }
 
 export interface VoiceQueue {
@@ -114,7 +121,9 @@ export interface VoiceQueue {
   /**
    * The focused feed scheduled this row: it is said there, not here. Until
    * it says so, an item in the focused chat stays queued; being focused is
-   * not being heard.
+   * not being heard. A question or approval it says stays queued all the
+   * same, unsaid by the queue, so it can still be opened as a card until it
+   * is settled.
    */
   noteFocused(messageId: string): void;
   addAnnouncement(input: {
@@ -149,6 +158,12 @@ export interface VoiceQueue {
    */
   noteSwitched(itemId: string): void;
   /**
+   * The item is read as a card (VT5): its saying is the card's from now on.
+   * Its one-line offer and a Read of it queued here are taken back, so
+   * neither is said over or after the card, and the focused feed leaves it.
+   */
+  claimForCard(itemId: string): void;
+  /**
    * A queued question or surfaced prompt was settled by someone else (its
    * row no longer asks anything open): it no longer waits on the person, so
    * it leaves the queue unsaid, its offer and any Read withdrawn, and is not
@@ -157,8 +172,15 @@ export interface VoiceQueue {
   promptSettled(itemId: string): void;
   /** The ids of prompts settled by someone else, for a briefing to leave out. */
   settledPromptIds(): ReadonlySet<string>;
-  /** Runs `read`, `switch`, `later` or `brief`; `status` is the controller's. */
-  run(verb: Exclude<QueueVerb, { readonly kind: "status" }>): QueueVerbOutcome;
+  /**
+   * The task surface the item's row points at, of any kind and settled or
+   * not, as hydrated; `null` for an item whose row points at none.
+   */
+  surfaceOf(itemId: string): BotSurfaceReference | null;
+  /** Runs `read`, `switch`, `later` or `brief`; `status` and `open` are the controller's. */
+  run(
+    verb: Exclude<QueueVerb, { readonly kind: "status" | "open" }>,
+  ): QueueVerbOutcome;
   items(): ReadonlyArray<QueueItem>;
   /** The session ended: forgets everything. */
   reset(): void;
@@ -172,10 +194,17 @@ interface Entry {
   /** The bot's words; `null` for an item that has none (a stopped answer). */
   readonly content: string | null;
   readonly options: ReadonlyArray<string>;
+  /** The task surface the row points at, as hydrated; `null` for none. */
+  readonly surface: BotSurfaceReference | null;
   /** The scheduler item offering it, while it may still be appended. */
   offerId: string | null;
   /** The scheduler item reading it, while it is in flight. */
   readId: string | null;
+  /**
+   * Said elsewhere: read as a card, or a prompt the focused feed said. The
+   * queue never offers or reads it; it stays to be opened as a card.
+   */
+  claimed: boolean;
 }
 
 interface Pending {
@@ -189,6 +218,11 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
   const pending = new Map<string, Pending>();
   /** Message ids settled without an item: said by the focused feed, or not hydratable. */
   const settled = new Set<string>();
+  /**
+   * Rows the focused feed said while their records were still being read:
+   * decided once they are, a prompt kept as a card, anything else let go.
+   */
+  const focusedPending = new Set<string>();
   /** Prompts someone else settled: message and surface ids, for the briefing. */
   const settledPrompts = new Set<string>();
   const pendingListeners = new Set<() => void>();
@@ -270,6 +304,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
         if (entry.offerId !== id) return;
         entry.offerId = null;
         if (entry.item.state === "queued") setState(entry, "offered");
+        deps.onOfferHeard();
       },
       // Not confirmed heard within its attempts: it stays queued for the
       // Waiting control and the bell, and is not offered again.
@@ -282,6 +317,42 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
   /** The queue's side of a switch to an item, whoever navigates: its offer is not said. */
   const switchedTo = (entry: Entry): void => {
     withdrawOffer(entry);
+  };
+
+  /** A row the focused feed said, and that waits on nobody: the queue lets it go. */
+  const letFocusedGo = (messageId: string): void => {
+    settled.add(messageId);
+    const entry = entries.get(messageId);
+    if (entry === undefined) return;
+    withdrawOffer(entry);
+    withdrawRead(entry);
+    entries.delete(messageId);
+    publish();
+  };
+
+  /**
+   * What a row read for a reference is queued as; `null` when it is not
+   * queued (it is settled here). No row, or no prose: the bell keeps it (an
+   * announcement already held for it stays as it was). A surface is keyed
+   * by what it points at: a second post about the same approval or question
+   * is the same thing waiting. A row the focused feed said while it was
+   * read is kept only when it is a prompt.
+   */
+  const queuedEntryOf = (
+    messageId: string,
+    row: HydrationRow | null,
+    saidByFeed: boolean,
+  ): HydratedEntry | null => {
+    const entry = row === null ? null : hydratedEntryOf(row);
+    if (saidByFeed && (entry === null || !isPromptKind(entry.kind))) {
+      letFocusedGo(messageId);
+      return null;
+    }
+    if (entry === null || surfaceTaken(entry.surfaceId)) {
+      settled.add(messageId);
+      return null;
+    }
+    return entry;
   };
 
   /** Whether a queued item already points at this surface. */
@@ -436,19 +507,9 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       pending.delete(messageId);
       notifyPending();
       const ref = waiting.hydration.ref;
-      const entry = row === null ? null : hydratedEntryOf(row);
-      // No row, or no prose: nothing is queued, and the bell keeps it (an
-      // announcement already held for it stays as it was).
-      if (entry === null) {
-        settled.add(messageId);
-        return;
-      }
-      // A surface is keyed by what it points at: a second post about the
-      // same approval or question is the same thing waiting.
-      if (surfaceTaken(entry.surfaceId)) {
-        settled.add(messageId);
-        return;
-      }
+      const saidByFeed = focusedPending.delete(messageId);
+      const entry = queuedEntryOf(messageId, row, saidByFeed);
+      if (entry === null) return;
       const carried = takeOverAnnouncement(messageId);
       const created: Entry = {
         item: {
@@ -468,8 +529,10 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
         },
         content: entry.content,
         options: entry.options,
+        surface: surfaceOfRow(row),
         offerId: null,
         readId: carried?.readId ?? null,
+        claimed: saidByFeed,
       };
       created.item = {
         ...created.item,
@@ -482,6 +545,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       // stays in Waiting if the feed never does (a row it took for history).
       if (
         waiting.offer &&
+        !created.claimed &&
         created.item.state === "queued" &&
         created.readId === null &&
         !deps.isFocused(ref.botId, ref.chatId)
@@ -490,14 +554,21 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       }
     },
     noteFocused(messageId) {
-      settled.add(messageId);
-      if (pending.delete(messageId)) notifyPending();
       const entry = entries.get(messageId);
-      if (entry === undefined) return;
-      withdrawOffer(entry);
-      withdrawRead(entry);
-      entries.delete(messageId);
-      publish();
+      // A question or approval the focused feed says still waits on the
+      // person: it stays, openable as a card, and the queue never says it.
+      if (entry !== undefined && isPromptKind(entry.item.kind)) {
+        withdrawOffer(entry);
+        withdrawRead(entry);
+        entry.claimed = true;
+        return;
+      }
+      // Its row is still being read: whether it is a prompt is not known yet.
+      if (pending.has(messageId)) {
+        focusedPending.add(messageId);
+        return;
+      }
+      letFocusedGo(messageId);
     },
     addAnnouncement({ botId, hostId, chatId, announcement }) {
       if (known(announcement.messageId)) return;
@@ -520,8 +591,10 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
         item: { ...item, line: itemLineOf(item, deps.botTitle(botId)) },
         content: announcement.content,
         options: [],
+        surface: null,
         offerId: null,
         readId: null,
+        claimed: false,
       });
       publish();
     },
@@ -563,8 +636,10 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
           item: { ...item, line: itemLineOf(item, deps.botTitle(botId)) },
           content: null,
           options: [],
+          surface: null,
           offerId: null,
           readId: null,
+          claimed: false,
         });
         changed = true;
       }
@@ -630,14 +705,25 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
     settledPromptIds() {
       return settledPrompts;
     },
+    surfaceOf(itemId) {
+      return entries.get(itemId)?.surface ?? null;
+    },
     noteSwitched(itemId) {
       const entry = entries.get(itemId);
       if (entry !== undefined) switchedTo(entry);
+    },
+    claimForCard(itemId) {
+      const entry = entries.get(itemId);
+      if (entry === undefined) return;
+      withdrawOffer(entry);
+      withdrawRead(entry);
+      entry.claimed = true;
     },
     keepsFromFocus(itemId) {
       const entry = entries.get(itemId);
       if (entry === undefined) return false;
       return (
+        entry.claimed ||
         entry.readId !== null ||
         entry.item.state === "heard" ||
         entry.item.state === "dismissed"
@@ -650,12 +736,24 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       }
       entries.clear();
       pending.clear();
+      focusedPending.clear();
       settled.clear();
       settledPrompts.clear();
       notifyPending();
       publish();
     },
   };
+}
+
+/** The task surface a hydrated bot row points at; `null` for none, or a member's row. */
+function surfaceOfRow(row: HydrationRow | null): BotSurfaceReference | null {
+  if (row === null || row.role !== "assistant") return null;
+  return row.surface ?? null;
+}
+
+/** What waits on the person: a bot's question, or a task's surfaced question or approval. */
+function isPromptKind(kind: QueueItem["kind"]): boolean {
+  return kind === "question" || kind === "surface";
 }
 
 function stoppedId(botId: string, requestId: string): string {

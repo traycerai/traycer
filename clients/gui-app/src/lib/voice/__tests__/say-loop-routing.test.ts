@@ -5,9 +5,11 @@ import type {
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import type { OpenTextBlock } from "@traycer/protocol/persistence/epic/open-harness-records";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   useVoiceSessionStore,
+  type RouterCard,
+  type VoiceCardDriver,
   type VoiceFocus,
 } from "@/stores/voice/voice-session-store";
 import {
@@ -17,6 +19,12 @@ import {
   type BoundTarget,
   type VoiceDirectory,
 } from "../directory";
+import {
+  CARD_STALE_ANSWER_TEXT,
+  createCardDesk,
+  type CardApi,
+  type CardContent,
+} from "../card-desk";
 import { NOTHING_WAITING_NOTICE } from "../deferred-verbs";
 import { resolveRoute, type RouterResult } from "../router";
 import type { SpeechItem } from "../scheduler";
@@ -25,6 +33,7 @@ import {
   CONFIRM_ANSWER_WINDOW_MS,
   createSayLoop,
   type AskOutcome,
+  type RouteRequest,
 } from "../say-loop";
 
 const NOW = 1_800_000_000_000;
@@ -113,6 +122,7 @@ function route(
     uncertain: false,
     question: null,
     control: null,
+    choice: null,
   };
 }
 
@@ -152,6 +162,7 @@ function build(wiring: Wiring) {
 /** {@link build} over a directory the test composed. */
 function buildFor(wiring: Wiring, directory: VoiceDirectory) {
   const sends: VoiceFocus[] = [];
+  const requests: RouteRequest[] = [];
   const notices: string[] = [];
   const noticeDelegations: Array<string | null> = [];
   const navigations: BoundTarget[] = [];
@@ -174,6 +185,7 @@ function buildFor(wiring: Wiring, directory: VoiceDirectory) {
       return () => undefined;
     },
     decide: async (request) => {
+      requests.push(request);
       const next = answers.shift();
       if (next === undefined) throw new Error("no answer queued");
       // The directory is read when the route is made, as the real one does.
@@ -206,6 +218,7 @@ function buildFor(wiring: Wiring, directory: VoiceDirectory) {
   return {
     loop,
     sends,
+    requests,
     notices,
     noticeDelegations,
     navigations,
@@ -451,10 +464,14 @@ describe("a routed verb on the queue", () => {
         answers: [],
         prompts: { approvals: [], questions: [] },
       }),
+      onOfferHeard: () => undefined,
     });
     useVoiceSessionStore.setState({ phase: "live" });
     useVoiceSessionStore.getState().setQueueDriver({
-      run: (verb) => (verb.kind === "status" ? "nothing" : queue.run(verb)),
+      run: (verb) =>
+        verb.kind === "status" || verb.kind === "open"
+          ? "nothing"
+          : queue.run(verb),
       noteSwitched: (itemId) => queue.noteSwitched(itemId),
     });
     return { queue, enqueued, withdrawn };
@@ -729,5 +746,469 @@ describe("a routed verb on the queue", () => {
     expect(h.sends).toEqual([]);
     expect(enqueued).toEqual([]);
     expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+});
+
+describe("the active card", () => {
+  const CARD: RouterCard = {
+    key: { opening: 4, questionIndex: 0 },
+    question: "Which environment?",
+    choices: ["Staging", "Production", "Skip"],
+    takesText: false,
+  };
+
+  /** A card desk that waits for an answer and takes the verdict it is given. */
+  function installDriver(verdict: "handled" | "route"): VoiceCardDriver {
+    const driver: VoiceCardDriver = {
+      open: vi.fn<VoiceCardDriver["open"]>(() => "appended"),
+      awaitsAnswer: vi.fn<VoiceCardDriver["awaitsAnswer"]>(() => true),
+      answer: vi.fn<VoiceCardDriver["answer"]>(() => verdict),
+      answerRouted: vi.fn<VoiceCardDriver["answerRouted"]>(() => true),
+      routerCard: vi.fn<VoiceCardDriver["routerCard"]>(() => CARD),
+      dropCandidate: vi.fn<VoiceCardDriver["dropCandidate"]>(),
+      invalidate: vi.fn<VoiceCardDriver["invalidate"]>(),
+    };
+    useVoiceSessionStore.getState().setCardDriver(driver);
+    return driver;
+  }
+
+  it("takes the words it handles: they are never routed, posted or kept", async () => {
+    const driver = installDriver("handled");
+    const h = build({ recheckHolds: true, canSend: true });
+
+    speak("the second", " one");
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(driver.answer).toHaveBeenCalledTimes(1);
+    const [words, delegationId] = vi.mocked(driver.answer).mock.calls[0];
+    expect(words.text).toBe("the second one");
+    expect(delegationId).toBe("d-1");
+    expect(h.requests).toEqual([]);
+    expect(h.sends).toEqual([]);
+    expect(h.notices).toEqual([]);
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+
+  it("routes the words it does not take with the card in view, and a post then drops the candidate", async () => {
+    const driver = installDriver("route");
+    const h = build({ recheckHolds: true, canSend: true });
+    h.answers.push(() => Promise.resolve(route("post", null, null, 2)));
+
+    speak("tell", " tracy hello");
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(h.requests.map((request) => request.card)).toEqual([CARD]);
+    expect(h.sends.map((focus) => focus.botId)).toEqual([TRACY]);
+    expect(driver.dropCandidate).toHaveBeenCalledTimes(1);
+    const [key, seqs] = vi.mocked(driver.dropCandidate).mock.calls[0];
+    expect(key).toEqual(CARD.key);
+    expect(seqs).toHaveLength(2);
+    expect(driver.answerRouted).not.toHaveBeenCalled();
+  });
+
+  it("keeps the candidate when the words routed were an unfinished request", async () => {
+    const driver = installDriver("route");
+    const h = build({ recheckHolds: true, canSend: true });
+    h.answers.push(() => Promise.resolve(route("fragment", null, null, 2)));
+
+    speak("tell", " tracy");
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(h.requests.map((request) => request.card)).toEqual([CARD]);
+    expect(driver.dropCandidate).not.toHaveBeenCalled();
+  });
+
+  it("hands the router's answer to the card, with its choice and words, and posts nothing", async () => {
+    const driver = installDriver("route");
+    const h = build({ recheckHolds: true, canSend: true });
+    h.answers.push(() =>
+      Promise.resolve({ ...route("answer", null, null, 2), choice: 1 }),
+    );
+
+    speak("hold", " it");
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(driver.answerRouted).toHaveBeenCalledTimes(1);
+    const [routed, delegationId] = vi.mocked(driver.answerRouted).mock.calls[0];
+    expect(routed).toMatchObject({ choice: 1, text: "hold it", key: CARD.key });
+    expect(routed.seqs).toHaveLength(2);
+    expect(delegationId).toBe("d-1");
+    expect(driver.dropCandidate).not.toHaveBeenCalled();
+    expect(h.sends).toEqual([]);
+    expect(h.notices).toEqual([]);
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+
+  it.each([
+    ["no card waits", null],
+    ["the card no longer waits", "closed"],
+  ] as const)(
+    "says so and posts nothing when the router answers and %s",
+    async (_name, state) => {
+      if (state === "closed") {
+        const driver = installDriver("route");
+        vi.mocked(driver.answerRouted).mockReturnValue(false);
+        vi.mocked(driver.awaitsAnswer).mockReturnValue(false);
+      }
+      const h = build({ recheckHolds: true, canSend: true });
+      h.answers.push(() => Promise.resolve(route("answer", null, null, 2)));
+
+      speak("the", " second one");
+      await h.loop.onDelegationCreated("d-1");
+
+      expect(h.requests.map((request) => request.card)).toEqual([null]);
+      expect(h.sends).toEqual([]);
+      expect(h.notices).toHaveLength(1);
+      expect(h.notices[0]).toMatch(
+        /^Nothing was sent: no question or approval/,
+      );
+      expect(useVoiceSessionStore.getState().segments).toEqual([]);
+    },
+  );
+
+  it("leaves a card that waits for nothing out of the words' route", async () => {
+    const driver = installDriver("route");
+    vi.mocked(driver.awaitsAnswer).mockReturnValue(false);
+    const h = build({ recheckHolds: true, canSend: true });
+    h.answers.push(() => Promise.resolve(route("post", null, null, 2)));
+
+    speak("tell", " tracy hello");
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(driver.answer).not.toHaveBeenCalled();
+    expect(h.requests.map((request) => request.card)).toEqual([null]);
+    expect(driver.dropCandidate).not.toHaveBeenCalled();
+    expect(h.sends.map((focus) => focus.botId)).toEqual([TRACY]);
+  });
+});
+
+describe("the card desk behind the say loop", () => {
+  const APPROVAL: CardContent = {
+    family: "approval",
+    botTitle: "Release",
+    place: "in its channel",
+    questions: [],
+    questionIndex: 0,
+    approval: { tool: "Bash", summary: "delete production backups" },
+    postText: "A task needs your approval.",
+    actable: true,
+  };
+
+  /** The real desk, installed as the store's card driver, with the voice's speech captured. */
+  function installDesk() {
+    const spoken: SpeechItem[] = [];
+    const withdrawn: string[] = [];
+    const cardDesk = createCardDesk({
+      store: useVoiceSessionStore,
+      speech: {
+        enqueue: (item) => spoken.push(item),
+        withdraw: (itemId) => withdrawn.push(itemId),
+        activity: () => ({
+          inputActiveUntil: null,
+          outputPlaying: false,
+          ackPending: false,
+        }),
+        subscribe: () => () => undefined,
+      },
+      schedule: () => () => undefined,
+      target: (itemId) => ({
+        family: "approval",
+        ids: {
+          itemId,
+          botId: TRACY,
+          hostId: "host-1",
+          threadId: null,
+          chatId: "chat-1",
+          messageId: itemId,
+        },
+      }),
+      newActionId: () => "act-1",
+    });
+    const actSurface = vi.fn<CardApi["actSurface"]>(() =>
+      Promise.resolve({ kind: "failed" }),
+    );
+    const api: CardApi = {
+      answerBotQuestion: () => Promise.resolve({ kind: "failed" }),
+      actSurface,
+      postInThread: () => Promise.resolve(true),
+      canPost: true,
+    };
+    useVoiceSessionStore.getState().setCardDriver(cardDesk);
+    return {
+      spoken,
+      withdrawn,
+      actSurface,
+      /** The card of this item is opened and its records read. */
+      show: (itemId: string): void => {
+        cardDesk.open(itemId, null);
+        cardDesk.observe(
+          itemId,
+          {
+            content: APPROVAL,
+            settledBy: () => null,
+            gone: false,
+            forwarded: () => null,
+          },
+          api,
+        );
+      },
+      /** The voice confirmed having said the newest thing. */
+      heard: async (): Promise<void> => {
+        spoken.at(-1)?.onDelivered?.();
+        await Promise.resolve();
+      },
+    };
+  }
+
+  const activeCard = () => useVoiceSessionStore.getState().activeCard;
+
+  it("never posts an approval said before the list was heard, and shows the router the card for other words", async () => {
+    const desk = installDesk();
+    desk.show("a");
+    const h = build({ recheckHolds: true, canSend: true });
+    h.answers.push(() => Promise.resolve(route("post", null, null, 1)));
+
+    speak("approve");
+    await h.loop.onDelegationCreated("early");
+
+    expect(h.requests).toEqual([]);
+    expect(h.sends).toEqual([]);
+    expect(activeCard()?.candidate).toBeNull();
+
+    speak("what is the weather");
+    await h.loop.onDelegationCreated("other");
+
+    expect(h.requests).toHaveLength(1);
+    expect(h.requests[0]?.card).toMatchObject({
+      question: "Allow or deny Bash?",
+      choices: ["Allow", "Deny"],
+    });
+    expect(h.sends.map((focus) => focus.botId)).toEqual([TRACY]);
+  });
+
+  describe("a routed answer to words said around the list being heard", () => {
+    /** The words are routed with the card shown; `heardFirst` says whether its list was heard before they were said. */
+    async function routedAnswerForWords(heardFirst: boolean) {
+      const desk = installDesk();
+      desk.show("a");
+      if (heardFirst) await desk.heard();
+      const h = build({ recheckHolds: true, canSend: true });
+      const out = heldAnswer();
+      h.answers.push(out.answer);
+      speak("please permit that operation");
+      const done = h.loop.onDelegationCreated("slow");
+      expect(h.requests[0]?.card).toMatchObject({
+        question: "Allow or deny Bash?",
+      });
+      if (!heardFirst) await desk.heard();
+      const spokenBefore = desk.spoken.length;
+
+      out.release({ ...route("answer", null, null, 1), choice: 0 });
+      await done;
+      return { desk, h, spokenBefore };
+    }
+
+    it("chooses nothing when the words were said while the list still played", async () => {
+      const { desk, h, spokenBefore } = await routedAnswerForWords(false);
+
+      expect(activeCard()?.candidate).toBeNull();
+      expect(desk.spoken).toHaveLength(spokenBefore);
+      expect(h.sends).toEqual([]);
+      expect(h.notices).toEqual([]);
+    });
+
+    it("chooses the routed choice when the words were said after the list was heard", async () => {
+      const { desk, h, spokenBefore } = await routedAnswerForWords(true);
+
+      expect(activeCard()?.candidate).toEqual({
+        kind: "option",
+        index: 0,
+        label: "Allow",
+      });
+      expect(desk.spoken).toHaveLength(spokenBefore + 1);
+      expect(desk.spoken.at(-1)?.text).toContain("Allow Bash");
+      expect(h.sends).toEqual([]);
+    });
+  });
+
+  describe("a request routed while the card waited, coming back after the person made a choice", () => {
+    /** The list is heard; "tell tracy hello" is routed (the answer is out), and the choice is made before or after it. */
+    async function choiceAroundRoute(choiceFirst: boolean) {
+      const desk = installDesk();
+      desk.show("a");
+      await desk.heard();
+      const h = build({ recheckHolds: true, canSend: true });
+      const out = heldAnswer();
+      h.answers.push(out.answer);
+      const routeRequest = (): Promise<void> => {
+        speak("tell tracy hello");
+        return h.loop.onDelegationCreated("slow");
+      };
+      const choose = async (): Promise<void> => {
+        speak("approve");
+        await h.loop.onDelegationCreated("choose");
+      };
+      let done: Promise<void>;
+      if (choiceFirst) {
+        await choose();
+        done = routeRequest();
+      } else {
+        done = routeRequest();
+        await choose();
+      }
+      const readBack = desk.spoken.at(-1);
+      if (readBack === undefined) throw new Error("no read-back was spoken");
+      return { desk, h, out, done, readBack };
+    }
+
+    it("is ignored when it was said before the choice: the candidate and its read-back stand", async () => {
+      const { desk, h, out, done } = await choiceAroundRoute(false);
+      expect(activeCard()?.candidate).toMatchObject({ label: "Allow" });
+
+      out.release(route("post", null, null, 1));
+      await done;
+
+      expect(h.sends.map((focus) => focus.botId)).toEqual([TRACY]);
+      expect(activeCard()?.candidate).toMatchObject({ label: "Allow" });
+      expect(desk.withdrawn).toEqual([]);
+
+      await desk.heard();
+      speak("yes");
+      await h.loop.onDelegationCreated("yes");
+      expect(desk.actSurface).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops the candidate and takes back its read-back when it was said after the choice", async () => {
+      const { desk, h, out, done, readBack } = await choiceAroundRoute(true);
+      expect(activeCard()?.candidate).toMatchObject({ label: "Allow" });
+
+      out.release(route("post", null, null, 1));
+      await done;
+
+      expect(h.sends.map((focus) => focus.botId)).toEqual([TRACY]);
+      expect(activeCard()?.candidate).toBeNull();
+      expect(desk.withdrawn).toEqual([readBack.id]);
+    });
+  });
+
+  describe("routes made while the card waited, coming back out of order", () => {
+    /** The list is heard; the card's answer to "use the first" is routed first and stays out. */
+    async function olderAnswerOut(chooseExactlyFirst: boolean) {
+      const desk = installDesk();
+      desk.show("a");
+      await desk.heard();
+      const h = build({ recheckHolds: true, canSend: true });
+      if (chooseExactlyFirst) {
+        speak("approve");
+        await h.loop.onDelegationCreated("choose");
+        expect(activeCard()?.candidate).toMatchObject({ label: "Allow" });
+      }
+      const older = heldAnswer();
+      const newer = heldAnswer();
+      h.answers.push(older.answer, newer.answer);
+      speak("use the first");
+      const olderDone = h.loop.onDelegationCreated("older");
+      speak("tell tracy hello");
+      const newerDone = h.loop.onDelegationCreated("newer");
+      return { desk, h, older, newer, olderDone, newerDone };
+    }
+
+    it("never lets an older card answer choose after a newer request was routed elsewhere", async () => {
+      const { desk, older, newer, olderDone, newerDone } =
+        await olderAnswerOut(false);
+      newer.release(route("post", null, null, 1));
+      await newerDone;
+      const spokenBefore = desk.spoken.length;
+
+      older.release({ ...route("answer", null, null, 1), choice: 0 });
+      await olderDone;
+
+      expect(activeCard()?.candidate).toBeNull();
+      expect(desk.spoken).toHaveLength(spokenBefore);
+    });
+
+    it("does so when the newer request dropped a candidate chosen before the older words", async () => {
+      const { desk, older, newer, olderDone, newerDone } =
+        await olderAnswerOut(true);
+      newer.release(route("post", null, null, 1));
+      await newerDone;
+      expect(activeCard()?.candidate).toBeNull();
+      const spokenBefore = desk.spoken.length;
+
+      older.release({ ...route("answer", null, null, 1), choice: 1 });
+      await olderDone;
+
+      expect(activeCard()?.candidate).toBeNull();
+      expect(desk.spoken).toHaveLength(spokenBefore);
+    });
+
+    it("still installs the candidate of a card answer made of words newer than the drop", async () => {
+      const { desk, h, newer, newerDone } = await olderAnswerOut(false);
+      newer.release(route("post", null, null, 1));
+      await newerDone;
+      const spokenBefore = desk.spoken.length;
+      const latest = heldAnswer();
+      h.answers.push(latest.answer);
+      speak("use the first");
+      const latestDone = h.loop.onDelegationCreated("latest");
+
+      latest.release({ ...route("answer", null, null, 1), choice: 0 });
+      await latestDone;
+
+      expect(activeCard()?.candidate).toMatchObject({ label: "Allow" });
+      expect(desk.spoken).toHaveLength(spokenBefore + 1);
+    });
+  });
+
+  describe("a route made against a card that is no longer the open one", () => {
+    /** A request routes against card A, still out when B is opened and heard. */
+    async function routeOutWhileAnotherOpens() {
+      const desk = installDesk();
+      desk.show("a");
+      await desk.heard();
+      const h = build({ recheckHolds: true, canSend: true });
+      const out = heldAnswer();
+      h.answers.push(out.answer);
+      speak("please permit that operation");
+      const done = h.loop.onDelegationCreated("slow");
+      expect(h.requests).toHaveLength(1);
+      desk.show("b");
+      await desk.heard();
+      return { desk, h, out, done };
+    }
+
+    it("chooses nothing on the other card when its answer arrives, and says so", async () => {
+      const { desk, h, out, done } = await routeOutWhileAnotherOpens();
+
+      out.release({ ...route("answer", null, null, 1), choice: 0 });
+      await done;
+
+      expect(activeCard()).toMatchObject({
+        ids: { itemId: "b" },
+        candidate: null,
+      });
+      expect(desk.spoken.at(-1)?.text).toBe(CARD_STALE_ANSWER_TEXT);
+      expect(h.sends).toEqual([]);
+    });
+
+    it("leaves the other card's candidate alone when its words were posted", async () => {
+      const { h, out, done } = await routeOutWhileAnotherOpens();
+      speak("approve");
+      await h.loop.onDelegationCreated("choose");
+      expect(activeCard()?.candidate).toEqual({
+        kind: "option",
+        index: 0,
+        label: "Allow",
+      });
+
+      out.release(route("post", null, null, 1));
+      await done;
+
+      expect(h.sends.map((focus) => focus.botId)).toEqual([TRACY]);
+      expect(activeCard()).toMatchObject({
+        ids: { itemId: "b" },
+        candidate: { kind: "option", index: 0, label: "Allow" },
+      });
+    });
   });
 });

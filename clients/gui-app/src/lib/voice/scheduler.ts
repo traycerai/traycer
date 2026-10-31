@@ -45,9 +45,10 @@ export interface SpeechItem {
   /**
    * Words whose appearance in the output transcript prove the item was
    * spoken. Compared case-insensitively on word boundaries; see
-   * {@link confirmationWords}.
+   * {@link confirmationWords}. A {@link RepeatedWord} proves it only when
+   * said more often than the item's text says it before the part it proves.
    */
-  readonly confirmWords: ReadonlyArray<string>;
+  readonly confirmWords: ReadonlyArray<ConfirmWord>;
   /** Runs once, when delivery is confirmed. */
   readonly onDelivered: (() => void) | null;
   /**
@@ -56,6 +57,20 @@ export interface SpeechItem {
    * Never after `onDelivered`, and not when the session ends.
    */
   readonly onGivenUp: (() => void) | null;
+}
+
+/** One proof of an item's saying: a phrase said whole, or a word said often enough. */
+export type ConfirmWord = string | RepeatedWord;
+
+/**
+ * A word that proves the END of an item was said: the output must say it
+ * more than `beyond` times, `beyond` being how often the item's text says it
+ * before its end. A word only the end says needs one saying; one the start
+ * says too must be said again, so the start alone proves nothing.
+ */
+export interface RepeatedWord {
+  readonly word: string;
+  readonly beyond: number;
 }
 
 /** The three facts, as the strip and the store read them. */
@@ -948,9 +963,37 @@ function confirmedByContent(transcript: string, item: SpeechItem): boolean {
   const said = transcript.toLowerCase();
   // Content words alone: a number, a whole reply or an opaque token is
   // judged at completion, where it is known to be complete.
-  return item.confirmWords.some(
-    (phrase) => isContentWord(phrase) && holdsPhrase(said, phrase),
+  return item.confirmWords.some((proof) =>
+    typeof proof === "string"
+      ? isContentWord(proof) && holdsPhrase(said, proof)
+      : timesSaid(said, proof.word) > proof.beyond,
   );
+}
+
+/** How often the output says `word`, as a whole word. */
+function timesSaid(said: string, word: string): number {
+  const expected = canonicalWord(word.toLowerCase());
+  return wordsOf(spokenOf(said)).filter(
+    (candidate) => canonicalWord(candidate) === expected,
+  ).length;
+}
+
+/**
+ * The words that prove `end` was said after `before`: each content word of
+ * `end`, to be said more often than `before` says it.
+ */
+export function repeatedWords(
+  end: string,
+  before: string,
+): ReadonlyArray<RepeatedWord> {
+  const earlier = wordsOf(before).map(canonicalWord);
+  return confirmationWords({ botTitle: null, threadTitle: null, text: end })
+    .filter((phrase) => isContentWord(phrase))
+    .map((word) => ({
+      word,
+      beyond: earlier.filter((candidate) => candidate === canonicalWord(word))
+        .length,
+    }));
 }
 
 /**
@@ -963,17 +1006,20 @@ function confirmedByContent(transcript: string, item: SpeechItem): boolean {
  * Read only once the utterance is complete: a prefix proves nothing.
  */
 function confirmedAtCompletion(transcript: string, item: SpeechItem): boolean {
-  if (item.confirmWords.length === 0) return false;
+  const phrases = item.confirmWords.filter(
+    (proof): proof is string => typeof proof === "string",
+  );
+  if (phrases.length === 0) return false;
   const said = transcript.toLowerCase();
   if (
-    item.confirmWords.some(
+    phrases.some(
       (phrase) => isWholeAnswer(item, phrase) && isOnly(said, phrase),
     )
   ) {
     return true;
   }
   if (isBackchannelOnly(transcript)) return false;
-  return item.confirmWords.some(
+  return phrases.some(
     (phrase) => isNumberPhrase(phrase) && holdsPhrase(said, phrase),
   );
 }

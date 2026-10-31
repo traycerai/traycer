@@ -3,7 +3,6 @@ import { v4 as uuidv4 } from "uuid";
 import type { BotSurfaceReference } from "@traycer/protocol/persistence/epic/messages";
 import type { BotInputNeeded } from "@traycer/protocol/host/bot/schemas";
 import type { BotSurfaceAction } from "@traycer/protocol/host/bot/surface-schemas";
-import type { RuntimeInterviewAnswer } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import {
@@ -15,7 +14,6 @@ import { useBotSurfaceOpen } from "@/hooks/bots/use-bot-surface-open";
 import {
   answerDraftKey,
   useBotDraftsStore,
-  type BotAnswerDraft,
 } from "@/stores/bots/bot-drafts-store";
 import {
   useBotSurfaceActionsStore,
@@ -29,6 +27,7 @@ import {
 import {
   botSurfaceCardView,
   openSurfaceOf,
+  surfaceAnswerOf,
   type BotSurfaceCardState,
 } from "./bot-surface-card-view";
 
@@ -292,62 +291,16 @@ function SurfaceQuestion(props: {
           (_, index) => current[keyOf(index)] ?? null,
         );
         if (given.some((draft) => (draft?.sent ?? null) === null)) return;
-        onSend(surfaceAnswer(questions, given));
+        onSend(
+          surfaceAnswerOf(
+            questions,
+            given.map((draft) => draft?.sent ?? null),
+          ),
+        );
       }}
       onDiscuss={null}
     />
   );
-}
-
-/**
- * The answers as the task's own question card sends them: each question's
- * id and text, the value given, and which option it was or the words typed.
- */
-function surfaceAnswer(
-  questions: ReadonlyArray<{
-    readonly questionId: string | null;
-    readonly text: string;
-    readonly options: ReadonlyArray<string>;
-  }>,
-  given: ReadonlyArray<BotAnswerDraft | null>,
-): BotSurfaceAction {
-  if (given.every((draft) => draft?.sent?.skipped !== false)) {
-    return { kind: "skip", draftAnswers: [] };
-  }
-  const answers = questions.map((question, index): RuntimeInterviewAnswer => {
-    const sent = given[index]?.sent ?? null;
-    if (sent === null || sent.skipped) {
-      return {
-        questionId: question.questionId,
-        question: question.text,
-        values: [],
-        notes: null,
-        selection: null,
-      };
-    }
-    const optionIndex = question.options.indexOf(sent.text);
-    return {
-      questionId: question.questionId,
-      question: question.text,
-      values: [sent.text],
-      notes: null,
-      selection:
-        optionIndex >= 0
-          ? {
-              questionIndex: index,
-              optionIndices: [optionIndex],
-              optionLabels: [sent.text],
-              customText: null,
-            }
-          : {
-              questionIndex: index,
-              optionIndices: [],
-              optionLabels: [],
-              customText: sent.text,
-            },
-    };
-  });
-  return { kind: "answer", answers };
 }
 
 /** Allow and Deny; held, with the chosen one's spinner, while it is sent. */
