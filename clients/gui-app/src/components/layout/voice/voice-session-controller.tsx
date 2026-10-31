@@ -1297,6 +1297,7 @@ export function VoiceSessionController(): ReactNode {
         <VoiceSelectionSync
           voiceNavigationRef={voiceNavigationRef}
           onManualChange={() => sayLoop().onSelectionChanged()}
+          onCardMove={offerCardAgainOnMove}
           onResolved={() => void sayLoopRef.current?.onFocusResolved()}
           voiceSwitch={voiceQueue.voiceSwitch}
         />
@@ -1531,11 +1532,22 @@ function VoiceSelectionSync(props: {
   /** The voice's own navigation to another bot, while its tab has not come up. */
   readonly voiceNavigationRef: { current: VoiceNavigation | null };
   readonly onManualChange: () => void;
+  /**
+   * The person moved by hand, whatever they had said: the active card's
+   * candidate is offered again, so a yes never binds to a card they left.
+   */
+  readonly onCardMove: () => void;
   /** The thread list resolved the anchor the focus already names. */
   readonly onResolved: () => void;
   readonly voiceSwitch: { current: VoiceSwitch | null };
 }): null {
-  const { voiceNavigationRef, onManualChange, onResolved, voiceSwitch } = props;
+  const {
+    voiceNavigationRef,
+    onManualChange,
+    onCardMove,
+    onResolved,
+    voiceSwitch,
+  } = props;
   const focusedRef = useTabsStore(selectHostFocusedRef);
   const activeBotId = focusedRef?.kind === "bot" ? focusedRef.id : null;
   const tab = useBotTabsStore((state) =>
@@ -1580,17 +1592,18 @@ function VoiceSelectionSync(props: {
           voiceNavigationRef.current = navigation;
           return;
         }
-        applyMoveDuringNavigation(selection, onManualChange);
+        applyMoveDuringNavigation(selection, { onManualChange, onCardMove });
         return;
       }
     }
     // A switch the queue made (`switch` from Waiting or the router) keeps
     // the selections its own landing causes.
     if (followsVoiceSwitch(selection, voiceSwitch, listed)) return;
-    applySelection(selection, onManualChange, onResolved);
+    applySelection(selection, { onManualChange, onCardMove }, onResolved);
   }, [
     activeBotId,
     listed,
+    onCardMove,
     onManualChange,
     onResolved,
     tab,
@@ -1708,7 +1721,7 @@ function focusOf(
  */
 function applyMoveDuringNavigation(
   selection: VoiceFocus,
-  onManualChange: () => void,
+  moved: ManualMove,
 ): void {
   const store = useVoiceSessionStore.getState();
   const current = store.focus;
@@ -1720,7 +1733,8 @@ function applyMoveDuringNavigation(
   const wasOpen = isUtteranceOpen(store);
   if (returned) store.selectionReturned();
   else store.selectionChanged(selection);
-  if (wasOpen) onManualChange();
+  if (wasOpen) moved.onManualChange();
+  moved.onCardMove();
 }
 
 /**
@@ -1734,7 +1748,7 @@ function applyMoveDuringNavigation(
  */
 function applySelection(
   selection: VoiceFocus,
-  onManualChange: () => void,
+  moved: ManualMove,
   onResolved: () => void,
 ): void {
   const store = useVoiceSessionStore.getState();
@@ -1755,7 +1769,23 @@ function applySelection(
   }
   const wasOpen = isUtteranceOpen(store);
   store.selectionChanged(selection);
-  if (wasOpen) onManualChange();
+  if (wasOpen) moved.onManualChange();
+  moved.onCardMove();
+}
+
+/**
+ * What a manual move tells: the say loop, only while words are open (it
+ * interrupts them), and the active card always (its candidate is offered
+ * again).
+ */
+interface ManualMove {
+  readonly onManualChange: () => void;
+  readonly onCardMove: () => void;
+}
+
+/** The active card's side of a manual move: a yes never binds to a card the person left. */
+function offerCardAgainOnMove(): void {
+  useVoiceSessionStore.getState().cardDriver?.invalidate("focus");
 }
 
 /**

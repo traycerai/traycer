@@ -1352,9 +1352,6 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     onSelectionChanged() {
       releaseRouted();
       const state = store.getState();
-      // A yes must never bind to a card's candidate the person moved away
-      // from: it is offered again.
-      state.cardDriver?.invalidate("focus");
       for (const action of inFlight.values()) {
         if (action.sessionToken === state.sessionToken) {
           action.movedWhileSending = true;

@@ -456,7 +456,10 @@ interface Desk {
 /**
  * A card's act that has not settled, kept by the item it acts on whatever
  * card is active since: a card opened again while its act is out shows that
- * act, and never sends a second one.
+ * act, and never sends a second one. A forwarded act is only kept while
+ * another card is open: its records are not watched meanwhile, and it is
+ * reconciled with them when its card is opened again. An answer that comes
+ * back while another card is open is not said.
  */
 interface ActOut {
   readonly family: CardFamily;
@@ -467,6 +470,11 @@ interface ActOut {
   state: "sending" | "forwarded";
   /** The surfaced act's id; `null` for a bot's answer. */
   readonly actionId: string | null;
+  /** The user session the act was sent in: a later session's card is never this act's. */
+  readonly sessionToken: number;
+  /** The utterance whose yes sent it, and the engine that delegation belongs to. */
+  readonly delegationId: string | null;
+  readonly engineGeneration: number;
 }
 
 export function createCardDesk(deps: CardDeskDeps): CardDesk {
@@ -524,19 +532,29 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     held.delegationId = null;
     return spoken;
   };
-  /** Runs `fn` once the voice's output is quiet, while the card is still `held`. */
+  /**
+   * Runs `fn` once the voice's output is quiet, while the card is still
+   * `held`. Called from `onDelivered`, which the scheduler runs while it
+   * handles the output delta that confirmed the item, before it holds the
+   * output as playing for that delta (the transcript can arrive before the
+   * sound): the quiet is read once that handling is over, never from the
+   * moment before it.
+   */
   const afterPlayback = (held: Desk, fn: () => void): void => {
-    if (!speech.activity().outputPlaying) {
-      fn();
-      return;
-    }
-    const stop = speech.subscribe((activity) => {
-      if (activity.outputPlaying) return;
-      stop();
-      held.waits.delete(stop);
-      if (desk === held) fn();
+    void Promise.resolve().then(() => {
+      if (desk !== held) return;
+      if (!speech.activity().outputPlaying) {
+        fn();
+        return;
+      }
+      const stop = speech.subscribe((activity) => {
+        if (activity.outputPlaying) return;
+        stop();
+        held.waits.delete(stop);
+        if (desk === held) fn();
+      });
+      held.waits.add(stop);
     });
-    held.waits.add(stop);
   };
   const notify = (held: Desk, text: string): void => {
     say(held, {
@@ -559,6 +577,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
 
   /** The card is over: whatever it had out is taken back, and the store forgets it. */
   const close = (held: Desk): void => {
+    held.delegationId = null;
     held.cancelWindow();
     held.cancelLoad();
     held.cancelSettlerWait();
@@ -745,18 +764,20 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     content: CardContent,
     choice: CardChoice,
   ): Promise<void> => {
-    const ids = holdOut(held, content, [choice], null);
-    if (ids === null) return;
+    const out = holdOut(held, content, [choice], null);
+    if (out === null) return;
     const outcome = await api.answerBotQuestion({
       text: choiceText(choice),
       questionIndex: content.questionIndex,
       skipped: choice.kind === "skip",
     });
-    acts.delete(ids.itemId);
+    if (!stillOut(out)) return;
+    acts.delete(out.ids.itemId);
     // Said on whichever opening of the card holds it now: the person may
     // have opened another card meanwhile, and this one again.
-    const current = holderOf(ids.itemId);
+    const current = holderOf(out);
     if (current === null) return;
+    answerUnder(current, out);
     switch (outcome.kind) {
       case "sent":
         setCard({ state: "settled" });
@@ -777,9 +798,30 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     }
   };
 
-  /** The open card, while it is an opening of this item. */
-  const holderOf = (itemId: string): Desk | null =>
-    desk !== null && card()?.ids.itemId === itemId ? desk : null;
+  /** The open card, while it is an opening of this item in the session that sent the act. */
+  const holderOf = (out: ActOut): Desk | null =>
+    desk !== null &&
+    card()?.ids.itemId === out.ids.itemId &&
+    desk.sessionToken === out.sessionToken
+      ? desk
+      : null;
+
+  /**
+   * Whether an act's answer still belongs to the desk: the item still holds
+   * that act, in the session it was sent in. A session ended since (the
+   * acts were forgotten), or another act on the item, makes it stale.
+   */
+  const stillOut = (out: ActOut): boolean =>
+    acts.get(out.ids.itemId) === out &&
+    store.getState().sessionToken === out.sessionToken;
+
+  /** The act's answer is said under the yes that sent it, while its engine lives. */
+  const answerUnder = (current: Desk, out: ActOut): void => {
+    current.delegationId =
+      store.getState().engineGeneration === out.engineGeneration
+        ? out.delegationId
+        : null;
+  };
 
   /** The act leaves: the card shows it sending, and the item holds it until it settles. */
   const holdOut = (
@@ -787,11 +829,12 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     content: CardContent,
     draft: ReadonlyArray<CardChoice>,
     actionId: string | null,
-  ): ActiveCardIds | null => {
+  ): ActOut | null => {
     const active = card();
     if (active === null) return null;
     held.actionId = actionId;
-    acts.set(active.ids.itemId, {
+    const state = store.getState();
+    const out: ActOut = {
       family: active.family,
       ids: active.ids,
       content,
@@ -799,9 +842,13 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
       draft,
       state: "sending",
       actionId,
-    });
+      sessionToken: held.sessionToken,
+      delegationId: held.delegationId,
+      engineGeneration: state.engineGeneration,
+    };
+    acts.set(active.ids.itemId, out);
     setCard({ state: "sending", draft });
-    return active.ids;
+    return out;
   };
 
   const actOnSurface = async (
@@ -814,18 +861,19 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     const last = draft.at(-1);
     if (last === undefined) return;
     const actionId = deps.newActionId();
-    const ids = holdOut(held, content, draft, actionId);
-    if (ids === null) return;
+    const out = holdOut(held, content, draft, actionId);
+    if (out === null) return;
     const outcome = await api.actSurface(action, actionId);
-    const out = acts.get(ids.itemId);
+    if (!stillOut(out)) return;
     const forwarded =
       outcome.kind === "answered" && outcome.response.outcome === "forwarded";
     // Not settled when forwarded: the draft is kept until the task's machine
     // records it (the post shows the resolution) or refuses it.
-    if (forwarded && out?.actionId === actionId) out.state = "forwarded";
-    else if (out?.actionId === actionId) acts.delete(ids.itemId);
-    const current = holderOf(ids.itemId);
+    if (forwarded) out.state = "forwarded";
+    else acts.delete(out.ids.itemId);
+    const current = holderOf(out);
     if (current === null) return;
+    answerUnder(current, out);
     if (outcome.kind === "failed") {
       setCard({ state: "refused" });
       notify(current, CARD_FAILED_TEXT);
@@ -1086,7 +1134,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     if (target === null) return "nothing";
     const existing = desk;
     const out = acts.get(itemId);
-    if (existing !== null && out !== undefined && holderOf(itemId) !== null) {
+    if (existing !== null && out !== undefined && holderOf(out) !== null) {
       existing.delegationId = delegationId;
       notify(existing, ON_ITS_WAY_TEXT);
       return "appended";
@@ -1147,6 +1195,88 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     return "appended";
   };
 
+  /** The router's answer to the card that listens; `true` when the card took it. */
+  const answerRoutedWith = (
+    held: Desk,
+    active: ActiveCard,
+    routed: {
+      readonly choice: number | null;
+      readonly text: string;
+      readonly key: CardKey;
+    },
+  ): boolean => {
+    const { choice, text, key } = routed;
+    // Routed against another card, or another of its questions: the
+    // answer is not this one's.
+    if (!sameKey(active, key)) {
+      notify(held, CARD_STALE_ANSWER_TEXT);
+      return true;
+    }
+    const content = held.content;
+    // Said before the card could be answered: spent, choosing nothing.
+    if (content === null || !answerable(held)) return true;
+    const question = currentQuestion(held);
+    const choices = choicesOf(content, question);
+    if (choice === null) {
+      const words = text.trim();
+      if (question?.takesText !== true || words.length === 0) {
+        notify(held, CARD_WHICH_TEXT);
+        return true;
+      }
+      readCandidate(held, { kind: "text", text: words }, "");
+      return true;
+    }
+    if (choice >= 0 && choice < choices.length) {
+      readCandidate(
+        held,
+        { kind: "option", index: choice, label: choices[choice] },
+        "",
+      );
+      return true;
+    }
+    if (choice === choices.length && skippable(content.family)) {
+      readCandidate(held, { kind: "skip" }, "");
+      return true;
+    }
+    notify(held, CARD_WHICH_TEXT);
+    return true;
+  };
+
+  /** A boundary's words while the card listens: spent by it, or a request of their own. */
+  const answerWords = (
+    held: Desk,
+    words: { readonly text: string; readonly seqs: ReadonlyArray<number> },
+  ): "handled" | "route" => {
+    if (held.offer !== null) return answerOffer(held, held.offer, words);
+    const active = card();
+    const content = held.content;
+    const list = held.list;
+    if (active === null) return "route";
+    if (content === null || list === null || !answerable(held)) {
+      return prematureAnswer(active, content, words.text);
+    }
+    const choices = choicesOf(content, currentQuestion(held));
+    const choice = matchCardChoice(words.text, content.family, choices);
+    // A choice of the list wins over a yes: a question's option may be "Yes".
+    // A choice the candidate already is, said again, is a yes to it.
+    const sameAsCandidate =
+      choice !== null &&
+      active.candidate !== null &&
+      sameChoice(choice, active.candidate);
+    if (choice !== null && !sameAsCandidate) {
+      // A choice said before the list was heard chooses nothing.
+      if (words.seqs.some((seq) => seq <= list.heardAfterSeq)) {
+        return "handled";
+      }
+      readCandidate(held, choice, "");
+      return "handled";
+    }
+    const verdict = sameAsCandidate ? "yes" : confirmationAnswer(words.text);
+    if (verdict === "not-an-answer") return "route";
+    answerYesNo(held, verdict, words.seqs);
+    return "handled";
+  };
+
   return {
     open,
 
@@ -1188,35 +1318,14 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     answer(words, delegationId) {
       const held = desk;
       if (!listening(held)) return "route";
+      // The utterance's delegation covers what is said in answer to it, now,
+      // and nothing said later.
       held.delegationId = delegationId;
-      if (held.offer !== null) return answerOffer(held, held.offer, words);
-      const active = card();
-      const content = held.content;
-      const list = held.list;
-      if (active === null) return "route";
-      if (content === null || list === null || !answerable(held)) {
-        return prematureAnswer(active, content, words.text);
+      try {
+        return answerWords(held, words);
+      } finally {
+        held.delegationId = null;
       }
-      const choices = choicesOf(content, currentQuestion(held));
-      const choice = matchCardChoice(words.text, content.family, choices);
-      // A choice of the list wins over a yes: a question's option may be "Yes".
-      // A choice the candidate already is, said again, is a yes to it.
-      const sameAsCandidate =
-        choice !== null &&
-        active.candidate !== null &&
-        sameChoice(choice, active.candidate);
-      if (choice !== null && !sameAsCandidate) {
-        // A choice said before the list was heard chooses nothing.
-        if (words.seqs.some((seq) => seq <= list.heardAfterSeq)) {
-          return "handled";
-        }
-        readCandidate(held, choice, "");
-        return "handled";
-      }
-      const verdict = sameAsCandidate ? "yes" : confirmationAnswer(words.text);
-      if (verdict === "not-an-answer") return "route";
-      answerYesNo(held, verdict, words.seqs);
-      return "handled";
     },
 
     answerRouted(choice, text, delegationId, key) {
@@ -1226,40 +1335,11 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
         return false;
       }
       held.delegationId = delegationId;
-      // Routed against another card, or another of its questions: the
-      // answer is not this one's.
-      if (!sameKey(active, key)) {
-        notify(held, CARD_STALE_ANSWER_TEXT);
-        return true;
+      try {
+        return answerRoutedWith(held, active, { choice, text, key });
+      } finally {
+        held.delegationId = null;
       }
-      const content = held.content;
-      // Said before the card could be answered: spent, choosing nothing.
-      if (content === null || !answerable(held)) return true;
-      const question = currentQuestion(held);
-      const choices = choicesOf(content, question);
-      if (choice === null) {
-        const words = text.trim();
-        if (question?.takesText !== true || words.length === 0) {
-          notify(held, CARD_WHICH_TEXT);
-          return true;
-        }
-        readCandidate(held, { kind: "text", text: words }, "");
-        return true;
-      }
-      if (choice >= 0 && choice < choices.length) {
-        readCandidate(
-          held,
-          { kind: "option", index: choice, label: choices[choice] },
-          "",
-        );
-        return true;
-      }
-      if (choice === choices.length && skippable(content.family)) {
-        readCandidate(held, { kind: "skip" }, "");
-        return true;
-      }
-      notify(held, CARD_WHICH_TEXT);
-      return true;
     },
 
     routerCard(): RouterCard | null {
