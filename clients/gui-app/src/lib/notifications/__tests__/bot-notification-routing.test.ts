@@ -22,7 +22,7 @@ import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 /**
  * A tapped push of a bot's conversation (Tracy Bots VN4) opens the bot's
  * tab, landed on the thread beside its channel; a window with no host to
- * open it on routes the row as a chat.
+ * open it on opens nothing.
  */
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -124,17 +124,13 @@ describe("routing a chat payload that names a bot", () => {
     });
   });
 
-  it("opens no tab and requests no landing without a host, and routes the row as a chat", () => {
+  it("opens nothing without a host: no tab, no landing, and never the bot id as an epic", () => {
     const navigate = vi.fn();
 
-    route(navigate, null);
+    expect(route(navigate, null)).toBe(false);
 
     expect(useBotTabsStore.getState().tabs).toEqual({});
     expect(useBotTabLandingStore.getState().byBotId).toEqual({});
-    // The chat route took it: it did not navigate to a bot.
-    for (const call of navigate.mock.calls) {
-      const intent: unknown = call[0];
-      expect(intent).not.toMatchObject({ params: { botId: BOT_ID } });
-    }
+    expect(navigate).not.toHaveBeenCalled();
   });
 });
