@@ -235,6 +235,7 @@ function TracySurfaceShell(props: {
     listed: botList.status === "success" ? botList.data.bots : null,
     select,
   });
+  useSenderLandingSpentOnDeparture(botId);
   const channelTitle =
     botList.data?.bots.find((bot) => bot.botId === botId)?.title ??
     TRACY_TAB_LABEL;
@@ -302,6 +303,45 @@ function TracySurfaceShell(props: {
  * acknowledged) it waits, so it never supersedes that navigation, and a
  * selected bot that goes away meanwhile is only deselected.
  */
+/**
+ * A `sender` landing waits in its channel's pane for the thread list, and a
+ * move of the channel while it waits spends it unlanded
+ * (`useSpendTabLanding`). Leaving the channel is such a move, but it unmounts
+ * the pane and its wait with it, so the shell spends it here: the sender
+ * landing the channel held while shown is withdrawn once another is selected.
+ * Only that same request: one asked of the channel since (an opener staging
+ * it before navigating back) is the channel's next landing.
+ */
+function useSenderLandingSpentOnDeparture(botId: string | null): void {
+  const shownLanding = useBotTabLandingStore((state) =>
+    botId !== null && Object.hasOwn(state.byBotId, botId)
+      ? state.byBotId[botId]
+      : null,
+  );
+  const held = useRef<{
+    readonly botId: string;
+    readonly landing: BotTabLanding;
+  } | null>(null);
+  useEffect(() => {
+    // Compared with the channel last seen, not run on cleanup, so a remount
+    // of the same channel is no departure.
+    const previous = held.current;
+    if (previous !== null && previous.botId !== botId) {
+      const { byBotId, clear } = useBotTabLandingStore.getState();
+      if (
+        Object.hasOwn(byBotId, previous.botId) &&
+        byBotId[previous.botId] === previous.landing
+      ) {
+        clear(previous.botId);
+      }
+    }
+    held.current =
+      botId !== null && shownLanding?.kind === "sender"
+        ? { botId, landing: shownLanding }
+        : null;
+  }, [botId, shownLanding]);
+}
+
 function useTracyChannelUpkeep(input: {
   readonly botId: string | null;
   readonly groups: ReadonlyArray<HomeBotsGroup> | null;

@@ -29,6 +29,7 @@ import {
   type UseNavigateResult,
 } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import type { BotSubscriptionSnapshot } from "@/hooks/bots/use-bot-subscription";
@@ -44,6 +45,13 @@ interface ListScript {
   readonly hasData: boolean;
 }
 
+/** What one bot's thread-list read holds; a bot with none holds no threads. */
+interface ThreadListScript {
+  readonly threads: ReadonlyArray<BotThreadSummary>;
+  readonly isFetching: boolean;
+  readonly isError: boolean;
+}
+
 const script = vi.hoisted(() => {
   const listeners = new Set<() => void>();
   const state: {
@@ -51,10 +59,13 @@ const script = vi.hoisted(() => {
     environments: ReadonlyArray<EnvironmentDescriptor>;
     /** Bot ids whose `bot.open` is refused. */
     openFails: Set<string>;
+    /** Replaced, never mutated, so a subscriber reads a stable snapshot. */
+    threadLists: Readonly<Record<string, ThreadListScript>>;
   } = {
     list: { status: "pending", bots: [], mainBotIds: null, hasData: false },
     environments: [],
     openFails: new Set(),
+    threadLists: {},
   };
   return {
     state,
@@ -180,7 +191,20 @@ vi.mock("@/hooks/host/use-host-query", async (importOriginal) => ({
   },
 }));
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
-  useBotThreadListQuery: () => ({ data: { threads: [] } }),
+  useBotThreadListQuery: (_client: unknown, botId: string) => {
+    const lists = useSyncExternalStore(
+      script.subscribe,
+      () => script.state.threadLists,
+      () => script.state.threadLists,
+    );
+    const read = Object.hasOwn(lists, botId) ? lists[botId] : undefined;
+    if (read === undefined) return { data: { threads: [] } };
+    return {
+      data: { threads: read.threads },
+      isFetching: read.isFetching,
+      isError: read.isError,
+    };
+  },
 }));
 vi.mock("@/hooks/bots/use-bot-subscription", () => ({
   useBotSubscriptionForHost: (input: { botId: string }) => ({
@@ -370,6 +394,11 @@ function setList(next: ListScript): void {
   script.notify();
 }
 
+function setThreadList(botId: string, next: ThreadListScript): void {
+  script.state.threadLists = { ...script.state.threadLists, [botId]: next };
+  script.notify();
+}
+
 function buildRouter(Host: () => ReactNode, initialPath: string) {
   const rootRoute = createRootRoute({
     component: () => (
@@ -539,6 +568,7 @@ function resetStores(): void {
   };
   script.state.environments = ENVIRONMENTS;
   script.state.openFails.clear();
+  script.state.threadLists = {};
   useTracySurfaceStore.setState({
     open: false,
     hostId: null,
@@ -830,6 +860,97 @@ describe("the Tracy surface shell", () => {
         mounted.history.back();
       });
       expect(mounted.pathname()).toBe("/home");
+    });
+  });
+
+  describe("a sender landing held for its channel's thread list", () => {
+    const SENDER_CHAT = "session-x";
+    const THREAD: BotThreadSummary = {
+      threadId: "thread-x",
+      conversationId: "conversation-x",
+      sessionChatId: SENDER_CHAT,
+      anchor: {
+        messageId: "post-of-session-x",
+        requestId: "request-x",
+        senderUserId: null,
+        sentAt: 1_000,
+        resolvedAt: null,
+        excerpt: null,
+      },
+      replyCount: 0,
+      lastReplyAt: null,
+      openRequestCount: 0,
+      costUsd: null,
+    };
+
+    /**
+     * The release channel shows, its thread list is held without the sender's
+     * thread, and a sender landing waits for it. The person then leaves for
+     * triage, and the list answers with the thread while the channel is away.
+     */
+    async function leaveWithWaitingLanding(): Promise<Mounted> {
+      answerList([RELEASE, TRIAGE], null);
+      const mounted = await mount();
+      open(mounted, "bot-release");
+      await shownChannel("bot-release");
+      act(() =>
+        setThreadList("bot-release", {
+          threads: [],
+          isFetching: true,
+          isError: false,
+        }),
+      );
+      act(() =>
+        useBotTabLandingStore
+          .getState()
+          .request("bot-release", { kind: "sender", chatId: SENDER_CHAT }),
+      );
+      expect(keptState("bot-release").landing).toBe(true);
+      expect(
+        screen.getByTestId("stub-channel").getAttribute("data-open-thread"),
+      ).toBe("none");
+
+      fireEvent.click(row("bot-triage"));
+      await shownChannel("bot-triage");
+      act(() =>
+        setThreadList("bot-release", {
+          threads: [THREAD],
+          isFetching: false,
+          isError: false,
+        }),
+      );
+      return mounted;
+    }
+
+    it("spends a waiting sender landing unlanded when its channel is left, so returning does not open its thread", async () => {
+      await leaveWithWaitingLanding();
+
+      fireEvent.click(row("bot-release"));
+
+      const channel = await shownChannel("bot-release");
+      expect(keptState("bot-release").landing).toBe(false);
+      expect(channel.getAttribute("data-open-thread")).toBe("none");
+    });
+
+    it("leaves a newer request of the channel to be spent by it on return", async () => {
+      await leaveWithWaitingLanding();
+      // An opener staging the next landing before it navigates back.
+      act(() =>
+        useBotTabLandingStore
+          .getState()
+          .request("bot-release", { kind: "sender", chatId: SENDER_CHAT }),
+      );
+      expect(keptState("bot-release").landing).toBe(true);
+
+      fireEvent.click(row("bot-release"));
+
+      const channel = await shownChannel("bot-release");
+      await waitFor(() => {
+        expect(channel.getAttribute("data-open-thread")).toBe(
+          "post-of-session-x",
+        );
+      });
+      expect(keptState("bot-release").landing).toBe(false);
     });
   });
 });
