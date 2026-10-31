@@ -21,7 +21,7 @@ function makeDriver() {
 function renderControl(): void {
   render(
     <TooltipProvider>
-      <TalkControl />
+      <TalkControl compact={false} />
     </TooltipProvider>,
   );
 }
@@ -48,6 +48,21 @@ describe("TalkControl", () => {
     useVoiceSessionStore.setState({ driver: null, availability: "live" });
     renderControl();
     expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
+  });
+
+  it("compact draws the glyph alone, named and working as before", async () => {
+    const driver = makeDriver();
+    useVoiceSessionStore.setState({ driver, availability: "live" });
+    render(
+      <TooltipProvider>
+        <TalkControl compact />
+      </TooltipProvider>,
+    );
+
+    const button = screen.getByRole("button", { name: "Talk" });
+    expect(button.textContent).toBe("");
+    await userEvent.click(button);
+    expect(driver.start).toHaveBeenCalledTimes(1);
   });
 
   it("starts a session when idle", async () => {

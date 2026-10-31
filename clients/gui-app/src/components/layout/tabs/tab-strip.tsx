@@ -220,7 +220,7 @@ function TabStripBody() {
             <TracyStripSlot entry={controller.tracy} />
             {/* Beside the Tracy entry, never in the composer (V6): the voice
                 belongs to the whole bot surface, not to one draft. */}
-            <TalkControl />
+            <TalkControl compact={false} />
           </>
         )}
         <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">

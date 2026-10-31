@@ -69,6 +69,7 @@ import {
   useLayoutStore,
 } from "@/stores/layout/layout-store";
 import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
+import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -1178,6 +1179,43 @@ describe("the fixed Tracy entry - vertical strip", () => {
     await waitFor(() => {
       expect(view.pathname()).toBe(`/bot/${TRACY}`);
     });
+  });
+
+  it("draws Talk under the entry when voice is available, and as the glyph alone in the collapsed rail", async () => {
+    const initialVoice = useVoiceSessionStore.getInitialState();
+    useVoiceSessionStore.setState({
+      availability: "live",
+      driver: {
+        start: () => undefined,
+        end: () => undefined,
+        setMuted: () => undefined,
+      },
+    });
+    try {
+      openEpicTabs(["Alpha"]);
+      mountSideStrip("/epics/e-alpha/e-alpha");
+
+      const entry = await screen.findByTestId("tab-tracy");
+      const talk = screen.getByRole("button", { name: "Talk" });
+      expect(screen.getByTestId("side-strip-top-block").contains(talk)).toBe(
+        true,
+      );
+      expect(
+        entry.compareDocumentPosition(talk) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(talk.textContent).toBe("Talk");
+
+      act(() => {
+        useSideTabStripStore.setState({ collapsed: true });
+      });
+      const tile = await screen.findByRole("button", { name: "Talk" });
+      expect(tile.textContent).toBe("");
+      expect(screen.getByTestId("side-strip-top-block").contains(tile)).toBe(
+        true,
+      );
+    } finally {
+      useVoiceSessionStore.setState(initialVoice, true);
+    }
   });
 });
 
