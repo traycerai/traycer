@@ -159,6 +159,7 @@ describe("isUtteranceOpen and sameFocus", () => {
       text: "x",
       delegationId: null,
       selectionGeneration: 0,
+      askState: "asking",
     });
     expect(isUtteranceOpen(useVoiceSessionStore.getState())).toBe(true);
   });

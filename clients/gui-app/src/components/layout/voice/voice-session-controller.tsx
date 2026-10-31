@@ -42,6 +42,7 @@ import {
   createReplyWatchMemory,
   replySpeechText,
   requestIdAnsweredIn,
+  replyTextOf,
   takeNewBotReplies,
   type FocusedReply,
   type ReplyRecords,
@@ -51,6 +52,7 @@ import {
 import { createBrowserGptLiveEngine } from "@/lib/voice/gpt-live-engine";
 import {
   createSayLoop,
+  type AcceptedRequest,
   type ReplyPlace,
   type SayLoop,
 } from "@/lib/voice/say-loop";
@@ -246,6 +248,10 @@ export function VoiceSessionController(): ReactNode {
   // carry the store's session token, so a late acceptance from an ended or
   // replaced session changes nothing.
   const sayLoopRef = useRef<SayLoop | null>(null);
+  /** The focused feed's reconciliation of an accepted request against loaded rows. */
+  const reconcileRef = useRef<(request: AcceptedRequest) => void>(
+    () => undefined,
+  );
   const sayLoop = useCallback((): SayLoop => {
     const existing = sayLoopRef.current;
     if (existing !== null) return existing;
@@ -264,8 +270,9 @@ export function VoiceSessionController(): ReactNode {
             text,
           }),
           onDelivered: null,
+          onGivenUp: null,
         }),
-      ask: (text) =>
+      ask: (text, outcome) =>
         ensureSpeech().enqueue({
           id: `ask:${Date.now()}`,
           priority: "ask",
@@ -276,7 +283,8 @@ export function VoiceSessionController(): ReactNode {
             threadTitle: null,
             text,
           }),
-          onDelivered: null,
+          onDelivered: outcome.onDelivered,
+          onGivenUp: outcome.onGivenUp,
         }),
       openThread: (target, response, text) => {
         if (response.threadId === null) return;
@@ -296,6 +304,7 @@ export function VoiceSessionController(): ReactNode {
         });
       },
       botTitle: (botId) => botTitleRef.current(botId),
+      onAccepted: (request) => reconcileRef.current(request),
     });
     sayLoopRef.current = created;
     return created;
@@ -812,7 +821,7 @@ export function VoiceSessionController(): ReactNode {
     <>
       {running ? (
         <VoiceSelectionSync
-          onManualChange={() => sayLoopRef.current?.onSelectionChanged()}
+          onManualChange={() => sayLoop().onSelectionChanged()}
         />
       ) : null}
       {running && focus !== null && channelId !== null && speech !== null ? (
@@ -828,6 +837,9 @@ export function VoiceSessionController(): ReactNode {
           delegationForReply={(place) =>
             sayLoopRef.current?.delegationForReply(place) ?? null
           }
+          registerReconcile={(reconcile) => {
+            reconcileRef.current = reconcile;
+          }}
           awaitedIn={(threadId) =>
             sayLoopRef.current?.awaitedIn(threadId) ?? "none"
           }
@@ -970,19 +982,23 @@ function applySelection(
  * is marked read once the voice is confirmed to have said it, with the
  * entity-level call looking makes.
  *
- * Two records are read: the focused chat's rows, and the channel's, because
- * the host opens a post's thread with no row of its own and resolves the
- * opening request on the channel's post after the reply exists. A reply is
- * placed by the request the records already name, else by the thread an
- * accepted post opened, else by the one request awaiting an answer at the
- * channel's top level.
+ * Two records are read and watched: the focused chat's rows, and the
+ * channel's, because the host opens a post's thread with no row of its own
+ * and resolves the opening request on the channel's post after the reply
+ * exists. A reply is placed by the request the records already name, else by
+ * the thread an accepted post opened, else by the one request awaiting an
+ * answer at the channel's top level; one the records do not place yet is
+ * scheduled under no delegation and re-labelled when they do, before it is
+ * appended.
  *
  * Hydration is not arrival: the baseline is the first loaded snapshot, so a
  * cold store's history is never spoken, EXCEPT the answers this session is
- * waiting for, which count as arrivals wherever they turn up. The memory
- * outlives this component (the controller keeps it per chat for the user
- * session), so a remount across a replacement speaks what landed in the gap
- * and nothing older.
+ * waiting for, which count as arrivals wherever they turn up, and whenever
+ * the acceptance that names them comes back (`reconcile`): the exact request
+ * is matched against rows already loaded, and nothing already scheduled is
+ * spoken twice. The memory outlives this component (the controller keeps it
+ * per chat for the user session), so a remount across a replacement speaks
+ * what landed in the gap and nothing older.
  */
 function VoiceFocusedReplyFeed(props: {
   readonly focus: VoiceFocus;
@@ -995,6 +1011,10 @@ function VoiceFocusedReplyFeed(props: {
   readonly delegationForReply: (place: ReplyPlace) => string | null;
   readonly awaitedIn: (threadId: string | null) => "opened" | "joined" | "none";
   readonly isAwaiting: (requestId: string) => boolean;
+  /** Hands the controller this feed's reconciliation for the loop's acceptances. */
+  readonly registerReconcile: (
+    reconcile: (request: AcceptedRequest) => void,
+  ) => void;
 }): null {
   const {
     focus,
@@ -1007,6 +1027,7 @@ function VoiceFocusedReplyFeed(props: {
     delegationForReply,
     awaitedIn,
     isAwaiting,
+    registerReconcile,
   } = props;
   const chatId = focus.threadId ?? channelId;
   const handle = useChatSessionHandleForContainer(
@@ -1030,44 +1051,75 @@ function VoiceFocusedReplyFeed(props: {
   useEffect(() => {
     placeRef.current = { delegationForReply, awaitedIn, isAwaiting };
   }, [awaitedIn, delegationForReply, isAwaiting]);
+  const registerReconcileRef = useRef(registerReconcile);
+  useEffect(() => {
+    registerReconcileRef.current = registerReconcile;
+  }, [registerReconcile]);
 
   useEffect(() => {
     if (handle === null || channelHandle === null) return;
     const threadId = focus.threadId;
-    const records = (state: ReplyWatchState): ReplyRecords => ({
-      threadRows: threadId === null ? [] : state.messages,
-      channelRows:
-        threadId === null
-          ? state.messages
-          : channelHandle.store.getState().messages,
+    const records = (): ReplyRecords => ({
+      threadRows: threadId === null ? [] : handle.store.getState().messages,
+      channelRows: channelHandle.store.getState().messages,
     });
-    const speak = (reply: FocusedReply, where: ReplyRecords): void => {
-      const text = replySpeechText({
-        botTitle,
-        speaksAsThisBot,
-        content: reply.text,
+    /** Replies scheduled under no delegation whose request the records may still name. */
+    const unplaced = new Map<string, string>();
+    const place = (
+      replyMessageId: string,
+      where: ReplyRecords,
+    ): string | null =>
+      placeRef.current.delegationForReply({
+        botId: focus.botId,
+        hostId: focus.hostId,
+        threadId,
+        requestId: requestIdAnsweredIn(where, replyMessageId),
       });
+    const speak = (reply: FocusedReply, where: ReplyRecords): void => {
+      if (memory.scheduled.has(reply.messageId)) return;
+      memory.scheduled.add(reply.messageId);
+      const itemId = `reply:${reply.messageId}`;
+      const delegationId = place(reply.messageId, where);
+      if (delegationId === null) unplaced.set(reply.messageId, itemId);
       scheduler.enqueue({
-        id: `reply:${reply.messageId}`,
+        id: itemId,
         priority: "focused",
-        text,
-        delegationId: placeRef.current.delegationForReply({
-          threadId,
-          requestId: requestIdAnsweredIn(where, reply.messageId),
+        text: replySpeechText({
+          botTitle,
+          speaksAsThisBot,
+          content: reply.text,
         }),
+        delegationId,
         confirmWords: confirmationWords({
           botTitle,
           threadTitle: null,
           text: reply.text,
         }),
         onDelivered: () => markReadRef.current({ epicId: focus.botId, chatId }),
+        onGivenUp: null,
       });
+    };
+    // Records that arrived after a reply was scheduled may name its request
+    // now: the item is re-labelled while it still waits to be appended.
+    const placeLater = (where: ReplyRecords): void => {
+      for (const [replyMessageId, itemId] of unplaced) {
+        const requestId = requestIdAnsweredIn(where, replyMessageId);
+        if (requestId === null) continue;
+        unplaced.delete(replyMessageId);
+        const delegationId = placeRef.current.delegationForReply({
+          botId: focus.botId,
+          hostId: focus.hostId,
+          threadId,
+          requestId,
+        });
+        if (delegationId !== null) scheduler.relabel(itemId, delegationId);
+      }
     };
     // A watch that already has a baseline carries on; a fresh one takes the
     // first loaded snapshot as history, less the answers awaited here.
     const watch = (state: ReplyWatchState): void => {
       if (!state.snapshotLoaded) return;
-      const where = records(state);
+      const where = records();
       if (!memory.baselined) {
         // In a thread an accepted post opened, every bot row is its answer;
         // elsewhere only a row the records tie to an awaited request is.
@@ -1088,14 +1140,45 @@ function VoiceFocusedReplyFeed(props: {
       for (const reply of takeNewBotReplies(state.messages, memory)) {
         speak(reply, where);
       }
+      placeLater(where);
     };
+    // An acceptance came back: a row already loaded (and baselined, or seen
+    // while the send was out) that answers exactly this request is spoken.
+    const reconcile = (request: AcceptedRequest): void => {
+      if (request.botId !== focus.botId || request.hostId !== focus.hostId) {
+        return;
+      }
+      if (request.threadId !== threadId) return;
+      const where = records();
+      const rows = handle.store.getState().messages;
+      for (const row of rows) {
+        if (row.role !== "assistant") continue;
+        if (requestIdAnsweredIn(where, row.messageId) !== request.requestId) {
+          continue;
+        }
+        const text = replyTextOf(row);
+        if (text.length > 0) speak({ messageId: row.messageId, text }, where);
+      }
+      placeLater(where);
+    };
+    registerReconcileRef.current(reconcile);
     watch(handle.store.getState());
-    return handle.store.subscribe(watch);
+    const unsubscribeFocused = handle.store.subscribe(watch);
+    const unsubscribeChannel =
+      threadId === null
+        ? () => undefined
+        : channelHandle.store.subscribe(() => placeLater(records()));
+    return () => {
+      unsubscribeFocused();
+      unsubscribeChannel();
+      registerReconcileRef.current(() => undefined);
+    };
   }, [
     botTitle,
     channelHandle,
     chatId,
     focus.botId,
+    focus.hostId,
     focus.threadId,
     handle,
     memory,

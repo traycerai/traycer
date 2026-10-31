@@ -13,7 +13,10 @@ import {
 import { create, type StoreApi } from "zustand";
 import type { VoiceEngineEvents } from "@/lib/voice/engine";
 import type { ReplyRow } from "@/lib/voice/focused-replies";
+import { MOVED_ASK_TEXT } from "@/lib/voice/say-loop";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
+import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useTabsStore } from "@/stores/tabs/store";
 import {
   useVoiceSessionStore,
   type VoiceFocus,
@@ -200,6 +203,8 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 
 const initialVoice = useVoiceSessionStore.getState();
 const initialRail = useBotOpenThreadStore.getState();
+const initialTabs = useTabsStore.getState();
+const initialBotTabs = useBotTabsStore.getState();
 
 function textBlock(text: string): OpenTextBlock {
   return {
@@ -220,6 +225,39 @@ function botRow(messageId: string, text: string): ReplyRow {
     timestamp: Date.now(),
     blocks: [textBlock(text)],
   };
+}
+
+/** A member row whose request `requestId` was resolved by the bot row `resolvedBy`. */
+function requestRow(
+  messageId: string,
+  requestId: string,
+  resolvedBy: string,
+): ReplyRow {
+  return {
+    role: "user",
+    messageId,
+    timestamp: Date.now(),
+    conversationRequest: {
+      requestId,
+      resolvedAt: Date.now(),
+      resolvedByMessageId: resolvedBy,
+    },
+  };
+}
+
+/** The person picks `botId`'s tab: the real tab stores the selection sync reads. */
+function selectBotTab(botId: string): void {
+  act(() => {
+    useBotTabsStore
+      .getState()
+      .openBotTab({ botId, hostId: "host-a", title: botId });
+    useTabsStore.setState({
+      items: [
+        { kind: "tab", id: `item-${botId}`, ref: { kind: "bot", id: botId } },
+      ],
+      activeItemId: `item-${botId}`,
+    });
+  });
 }
 
 function addChat(chatId: string, state: ChatState): StoreApi<ChatState> {
@@ -325,6 +363,8 @@ beforeEach(() => {
   useVoiceSessionStore.setState(initialVoice, true);
   useVoiceSessionStore.getState().setAvailability("live");
   useBotOpenThreadStore.setState(initialRail, true);
+  useTabsStore.setState(initialTabs, true);
+  useBotTabsStore.setState(initialBotTabs, true);
   Object.defineProperty(navigator, "mediaDevices", {
     configurable: true,
     value: { getUserMedia: () => fake.media.promise },
@@ -488,5 +528,206 @@ describe("an engine re-mint during a send", () => {
     expect(useBotOpenThreadStore.getState().byBotId[BOT_ID]?.kind).toBe(
       "thread",
     );
+  });
+});
+
+describe("an interruption whose ask is never delivered", () => {
+  it("resolves itself after the ask's three unconfirmed appends, so the next request posts", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    // The say loop exists from the session's first delegation.
+    await say("Merge it.", "d0");
+    await act(async () => {
+      fake.send.resolve({ ...ACCEPTED, threadId: null });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    fake.sendMock.mockClear();
+
+    act(() => eventsOf(0).onInputTranscriptDelta("Run"));
+    selectBotTab("bot-2");
+    expect(useVoiceSessionStore.getState().pendingAction?.askState).toBe(
+      "asking",
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(40_000);
+    });
+
+    const asks = (fake.engines[0]?.appendCommentary.mock.calls ?? []).filter(
+      ([text]) => text === MOVED_ASK_TEXT,
+    );
+    expect(asks).toHaveLength(3);
+    expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
+
+    await say("Run the new build.", "d1");
+
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    expect(fake.sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({ botId: "bot-2", text: "Run the new build." }),
+    );
+  });
+});
+
+describe("an interruption before the session's first delegation", () => {
+  it("holds the words and asks, and the first delegation posts nothing", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+
+    act(() => eventsOf(0).onInputTranscriptDelta("Delete "));
+    selectBotTab("bot-2");
+    await say("the branch.", "d0");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+
+    expect(fake.sendMock).not.toHaveBeenCalled();
+    const asks = (fake.engines[0]?.appendCommentary.mock.calls ?? []).filter(
+      ([text]) => text === MOVED_ASK_TEXT,
+    );
+    expect(asks).toHaveLength(1);
+    const held = useVoiceSessionStore.getState().pendingAction;
+    expect(held?.text).toContain("Delete");
+    expect(held?.text).toContain("the branch.");
+  });
+});
+
+describe("a fast answer in a cold existing thread", () => {
+  const FOLLOW_UP = {
+    messageId: "m1",
+    requestId: "r1",
+    delivery: "written",
+    threadId: "t1",
+  };
+  const THREAD_FOCUS: VoiceFocus = { ...CHANNEL_FOCUS, threadId: "t1" };
+
+  function coldSnapshot(): ReadonlyArray<ReplyRow> {
+    return [
+      botRow("h0", "Old news about the release."),
+      requestRow("u1", "r1", "a1"),
+      botRow("a1", "Merged."),
+    ];
+  }
+
+  async function expectOneAnswer(): Promise<void> {
+    const commentary = fake.engines[0]?.appendCommentary;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(commentary).toHaveBeenCalledTimes(1);
+    expect(commentary).toHaveBeenCalledWith(
+      expect.stringContaining("Merged."),
+      "d1",
+    );
+    act(() => eventsOf(0).onOutputTranscriptDelta("CI bot says merged"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(commentary).toHaveBeenCalledTimes(1);
+  }
+
+  it("is spoken when the snapshot beats the send's acceptance, and the history in it is not", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    const thread = addChat("t1", { snapshotLoaded: false, messages: [] });
+    await bringLive();
+    focusOn(THREAD_FOCUS);
+    await say("Update it.", "d1");
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      thread.setState({ snapshotLoaded: true, messages: coldSnapshot() });
+    });
+    await act(async () => {
+      fake.send.resolve(FOLLOW_UP);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    await expectOneAnswer();
+  });
+
+  it("is spoken when the acceptance comes first", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    const thread = addChat("t1", { snapshotLoaded: false, messages: [] });
+    await bringLive();
+    focusOn(THREAD_FOCUS);
+    await say("Update it.", "d1");
+
+    await act(async () => {
+      fake.send.resolve(FOLLOW_UP);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      thread.setState({ snapshotLoaded: true, messages: coldSnapshot() });
+    });
+
+    await expectOneAnswer();
+  });
+});
+
+describe("a follow-up accepted in an existing thread", () => {
+  it("labels its reply with the delegation once the channel names the request, and not an unrelated row", async () => {
+    const channel = addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    const thread = addChat("t1", { snapshotLoaded: true, messages: [] });
+    await bringLive();
+    focusOn({ ...CHANNEL_FOCUS, threadId: "t1" });
+    await say("Follow up.", "d-new");
+    await act(async () => {
+      fake.send.resolve({
+        messageId: "m2",
+        requestId: "r-new",
+        delivery: "written",
+        threadId: "t1",
+      });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // The reply and an unrelated bot row land before the channel resolves
+    // the request; the acknowledgement still holds the voice.
+    act(() => {
+      thread.setState({
+        snapshotLoaded: true,
+        messages: [
+          botRow("a2", "Deployment finished."),
+          botRow("ax", "Unrelated chatter here."),
+        ],
+      });
+    });
+    const commentary = fake.engines[0]?.appendCommentary;
+    expect(commentary).not.toHaveBeenCalled();
+
+    act(() => {
+      channel.setState({
+        snapshotLoaded: true,
+        messages: [requestRow("m2", "r-new", "a2")],
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_100);
+    });
+    expect(commentary).toHaveBeenCalledTimes(1);
+    expect(commentary).toHaveBeenLastCalledWith(
+      expect.stringContaining("Deployment finished."),
+      "d-new",
+    );
+
+    act(() =>
+      eventsOf(0).onOutputTranscriptDelta("CI bot says deployment finished"),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(commentary).toHaveBeenCalledTimes(2);
+    expect(commentary).toHaveBeenLastCalledWith(
+      expect.stringContaining("Unrelated chatter here."),
+      null,
+    );
+    act(() =>
+      eventsOf(0).onOutputTranscriptDelta("CI bot says unrelated chatter"),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(commentary).toHaveBeenCalledTimes(2);
   });
 });

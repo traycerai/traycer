@@ -94,6 +94,7 @@ function item(
     delegationId: `d-${id}`,
     confirmWords: ["tracy"],
     onDelivered: null,
+    onGivenUp: null,
     ...overrides,
   };
 }
@@ -171,6 +172,50 @@ describe("delivery confirmation", () => {
 
     expect(appended).toHaveLength(MAX_DELIVERY_ATTEMPTS);
     expect(scheduler.pendingCount()).toBe(0);
+  });
+});
+
+describe("giving up", () => {
+  it("runs onGivenUp once after the last unconfirmed append, and never onDelivered", () => {
+    let givenUp = 0;
+    let delivered = 0;
+    scheduler.enqueue(
+      item("a", { onGivenUp: () => givenUp++, onDelivered: () => delivered++ }),
+    );
+
+    for (let i = 0; i < MAX_DELIVERY_ATTEMPTS - 1; i++) {
+      clock.advance(CONFIRM_WINDOW_MS);
+    }
+    expect(givenUp).toBe(0);
+    clock.advance(CONFIRM_WINDOW_MS);
+    clock.advance(CONFIRM_WINDOW_MS);
+
+    expect(appended).toHaveLength(MAX_DELIVERY_ATTEMPTS);
+    expect(givenUp).toBe(1);
+    expect(delivered).toBe(0);
+    expect(scheduler.pendingCount()).toBe(0);
+  });
+});
+
+describe("relabel", () => {
+  it("changes the delegation of a queued item before it is appended", () => {
+    scheduler.noteOutputLevel(true);
+    scheduler.enqueue(item("a", {}));
+    scheduler.relabel("a", "d-new");
+    scheduler.noteOutputLevel(false);
+
+    expect(appended).toEqual([{ text: "reply a", delegationId: "d-new" }]);
+  });
+
+  it("is a no-op for the item already in flight", () => {
+    scheduler.enqueue(item("a", {}));
+    scheduler.relabel("a", "d-new");
+    clock.advance(CONFIRM_WINDOW_MS);
+
+    expect(appended).toEqual([
+      { text: "reply a", delegationId: "d-a" },
+      { text: "reply a", delegationId: "d-a" },
+    ]);
   });
 });
 
@@ -262,6 +307,29 @@ describe("without a trusted level detector", () => {
     expect(appended).toHaveLength(1);
 
     clock.advance(estimateSpeechMs(longText) - 4_001);
+    expect(appended).toHaveLength(1);
+
+    clock.advance(1);
+    expect(appended.map((entry) => entry.text)).toEqual([longText, "reply b"]);
+  });
+
+  it("keeps the playback floor after a matching transcript confirms the long item early", () => {
+    scheduler.setLevelDetection(false);
+    const longText = "word ".repeat(33).trim();
+    let delivered = 0;
+    scheduler.enqueue(
+      item("a", { text: longText, onDelivered: () => delivered++ }),
+    );
+    scheduler.enqueue(item("b", {}));
+
+    clock.advance(640);
+    scheduler.noteOutputTranscript("Tracy says");
+    expect(delivered).toBe(1);
+
+    clock.advance(4_000);
+    expect(appended).toHaveLength(1);
+
+    clock.advance(estimateSpeechMs(longText) - 4_640 - 1);
     expect(appended).toHaveLength(1);
 
     clock.advance(1);

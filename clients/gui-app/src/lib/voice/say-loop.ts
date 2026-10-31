@@ -29,14 +29,17 @@ import type {
  * reply, and what the voice says about it goes under no delegation, since the
  * old engine's ids mean nothing to the new one.
  *
- * A manual selection change while an utterance is open interrupts it for
- * the rest of that utterance: the words so far are let go into
- * `pendingAction`, the voice asks once, and the next boundary - the
- * continuation of the interrupted sentence, or the person's answer to the
- * ask - is consumed by that pending action and never posted. Only the
- * boundary after that is a fresh request. An action already in flight lands
- * where it was sent, and its acceptance says so without reopening the old
- * rail.
+ * A manual selection change while an utterance is open interrupts it: the
+ * words so far are held in `pendingAction`, never posted, and the voice asks
+ * the person to say the request again. Until the person has HEARD that ask,
+ * every boundary adds its words to the held ones (nothing told them to start
+ * over, so their words are not a fresh request and are not thrown away); the
+ * first boundary after the ask was heard closes the interruption, and the
+ * one after that is a fresh request. If the ask can never be delivered, the
+ * interruption resolves itself: the held words are let go, since the voice
+ * cannot say anything about them, and the next request posts as usual. An
+ * action already in flight lands where it was sent, and its acceptance says
+ * so without reopening the old rail.
  */
 
 export interface SayLoopDeps {
@@ -54,8 +57,11 @@ export interface SayLoopDeps {
    * utterance.
    */
   readonly notify: (text: string, delegationId: string | null) => void;
-  /** Something the voice says on its own: here, the question after a move. */
-  readonly ask: (text: string) => void;
+  /**
+   * Something the voice says on its own: here, the question after a move.
+   * The scheduler reports whether it was heard, or given up on.
+   */
+  readonly ask: (text: string, outcome: AskOutcome) => void;
   /** Opens the rail on the thread a post's answer landed in. */
   readonly openThread: (
     focus: VoiceFocus,
@@ -64,10 +70,31 @@ export interface SayLoopDeps {
   ) => void;
   /** The bot's name, for what the voice says about where a post landed. */
   readonly botTitle: (botId: string) => string;
+  /**
+   * A request was accepted and is now awaited: whoever watches the records
+   * reconciles rows already loaded against it (the answer may have landed in
+   * a snapshot before the acceptance came back).
+   */
+  readonly onAccepted: (request: AcceptedRequest) => void;
+}
+
+export interface AskOutcome {
+  readonly onDelivered: () => void;
+  readonly onGivenUp: () => void;
+}
+
+/** An accepted request, as the records will name it. */
+export interface AcceptedRequest {
+  readonly requestId: string;
+  readonly botId: string;
+  readonly hostId: string;
+  readonly threadId: string | null;
 }
 
 /** Where a bot's reply was found, for the loop to name the request it answers. */
 export interface ReplyPlace {
+  readonly botId: string;
+  readonly hostId: string;
   /** The thread the reply is in; `null` at the channel's top level. */
   readonly threadId: string | null;
   /**
@@ -85,11 +112,13 @@ export interface SayLoop {
   /**
    * The delegation a reply answers, or `null`: a request this session
    * accepted and still awaits an answer to, named by its id when the records
-   * name it, else by the thread the accepted post opened (its first reply
-   * answers it), else, at the channel's top level, the one request awaiting
-   * an answer there. The binding is spent by a match; a reply the loop
-   * cannot place spends nothing. `null` also for a request of a replaced
-   * engine: the new one knows no such delegation.
+   * name it; else, for a thread that an accepted post OPENED, that post (its
+   * first reply answers it before the channel's row says so); else, at the
+   * channel's top level of the same bot on the same host, the one request
+   * awaiting an answer there. A reply in an existing thread the records do
+   * not yet tie to a request spends nothing: the caller places it once they
+   * do. `null` also for a request of a replaced engine: the new one knows no
+   * such delegation.
    */
   delegationForReply(place: ReplyPlace): string | null;
   /**
@@ -124,6 +153,8 @@ interface RequestBinding {
   readonly requestId: string;
   readonly delegationId: string;
   readonly engineGeneration: number;
+  readonly botId: string;
+  readonly hostId: string;
   /** The thread the post is in, or `null` for a top-level post the bot answers in the channel. */
   readonly threadId: string | null;
   /** The post opened `threadId`: the thread has no row older than it. */
@@ -183,6 +214,8 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       requestId: response.requestId,
       delegationId,
       engineGeneration: action.engineGeneration,
+      botId: focus.botId,
+      hostId: focus.hostId,
       threadId: response.threadId,
       openedThread: focus.threadId === null && response.threadId !== null,
     });
@@ -210,6 +243,32 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         : null,
     ].filter((line) => line !== null);
     if (notice.length > 0) deps.notify(notice.join(" "), delegationOf(action));
+    // Last: the answer may already be in a loaded snapshot.
+    deps.onAccepted({
+      requestId: response.requestId,
+      botId: focus.botId,
+      hostId: focus.hostId,
+      threadId: response.threadId,
+    });
+  }
+
+  /**
+   * A boundary while an interruption is pending. Unheard ask: the words are
+   * held with the interrupted ones. Heard: this boundary closes the
+   * interruption; the next is a fresh request.
+   */
+  function holdInterruptedBoundary(): void {
+    const state = store.getState();
+    const pending = state.pendingAction;
+    if (pending === null) return;
+    const more = state.dropOpenSpan();
+    if (pending.askState === "heard") {
+      state.setPendingAction(null);
+      return;
+    }
+    if (more !== null) {
+      state.setPendingAction({ ...pending, text: `${pending.text} ${more}` });
+    }
   }
 
   return {
@@ -218,12 +277,8 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       const boundary = `${state.engineGeneration}:${delegationId}`;
       if (handledBoundaries.has(boundary)) return;
       handledBoundaries.add(boundary);
-      // The interrupted utterance's own boundary: its continuation, or the
-      // person's answer to the ask. Consumed by the pending action, never
-      // posted; the boundary after this one is a fresh request.
       if (state.pendingAction !== null) {
-        state.dropOpenSpan();
-        state.setPendingAction(null);
+        holdInterruptedBoundary();
         return;
       }
       const focus = state.focus;
@@ -255,8 +310,21 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
           action.movedWhileSending = true;
         }
       }
+      // A move during an interruption already pending adds nothing: the
+      // words are held and the ask is out.
+      if (state.pendingAction !== null) {
+        const more = state.dropOpenSpan();
+        if (more !== null) {
+          state.setPendingAction({
+            ...state.pendingAction,
+            text: `${state.pendingAction.text} ${more}`,
+          });
+        }
+        return;
+      }
       const held = state.dropOpenSpan();
       if (held === null) return;
+      const sessionToken = state.sessionToken;
       // The open delegation, if any, belongs to an action in flight; the
       // held words had none of their own yet.
       state.setPendingAction({
@@ -264,9 +332,25 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         text: held,
         delegationId: inFlight.size === 0 ? state.pendingDelegationId : null,
         selectionGeneration: state.selectionGeneration,
+        askState: "asking",
       });
       if (inFlight.size === 0) state.setPendingDelegation(null);
-      deps.ask(MOVED_ASK_TEXT);
+      deps.ask(MOVED_ASK_TEXT, {
+        onDelivered: () => {
+          const now = store.getState();
+          if (now.sessionToken !== sessionToken) return;
+          const pending = now.pendingAction;
+          if (pending === null || pending.askState === "heard") return;
+          now.setPendingAction({ ...pending, askState: "heard" });
+        },
+        onGivenUp: () => {
+          // The voice could not ask: the interruption resolves itself, the
+          // held words go, and the next request posts as usual.
+          const now = store.getState();
+          if (now.sessionToken !== sessionToken) return;
+          if (now.pendingAction !== null) now.setPendingAction(null);
+        },
+      });
     },
 
     delegationForReply(place) {
@@ -274,17 +358,25 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       if (place.requestId !== null) {
         binding = awaiting.get(place.requestId) ?? null;
       } else if (place.threadId !== null) {
-        // The thread an accepted post opened: its first reply answers it,
-        // before the channel's row says so.
+        // Only a thread an accepted post OPENED answers it with its first
+        // reply before the channel's row says so; a row in a thread that
+        // already existed is placed once the records tie it to a request.
         binding =
           Array.from(awaiting.values()).find(
-            (candidate) => candidate.threadId === place.threadId,
+            (candidate) =>
+              candidate.openedThread &&
+              candidate.threadId === place.threadId &&
+              candidate.botId === place.botId &&
+              candidate.hostId === place.hostId,
           ) ?? null;
       } else {
         // A bot answering in its channel: unambiguous only while one request
-        // waits there.
+        // of that bot on that host waits there.
         const atTopLevel = Array.from(awaiting.values()).filter(
-          (candidate) => candidate.threadId === null,
+          (candidate) =>
+            candidate.threadId === null &&
+            candidate.botId === place.botId &&
+            candidate.hostId === place.hostId,
         );
         binding = atTopLevel.length === 1 ? atTopLevel[0] : null;
       }

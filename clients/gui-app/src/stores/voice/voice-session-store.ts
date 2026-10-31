@@ -73,6 +73,13 @@ export interface PendingAction {
   readonly delegationId: string | null;
   /** The selection generation the move produced. */
   readonly selectionGeneration: number;
+  /**
+   * Whether the person has heard the voice ask them to say the request
+   * again. While `"asking"`, words that reach a boundary are held with the
+   * interrupted ones, since nothing has told the person to start over; once
+   * `"heard"`, the next boundary closes the interruption.
+   */
+  readonly askState: "asking" | "heard";
 }
 
 export type VoicePhase = "idle" | "connecting" | "live" | "ending";

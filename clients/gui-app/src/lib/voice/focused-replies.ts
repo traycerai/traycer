@@ -35,13 +35,20 @@ export type ReplyRow =
  */
 export interface ReplyWatchMemory {
   readonly seen: Set<string>;
+  /** Rows handed to the scheduler, so a reconciliation never speaks one twice. */
+  readonly scheduled: Set<string>;
   /** The newest baseline row's timestamp; `0` before a baseline, or for an empty chat. */
   since: number;
   baselined: boolean;
 }
 
 export function createReplyWatchMemory(): ReplyWatchMemory {
-  return { seen: new Set<string>(), since: 0, baselined: false };
+  return {
+    seen: new Set<string>(),
+    scheduled: new Set<string>(),
+    since: 0,
+    baselined: false,
+  };
 }
 
 /** Takes the loaded snapshot as history: every row seen, none spoken. */
@@ -149,7 +156,7 @@ export function takeNewBotReplies(
 }
 
 /** The prose of an assistant row: its text blocks, less the provider notices. */
-function replyTextOf(message: Pick<AssistantRow, "blocks">): string {
+export function replyTextOf(message: Pick<AssistantRow, "blocks">): string {
   return message.blocks
     .flatMap((block) =>
       block.type === "text" && block.providerNotice === null

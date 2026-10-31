@@ -50,6 +50,12 @@ export interface SpeechItem {
   readonly confirmWords: ReadonlyArray<string>;
   /** Runs once, when delivery is confirmed. */
   readonly onDelivered: (() => void) | null;
+  /**
+   * Runs once if the item is given up on: its attempts are spent without a
+   * confirmed delivery, or a replacement takes the engine with none left.
+   * Never after `onDelivered`, and not when the session ends.
+   */
+  readonly onGivenUp: (() => void) | null;
 }
 
 /** The three facts, as the strip and the store read them. */
@@ -71,6 +77,12 @@ export interface SpeechScheduler {
   enqueue(item: SpeechItem): void;
   /** Drops a queued item that has not been appended; a no-op otherwise. */
   remove(itemId: string): void;
+  /**
+   * Re-labels a queued item's delegation before it is appended (its request
+   * was placed after it was scheduled). A no-op once the item is in flight
+   * or gone.
+   */
+  relabel(itemId: string, delegationId: string | null): void;
   noteInputTranscript(): void;
   noteOutputTranscript(text: string): void;
   /** The remote track's sound level crossed the speaking threshold, or fell under it. */
@@ -163,9 +175,6 @@ interface InFlight {
   readonly queued: QueuedItem;
   transcript: string;
   timer: unknown;
-  /** Until when the item's own audio is taken to be playing, lacking a detector. */
-  readonly playingUntil: number;
-  holdTimer: unknown;
 }
 
 export function createSpeechScheduler(
@@ -185,6 +194,15 @@ export function createSpeechScheduler(
   let disposed = false;
   let ready = false;
   let levelDetection = false;
+  /**
+   * The playback floor: until when the last appended item's own audio is
+   * taken to be playing, lacking a trusted detector. Independent of delivery
+   * confirmation, which only settles the item: the words may be confirmed
+   * 640 ms in while the sound runs for nine seconds more, and an append in
+   * that time is never spoken.
+   */
+  let floorUntil: number | null = null;
+  let floorTimer: unknown = null;
 
   const outputHangoverMs = (): number =>
     levelDetection ? OUTPUT_HANGOVER_MS : OUTPUT_HANGOVER_WITHOUT_LEVEL_MS;
@@ -192,9 +210,7 @@ export function createSpeechScheduler(
   const outputPlaying = (): boolean =>
     outputLevelPlaying ||
     (outputTranscriptUntil !== null && outputTranscriptUntil > deps.now()) ||
-    (!levelDetection &&
-      inFlight !== null &&
-      inFlight.playingUntil > deps.now());
+    (!levelDetection && floorUntil !== null && floorUntil > deps.now());
 
   const activity = (): SpeechActivity => ({
     inputActiveUntil:
@@ -247,13 +263,14 @@ export function createSpeechScheduler(
     if (current === null) return;
     inFlight = null;
     if (current.timer !== null) deps.clearTimer(current.timer);
-    if (current.holdTimer !== null) deps.clearTimer(current.holdTimer);
     if (delivered) {
       current.queued.item.onDelivered?.();
       return;
     }
     if (current.queued.attempts < MAX_DELIVERY_ATTEMPTS) {
       queue.unshift(current.queued);
+    } else {
+      current.queued.item.onGivenUp?.();
     }
   };
 
@@ -279,14 +296,18 @@ export function createSpeechScheduler(
         },
         Math.max(CONFIRM_WINDOW_MS, holdMs),
       ),
-      playingUntil: deps.now() + holdMs,
-      // The hold ending is a fact change: the next item may go.
-      holdTimer: deps.setTimer(() => {
-        if (inFlight?.queued !== next) return;
-        inFlight.holdTimer = null;
-        onFactsChanged();
-      }, holdMs),
     };
+    holdFloor(holdMs);
+  };
+
+  /** Holds the floor for `ms`; its end is a fact change the next item waits on. */
+  const holdFloor = (ms: number): void => {
+    floorUntil = deps.now() + ms;
+    if (floorTimer !== null) deps.clearTimer(floorTimer);
+    floorTimer = deps.setTimer(() => {
+      floorTimer = null;
+      onFactsChanged();
+    }, ms);
   };
 
   const onFactsChanged = (): void => {
@@ -303,6 +324,11 @@ export function createSpeechScheduler(
     remove(itemId) {
       const index = queue.findIndex((entry) => entry.item.id === itemId);
       if (index !== -1) queue.splice(index, 1);
+    },
+    relabel(itemId, delegationId) {
+      const entry = queue.find((candidate) => candidate.item.id === itemId);
+      if (entry === undefined) return;
+      entry.item = { ...entry.item, delegationId };
     },
     noteInputTranscript() {
       inputActiveUntil = deps.now() + INPUT_ACTIVE_WINDOW_MS;
@@ -400,20 +426,23 @@ export function createSpeechScheduler(
   function retireFacts(): QueuedItem[] {
     if (inFlight !== null) {
       if (inFlight.timer !== null) deps.clearTimer(inFlight.timer);
-      if (inFlight.holdTimer !== null) deps.clearTimer(inFlight.holdTimer);
       // Its append was spent on the engine that is going; the item keeps
-      // what is left of its budget, and none when none is left.
+      // what is left of its budget, and is given up with none left.
       if (inFlight.queued.attempts < MAX_DELIVERY_ATTEMPTS) {
         queue.unshift(inFlight.queued);
+      } else if (!disposed) {
+        inFlight.queued.item.onGivenUp?.();
       }
       inFlight = null;
     }
-    for (const timer of [inputTimer, outputTimer, ackTimer]) {
+    for (const timer of [inputTimer, outputTimer, ackTimer, floorTimer]) {
       if (timer !== null) deps.clearTimer(timer);
     }
     inputTimer = null;
     outputTimer = null;
     ackTimer = null;
+    floorTimer = null;
+    floorUntil = null;
     inputActiveUntil = null;
     outputTranscriptUntil = null;
     outputLevelPlaying = false;

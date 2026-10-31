@@ -5,7 +5,14 @@ import {
   type VoiceFocus,
 } from "@/stores/voice/voice-session-store";
 import { requestIdAnsweredIn, type ReplyRow } from "../focused-replies";
-import { MOVED_ASK_TEXT, createSayLoop, type SayLoop } from "../say-loop";
+import {
+  MOVED_ASK_TEXT,
+  createSayLoop,
+  type AcceptedRequest,
+  type AskOutcome,
+  type ReplyPlace,
+  type SayLoop,
+} from "../say-loop";
 
 const FOCUS: VoiceFocus = {
   botId: "bot-1",
@@ -22,6 +29,9 @@ interface Harness {
   readonly notices: string[];
   readonly noticeDelegations: Array<string | null>;
   readonly asks: string[];
+  /** The outcome handed with each ask, in order. */
+  readonly outcomes: AskOutcome[];
+  readonly accepted: AcceptedRequest[];
   readonly opened: BotConversationSendResponse[];
   readonly loop: SayLoop;
   /** Settles the send at `index` (the oldest by default). */
@@ -41,11 +51,25 @@ function response(
   };
 }
 
+function placeOf(
+  threadId: string | null,
+  requestId: string | null,
+): ReplyPlace {
+  return {
+    botId: FOCUS.botId,
+    hostId: FOCUS.hostId,
+    threadId,
+    requestId,
+  };
+}
+
 function harness(): Harness {
   const sends: Harness["sends"] = [];
   const notices: string[] = [];
   const noticeDelegations: Array<string | null> = [];
   const asks: string[] = [];
+  const outcomes: AskOutcome[] = [];
+  const accepted: AcceptedRequest[] = [];
   const opened: BotConversationSendResponse[] = [];
   const settles: Array<{
     resolve: (value: BotConversationSendResponse) => void;
@@ -63,15 +87,21 @@ function harness(): Harness {
       notices.push(text);
       noticeDelegations.push(delegationId);
     },
-    ask: (text) => asks.push(text),
+    ask: (text, outcome) => {
+      asks.push(text);
+      outcomes.push(outcome);
+    },
     openThread: (_focus, answer) => opened.push(answer),
     botTitle: () => "Tracy",
+    onAccepted: (request) => accepted.push(request),
   });
   return {
     sends,
     notices,
     noticeDelegations,
     asks,
+    outcomes,
+    accepted,
     opened,
     loop,
     resolve: (value, index) => settles[index]?.resolve(value),
@@ -104,6 +134,14 @@ describe("a delegation", () => {
       anchorMessageId: "m-1",
     });
     expect(h.opened).toHaveLength(1);
+    expect(h.accepted).toEqual([
+      {
+        requestId: "r-1",
+        botId: FOCUS.botId,
+        hostId: FOCUS.hostId,
+        threadId: "thread-1",
+      },
+    ]);
   });
 
   it("says a queued delivery as queued, never paused", async () => {
@@ -222,7 +260,9 @@ describe("a selection change mid-utterance", () => {
 
     expect(h.sends).toEqual([]);
     expect(h.asks).toEqual([MOVED_ASK_TEXT]);
-    expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
+    expect(useVoiceSessionStore.getState().pendingAction?.text).toBe(
+      "please check the build.",
+    );
   });
 
   it("asks nothing when there are no open words", () => {
@@ -259,7 +299,7 @@ describe("a selection change mid-utterance", () => {
     await second;
   });
 
-  it("drops open words after a send began, asks once, consumes the next boundary and posts only the one after", async () => {
+  it("drops open words after a send began, asks once, closes the heard interruption at the next boundary and posts only the one after", async () => {
     const h = harness();
     const first = h.loop.onDelegationCreated("d-1");
     useVoiceSessionStore.getState().appendInputSegment("Delete the branch.", 3);
@@ -267,6 +307,7 @@ describe("a selection change mid-utterance", () => {
     h.loop.onSelectionChanged();
 
     expect(h.asks).toEqual([MOVED_ASK_TEXT]);
+    h.outcomes[0]?.onDelivered();
 
     await h.loop.onDelegationCreated("d-2");
     expect(h.sends.map((send) => send.text)).toEqual([
@@ -306,9 +347,7 @@ describe("a session that ended or was replaced during a send", () => {
     expect(state.phase).toBe("idle");
     expect(h.opened).toEqual([]);
     expect(h.notices).toEqual([]);
-    expect(
-      h.loop.delegationForReply({ threadId: null, requestId: "r-1" }),
-    ).toBeNull();
+    expect(h.loop.delegationForReply(placeOf(null, "r-1"))).toBeNull();
   });
 
   it("spends only its own reserved words when the session was replaced, leaving newer open words", async () => {
@@ -328,9 +367,7 @@ describe("a session that ended or was replaced during a send", () => {
     expect(state.segments).toHaveLength(1);
     expect(h.opened).toEqual([]);
     expect(h.notices).toEqual([]);
-    expect(
-      h.loop.delegationForReply({ threadId: null, requestId: "r-1" }),
-    ).toBeNull();
+    expect(h.loop.delegationForReply(placeOf(null, "r-1"))).toBeNull();
   });
 });
 
@@ -361,10 +398,8 @@ describe("delegationForReply", () => {
       "a-7",
     );
     expect(requestId).toBe("r-7");
-    expect(h.loop.delegationForReply({ threadId: null, requestId })).toBe(
-      "d-7",
-    );
-    expect(h.loop.delegationForReply({ threadId: null, requestId })).toBeNull();
+    expect(h.loop.delegationForReply(placeOf(null, requestId))).toBe("d-7");
+    expect(h.loop.delegationForReply(placeOf(null, requestId))).toBeNull();
   });
 
   it("finds the delegation by the thread an accepted post opened, once, before the records name the request", async () => {
@@ -375,12 +410,8 @@ describe("delegationForReply", () => {
     await done;
 
     expect(h.loop.awaitedIn("t1")).toBe("opened");
-    expect(h.loop.delegationForReply({ threadId: "t1", requestId: null })).toBe(
-      "d-1",
-    );
-    expect(
-      h.loop.delegationForReply({ threadId: "t1", requestId: null }),
-    ).toBeNull();
+    expect(h.loop.delegationForReply(placeOf("t1", null))).toBe("d-1");
+    expect(h.loop.delegationForReply(placeOf("t1", null))).toBeNull();
     expect(h.loop.awaitedIn("t1")).toBe("none");
   });
 
@@ -396,7 +427,7 @@ describe("delegationForReply", () => {
 });
 
 describe("the interrupted utterance's continuation", () => {
-  it("is consumed with its boundary, and only the words after it post", async () => {
+  it("is consumed with the boundary that closes a heard interruption, and only the words after it post", async () => {
     const h = harness();
     useVoiceSessionStore.getState().dropOpenSpan();
     const store = useVoiceSessionStore.getState();
@@ -405,6 +436,7 @@ describe("the interrupted utterance's continuation", () => {
     h.loop.onSelectionChanged();
     expect(h.asks).toEqual([MOVED_ASK_TEXT]);
     store.appendInputSegment("the branch.", 2);
+    h.outcomes[0]?.onDelivered();
 
     await h.loop.onDelegationCreated("d-1");
 
@@ -485,8 +517,164 @@ describe("an engine replacement during a send", () => {
     expect(h.opened).toHaveLength(1);
     expect(h.noticeDelegations).toEqual([null]);
     expect(state.openSpan()).toBe("later words");
+    expect(h.loop.delegationForReply(placeOf("t1", "r-1"))).toBeNull();
+  });
+});
+
+describe("an interruption whose ask is not yet heard", () => {
+  function interruptRun(h: Harness): void {
+    const store = useVoiceSessionStore.getState();
+    store.dropOpenSpan();
+    store.appendInputSegment("Run", 10);
+    store.selectionChanged(OTHER_FOCUS);
+    h.loop.onSelectionChanged();
+    expect(h.asks).toEqual([MOVED_ASK_TEXT]);
+    expect(useVoiceSessionStore.getState().pendingAction?.askState).toBe(
+      "asking",
+    );
+  }
+
+  it("holds a boundary's words with the interrupted ones, and posts the next request normally once the ask is given up", async () => {
+    const h = harness();
+    interruptRun(h);
+    const outcome = h.outcomes[0];
+
+    useVoiceSessionStore.getState().appendInputSegment(" the new build.", 11);
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(h.sends).toEqual([]);
+    const held = useVoiceSessionStore.getState().pendingAction;
+    expect(held?.text).toBe("Run the new build.");
+    expect(held?.askState).toBe("asking");
+
+    outcome.onGivenUp();
+    expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
+
+    useVoiceSessionStore
+      .getState()
+      .appendInputSegment("Run the new build.", 12);
+    const second = h.loop.onDelegationCreated("d-2");
+    expect(h.sends.map((send) => send.text)).toEqual(["Run the new build."]);
+    h.resolve(response({ threadId: null }), 0);
+    await second;
+  });
+
+  it("closes the interruption at the first boundary after the ask was heard, without a send, and posts the following one", async () => {
+    const h = harness();
+    interruptRun(h);
+
+    h.outcomes[0]?.onDelivered();
+    expect(useVoiceSessionStore.getState().pendingAction?.askState).toBe(
+      "heard",
+    );
+
+    useVoiceSessionStore.getState().appendInputSegment(" the new build.", 11);
+    await h.loop.onDelegationCreated("d-1");
+    expect(h.sends).toEqual([]);
+    expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+
+    useVoiceSessionStore.getState().appendInputSegment("Check the logs.", 12);
+    const second = h.loop.onDelegationCreated("d-2");
+    expect(h.sends.map((send) => send.text)).toEqual(["Check the logs."]);
+    h.resolve(response({ threadId: null }), 0);
+    await second;
+  });
+});
+
+describe("delegationForReply fallbacks", () => {
+  it("spends nothing for a reply in an existing thread the records do not tie to a request", async () => {
+    const h = harness();
+    useVoiceSessionStore.getState().setFocus({ ...FOCUS, threadId: "t1" });
+    const done = h.loop.onDelegationCreated("d-1");
+    h.resolve(response({ requestId: "r-new", threadId: "t1" }), 0);
+    await done;
+
+    expect(h.loop.awaitedIn("t1")).toBe("joined");
+    expect(h.loop.delegationForReply(placeOf("t1", null))).toBeNull();
+    expect(h.loop.delegationForReply(placeOf("t1", "r-new"))).toBe("d-1");
+  });
+
+  async function acceptTopLevel(
+    h: Harness,
+    index: number,
+    accept: {
+      readonly focus: VoiceFocus;
+      readonly delegationId: string;
+      readonly requestId: string;
+    },
+  ): Promise<void> {
+    const store = useVoiceSessionStore.getState();
+    store.setFocus(accept.focus);
+    store.appendInputSegment(`words for ${accept.delegationId}`, 20 + index);
+    const done = h.loop.onDelegationCreated(accept.delegationId);
+    h.resolve(response({ requestId: accept.requestId, threadId: null }), index);
+    await done;
+  }
+
+  it("matches a top-level reply by bot and host, never taking another bot's binding", async () => {
+    const h = harness();
+    const botA: VoiceFocus = {
+      ...FOCUS,
+      botId: "A",
+      hostId: "host-a",
+      threadId: null,
+    };
+    const botB: VoiceFocus = { ...botA, botId: "B" };
+    useVoiceSessionStore.getState().dropOpenSpan();
+    await acceptTopLevel(h, 0, {
+      focus: botA,
+      delegationId: "d-a",
+      requestId: "r-a",
+    });
+    await acceptTopLevel(h, 1, {
+      focus: botB,
+      delegationId: "d-b",
+      requestId: "r-b",
+    });
+
+    const forB: ReplyPlace = {
+      botId: "B",
+      hostId: "host-a",
+      threadId: null,
+      requestId: null,
+    };
+    expect(h.loop.delegationForReply(forB)).toBe("d-b");
+    expect(h.loop.delegationForReply(forB)).toBeNull();
+    expect(h.loop.isAwaiting("r-a")).toBe(true);
     expect(
-      h.loop.delegationForReply({ threadId: "t1", requestId: "r-1" }),
-    ).toBeNull();
+      h.loop.delegationForReply({ ...forB, botId: "A", requestId: "r-a" }),
+    ).toBe("d-a");
+  });
+
+  it("matches nothing when two requests of the same bot wait at the top level", async () => {
+    const h = harness();
+    const botA: VoiceFocus = {
+      ...FOCUS,
+      botId: "A",
+      hostId: "host-a",
+      threadId: null,
+    };
+    useVoiceSessionStore.getState().dropOpenSpan();
+    await acceptTopLevel(h, 0, {
+      focus: botA,
+      delegationId: "d-1",
+      requestId: "r-1",
+    });
+    await acceptTopLevel(h, 1, {
+      focus: botA,
+      delegationId: "d-2",
+      requestId: "r-2",
+    });
+
+    const place: ReplyPlace = {
+      botId: "A",
+      hostId: "host-a",
+      threadId: null,
+      requestId: null,
+    };
+    expect(h.loop.delegationForReply(place)).toBeNull();
+    expect(h.loop.isAwaiting("r-1")).toBe(true);
+    expect(h.loop.isAwaiting("r-2")).toBe(true);
   });
 });
