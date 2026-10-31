@@ -2028,17 +2028,17 @@ export interface ChatSessionState {
    */
   refreshMissingWorktreePaths: (update: MissingWorktreePathsUpdate) => void;
 
-  /**
-   * Re-subscribe after a fatal close. Tears down the existing stream and opens
-   * a fresh `chat.subscribe`, clearing `fatalClose` and `snapshotLoaded`. Drives
-   * the tile error state's retry affordance.
-   */
   /** See the implementation - names the ordinal a pending jump is waiting on. */
   requestTranscriptOrdinal: (ordinal: number | null) => void;
   /** See the implementation - names the ordinal a find index read needs. */
   requestFindReadOrdinal: (ordinal: number | null) => void;
   /** See the implementation - holds a row hydrated for a surface that shows it. */
   holdTranscriptOrdinal: (ordinal: number) => () => void;
+  /**
+   * Re-subscribe after a fatal close. Tears down the existing stream and opens
+   * a fresh `chat.subscribe`, clearing `fatalClose` and `snapshotLoaded`. Drives
+   * the tile error state's retry affordance.
+   */
   retry: () => void;
   /**
    * {@link retry}, escalated to a transport re-dial first when - and only
@@ -2781,42 +2781,6 @@ function backgroundStopSlices(
   };
 }
 
-/**
- * Decide the slot between claimants that a reconnect killed together.
- *
- * The restored PROMPT is terminal, and terminal either way. If it carried a
- * worktree, that worktree is staged with it; if it was deliberately sent
- * WITHOUT one, the slot stays empty - that is its dispatch state, and it is
- * just as much a decision. What must not happen is a lower-priority claimant
- * filling the gap: an unrelated action's binding attaching itself to this
- * prompt is the wrong-binding hazard, and a prompt sent with no worktree is
- * exactly where it used to slip in, because a null claim looked like no claim.
- *
- * Only when NO prompt came back do the swept actions get their bindings, which
- * is the case the sweep's own reasoning was written for.
- */
-/**
- * The statement a rejected action earns.
- *
- * A rejected SEND that could not claim the restoration slot is a dead send
- * neither restored nor stated - the same hole the settle passes closed in
- * rounds 1-4, on the one surface that kept a reason-only notice. It routes
- * through the SAME builder they use rather than a parallel one, so it inherits
- * the inlined text and every qualification clause automatically; a second
- * notice shape here would drift from those the moment either changed.
- *
- * Everything else - a non-send, a send that DID claim the slot, an action with
- * no content - keeps the host's reason, which is the whole story for it.
- */
-/**
- * The send a rejection is about to state as UNRECOVERABLE, or `null` when this
- * rejection is not one.
- *
- * Shared by the notice and by the `lastCopyPrompts` record beside it, so
- * "which rejections are last copies" is decided once. Two copies of this
- * condition would drift, and the failure mode is silent: a notice with no
- * document behind it looks exactly like a notice.
- */
 /** Drop one last-copy document. `Record` spread is additive, so this is a doing. */
 function withoutLastCopyPrompt(
   prompts: Readonly<Record<string, UnrecoverableSendPrompt>>,
@@ -2851,6 +2815,15 @@ function recordLastCopyPrompt(
   };
 }
 
+/**
+ * The send a rejection is about to state as UNRECOVERABLE, or `null` when this
+ * rejection is not one.
+ *
+ * Shared by the notice and by the `lastCopyPrompts` record beside it, so
+ * "which rejections are last copies" is decided once. Two copies of this
+ * condition would drift, and the failure mode is silent: a notice with no
+ * document behind it looks exactly like a notice.
+ */
 function rejectionLastCopySend(input: {
   readonly frame: {
     readonly reason: string | null;
@@ -2880,6 +2853,19 @@ function rejectionLastCopySend(input: {
   };
 }
 
+/**
+ * The statement a rejected action earns.
+ *
+ * A rejected SEND that could not claim the restoration slot is a dead send
+ * neither restored nor stated - the same hole the settle passes closed in
+ * rounds 1-4, on the one surface that kept a reason-only notice. It routes
+ * through the SAME builder they use rather than a parallel one, so it inherits
+ * the inlined text and every qualification clause automatically; a second
+ * notice shape here would drift from those the moment either changed.
+ *
+ * Everything else - a non-send, a send that DID claim the slot, an action with
+ * no content - keeps the host's reason, which is the whole story for it.
+ */
 function rejectionNotice(input: {
   readonly frame: {
     readonly reason: string | null;
@@ -3236,6 +3222,20 @@ function restorationSlotHeldByOther(
   return restoration !== null && restoration.clientActionId !== clientActionId;
 }
 
+/**
+ * Decide the slot between claimants that a reconnect killed together.
+ *
+ * The restored PROMPT is terminal, and terminal either way. If it carried a
+ * worktree, that worktree is staged with it; if it was deliberately sent
+ * WITHOUT one, the slot stays empty - that is its dispatch state, and it is
+ * just as much a decision. What must not happen is a lower-priority claimant
+ * filling the gap: an unrelated action's binding attaching itself to this
+ * prompt is the wrong-binding hazard, and a prompt sent with no worktree is
+ * exactly where it used to slip in, because a null claim looked like no claim.
+ *
+ * Only when NO prompt came back do the swept actions get their bindings, which
+ * is the case the sweep's own reasoning was written for.
+ */
 function restoreOneWorktreeIntent(
   restoredPrompt: StagedWorktreeIntentSource | null,
   sweptClaimants: ReadonlyArray<SweptWorktreeClaimant | undefined>,
