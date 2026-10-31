@@ -3012,6 +3012,30 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       expectNoSession();
       expect(useBotTabLandingStore.getState().byBotId).toEqual({});
     });
+
+    it.each([
+      ["the trunk session", "trunk-1"],
+      ["a thread's session", "session-thread-1"],
+    ])(
+      "leaves Threads for %s, with the channel under it for Back",
+      async (_kind, chatId) => {
+        const user = userEvent.setup();
+        render(surface());
+        await user.click(screen.getByTestId("stub-sidebar-threads"));
+        expect(screen.getByTestId("stub-threads")).toBeTruthy();
+
+        act(() => openSearchHit(chatId, "session-row-1"));
+
+        expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+        expect(screen.queryByTestId("stub-threads")).toBeNull();
+        expect(screen.getByTestId("stub-session").dataset.chatId).toBe(chatId);
+
+        await user.click(screen.getByTestId("stub-session-back"));
+
+        expect(screen.queryByTestId("stub-threads")).toBeNull();
+        expect(screen.getByTestId("stub-channel")).toBeTruthy();
+      },
+    );
   });
 
   it("gives the channel the bot's trunk session", () => {

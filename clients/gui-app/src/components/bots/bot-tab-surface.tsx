@@ -655,9 +655,11 @@ function useSpendTabLanding(args: {
   readonly landChannel: (messageId: string | null) => void;
   readonly showThread: (threadId: string, messageId: string | null) => void;
   readonly openSession: BotSessionOpen;
+  /** Shows one of the tab's views: it also leaves Threads. */
+  readonly onViewChange: (view: BotTabView) => void;
 }): void {
   const { botId, channelChatId, trunkChatId, threads } = args;
-  const { landChannel, showThread, openSession } = args;
+  const { landChannel, showThread, openSession, onViewChange } = args;
   const landing = useBotTabLandingStore((state) =>
     Object.hasOwn(state.byBotId, botId) ? state.byBotId[botId] : null,
   );
@@ -681,6 +683,10 @@ function useSpendTabLanding(args: {
     }
     const session = threads.find((thread) => thread.sessionChatId === chatId);
     if (session !== undefined || chatId === trunkChatId) {
+      // Threads shows in place of a session, so leave it, onto the channel
+      // the session's Back returns to; a channel or thread landing leaves it
+      // the same way through `landChannel` and `showThread`.
+      onViewChange("messages");
       openSession({
         chatId,
         threadId: session?.threadId ?? null,
@@ -693,6 +699,7 @@ function useSpendTabLanding(args: {
     channelChatId,
     landChannel,
     landing,
+    onViewChange,
     openSession,
     showThread,
     threads,
@@ -854,6 +861,7 @@ function BotTabContent(props: {
     landChannel,
     showThread,
     openSession,
+    onViewChange,
   });
   // Leaving Threads for the tab's channel shows the channel: a session open
   // when Threads was chosen is not where either way back says it goes.
