@@ -23,6 +23,7 @@ import type {
 } from "@traycer/protocol/host/chat-fallback";
 import { tierRungSkipReasonSchema } from "@traycer/protocol/host/fallback-policy";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { BotUpdateRunSettingsRequest } from "@traycer/protocol/host/bot/schemas";
 import {
   advertisedServiceTierOption,
   DEFAULT_PERMISSION,
@@ -39,12 +40,18 @@ import {
   type HarnessModelPickerEmbedding,
 } from "@/components/home/pickers/harness-model-picker";
 import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
+import {
+  useBotIdentity,
+  type BotIdentity,
+} from "@/components/bots/bot-identity-context";
+import { useBotSettingsOpener } from "@/components/bots/bot-settings-opener-context";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import {
   useGuiHarnessesQueryForClient,
   useGuiHarnessModelsQueryForClient,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
+import { useBotUpdateRunSettingsMutation } from "@/hooks/bots/use-bot-mutations";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -56,8 +63,11 @@ import {
   type ComposerToolbarValues,
 } from "@/stores/composer/composer-toolbar-store";
 import {
+  BOT_SETTINGS_LINK_LABEL,
+  BOT_SWITCH_AND_RETRY_LABEL,
   COUNTDOWN_NOT_PAUSED_LABEL,
   HOST_UNREACHABLE_LABEL,
+  botRoutingSwitchLine,
   describeFallbackOutcome,
   describeManualRungRefusal,
   routingSwitchLine,
@@ -156,6 +166,14 @@ function routingProviderSwitchModel(): string {
  * - so the store's catalog and the picker's own reads agree on the machine.
  * `hostId` (the chat session's host) keys only the session-store reads: the
  * lease and the announcer.
+ *
+ * ## A bot's chat
+ *
+ * A bot's sessions run on the bot's row, and the host refuses the `switch`
+ * rung on them. On a bot's failed turn (the surface's bot is the chat's
+ * epic), Switch writes the pick to the bot's row - what the Channel settings'
+ * Model group writes - and only once the host takes it sends `retry` on the
+ * attempt, which reads the row afresh. It never sends `switch` there.
  */
 export function RoutingDestinationPicker(props: {
   readonly entry: RoutingDestinationEntry;
@@ -191,6 +209,14 @@ export function RoutingDestinationPicker(props: {
   const { entry, epicId, chatId, hostId, canAct } = props;
   const tabHostId = useTabHostId();
   const client = useTabHostClient();
+  const surfaceBot = useBotIdentity();
+  const bot =
+    entry.kind === "failed-turn" &&
+    surfaceBot !== null &&
+    surfaceBot.botId === epicId
+      ? surfaceBot
+      : null;
+  const openBotSettings = useBotSettingsOpener();
   const [open, setOpen] = useState(false);
   const entryTuple = useStableValue(entrySeedTuple(entry), sameRunSettings);
   const listing = useRoutingListing({
@@ -271,6 +297,7 @@ export function RoutingDestinationPicker(props: {
     open,
     onAnswer,
     onTransportError,
+    onBotWriteRefused: setRefusal,
   });
 
   // Read at click time, through a ref, so the footer's button does not change
@@ -283,6 +310,7 @@ export function RoutingDestinationPicker(props: {
       data,
       failedTuple,
       leaseToken: lease.token,
+      botId: bot === null ? null : bot.botId,
     });
     if (request !== null) verbs.send(request);
   };
@@ -293,6 +321,17 @@ export function RoutingDestinationPicker(props: {
   const onConfirm = useCallback(() => {
     confirmRef.current();
   }, []);
+
+  const onBotSettings = useMemo(
+    () =>
+      bot === null || openBotSettings === null
+        ? null
+        : () => {
+            closeRef.current?.();
+            openBotSettings();
+          },
+    [bot, openBotSettings],
+  );
 
   const footerRefusal =
     refusal ?? (lease.refused ? COUNTDOWN_NOT_PAUSED_LABEL : null);
@@ -310,9 +349,12 @@ export function RoutingDestinationPicker(props: {
         countdownReady={lease.ready}
         busy={verbs.busy}
         onConfirm={onConfirm}
+        bot={bot}
+        onBotSettings={onBotSettings}
       />
     ),
     [
+      bot,
       canAct,
       data,
       failedTuple,
@@ -321,6 +363,7 @@ export function RoutingDestinationPicker(props: {
       labelFor,
       lease.ready,
       modelLabelFor,
+      onBotSettings,
       onConfirm,
       store,
       verbs.busy,
@@ -544,11 +587,16 @@ function skipIsCurrentDeadEvidence(skip: FallbackTargetSkip | null): boolean {
 /* Verbs                                                                     */
 /* ------------------------------------------------------------------------- */
 
-/** What Switch sends, by entry. */
+/** What Switch sends, by entry; a bot's failed turn writes the bot's row. */
 type RoutingRequest =
   | {
       readonly kind: "switch-attempt";
       readonly target: ChatRunSettings;
+      readonly attempt: LastFailedAttempt;
+    }
+  | {
+      readonly kind: "bot-write-then-retry";
+      readonly write: BotUpdateRunSettingsRequest;
       readonly attempt: LastFailedAttempt;
     }
   | {
@@ -565,16 +613,32 @@ function routingRequestFor(input: {
   readonly data: ChatFallbackListTargetsResponse | undefined;
   readonly failedTuple: ChatRunSettings;
   readonly leaseToken: string | null;
+  /** The bot whose failed turn this is; `null` on any other chat. */
+  readonly botId: string | null;
 }): RoutingRequest | null {
   const { entry } = input;
-  const target = confirmTarget(
-    input.store.getState(),
-    input.data,
-    input.failedTuple,
-  );
+  const pick = input.store.getState();
+  const target = confirmTarget(pick, input.data, input.failedTuple);
   if (target === null) return null;
   if (entry.kind === "failed-turn") {
-    return { kind: "switch-attempt", target, attempt: entry.attempt };
+    if (input.botId === null) {
+      return { kind: "switch-attempt", target, attempt: entry.attempt };
+    }
+    // The pick itself, as the Channel settings' Model group writes it: the
+    // selection and its derived effort, never a listed destination's
+    // representation of that effort (whose `null` means "the model's
+    // default"). The bot row keeps no permission, agent mode or tier.
+    return {
+      kind: "bot-write-then-retry",
+      write: {
+        botId: input.botId,
+        harness: pick.selection.harnessId,
+        model: pick.selection.modelSlug,
+        effort: pick.reasoning.length === 0 ? null : pick.reasoning,
+        profile: pick.selection.profileId,
+      },
+      attempt: entry.attempt,
+    };
   }
   return {
     kind: "choose",
@@ -628,7 +692,8 @@ function answerRefusalText(
  * through the per-call handlers here; once it has closed or gone, the
  * hook-level reporting takes over (the announcer). A transport failure prints
  * the same sentence the listing prints when it cannot reach the host - one
- * unreachable host is one fact.
+ * unreachable host is one fact. A refused bot-row write is the host's own
+ * sentence, and nothing follows it.
  */
 function useRoutingVerbs(input: {
   readonly client: HostClient<HostRpcRegistry> | null;
@@ -639,9 +704,19 @@ function useRoutingVerbs(input: {
   readonly onAnswer: (answer: RoutingAnswer) => void;
   /** A request that got no response at all - every `outcome` is a response. */
   readonly onTransportError: () => void;
+  /** The host's sentence for a bot-row write it refused. */
+  readonly onBotWriteRefused: (message: string) => void;
 }) {
-  const { client, epicId, chatId, hostId, open, onAnswer, onTransportError } =
-    input;
+  const {
+    client,
+    epicId,
+    chatId,
+    hostId,
+    open,
+    onAnswer,
+    onTransportError,
+    onBotWriteRefused,
+  } = input;
   const publishUnattended = usePublishUnattendedFallbackOutcome({
     epicId,
     chatId,
@@ -660,34 +735,61 @@ function useRoutingVerbs(input: {
     publishConfirmed,
     reporting,
   );
+  const writeBot = useBotUpdateRunSettingsMutation(client);
+  const sendRung = (
+    rung: "switch" | "retry",
+    target: ChatRunSettings | null,
+    attempt: LastFailedAttempt,
+  ): void => {
+    runManualRung.mutate(
+      {
+        epicId,
+        chatId,
+        rung,
+        target,
+        // BOTH ids, from the DTO: the reuse path re-sends one persisted user
+        // message across retries, so the message id alone cannot tell this
+        // attempt from its retry.
+        userMessageId: attempt.userMessageId,
+        turnId: attempt.turnId,
+      },
+      {
+        onSuccess: (response) => {
+          onAnswer({
+            verb: "manual",
+            outcome: response.outcome,
+            detail: response.detail,
+            rung,
+          });
+        },
+        onError: onTransportError,
+      },
+    );
+  };
   const send = (request: RoutingRequest): void => {
     switch (request.kind) {
       case "switch-attempt":
-        runManualRung.mutate(
-          {
-            epicId,
-            chatId,
-            rung: "switch",
-            target: request.target,
-            // BOTH ids, from the DTO: the reuse path re-sends one persisted
-            // user message across retries, so the message id alone cannot tell
-            // this attempt from its retry.
-            userMessageId: request.attempt.userMessageId,
-            turnId: request.attempt.turnId,
+        sendRung("switch", request.target, request.attempt);
+        return;
+      case "bot-write-then-retry": {
+        const { attempt } = request;
+        // A promise rather than per-call handlers, which TanStack drops once
+        // this surface unmounts (its thread panel or tab closed mid-write):
+        // a confirmed Switch and retry finishes either way. The retry reads
+        // the row, so it goes only once the host took the write, and its
+        // answer finds the announcer through the verb's own reporting when
+        // nothing here is left to show it. A refused write leaves the row as
+        // it was and is said inline; unmounted, there is no line to say it.
+        void writeBot.mutateAsync(request.write).then(
+          () => {
+            sendRung("retry", null, attempt);
           },
-          {
-            onSuccess: (response) => {
-              onAnswer({
-                verb: "manual",
-                outcome: response.outcome,
-                detail: response.detail,
-                rung: "switch",
-              });
-            },
-            onError: onTransportError,
+          (error: Error) => {
+            onBotWriteRefused(error.message);
           },
         );
         return;
+      }
       case "choose":
         chooseTarget.mutate(
           {
@@ -709,7 +811,8 @@ function useRoutingVerbs(input: {
     }
   };
   return {
-    busy: chooseTarget.isPending || runManualRung.isPending,
+    busy:
+      chooseTarget.isPending || runManualRung.isPending || writeBot.isPending,
     send,
   };
 }
@@ -1173,6 +1276,10 @@ function listedTarget(
  * Switch waits for a pick that goes somewhere (the failed tuple itself is not
  * a switch), a model the store has resolved, and - on the countdown - the
  * host's hold, so a pick cannot land while the countdown is still being spent.
+ *
+ * On a bot's chat the line says the pick moves the bot's model for all its
+ * chats, the confirm reads "Switch and retry", and a link opens the bot
+ * tab's Channel settings where the tab provides one.
  */
 function RoutingConfirmFooter({
   store,
@@ -1186,6 +1293,8 @@ function RoutingConfirmFooter({
   countdownReady,
   busy,
   onConfirm,
+  bot,
+  onBotSettings,
 }: {
   readonly store: ComposerToolbarStore;
   readonly failedTuple: ChatRunSettings;
@@ -1198,6 +1307,10 @@ function RoutingConfirmFooter({
   readonly countdownReady: boolean;
   readonly busy: boolean;
   readonly onConfirm: () => void;
+  /** The bot whose chat this is; `null` on any other chat. */
+  readonly bot: BotIdentity | null;
+  /** Opens the bot's Channel settings; `null` where nothing can. */
+  readonly onBotSettings: (() => void) | null;
 }) {
   const selection = useStore(store, (state) => state.selection);
   const reasoning = useStore(store, (state) => state.reasoning);
@@ -1213,11 +1326,13 @@ function RoutingConfirmFooter({
     data,
     failedTuple,
   );
+  const destinationLine =
+    target === null
+      ? null
+      : switchLine({ target, selectedModel, labelFor, modelLabelFor });
   const line =
     refusal ??
-    (target === null
-      ? null
-      : switchLine({ target, selectedModel, labelFor, modelLabelFor }));
+    (bot === null ? destinationLine : botRoutingSwitchLine(bot.title));
   const speedNotice = fallbackSpeedNotice(
     failedTuple,
     failedTierName,
@@ -1240,7 +1355,8 @@ function RoutingConfirmFooter({
         <div
           aria-hidden={refusal !== null}
           className={cn(
-            "truncate",
+            // A bot's line is a sentence that has to be read whole.
+            bot === null && "truncate",
             refusal === null
               ? "text-muted-foreground"
               : "text-warning-foreground",
@@ -1248,12 +1364,23 @@ function RoutingConfirmFooter({
         >
           {line}
         </div>
+        {onBotSettings === null ? null : (
+          <Button
+            type="button"
+            variant="link"
+            size="inline-xs"
+            className="self-start"
+            onClick={onBotSettings}
+          >
+            {BOT_SETTINGS_LINK_LABEL}
+          </Button>
+        )}
         <div role="status" className="text-warning-foreground">
           {refusal === null ? speedNotice : null}
         </div>
       </div>
       <Button size="sm" disabled={disabled} onClick={onConfirm}>
-        Switch
+        {bot === null ? "Switch" : BOT_SWITCH_AND_RETRY_LABEL}
         {busy ? (
           <AgentSpinningDots
             className={undefined}

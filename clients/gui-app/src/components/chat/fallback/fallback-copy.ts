@@ -644,3 +644,18 @@ export function routingSwitchLine(
 ): string {
   return `Replays on ${modelLabel} · ${accountLabel} in a new session`;
 }
+
+/**
+ * The chooser's footer line on a bot's chat (T99), in place of
+ * {@link routingSwitchLine}: a bot's chats all run on the bot's model, so the
+ * confirm moves that and then retries the failed answer.
+ */
+export function botRoutingSwitchLine(botTitle: string): string {
+  return `Changes ${botTitle}'s model for all its chats, then retries this answer.`;
+}
+
+/** The chooser's confirm on a bot's chat. */
+export const BOT_SWITCH_AND_RETRY_LABEL = "Switch and retry";
+
+/** The chooser's link to the bot tab's Channel settings. */
+export const BOT_SETTINGS_LINK_LABEL = "Bot settings";
