@@ -9,7 +9,7 @@ import type {
 } from "@traycer/protocol/host/epic/unary-schemas";
 
 /**
- * PR 2150 cold-review test gap: the `structuralSharing` merge
+ * Test gap: the `structuralSharing` merge
  * (`keepAnsweredOverTransientUnknown`) is unit-tested against plain objects
  * elsewhere, but nothing drove it through TanStack's REAL `useQueries` +
  * `combine` pipeline, where it actually has to run as the option TanStack

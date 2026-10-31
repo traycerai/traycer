@@ -61,7 +61,7 @@ const xtermMocks = vi.hoisted(() => ({
   // reported grid.
   availableWidthPx: 800,
   // Arms one `CanvasAddon.activate` to throw AFTER it has installed its
-  // renderer - the non-transactional `loadAddon` failure from the review.
+  // renderer - the non-transactional `loadAddon` failure.
   failNextActivationAfterInstall: false,
 }));
 
@@ -658,7 +658,7 @@ describe("<TerminalXtermHost /> presentation-gated canvases", () => {
   });
 
   it("disposes a canvas addon whose activation throws after installing its renderer", () => {
-    // Finding 3: `loadAddon` is not transactional. `AddonManager` stores the
+    // `loadAddon` is not transactional. `AddonManager` stores the
     // addon before activating it, and activation installs the renderer before
     // registering the disposable that would restore xterm's DOM one, so the
     // engine's catch is the only thing that can hand back what was built.

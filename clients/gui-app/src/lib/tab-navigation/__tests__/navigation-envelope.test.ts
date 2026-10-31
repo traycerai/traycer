@@ -552,7 +552,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(getTabNavigationDiagnostics().pendingTokenCount).toBe(0);
   });
 
-  // Cold review #2: snapshot must precede new-draft creation/activation so a
+  // Snapshot must precede new-draft creation/activation so a
   // rejected navigate restores Settings (or Epic), not the draft just minted.
   it("rejecting newDraftTabIntent from Settings restores the true pre-creation selection", async () => {
     const nav = makeDeferredNavigate();
@@ -583,7 +583,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(focusedRefKey()?.startsWith("draft:")).toBe(true);
 
     await nav.reject(1);
-    // Restore also runs the legacy compat projection (round 4): focus lands
+    // Restore also runs the legacy compat projection: focus lands
     // back on Settings, and the just-created draft is no longer the active
     // source-projection draft, without crashing.
     expect(focusedRefKey()).toBe("settings:settings");
@@ -855,7 +855,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(focusedRefKey()).toBe(tabRefKey(b.ref));
   });
 
-  // Cold review #1: settle must not retire a superseded token before its
+  // Settle must not retire a superseded token before its
   // delayed history entry can still commit and be repaired.
   it("superseded token remains repairable when its promise settles before delayed commit", async () => {
     const a = openEpic("epic-a", "A");
@@ -896,7 +896,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(focusedRefKey()).toBe(tabRefKey(a.ref));
   });
 
-  // Cold review #1: newer intent must supersede acknowledged-but-unsettled,
+  // Newer intent must supersede acknowledged-but-unsettled,
   // and a later commit of that superseded token must repair — not re-apply B.
   it("newer intent supersedes acknowledged unsettled token; later same/second-key commits repair", () => {
     const a = openEpic("epic-a", "A");
@@ -1036,7 +1036,7 @@ describe("TabNavigationController envelope lifecycle", () => {
     expect(focusedRefKey()).toBe(tabRefKey(a.ref));
   });
 
-  // Cold review #3: repair must rebuild the exact latest authoritative route,
+  // Repair must rebuild the exact latest authoritative route,
   // not the stale committing pathname (Settings subsections).
   it("stale Settings general commit repairs to exact /settings/providers when providers is authoritative", () => {
     const nav = makeDeferredNavigate();
@@ -1489,7 +1489,7 @@ describe("empty focus / startup preservation", () => {
     resetStores();
   });
 
-  // Cold review #6: startup / same-location layout sync may preserve empty
+  // Startup / same-location layout sync may preserve empty
   // focus; later envelope-free PUSH/REPLACE is real external navigation and
   // must focus the backing member.
   it.each([
@@ -1968,7 +1968,7 @@ describe("activateTabIntent / navigateToTabIntent seam", () => {
     expect(focusedRefKey()).toBe(tabRefKey(a.ref));
   });
 
-  // Cold review #7: re-activating the already-active ordinary tab must replace
+  // Re-activating the already-active ordinary tab must replace
   // (same as within-split), not push a dead same-href history step.
   it("re-activating the active ordinary tab uses replace and does not push history", () => {
     const a = openEpic("epic-a", "A");

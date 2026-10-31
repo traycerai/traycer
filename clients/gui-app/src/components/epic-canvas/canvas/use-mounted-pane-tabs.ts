@@ -184,7 +184,7 @@ export function useMountedPaneTabs(
   // a pane holding a dead chat among its two most recent retains only one live
   // chat and the second still churns. Both are strictly better than the
   // reverse - a member with no slot strands a hosted body on a disconnected
-  // anchor (cold review F1).
+  // anchor (F1).
   const retainedChatIds = useMemo(
     () =>
       new Set(

@@ -25,8 +25,8 @@ import { transportEvidenceRelay } from "@/lib/host/transport-evidence";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /**
- * The window's kernel must survive a StrictMode remount (redesign P1.3, review
- * finding F2 - the fourth test class: cross-owner composition).
+ * The window's kernel must survive a StrictMode remount (redesign P1.3,
+ * F2 - the fourth test class: cross-owner composition).
  *
  * Neither half of this is visible to a test of either piece alone. The kernel
  * is correct; `HostRuntimeProvider`'s effect is correct; the client's

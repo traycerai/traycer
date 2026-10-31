@@ -1050,7 +1050,7 @@ describe("<ChatTileErrorNoticeToasts />", () => {
     expect(sonnerToastWarning).not.toHaveBeenCalled();
   });
 
-  // R7 `-oRs`: round 6 made the recovery STRING verbatim, but Sonner renders
+  // R7 `-oRs`: the recovery STRING is verbatim, but Sonner renders
   // it as ordinary HTML - so the newlines and indentation the byte guarantee
   // exists to protect collapse on screen and on copy. The presentation layer
   // has to preserve them or the guarantee stops at the store boundary.

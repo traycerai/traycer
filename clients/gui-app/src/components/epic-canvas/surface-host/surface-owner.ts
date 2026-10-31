@@ -14,7 +14,7 @@
  * `isHostedSurfaceEligible` is the shared candidate rule extracted so
  * `tile-surface-membership.ts`'s canvas-wide membership derivation and this
  * module's render-routing decision are structurally incapable of disagreeing
- * (design-review slice-4 finding 2: they used to drift on remote-deletion,
+ * (they used to drift on remote-deletion,
  * producing two simultaneous owners for the same instance). `surfaceOwnerFor`
  * layers the switch check on top - membership itself is switch-independent
  * by design (see `stable-tile-surface-host-switch.ts`: "membership and the

@@ -234,7 +234,7 @@ describe("<SplitResizeHandle />", () => {
     expect(committed[1]).toBeCloseTo(0.4, 10);
   });
 
-  // Ticket 21 wave-2 live pass, fix round 2 (F1): moving move/up/cancel to
+  // Ticket 21 (F1): moving move/up/cancel to
   // window listeners means blur must be a terminal event this hook owns
   // directly - `beginPanelResizeInteraction`'s own blur cleanup only clears
   // the shared interaction id for the CSS class, it has no idea `dragRef`
@@ -329,7 +329,7 @@ describe("<SplitResizeHandle />", () => {
     expect(onCommitSizes.mock.calls[0][0]).toBe(GROUP_ID);
   });
 
-  // Ticket 21 wave-2 live pass, fix round 2 (F2): the pre-fix React-prop
+  // Ticket 21 (F2): the pre-fix React-prop
   // design died with the element on unmount for free. Once move/up/cancel
   // are imperative window listeners, an unmount mid-drag must be an
   // explicit teardown path, or the dead component's closures keep
@@ -774,7 +774,7 @@ describe("<SplitResizeHandle />", () => {
   });
 
   // F9: Escape must be a terminal event the hook owns directly, the same way
-  // blur already is (fix-round 2, F1 above) - a window CAPTURE-phase listener
+  // blur already is (F1 above) - a window CAPTURE-phase listener
   // so it is seen and stopped before any other Escape handler (a layout
   // session, a dialog) acts on the same keypress while a handle is held.
   describe("Escape during a drag (F9)", () => {

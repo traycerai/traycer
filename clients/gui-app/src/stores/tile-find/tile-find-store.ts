@@ -85,7 +85,7 @@ const pendingSearchFlushes = new Map<string, () => boolean>();
 // `replayRegisteredAdapterSearch` re-runs the search unmodified once a fresh
 // adapter registers.
 //
-// Ticket 15 review round (F3): committed explicitly by `evictTileFindUi`
+// Ticket 15 (F3): committed explicitly by `evictTileFindUi`
 // (the close point), not mirrored continuously on every mutation. A
 // switch-away remount does not need a durable round-trip at all - the
 // tab-key `uiByTileInstanceId` entry survives it untouched (only a real
@@ -93,7 +93,7 @@ const pendingSearchFlushes = new Map<string, () => boolean>();
 // bought "last-mutation-wins" instead of decision #29's literal
 // "last-CLOSED-wins", with no benefit for the case it wasn't needed for.
 //
-// Ticket 15 review round 4: round 3 also carried `current`/`activeUnitId`
+// Ticket 15: the earlier version also carried `current`/`activeUnitId`
 // here and restored to that exact occurrence on reopen. Deleted - the real
 // adapter keys a match as `messageId:unitId:occurrenceInUnit`, but the
 // snapshot only ever exposes `unitId`, so "same activeUnitId" silently
@@ -132,7 +132,7 @@ export function evictTileFindUiForEpic(epicId: string): void {
 }
 
 /**
- * Ticket 15 review round 3: promotes one tile's CURRENT ui state to durable
+ * Ticket 15: promotes one tile's CURRENT ui state to durable
  * - called from the canvas close sweep, BEFORE `evictTileFindUi` drops the
  * tab-key entry, for every removed CHAT tile (the sweep already resolved
  * `identity` from the canvas tree, so this no longer depends on
@@ -508,7 +508,7 @@ function flushPendingSearch(tileInstanceId: string): boolean {
 // return and `replayRegisteredAdapterSearch` (below) restores the session
 // onto it.
 //
-// F4 (ticket 5 review): this liveness check means a tile that unregisters
+// F4 (ticket 5): this liveness check means a tile that unregisters
 // WHILE live is skipped here and never revisited - if that tile is later
 // closed without ever remounting (closed directly from an inactive tab, no
 // switch-back), nothing calls `scheduleUiReclaim` again and `ui` would leak
@@ -533,7 +533,7 @@ function scheduleUiReclaim(tileInstanceId: string): void {
 }
 
 /**
- * F4 (ticket 5 review): drops `ui` entries outright for tiles removed from
+ * F4 (ticket 5): drops `ui` entries outright for tiles removed from
  * the canvas for good - called from the canvas store's tile-removal
  * subscriber, the same sweep that evicts the other per-tab registries.
  * Complements `scheduleUiReclaim`'s deferred, liveness-gated path: that path
@@ -596,7 +596,7 @@ function getUiState(
   );
 }
 
-// Ticket 15 review round 5 (item 1, decision #19 re-amended): restores
+// Ticket 15 (item 1, decision #19 re-amended): restores
 // query + bar state only, everywhere (tab switch AND reopen-after-close) -
 // the replayed search always lands on the adapter's own default match, by
 // design, not a chased occurrence.

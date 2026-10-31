@@ -474,8 +474,8 @@ describe("describeUpdateOperation — verification-refused", () => {
     // structural precedent is the floor park, a full sentence with an
     // affordance tail, also unterminated.
     //
-    // Reviewer C raised the mixed punctuation here as a nit, then withdrew it
-    // on that count: the finding had compared this string against its two
+    // The mixed punctuation here was raised as a nit, then withdrawn
+    // on that count: the comparison had been against this string's two
     // NAMED neighbours instead of against the whole set, and "match
     // `finalizing-record`, not `unavailable`" is a choice between neighbours,
     // not a convention. Adding the period would have moved a conforming string

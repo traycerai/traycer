@@ -118,7 +118,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
         style={spacerDragStyle}
       />
       {/* Shrinkable for the readings in it alone: the controls after them
-          never give way (G6 review A). */}
+          never give way (G6). */}
       <div
         className="relative z-10 flex min-w-0 items-center gap-2"
         style={framelessDesktop ? NO_DRAG_STYLE : undefined}
@@ -137,7 +137,7 @@ function DesktopAppHeader(props: AppHeaderProps): ReactNode {
 
 /**
  * The tab strip's box. The tabs keep a floor of the header, so readings moved
- * up here shrink before they do (G6 review A).
+ * up here shrink before they do (G6).
  */
 function tabStripBoxClass(showTabStrip: boolean, draggable: boolean): string {
   return cn(

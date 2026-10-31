@@ -329,7 +329,7 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
   });
 
   it("records on the SESSION's host, not the window's effective host", async () => {
-    // The cold reviewer's A/B. The route carries the session's `isLocalHome`
+    // The A/B. The route carries the session's `isLocalHome`
     // and used to resolve `useHostClient()` - the window's effective host - so a
     // local session on one machine sent `epic.recordViewed` to another. The
     // host's local-home arm is served out of its OWN store, so that write
@@ -383,7 +383,7 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
   });
 
   it("drops a `local` answer that arrives after the bound even if the TIMER never fired", async () => {
-    // The cold reviewer's finding. `setTimeout` is the mechanism that wakes the
+    // `setTimeout` is the mechanism that wakes the
     // decision, not the bound itself: a backgrounded tab throttles timers to a
     // minute or more and a busy main thread delays them arbitrarily, so wall
     // time can pass the deadline while the callback is still queued. The
@@ -419,7 +419,7 @@ describe("EpicRouteTabSync recency bounded wait (7d521991d)", () => {
   });
 
   it("expires an overdue deadline even when the VERDICT recovers", async () => {
-    // The reviewer's case, and the one my first repair missed. The guard tested
+    // The case the first repair missed. The guard tested
     // `!cloudAuthorized`, so a deadline that passed while unverified stopped
     // being expired the moment the verdict came back: the guard fell through and
     // the cloud branch recorded, stamping the RECOVERY time as the view time.

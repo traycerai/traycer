@@ -608,7 +608,7 @@ function CandidateRow(props: {
       ?.click();
   };
   // What "fix this row" is called: a pattern is edited, an exact pick is
-  // swapped for another model (review R11) - "Edit pattern" on a row holding
+  // swapped for another model (R11) - "Edit pattern" on a row holding
   // `gpt-5.6-terra` names a thing the row does not have.
   const editLabel = isModelPattern(candidate.modelFamily.trim())
     ? "Edit pattern"

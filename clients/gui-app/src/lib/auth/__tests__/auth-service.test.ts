@@ -2559,7 +2559,7 @@ describe("AuthService", () => {
       const outcome = await service.revalidateCurrentContext();
       // The REQUEST is still rejected - a dead credential cannot authorize it.
       expect(outcome?.kind).toBe("rejected");
-      // ...but the SESSION is demoted, not cleared (cold-review P1-4). A mid-
+      // ...but the SESSION is demoted, not cleared (P1-4). A mid-
       // session expiry is a verdict about the token; the person is still at the
       // keyboard and their epics are still on this disk.
       expect(useAuthStore.getState().status).toBe("unverified");

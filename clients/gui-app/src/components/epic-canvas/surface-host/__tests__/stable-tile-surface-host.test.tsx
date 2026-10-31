@@ -187,7 +187,7 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
     expect(renderer.mountCount("chat-1")).toBe(1);
     expect(renderer.unmountCount("chat-1")).toBe(0);
 
-    // Same-pane reorder via the real action (design-review F3 - was a
+    // Same-pane reorder via the real action (F3 - was a
     // handcrafted setState).
     act(() => {
       useEpicCanvasStore.getState().moveTabOnTabStrip("tab-1", {
@@ -226,7 +226,7 @@ describe("StableTileSurfaceHost lifecycle matrix (real store/coordinator, synthe
     expect(renderer.mountCount("chat-1")).toBe(1);
     expect(renderer.unmountCount("chat-1")).toBe(0);
 
-    // Wrap (design-review F3 - the old test's same-direction split
+    // Wrap (F3 - the old test's same-direction split
     // flattened 2->3 siblings instead of wrapping): a genuinely
     // PERPENDICULAR split ("bottom" against the root's "horizontal" group)
     // around chat-1's OWN pane. chat-3 rides along purely as the wrap

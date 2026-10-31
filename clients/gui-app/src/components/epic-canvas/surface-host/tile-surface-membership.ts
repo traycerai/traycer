@@ -20,7 +20,7 @@
  *    applied to its RESULT below. Injecting eligibility into the selection
  *    would not narrow this set relative to `use-mounted-pane-tabs.ts`'s; it
  *    would SHIFT it, because the window is capped and rejection keeps filling
- *    (cold review F1). A member the pane therefore never slots does not
+ *    (F1). A member the pane therefore never slots does not
  *    mispaint - a selected chat is seeded first on both sides, so the
  *    shifted-in id can never carry a stale `tabSelected: true` - it strands:
  *    its record keeps a non-null environment and the sticky `canMountBody`
@@ -53,8 +53,8 @@
  * machinery learned the hard way).
  *
  * A selected chat also has to pass `isHostedSurfaceEligible` (shared with
- * `surface-owner.ts`'s render-routing decision - design-review slice-4
- * finding 2) - a remote-deleted chat leaves membership the same instant
+ * `surface-owner.ts`'s render-routing decision)
+ * - a remote-deleted chat leaves membership the same instant
  * `ActiveTabBody` reports it, so the registry entry it's holding gets cleared
  * by slice 2's existing membership-loss subscription instead of lingering
  * alongside the inline `DeletedArtifactBody`.
@@ -100,7 +100,7 @@ export function collectCanvasWideRetainedChatMembership(
       // `use-mounted-pane-tabs.ts`. Eligibility is applied to the result,
       // AFTER the cap - injecting it into the selection would shift this
       // window relative to the render side's and strand a member with no slot
-      // (cold review F1; see `retained-pane-chats.ts`).
+      // (F1; see `retained-pane-chats.ts`).
       const retained = retainedPaneChatInstanceIds({
         pane,
         cap: RETAINED_PANE_CHAT_CAP,

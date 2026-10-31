@@ -65,7 +65,7 @@ describe("FallbackLadderEditor", () => {
 
   it("states that switching starts a new agent session, unconditionally, above the step list", () => {
     // This paragraph answers the page's central question - what happens to my
-    // chat - and a user-lens review found nothing on the page said it before:
+    // chat - and nothing on the page said it before:
     // the switch-back row's "starts a fresh session too" had no antecedent,
     // since nothing had ever said the OUTBOUND switch started one either.
     // Falsification: delete the `<p>` above the DndContext in

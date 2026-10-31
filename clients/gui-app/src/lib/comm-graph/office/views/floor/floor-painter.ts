@@ -682,7 +682,7 @@ function floorChunk(
  * The Floor view rings a civic room only where the plan says `walled`, which is
  * the right call for structure - an "open" room's bounds are furniture, not
  * walls - and it leaves the open ones with nothing but their sign to say where
- * they stop. That is the reading feedback round 1 filed against Building
+ * they stop. That is the reading filed against Building
  * ("some agents are working from the waiting room?"), and this floor has the
  * same plazas on it. All six views tint at {@link OFFICE_CIVIC_GROUND_ALPHA}.
  *

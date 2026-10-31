@@ -11,7 +11,7 @@ import {
 
 // `projectLocalUpdate` is the ONE precedence-plus-projection the landing
 // banner's hook and the selected-host Overview share. Its whole subject is
-// which of the two legs answers, and — since cold review C — which CLOCK each
+// which of the two legs answers, and which CLOCK each
 // leg is answering against.
 
 const NOW_MS = 1_000_000;
@@ -223,7 +223,7 @@ describe("projectLocalUpdate — the wire leg is NOT aged by the record leg's ti
   });
 });
 
-// PR2069 (CodeRabbit) follow-up: at an equal position, `preferLiveOverRecord`
+// Follow-up: at an equal position, `preferLiveOverRecord`
 // now keeps the WIRE (not the record) when the record is unchanged and has
 // no live holder proof, so a record with no `runningVersion` of its own can't
 // erase the wire's finalizing-record conclusion by winning precedence.

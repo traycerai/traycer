@@ -496,7 +496,7 @@ describe("initial chat handoff route coordinator", () => {
   });
 
   it("stamps the seeded chat's tile with the host the handoff RECORD names, not the window's host", async () => {
-    // Codex #1243 T-46: the handoff's lookup key already ignores the host
+    // The handoff's lookup key already ignores the host
     // (`initialChatHandoffKey`), but the tile it opens is stamped with a
     // separately-read host id and carries that binding for life. Read
     // app-wide it stamped a chat created on the landing composer's PLACEMENT
