@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-import type { ContentBlock } from "@traycer/protocol/persistence/epic/content-blocks";
+import type {
+  BotSendReceipt,
+  ContentBlock,
+} from "@traycer/protocol/persistence/epic/content-blocks";
 import type { Message } from "@traycer/protocol/persistence/epic/messages";
 
 import type { TranscriptRowDescriptor } from "@traycer/protocol/persistence/chat-transcript/row-projection";
@@ -221,6 +224,17 @@ function sentMessageBlockId(
 }
 
 /**
+ * Whether a bot send's receipt names a channel post: a send posted in Slack
+ * (S4b) does not. Read through `unknown`: a receipt from before `slack`
+ * existed reaches a caller holding unparsed blocks without the key, and it
+ * names a channel post.
+ */
+function namesChannelPost(receipt: BotSendReceipt): boolean {
+  const slack: unknown = receipt.slack;
+  return slack === null || slack === undefined;
+}
+
+/**
  * The `tool_call` block whose `agentMessageReceipt` names this delivered
  * message, or whose `botSendReceipt` names this channel post; `null` for
  * neither.
@@ -241,7 +255,8 @@ function receiptBlockId(
       if (block.type !== "tool_call") continue;
       if (
         block.agentMessageReceipt?.messageId === messageId ||
-        block.botSendReceipt?.messageId === messageId
+        (block.botSendReceipt?.messageId === messageId &&
+          namesChannelPost(block.botSendReceipt))
       ) {
         return block.blockId;
       }

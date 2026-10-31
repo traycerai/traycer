@@ -121,6 +121,18 @@ import {
 import type { SelectionAuthorityClient } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import {
+  disconnectSlackAppViaHttp,
+  fetchSlackAppManifestViaHttp,
+  mintSlackAppInstallUrlViaHttp,
+  readSlackAppViaHttp,
+  registerSlackAppViaHttp,
+  type SlackAppInstallUrlResult,
+  type SlackAppManifestResult,
+  type SlackAppReadResult,
+  type SlackAppWriteResult,
+} from "@traycer-clients/shared/host-client/slack-app";
+import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
@@ -867,6 +879,61 @@ export class MobileRunnerHost implements IRunnerHost {
       bearerToken,
       null,
       target,
+    );
+  }
+
+  readSlackApp(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppReadResult> {
+    return readSlackAppViaHttp(this.serverBaseUrl, bearerToken, null, botId);
+  }
+
+  getSlackAppManifest(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppManifestResult> {
+    return fetchSlackAppManifestViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      botId,
+    );
+  }
+
+  registerSlackApp(
+    bearerToken: string,
+    request: SlackAppRegisterRequest,
+  ): Promise<SlackAppWriteResult> {
+    return registerSlackAppViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      request,
+    );
+  }
+
+  mintSlackAppInstallUrl(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppInstallUrlResult> {
+    return mintSlackAppInstallUrlViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      botId,
+    );
+  }
+
+  disconnectSlackApp(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppWriteResult> {
+    return disconnectSlackAppViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      botId,
     );
   }
 

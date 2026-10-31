@@ -138,7 +138,7 @@ function noOpOnFindReadOrdinalChange(_ordinal: number | null): void {
 
 const platformMock = vi.hoisted(() => ({ isMac: true }));
 // Default false matches an empty canvas store (existing tests never seed live
-// tiles). Ticket 5 remount-save tests flip this true so unmount commits to the
+// tiles). The remount-save tests flip this true so unmount commits to the
 // cache; permanent-close tests keep it false so the save-side guard can be
 // asserted. Mirrors use-scroll-restoration.test.tsx.
 const tileLiveness = vi.hoisted(() => ({ live: false }));
@@ -217,7 +217,7 @@ vi.mock("@/components/chat/chat-message", async () => {
   };
 });
 
-// Ticket 17 (review round 2, finding 2 residual): a thin, behavior-preserving
+// A thin, behavior-preserving
 // pass-through around the REAL `LegendList` component - re-exports everything
 // unchanged, wraps only the component itself to tee its ref into a
 // module-scope holder. The real component renders and behaves identically;
@@ -315,7 +315,7 @@ vi.mock(
       await importOriginal<
         typeof import("@/stores/chats/activity-group-open-store-core")
       >();
-    // Ticket 5's registry (`getOrCreateActivityGroupOpenStore`) can hand back
+    // The registry (`getOrCreateActivityGroupOpenStore`) can hand back
     // the SAME real store object across multiple calls for one tileInstanceId
     // (e.g. a remount-simulating test); track which store objects are already
     // wrapped so re-wrapping never double-counts a single `setOpen` call.
@@ -494,7 +494,7 @@ function appendOptimisticUserSend(
 const TICKET_13_ROW_HEIGHT_PX = 90;
 
 /**
- * Plain-navigation settle (`scrollToEnd`/`navigateToMessage`, ticket 10):
+ * Plain-navigation settle (`scrollToEnd`/`navigateToMessage`):
  * waits for LegendList's own frames plus the DOM-`scrollend`-based
  * `awaitScrollSettle` fallback window (`CHAT_ANCHOR_SETTLE_FALLBACK_MS`).
  */
@@ -619,7 +619,7 @@ function requireList(): import("@legendapp/list/react").LegendListRef {
 }
 
 /**
- * Ticket 15 review (live pass S5 round 3): sets `scrollTop` and fires the
+ * Sets `scrollTop` and fires the
  * scroll event WITHOUT yielding an animation frame afterward - deliberately
  * leaves `scheduleActiveViewportUpdate`'s rAF-throttled reading-line mirror
  * (`scrolledActiveUserMessageIdRef`) unserviced, exactly as a real close
@@ -925,7 +925,7 @@ async function selectLastChatTurnMinimapItem(): Promise<void> {
 interface RenderChatMessagesOptions {
   readonly messages: ReadonlyArray<ChatMessageModel>;
   /**
-   * Tab-key half of the dual-key identity (ticket 15). Prefer this over a
+   * Tab-key half of the dual-key identity. Prefer this over a
    * separate `instanceId` when a test only cares about the cache key - the
    * production path keys everything by `instanceId` now (scrollStateKey was
    * dropped as a redundant prop).
@@ -945,7 +945,7 @@ interface RenderChatMessagesOptions {
   readonly withSiblingChrome?: boolean;
   readonly strictMode?: boolean;
   /**
-   * Ticket 21 slice 4: models a HOSTED chat's DOM shape - the tile's own
+   * Models a HOSTED chat's DOM shape - the tile's own
    * wrapper carries the hosted-record identity attributes instead of a
    * physical `data-group-id` ancestor, while `withSiblingChrome`'s sibling
    * (the pane's own tab strip, which never moves) stays under a real
@@ -1000,7 +1000,7 @@ interface ChatMessagesRenderState {
     | null;
 }
 
-/** Synthetic dual-key identity for tests (ticket 15). */
+/** Synthetic dual-key identity for tests. */
 function makeTestIdentity(
   tileInstanceId: string,
   epicId: string,
@@ -1247,7 +1247,7 @@ describe("ChatMessages scroll policy", () => {
     useKeybindingStore.setState({ bindings: getDefaultBindings() });
     setLegendListScrollContainerScrollHeightOverride(null);
     useLayoutStore.setState({ ...DEFAULT_LAYOUT_SNAPSHOT });
-    // Ticket 15: dual-key durable entries survive tab-key cleanup - clear the
+    // Dual-key durable entries survive tab-key cleanup - clear the
     // harness default epic so later tests' freshOpen paths see a true empty
     // chat-key cache rather than a leftover following-end/free-scrolling seed.
     evictChatTabPersistenceForEpic("epic-1");
@@ -1516,7 +1516,7 @@ describe("ChatMessages scroll policy", () => {
   });
 
   /**
-   * Ticket 14 (direction A): edge-aware wheel cancellation. A downward wheel
+   * Edge-aware wheel cancellation. A downward wheel
    * at the true live edge must not cancel follow (clamped momentum shape:
    * wheel with no accompanying scroll). Upward / ambiguous wheels and
    * directionless touch movement are departures; explicit toward-end touch
@@ -2778,7 +2778,7 @@ describe("ChatMessages scroll policy", () => {
 
   describe("H3 free-scrolling ownership: real gestures resume follow; programmatic scrolls do not", () => {
     it("a REAL subsequent near-end gesture still restores follow after a suppressed programmatic scroll settles", async () => {
-      // Ticket 17 removed free-scrolling suffix removal as a suppress path
+      // Free-scrolling suffix removal is no longer a suppress path
       // (case a is none; case b forces following-end). Minimap navigation is
       // still a free-scrolling programmatic landing that sets
       // suppressFollowRestoreRef - use that to pin the companion contract.
@@ -3037,7 +3037,7 @@ describe("ChatMessages scroll policy", () => {
     });
   });
 
-  // O2 (ticket 16 listener consolidation): proves the FULL production chain
+  // Listener consolidation: proves the FULL production chain
   // end to end - a real LegendList scroll -> ChatTimeline's own `onScroll` ->
   // ChatMessages's `handleScroll` -> `minimapInViewRefreshRef.current()` ->
   // the rail's current tick. chat-turn-minimap.test.tsx's own pins call
@@ -4138,7 +4138,7 @@ describe("ChatMessages scroll policy", () => {
         // The unmount save captured THIS exact scrollTop via the real
         // capture pipeline (whichever row it anchored to) - not a value this
         // test invented via a seeded saveChatTabState call. Tab-key is the
-        // tile instanceId (ticket 15).
+        // tile instanceId.
         const saved = restoreChatTabState(
           makeDefaultTestIdentity(instanceId),
           messages.map((message) => message.id),
@@ -4372,10 +4372,10 @@ describe("ChatMessages scroll policy", () => {
       const wrongRowTop = wrongScrollTop - LEGEND_LIST_HEADER_PX + viewOffset;
 
       const originalScrollToIndex = list.scrollToIndex.bind(list);
-      // `positionAtIndex` is typed `number` but - per `expectedTimelineScrollTop`'s
-      // own guard at the top of this file, and CodeRabbit's finding on this
-      // exact predicate - does not always answer one: an unmeasured row can
-      // report `undefined`. "unmeasured" models that row; "wrong" is a
+      // `positionAtIndex` answers `number | undefined`, and withholds the
+      // reading for a row the layout pass has not laid out -
+      // `expectedTimelineScrollTop` in `chat-messages.tsx` guards the same
+      // call the same way. "unmeasured" models that row; "wrong" is a
       // distinct, otherwise-plausible finite reading the row moves to next
       // (not its real one); "settled" is the real, final position.
       let measurementPhase: "unmeasured" | "wrong" | "settled" = "unmeasured";
@@ -4403,14 +4403,17 @@ describe("ChatMessages scroll policy", () => {
           positionAtIndex: (index: number) => {
             if (index !== targetIndex) return state.positionAtIndex(index);
             if (measurementPhase === "unmeasured") {
-              // `NaN` rather than `undefined`, which the real implementation
-              // can also answer despite this signature's declared `number`
-              // (`expectedTimelineScrollTop` guards the same call for exactly
-              // that). Both reach the predicate's one non-finite branch, and
-              // `NaN` IS a number, so modelling the unmeasured row with it
-              // needs no cast and no suppressed error - the signature stays
-              // honest about what this mock returns.
-              return Number.NaN;
+              // What the real implementation answers for a row it has not
+              // laid out: `positions[index]` on an index the layout pass has
+              // not reached, which is nothing at all. `NaN` reaches the same
+              // non-finite branch of the predicate below, but it is not the
+              // value production produces, and the difference is load-bearing
+              // one predicate away: a guard that compares two readings for
+              // equality accepts `undefined === undefined` while
+              // `NaN === NaN` is false, so a fixture built on `NaN` cannot
+              // fail on a reading that is equal to itself for want of any
+              // reading at all.
+              return undefined;
             }
             if (measurementPhase === "wrong") return wrongRowTop;
             return state.positionAtIndex(index);
@@ -4998,7 +5001,7 @@ describe("ChatMessages scroll policy", () => {
       async () => {
         // Root cause: selectActiveUserMessageId/viewportActiveUserMessageId
         // are human-only gated (isHumanUserMessage) - correct for the
-        // minimap rail, but the ticket-5 save path shares the same gate, so
+        // minimap rail, but the save path shares the same gate, so
         // a transcript with ZERO human user rows (pure agent-to-agent child
         // chat) never had a candidate to track, freezing the saved anchor at
         // whatever it was on mount instead of the reader's actual position.
@@ -5058,9 +5061,9 @@ describe("ChatMessages scroll policy", () => {
       const messages = makeCompletedTranscript(12);
       const scrollStateKey = `t5-stale-free-${Math.random().toString(36).slice(2)}`;
 
-      // Legacy save without anchorIndex (pre-ticket-15 shape): when the id is
+      // Legacy save without anchorIndex (an older shape): when the id is
       // gone AND no index was recorded, still degrade to null-anchor rather
-      // than inventing a neighbor. Ticket 15's nearest-neighbor pin covers
+      // than inventing a neighbor. The nearest-neighbor pin covers
       // the anchorIndex path separately.
       saveChatTabState({
         identity: makeDefaultTestIdentity(scrollStateKey),
@@ -5134,7 +5137,7 @@ describe("ChatMessages scroll policy", () => {
       await enterFreeScrollingAwayFromEnd();
       await waitForPillVisible();
 
-      // Production order (ticket 15 review F1): the canvas sweep drops the
+      // Production order: the canvas sweep drops the
       // TAB-key entry and flips liveness false SYNCHRONOUSLY, before this
       // component's own unmount cleanup ever runs.
       evictChatTabState([instanceId]);
@@ -5305,11 +5308,11 @@ describe("ChatMessages scroll policy", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Ticket 11: live-edge reconciliation for mode + pill (scroll-only routes,
+  // Live-edge reconciliation for mode + pill (scroll-only routes,
   // suppressed-nav pill bookkeeping, strict epsilon vs loose near-end).
   // -------------------------------------------------------------------------
   // -------------------------------------------------------------------------
-  // Ticket 10: settle/re-issue generalization + item-type split.
+  // Settle/re-issue generalization + item-type split.
   // ANIMATED undershoot itself is jsdom-blind (no real animation timing);
   // pins exercise the settle/validate/re-issue LOGIC by driving geometry
   // between issue and settle (F2-style).
@@ -5453,15 +5456,15 @@ describe("ChatMessages scroll policy", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Ticket 12: viewport stability while free-scrolling (sizePreservationEnabled).
+  // Viewport stability while free-scrolling (sizePreservationEnabled).
   // Pure size-change MVCP simulation is jsdom-blind under the fixed-height
   // shim (LegendList's size path needs real item-layout measurement churn
   // that getBoundingClientRect overrides alone do not trigger). Interaction
   // contracts that do not need a size event are pinned below.
   // -------------------------------------------------------------------------
   // -------------------------------------------------------------------------
-  // Ticket 18: send-anchor validated convergence (rootcause-send-undershoot).
-  // The engine now shares ticket 10's settle/re-issue helper, writes
+  // Send-anchor validated convergence (root cause: send undershoot).
+  // The engine now shares the settle/re-issue helper, writes
   // settledTimelineAnchorRef ONLY on a validated landing, fails safe to
   // free-scrolling + pill on exhaustion, and repairs anchor-position drift
   // BEFORE the reveal pass's overflow early-return.
@@ -5551,7 +5554,7 @@ describe("ChatMessages scroll policy", () => {
       await enterFreeScrollingAwayFromEnd();
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
 
-      // PRODUCTION ORDER (ticket 15 review F1): a real close removes the
+      // PRODUCTION ORDER: a real close removes the
       // tile from the canvas and runs the tile-removal sweep (tab-key
       // eviction) SYNCHRONOUSLY, before React ever gets around to unmounting
       // this component - `isEpicCanvasTileInstanceLive` already reads false
@@ -5566,7 +5569,7 @@ describe("ChatMessages scroll policy", () => {
       // which the non-live unmount above just committed (F1's durable-only
       // commit path) - nothing else in this test ever wrote it.
       expect(peekSavedChatTabState(reopenedIdentity) !== null).toBe(true);
-      // Ticket 15 review (live pass S5 round 3): a mode-only assertion
+      // A mode-only assertion
       // stayed green through two live failures - a poisoned
       // {anchorMessageId, anchorIndex, offset} triple (a stale anchor row
       // paired with the live scroll offset) still reports `mode:
@@ -5604,7 +5607,7 @@ describe("ChatMessages scroll policy", () => {
       ).toBe("free-scrolling"); // durable still answers for same chat
     });
 
-    // Ticket 15 review (live pass S5 round 3): a small (16-row) transcript
+    // A small (16-row) transcript
     // and a shallow scroll target let the OLD code's clamping accidentally
     // land "close enough" even with a stale anchor - the poisoned pair
     // only breaks catastrophically once the stale row and the true
@@ -5887,11 +5890,11 @@ describe("ChatMessages scroll policy", () => {
       });
       await settleLegendList();
       await settleLegendList();
-      // Fixup (hydration-transaction): a passive geometry report is not
-      // reader intent (that is the whole point of the transactional gate),
-      // so this needs a real, explicitly-recognized gesture
-      // (`publishesReaderPosition: true`, keyboard scroll) to supersede the
-      // session-retained raw anchor - not just any programmatic scroll.
+      // A passive geometry report is not reader intent (that is the whole
+      // point of the transactional gate), so this needs a real,
+      // explicitly-recognized gesture (`publishesReaderPosition: true`,
+      // keyboard scroll) to supersede the session-retained raw anchor - not
+      // just any programmatic scroll.
       act(() => {
         dispatchKeyInScope("ArrowDown");
       });
@@ -5980,7 +5983,7 @@ describe("ChatMessages scroll policy", () => {
 
   describe("ticket 20: pre-structural-mutation viewport handoff", () => {
     /**
-     * Review round 1, finding 3: the same-commit pin below must actually
+     * The same-commit pin below must actually
      * force React to unmount the old fiber and mount the replacement in ONE
      * commit - `unmount()` followed by a separate `render()` call is two
      * commits, and cannot catch a cleanup-clobber. Swapping the wrapping
@@ -6126,7 +6129,7 @@ describe("ChatMessages scroll policy", () => {
         const first = renderChatMessages({ messages, instanceId });
         await settleLegendList();
         await enterFreeScrollingAwayFromEnd();
-        // Ticket 15 review (live pass S5 round 3)'s exact race, reused here
+        // That same race, reused here
         // for the still-mounted flush path instead of that pin's non-live
         // unmount path: sets scrollTop and fires the scroll event WITHOUT
         // yielding a frame afterward, so `scheduleActiveViewportUpdate`'s
@@ -7663,23 +7666,27 @@ describe("ChatMessages scroll policy", () => {
       // disclosure (setItemSize), and footer/inset - each at the strict edge
       // AND away from it.
       //
-      // Fixup (remove-passive-supersession, P2): a genuine pane/viewport-
-      // length (clientHeight/scrollLength) mutation is NOT covered here.
-      // `composerOverlayHeight` only drives `contentInsetEndAdjustment`
-      // (the same path `footer-inset` already exercises at a different
-      // value) - it never changes the scroll container's own measured size,
-      // so a second inset case would duplicate `footer-inset`, not add real
-      // pane-resize coverage. LegendList observes a genuine container resize
-      // only via a ResizeObserver callback on the real scroll node
-      // (`useOnLayoutSync` in the installed `@legendapp/list@3.2.0`), which
-      // this harness's global `MockResizeObserver` never fires - faithfully
-      // triggering it would require inventing a controllable-ResizeObserver
-      // shim reaching into the library's own lazily-cached global observer
-      // singleton, exactly the fragile, easily-stale pattern removed from
-      // this file in the prior fixup round. The static contract this matrix
-      // cannot replace - `maintainScrollAtEnd.on.layout === true` - is
-      // already pinned directly in `chat-timeline.test.tsx` ("pins
-      // maintainScrollAtEndThreshold=0 and static end/MVCP maintenance").
+      // A genuine pane/viewport-length (clientHeight/scrollLength)
+      // mutation is NOT covered here. `composerOverlayHeight` only drives
+      // `contentInsetEndAdjustment` (the same path `footer-inset` already
+      // exercises at a different value) - it never changes the scroll
+      // container's own measured size, so a second inset case would
+      // duplicate `footer-inset`, not add real pane-resize coverage.
+      // LegendList observes a genuine container resize only via a
+      // ResizeObserver callback on the real scroll node (`useOnLayoutSync`
+      // in the installed `@legendapp/list@3.3.4`), which this harness's
+      // global `MockResizeObserver` never fires - faithfully triggering it
+      // would require inventing a controllable-ResizeObserver shim reaching
+      // into the library's own lazily-cached global observer singleton,
+      // exactly the fragile, easily-stale pattern this file removed
+      // earlier. The static contract this matrix cannot replace is the
+      // opposite of a pin: `ChatTimeline` never passes `maintainScrollAtEnd`
+      // at all, which makes every one of the library's own maintain call
+      // sites unreachable, and a resize is followed by the latch's own
+      // ResizeObserver instead. That contract is pinned directly in
+      // `chat-timeline.test.tsx` ("pins maintainScrollAtEndThreshold=0,
+      // MVCP maintenance, and the library's own maintainScrollAtEnd
+      // permanently disabled").
       // Real pane-resize behavior needs the explicit live-browser gate, not
       // a simulated jsdom layout event.
       type MutationCase = {
@@ -7890,18 +7897,17 @@ describe("ChatMessages scroll policy", () => {
     // already documents and solves this exact hazard for the native-div and
     // bundle-diff tile bodies via a continuously-mirrored ref.
     it("hidden permanent close does not overwrite the published handoff with zero geometry; new-instance reopen restores it", async () => {
-      // Fixup (hidden-close-and-rapid-capture, P1 #1): `persistCurrentScroll`'s
-      // ordinary (non-restore-pending) branch used to call
-      // `captureLiveChatTabScrollSnapshot()` UNCONDITIONALLY on every unmount,
-      // including a permanent close of a tab that has been hidden (and
-      // therefore geometry-zeroed via the real production chain documented
-      // above) for a while. That live read would silently resolve to
-      // row-zero/clamped garbage and overwrite the durable coordinate the
-      // hide-time handoff had already published correctly. Simulate the
-      // "already zeroed" symptom directly (scoped `clientHeight` override on
-      // the scroll node, matching the same terminal-symptom-injection
-      // approach used above for `scrollTop`) through a genuine close and
-      // reopen under a brand-new instance id.
+      // `persistCurrentScroll`'s ordinary (non-restore-pending) branch used
+      // to call `captureLiveChatTabScrollSnapshot()` UNCONDITIONALLY on
+      // every unmount, including a permanent close of a tab that has been
+      // hidden (and therefore geometry-zeroed via the real production chain
+      // documented above) for a while. That live read would silently
+      // resolve to row-zero/clamped garbage and overwrite the durable
+      // coordinate the hide-time handoff had already published correctly.
+      // Simulate the "already zeroed" symptom directly (scoped
+      // `clientHeight` override on the scroll node, matching the same
+      // terminal-symptom-injection approach used above for `scrollTop`)
+      // through a genuine close and reopen under a brand-new instance id.
       const messages = makeCompletedTranscript(200);
       const anchorIndex = 50;
       const savedViewOffset = 24;
@@ -8118,6 +8124,142 @@ describe("ChatMessages scroll policy", () => {
       );
       expect(persisted.mode).toBe("free-scrolling");
       expect(persisted.anchorIndex).toBeGreaterThan(anchorIndex);
+    });
+
+    it("a restore still converging when the box survives concealment finishes while concealed, so the show replays nothing", async () => {
+      // The retained-box guard above is judged on a list whose restore had
+      // already finished. This drives the case where it had NOT: the saved
+      // row is still measuring when the tile is concealed WITHOUT collapsing
+      // (`visibility:hidden`, an in-pane tab switch, where the hosted record
+      // keeps its rect and the list never stops measuring), its measurement
+      // finishes while concealed, and the tile is shown again.
+      //
+      // Ending that restore's settle loop at the hide left its persistence
+      // gate armed - the loop's own terminal outcome is what clears it - and
+      // the show branch's undisturbed early return is gated on that flag, so
+      // an armed gate replayed the saved anchor over a list the reader never
+      // left. A box that survives concealment keeps measuring, so the loop
+      // converges there and clears its own gate.
+      const messages = makeCompletedTranscript(200);
+      const anchorIndex = 20;
+      const savedViewOffset = 24;
+      const anchorId = messages[anchorIndex]?.id ?? null;
+      expect(anchorId).toBeTruthy();
+      const key = `t-visibility-converging-intact-${Math.random().toString(36).slice(2)}`;
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+      );
+      saveChatTabState({
+        identity: makeDefaultTestIdentity(key),
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        anchorIndex,
+        offset: savedViewOffset,
+      });
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: key,
+      });
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("LegendList ref is not mounted");
+      const beforeHide = getScrollNode().scrollTop;
+      expect(beforeHide).toBeGreaterThan(0);
+      // The handoff decides "did the box collapse" from the last reported
+      // position, so report the landing a real browser would have reported.
+      await fireScrollTopAndFlush(beforeHide);
+
+      // The saved row's position keeps moving while `measuring` is true: its
+      // position is a sum over the rows above it, which resolve from estimates
+      // over several commits. Each read drifts a further 100px, which is past
+      // CHAT_TIMELINE_RESTORE_POSITION_HELD_EPSILON_PX, so the restore reads
+      // its target as still settling and defers acceptance - the deferral this
+      // witness needs, reached by the mechanism it names. A drift inside that
+      // epsilon would instead read as having HELD STILL, and the restore would
+      // stay pending only for as long as its landing check happened to keep
+      // failing: still red here, but for a reason the test does not state and
+      // does not check. Same seam as the held-still witness above - spy
+      // `getState` and override this one row's `positionAtIndex` - so no other
+      // consumer's reads are disturbed.
+      let measuring = true;
+      let reads = 0;
+      const originalGetState = list.getState.bind(list);
+      const getStateSpy = vi.spyOn(list, "getState").mockImplementation(() => {
+        const state = originalGetState();
+        return {
+          ...state,
+          positionAtIndex: (index: number) => {
+            const real = state.positionAtIndex(index);
+            // The list withholds this reading for a row it has not measured,
+            // and perturbing a reading that does not exist would model
+            // nothing. Pass those through: this test is about a row whose
+            // position is known and still moving.
+            if (
+              index !== anchorIndex ||
+              !measuring ||
+              typeof real !== "number"
+            ) {
+              return real;
+            }
+            reads += 1;
+            return real + reads * 100;
+          },
+        };
+      });
+
+      // ONE wrapper per placement call, installed before the restore's first
+      // settle and never nested: a second wrapper over one that is already
+      // live adds two placements to whatever the run would otherwise report,
+      // on both sides of the fix. Counts are therefore read as deltas, so only
+      // what the show itself issued is judged.
+      const scrollToIndexSpy = vi.spyOn(list, "scrollToIndex");
+      const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+
+      try {
+        // Two settles with the row still moving: the restore is mid-flight.
+        await settleLegendList();
+        const issuedEarly = scrollToIndexSpy.mock.calls.length;
+        await settleLegendList();
+
+        // The premise, asserted rather than assumed: the restore is still
+        // PENDING when the tile hides. A pending loop re-issues on every
+        // settle, so a placement count that grew across that second settle is
+        // the loop still running and its persistence gate still armed. A
+        // restore that had already accepted issues nothing further, and the
+        // hide would then be concealing a FINISHED restore - the defect this
+        // witness covers needs an unfinished one, so the run would pass while
+        // exercising nothing.
+        const issuedBeforeHide = scrollToIndexSpy.mock.calls.length;
+        expect(issuedBeforeHide).toBeGreaterThan(issuedEarly);
+
+        // Conceal WITHOUT collapsing. The assertion is the premise: a hide
+        // that zeroed the box would exercise the collapsed path instead, and
+        // this test would pass for the wrong reason.
+        rerenderWith({ visible: false });
+        expect(getScrollNode().scrollTop).toBe(beforeHide);
+
+        // Measurement finishes while the tile is concealed. An intact box
+        // keeps measuring, so a loop still running here converges and reaches
+        // the terminal outcome that releases the gate.
+        measuring = false;
+        for (let round = 0; round < 8; round += 1) {
+          await settleLegendList();
+        }
+
+        const issuedBeforeShow = scrollToIndexSpy.mock.calls.length;
+        const placedBeforeShow = scrollToOffsetSpy.mock.calls.length;
+        rerenderWith({ visible: true });
+        await settleLegendList();
+        await settleLegendList();
+        expect(scrollToIndexSpy.mock.calls.length).toBe(issuedBeforeShow);
+        expect(scrollToOffsetSpy.mock.calls.length).toBe(placedBeforeShow);
+        // The reader is where they were, and the mode survived the handoff.
+        expect(getScrollNode().scrollTop).toBe(beforeHide);
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      } finally {
+        scrollToIndexSpy.mockRestore();
+        scrollToOffsetSpy.mockRestore();
+        getStateSpy.mockRestore();
+      }
     });
 
     it("a retained chat whose box survived concealment is not re-scrolled on show (bottom-following)", async () => {
@@ -8367,11 +8509,11 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("a bottom-following reader returns to the newest true bottom after hidden growth", async () => {
-      // Fixup (callback-synchronous-follow): the follow latch's permission
-      // is updated by publishing wheel intent plus the resulting native
-      // `scroll` event. The manual `scrollTop = 0` write below needs the shim's
-      // synthetic-event dispatch enabled, matching what a real browser does,
-      // so the latch learns the reader detached before the visibility toggle.
+      // The follow latch's permission is updated by publishing wheel intent
+      // plus the resulting native `scroll` event. The manual `scrollTop =
+      // 0` write below needs the shim's synthetic-event dispatch enabled,
+      // matching what a real browser does, so the latch learns the reader
+      // detached before the visibility toggle.
       enableLegendListBrowserScrollEvents();
       const messages = makeCompletedTranscript(24);
       const key = `t-visibility-following-end-${Math.random().toString(36).slice(2)}`;
@@ -8466,19 +8608,19 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("a scroll immediately followed by hide publishes the new position, not the previous mirror", async () => {
-      // Fixup (hidden-close-and-rapid-capture, P1 #2): the mirror capture
-      // must run SYNCHRONOUSLY inside `handleScroll`, never scheduled onto a
-      // SECOND, app-owned animation frame on top of whatever LegendList's
-      // own scroll/position bookkeeping already needs. `fireScrollTopWithout
-      // Flush` (investigated directly, not just assumed) proves that
-      // bookkeeping - `getState().scroll`, `positionAtIndex`, and the
-      // rendered-window bounds `viewportAnchorMessageId` searches - is not
-      // internally self-consistent immediately after a raw `scrollTop`
-      // write in this harness: `handleScroll` itself does not run until
-      // LegendList's own processing has had at least one frame, and reading
-      // ANYTHING (mirror OR a live DOM read, guarded or not) before that
-      // frame risks resolving to the wrong row rather than failing safely -
-      // a library-internal scheduling floor this component cannot bypass by
+      // The mirror capture must run SYNCHRONOUSLY inside `handleScroll`,
+      // never scheduled onto a SECOND, app-owned animation frame on top of
+      // whatever LegendList's own scroll/position bookkeeping already
+      // needs. `fireScrollTopWithoutFlush` (investigated directly, not
+      // just assumed) proves that bookkeeping - `getState().scroll`,
+      // `positionAtIndex`, and the rendered-window bounds
+      // `viewportAnchorMessageId` searches - is not internally
+      // self-consistent immediately after a raw `scrollTop` write in this
+      // harness: `handleScroll` itself does not run until LegendList's own
+      // processing has had at least one frame, and reading ANYTHING (mirror
+      // OR a live DOM read, guarded or not) before that frame risks
+      // resolving to the wrong row rather than failing safely - a
+      // library-internal scheduling floor this component cannot bypass by
       // itself, distinct from the app-level throttle this fixup removes.
       // `fireScrollTopAndFlush` gives exactly that one required frame; this
       // test hides IMMEDIATELY after it, with zero ADDITIONAL settle, to
@@ -9206,7 +9348,7 @@ describe("ChatMessages scroll policy", () => {
   });
 
   describe("atomic-reader-supersession", () => {
-    // Review (internal-tab-bottom-follow-review): the past-target release
+    // The past-target release
     // must resolve the WHOLE pending hydration transaction atomically
     // (persistence gate, pendingHydrationRestoreAnchorIdRef, and the
     // module-level pending registry together), and must not be fooled by
@@ -9287,14 +9429,14 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("pointerdown then stable past-target bottom, formerly-missing row hydrates: reader stays at true bottom, no yank-back", async () => {
-      // Fixup (pointer-generation-order): a real pointer interaction bumps
-      // anchorUserScrollGenerationRef via handleTranscriptPointerDown before
-      // the reader ever moves. Without the reorder, the outer settle wrapper's
-      // `generationMismatch || isAborted()` short-circuits on the ALREADY-true
-      // generation mismatch and never calls the atomic frozen-target
-      // predicate at all - leaving the pending id, registry entry, and
-      // persistence gate all armed even though the reader genuinely reached
-      // stable true bottom under unchanged messages/geometry.
+      // A real pointer interaction bumps anchorUserScrollGenerationRef via
+      // handleTranscriptPointerDown before the reader ever moves. Without
+      // the reorder, the outer settle wrapper's `generationMismatch ||
+      // isAborted()` short-circuits on the ALREADY-true generation mismatch
+      // and never calls the atomic frozen-target predicate at all - leaving
+      // the pending id, registry entry, and persistence gate all armed even
+      // though the reader genuinely reached stable true bottom under
+      // unchanged messages/geometry.
       enableLegendListBrowserScrollEvents();
       const fullMessages = makeCompletedTranscript(80);
       const missingAnchorIndexInFull = 40;
@@ -9370,8 +9512,8 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("pointerdown then stable past-target bottom, permanent close, new-instance reopen before row arrival: durable state stays following-end", async () => {
-      // Fixup (pointer-generation-order): companion to the hydration case
-      // above for the close/reopen route the ticket also requires.
+      // Companion to the hydration case above for the close/reopen route
+      // the ticket also requires.
       enableLegendListBrowserScrollEvents();
       const fullMessages = makeCompletedTranscript(80);
       const missingAnchorIndexInFull = 40;
@@ -9464,12 +9606,12 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("pointerdown then past-target during message reorder retains pending transaction, never following-end on close", async () => {
-      // Fixup (pointer-generation-order): the settle wrapper now evaluates the
-      // caller's atomic predicate BEFORE the generation mismatch. That makes
-      // the frozen-target geometry/identity checks reachable after a real
-      // pointerdown. Prove the reorder path still REFUSES release - running
-      // the predicate first must not weaken its own message-array fingerprint
-      // (mirror of the non-pointer reorder regression, with pointer first).
+      // The settle wrapper now evaluates the caller's atomic predicate
+      // BEFORE the generation mismatch. That makes the frozen-target
+      // geometry/identity checks reachable after a real pointerdown. Prove
+      // the reorder path still REFUSES release - running the predicate
+      // first must not weaken its own message-array fingerprint (mirror of
+      // the non-pointer reorder regression, with pointer first).
       enableLegendListBrowserScrollEvents();
       const fullMessages = makeCompletedTranscript(80);
       const missingAnchorIndexInFull = 40;

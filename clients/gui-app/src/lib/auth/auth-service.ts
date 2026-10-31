@@ -50,6 +50,15 @@ import type {
   SandboxVerbFetchResult,
   TraycerModelsFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
+import {
+  SLACK_SETTINGS_UNAVAILABLE_IN_STAGING,
+  type SlackAppFailure,
+  type SlackAppInstallUrlResult,
+  type SlackAppManifestResult,
+  type SlackAppReadResult,
+  type SlackAppWriteResult,
+} from "@traycer-clients/shared/host-client/slack-app";
+import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
 import type {
   VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
@@ -3338,6 +3347,67 @@ export class AuthService {
       throw new Error("Sign in to start Automations.");
     }
     return this.runnerHost.openSandboxAutomation(bearer, target);
+  }
+
+  /**
+   * The floor under every Slack app call: a build that cannot reach
+   * traycer-server at all (the signal the sandbox floor reads,
+   * `IRunnerHost.sandboxControlUnavailableReason`: staging mobile, whose
+   * server is behind IAP) sends none of them.
+   */
+  private slackAppRefusal(): SlackAppFailure | null {
+    return this.runnerHost.sandboxControlUnavailableReason === null
+      ? null
+      : { kind: "unavailable", reason: SLACK_SETTINGS_UNAVAILABLE_IN_STAGING };
+  }
+
+  /**
+   * A bot's Slack app, on traycer-server with the person's bearer (its
+   * members only; the server refuses anyone else). Signed out, each answers
+   * `unauthorized` without a request.
+   */
+  async readSlackApp(botId: string): Promise<SlackAppReadResult> {
+    const refusal = this.slackAppRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.readSlackApp(bearer, botId);
+  }
+
+  async getSlackAppManifest(botId: string): Promise<SlackAppManifestResult> {
+    const refusal = this.slackAppRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.getSlackAppManifest(bearer, botId);
+  }
+
+  async registerSlackApp(
+    request: SlackAppRegisterRequest,
+  ): Promise<SlackAppWriteResult> {
+    const refusal = this.slackAppRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.registerSlackApp(bearer, request);
+  }
+
+  async mintSlackAppInstallUrl(
+    botId: string,
+  ): Promise<SlackAppInstallUrlResult> {
+    const refusal = this.slackAppRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.mintSlackAppInstallUrl(bearer, botId);
+  }
+
+  async disconnectSlackApp(botId: string): Promise<SlackAppWriteResult> {
+    const refusal = this.slackAppRefusal();
+    if (refusal !== null) return refusal;
+    const bearer = this.cloudBearer();
+    if (bearer === null) return { kind: "unauthorized" };
+    return this.runnerHost.disconnectSlackApp(bearer, botId);
   }
 
   /** Explicit invitation access when the serving tier predates the host methods. */

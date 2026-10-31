@@ -41,7 +41,7 @@ const MESSAGE_ROW_SELECTOR = "[data-message-id]";
 const LARGE_MESSAGE_COUNT = 400;
 
 /**
- * Review round 1, finding 2: counts ROW-BOUNDARY renders - i.e. how many
+ * Counts ROW-BOUNDARY renders - i.e. how many
  * times `ChatTimelineRow` re-entered this child boundary - NOT executions of
  * the real memoized `ChatMessageImpl` body. This wrapper is intentionally
  * un-memoized, so it always re-runs (and increments the counter) whenever
@@ -105,7 +105,7 @@ function mountedMessageRows(container: HTMLElement): NodeListOf<Element> {
   return container.querySelectorAll(MESSAGE_ROW_SELECTOR);
 }
 
-/** Ticket 23 panel-resize tests: a distinct-position rect, overriding the
+/** The panel-resize tests use a distinct-position rect, overriding the
  *  shared `installLegendListViewportMetrics()` shim's uniform (0,0)-origin
  *  stub on a specific element so visible vs. off-screen rows are
  *  distinguishable (see `chat-timeline-panel-resize-snapshot.test.ts` for
@@ -467,8 +467,7 @@ describe("ChatTimeline", () => {
     expect(screen.getByLabelText("Edit message")).not.toBeNull();
   });
 
-  // Ticket 17 (chat-messages.tsx review round 2, finding 2 residual):
-  // establishes the LIBRARY-LEVEL contract the fix depends on - a row's
+  // Establishes the LIBRARY-LEVEL contract the fix depends on - a row's
   // real measured size CAN change under the SAME `data` array with NO
   // scroll event at all (an activity-group disclosure collapsing/expanding
   // is exactly this shape: that open/closed state lives outside `messages`,
@@ -526,7 +525,7 @@ describe("ChatTimeline", () => {
     );
   });
 
-  // M4 (ticket 16 spacer alignment): header/footer 40px -> 12/16px, fade
+  // Spacer alignment: header/footer 40px -> 12/16px, fade
   // header 64/80px -> 40/48px.
   it("uses the approved compact spacer sizes instead of the old 40/64/80px drift", () => {
     const messages: ChatMessageModel[] = [makeMessage(0, "user")];
@@ -567,7 +566,7 @@ describe("ChatTimeline", () => {
     );
   });
 
-  // Ticket 24 (painted-chat lifecycle audit, finding 5): the shared row
+  // Painted-chat lifecycle: the shared row
   // context previously carried `navigationHighlightedMessageId` directly, so
   // React's context propagation re-rendered EVERY mounted row - bypassing
   // each row's own `memo` bailout entirely (see the render-count probe's own
@@ -631,7 +630,7 @@ describe("ChatTimeline", () => {
   }
 
   /**
-   * Review round 1, finding 1: owns messages/highlight as REAL React state
+   * Owns messages/highlight as REAL React state
    * (mirroring how chat-messages.tsx drives `ChatTimeline`) and exposes the
    * raw setters, so timing-sensitive tests can trigger updates WITHOUT going
    * through Testing Library's `rerender` - `rerender`'s internal `act()`
@@ -1293,13 +1292,13 @@ describe("ChatTimeline LegendList strict-edge policy config", () => {
   });
 
   it("pins maintainScrollAtEndThreshold=0, MVCP maintenance, and the library's own maintainScrollAtEnd permanently disabled", async () => {
-    // Fixup (callback-synchronous-follow): the library's own
-    // `maintainScrollAtEnd` is NEVER passed at all anymore - not even
-    // conditionally - since every one of its call sites (data/item/footer/
-    // layout) already no-ops when this prop is falsy. Bottom-follow is
-    // reimplemented in `chat-timeline-follow-latch.ts` and driven
-    // imperatively; see that module's own real-LegendList integration
-    // coverage for the actual follow/detach behavior this enables.
+    // The library's own `maintainScrollAtEnd` is NEVER passed at all
+    // anymore - not even conditionally - since every one of its call sites
+    // (data/item/footer/layout) already no-ops when this prop is falsy.
+    // Bottom-follow is reimplemented in `chat-timeline-follow-latch.ts` and
+    // driven imperatively; see that module's own real-LegendList
+    // integration coverage for the actual follow/detach behavior this
+    // enables.
     renderTimeline({ messages: makeMessages(6) });
     await settleLegendList();
     expect(legendListPolicyProps.last).not.toBeNull();

@@ -91,6 +91,13 @@ export const RunnerHostInvoke = {
   runSandboxVerb: "runnerHost:sandboxes:verb",
   getSandboxAutomation: "runnerHost:sandboxes:automation:get",
   openSandboxAutomation: "runnerHost:sandboxes:automation:open",
+  // A bot's Slack app (traycer-server `/api/slack/apps/*`), for the same
+  // reason as the sandbox control plane.
+  readSlackApp: "runnerHost:slackApps:read",
+  getSlackAppManifest: "runnerHost:slackApps:manifest",
+  registerSlackApp: "runnerHost:slackApps:register",
+  mintSlackAppInstallUrl: "runnerHost:slackApps:installUrl",
+  disconnectSlackApp: "runnerHost:slackApps:disconnect",
   // The secrets broker (authn), from Electron main for the same reason.
   getSandboxGrants: "runnerHost:sandboxSecrets:grants",
   getTeamEnvironment: "runnerHost:environments:team",

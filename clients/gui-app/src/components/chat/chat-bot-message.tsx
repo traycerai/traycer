@@ -1,6 +1,5 @@
 import {
   Fragment,
-  useContext,
   useEffect,
   useState,
   type ReactElement,
@@ -12,12 +11,10 @@ import {
   Pencil,
   RotateCcw,
 } from "lucide-react";
-import {
-  isConversationRequestMessageId,
-  type BotAnnouncement,
-  type BotAnnouncementKind,
-  type BotQuestion,
-  type ConversationRequest,
+import type {
+  BotAnnouncement,
+  BotAnnouncementKind,
+  BotQuestion,
 } from "@traycer/protocol/persistence/epic/messages";
 import {
   BOT_THREAD_ANCHOR_ANSWER,
@@ -54,14 +51,13 @@ import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
 import { BotSurfaceCard } from "@/components/bots/bot-surface-card";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import {
-  ChatBotPresentationContext,
-  type ChatBotFailedRecovery,
-  type ChatBotFailedRequest,
-  type ChatBotPresentation,
-  type ChatBotQuestions,
-  type ChatBotThreadLine,
-  type ChatBotTurnReceipt,
+import type {
+  ChatBotFailedRecovery,
+  ChatBotFailedRequest,
+  ChatBotPresentation,
+  ChatBotQuestions,
+  ChatBotThreadLine,
+  ChatBotTurnReceipt,
 } from "./chat-bot-presentation-context";
 import { chatFindSegmentUnitId } from "./chat-find";
 import { ChatMessageTimestamp } from "./chat-message-timestamp";
@@ -80,9 +76,8 @@ import { TextSegment } from "./segments/text-segment";
 /**
  * One row of a bot's channel or thread, in Slack's message layout (Tracy
  * Bots, decision 41): the sender's picture, their name and the time, then
- * the text. A member's message carries a jump to the reply that answered it
- * where that reply is not right under it and, in the channel, the line of
- * its thread once the thread has a reply; an announcement carries its kind
+ * the text. A member's message carries, in the channel, the line of its
+ * thread once the thread has a reply; an announcement carries its kind
  * on a coloured bar, as Slack draws an app's attachment. A question or a
  * proposal carries the line of the thread a member answers it in, and a
  * reply that asks carries its options as buttons. A row that asks without
@@ -146,7 +141,7 @@ export function ChatBotMessage(props: {
 }
 
 /**
- * A member's row: their message, what it was answered with or why not, and
+ * A member's row: their message, why it went unanswered where it did, and
  * the line of its thread.
  */
 function MemberRow(props: {
@@ -196,13 +191,6 @@ function MemberRow(props: {
       )}
       {failedReceipt === null ? null : (
         <TurnReceiptLine receipt={failedReceipt} alwaysShown />
-      )}
-      {message.conversationRequest === undefined ? null : (
-        <AnsweredReplyLink
-          request={message.conversationRequest}
-          postId={postId}
-          inChannel={presentation.threadLine !== null}
-        />
       )}
       {replyInThread === null || !threadStarted(threadLine) ? null : (
         <ThreadLine
@@ -1209,57 +1197,6 @@ function AnnouncementLink(props: { readonly link: string }): ReactNode {
       onClick={(event) => void openLink(props.link, "markdown", event)}
     >
       {props.link}
-    </Button>
-  );
-}
-
-/**
- * "See reply" under a member's message the bot has answered, a jump to the
- * reply when that reply is in this list (in a thread, or in the channel for
- * a direct post, whose reply is in the channel) and not the row right under
- * the message. Whether a message still waits for its answer is the bot's
- * own bookkeeping and is not drawn. Read off the member's row, which is
- * where the host keeps it; the reply row says nothing about the request.
- */
-function AnsweredReplyLink(props: {
-  readonly request: ConversationRequest;
-  /** The member's message, by its message id; `null` before it is written. */
-  readonly postId: string | null;
-  readonly inChannel: boolean;
-}): ReactNode {
-  const { request, postId, inChannel } = props;
-  const presentation = useContext(ChatBotPresentationContext);
-  const scrollToMessage =
-    inChannel && request.direct !== true
-      ? null
-      : (presentation?.scrollToMessage ?? null);
-  const replyId =
-    request.resolvedAt === null ? null : request.resolvedByMessageId;
-  // A message the person replaced with an edit was not answered: the new
-  // message carries the request now.
-  if (
-    replyId === null ||
-    scrollToMessage === null ||
-    isConversationRequestMessageId(replyId)
-  ) {
-    return null;
-  }
-  if (
-    postId !== null &&
-    presentation?.replyFollowsPost?.(postId, replyId) === true
-  ) {
-    return null;
-  }
-  return (
-    <Button
-      type="button"
-      variant="link"
-      size="xs"
-      className="self-start"
-      onClick={() => scrollToMessage(replyId)}
-      data-testid="conversation-request-reply-link"
-    >
-      See reply
     </Button>
   );
 }

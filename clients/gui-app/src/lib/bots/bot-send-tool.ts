@@ -2,6 +2,7 @@ import type {
   BotSendReceipt,
   ToolInputDetail,
 } from "@traycer/protocol/persistence/epic/content-blocks";
+import { botSendSlackPlace } from "@traycer/protocol/persistence/epic/bot-send-slack-place";
 import type { BotSurfaceKind } from "@traycer/protocol/persistence/epic/messages";
 import type { OpenMessage } from "@traycer/protocol/persistence/epic/open-harness-records";
 import {
@@ -124,8 +125,19 @@ export function paintedBotSendOf(call: {
 }
 
 /**
+ * Where a send posted in Slack went, as its card and Find say it (S4b; see
+ * `botSendSlackPlace`). `null` for a Traycer post and for a send with no
+ * stamp.
+ */
+export function slackSendPlace(send: BotSend): string | null {
+  const slack = send.receipt?.slack ?? null;
+  return slack === null ? null : botSendSlackPlace(slack);
+}
+
+/**
  * The conversations the stamped questions of `messages` were asked in (T94),
- * sorted: where their states are read from.
+ * sorted: where their states are read from. A question asked in Slack has
+ * no post to read.
  */
 export function askedConversationIds(
   messages: ReadonlyArray<ChatMessage>,
@@ -133,7 +145,11 @@ export function askedConversationIds(
   const ids = new Set<string>();
   for (const message of messages) {
     for (const segment of message.segments) {
-      if (segment.kind === "tool" && segment.botSendReceipt?.kind === "ask") {
+      if (
+        segment.kind === "tool" &&
+        segment.botSendReceipt?.kind === "ask" &&
+        segment.botSendReceipt.slack === null
+      ) {
         ids.add(segment.botSendReceipt.conversationId);
       }
     }

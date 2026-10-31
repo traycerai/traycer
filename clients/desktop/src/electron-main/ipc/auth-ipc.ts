@@ -41,6 +41,13 @@ import {
   fetchSandboxGrantsViaHttp,
   fetchTeamEnvironmentViaHttp,
 } from "@traycer-clients/shared/host-client/sandbox-secrets";
+import {
+  disconnectSlackAppViaHttp,
+  fetchSlackAppManifestViaHttp,
+  mintSlackAppInstallUrlViaHttp,
+  readSlackAppViaHttp,
+  registerSlackAppViaHttp,
+} from "@traycer-clients/shared/host-client/slack-app";
 import { mintExecutableWriteGrantViaHttp } from "@traycer-clients/shared/host-client/executable-write-grant";
 import { config } from "../../config";
 import type {
@@ -68,6 +75,8 @@ import {
   parseSandboxVerbGesture,
   parseSandboxPatchRequest,
   parseSecretRequestDecision,
+  parseSlackAppBotId,
+  parseSlackAppRegisterRequest,
   parseStoredAuthTokens,
   parseStoredCredentialsIdentity,
   parseTokenRotateExpected,
@@ -368,6 +377,43 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         bearerToken,
         await iapProxyToken(),
         parsedTarget,
+      );
+    },
+  );
+
+  // A bot's Slack app, on the same server and with the same proxy token.
+  const slackAppBotCalls = [
+    [RunnerHostInvoke.readSlackApp, readSlackAppViaHttp],
+    [RunnerHostInvoke.getSlackAppManifest, fetchSlackAppManifestViaHttp],
+    [RunnerHostInvoke.mintSlackAppInstallUrl, mintSlackAppInstallUrlViaHttp],
+    [RunnerHostInvoke.disconnectSlackApp, disconnectSlackAppViaHttp],
+  ] as const;
+  for (const [channel, viaHttp] of slackAppBotCalls) {
+    bridge.handleInvoke(
+      channel,
+      async (_event, bearerToken: unknown, botId: unknown) => {
+        assertString(bearerToken, `${channel}.bearerToken`);
+        const parsedBotId = parseSlackAppBotId(botId, `${channel}.botId`);
+        return viaHttp(
+          config.serverBaseUrl,
+          bearerToken,
+          await iapProxyToken(),
+          parsedBotId,
+        );
+      },
+    );
+  }
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.registerSlackApp,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "registerSlackApp.bearerToken");
+      const parsedRequest = parseSlackAppRegisterRequest(request);
+      return registerSlackAppViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        parsedRequest,
       );
     },
   );
