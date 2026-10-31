@@ -3,8 +3,10 @@
  * path (`AgentReferenceMarkdown` over `TraycerMarkdown`): `<@id>` with an
  * agent's id is the agent's chip between the literal `<@` and `>`, as the
  * release before drew it, and never a mention. With the features on, the same
- * token is a mention. The rehype plugin list is read once at import, so each
- * case imports the renderer fresh under its own switch.
+ * token is a mention. A raw `traycer-mention` tag is read through and
+ * unwrapped, as it was before mentions existed. The rehype plugin list and the
+ * sanitize schema are read once at import, so each case imports the renderer
+ * fresh under its own switch.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -99,10 +101,65 @@ describe("an agent id inside <@…>", () => {
     expect(container.textContent).toBe("ask <@Planner> next");
   });
 
+  it("inside a raw mention tag is the agent's chip without the features, and the tag is unwrapped", async () => {
+    const container = await renderUnder(
+      false,
+      `ask <traycer-mention data-user-id="${AGENT_ID}">${AGENT_ID}</traycer-mention> next`,
+    );
+
+    expect(screen.getByRole("button").textContent).toBe("Planner");
+    expect(screen.queryByTestId("bot-mention")).toBeNull();
+    expect(container.querySelector("traycer-mention")).toBeNull();
+    expect(container.textContent).toBe("ask Planner next");
+  });
+
   it("is a mention with the features", async () => {
     await renderUnder(true, `ask <@${AGENT_ID}> next`);
 
     expect(screen.getByTestId("bot-mention").textContent).toBe("@Pat");
     expect(screen.queryByRole("button")).toBeNull();
+  });
+});
+
+/**
+ * A surface that maps no mention tag (reasoning, a plan, a pull request's
+ * conversation) renders whatever sanitize keeps.
+ */
+async function renderPlainUnder(
+  enabled: boolean,
+  markdown: string,
+): Promise<HTMLElement> {
+  features.enabled = enabled;
+  const { TraycerMarkdown } = await import("@/markdown");
+  const { container } = render(
+    <TraycerMarkdown
+      className={null}
+      proseSize="compact"
+      components={null}
+      remarkPlugins={null}
+      rehypePlugins={null}
+      quotable={false}
+      isStreaming={false}
+    >
+      {markdown}
+    </TraycerMarkdown>,
+  );
+  return container;
+}
+
+describe("a raw mention tag where no surface maps it", () => {
+  const markdown = `hi <traycer-mention data-user-id="u-1">Ann</traycer-mention> there`;
+
+  it("is unwrapped to its text without the features", async () => {
+    const container = await renderPlainUnder(false, markdown);
+
+    expect(container.querySelector("traycer-mention")).toBeNull();
+    expect(container.textContent).toBe("hi Ann there");
+  });
+
+  it("is kept with the features", async () => {
+    const container = await renderPlainUnder(true, markdown);
+
+    expect(container.querySelector("traycer-mention")).not.toBeNull();
   });
 });
