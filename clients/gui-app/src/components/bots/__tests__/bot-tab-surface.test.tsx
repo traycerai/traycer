@@ -14,7 +14,7 @@
  */
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { StrictMode, type ReactNode } from "react";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -509,6 +509,7 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
+import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -2092,6 +2093,63 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
     expect(channel.getAttribute("data-open-thread")).toBe("post-7");
     expect(channel.getAttribute("data-land-on")).toBe("thread-reply-9");
     expect(channel.getAttribute("data-land-on-thread")).toBe("thread-1");
+  });
+
+  describe("a landing requested from outside, as a tapped push does", () => {
+    const LISTED_THREAD: BotThreadSummary = {
+      threadId: "thread-1",
+      conversationId: "conversation-app",
+      sessionChatId: "session-thread-1",
+      anchor: {
+        messageId: "post-7",
+        requestId: "req-7",
+        senderUserId: "user-1",
+        sentAt: 1_000,
+        resolvedAt: 1_001,
+      },
+      replyCount: 1,
+      lastReplyAt: 2_000,
+      openRequestCount: 0,
+      costUsd: null,
+    };
+
+    beforeEach(() => {
+      useBotTabLandingStore.setState({ byBotId: {} });
+    });
+
+    it("opens the listed thread beside the channel on the row, and is spent, so a later render does not land it again", () => {
+      mocks.state.threads = [LISTED_THREAD];
+      useBotTabLandingStore
+        .getState()
+        .request(BOT_ID, { threadId: "thread-1", messageId: "reply-3" });
+      const { rerender } = render(surface());
+
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-open-thread")).toBe("post-7");
+      expect(channel.getAttribute("data-land-on")).toBe("reply-3");
+      expect(channel.getAttribute("data-land-on-thread")).toBe("thread-1");
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+
+      // The person closes the thread; rendering again does not reopen it.
+      act(() => useBotOpenThreadStore.getState().setRail(BOT_ID, null));
+      rerender(surface());
+      expect(
+        screen.getByTestId("stub-channel").getAttribute("data-open-thread"),
+      ).toBe("none");
+    });
+
+    it("shows the channel when the list does not name the thread", () => {
+      mocks.state.threads = [LISTED_THREAD];
+      useBotTabLandingStore
+        .getState()
+        .request(BOT_ID, { threadId: "thread-gone", messageId: "reply-3" });
+      render(surface());
+
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-open-thread")).toBe("none");
+      expect(channel.getAttribute("data-land-on")).toBe("none");
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+    });
   });
 
   it("gives the channel the bot's trunk session", () => {

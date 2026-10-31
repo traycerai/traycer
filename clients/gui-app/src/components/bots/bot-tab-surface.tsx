@@ -45,6 +45,7 @@ import {
 import { useTeamSetupHistory } from "@/hooks/bots/use-team-setup-history";
 import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import {
   BotChannelView,
   type BotChannelLanding,
@@ -591,6 +592,34 @@ function useBotTabSession(args: {
 }
 
 /**
+ * Lands the tab where it was asked to from outside (a tapped push): the
+ * thread beside the channel, or the channel, once the thread list has
+ * answered, since a thread opens by the post it hangs off. Each request is
+ * spent once.
+ */
+function useSpendTabLanding(args: {
+  readonly botId: string;
+  /** `null` while the list is read. */
+  readonly threads: ReadonlyArray<BotThreadSummary> | null;
+  readonly showChannel: (messageId: string | null) => void;
+  readonly showThread: (threadId: string, messageId: string | null) => void;
+}): void {
+  const { botId, threads, showChannel, showThread } = args;
+  const landing = useBotTabLandingStore((state) =>
+    Object.hasOwn(state.byBotId, botId) ? state.byBotId[botId] : null,
+  );
+  useEffect(() => {
+    if (landing === null || threads === null) return;
+    useBotTabLandingStore.getState().clear(botId);
+    if (landing.threadId === null) {
+      showChannel(landing.messageId);
+    } else {
+      showThread(landing.threadId, landing.messageId);
+    }
+  }, [botId, landing, showChannel, showThread, threads]);
+}
+
+/**
  * The top of a team's main bot's live channel (T67b): the setup the bot was
  * born from and how the team's host came; `null` for any other bot, and until
  * the environment list names the bot's team.
@@ -733,6 +762,7 @@ function BotTabContent(props: {
     showChannel,
     showThread,
   } = useBotTabSession({ threads, onViewChange, setOpenThread });
+  useSpendTabLanding({ botId, threads, showChannel, showThread });
   const openActivity = useCallback(() => changeView("activity"), [changeView]);
   const activitySummary = useBotActivitySummary({
     botId,
