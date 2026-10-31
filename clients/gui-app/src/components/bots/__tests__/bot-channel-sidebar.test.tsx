@@ -5,7 +5,8 @@
  * + that opens the create form, and an empty one a call to action doing the
  * same; a team's + opens the team's main bot, which for a new team with no bot
  * is the one still to be set up (T67), drawn as a row marked as needing a
- * host. A person in no team is offered "Create a team".
+ * host. A person in no team is offered "Create a team". A bot that is not its
+ * environment's main bot is made main from its row's menu.
  * The real sidebar, the real new-bot dialog and the real bot-tabs store run
  * over mocked reads; `bot.onboarding.read` answers per environment from a
  * script, the create form and the navigation helper are stubs, so the dialog's
@@ -65,6 +66,7 @@ const mocks = vi.hoisted(() => {
     openLink: vi.fn<(url: string, kind: string) => Promise<void>>(),
     hasShell: true,
     navigateToTabIntent: vi.fn<(intent: unknown) => void>(),
+    setMainBot: vi.fn<(variables: object) => void>(),
     bindings: { stub: "environment-bindings" },
     state: {
       environments: [] as EnvironmentDescriptor[],
@@ -75,6 +77,10 @@ const mocks = vi.hoisted(() => {
       reads,
       /** Whether the host advertises `bot.onboarding.read`; `null` while unknown. */
       support: null as boolean | null,
+      /** Whether the host advertises `environment.setMainBot`; `null` while unknown. */
+      setMainBotSupport: null as boolean | null,
+      /** What `environment.setMainBot` reports as its error; `null` = accepted. */
+      setMainBotRefusal: null as string | null,
       /** The line the host negotiated for `bot.onboarding.read`. */
       version: { major: 1, minor: 1 },
       /** What `bot.notificationLevel.read` answers: levels by channel id. */
@@ -112,8 +118,12 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-tab",
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSupport: (_hostId: string | null, method: string) =>
-    mocks.state.unsupported.has(method) ? false : mocks.state.support,
+  useHostMethodSupport: (_hostId: string | null, method: string) => {
+    if (method === "environment.setMainBot") {
+      return mocks.state.setMainBotSupport;
+    }
+    return mocks.state.unsupported.has(method) ? false : mocks.state.support;
+  },
   useHostMethodSchemaVersion: () => mocks.state.version,
   useHostSupportsMethod: () => true,
 }));
@@ -172,6 +182,16 @@ vi.mock("@/hooks/host/use-host-query", async (importOriginal) => ({
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
   useBotListQuery: () => ({
     data: { bots: mocks.state.bots, mainBotIds: mocks.state.mainBotIds },
+  }),
+}));
+vi.mock("@/hooks/bots/use-environment-set-main-bot-mutation", () => ({
+  useEnvironmentSetMainBotMutation: () => ({
+    isPending: false,
+    error:
+      mocks.state.setMainBotRefusal === null
+        ? null
+        : { message: mocks.state.setMainBotRefusal },
+    mutate: mocks.setMainBot,
   }),
 }));
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
@@ -316,6 +336,8 @@ beforeEach(() => {
   mocks.state.connectable = { hostIds: [TAB_HOST, OTHER_HOST], resolved: true };
   mocks.state.epics = {};
   mocks.state.support = true;
+  mocks.state.setMainBotSupport = true;
+  mocks.state.setMainBotRefusal = null;
   mocks.state.version = { major: 1, minor: 1 };
   mocks.state.levels = {};
   mocks.state.readCursor = undefined;
@@ -596,6 +618,70 @@ describe("<BotChannelSidebar /> main bot", () => {
     mount("bot-release");
 
     expect(screen.queryByRole("img", { name: "Main bot" })).toBeNull();
+  });
+});
+
+describe("<BotChannelSidebar /> making a bot main", () => {
+  function menuOf(botId: string): HTMLElement | null {
+    const item = row(botId).closest("li");
+    if (item === null) throw new Error(`no list item for ${botId}`);
+    return within(item).queryByTestId("bot-channel-row-menu");
+  }
+
+  it("makes a bot that is not main the main bot from its row's menu and its context menu, in one click with no confirmation", async () => {
+    const user = userEvent.setup();
+    mocks.state.mainBotIds = { "env-team": "bot-release" };
+    mount("bot-release");
+
+    const menu = menuOf("bot-triage");
+    if (menu === null) throw new Error("expected the triage bot's menu");
+    await user.click(menu);
+    await user.click(screen.getByRole("menuitem", { name: "Make main" }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(mocks.setMainBot).toHaveBeenCalledTimes(1);
+    expect(mocks.setMainBot.mock.calls[0][0]).toEqual({
+      environmentId: "env-team",
+      botId: "bot-triage",
+    });
+
+    await user.pointer({ keys: "[MouseRight]", target: row("bot-triage") });
+    await user.click(screen.getByRole("menuitem", { name: "Make main" }));
+    expect(mocks.setMainBot).toHaveBeenCalledTimes(2);
+    expect(mocks.setMainBot.mock.calls[1][0]).toEqual({
+      environmentId: "env-team",
+      botId: "bot-triage",
+    });
+  });
+
+  it("offers no menu on the main bot, nor in an environment with no main bot", () => {
+    mocks.state.mainBotIds = { "env-team": "bot-release" };
+    mount("bot-release");
+
+    expect(menuOf("bot-triage")).not.toBeNull();
+    expect(menuOf("bot-release")).toBeNull();
+    expect(menuOf("bot-notes")).toBeNull();
+  });
+
+  it.each([false, null])(
+    "offers no menu on a host whose support for environment.setMainBot is %s",
+    (support) => {
+      mocks.state.setMainBotSupport = support;
+      mocks.state.mainBotIds = { "env-team": "bot-release" };
+      mount("bot-release");
+
+      expect(screen.queryByTestId("bot-channel-row-menu")).toBeNull();
+    },
+  );
+
+  it("states a refusal under the bot's row, and nowhere else", () => {
+    mocks.state.setMainBotRefusal = "Only an admin can change the main bot";
+    mocks.state.mainBotIds = { "env-team": "bot-release" };
+    mount("bot-release");
+
+    const refusal = screen.getByRole("alert");
+    expect(refusal.textContent).toBe("Only an admin can change the main bot");
+    expect(row("bot-triage").closest("li")?.contains(refusal)).toBe(true);
   });
 });
 

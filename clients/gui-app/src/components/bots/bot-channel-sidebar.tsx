@@ -1,17 +1,32 @@
 import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { ExternalLink, Plus } from "lucide-react";
+import { EllipsisVertical, ExternalLink, Plus } from "lucide-react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
+import { BotSettingsRefusal } from "@/components/bots/bot-settings-group";
 import {
   NewBotDialog,
   type NewBotTarget,
 } from "@/components/bots/new-bot-dialog";
 import { Badge } from "@/components/ui/badge";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useDashboardPageOpener } from "@/components/settings/host-scope/use-dashboard-page-opener";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useEnvironmentSetMainBotMutation } from "@/hooks/bots/use-environment-set-main-bot-mutation";
 import { useTeamSetups, type TeamSetup } from "@/hooks/bots/use-team-setups";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
@@ -60,7 +75,11 @@ const SIDEBAR_ACTION_ROW_CLASS =
  * create form for one more bot there (`NewBotDialog`), which an empty
  * personal section offers once too. With no team at all, "Create a team"
  * stands where a team's section would, opening the dashboard page where a
- * team is made.
+ * team is made. The row of a bot that is not its environment's main bot,
+ * where the environment has one and the tab's host can write it, has a menu
+ * (its ⋮ and its context menu) whose "Make main" hands the star over, with no
+ * confirmation since making another bot main hands it back; a refusal is
+ * stated under the row.
  *
  * Read through the tab's host: the lists are cloud-backed, so any host gives
  * the same answer. A channel opens that bot's tab, through this tab's host,
@@ -81,6 +100,8 @@ export function BotChannelSidebar(props: {
   const noTeam = hasNoTeamEnvironment(environments.data?.environments);
   const botList = bots.data?.bots ?? EMPTY_BOTS;
   const mainBotIds = bots.data?.mainBotIds ?? null;
+  const canSetMainBot =
+    useHostMethodSupport(hostId, "environment.setMainBot") === true;
   const model = useMemo(
     () =>
       buildHomeBotsModel({
@@ -148,6 +169,7 @@ export function BotChannelSidebar(props: {
           group={group}
           activeBotId={activeBotId}
           unreadByBotId={unreadByBotId}
+          canSetMainBot={canSetMainBot}
           setup={
             teamSetups.setups.find(
               (setup) => setup.environmentId === group.environmentId,
@@ -176,6 +198,8 @@ function SidebarSection(props: {
   readonly group: HomeBotsGroup;
   readonly activeBotId: string;
   readonly unreadByBotId: ReadonlyMap<string, number | null>;
+  /** Whether the tab's host can make another bot main. */
+  readonly canSetMainBot: boolean;
   /** The team's main bot while it is still to be set up; `null` otherwise. */
   readonly setup: TeamSetup | null;
   /** The tab's host, which reads each channel's level. */
@@ -235,8 +259,8 @@ function SidebarSection(props: {
         </button>
       )}
       <ul className="flex flex-col gap-0.5">
-        {group.bots.map((bot) => (
-          <li key={bot.botId}>
+        {group.bots.map((bot) => {
+          const row = (
             <ChannelRow
               bot={bot}
               isMain={bot.botId === group.mainBotId}
@@ -246,8 +270,21 @@ function SidebarSection(props: {
               hostId={hostId}
               onOpen={() => onOpenChannel(bot)}
             />
-          </li>
-        ))}
+          );
+          const canMakeMain =
+            props.canSetMainBot &&
+            group.mainBotId !== null &&
+            bot.botId !== group.mainBotId;
+          return (
+            <li key={bot.botId}>
+              {canMakeMain ? (
+                <MakeMainChannelRow bot={bot}>{row}</MakeMainChannelRow>
+              ) : (
+                row
+              )}
+            </li>
+          );
+        })}
         {setup === null ? null : (
           <li>
             <SetupChannelRow
@@ -387,6 +424,61 @@ function ChannelRow(props: {
         />
       )}
     </button>
+  );
+}
+
+/**
+ * A bot's row with the menu that makes it its environment's main bot, from
+ * the row's ⋮ (drawn on hover and keyboard focus, always on a touch screen)
+ * or its context menu. The refusal of the write is stated under the row.
+ */
+function MakeMainChannelRow(props: {
+  readonly bot: BotRecord;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { bot } = props;
+  const client = useTabHostClient();
+  const setMain = useEnvironmentSetMainBotMutation(client);
+  const makeMain = (): void =>
+    setMain.mutate({ environmentId: bot.environmentId, botId: bot.botId });
+  return (
+    <div className="flex flex-col gap-0.5">
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div className="group/row flex min-w-0 items-center gap-0.5">
+            <div className="min-w-0 flex-1">{props.children}</div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={`Actions for ${bot.title}`}
+                  data-testid="bot-channel-row-menu"
+                  className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-foreground/6 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2 group-hover/row:opacity-100 data-[state=open]:opacity-100 pointer-coarse:opacity-100"
+                >
+                  <EllipsisVertical className="size-3.5" aria-hidden="true" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  disabled={setMain.isPending}
+                  onSelect={makeMain}
+                >
+                  Make main
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem disabled={setMain.isPending} onSelect={makeMain}>
+            Make main
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      <BotSettingsRefusal
+        message={setMain.error === null ? null : setMain.error.message}
+      />
+    </div>
   );
 }
 

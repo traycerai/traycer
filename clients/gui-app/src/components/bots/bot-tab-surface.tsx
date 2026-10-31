@@ -992,7 +992,6 @@ function BotTabContent(props: {
               {settingsOpen ? (
                 <BotChannelSettingsPanel
                   bot={snapshot.bot}
-                  isMain={isMain}
                   personal={personal}
                   channelId={snapshot.bot.appConversationChatId}
                   environmentBots={environmentBots}
