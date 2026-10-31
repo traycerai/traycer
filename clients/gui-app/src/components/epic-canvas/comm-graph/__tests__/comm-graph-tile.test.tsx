@@ -928,7 +928,7 @@ function lastFrameAndBounds(
  * render-time decision this fixup added reads `agents.length` nowhere, so
  * the real risk is a probe that never reaches a truthful `drawReady`
  * because the office canvas measured before agents existed. Loading first is
- * what the reviewer's own probe does to rule that out.
+ * what the original probe does to rule that out.
  */
 function LoadedTileGate(props: { readonly show: boolean }) {
   const { nodes } = useCommGraphAgents();

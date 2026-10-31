@@ -372,7 +372,7 @@ function FallbackSettingsPanelBody(props: {
   return (
     // Which tier conflicts have been announced, for exactly the editor's
     // lifetime - the same key - so leaving the Equivalent models tab and
-    // coming back does not read every conflict out again (review R2).
+    // coming back does not read every conflict out again (R2).
     <FallbackConflictAnnouncementsProvider key={editorKey}>
       <FallbackPolicyEditor
         key={editorKey}

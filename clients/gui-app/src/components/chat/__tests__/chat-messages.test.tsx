@@ -757,7 +757,7 @@ function assertTrueBottomGeometry(): void {
  * (viewport * 0.1) but more than 1px from the strict edge - the zone where
  * maintainScrollAtEndThreshold=0.1 would have reattached, and threshold=0
  * must not. `enterFreeScrollingAwayFromEnd` parks at scrollTop=0; this
- * covers the near-end gap the review called out.
+ * covers the near-end gap.
  *
  * LegendList's distanceFromEnd is
  * `contentLength - scroll - scrollLength - contentInsetEnd` (composer
@@ -6852,7 +6852,7 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("near-end (inside former 10% band, >1px from edge) does not follow growth", async () => {
-      // Review P2: the previous "near-end" case parked at scrollTop=0 via
+      // The previous "near-end" case parked at scrollTop=0 via
       // enterFreeScrollingAwayFromEnd. This parks 40px from the edge - more
       // than the 1px strict epsilon, inside the library's default 10% band
       // (0.1 * 700 = 70) - and proves threshold=0 does not reattach.
@@ -10083,7 +10083,7 @@ describe("ChatMessages scroll policy", () => {
         fullMessages[missingAnchorIndexInFull]?.id ?? null;
       expect(missingAnchorId).toBeTruthy();
       // Genuinely absent at mount - not yet arrived, per the "missing row"
-      // scenario the review's regression (a) describes. Everything else
+      // scenario regression (a) describes. Everything else
       // (before AND after it) is intact, so the clamped restore lands
       // mid-list, not coincidentally at the tail.
       let messages: ReadonlyArray<ChatMessageModel> = fullMessages.filter(
@@ -10683,7 +10683,7 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("message reorder during free-restore settle retains pending transaction, never following-end on close", async () => {
-      // Review P1#2 explicitly lists reorder (not only append/growth) as a
+      // Reorder (not only append/growth) as a
       // content change that must retain the pending hydration transaction.
       // Mid-list missing anchor: the clamped restore lands mid-list, so a
       // later force to true bottom is numerically past the issued target -

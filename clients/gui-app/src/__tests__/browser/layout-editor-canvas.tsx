@@ -154,7 +154,7 @@ import "@/components/layout-editor/layout-editor.css";
  * THE CANVAS INTERACTION REGRESSION (L-115 .. L-135), in real Chrome with real
  * mouse input.
  *
- * Three review gates and thousands of jsdom tests passed while the sample
+ * Thousands of jsdom tests passed while the sample
  * workspace's chat pane was wrapped in `inert`, so in the shipped app nothing
  * on it could be hovered, selected by pointing or dragged (LV2-01). jsdom has
  * no hit testing, no layout and no paint order, so none of that was observable

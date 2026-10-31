@@ -3384,7 +3384,7 @@ describe("CommGraphOfficeCanvas", () => {
    * camera, in two SEPARATE renders - never the same one, one after another.
    * Two double-clicks in one render compound (the second zooms on top of the
    * first: `1040 / 1.25²`, not `1040 / 1.25`), which is exactly how the
-   * reviewer's own probe encoded the defect it was meant to catch: its
+   * original probe encoded the defect it was meant to catch: its
    * agent-then-empty "control" only agreed with the agent gesture while the
    * agent gesture was broken and did nothing. Pinning both against EACH
    * OTHER, not each against the bare constant, is what makes this a parity
@@ -4995,7 +4995,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     );
   }
 
-  /** A projector that shifts every projected x by +2048px - the review's own F5 recipe. */
+  /** A projector that shifts every projected x by +2048px - the F5 recipe. */
   const SHIFTED_PROJECTOR_X = 2048;
 
   it("F5: carries the projected sign anchor to the board's label text, not raw tile math", () => {
@@ -5462,7 +5462,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
   });
 
   it("F11 fixup 7: names all five of a wide HQ board's hottest, spelt out rather than lettered to initials", () => {
-    // The reviewer's own fixture: ordinary two-word names. Fixup 7 removes
+    // The original fixture: ordinary two-word names. Fixup 7 removes
     // the initials rung this case used to land on ("AB BQ GS DA ED" at eight
     // tiles) - below the first-names rung the HQ board now counts instead of
     // lettering, so pinning "all five named, none dropped" needs a board
@@ -5844,7 +5844,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
 
   describe("CommGraphOfficeCanvas fixup 3 - N1 Find annotates an agent, not its parts", () => {
     /**
-     * The reviewer's reproduction: a real City office, everybody working, Find
+     * The reproduction: a real City office, everybody working, Find
      * matching the first agent. City builds its agents out of many parts, and
      * since F4 each part is separately hit-testable - so this is the scene where
      * "one region, one label" and "one agent, one label" differ by thirty.
@@ -5928,7 +5928,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       // ONE label. The old path walked `frame.hitRegions` and drew a label for
       // every entry, which on a real City building is its roof, its windows,
       // its body and its seat backstop - thirty-two labels stacked four pixels
-      // apart, 160 passes where the reviewer allowed ten.
+      // apart, 160 passes where ten are allowed.
       expect(namePaints(matched.name)).toBe(PASSES_PER_LABEL);
     });
 

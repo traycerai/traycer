@@ -6981,7 +6981,7 @@ describe("useChatTimelineFollowLatch", () => {
     expect(listRef.scrollToEnd).not.toHaveBeenCalled();
 
     // Scroll DOWNWARD again but still 200px short of the (grown) end -
-    // review's exact counter-example against a numeric baseline.
+    // exact counter-example against a numeric baseline.
     shim.setGeometry(node, { scrollTop: 1000, scrollHeight: 1700 });
     fireNativeScroll(node);
     result.current.followEndIfPermitted();

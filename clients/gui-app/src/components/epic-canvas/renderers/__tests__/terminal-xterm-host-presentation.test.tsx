@@ -61,7 +61,7 @@ const xtermMocks = vi.hoisted(() => ({
   // reported grid.
   availableWidthPx: 800,
   // Arms one `CanvasAddon.activate` to throw AFTER it has installed its
-  // renderer - the non-transactional `loadAddon` failure from the review.
+  // renderer - the non-transactional `loadAddon` failure.
   failNextActivationAfterInstall: false,
 }));
 

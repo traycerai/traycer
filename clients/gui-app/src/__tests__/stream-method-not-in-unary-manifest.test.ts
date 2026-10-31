@@ -24,7 +24,7 @@ import { hostStreamRpcRegistry } from "@traycer/protocol/host/registry";
  *   - `sessionImport.run` in the import wizard (round 17), where a capable host
  *     silently got `auto_accept_edits` instead of the user's `auto`.
  *
- * Both looked correct in review, and a test that pins the version into the
+ * Both looked correct, and a test that pins the version into the
  * registry passes while production reads `null` - so the mock agrees and the
  * suite stays green. A source scan is the only gate that sees it.
  *

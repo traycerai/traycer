@@ -5,7 +5,7 @@
  * The pure/hook-level latch suite (`chat-timeline-follow-latch.test.ts`) already
  * proves the latch itself is sound against a hand-constructed `LegendListRef`.
  * This file mounts the real `LegendList` via `ChatTimeline` and asserts the
- * production wiring at actual callback boundaries - especially the review's
+ * production wiring at actual callback boundaries - especially the
  * no-rerender item/footer/viewport ordering that the rejected render-gated
  * design could not close.
  *
@@ -95,7 +95,7 @@ function parkAtStrictBottom(node: HTMLElement): number {
 /**
  * Detach via recognized wheel intent, a real DOM scrollTop write, and a
  * native scroll event.
- * Deliberately no React re-render - this is the review's silent-detach
+ * Deliberately no React re-render - this is the silent-detach
  * ordering that must leave the latch denying follow on the next callback.
  */
 function detachReader(node: HTMLElement, scrollTop: number): number {
@@ -1055,7 +1055,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
 
       // Mount as free-reading (not following-end). initialScrollAtEnd=false
       // seeds the latch permission as false - the restored free-reading
-      // intent the review requires.
+      // intent required.
       const { listRef, rerenderMessages } = renderTimeline({
         messages: makeMessages(rowCount),
         initialScrollAtEnd: false,
@@ -1131,7 +1131,7 @@ describe("ChatTimeline follow-latch real-LegendList integration", () => {
       parkAtStrictBottom(node);
 
       // Detach far above, then crawl downward with real native scroll events
-      // at each step - still hundreds of px from the true end (review's
+      // at each step - still hundreds of px from the true end (the
       // counter-example against a numeric baseline heuristic).
       detachReader(node, 200);
       for (const top of [400, 700, 1000, 1500]) {

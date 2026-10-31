@@ -39,9 +39,9 @@ afterEach(() => {
 });
 
 /**
- * Real-editor integration coverage for the review-fix round on paste/drop
+ * Real-editor integration coverage for the fix round on paste/drop
  * path insertion. Mounts the actual `ComposerPromptEditor` wired to the
- * actual `useComposerHashPaste` handlers - the seam the prior review
+ * actual `useComposerHashPaste` handlers - the seam the prior pass
  * called out as untested (plain div / mocked handle would hide ProseMirror
  * ownership races, position mapping, undo grouping, and unmount liveness).
  */

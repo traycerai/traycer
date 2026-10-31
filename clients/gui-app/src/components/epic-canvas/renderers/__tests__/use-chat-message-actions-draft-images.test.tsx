@@ -561,7 +561,7 @@ describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
     expect(typeof atoms[0]?.b64content).toBe("string");
   });
 
-  // F4 (batch-1 review): the hash list is captured ONCE, before the await. If
+  // F4: the hash list is captured ONCE, before the await. If
   // a second hash-only image appears in the live document while the first is
   // still resolving, the final re-read includes it but the byte map does not
   // - so it is sent bare despite this client being able to resolve it. The
@@ -765,7 +765,7 @@ describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
     expect(editUserMessage).not.toHaveBeenCalled();
   });
 
-  // F2 (batch-1 review): cancel-and-reopen of the SAME message is a NEW
+  // F2: cancel-and-reopen of the SAME message is a NEW
   // editing session even though `targetMessageId` is unchanged. Before the
   // fix, only `targetMessageId` was checked, so the stale job's read would
   // land and submit the newly reopened edit's content under the OLD job's
