@@ -29,7 +29,7 @@ export const SIDE_STRIP_TITLE_ROW_MIN_WIDTH_CLASS =
   "wco:min-w-[calc(var(--window-leading-inset)+8.5rem)]";
 /**
  * The collapsed, icon-only rail. On macOS with the strip at the left it
- * widens to the traffic-light inset (D15), and the tiles stay centred.
+ * widens to the traffic-light inset, and the tiles stay centred.
  */
 export const SIDE_STRIP_RAIL_WIDTH_PX = 60;
 /** A handle drag below this width snaps to the rail: the midpoint of the minimum and the rail. */
