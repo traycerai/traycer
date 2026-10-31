@@ -211,7 +211,7 @@ describe("moving picks with the text", () => {
         shiftMentionPicks(BOTH, FIRST_ONLY, TWO, {
           start: 9,
           end: 18,
-          caretAfter: 9,
+          inputType: "deleteContentBackward",
         }),
       ).toEqual([pick(0, 8, "u-ann")]);
       // Read from the texts alone, it is the first that goes.
@@ -221,7 +221,7 @@ describe("moving picks with the text", () => {
     });
 
     // The same text results from Backspace and from Delete here, so only the
-    // caret tells whether the pick's last letter was the one deleted.
+    // kind of input tells whether the pick's last letter was the one deleted.
     const PICKED = [pick(0, 8, "u-ann")];
     const BEFORE = "@Ann Leee";
     const AFTER = "@Ann Lee";
@@ -231,7 +231,7 @@ describe("moving picks with the text", () => {
         shiftMentionPicks(BEFORE, AFTER, PICKED, {
           start: 8,
           end: 8,
-          caretAfter: 7,
+          inputType: "deleteContentBackward",
         }),
       ).toEqual([]);
     });
@@ -241,32 +241,40 @@ describe("moving picks with the text", () => {
         shiftMentionPicks(BEFORE, AFTER, PICKED, {
           start: 8,
           end: 8,
-          caretAfter: 8,
+          inputType: "deleteContentForward",
         }),
       ).toEqual(PICKED);
     });
 
-    it("takes text longer than before as an insertion at the caret", () => {
+    it("reads the texts alone when the selection did not make the edit", () => {
       expect(
-        shiftMentionPicks("hi @Ann Lee", "oh, hi @Ann Lee", PICKS, {
-          start: 0,
-          end: 0,
-          caretAfter: 4,
+        shiftMentionPicks(BOTH, FIRST_ONLY, TWO, {
+          start: 5,
+          end: 5,
+          inputType: "deleteContentBackward",
         }),
-      ).toEqual([pick(7, 15, "u-ann")]);
+      ).toEqual([pick(0, 8, "u-ann-2")]);
     });
 
-    it("reads the texts alone when the selection did not make the edit", () => {
-      // The texts differ by a deletion at the front, but the selection says
-      // the caret was at the end.
+    it("leaves an undo or redo to the texts, though a selection is known", () => {
       expect(
-        shiftMentionPicks(
-          "oh, hi @Ann Lee",
-          "hi @Ann Lee",
-          [pick(7, 15, "u-ann")],
-          { start: 15, end: 15, caretAfter: 15 },
-        ),
-      ).toEqual(PICKS);
+        shiftMentionPicks(BOTH, FIRST_ONLY, TWO, {
+          start: 9,
+          end: 18,
+          inputType: "historyUndo",
+        }),
+      ).toEqual([pick(0, 8, "u-ann-2")]);
+    });
+
+    it("ignores a selection that agrees with the texts but covers more than their one span, where the texts leave no doubt", () => {
+      // Only "ok" became "OK"; the selection spanned the whole text.
+      expect(
+        shiftMentionPicks("@Ann Lee ok", "@Ann Lee OK", PICKED, {
+          start: 0,
+          end: 11,
+          inputType: "insertReplacementText",
+        }),
+      ).toEqual(PICKED);
     });
   });
 });

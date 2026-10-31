@@ -282,16 +282,8 @@ export function BotMessageComposer(props: {
           data-testid={`${testId}-input`}
           aria-autocomplete="list"
           aria-controls={mentions.listOpen ? mentionListId : undefined}
-          onSelect={(event) => {
-            mentions.onSelection(event.currentTarget);
-            mentions.onCaret(event.currentTarget.selectionStart);
-          }}
-          onKeyUp={(event) => mentions.onSelection(event.currentTarget)}
-          onMouseUp={(event) => mentions.onSelection(event.currentTarget)}
-          onPaste={(event) => mentions.onSelection(event.currentTarget)}
-          onCut={(event) => mentions.onSelection(event.currentTarget)}
-          onCompositionStart={(event) =>
-            mentions.onSelection(event.currentTarget)
+          onSelect={(event) =>
+            mentions.onCaret(event.currentTarget.selectionStart)
           }
           onChange={(event) => {
             setText(event.target.value);

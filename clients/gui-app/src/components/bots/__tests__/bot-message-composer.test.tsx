@@ -519,6 +519,93 @@ describe("<BotMessageComposer /> @ mentions", () => {
       expect(await sentText(user)).toBe("@Ann Lee");
     });
 
+    it("keeps the mention an undo restores after the caret moved, by what the text says, not by where the caret was", async () => {
+      const user = userEvent.setup();
+      mountEdit("<@u-ann> <@u-ann-2> ");
+      await user.click(box());
+      act(() => box().setSelectionRange(0, 9));
+      await user.keyboard("{Backspace}{ArrowRight>9/}");
+      expect(box().value).toBe("@Ann Lee ");
+      expect(box().selectionStart).toBe(9);
+
+      box().dispatchEvent(
+        new InputEvent("beforeinput", {
+          bubbles: true,
+          cancelable: true,
+          inputType: "historyUndo",
+        }),
+      );
+      fireEvent.input(box(), {
+        target: {
+          value: "@Ann Lee @Ann Lee ",
+          selectionStart: 0,
+          selectionEnd: 9,
+        },
+        inputType: "historyUndo",
+      });
+
+      expect(await sentText(user)).toBe("@Ann Lee <@u-ann-2>");
+    });
+
+    it("does not bind text replacing a selection to the pick the selection had moved away from", async () => {
+      const user = userEvent.setup();
+      mountEdit("<@u-ann> <@u-ann-2> ");
+      await user.click(box());
+      act(() => box().setSelectionRange(0, 9));
+      fireEvent.select(box());
+
+      act(() => {
+        box().setSelectionRange(9, 18);
+        box().dispatchEvent(
+          new InputEvent("beforeinput", {
+            bubbles: true,
+            cancelable: true,
+            inputType: "insertReplacementText",
+            data: "@Ann Lee @Ann Lee ",
+          }),
+        );
+        fireEvent.input(box(), {
+          target: {
+            value: "@Ann Lee @Ann Lee @Ann Lee ",
+            selectionStart: 27,
+            selectionEnd: 27,
+          },
+          inputType: "insertReplacementText",
+          data: "@Ann Lee @Ann Lee ",
+        });
+      });
+
+      expect(await sentText(user)).toBe("<@u-ann> @Ann Lee @Ann Lee");
+    });
+
+    it("drops a mention a spelling correction changes part of, and sends the corrected text as typed", async () => {
+      const user = userEvent.setup();
+      mountIn(SHARED);
+      await user.type(box(), "@ann");
+      await user.keyboard("{Enter}");
+      expect(box().value).toBe("@Ann Lee ");
+      act(() => box().setSelectionRange(5, 8));
+
+      act(() => {
+        box().dispatchEvent(
+          new InputEvent("beforeinput", {
+            bubbles: true,
+            cancelable: true,
+            inputType: "insertReplacementText",
+            data: "Leo",
+          }),
+        );
+        fireEvent.input(box(), {
+          target: { value: "@Ann Leo ", selectionStart: 8, selectionEnd: 8 },
+          inputType: "insertReplacementText",
+          data: "Leo",
+        });
+      });
+
+      expect(box().value).toBe("@Ann Leo ");
+      expect(await sentText(user)).toBe("@Ann Leo");
+    });
+
     it("sends a unique member's name typed plainly, with no pick, as their token", async () => {
       const user = userEvent.setup();
       mountIn(TEAM);
