@@ -1,13 +1,17 @@
 /**
  * The build without bots (`unreleased-features.ts`): the expanded strip's
  * column holds what it held before voice, so New task keeps its place below
- * Home. With the features on, Talk's slot follows the fixed rows. The rows
- * around the slot are stand-ins; the column and the real `TalkControl` (which
- * draws nothing until voice is offered) are what is read.
+ * Home. With the features on and voice offered, Talk's slot follows the fixed
+ * rows and holds Talk. The rows around the slot are stand-ins; the column, the
+ * real `TalkControl` and the real voice store are what is read.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  useVoiceSessionStore,
+  type VoiceSessionDriver,
+} from "@/stores/voice/voice-session-store";
 import { SideStripTopBlock } from "../side-strip-top-block";
 
 const flags = vi.hoisted(() => ({ enabled: false }));
@@ -40,6 +44,7 @@ vi.mock("@/components/layout/tabs/side-strip/strip-agents-mode", () => ({
 afterEach(() => {
   cleanup();
   flags.enabled = false;
+  useVoiceSessionStore.setState(useVoiceSessionStore.getInitialState(), true);
 });
 
 /** The expanded column under the title row, Home drawn and no Tracy entry. */
@@ -75,8 +80,16 @@ describe("the side strip's expanded column", () => {
     ).toEqual(["nav-rows", "home-row", "new-task", "tasks-label"]);
   });
 
-  it("puts Talk's slot after the fixed rows with the features on", () => {
+  it("puts Talk's slot, holding Talk, after the fixed rows with the features on", () => {
     flags.enabled = true;
+    useVoiceSessionStore.setState({
+      availability: "live",
+      driver: {
+        start: vi.fn<VoiceSessionDriver["start"]>(),
+        end: vi.fn<VoiceSessionDriver["end"]>(),
+        setMuted: vi.fn<VoiceSessionDriver["setMuted"]>(),
+      },
+    });
     const column = renderExpandedColumn();
     const children = Array.from(column.children);
     expect(children.map((child) => child.getAttribute("data-testid"))).toEqual([
@@ -86,6 +99,9 @@ describe("the side strip's expanded column", () => {
       "new-task",
       "tasks-label",
     ]);
-    expect(children[2]?.className).toBe("flex");
+    const slot = children[2];
+    if (!(slot instanceof HTMLElement)) throw new Error("no slot");
+    expect(slot.className).toBe("flex");
+    within(slot).getByRole("button", { name: "Talk" });
   });
 });
