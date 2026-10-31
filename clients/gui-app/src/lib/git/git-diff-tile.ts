@@ -100,7 +100,7 @@ export function gitImageDiffSides(file: GitChangedFile): GitImageDiffSides {
  * key for the SAME file already includes all three.
  *
  * A null OID is not always "this side doesn't exist" (Codex re-review):
- * ADR-0007's degraded-repo-mode fallback (`assessRepoMode`,
+ * The degraded-repo-mode fallback (`assessRepoMode`,
  * `computeStatusPipeline` in `git-service.ts`) skips OID computation
  * entirely under load, nulling `stagedOid`/`worktreeOid` for every changed
  * file in that snapshot regardless of whether the side has real content -

@@ -75,8 +75,8 @@ const ACTIVATION_DEBT_STATES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * In-app host update / activation-debt banner (Host Update Layer Redesign
- * Tech Plan). Driven entirely by the canonical two-lane
+ * In-app host update / activation-debt banner.
+ * Driven entirely by the canonical two-lane
  * `HostControllerStatus` - never the raw registry probe - so it never shows
  * for a merely-detected update, only once a stage is `updateReady` or the
  * host carries activation debt. A ready update supersedes debt (applying new
@@ -295,7 +295,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
 
   const nowMs = useHostUpdateNowMs();
 
-  // Update-over-debt priority (Tech Plan): a ready update supersedes
+  // Update-over-debt priority: a ready update supersedes
   // activation debt outright, since applying the new bytes activates them.
   const { showUpdate, showDebt, hostDown, offeredVersion, installedVersion } =
     deriveOfferedVersion(status);
@@ -306,7 +306,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
 
   // An attempt that is doing something is NOT snoozable and does not wait for
   // the controller lane to agree — "active, parked, or reconnecting operations
-  // cannot be snoozed away" (experience doc), and a parked
+  // cannot be snoozed away", and a parked
   // `waiting-to-activate` is precisely the state a person needs to see.
   //
   // Failures can be dismissed here, and the dismissal is shared with the
@@ -437,7 +437,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
         aria-label={bannerAriaLabel}
         data-testid="host-update-banner"
         // Polite for ordinary phase changes, assertive for a failure — the
-        // experience doc's accessibility rule. `aria-live` on the same element
+        // accessibility rule. `aria-live` on the same element
         // as `aria-label` is what makes each phase transition announce itself
         // rather than only being readable on focus.
         //
@@ -765,7 +765,7 @@ function OperationRecoveryAction(props: OperationRecoveryActionProps) {
  *
  * WHAT IS DELIBERATELY ABSENT: any control that disables anything else. This
  * banner never gates Restart, Diagnostics, Activate or the overflow menu.
- * Update state is not a host-action mutex (plan §4), and the user is never
+ * Update state is not a host-action mutex, and the user is never
  * required to clear or dismiss this banner before recovering the host — which
  * is why there is no dismiss affordance on an active operation and no disabled
  * state applied to anything outside this element.

@@ -42,7 +42,7 @@ function group(id: string, candidates: readonly TierCandidate[]): TierGroup {
   return { id, candidates: [...candidates] };
 }
 
-/** Codex's live catalog (spec §What the live catalogs say), title-cased IDs. */
+/** Codex's live catalog, title-cased IDs. */
 const CODEX_CATALOG: readonly TierModelIdentity[] = [
   { slug: "gpt-6-astra", label: "GPT-6-Astra" },
   { slug: "gpt-6-sol", label: "GPT-6-Sol" },

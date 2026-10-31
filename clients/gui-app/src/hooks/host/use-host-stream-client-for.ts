@@ -230,7 +230,7 @@ export function buildHostStreamClient(params: {
   readonly auth: StreamAuthRevalidator | null;
   /**
    * The signed-in user this transport is built for. Part of the shared
-   * `(hostId, userId)` remote-session cache key (Architecture §4 / S1) - only
+   * `(hostId, userId)` remote-session cache key (S1) - only
    * consulted on the remote and pool branches.
    */
   readonly userId: string;
@@ -484,7 +484,7 @@ export function useHostStreamClientBindingFor(
   // double-invoke, or a discarded concurrent render in prod) used to be
   // harmless (each built its own independent, unstarted client that GC
   // reclaimed); under the shared `(hostId, userId)` session cache
-  // (Architecture §4 / S1) a discarded acquire instead holds a live,
+  // (S1) a discarded acquire instead holds a live,
   // never-released reference on the ONE shared session, so the session's
   // refCount would never return to zero. This effect's cleanup is guaranteed
   // to run for exactly the committed acquire, so it supersedes both the old

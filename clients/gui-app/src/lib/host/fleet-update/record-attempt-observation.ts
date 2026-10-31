@@ -13,7 +13,7 @@ import type { FleetUpdateRecordObservation } from "@/lib/host/fleet-update/fleet
  * This is the production consumer of `LocalAttemptFacts`. Desktop re-reads
  * `update-attempt.json` and broadcasts it on the controller status precisely so
  * the renderer can still say something true while the host is unreachable; a
- * renderer that discarded it left §5.2.7 an isolated projector rather than a
+ * renderer that discarded it left an isolated projector rather than a
  * feature.
  *
  * ## FACTS ONLY

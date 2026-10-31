@@ -62,7 +62,7 @@ export const UNBOUND_LOCAL_UPDATE_OPERATION: LocalHostUpdateOperation = {
  *
  * Local only, by construction rather than by convention: the host id comes from
  * {@link useReactiveLocalHostId} and nothing here accepts one. The landing
- * banner never summarizes remote hosts (experience doc, Scope), and a hook that
+ * banner never summarizes remote hosts, and a hook that
  * took a `hostId` would make that a caller's discipline instead of a property.
  *
  * Reads the SAME `host.status` query key every other consumer reads, rather than

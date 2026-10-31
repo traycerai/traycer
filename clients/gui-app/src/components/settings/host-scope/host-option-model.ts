@@ -308,7 +308,7 @@ export function sandboxWordYieldsToHealth(host: HostScopeOption): boolean {
  *
  * The status word above answers **health and route**: can this machine be
  * reached, is it mid-setup, is it removed. This answers **what its update is
- * doing**. The experience doc states the rule directly — "connectivity and
+ * doing**. The rule is stated directly — "connectivity and
  * update state remain separate facts" — and the long note on `STATUS_WORD`
  * records what happened the last time one vocabulary tried to answer two
  * questions: a row contradicted its own health line, in the same row.

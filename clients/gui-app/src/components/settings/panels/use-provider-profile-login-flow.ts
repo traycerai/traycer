@@ -408,12 +408,12 @@ export interface ProviderProfileLoginFlow {
  * reauth gate) reacts to the re-probed auth status on its own, matching
  * the ambient flow's pre-code-paste `onSettled` behavior.
  *
- * Also owns the code-paste sub-flow within `waiting` (code-paste decision
- * log): submitting a pasted code, a throttled keepalive, and bounded
+ * Also owns the code-paste sub-flow within `waiting`:
+ * submitting a pasted code, a throttled keepalive, and bounded
  * auto-restart when the host reports the submitted code was rejected or the
  * login child already died. This never introduces a new top-level state -
- * the paste field is always visible within `waiting` per that decision
- * log's "Paste field visibility" row. `settleAttempt` is the two-sided join
+ * the paste field is always visible within `waiting`.
+ * `settleAttempt` is the two-sided join
  * that decides what a `waiting` attempt resolves to once `awaitLogin` and
  * `submitLoginCode` have both had a chance to weigh in - see its own doc
  * comment for the exact rules (review findings 1 and 2).

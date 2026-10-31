@@ -6,7 +6,7 @@
  * canvas controllers create. There is no scrim, no proxy layer and no
  * duplicate of the app: what the user points at is the real thing (P3, P4).
  *
- * The motion values are frozen in the plan's section 6 and only `transform`,
+ * The motion values are frozen and only `transform`,
  * `opacity` and `filter` animate (L-29). Both reduced-motion gates are
  * honoured: the OS media query, and the app's own Panel animations switch,
  * which `theme-applier.ts` mirrors onto `<html data-reduce-panel-motion>`.
@@ -130,7 +130,7 @@
   border-right: 1px solid var(--border);
 }
 
-/* The exit, faster than the entry (section 6). It plays while the session is
+/* The exit, faster than the entry. It plays while the session is
    still open: the inspector renders session state, so `editor-session.ts`
    holds the teardown until this animation reports finished, and an exit under
    either reduced-motion gate has no animation to report and lands at once. */
@@ -250,7 +250,7 @@
 }
 
 /* ---------------------------------------------------------------
-   Entry and exit: the View Transition (L-30, 5.2, section 6)
+   Entry and exit: the View Transition (L-30)
 
    Two named groups and no more: the app column, which glides narrower or
    wider, and the inspector, which slides in over 220ms and back out over

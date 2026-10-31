@@ -19,8 +19,8 @@ import {
 } from "@traycer/protocol/host/epic/share-refusal";
 
 /**
- * Maps a HostRpcError to the appropriate toast copy mandated by the
- * Core Flows spec. Permission errors get distinct copy from network/RPC
+ * Maps a HostRpcError to its toast copy.
+ * Permission errors get distinct copy from network/RPC
  * errors so the user knows whether to retry or ask for access.
  *
  * Call this in every mutation hook's `onError` callback.

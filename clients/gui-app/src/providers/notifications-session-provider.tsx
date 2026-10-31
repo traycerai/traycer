@@ -1192,7 +1192,7 @@ function NotificationsSessionBody(
       if (servingHostId === null) return;
       const streamHostId = servingHostId;
       // ONE reconnect policy for this host, handed to every stream opened
-      // below (redesign P4.1 / connection-registry §6). This is the single
+      // below (redesign P4.1). This is the single
       // wiring point for all of them, which is exactly why the acquisition
       // belongs here: each store constructing its own scheduler was the
       // scattered ownership the consolidation removes. Each store still opens

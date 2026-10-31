@@ -15,7 +15,7 @@ import { useTabsStore } from "@/stores/tabs";
  * Two things launch from here because both are facts about the app starting
  * rather than about any surface in it, and this component is already mounted
  * once for the shell's lifetime - which is exactly the "on app launch" moment
- * they want. A third bootstrap is what tech-plan section 7 refused.
+ * they want, so neither needs a bootstrap of its own.
  *
  * The periodic resource sampler reads its workload context here rather than
  * inside the sampler, so `lib/resources/resource-telemetry.ts` stays

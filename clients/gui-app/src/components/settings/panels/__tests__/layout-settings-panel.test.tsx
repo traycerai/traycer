@@ -267,7 +267,7 @@ describe("Settings - Layout", () => {
     });
 
     /**
-     * The Composer card's dock list. The claim is the one the ticket is
+     * The Composer card's dock list. The claim is the one this test is
      * about: every member in `DEFAULT_ARRANGEMENT.dock`, reorderable, in the
      * stored order, with no row of a different kind mixed in - the page reads
      * the arrangement, so a member that had to be spelled out per region

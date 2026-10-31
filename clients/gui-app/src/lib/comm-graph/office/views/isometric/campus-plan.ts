@@ -6,7 +6,7 @@
  * everybody the partition calls a solo. It is not a lineage subtree, and that
  * distinction is the whole view. The recording's 309-agent epic is one root
  * with thirty teams under it, so "a room per subtree" built ONE 55 x 55 room
- * holding all 309 desks: geometry the spec's numbers liked and a picture that
+ * holding all 309 desks: geometry the numbers liked and a picture that
  * showed the user no team at all.
  *
  * Sizing still belongs to the room rather than to the Floor's packer. A team's

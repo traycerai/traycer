@@ -1,6 +1,6 @@
 /**
  * The one intent shape every tile open is expressed in, and the one plan shape
- * the resolver answers with (decisions C1-C7, C10; plan §5.1).
+ * the resolver answers with (decisions C1-C7, C10).
  *
  * Nothing here touches a store: `resolve-tile-open.ts` turns an intent plus
  * settings/canvas/viewport into a {@link TileOpenPlan}, and the executor

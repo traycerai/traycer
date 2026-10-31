@@ -6,7 +6,7 @@
  * and instantly, and this section answers the second question underneath -
  * which of this task's agents said the word. The index's own chat-title
  * section is dropped: the tree above is a superset of it, so showing it here
- * would be the same answer twice. The cost is the one case the spec accepts -
+ * would be the same answer twice. The cost is this case -
  * a chat whose title matches and whose messages do not appears only in the
  * tree.
  *

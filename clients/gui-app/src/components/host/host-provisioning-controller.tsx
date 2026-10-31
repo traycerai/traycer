@@ -425,7 +425,7 @@ function useHostProvisioning(args: {
     );
   }, [queryClient, run, runnerHost.hostManagement]);
 
-  // THE AUTOMATIC LAUNCH-TIME `convergeReady` IS RETIRED (C5, registry §5).
+  // THE AUTOMATIC LAUNCH-TIME `convergeReady` IS RETIRED (C5).
   //
   // It used to fire here, once per session, whenever a signed-in local-host
   // shell had no reachable host. That made the renderer a SECOND process actor
@@ -439,8 +439,8 @@ function useHostProvisioning(args: {
   // provisioning state described different worlds; engine-wins produced two
   // converge calls for one boot.
   //
-  // It is also what made the ∅ definitions two rather than one: registry §5
-  // says ∅ is "no usable lease AND the ensure path is unavailable or has
+  // It is also what made the ∅ definitions two rather than one: ∅ is
+  // "no usable lease AND the ensure path is unavailable or has
   // failed", which is only decidable if the engine is the one asking.
   //
   // What stays HERE is presentation state and USER-INITIATED recovery: Retry,
@@ -588,7 +588,7 @@ interface LocalHostStartupState {
  * `useLocalHostGateState` until P3.4 deleted the gate it was named for; the
  * behaviour is unchanged, so a search for the old name lands here.
  *
- * Staged wait (Flow 5):
+ * Staged wait:
  *   1. "loading" - the immediate waiting state, no Retry affordance. The
  *      default on mount and after every Ready -> not-ready transition.
  *   2. "slow" - entered after `LOCAL_HOST_SLOW_START_THRESHOLD_MS` has

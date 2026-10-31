@@ -473,7 +473,7 @@ export function resolveSurfaceReadiness(args: {
    * verdict is the better answer than a directory-membership guess. The
    * tab-host arm below deliberately does NOT read them: a tab is bound to its
    * host for life and asks a window-local question — "does a route to my host
-   * exist" — which §1b keeps distinct from the app-wide lease on purpose.
+   * exist" — which stays distinct from the app-wide lease on purpose.
    *
    * `attached: false` and a missing lease are ABSENCE OF EVIDENCE, never
    * death: before this window's kernel attaches every host answers `null`, and

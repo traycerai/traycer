@@ -487,7 +487,7 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
 
     // What `useCloneSourceOwnerUserId` answers for a chat this device holds no
     // record of but whose cloud row it just rendered the tile from - the exact
-    // case the host's cloud tier refused before this ticket, degrading the
+    // case the host's cloud tier refused before this change, degrading the
     // clone to settings-only.
     const resolvedOwner = resolveCloneSourceOwnerUserId({
       chatId: "source-chat-1",

@@ -5,7 +5,7 @@ import { resolveCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-ow
 /**
  * The owner a clone surface sends with `forkSource`.
  *
- * The case this exists for is the third one: no local record, but a
+ * The central case is the third one: no local record, but a
  * cloud row the surface already rendered from. Everything else here pins the
  * ordering and the two ways this must answer `null` rather than guess - the
  * host TRUSTS a value it is given when it holds no facts of its own, so a

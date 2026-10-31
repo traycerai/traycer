@@ -8,8 +8,8 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 
 /**
  * `06641bf75` - the `unverified` local-home carve-out for `epic.setPinned`
- * dispatch (gap "the `unverified` carve-out - dispatch" in the lane 9
- * evidence artifact, §3.1). `epicPinDispatchAdmitted` is admitted through
+ * dispatch.
+ * `epicPinDispatchAdmitted` is admitted through
  * EITHER the local-home exemption (`isLocalHome` AND a `@1.1`-negotiated
  * host) OR a held cloud verdict - never through one conjunct alone. Every row
  * below matches the artifact's matrix; the `@1.0`/legacy-host rows exist

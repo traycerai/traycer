@@ -1,5 +1,5 @@
 /**
- * The one placement decision (plan §5.1 steps 1-7; decisions C3-C7, C10).
+ * The one placement decision (decisions C3-C7, C10).
  *
  * Pure: everything it reads is an argument, so the whole placement contract is
  * table-testable and the executor stays a dumb dispatcher.

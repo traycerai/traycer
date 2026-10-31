@@ -10,8 +10,8 @@ import type {
  * Per-profile comparison-state contract the model picker's profile selector
  * consumes (T3): one shape combining a target host's cached rate-limit
  * envelope with the cheap per-profile host summary (`rateLimitStatus`,
- * `usageUpdatedAt`) into the states the Core Flows state-treatment table
- * names, so no consumer re-derives this classification independently.
+ * `usageUpdatedAt`) into one set of states,
+ * so no consumer re-derives this classification independently.
  */
 
 /** `providerProfileRateLimitStatusSchema` narrowed to the two warning

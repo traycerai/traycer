@@ -16,7 +16,7 @@
  * This constant is also the ROLLBACK lever: setting it back to `false`
  * returns selected chats to the inline pane path in one line. The
  * viewport handoff stays installed as the absorber for that one controlled
- * remount, per the design's rollback contract. Any surface-host code change
+ * remount. Any surface-host code change
  * after enablement requires re-recording the live gate.
  *
  * One export, one call site (`top-level-tab-host.tsx`). Do not gate any

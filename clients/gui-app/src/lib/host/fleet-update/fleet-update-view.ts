@@ -566,7 +566,7 @@ export function projectFleetUpdateView(
   //                            throwing it away would replace a qualified
   //                            truth with nothing.
   //
-  // That is exactly the distinction §5.2.7 asks for: "attempt progressing" is a
+  // That is exactly the distinction needed: "attempt progressing" is a
   // live `kind`, "attempt exists, host unreachable" is `unknown` + a retained
   // phase, so a surface renders "last seen preparing v2.0.0" rather than either
   // a bare offline badge or a false claim of progress.
@@ -1326,7 +1326,7 @@ function clampPercent(percent: number): number {
  * no live source, and offering to end work we cannot count is how a button
  * promises "ends 2 sessions" and ends five.
  *
- * This never gates the host's own Restart control. Per the ticket's standing
+ * This never gates the host's own Restart control. As a standing
  * rule, update state is not a host-action mutex — the overflow Restart stays
  * available whatever this returns.
  */
@@ -1351,7 +1351,7 @@ export function offersForceRestart(view: FleetUpdateView): boolean {
  * then locks it for the entire life of the park, and `waiting-to-activate` is
  * designed to survive a reboot and sit for a week.
  *
- * The result would be the exact inversion the ticket forbids twice: a parked
+ * The result would be the exact inversion that must not happen: a parked
  * update disabling Restart, Diagnostics and the service verbs — while the
  * restart it is waiting for is the user's only way out. A banner may inform and
  * may offer **Force restart…**; it may never be the thing standing between a
@@ -1418,7 +1418,7 @@ export function holdsLifecycleGate(view: FleetUpdateView): boolean {
  * can sit for a week (`waiting-to-activate` survives a reboot by design), a
  * terminal one is retained for seven days, and a qualified one is evidence we
  * already know we cannot refresh — none of those justify polling a host every
- * two seconds, and doing so would be the retry storm §6 forbids.
+ * two seconds, and doing so would be a retry storm.
  *
  * The coarse `updating` kind does not earn it either, and for the same
  * reason it does not hold the lifecycle gate: the marker proves a file

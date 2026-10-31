@@ -72,7 +72,7 @@ export function buildDefaultRemoteFetcher(
         // the moment a verdict lands. Do NOT "simplify" this to `signed-out` for
         // the unverified case: that would wipe a user's remote host list because
         // their laptop woke up on a dead network, which is the exact tear-down
-        // this ticket exists to stop.
+        // this guard exists to stop.
         return era.identity === null
           ? { kind: "signed-out" }
           : { kind: "failed" };

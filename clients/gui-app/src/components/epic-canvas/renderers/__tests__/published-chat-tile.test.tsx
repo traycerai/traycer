@@ -2165,7 +2165,7 @@ describe("PublishedChatTile - the sandbox's own state", () => {
 /**
  * The REAL state hook over its data sources: what a sandbox chat shows while
  * its state is moving or not yet known to this device, as after a Stop and
- * after a reload of a destroyed chat (§10).
+ * after a reload of a destroyed chat.
  */
 describe("PublishedChatTile - a sandbox chat whose state is not known yet", () => {
   const TASK_ROW: TaskHostRow = {

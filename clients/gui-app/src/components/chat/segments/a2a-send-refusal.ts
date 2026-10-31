@@ -1,5 +1,5 @@
 /**
- * The fixed opening of a same-principal refusal (core flows, the reach row):
+ * The fixed opening of a same-principal refusal:
  * the host's `principalMismatchSentence` and its host-verb refusals both start
  * with it, and it is the only part of either that is not composed.
  */

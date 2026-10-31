@@ -68,7 +68,7 @@ function props(
  * no catalog to find it in - so the stored value becomes the query and the
  * highlight lands on the only option there is, the "contains" pattern. When
  * the catalog lands the exact model moves to the top, and the Enter rule
- * (spec §Wireframe 2: an exact ID puts that model first, so Enter picks it)
+ * (an exact ID puts that model first, so Enter picks it)
  * has to hold: Enter saves the SLUG, never `*gpt-5.6-terra*`, which would
  * silently turn a one-model row into a pattern.
  */

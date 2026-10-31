@@ -484,7 +484,7 @@ export function formatPrStackCount(block: PrStackBlock): string {
 /**
  * A row is "fully identified" (tile-able) only when BOTH its base
  * coordinates and its `githubHost` are known - the two are derived together
- * from the same parsed `prUrl` (tech plan's unknown-base rule), so a fork PR
+ * from the same parsed `prUrl`, so a fork PR
  * or absent/unparseable `prUrl` leaves both `null`.
  */
 export function fullyIdentifiedPrBase(

@@ -237,7 +237,7 @@ function HostReadinessControllerContents(props: {
   /**
    * The authority's leases and its attach flag, threaded to the DEFAULT-HOST
    * arm of `resolveSurfaceReadiness`. Read there and nowhere else - the
-   * tab-host arm stays a route question by design (§1b).
+   * tab-host arm stays a route question by design.
    */
   readonly leases: readonly HostLeaseSnapshot[];
   readonly authorityAttached: boolean;

@@ -1041,8 +1041,8 @@ function failedStepOf(
 }
 
 /**
- * The setup line once the message was handed to the agent (sandboxes
- * redesign Flow 1 step 2): `Sandbox ready · name · 24 s`, collapsed, above the
+ * The setup line once the message was handed to the agent:
+ * `Sandbox ready · name · 24 s`, collapsed, above the
  * chat's first message. Expanded, the idle rule with the sandbox's own idle
  * period, once its row says it.
  */

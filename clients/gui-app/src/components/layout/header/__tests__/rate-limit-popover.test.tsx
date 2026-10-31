@@ -410,7 +410,7 @@ function readyResult(
 
 /** A `ready` result whose envelope retains `lastGood` across a transient
  * unavailable `latest` - the "dimmed reading + specific transient message"
- * scenario this ticket's retention treatment adds. */
+ * scenario the retention treatment adds. */
 function degradedRetainedResult(
   lastGood: AvailableProviderRateLimits,
   reason: "usage_fetch_failed" | "timeout" | "connection_failed",

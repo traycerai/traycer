@@ -19,7 +19,7 @@ import {
  * it is editing.
  */
 
-/** Section 6's frozen float geometry. */
+/** The frozen float geometry. */
 export const FLOAT_DOCK_WIDTH = 380;
 const FLOAT_DOCK_MAX_HEIGHT = 560;
 const FLOAT_DOCK_VIEWPORT_MARGIN = 92;

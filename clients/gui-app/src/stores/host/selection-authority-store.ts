@@ -10,12 +10,12 @@ import type { SelectionKernelSnapshot } from "@traycer-clients/shared/host-selec
  * (`mountSelectionAuthorityBridge`) parks the kernel snapshot so React can
  * read it. It has exactly ONE writer, and it is not a picker: every UI
  * gesture that wants to move the app-wide selection goes UP through
- * `SelectionAuthorityClient.activate(...)` and comes back DOWN through here
- * (selection model §1, invariant 1). Nothing in the tree may `set` it.
+ * `SelectionAuthorityClient.activate(...)` and comes back DOWN through here.
+ * Nothing in the tree may `set` it.
  *
  * Deliberately NOT persisted. `preferredHostId` is persisted by the
  * authority, identity-scoped, and `effectiveHostId` is derived - never
- * persisted, by definition (selection model §1). A persisted copy here would
+ * persisted, by definition. A persisted copy here would
  * be a second answer to "which host is this window on" that outlives the
  * process that computed it.
  *

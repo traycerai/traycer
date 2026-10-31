@@ -605,7 +605,7 @@ function overlappingCityRoofs(): {
 /**
  * The view contract's invariants against one City layout. Restated rather
  * than shared with `campus-plan.test.ts` because these two files must stand
- * alone (see the ticket).
+ * alone.
  */
 function checkContract(
   layout: OfficeLayout,

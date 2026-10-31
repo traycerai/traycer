@@ -1,14 +1,12 @@
 // T3 — Overview ▸ Updates tab: the single-row auto-update group, its work
 // while the host cannot be reached, the unreachable/not-manageable list
 // fallbacks, a refused install's two surfaces, and Check now (on the version
-// list's heading) sharing the answer card's own check. See the `t3-updates-tab` ticket and the
-// `host-overview-tabs` core-flows artifact ("Updates", "When the host can't
-// answer", "What changes from today") for the behaviour each test pins.
+// list's heading) sharing the answer card's own check.
 //
 // Same mocking boundary as the sibling Overview suites: `useHostScope` and
 // `@/lib/host`'s `useHostBinding` are mocked rather than standing up a host
 // runtime (see `host-overview-updates.test.tsx`, which this file deliberately
-// does not duplicate — every case here is new coverage the ticket calls out).
+// does not duplicate — every case here is new coverage).
 vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
   useScopedStreamBinding: () => null,
 }));
@@ -319,7 +317,7 @@ function scopeFrom(
 
 describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
   it("draws no group label over the single-row auto-update group, and its switch still writes the account policy while the host can't be reached", async () => {
-    // The ticket's own contrast: "Pick a different version" gets an explicit
+    // The contrast: "Pick a different version" gets an explicit
     // label div ahead of its bordered group; the auto-update row does not —
     // its own title stands for the group. A regression that wrapped the row
     // in a labelled group (the way every OTHER group on this tab is) would
@@ -777,7 +775,7 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
   // `host.health.state === "restarting"`, so an expected restart fell through
   // to whatever the scope status or operation view said instead of the
   // loading shape every other region already gives a restart. Two arms, one
-  // per row of the ticket's own table.
+  // per case.
   it("health restarting, scope unreachable with a null client: the connecting shape replaces the unreachable sentence, and the auto-update row stays", async () => {
     hostBindingMock.current = null;
     scopeOverrides.current = {

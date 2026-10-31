@@ -252,7 +252,7 @@ export interface TerminalAgentLaunch {
 }
 
 /**
- * Both actions return the submit-time placement refusal (selection model §54)
+ * Both actions return the submit-time placement refusal
  * instead of dispatching, or `null` otherwise; `settled` then says whether the
  * create went out. The caller renders the message inline on the composer -
  * never a toast-and-proceed, and never a silent fallback onto another host.
@@ -348,7 +348,7 @@ interface FinalizeLandingSubmissionInput {
  * composer), which is exactly when these callbacks must stop addressing the
  * old machine.
  *
- * `target` is the composer's resolved placement (selection model §54), and it
+ * `target` is the composer's resolved placement, and it
  * is the ONLY host any create below touches: the epic create, its folded chat
  * seed, and the terminal-agent chain all run on `target.client`, whose host
  * identity is re-validated at the top of each action. A staged sandbox's team
@@ -1529,7 +1529,7 @@ export function useLandingComposerActions(
     [createLandingEpic, navigate, terminalAgentCreateFn],
   );
 
-  // Selection model §54's submit-time re-validation, and the FIRST thing both
+  // The submit-time re-validation, and the FIRST thing both
   // actions do. It runs before any store write, navigation, or optimistic
   // seed: a refusal must leave the composer exactly as the user left it, with
   // the message rendered inline next to the send button.

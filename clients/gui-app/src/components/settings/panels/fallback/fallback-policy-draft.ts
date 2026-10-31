@@ -20,7 +20,7 @@ import {
  * Which group an edit came from, so its status renders under the control that
  * produced it rather than once at the foot of the panel.
  *
- * The ticket's wording is "inline under the changed control", and a single
+ * The rule is "inline under the changed control", and a single
  * panel-wide line cannot satisfy it: this page has five groups, and a message
  * beneath the last one does not tell someone which of a dozen settings was
  * refused. The reducer therefore carries the origin of the edit - not the exact
@@ -41,7 +41,7 @@ export type FallbackPolicyField =
 /**
  * The panel's edit model.
  *
- * Every control in the Fallback section writes through this, so the ticket's
+ * Every control in the Fallback section writes through this, so the
  * failure handling is decided once rather than per group. The ticket names two
  * kinds; the reducer distinguishes four, because the second kind kept turning
  * out not to be one thing:

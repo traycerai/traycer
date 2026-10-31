@@ -88,7 +88,7 @@ const EMPTY_OCCUPANCY: ReadonlyMap<string, string> = new Map();
 const EMPTY_NEEDS: ReadonlyArray<string> = [];
 const EMPTY_ACTIVITY: ReadonlyMap<string, number> = new Map();
 
-/** Measured from `planMissionControl` on triage seed 1; not the ticket estimates. */
+/** Measured from `planMissionControl` on triage seed 1; not estimates. */
 /**
  * Re-measured for the medbay's two rows: the hall is two rows taller than it was
  * before it had a ward, so every fit the HEIGHT binds moved. The 309-agent
@@ -2227,7 +2227,7 @@ describe("mission control plates: fixup 5 - plates fit their own arc segment and
     );
     // 4. Half of the narrowest rung's own threshold: nothing on the ladder
     //    fits any more, so the plate is dropped rather than drawn over the
-    //    run next door - the ticket's "team keeps only its hover name".
+    //    run next door - "team keeps only its hover name".
     expect(resolvedAt(thresholds[3] * 0.5)).toBeUndefined();
   });
 

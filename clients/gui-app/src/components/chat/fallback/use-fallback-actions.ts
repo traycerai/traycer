@@ -186,8 +186,8 @@ export const IGNORE_FALLBACK_OUTCOME = (): void => undefined;
  *
  * There is no toast branch any more. The bare Retry and Wait buttons used to
  * toast, on the argument that an unchanged row had nowhere to write; the
- * failed-turn card now writes the refusal where the button was (spec Flow 4:
- * "a toast never carries a refusal").
+ * failed-turn card now writes the refusal where the button was:
+ * "a toast never carries a refusal".
  *
  * `inlineMenuOpen` rather than "is the component mounted", because mounted is
  * not the question - and the name predates the failed-turn card's note, which

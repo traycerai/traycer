@@ -490,7 +490,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   // registration must be live before the browser can paint a state where a
   // drag could start. Cleared defensively on unmount (in addition to
   // unregistering) even though the unmounted DOM is about to be discarded
-  // anyway - matches the ticket's explicit "cleared ... at end/unmount"
+  // anyway - matches the explicit "cleared ... at end/unmount"
   // contract.
   useLayoutEffect(() => {
     const capture = (): void => {

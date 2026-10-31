@@ -61,7 +61,7 @@ export interface LayoutDragInput {
   readonly onDrop: (fromIndex: number, toIndex: number) => void;
 }
 
-/** The lift, which says the member is off the surface and in hand (section 6). */
+/** The lift, which says the member is off the surface and in hand. */
 const LIFT_SCALE = 1.02;
 
 /**
@@ -235,7 +235,7 @@ function startLayoutDrag(
     // otherwise open it at the end of every drag.
     swallowNextClick();
     // Under either reduced-motion gate the drop is placed, not thrown, so the
-    // one spring section 6 allows a bounce never runs.
+    // one spring allowed a bounce never runs.
     if (prefersReducedMotion()) {
       finish();
       return;

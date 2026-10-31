@@ -64,8 +64,8 @@ export interface HostScope {
   readonly localMaintenanceFallback: boolean;
   readonly setHostId: (hostId: string) => void;
   /**
-   * ACTIVATE: the app's one and only writer of `preferredHostId` (selection
-   * model §1, invariant 1). It does not bind anything here - it asks the
+   * ACTIVATE: the app's one and only writer of `preferredHostId`.
+   * It does not bind anything here - it asks the
    * selection authority, which validates against the fleet, persists, and
    * re-derives; the new effective host comes back down to every window.
    */

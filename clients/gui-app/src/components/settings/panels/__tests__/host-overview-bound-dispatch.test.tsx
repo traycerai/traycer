@@ -373,7 +373,7 @@ describe("HostOverviewPanel — bound-dispatch sequence: accept, park, auto-open
           // armed (no `view.updateProgress.state === "updating"` frame ever
           // releases it — see `host-overview-panel.tsx`'s effect beside that
           // latch), so "preparing frames released the latch" reddens exactly
-          // as the ticket's own ablation names it.
+          // as named.
           updateProgress:
             phase === "preparing"
               ? { state: "updating" as const, error: null }
@@ -431,7 +431,7 @@ describe("HostOverviewPanel — bound-dispatch sequence: accept, park, auto-open
 
     // (b): Defer, then the next poll with the SAME `waiting-to-activate a1`
     // frame — stays closed. Falsifies: dropping the `autoOpenedFor` write
-    // (the ticket's own first ablation) — without it this poll would
+    // — without it this poll would
     // re-satisfy `deriveActivationAutoOpen` and reopen the dialog.
     fireEvent.click(screen.getByTestId("host-busy-defer"));
     await waitFor(() => {
@@ -470,7 +470,7 @@ describe("HostOverviewPanel — dispatch ownership: ACK racing the cache, an un-
   it("(d) an ACK for a1 while host.status still reports a DIFFERENT attempt (a0) keeps the slot — the dialog opens once a1 is later seen parked", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     // Falsifies: clearing the slot on ANY different attempt id regardless of
-    // `seen` (the ticket's own ablation) — that would drop the a1 slot the
+    // `seen` — that would drop the a1 slot the
     // moment the a0 frame arrived and this test's final `findByTestId` would
     // time out.
     //
@@ -686,7 +686,7 @@ describe("HostOverviewPanel — dispatch ownership: unusable scope and unmount-b
     // for a local host, can only ever project `restarting` or `unknown` and
     // never the `waiting-to-activate` the auto-open requires. The clause is
     // defence in depth over a state the wiring already forecloses. What this
-    // pin does hold is the OUTCOME the ticket's invariant names — no bound
+    // pin does hold is the OUTCOME the invariant names — no bound
     // dispatch surfaces on an unusable scope — against the compound
     // condition, which is what would actually regress if either half moved.
     const FIXED_INCARNATION = "fixed-incarnation-g";
@@ -804,7 +804,7 @@ describe("HostOverviewPanel — dispatch ownership: unusable scope and unmount-b
     firstMount.unmount();
 
     // Falsifies: gating the latch settlement / read invalidation on the
-    // incarnation (the ticket's own ablation) — that would leave both
+    // incarnation — that would leave both
     // stranded when the settle for a retired mount runs, which is exactly
     // what this resolves next.
     phase = "preparing";
@@ -850,7 +850,7 @@ describe("HostOverviewPanel — dispatch ownership: unusable scope and unmount-b
     });
 
     // The page's Restart still works: the incarnation gate is scoped to the
-    // dispatch SLOT alone, exactly as the ticket's scope table states. The
+    // dispatch SLOT alone. The
     // attempt itself finishing is what releases the LIFECYCLE gate (a
     // `preparing` attempt legitimately disables the header while it runs,
     // same as G1's own matrix) — clear it here to prove the page as a whole
@@ -1031,7 +1031,7 @@ describe("HostOverviewPanel — the dialog's Force bypasses the catalog gate (i)
         }),
         // The catalog does NOT list "1.6.0" — the attempt's own target.
         // Falsifies: routing the dialog's Force through `installForce`
-        // (the ticket's own ablation) — `installForce` would call
+        // — `installForce` would call
         // `describeForceUpdateRefusal`, find no entry for "1.6.0", and show
         // #1756's refusal notice instead of dispatching.
         "host.update.check": () => ({
@@ -1089,7 +1089,7 @@ describe("HostOverviewPanel — the dialog's Force bypasses the catalog gate (i)
           busy: true,
           // ⚠ THE PIN: a POSITIVE reported count. Falsifies: forgetting that
           // `offersForceRestart` still gates the control on a positive
-          // host-reported count — the ticket's own note that this rule was
+          // host-reported count — this rule was
           // NOT changed by this cutover. A `null` or zero count here would
           // hide "Force update…" even though `attemptControl` names the
           // continuation.
@@ -1195,7 +1195,7 @@ describe("HostOverviewPanel — a host without the two methods keeps the legacy 
     // transport would refuse.
     //
     // Falsifies: carrying the intent as a REQUEST FIELD instead of as its own
-    // method (the ticket's own ablation). With nothing to negotiate, every
+    // method. With nothing to negotiate, every
     // host reads as capable, `deriveAttemptControl` names the activation, and
     // `onRestart` becomes `openBoundOffer` — the control reappears and this
     // pin's first assertion reddens.

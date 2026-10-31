@@ -1,8 +1,7 @@
 /**
  * Independent acceptance suite — seam S4: the managed-command output window.
  *
- * Expected behavior comes from the records (`traycer-host/src/domain/
- * managed-command/UI.md` §§3-4, 9, 9a and root `CONTEXT.md`), never from the
+ * Expected behavior comes from the records, never from the
  * component code. The tile, its session hook, its zustand store and the epic
  * canvas store are all real; the one seam faked is the WebSocket stream
  * client, replaced through the production factory override. Every frame fed
@@ -443,7 +442,7 @@ describe("S4 · output window", () => {
     expect(rows[2].textContent).toContain("warning: low disk");
     expect(rows[3].textContent).toContain("half-written record");
 
-    // "Tinted stderr" and "visually distinct" lifecycle rows (UI.md §4): the
+    // "Tinted stderr" and "visually distinct" lifecycle rows: the
     // three channels must not share one presentation.
     const textSpanOf = (row: HTMLElement): string => {
       const spans = row.querySelectorAll("span");
@@ -452,7 +451,7 @@ describe("S4 · output window", () => {
     expect(textSpanOf(rows[2])).not.toBe(textSpanOf(rows[1]));
     expect(textSpanOf(rows[0])).not.toBe(textSpanOf(rows[1]));
 
-    // Timestamps shown by default on every line (UI.md §4). A line the host
+    // Timestamps shown by default on every line. A line the host
     // could not date still gets a visible placeholder, not a missing cell.
     for (const [index, row] of rows.entries()) {
       const time = within(row).getByTestId(

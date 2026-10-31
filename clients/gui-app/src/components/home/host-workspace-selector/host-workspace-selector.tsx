@@ -443,7 +443,7 @@ function HomeSurface(props: HomeSurfaceProps) {
  *
  * Two host scopes, and the name is now historical: `fixed` addresses a
  * caller-supplied host with an inert picker, and what used to be the "active"
- * scope is the composer's window-keyed SURFACE PIN (selection model §2), which
+ * scope is the composer's window-keyed SURFACE PIN, which
  * resolves to `pin ?? effective` and follows the effective host only until the
  * user names one. Neither scope writes the app-wide selection any more.
  */
@@ -488,7 +488,7 @@ export function ActiveHostWorkspaceControls(
   const disabled = props.disabled;
   const directoryEntries = directoryList.data ?? [];
   // The composer is PLACEMENT, and placement is a per-surface pin (redesign
-  // P1.2, selection model §2/§54) - not the app-wide selection, which is
+  // P1.2) - not the app-wide selection, which is
   // Settings ▸ Activate's alone now. A scope that NAMES a host (`fixed`, or
   // #1227's dialog-local `selected`) wins outright; the follow arm resolves
   // the composer's own pin - `pin ?? effective` - and the picker below writes

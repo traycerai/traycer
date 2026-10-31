@@ -431,7 +431,7 @@ export function useGitListChangedFilesSubscription(args: {
     return () => {
       shared.refCount -= 1;
 
-      // ADR-0003: no grace period - tear down immediately when ref count reaches 0.
+      // No grace period - tear down immediately when ref count reaches 0.
       if (shared.refCount === 0) {
         shared.unsubscribeFromStream();
         subscriptions.delete(key);
@@ -1069,7 +1069,7 @@ function writeIntoCache(
     event.type === "updated" &&
     event.changedPaths.length > 0
   ) {
-    // ADR-0004: Per-path invalidation for changed files.
+    // Per-path invalidation for changed files.
     invalidateChangedFileDiffs(queryClient, args.hostId, [
       { runningDir: args.runningDir, changedPaths: event.changedPaths },
     ]);
@@ -1255,7 +1255,7 @@ function replayLastEventIntoCache(opts: {
 }
 
 /**
- * ADR-0004 per-path diff invalidation across one or more repo roots (the
+ * Per-path diff invalidation across one or more repo roots (the
  * parent worktree and, on rich frames, each submodule root).
  */
 function invalidateChangedFileDiffs(

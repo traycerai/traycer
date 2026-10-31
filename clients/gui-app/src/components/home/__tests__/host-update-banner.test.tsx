@@ -1122,7 +1122,7 @@ describe("HostUpdateBanner: service-registration notices are not failures", () =
     ).toBeNull();
   });
 
-  // R5 §G cleanup: the update row's Enable-background-service action, gated
+  // R5 cleanup: the update row's Enable-background-service action, gated
   // on `updateDeferral.code === "E_SERVICE_REGISTRATION_DISABLED"` AND a
   // known local host.
   describe("the Enable background service action", () => {

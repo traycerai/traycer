@@ -283,7 +283,7 @@ export function FallbackTierGroupsEditor(
   const ambiguousNames = ambiguousGroupNames(groups);
   /**
    * What the live region says about a picker refusal - Enter on an option the
-   * one-model-one-tier rule refuses (spec §Accessibility). The same region as
+   * one-model-one-tier rule refuses. The same region as
    * the preview's status, so the page keeps one place that speaks; a counter
    * rides along so pressing Enter twice on the same refusal is said twice.
    */

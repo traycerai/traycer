@@ -1,5 +1,5 @@
 /**
- * Runs one {@link TileOpenPlan} (plan §5.1). The resolver decides,
+ * Runs one {@link TileOpenPlan}. The resolver decides,
  * this dispatches - no placement logic lives here.
  *
  * Every plan except `pip` commits through `navigateNested`, so the canvas

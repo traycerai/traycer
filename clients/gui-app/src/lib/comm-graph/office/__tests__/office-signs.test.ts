@@ -96,11 +96,11 @@ function boardWidthPx(widthTiles: number): number {
  * THE INVARIANT, shared between the sweep (below) and the real
  * 309 Building case: the HQ board's ladder no longer has a rung of
  * manufactured initials, because the third `nameRungs` element it used to
- * letter with is gone. The ticket wrote down two regexes for this and both
+ * letter with is gone. Two regexes capture this, and both
  * are approximations - narrowed here to what the ladder is actually allowed
  * to produce:
  *
- * - `\w` matches digits as well as letters, so the ticket's
+ * - `\w` matches digits as well as letters, so the
  *   `/^(\w( |$))+$/` also matches the legitimate bare-total rung ("5",
  *   "309"). Narrowed to `[A-Za-z]` so a digit can never trip it.
  * - `/^\w{2,5}$/` likewise matches "309". Narrowed to `[A-Za-z]{2,5}`.

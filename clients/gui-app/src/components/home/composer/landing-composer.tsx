@@ -197,7 +197,7 @@ export function LandingComposer(props: LandingComposerProps) {
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
   const createdUnboundDraftIdRef = useRef<string | null>(null);
   const [pickerStore] = useState(() => createComposerPickerStore());
-  // The composer's PLACEMENT (redesign P1.2, selection model §54): its own
+  // The composer's PLACEMENT (redesign P1.2): its own
   // window-keyed surface pin, or the effective host while it follows. Not the
   // app-wide selection - the picker no longer moves that - so every RPC this
   // surface makes, and every create it performs, resolves through here.
@@ -686,7 +686,7 @@ export function LandingComposer(props: LandingComposerProps) {
     claimsSend: false,
   });
 
-  // Submit-time refusal copy (selection model §54). The G4 re-point used to
+  // Submit-time refusal copy. The G4 re-point used to
   // share this slot; it narrates as a toast now, and only when it actually
   // reset staged intent — see the effect below.
   const {
@@ -943,7 +943,7 @@ export function LandingComposer(props: LandingComposerProps) {
   /** Whether the submit went ahead. */
   const handleSubmit = useCallback((): boolean | Promise<boolean> => {
     if (!canSubmit) return false;
-    // A staged sandbox takes the send (sandboxes redesign Flow 1): the task
+    // A staged sandbox takes the send: the task
     // opens at once and the message waits in it, behind the setup line,
     // until the agent the person picked is ready on the sandbox. It runs
     // on that agent and model, never one this host would swap in.

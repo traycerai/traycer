@@ -5,7 +5,7 @@ export const authMutationKeys = {
   signInWithLinkCode: () => ["auth", "signInWithLinkCode"] as const,
   respondLinkLogin: () => ["auth", "respondLinkLogin"] as const,
   openVerificationPage: () => ["auth", "openVerificationPage"] as const,
-  // Remote Host Support (§13, T16): "Update now" / auto-policy toggle /
+  // T16: "Update now" / auto-policy toggle /
   // "Apply now — ends N sessions", scoped per host so concurrent writes to
   // different rows never share a pending state.
   updateHostVersionPolicy: (hostId: string) =>

@@ -614,8 +614,8 @@ export function useMentionItems(params: UseMentionItemsParams): void {
       workspacePending: workspaceFetching,
       epicRequested: epicRequests.length > 0,
       epicPending: epicFetching,
-      // Core flows asks for the header spinner AND the `Checking…` stamp during
-      // a background refetch, explicitly "same as Artifacts" - so the GitHub
+      // The header spinner AND the `Checking…` stamp show during
+      // a background refetch, the same as Artifacts - so the GitHub
       // sections drive it too. They sit in the same menu as the section that
       // does; reporting in-flight work differently there would read as one of
       // them being broken.

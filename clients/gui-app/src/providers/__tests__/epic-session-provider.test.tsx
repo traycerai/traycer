@@ -2588,7 +2588,7 @@ describe("<TestEpicSessionTab />", () => {
 
       await act(() => Promise.resolve());
       // Invariant 6 does not exempt a bridge that never attaches: an unbounded
-      // hold here is the infinite skeleton this ticket exists to delete.
+      // hold here is the infinite skeleton this guards against.
       await act(async () => {
         await vi.advanceTimersByTimeAsync(15_000);
       });
@@ -4661,7 +4661,7 @@ describe("<TestEpicSessionTab />", () => {
     act(() => {
       setEpicSurfaceVisibility(EPIC_ID, EPIC_ID, false);
     });
-    // Both arms in one flow, matching the ticket's "delete the threshold and
+    // Both arms in one flow, matching the "delete the threshold and
     // this cannot fail" bar: nothing released one second short of the window.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(PARK_HIDDEN_EPIC_AFTER_MS - 1_000);
@@ -4763,7 +4763,7 @@ describe("<TestEpicSessionTab />", () => {
     // has returned to the microtask queue in between - flips visibility back
     // on and unparks. A `queueMicrotask` scheduled by the park effect (the
     // pre-fix shape) would still be sitting unflushed at this exact point,
-    // which is what makes this the race the ticket describes; the fix's
+    // which is what makes this the race under test; the fix's
     // synchronous `setSession(null)` has nothing left for the unpark to beat.
     act(() => {
       vi.advanceTimersByTime(PARK_HIDDEN_EPIC_AFTER_MS);

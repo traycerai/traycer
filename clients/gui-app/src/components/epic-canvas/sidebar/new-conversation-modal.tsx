@@ -391,7 +391,7 @@ export function NewConversationModalAction(
       // Names no host: the modal resolves its own per-EPIC placement (this
       // Epic's last created chat's host, else the host the Epic is served
       // from - `useEpicConversationPlacement`), with the picker live. Naming
-      // one here would freeze the picker (§55) for a trigger that has no
+      // one here would freeze the picker for a trigger that has no
       // machine in mind.
       hostId: null,
     });
@@ -880,7 +880,7 @@ export function NewConversationModalBody(props: {
   // Epic is served from. Resolving the window's landing pin instead (what
   // this used to share) answered "where did the landing chip last point",
   // which is not a fact about this Epic. A request that DOES name a host
-  // keeps it, with the picker inert (§55).
+  // keeps it, with the picker inert.
   //
   // Same placement UNIT as the landing composer: the READ client for this
   // body's queries, the host-FROZEN client every create below is sent on, and
@@ -1346,7 +1346,7 @@ export function NewConversationModalBody(props: {
     />
   );
   const header = <NewConversationModalHeader switcher={switcher} />;
-  // §54 refusal copy, as on the landing composer. The G4 re-point used to
+  // Placement refusal copy, as on the landing composer. The G4 re-point used to
   // share this slot; it narrates as a toast now, and only when it actually
   // reset staged intent.
   const {
@@ -1368,7 +1368,7 @@ export function NewConversationModalBody(props: {
   // its placement - no named host, no per-Epic pin in force, no session host
   // in force - and only then does a derivation move re-point it. Its staged
   // worktree/branch intent names refs on the machine the user picked them on
-  // and must not travel; the §51 folder set stays, per the orchestrator's
+  // and must not travel; the folder set stays, per the orchestrator's
   // ruling on the landing row. A modal resting on its pin or on the Epic's
   // host is not moved by the derivation and must not narrate a move.
   // A move that reset nothing stays silent: the switch itself is
@@ -1419,7 +1419,7 @@ export function NewConversationModalBody(props: {
    * `liveContent` is a parameter rather than a read off `editorRef` because
    * the byte-resolution branch below re-reads the live document AFTER its
    * await and hands that re-read in - so every guard from here down, the
-   * §54 placement re-validation included, runs against the same document the
+   * placement re-validation included, runs against the same document the
    * create carries, and a keystroke typed during resolution rides along
    * instead of being cleared unsent.
    */
@@ -1456,7 +1456,7 @@ export function NewConversationModalBody(props: {
       // Global, single-selection billing context captured at create time; it
       // rides as a sibling of the per-chat settings on the initial message.
       const accountContext = useAccountContextStore.getState().accountContext;
-      // Selection model §54, and the ORDERING is the point: re-validate the
+      // The ORDERING is the point: re-validate the
       // placement BEFORE any persistent write, because `cleanupAfterSubmit`
       // below clears the draft and closes the modal synchronously, well before
       // the create can fail. An existence check (`getActiveHostId() !== null`)
@@ -1874,7 +1874,7 @@ export function NewConversationModalBody(props: {
     const editor = editorRef.current;
     if (editor === null) return;
     const captured = editor.getJSON();
-    // A staged sandbox takes the send (sandboxes redesign Flow 1): the
+    // A staged sandbox takes the send: the
     // message waits in this task, behind the setup line, until the agent the
     // person picked is ready on the sandbox, and the modal closes at once. It
     // runs on that agent and model, never one this host would swap in.
@@ -2233,7 +2233,7 @@ export function NewConversationModalBody(props: {
         });
         return false;
       }
-      // Same §54 gate as `handleSubmit`, and for the same ordering reason:
+      // Same placement gate as `handleSubmit`, and for the same ordering reason:
       // `cleanupAfterSubmit` runs before the async create, so a placement that
       // cannot be created on must be refused here or the draft is gone before
       // anything reports the failure.

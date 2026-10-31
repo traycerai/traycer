@@ -110,7 +110,7 @@ export interface WindowNarrationInput {
    * The gate on every arm below. A null effective host means two unrelated
    * things and only this tells them apart: `false` is the store's DETACHED
    * default (nobody has answered yet - bootstrap), `true` with a null host is
-   * the real ∅. Narrating a failure on the first is the flash P2.4 §7 fixed
+   * the real ∅. Narrating a failure on the first is the flash P2.4 fixed
    * one layer down; this surface is app-wide, so the same mistake here would
    * flash a full modal on every cold open.
    */

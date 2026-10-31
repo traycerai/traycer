@@ -19,7 +19,7 @@ export type SurfaceHostSelection = string | null;
  * instance id. Sidebar panels (git-diff, file-tree, new-terminal) all use
  * the view tab id — tab ids are uuid-unique app-wide, so a tab that moves
  * windows keeps its pins. `composer` is the landing composer's placement pin,
- * keyed per WINDOW (P1.2 §55). `new-conversation` is the in-Epic
+ * keyed per WINDOW (P1.2). `new-conversation` is the in-Epic
  * new-conversation modal's placement pin, keyed per EPIC: it is that Epic's
  * "last created chat's host" memory (recorded on every create, and by its
  * picker), the host analogue of the per-Epic model memory the modal already
@@ -74,7 +74,7 @@ export function gitDiffPanelSurfaceKey(tileRef: string): string {
   return tabSurfaceKey("git-diff", tileRef);
 }
 
-/** The landing composer's window-keyed placement pin (P1.2 §55). Accepts null so the contract matches `resolveSurfaceWindowId`. */
+/** The landing composer's window-keyed placement pin (P1.2). Accepts null so the contract matches `resolveSurfaceWindowId`. */
 export function composerSurfaceKey(windowId: string | null): string {
   return surfaceHostKey("composer", resolveSurfaceWindowId(windowId));
 }

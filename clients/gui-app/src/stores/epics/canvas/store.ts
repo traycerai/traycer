@@ -365,7 +365,7 @@ export interface EpicCanvasStore {
   readonly pendingChatTitles: Readonly<Record<string, PendingTitleEntry>>;
   /**
    * Per-epic PiP position/size. Survives relaunch; dismissals and phase
-   * do not. See core-flows retention table.
+   * do not.
    */
   readonly pipGeometryByEpicId: Readonly<
     Record<string, EpicPipGeometry | undefined>

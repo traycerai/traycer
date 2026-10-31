@@ -2,7 +2,7 @@ import type { FleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view"
 import { warrantsFastPoll } from "@/lib/host/fleet-update/fleet-update-view";
 
 /**
- * The bounds fleet observation runs under (plan §6), kept in one pure module so
+ * The bounds fleet observation runs under, kept in one pure module so
  * they can be asserted directly rather than inferred from a running scheduler.
  *
  * Every number here is a cost paid on someone else's machine — a remote host

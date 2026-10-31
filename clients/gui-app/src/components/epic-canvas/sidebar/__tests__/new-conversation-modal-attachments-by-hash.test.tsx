@@ -86,7 +86,7 @@ vi.mock("sonner", () => ({
  * A separate file from `new-conversation-submit-gate.test.tsx` rather than an
  * addition to it: that file's placement mock's `client` is a bare
  * `{ getActiveHostId }` stub with no upload method, and it is being edited by
- * other work on this ticket in parallel - duplicating its large mock block
+ * other work in parallel - duplicating its large mock block
  * here keeps this suite's own fixture from colliding with that.
  */
 

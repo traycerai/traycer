@@ -136,7 +136,7 @@ const COPY_FEEDBACK_RESET_MS = 1500;
 /**
  * `measuring`: stage not yet laid out - keep the skeleton up rather than
  * flash an unconstrained image (a real, verified video symptom: the huge-
- * image flash this ticket exists to fix). `no-dimensions`: the stage IS
+ * image flash this avoids). `no-dimensions`: the stage IS
  * measured but `meta` never declared width/height (a dimension-less SVG) -
  * there is nothing to compute an initial fit FROM, so this renders a
  * constrained (not unconstrained, not stuck-forever) fallback with no

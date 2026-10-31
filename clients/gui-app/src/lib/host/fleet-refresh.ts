@@ -12,7 +12,7 @@ import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
  *
  * **A shell capability, not the window's authority surface.** The type is
  * deliberately `Pick<IRunnerHost, …>` rather than anything on
- * `SelectionAuthorityClient`: this ticket spent its whole budget narrowing the
+ * `SelectionAuthorityClient`: this change spent its whole budget narrowing the
  * selection WRITE path to one bridge plus Settings ▸ Activate, and announcing
  * a membership change must not widen it again. This says "tell the shell its
  * copy is stale", never "select something".

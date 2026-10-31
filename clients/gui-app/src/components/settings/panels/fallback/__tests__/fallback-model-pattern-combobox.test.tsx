@@ -451,7 +451,7 @@ describe("FallbackModelPatternCombobox - Pin 13: combobox-relevant integration",
     // Falsification: `triggerFace`'s `spoken`/`accessibleName` composition
     // dropping the ", pattern" clause or the match-count pill - the
     // accessible name would then omit one of the two facts a screen-reader
-    // user needs (spec §Accessibility).
+    // user needs.
     expect(trigger.getAttribute("aria-label")).toBe(
       "Model or pattern: *opus*, pattern, 0 models",
     );

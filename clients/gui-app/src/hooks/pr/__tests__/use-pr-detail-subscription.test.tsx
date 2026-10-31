@@ -305,7 +305,7 @@ describe("usePrDetailSubscription - non-default-host subscription", () => {
     expect(session.closed).toBe(false);
 
     // Ref-counted teardown: the sole consumer unmounting closes the session
-    // immediately (ADR-0003 - no grace period).
+    // immediately (no grace period).
     unmount();
     expect(session.closed).toBe(true);
     expect(mockWsStreamClient.subscribeCallCount).toBe(1);
