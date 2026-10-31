@@ -370,14 +370,6 @@ interface LocalHomeProbe {
 }
 
 /**
- * A local-home exemption is trustworthy only when EVERY settled directory
- * host returned a complete-enough first page. A missed host, a rejected
- * request (including unsupported `epic.listTasks`), or a truncated page
- * leaves an unprovable hole, so the destructive effect must wait rather than
- * equate that hole with no local epics. Older successful schemas can omit the
- * marker; absence is not a truncation claim and their rows remain useful.
- */
-/**
  * Whether a page's `localRows` marker says the host-synthesized rows on it are
  * the WHOLE local answer.
  *
@@ -420,6 +412,14 @@ function negotiatedLineCarriesLocalRows(
   return version.major > 1 || (version.major === 1 && version.minor >= 4);
 }
 
+/**
+ * A local-home exemption is trustworthy only when EVERY settled directory
+ * host returned a complete-enough first page. A missed host, a rejected
+ * request (including unsupported `epic.listTasks`), or a truncated page
+ * leaves an unprovable hole, so the destructive effect must wait rather than
+ * equate that hole with no local epics. Older successful schemas can omit the
+ * marker; absence is not a truncation claim and their rows remain useful.
+ */
 function combineLocallyProtectedEpicIds(
   probes: ReadonlyArray<LocalHomeProbe> | null,
   results: ReadonlyArray<UseQueryResult<ListTasksResponse>>,

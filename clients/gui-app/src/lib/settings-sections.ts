@@ -572,11 +572,6 @@ export const RETIRED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
   new Set(["machine-setup", "agent-definitions", "browser-agent-access"]);
 
 /**
- * The page that now holds a retired section, where one does: a remembered
- * section or a link that names it opens that page, as its route redirects
- * there.
- */
-/**
  * The pages of the features this build does not ship (`unreleased-features.ts`):
  * sandboxes and their credits, a team's members, the environment's secrets,
  * the environment-wide MCP servers and Skills pages (each provider's own tab
@@ -594,6 +589,11 @@ export const UNRELEASED_SETTINGS_SECTION_IDS: ReadonlySet<SettingsSectionId> =
     "machine-setup",
   ]);
 
+/**
+ * The page that now holds a retired section, where one does: a remembered
+ * section or a link that names it opens that page, as its route redirects
+ * there.
+ */
 export const RETIRED_SECTION_REPLACEMENTS: Readonly<
   Partial<Record<SettingsSectionId, SettingsSectionId>>
 > = {

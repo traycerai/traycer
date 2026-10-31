@@ -223,15 +223,6 @@ export function noteAgentActivityConnectionStatus(
 }
 
 /**
- * Opens the activity stream for ONE host and writes into that host's slice.
- *
- * `hostId` is required and is the whole point of the change: without it the
- * second caller silently replaced the first caller's data. It is also what
- * {@link agentActivityPlaneCoversHost} answers from, so it is known before
- * the socket does anything and needs no re-assertion on a reopen - the reopen
- * lane dials into the same slice.
- */
-/**
  * Everything {@link openAgentActivityStream} needs, as one object because the
  * positional form had reached five parameters. Every field is REQUIRED: the
  * two nullable ones carry a decision (`null` means "no handler" and "host
@@ -276,6 +267,15 @@ export function rereadAgentActivity(): void {
   for (const reread of [...liveStreamRereads]) reread();
 }
 
+/**
+ * Opens the activity stream for ONE host and writes into that host's slice.
+ *
+ * `hostId` is required and is the whole point of the change: without it the
+ * second caller silently replaced the first caller's data. It is also what
+ * {@link agentActivityPlaneCoversHost} answers from, so it is known before
+ * the socket does anything and needs no re-assertion on a reopen - the reopen
+ * lane dials into the same slice.
+ */
 export function openAgentActivityStream(
   input: OpenAgentActivityStreamInput,
 ): () => void {

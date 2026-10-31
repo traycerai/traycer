@@ -2717,15 +2717,6 @@ function appendErrorNotice(
 }
 
 /**
- * Re-stage the worktree intent a `send`/`editUserMessage` pending captured,
- * unless the user has staged a newer selection since (revision guard). Shared
- * by the rejection ack and the reconnect sweep: an edit dropped before its ack
- * (connection lost mid-flight) never runs the rejection path, so without this
- * its staged selection would stay cleared and the next resend would silently
- * run against the prior binding - the exact silent-local-run the restore exists
- * to prevent.
- */
-/**
  * The two fields a revision-guarded re-stage needs. Structural rather than
  * tied to `PendingChatAction`, because the binding has to survive past the
  * accepted ack that drops the action - `PendingUserMessage` carries the same
