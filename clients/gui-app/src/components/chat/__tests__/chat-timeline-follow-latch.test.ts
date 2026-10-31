@@ -8980,4 +8980,192 @@ describe("useChatTimelineFollowLatch", () => {
       });
     });
   });
+
+  // --- T2: pressIsDownRef gates the held end-correction command -----------
+
+  describe("a standing scrollbar press gates the correction's held command", () => {
+    interface PressGateHarness {
+      readonly node: HTMLDivElement;
+      readonly listRef: FakeListRef;
+      readonly result: { readonly current: ChatTimelineFollowLatch };
+    }
+
+    /** Mounted already at the strict bottom, so the mount-time maintain
+     *  pass is a no-op and never confounds the press-arming below (see the
+     *  PressKey suite's own note on this). */
+    function mountPressGateHarness(): PressGateHarness {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(
+          listRef,
+          true,
+          true,
+          DEFAULT_FOLLOW_LATCH_OPTIONS,
+        ),
+      );
+      listRef.scrollToEnd.mockClear();
+      return { node, listRef, result };
+    }
+
+    /** Arms a press (indeterminate, publishing), then replaces it with a
+     *  toward-end intent that has room to move: PressKey's Class 2.1 shape.
+     *  `continuesFollow` is true (still following, toward-end, not touch),
+     *  so the arm clears to null even though the button is still down -
+     *  the one shape in which a correction can actually run while
+     *  `pressIsDownRef` stays true. */
+    function pressDownWithNoBlockingArm(harness: PressGateHarness): void {
+      harness.result.current.noteReaderGesture({
+        direction: "indeterminate",
+        freezeInFlightScroll: true,
+        publishesReaderPosition: true,
+      });
+      shim.setGeometry(harness.node, { scrollHeight: 1900 });
+      harness.result.current.noteReaderGesture({
+        direction: "toward-end",
+        freezeInFlightScroll: true,
+        publishesReaderPosition: true,
+      });
+    }
+
+    it("Class 1 (the gate): a correction under a standing press writes the end immediately but creates no held command", () => {
+      const harness = mountPressGateHarness();
+
+      pressDownWithNoBlockingArm(harness);
+      fireNativeScroll(harness.node);
+
+      // The immediate announced write still lands the correction's end.
+      expect(harness.node.scrollTop).toBe(1400);
+      // The held list command, and its bookkeeping, are skipped outright.
+      expect(harness.listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    describe("five clear-only sources, each clearing the press and nothing else", () => {
+      it("Class 2 (parity): a window pointerup (capture) clears the press; the standing arm still needs its own replacement before a correction can run", () => {
+        const { node, listRef, result } = mountPressGateHarness();
+
+        result.current.noteReaderGesture({
+          direction: "indeterminate",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        // The node's own pointerup never arrives - delivered elsewhere
+        // entirely. Only the window capture-phase listener sees it.
+        window.dispatchEvent(new PointerEvent("pointerup"));
+        shim.setGeometry(node, { scrollHeight: 1900 });
+        result.current.noteReaderGesture({
+          direction: "toward-end",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        fireNativeScroll(node);
+
+        expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      });
+
+      it("Class 2 (parity): a window pointercancel (capture) clears the press; the standing arm still needs its own replacement before a correction can run", () => {
+        const { node, listRef, result } = mountPressGateHarness();
+
+        result.current.noteReaderGesture({
+          direction: "indeterminate",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        window.dispatchEvent(new PointerEvent("pointercancel"));
+        shim.setGeometry(node, { scrollHeight: 1900 });
+        result.current.noteReaderGesture({
+          direction: "toward-end",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        fireNativeScroll(node);
+
+        expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      });
+
+      it("Class 2 (parity): a window blur clears the press (an OS drag/tab switch with the button still down); the standing arm still needs its own replacement", () => {
+        const { node, listRef, result } = mountPressGateHarness();
+
+        result.current.noteReaderGesture({
+          direction: "indeterminate",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        window.dispatchEvent(new Event("blur"));
+        shim.setGeometry(node, { scrollHeight: 1900 });
+        result.current.noteReaderGesture({
+          direction: "toward-end",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        fireNativeScroll(node);
+
+        expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      });
+
+      it("Class 2 (parity): a window pointermove with buttons===0 proves a release this node never saw, clearing the press; the standing arm still needs its own replacement", () => {
+        const { node, listRef, result } = mountPressGateHarness();
+
+        result.current.noteReaderGesture({
+          direction: "indeterminate",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        window.dispatchEvent(new PointerEvent("pointermove", { buttons: 0 }));
+        shim.setGeometry(node, { scrollHeight: 1900 });
+        result.current.noteReaderGesture({
+          direction: "toward-end",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        fireNativeScroll(node);
+
+        expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      });
+
+      it("Class 2 (parity): a fresh pointerdown (not itself publishing) clears both the press and its arm before being re-set", () => {
+        const { node, listRef, result } = mountPressGateHarness();
+
+        result.current.noteReaderGesture({
+          direction: "indeterminate",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        // A fresh contact that is not itself a scrollbar press - a bare
+        // content-tap preflight, `publishesReaderPosition: false` - ends
+        // the standing press and its arm in the same call, before
+        // `pressStandsAfterIntent` computes the (false) value it is reset
+        // to.
+        result.current.noteReaderGesture({
+          direction: "indeterminate",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: false,
+        });
+        shim.setGeometry(node, { scrollHeight: 1700 });
+        result.current.followEndIfPermitted();
+
+        expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("Class 2 (parity): the growth-follow burst still reissues while the press is held, even though its held command is gated", () => {
+      const harness = mountPressGateHarness();
+
+      pressDownWithNoBlockingArm(harness);
+      fireNativeScroll(harness.node);
+      expect(harness.node.scrollTop).toBe(1400);
+
+      // Content grows again before the burst's two-frame reissue - the
+      // held command is not what follows this, since it was never created.
+      shim.setGeometry(harness.node, { scrollHeight: 2100 });
+      flushAnimationFrame();
+      flushAnimationFrame();
+
+      expect(harness.node.scrollTop).toBe(1600);
+    });
+  });
 });
