@@ -135,6 +135,8 @@ export interface VoiceQueue {
     readonly stopped: ReadonlyArray<StoppedAnswer>;
     readonly seenAt: number;
   }): void;
+  /** Whether a Read of the item is queued or being said: the queue owns its saying. */
+  isBeingRead(itemId: string): boolean;
   /** Runs `read`, `switch`, `later` or `brief`; `status` is the controller's. */
   run(verb: Exclude<QueueVerb, { readonly kind: "status" }>): QueueVerbOutcome;
   items(): ReadonlyArray<QueueItem>;
@@ -581,6 +583,9 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
     },
     items() {
       return Array.from(entries.values(), (entry) => entry.item);
+    },
+    isBeingRead(itemId) {
+      return (entries.get(itemId)?.readId ?? null) !== null;
     },
     reset() {
       for (const entry of entries.values()) {

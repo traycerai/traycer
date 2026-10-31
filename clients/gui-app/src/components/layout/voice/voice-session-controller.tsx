@@ -337,8 +337,14 @@ export function VoiceSessionController(): ReactNode {
     botTitle,
     noteHeard,
   });
-  const { beginQueue, noteAnnouncement, noteChannel, noteFocused, resetQueue } =
-    voiceQueue;
+  const {
+    beginQueue,
+    isBeingRead,
+    noteAnnouncement,
+    noteChannel,
+    noteFocused,
+    resetQueue,
+  } = voiceQueue;
 
   // ---- Posting ---------------------------------------------------------- //
   const send = useBotConversationSendMutation(focusClient);
@@ -1308,6 +1314,7 @@ export function VoiceSessionController(): ReactNode {
             sayLoopRef.current?.isAwaiting(requestId) ?? false
           }
           onScheduled={noteFocused}
+          isBeingRead={isBeingRead}
           onAnnouncement={(announcement) =>
             noteAnnouncement({
               botId: focus.botId,
@@ -1775,6 +1782,8 @@ function VoiceFocusedReplyFeed(props: {
   ) => void;
   /** A row this feed will say: the queue does not offer it too. */
   readonly onScheduled: (messageId: string) => void;
+  /** Whether the queue is reading this row for the person already. */
+  readonly isBeingRead: (messageId: string) => boolean;
   /** An announcement that landed on the focused channel: the queue keeps it. */
   readonly onAnnouncement: (announcement: Announcement) => void;
 }): null {
@@ -1791,6 +1800,7 @@ function VoiceFocusedReplyFeed(props: {
     isAwaiting,
     registerReconcile,
     onScheduled,
+    isBeingRead,
     onAnnouncement,
   } = props;
   const chatId = focus.threadId ?? channelId;
@@ -1821,10 +1831,12 @@ function VoiceFocusedReplyFeed(props: {
   }, [registerReconcile]);
   const onScheduledRef = useRef(onScheduled);
   const onAnnouncementRef = useRef(onAnnouncement);
+  const isBeingReadRef = useRef(isBeingRead);
   useEffect(() => {
     onScheduledRef.current = onScheduled;
     onAnnouncementRef.current = onAnnouncement;
-  }, [onAnnouncement, onScheduled]);
+    isBeingReadRef.current = isBeingRead;
+  }, [isBeingRead, onAnnouncement, onScheduled]);
 
   useEffect(() => {
     if (handle === null || channelHandle === null) return;
@@ -1840,13 +1852,12 @@ function VoiceFocusedReplyFeed(props: {
      * can still re-label a queued item.
      */
     const unplaced = new Map<string, string>();
-    /**
-     * Rows taken for announcements as they landed, still open to
-     * reconsideration: an answer to a typed post can land before the post's
-     * request names it, and is the post's answer once it does. Read then,
-     * once, as a focused reply.
-     */
-    const provisional = new Set<string>();
+    // Rows taken for announcements as they landed, still open to
+    // reconsideration: an answer to a typed post can land before the post's
+    // request names it, and is the post's answer once it does. Read then,
+    // once, as a focused reply. Kept in the chat's memory, which outlives
+    // this feed.
+    const provisional = memory.provisional;
     const reconsider = (
       rows: ReadonlyArray<ReplyRow>,
       where: ReplyRecords,
@@ -1877,6 +1888,11 @@ function VoiceFocusedReplyFeed(props: {
     const speak = (reply: FocusedReply, where: ReplyRecords): void => {
       if (memory.scheduled.has(reply.messageId)) return;
       memory.scheduled.add(reply.messageId);
+      // A Read the person asked of this row is already queued or being
+      // said, under its own delegation: it stays the queue's, which settles
+      // it (heard, read) as any read; saying it here too would withdraw it
+      // and repeat the words under no request.
+      if (isBeingReadRef.current(reply.messageId)) return;
       onScheduledRef.current(reply.messageId);
       const itemId = `reply:${reply.messageId}`;
       const placement = place(reply.messageId, where);

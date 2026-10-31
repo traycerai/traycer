@@ -46,6 +46,13 @@ export interface ReplyWatchMemory {
   readonly seen: Set<string>;
   /** Rows handed to the scheduler, so a reconciliation never speaks one twice. */
   readonly scheduled: Set<string>;
+  /**
+   * Rows taken for announcements as they landed, still open to
+   * reconsideration (an answer that landed before its post's request named
+   * it): kept with the chat's memory, so a feed remounted later still
+   * reads one once its request resolves.
+   */
+  readonly provisional: Set<string>;
   /** The newest baseline row's timestamp; `0` before a baseline, or for an empty chat. */
   since: number;
   baselined: boolean;
@@ -55,6 +62,7 @@ export function createReplyWatchMemory(): ReplyWatchMemory {
   return {
     seen: new Set<string>(),
     scheduled: new Set<string>(),
+    provisional: new Set<string>(),
     since: 0,
     baselined: false,
   };
