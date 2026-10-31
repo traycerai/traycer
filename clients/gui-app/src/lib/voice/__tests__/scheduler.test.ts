@@ -812,6 +812,58 @@ describe("a handoff spends delivery attempts", () => {
   });
 });
 
+describe("an item suspended in flight", () => {
+  it("is confirmed by none of its silenced speech, waits at the front, and is appended again as a fresh item", () => {
+    let delivered = 0;
+    let givenUp = 0;
+    scheduler.enqueue(
+      item("a", {
+        onDelivered: () => delivered++,
+        onGivenUp: () => givenUp++,
+      }),
+    );
+    scheduler.enqueue(item("b", {}));
+    expect(appended).toHaveLength(1);
+
+    scheduler.setReady(false);
+    scheduler.suspendInFlight();
+    // The engine goes on producing the words nobody heard.
+    scheduler.noteOutputTranscript("Tracy says reply a");
+    expect(delivered).toBe(0);
+    expect(scheduler.pendingCount()).toBe(2);
+    clock.advance(CONFIRM_WINDOW_MS * (MAX_DELIVERY_ATTEMPTS + 1));
+    expect(appended).toHaveLength(1);
+    expect(givenUp).toBe(0);
+
+    scheduler.setReady(true);
+    expect(appended.map((entry) => entry.text)).toEqual(["reply a", "reply a"]);
+    scheduler.noteOutputTranscript("Tracy says reply a");
+    expect(delivered).toBe(1);
+  });
+
+  it("gets its spent attempt back: the silenced append does not count", () => {
+    let givenUp = 0;
+    scheduler.enqueue(item("a", { onGivenUp: () => givenUp++ }));
+    scheduler.setReady(false);
+    scheduler.suspendInFlight();
+    scheduler.setReady(true);
+
+    for (let i = 0; i < MAX_DELIVERY_ATTEMPTS; i++) {
+      clock.advance(CONFIRM_WINDOW_MS);
+    }
+    expect(appended).toHaveLength(1 + MAX_DELIVERY_ATTEMPTS);
+    expect(givenUp).toBe(1);
+  });
+
+  it("is a no-op with nothing in flight", () => {
+    scheduler.noteOutputLevel(true);
+    scheduler.enqueue(item("a", {}));
+    scheduler.suspendInFlight();
+    scheduler.noteOutputLevel(false);
+    expect(appended).toEqual([{ text: "reply a", delegationId: "d-a" }]);
+  });
+});
+
 describe("without a trusted level detector", () => {
   it("holds the next item for the estimated duration of the one in flight", () => {
     scheduler.setLevelDetection(false);

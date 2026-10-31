@@ -1307,6 +1307,57 @@ describe("dictation while a session is live", () => {
   });
 });
 
+describe("a reply being spoken when dictation starts", () => {
+  it("is not delivered or marked read by its silenced words, and is spoken again after Resume", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    const thread = addChat("t1", { snapshotLoaded: false, messages: [] });
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    await say("Merge it.", "d1");
+    await act(async () => {
+      fake.send.resolve(ACCEPTED);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      thread.setState({
+        snapshotLoaded: true,
+        messages: [botRow("a1", "Merged.")],
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    const commentary = fake.engines[0]?.appendCommentary;
+    expect(commentary).toHaveBeenCalledTimes(1);
+
+    // Dictation starts before a word of the reply is heard; the engine goes
+    // on transcribing the speech the paused speaker no longer plays.
+    act(() => useVoiceSessionStore.getState().acquireDictationHold("composer"));
+    act(() => eventsOf(0).onOutputTranscriptDelta("CI bot says merged"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(fake.markRead).not.toHaveBeenCalled();
+    expect(commentary).toHaveBeenCalledTimes(1);
+
+    act(() => useVoiceSessionStore.getState().releaseDictationHold("composer"));
+    act(() => useVoiceSessionStore.getState().resumeFromDictation());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(commentary).toHaveBeenCalledTimes(2);
+    expect(commentary).toHaveBeenLastCalledWith(
+      expect.stringContaining("Merged."),
+      "d1",
+    );
+    act(() => eventsOf(0).onOutputTranscriptDelta("CI bot says merged"));
+    expect(fake.markRead).toHaveBeenCalledWith({
+      epicId: BOT_ID,
+      chatId: "t1",
+    });
+  });
+});
+
 describe("the shell's voice item", () => {
   it("hears what the live session is doing, and its Mute and End act on the session", async () => {
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });

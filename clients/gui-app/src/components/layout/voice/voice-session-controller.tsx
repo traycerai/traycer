@@ -501,7 +501,11 @@ export function VoiceSessionController(): ReactNode {
         applyCapture();
         // Nothing is appended while paused: an item spoken into a silent
         // speaker would read as delivered from its transcript alone. The
-        // engine takes appends again on Resume, once it has started.
+        // item being spoken when the pause began goes back to wait, so its
+        // silenced words confirm nothing and it is spoken again after
+        // Resume. The engine takes appends again on Resume, once it has
+        // started.
+        if (state.pausedForDictation) speechRef.current?.suspendInFlight();
         const attempt = attemptRef.current;
         if (attempt !== null && attempt.started && !attempt.cancelled) {
           speechRef.current?.setReady(!state.pausedForDictation);
