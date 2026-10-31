@@ -649,7 +649,8 @@ function useBotTabSession(args: {
  * its trunk session, each shown the way the tab shows it; an id that is none
  * of these lands nowhere, and the tab stays as it is. A `sender` landing
  * (a sender chip) shows the thread whose session sent beside the channel, or
- * the channel for any other session.
+ * the channel for any other session once the list being read has answered:
+ * a thread the held list lacks may be in that answer.
  */
 function useSpendTabLanding(args: {
   readonly botId: string;
@@ -657,26 +658,30 @@ function useSpendTabLanding(args: {
   readonly trunkChatId: string;
   /** `null` while the list is read. */
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
+  /** A read of the list is in flight, over `threads` when they are held. */
+  readonly threadsFetching: boolean;
   readonly landChannel: (messageId: string | null) => void;
   readonly showThread: (threadId: string, messageId: string | null) => void;
   readonly openSession: BotSessionOpen;
   /** Shows one of the tab's views: it also leaves Threads. */
   readonly onViewChange: (view: BotTabView) => void;
 }): void {
-  const { botId, channelChatId, trunkChatId, threads } = args;
+  const { botId, channelChatId, trunkChatId, threads, threadsFetching } = args;
   const { landChannel, showThread, openSession, onViewChange } = args;
   const landing = useBotTabLandingStore((state) =>
     Object.hasOwn(state.byBotId, botId) ? state.byBotId[botId] : null,
   );
   useEffect(() => {
     if (landing === null || threads === null) return;
-    useBotTabLandingStore.getState().clear(botId);
     if (landing.kind === "sender") {
       const thread = threads.find((t) => t.sessionChatId === landing.chatId);
+      if (thread === undefined && threadsFetching) return;
+      useBotTabLandingStore.getState().clear(botId);
       if (thread === undefined) landChannel(null);
       else showThread(thread.threadId, null);
       return;
     }
+    useBotTabLandingStore.getState().clear(botId);
     const { messageId } = landing;
     if (landing.kind === "thread") {
       if (landing.threadId === null) landChannel(messageId);
@@ -714,6 +719,7 @@ function useSpendTabLanding(args: {
     openSession,
     showThread,
     threads,
+    threadsFetching,
     trunkChatId,
   ]);
 }
@@ -869,6 +875,7 @@ function BotTabContent(props: {
     channelChatId: snapshot.bot.appConversationChatId,
     trunkChatId: snapshot.bot.trunkChatId,
     threads,
+    threadsFetching: threadList.isFetching,
     landChannel,
     showThread,
     openSession,
