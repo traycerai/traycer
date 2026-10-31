@@ -216,7 +216,8 @@ const ANCHOR_EXCERPT_WORDS = 10;
  * a space follows, or of `。`, `！`, `？`, which end one on their own; either
  * with the closing quotes, brackets and Markdown markers after it.
  */
-const SENTENCE_END = /([.!?\u2026]+|[\u3002\uFF01\uFF1F]+)(["'\u201D\u2019)\]}*_`\u300D\u300F\uFF09]*)/gu;
+const SENTENCE_END =
+  /([.!?\u2026]+|[\u3002\uFF01\uFF1F]+)(["'\u201D\u2019)\]}*_`\u300D\u300F\uFF09]*)/gu;
 
 /** Punctuation an excerpt does not end on, before any closers that follow it. */
 const TRAILING_PUNCTUATION =
