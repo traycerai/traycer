@@ -88,8 +88,11 @@ export interface VoiceQueueOwner {
   readonly noteChannel: (channelId: string | null) => void;
   /** The focused feed will say this row: the queue does not offer it too. */
   readonly noteFocused: (messageId: string) => void;
-  /** A Read of this row is queued or being said: the focused feed leaves it to the queue. */
-  readonly isBeingRead: (messageId: string) => boolean;
+  /**
+   * The queue holds this row's saying (a Read in progress, or the person
+   * heard it or set it aside): the focused feed never says it.
+   */
+  readonly keepsFromFocus: (messageId: string) => boolean;
   /** The focused feed passed an announcement over: the queue keeps it, unsaid. */
   readonly noteAnnouncement: VoiceQueue["addAnnouncement"];
   /**
@@ -360,9 +363,9 @@ export function useVoiceQueueOwner(input: {
   const noteFocused = useCallback((messageId: string) => {
     queueRef.current?.noteFocused(messageId);
   }, []);
-  const isBeingRead = useCallback(
+  const keepsFromFocus = useCallback(
     (messageId: string): boolean =>
-      queueRef.current?.isBeingRead(messageId) ?? false,
+      queueRef.current?.keepsFromFocus(messageId) ?? false,
     [],
   );
   const noteAnnouncement = useCallback<VoiceQueue["addAnnouncement"]>(
@@ -383,7 +386,7 @@ export function useVoiceQueueOwner(input: {
     resetQueue,
     noteChannel,
     noteFocused,
-    isBeingRead,
+    keepsFromFocus,
     noteAnnouncement,
     noteStopped,
     forgetStopped,

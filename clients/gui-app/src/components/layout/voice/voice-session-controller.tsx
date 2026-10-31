@@ -339,7 +339,7 @@ export function VoiceSessionController(): ReactNode {
   });
   const {
     beginQueue,
-    isBeingRead,
+    keepsFromFocus,
     noteAnnouncement,
     noteChannel,
     noteFocused,
@@ -1314,7 +1314,7 @@ export function VoiceSessionController(): ReactNode {
             sayLoopRef.current?.isAwaiting(requestId) ?? false
           }
           onScheduled={noteFocused}
-          isBeingRead={isBeingRead}
+          keepsFromFocus={keepsFromFocus}
           onAnnouncement={(announcement) =>
             noteAnnouncement({
               botId: focus.botId,
@@ -1782,8 +1782,8 @@ function VoiceFocusedReplyFeed(props: {
   ) => void;
   /** A row this feed will say: the queue does not offer it too. */
   readonly onScheduled: (messageId: string) => void;
-  /** Whether the queue is reading this row for the person already. */
-  readonly isBeingRead: (messageId: string) => boolean;
+  /** Whether the queue holds this row's saying (a Read in progress, heard, set aside). */
+  readonly keepsFromFocus: (messageId: string) => boolean;
   /** An announcement that landed on the focused channel: the queue keeps it. */
   readonly onAnnouncement: (announcement: Announcement) => void;
 }): null {
@@ -1800,7 +1800,7 @@ function VoiceFocusedReplyFeed(props: {
     isAwaiting,
     registerReconcile,
     onScheduled,
-    isBeingRead,
+    keepsFromFocus,
     onAnnouncement,
   } = props;
   const chatId = focus.threadId ?? channelId;
@@ -1831,12 +1831,12 @@ function VoiceFocusedReplyFeed(props: {
   }, [registerReconcile]);
   const onScheduledRef = useRef(onScheduled);
   const onAnnouncementRef = useRef(onAnnouncement);
-  const isBeingReadRef = useRef(isBeingRead);
+  const keepsFromFocusRef = useRef(keepsFromFocus);
   useEffect(() => {
     onScheduledRef.current = onScheduled;
     onAnnouncementRef.current = onAnnouncement;
-    isBeingReadRef.current = isBeingRead;
-  }, [isBeingRead, onAnnouncement, onScheduled]);
+    keepsFromFocusRef.current = keepsFromFocus;
+  }, [keepsFromFocus, onAnnouncement, onScheduled]);
 
   useEffect(() => {
     if (handle === null || channelHandle === null) return;
@@ -1888,11 +1888,12 @@ function VoiceFocusedReplyFeed(props: {
     const speak = (reply: FocusedReply, where: ReplyRecords): void => {
       if (memory.scheduled.has(reply.messageId)) return;
       memory.scheduled.add(reply.messageId);
-      // A Read the person asked of this row is already queued or being
-      // said, under its own delegation: it stays the queue's, which settles
-      // it (heard, read) as any read; saying it here too would withdraw it
-      // and repeat the words under no request.
-      if (isBeingReadRef.current(reply.messageId)) return;
+      // The queue holds this row's saying: a Read the person asked is
+      // queued or being said (it settles heard and read as any read, under
+      // its own delegation), or they already heard it or set it aside.
+      // Saying it here would withdraw the Read, undo the disposition, and
+      // repeat the words under no request.
+      if (keepsFromFocusRef.current(reply.messageId)) return;
       onScheduledRef.current(reply.messageId);
       const itemId = `reply:${reply.messageId}`;
       const placement = place(reply.messageId, where);
