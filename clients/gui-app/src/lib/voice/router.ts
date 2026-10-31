@@ -401,13 +401,21 @@ function resolveDeferred(
   span: SpanPick,
 ): RoutedDecision {
   const itemId = result.target.itemId;
-  if (
-    itemId !== null &&
-    !directory.queue.some((candidate) => candidate.itemId === itemId)
-  ) {
-    return { kind: "refused", reason: "unknown-target" };
-  }
   const named = namedOf(result);
+  // The item and the bot (and thread) the route names are one destination:
+  // an item of another bot than the one named is not this route's.
+  if (itemId !== null) {
+    const item = directory.queue.find(
+      (candidate) => candidate.itemId === itemId,
+    );
+    if (
+      item === undefined ||
+      (named.botId !== null && item.botId !== named.botId) ||
+      (named.threadId !== null && item.threadId !== named.threadId)
+    ) {
+      return { kind: "refused", reason: "unknown-target" };
+    }
+  }
   if (named.botId === null && named.threadId === null) {
     return { kind: "deferred", verb, target: null, itemId, span };
   }
