@@ -9,6 +9,7 @@ import {
 } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import {
@@ -202,7 +203,7 @@ describe("VoiceSessionStrip", () => {
 
   it("says why a session ended and clears the line on dismiss", async () => {
     useVoiceSessionStore.setState({ phase: "idle", endReason: "credits" });
-    render(<VoiceSessionStrip />);
+    render(<VoiceSessionStrip />, { wrapper: WithTestQueryClient });
 
     expect(screen.getByTestId("voice-strip-state").textContent).toBe(
       "Voice ended: credits.",
@@ -215,7 +216,7 @@ describe("VoiceSessionStrip", () => {
 
   it("says the sound could not be played when the end was a playback failure", () => {
     useVoiceSessionStore.setState({ phase: "idle", endReason: "playback" });
-    render(<VoiceSessionStrip />);
+    render(<VoiceSessionStrip />, { wrapper: WithTestQueryClient });
 
     expect(screen.getByTestId("voice-strip-state").textContent).toBe(
       "Voice ended: the sound could not be played.",

@@ -16,6 +16,8 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
+import { WithTestQueryClient } from "@/__tests__/with-test-query-client";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
@@ -79,6 +81,11 @@ function makeDriver(): FakeDriver {
   };
 }
 
+/** The ended line reaches TanStack Query, so the chrome mounts under a client. */
+function renderChrome() {
+  return render(<VoiceSessionChrome />, { wrapper: WithTestQueryClient });
+}
+
 /** A session that has gone live on the channel, not yet drawn. */
 function markLive(driver: FakeDriver): FakeDriver {
   act(() => {
@@ -91,7 +98,7 @@ function markLive(driver: FakeDriver): FakeDriver {
 /** A session that has gone live on the channel, drawn in the current layout. */
 function goLive(driver: FakeDriver): FakeDriver {
   markLive(driver);
-  render(<VoiceSessionChrome />);
+  renderChrome();
   return driver;
 }
 
@@ -109,6 +116,7 @@ beforeEach(() => {
   useVoiceSessionStore.setState(initial, true);
   navigation.navigateToTabIntent.mockReset();
   runnerHost.openMicrophoneSettings.mockReset();
+  runnerHost.openMicrophoneSettings.mockResolvedValue(undefined);
   setPhoneLayoutOnly(true);
   Object.defineProperty(Element.prototype, "setPointerCapture", {
     configurable: true,
@@ -122,6 +130,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  toast.dismiss();
   setPhoneLayoutOnly(false);
   if (pointerCapture === undefined) {
     Reflect.deleteProperty(Element.prototype, "setPointerCapture");
@@ -241,7 +250,7 @@ describe("the phone voice view", () => {
 
   it("says on return that the session ended in the background", () => {
     act(() => useVoiceSessionStore.getState().sessionEnded("background"));
-    render(<VoiceSessionChrome />);
+    renderChrome();
 
     expect(screen.getByTestId("voice-strip-state").textContent).toBe(
       "Voice ended when you left the app.",
@@ -254,7 +263,7 @@ describe("the phone voice view", () => {
     act(() =>
       useVoiceSessionStore.getState().sessionEnded("microphone-denied"),
     );
-    render(<VoiceSessionChrome />);
+    renderChrome();
 
     expect(screen.getByTestId("voice-strip-state").textContent).toBe(
       "Voice needs the microphone. Allow it in Settings.",
@@ -307,7 +316,7 @@ describe("the phone voice view", () => {
 
   it("leaves push-to-talk with the microphone closed when the layout widens to the desktop one", async () => {
     markLive(makeDriver());
-    const { rerender } = render(<VoiceSessionChrome />);
+    const { rerender } = renderChrome();
     await userEvent.click(screen.getByRole("button", { name: "Push to talk" }));
     expect(screen.queryByTestId("voice-strip-mute")).toBeNull();
 
@@ -327,7 +336,7 @@ describe("the phone voice view", () => {
 
   it("never mutes an open-microphone session when the layout widens", () => {
     markLive(makeDriver());
-    const { rerender } = render(<VoiceSessionChrome />);
+    const { rerender } = renderChrome();
 
     setPhoneLayoutOnly(false);
     rerender(<VoiceSessionChrome />);
@@ -339,6 +348,62 @@ describe("the phone voice view", () => {
     expect(screen.getByTestId("voice-strip-mute").textContent).not.toContain(
       "Unmute",
     );
+  });
+
+  it("tells the person when the settings page could not be opened", async () => {
+    runnerHost.openMicrophoneSettings.mockRejectedValue(
+      new Error("no settings app"),
+    );
+    act(() =>
+      useVoiceSessionStore.getState().sessionEnded("microphone-denied"),
+    );
+    renderChrome();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open Settings" }),
+    );
+
+    await waitFor(() =>
+      expect(toast.getToasts().find((entry) => "title" in entry)).toMatchObject(
+        {
+          title: "Couldn't open the microphone settings",
+          description: "no settings app",
+        },
+      ),
+    );
+    expect(
+      screen.getByRole("button", { name: "Open Settings" }),
+    ).toHaveProperty("disabled", false);
+  });
+
+  it("disables Open Settings while the settings page is opening", async () => {
+    let finish: () => void = () => undefined;
+    runnerHost.openMicrophoneSettings.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    act(() =>
+      useVoiceSessionStore.getState().sessionEnded("microphone-denied"),
+    );
+    renderChrome();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open Settings" }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Open Settings" }),
+      ).toHaveProperty("disabled", true),
+    );
+
+    act(() => finish());
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Open Settings" }),
+      ).toHaveProperty("disabled", false),
+    );
+    expect(runnerHost.openMicrophoneSettings).toHaveBeenCalledTimes(1);
   });
 
   it("is the strip, not the phone view, on the desktop layout", () => {
