@@ -210,8 +210,12 @@ const fake = vi.hoisted(() => {
     mainBotIds: { "env-1": "bot-1" },
   };
   // The router's fixture answer: post the whole utterance to `botId`'s
-  // channel, or to the focus for `null`.
-  function routePost(botId: string | null, body: string): unknown {
+  // channel (or its `threadId`), or to the focus for `null`.
+  function routePost(
+    botId: string | null,
+    threadId: string | null,
+    body: string,
+  ): unknown {
     const segments = body.split(String.raw`\"segment\":`).length - 1;
     return {
       output: [
@@ -225,7 +229,7 @@ const fake = vi.hoisted(() => {
                 target: {
                   environmentId: null,
                   botId,
-                  threadId: null,
+                  threadId,
                   itemId: null,
                 },
                 span: { fromSegment: 0, toSegment: segments - 1 },
@@ -274,7 +278,7 @@ const fake = vi.hoisted(() => {
      * The router's answer for these cases: every utterance posts, whole, to
      * the focus, which is what the say loop's post path they pin needs.
      */
-    routeToFocus: (body: string): unknown => routePost(null, body),
+    routeToFocus: (body: string): unknown => routePost(null, null, body),
     /** A router answer for one case, in place of {@link routeToFocus}; reset for every case. */
     routeAnswer: null as ((body: string) => unknown) | null,
     /**
@@ -295,7 +299,11 @@ const fake = vi.hoisted(() => {
     conversationLists,
     /** The answer that posts the whole utterance to bot `botId`'s channel. */
     routeToBot: (botId: string, body: string): unknown =>
-      routePost(botId, body),
+      routePost(botId, null, body),
+    routeToThread: (botId: string, threadId: string, body: string): unknown =>
+      routePost(botId, threadId, body),
+    /** Each bot's threads as `bot.thread.list` answers the voice's directory. */
+    botThreads: new Map<string, ReadonlyArray<unknown>>(),
   };
 });
 
@@ -364,6 +372,38 @@ vi.mock("@/hooks/bots/use-environment-list-query", () => ({
   useEnvironmentListQuery: () => ENVIRONMENT_LIST,
 }));
 
+// The host queries the voice's directory makes: `bot.thread.list` answers
+// from `botThreads` (none by default); the follow, cursor and level reads
+// have not answered.
+vi.mock("@/hooks/host/use-host-queries", () => {
+  function result(data: unknown): unknown {
+    const settled = {
+      data,
+      isError: false,
+      isPending: data === undefined,
+      refetch: () => Promise.resolve(settled),
+    };
+    return settled;
+  }
+  return {
+    useHostQueries: (args: {
+      readonly requests: ReadonlyArray<{
+        readonly method: string;
+        readonly params: { readonly botId: string };
+      }>;
+    }) =>
+      args.requests.map((request) =>
+        result(
+          request.method === "bot.thread.list"
+            ? {
+                threads: fake.botThreads.get(request.params.botId) ?? [],
+                trunkCostUsd: null,
+              }
+            : undefined,
+        ),
+      ),
+  };
+});
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-a",
 }));
@@ -711,6 +751,7 @@ beforeEach(() => {
   fake.conversationLists.answer("bot-1", true);
   fake.conversationLists.answer("bot-2", true);
   fake.tabActivation = "switches";
+  fake.botThreads.clear();
   fake.sendMock.mockReset();
   fake.sendMock.mockImplementation(() => fake.send.promise);
   fake.markRead.mockReset();
@@ -2113,5 +2154,75 @@ describe("a rail change in the bot the voice is leaving", () => {
     expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
       generation + 1,
     );
+  });
+});
+
+describe("a routed post to another thread of the active bot", () => {
+  it("opens that thread, posts there once, and interrupts nothing while its navigation is out", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    fake.botThreads.set(BOT_ID, [
+      {
+        threadId: "t-safari",
+        conversationId: CHANNEL_ID,
+        sessionChatId: "session-safari",
+        anchor: {
+          messageId: "q-safari",
+          requestId: "r-safari",
+          senderUserId: "user-1",
+          sentAt: 1_000,
+          resolvedAt: null,
+        },
+        replyCount: 2,
+        lastReplyAt: 2_000,
+        openRequestCount: 0,
+        costUsd: null,
+      },
+    ]);
+    selectBotTab(BOT_ID);
+    await bringLive();
+    let land: () => void = () => undefined;
+    fake.navigateOutcome = () =>
+      new Promise<void>((resolve) => {
+        land = resolve;
+      });
+    fake.routeAnswer = (body) => fake.routeToThread(BOT_ID, "t-safari", body);
+    const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+    await say("Is the Safari fix in tonight's train?", "d1");
+
+    // The rail moved to the thread at once; the navigation is still out, so
+    // the new anchor is the voice's own and nothing is posted yet.
+    expect(useBotOpenThreadStore.getState().byBotId[BOT_ID]).toMatchObject({
+      kind: "thread",
+      anchorMessageId: "q-safari",
+    });
+    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
+      generation,
+    );
+    expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
+    expect(fake.sendMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      land();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    expect(fake.sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        botId: BOT_ID,
+        conversationId: CHANNEL_ID,
+        threadId: "t-safari",
+        text: "Is the Safari fix in tonight's train?",
+      }),
+    );
+    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
+      generation,
+    );
+    expect(
+      (fake.engines[0]?.appendCommentary.mock.calls ?? []).filter(
+        ([text]) => text === MOVED_ASK_TEXT,
+      ),
+    ).toEqual([]);
   });
 });

@@ -106,11 +106,16 @@ import {
   type VoiceFocus,
 } from "@/stores/voice/voice-session-store";
 
-/** A navigation by voice from one bot's tab to another's, until it settles. */
+/**
+ * A navigation by voice, until it settles: to another bot's tab, or to
+ * another thread (or the channel) of the bot whose tab is active.
+ */
 interface VoiceNavigation {
   /** The bot whose tab was active when the voice moved; `null` for none. */
   readonly fromBotId: string | null;
   readonly toBotId: string;
+  /** The anchor the voice opens in the target's rail; `null` for its channel. */
+  readonly toAnchorMessageId: string | null;
   /**
    * `"pending"` while the tab's navigation is out; then whether it landed.
    * Written once, when the navigation settles.
@@ -470,20 +475,21 @@ export function VoiceSessionController(): ReactNode {
       navigate: (target) => {
         const from = selectHostFocusedRef(useTabsStore.getState());
         const fromBotId = from !== null && from.kind === "bot" ? from.id : null;
-        const navigation: VoiceNavigation | null =
-          fromBotId === target.tuple.botId
-            ? null
-            : {
-                fromBotId,
-                toBotId: target.tuple.botId,
-                fromAnchorMessageId: railAnchorOf(fromBotId),
-                outcome: "pending",
-              };
+        // Recorded for a move within the active bot too: its rail changes at
+        // once, and the new anchor is the voice's, not the person's.
+        const navigation: VoiceNavigation = {
+          fromBotId,
+          toBotId: target.tuple.botId,
+          toAnchorMessageId:
+            target.tuple.threadId === null
+              ? null
+              : target.focus.anchorMessageId,
+          fromAnchorMessageId: railAnchorOf(fromBotId),
+          outcome: "pending",
+        };
         voiceNavigationRef.current = navigation;
         return openTarget(target, navigateRef.current).then((landed) => {
-          if (navigation !== null) {
-            navigation.outcome = landed ? "landed" : "failed";
-          }
+          navigation.outcome = landed ? "landed" : "failed";
           return landed;
         });
       },
@@ -1399,16 +1405,17 @@ function VoiceSelectionSync(props: {
     if (activeBotId === null || tab === null) return;
     const navigation = voiceNavigationRef.current;
     if (navigation !== null) {
-      // While the voice's navigation is out, the tab it is opening, or the
-      // one it is leaving still showing what it showed when the voice
-      // moved, is not a move: the focus is written when the navigation
-      // settles. Anything else is the person's.
+      // While the voice's navigation is out, the tab it is opening showing
+      // the rail it opens, or the tab it is leaving still showing what it
+      // showed when the voice moved, is not a move: the focus is written
+      // when the navigation settles. Anything else is the person's.
+      const anchor = thread?.anchorMessageId ?? null;
       if (
         navigation.outcome === "pending" &&
-        (activeBotId === navigation.toBotId ||
+        ((activeBotId === navigation.toBotId &&
+          anchor === navigation.toAnchorMessageId) ||
           (activeBotId === navigation.fromBotId &&
-            (thread?.anchorMessageId ?? null) ===
-              navigation.fromAnchorMessageId))
+            anchor === navigation.fromAnchorMessageId))
       ) {
         return;
       }
