@@ -8,6 +8,7 @@ import {
 
 import {
   appendBlocks,
+  appendQuoteMarkdown,
   appendQuoteToDraft,
   buildQuoteBlockquote,
 } from "../append-quote-to-draft";
@@ -239,5 +240,36 @@ describe("appendQuoteToDraft", () => {
     const draft = readComposerDraftSnapshot(taskId);
     expect(draft.content).toEqual(doc([first, second, emptyParagraph()]));
     expect(draft.resetEpoch).toBe(2);
+  });
+});
+
+describe("appendQuoteMarkdown", () => {
+  const plain = (text: string) => ({ text, fenceLanguage: null });
+
+  it("adds the quote after what the box holds, a blank line between", () => {
+    expect(appendQuoteMarkdown("Agreed, but", plain("a line"))).toBe(
+      "Agreed, but\n\n> a line\n\n",
+    );
+  });
+
+  it("takes the newlines a box already ends with as the gap, not more of it", () => {
+    expect(appendQuoteMarkdown("Agreed, but\n\n", plain("a line"))).toBe(
+      "Agreed, but\n\n> a line\n\n",
+    );
+  });
+
+  it("quotes every line, an internal blank line as a bare marker and the trailing blank lines dropped", () => {
+    expect(
+      appendQuoteMarkdown("", plain("first  \nsecond\n\nfourth\n\n")),
+    ).toBe("> first\n> second\n>\n> fourth\n\n");
+  });
+
+  it("keeps a code selection's fence and language inside the quote", () => {
+    expect(
+      appendQuoteMarkdown("", {
+        text: "const a = 1;\n\nreturn a;",
+        fenceLanguage: "ts",
+      }),
+    ).toBe("> ```ts\n> const a = 1;\n>\n> return a;\n> ```\n\n");
   });
 });

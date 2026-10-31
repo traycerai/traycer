@@ -53,7 +53,15 @@ import {
 import {
   BotMessageComposer,
   type BotComposerEdit,
+  type BotComposerSeed,
+  type BotKeptDraft,
 } from "@/components/bots/bot-message-composer";
+import { appendQuoteMarkdown } from "@/components/chat/quote/append-quote-to-draft";
+import { clearBrowserSelection } from "@/components/chat/quote/quote-snapshot-into-draft";
+import {
+  QuoteSinkContext,
+  type QuoteSink,
+} from "@/components/chat/quote/quote-sink-context";
 import { useBotSendFailure } from "@/hooks/bots/use-bot-send-failure";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
@@ -612,6 +620,42 @@ export function BotChannelView(props: {
     openThreadPostId === null
       ? null
       : (threadsByPost.get(openThreadPostId) ?? null);
+  // A quote, from the channel or the thread beside it, goes into the box
+  // that is open: the thread's while a thread is open, else the channel's.
+  // It is added after what the box holds, as a new message: an edit of a
+  // failed message the box held ends, as a Discuss draft ends it.
+  const [channelSeed, setChannelSeed] = useState<BotComposerSeed | null>(null);
+  // What the channel's box holds, for a quote to add to.
+  const channelBoxText = useRef("");
+  const channelKeptDraft = useMemo<BotKeptDraft>(
+    () => ({
+      keep: (text) => {
+        channelBoxText.current = text;
+      },
+      revision: () => null,
+      spend: () => undefined,
+    }),
+    [],
+  );
+  const quoteIntoOpenBox = useCallback<QuoteSink>(
+    (_chatId, snapshot) => {
+      if (railThreadPostId !== null) {
+        const kept =
+          useBotDraftsStore.getState().threadBoxes[botId]?.[railThreadPostId];
+        seedThreadBox(
+          botId,
+          railThreadPostId,
+          appendQuoteMarkdown(kept?.text ?? "", snapshot),
+        );
+      } else {
+        setEdit(null);
+        const text = appendQuoteMarkdown(channelBoxText.current, snapshot);
+        setChannelSeed((current) => ({ id: (current?.id ?? 0) + 1, text }));
+      }
+      clearBrowserSelection();
+    },
+    [botId, railThreadPostId, seedThreadBox],
+  );
   const threadLanding = useThreadPanelLanding(
     props.landOn,
     drawnPanelThreadId({
@@ -731,107 +775,111 @@ export function BotChannelView(props: {
   }
   return (
     <BotSurfaceCardsContext.Provider value={surfaceCards}>
-      <div className="@container flex min-h-0 flex-1">
-        <div className="flex min-h-0 w-full">
-          <section
-            ref={setChannelSection}
-            aria-label={botTitle}
-            data-testid="bot-channel"
-            data-conversation-id={channel.conversationId}
-            className={cn(
-              "min-h-0 min-w-0 flex-1 flex-col",
-              railOpen ? "hidden @3xl:flex" : "flex",
-            )}
-          >
-            <BotChatTranscript
-              botId={botId}
-              chatId={channel.conversationId}
-              hostId={hostId}
-              title={botTitle}
-              instanceId={`bot-channel:${botId}`}
-              surface={surface}
-              resolveMember={resolveMember}
-              showConnecting
-              landOn={landing}
-            />
-            <BotReplyingStrip
-              botTitle={botTitle}
-              activity={trunkReply}
-              testId="bot-channel-replying"
-            />
-            <BotRoutingCard
-              botId={botId}
-              hostId={hostId}
-              sessionChatId={trunkChatId}
-            />
-            <BotMessageComposer
-              botId={botId}
-              conversationId={channel.conversationId}
-              threadId={null}
-              announcementId={null}
-              sendable
-              placeholder={`Message ${botTitle}`}
-              label={`Message ${botTitle}`}
-              testId="bot-channel-composer"
-              failure={sendFailure}
-              edit={edit}
-              onEditEnd={endEdit}
-              seed={null}
-              keptDraft={null}
-              onSent={openPostedThread}
-            />
-          </section>
-          <ChannelMemoryPane
-            memory={openMemory}
-            render={(memory) => (
-              <BotMemoryPanel
+      <QuoteSinkContext value={quoteIntoOpenBox}>
+        <div className="@container flex min-h-0 flex-1">
+          <div className="flex min-h-0 w-full">
+            <section
+              ref={setChannelSection}
+              aria-label={botTitle}
+              data-testid="bot-channel"
+              data-conversation-id={channel.conversationId}
+              className={cn(
+                "min-h-0 min-w-0 flex-1 flex-col",
+                railOpen ? "hidden @3xl:flex" : "flex",
+              )}
+            >
+              <BotChatTranscript
                 botId={botId}
+                chatId={channel.conversationId}
                 hostId={hostId}
-                environmentId={environmentId}
-                botTitle={botTitle}
-                channelId={channel.conversationId}
-                trunkChatId={trunkChatId}
-                threads={threadList.data?.threads ?? null}
-                botNameOf={botNameOf}
-                back={memory.back}
-                onBack={
-                  memory.back === null ? null : () => onOpenThread(memory.back)
-                }
-                onClose={() => onOpenMemory(null)}
-                navigation={memoryNavigation}
-              />
-            )}
-          />
-          <ChannelThreadPane
-            postId={railThreadPostId}
-            render={(postId) => (
-              <BotThreadPanel
-                key={postId}
-                botId={botId}
-                hostId={hostId}
-                boundHostId={boundHostId}
-                botTitle={botTitle}
-                conversationId={channel.conversationId}
-                originMessageId={postId}
-                sent={open?.sent ?? null}
-                thread={panelThread}
-                tasks={tasks}
-                anchorSenderLabel={anchorSenderLabel}
+                title={botTitle}
+                instanceId={`bot-channel:${botId}`}
+                surface={surface}
                 resolveMember={resolveMember}
-                landOn={threadLanding.landing}
-                onClose={() => {
-                  threadLanding.spend();
-                  onOpenThread(null);
-                }}
-                onOpenActivity={onOpenActivity}
-                onEditPost={editPostFromThread}
-                onOpenTurn={onOpenTurn}
-                onOpenSession={onOpenSession}
+                showConnecting
+                landOn={landing}
               />
-            )}
-          />
+              <BotReplyingStrip
+                botTitle={botTitle}
+                activity={trunkReply}
+                testId="bot-channel-replying"
+              />
+              <BotRoutingCard
+                botId={botId}
+                hostId={hostId}
+                sessionChatId={trunkChatId}
+              />
+              <BotMessageComposer
+                botId={botId}
+                conversationId={channel.conversationId}
+                threadId={null}
+                announcementId={null}
+                sendable
+                placeholder={`Message ${botTitle}`}
+                label={`Message ${botTitle}`}
+                testId="bot-channel-composer"
+                failure={sendFailure}
+                edit={edit}
+                onEditEnd={endEdit}
+                seed={channelSeed}
+                keptDraft={channelKeptDraft}
+                onSent={openPostedThread}
+              />
+            </section>
+            <ChannelMemoryPane
+              memory={openMemory}
+              render={(memory) => (
+                <BotMemoryPanel
+                  botId={botId}
+                  hostId={hostId}
+                  environmentId={environmentId}
+                  botTitle={botTitle}
+                  channelId={channel.conversationId}
+                  trunkChatId={trunkChatId}
+                  threads={threadList.data?.threads ?? null}
+                  botNameOf={botNameOf}
+                  back={memory.back}
+                  onBack={
+                    memory.back === null
+                      ? null
+                      : () => onOpenThread(memory.back)
+                  }
+                  onClose={() => onOpenMemory(null)}
+                  navigation={memoryNavigation}
+                />
+              )}
+            />
+            <ChannelThreadPane
+              postId={railThreadPostId}
+              render={(postId) => (
+                <BotThreadPanel
+                  key={postId}
+                  botId={botId}
+                  hostId={hostId}
+                  boundHostId={boundHostId}
+                  botTitle={botTitle}
+                  conversationId={channel.conversationId}
+                  originMessageId={postId}
+                  sent={open?.sent ?? null}
+                  thread={panelThread}
+                  tasks={tasks}
+                  anchorSenderLabel={anchorSenderLabel}
+                  resolveMember={resolveMember}
+                  landOn={threadLanding.landing}
+                  onClose={() => {
+                    threadLanding.spend();
+                    onOpenThread(null);
+                  }}
+                  onOpenActivity={onOpenActivity}
+                  onEditPost={editPostFromThread}
+                  onOpenTurn={onOpenTurn}
+                  onOpenSession={onOpenSession}
+                />
+              )}
+            />
+          </div>
         </div>
-      </div>
+      </QuoteSinkContext>
     </BotSurfaceCardsContext.Provider>
   );
 }

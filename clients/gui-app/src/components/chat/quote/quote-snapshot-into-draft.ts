@@ -26,7 +26,8 @@ export function quoteSnapshotIntoDraft(
   clearBrowserSelection();
 }
 
-function clearBrowserSelection(): void {
+/** Collapses the page's selection once what it selected has been quoted. */
+export function clearBrowserSelection(): void {
   const selection = window.getSelection();
   if (selection === null) return;
   selection.removeAllRanges();

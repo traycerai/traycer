@@ -68,6 +68,32 @@ export function appendQuoteToDraft(
   useComposerDraftStore.getState().replaceDraft(taskId, next, null);
 }
 
+/**
+ * Appends a quoted selection to a markdown box's `text`, as blockquote lines
+ * after a blank line (none when the box is empty) and followed by one, so
+ * what is typed next starts its own paragraph. A selection wholly inside a
+ * code block keeps its fence, inside the quote.
+ */
+export function appendQuoteMarkdown(
+  text: string,
+  snapshot: QuoteTextSnapshot,
+): string {
+  const lines =
+    snapshot.fenceLanguage === null
+      ? normalizedQuoteLines(snapshot.text)
+      : [
+          `\`\`\`${snapshot.fenceLanguage}`,
+          ...snapshot.text.split(LINE_BREAK_REGEX),
+          "```",
+        ];
+  const quote = lines
+    .map((line) => (line.length === 0 ? ">" : `> ${line}`))
+    .join("\n");
+  // Blank lines the box already ends with are the gap, not more of it.
+  const before = text.replace(/\n+$/, "");
+  return `${before.length === 0 ? "" : `${before}\n\n`}${quote}\n\n`;
+}
+
 function quoteCodeBlockNode(text: string, language: string): JsonContent {
   // Raw lines: only the line-ending style is normalized (CRLF/CR -> LF), so
   // indentation and trailing whitespace inside the code stay byte-for-byte.
