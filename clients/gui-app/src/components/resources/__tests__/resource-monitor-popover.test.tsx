@@ -3994,7 +3994,7 @@ describe("ResourceMonitorPopover", () => {
     outside.remove();
   });
 
-  // A managed command reads as the shell it is (CONTEXT.md), never as the
+  // A managed command reads as the shell it is, never as the
   // umbrella term, and its noun follows the monitor flag the same way the
   // chat's Shells list names the very same shell.
   function managedCommandOwner(
@@ -4080,7 +4080,7 @@ describe("ResourceMonitorPopover", () => {
 });
 
 /**
- * Shells nest under their creator (CONTEXT.md: the agent whose tool call made
+ * Shells nest under their creator (the agent whose tool call made
  * them), uniformly for a chat whose program is still running and for one whose
  * is not - the latter gets a Synthetic Agent Row standing in for it. What these
  * pin is the panel's arithmetic invariant across the new level ("collapsed =
@@ -4588,7 +4588,7 @@ describe("ResourceMonitorPopover · stopping a shell rather than killing it", ()
   }
 
   it("routes a terminal-agent owner row's action through terminal.kill, not resources.kill", () => {
-    // The ticket's named acceptance case: `ownerSnapshotActionTarget` routes
+    // The acceptance case: `ownerSnapshotActionTarget` routes
     // BOTH terminal kinds (`terminal`, `terminal-agent`) to `stopAgent`, keyed
     // by the SESSION id (`ResourceOwnerRef.ownerId`), not the pids.
     openWith([terminalAgentOwner()]);

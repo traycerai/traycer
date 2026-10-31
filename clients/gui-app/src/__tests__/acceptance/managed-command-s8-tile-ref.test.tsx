@@ -1,7 +1,7 @@
 /**
  * Independent acceptance suite — seam S8 (GUI half).
  *
- * S8 pins the output window's persisted shape to what `UI.md` §9a promises:
+ * S8 pins the output window's persisted shape:
  * a renderer-local pointer of exactly `{ id: commandId, instanceId, type,
  * hostId }`, with kind/description/status re-read live on restore, and
  * NOTHING written to the epic doc. The key-set assertion is the fence that
@@ -68,7 +68,7 @@ describe("S8 · tile-ref minimalism", () => {
     if (persisted === null || typeof persisted !== "object") {
       throw new Error("expected an object");
     }
-    // UI.md §9a pins this exact key set.
+    // Exactly this key set.
     expect(Object.keys(persisted).sort()).toEqual([
       "hostId",
       "id",
@@ -88,7 +88,7 @@ describe("S8 · tile-ref minimalism", () => {
       instanceId: "instance-1",
       type: TILE_KIND_MANAGED_COMMAND_OUTPUT,
       hostId: HOST_ID,
-      // The creep §9a rules out — none of it may survive a round-trip.
+      // The creep the key set rules out — none of it may survive a round-trip.
       monitoring: true,
       description: "deploy watcher",
       command: "tail -f deploy.log",
@@ -165,7 +165,7 @@ describe("S8 · tile-ref minimalism", () => {
     expect(tiles.some((ref) => ref !== undefined && ref.id === "cmd-doc")).toBe(
       true,
     );
-    // …and the epic doc never heard about it (UI.md §9a: zero protocol /
+    // …and the epic doc never heard about it (zero protocol /
     // persistence surface; invisible to other users by construction).
     expect(docUpdates).toBe(0);
   });

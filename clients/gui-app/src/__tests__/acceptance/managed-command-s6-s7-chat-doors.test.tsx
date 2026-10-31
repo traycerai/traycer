@@ -2,14 +2,14 @@
  * Independent acceptance suite — seams S6 and S7: the chat-side surfaces.
  *
  * S6 is the chat's running work: the running subset of the set the chat's own
- * stream carries (`UI.md` §5, §9a) — running commands owned by THIS chat
+ * stream carries — running commands owned by THIS chat
  * appear as rows of the chat's Background panel, leave as soon as a later set
  * stops naming them as running, and click through to the output window. S7 is
  * the doors: the
  * queued-delivery chip and the resume divider open or focus the shell's
  * output window, the divider's terminal copy names the Shell entity (a
  * kind-only "monitor" trigger is the harness's own tool and keeps that name),
- * and one shell never has two windows (`UI.md` §9).
+ * and one shell never has two windows.
  *
  * Expected behavior derives from the records only. Real stores, registry,
  * stream mount and canvas store; frames and triggers are authored through the

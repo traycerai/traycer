@@ -14,7 +14,7 @@ import { appLogger, describeLogError } from "@/lib/logger";
 
 /**
  * THE wake-episode window now lives in the reconnect engine
- * (redesign P4.1 / connection-registry §6), alongside R9's rebuild pacing and
+ * (redesign P4.1), alongside R9's rebuild pacing and
  * R10's reopen backoff, so all three retry policies are declared in one place
  * instead of one per owner. Re-exported here because this module's own
  * consumers and tests already name it.

@@ -11773,7 +11773,7 @@ describe("createChatSessionStore", () => {
       event: transitionOnly,
     });
 
-    // Restorable selector keeps the gating event so Flow 8 restore still
+    // Restorable selector keeps the gating event so the restore still
     // fires even after the transition-only emission lands.
     expect(
       selectRestorableSetupInterruption(harness.handle.store.getState()),

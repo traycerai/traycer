@@ -63,7 +63,7 @@ vi.mock("@/hooks/host/use-host-directory-entry", () => ({
 }));
 
 // What the host answers a press with, and the toast spy: a refusal is written
-// on the card and never toasted (spec Flow 4).
+// on the card and never toasted.
 const rungAnswer = vi.hoisted(() => ({
   response: null as {
     readonly outcome: string;
@@ -525,7 +525,7 @@ describe("ErrorSegment's manual rungs stand down while a fallback traversal is l
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
-  // Spec Flow 1: a countdown with nothing to try draws no routing card and "the
+  // A countdown with nothing to try draws no routing card and "the
   // failed-turn card shows instead". The row must then keep its actions, or the
   // error would sit on screen with no controls anywhere.
   it("keeps the row's own actions for a countdown with nothing to try, which the composer draws no card for", () => {
@@ -655,7 +655,7 @@ describe("ErrorSegment failed-turn card, through the transcript row", () => {
     expect(screen.getByText("Reconnecting…")).toBeDefined();
   });
 
-  // Spec Flow 4: a sign-out is not gated. The host's eligible actions draw
+  // A sign-out is not gated. The host's eligible actions draw
   // with the ordinary cause ordering - Retry leads and is the only filled
   // button; Switch leads only for rate_limit / billing.
   it("draws the host's eligible actions for a signed-out failure, Retry leading and the only filled button", () => {

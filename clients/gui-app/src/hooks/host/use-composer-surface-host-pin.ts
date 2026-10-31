@@ -20,7 +20,7 @@ import {
 } from "@/stores/host/surface-host-selection-store";
 
 /**
- * The composer's surface key: window-scoped (selection model §2 / M4).
+ * The composer's surface key: window-scoped (M4).
  *
  * The composer is the one multi-instance surface whose instances must AGREE -
  * a window shows at most one placement composer at a time (the landing
@@ -88,7 +88,7 @@ export function useComposerSurfaceHostKey(): string {
 /**
  * This window's composer host pin. `selection === null` follows the effective
  * host; `resolvedHostId` is what the chip renders and what every create the
- * composer performs must address (selection model §54 - the composer is
+ * composer performs must address (the composer is
  * placement, and its resolved host decides where a chat/epic lives for life).
  *
  * Writing it is the ONLY thing the composer's host picker does: it never

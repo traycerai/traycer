@@ -288,7 +288,7 @@ const ONE_QUEUED_MESSAGE: ChatSessionState["queue"] = {
  * The Background panel's other three row shapes (R6H-10).
  *
  * `HeldManagedCommandRow`, `ManagedCommandRow` and `PortForwardRow` are all
- * changed by this ticket and none of them is reachable through
+ * changed and none of them is reachable through
  * `ChatLowerDock`'s props: they come from the chat-session store, which is why
  * they had no coverage here at all. The panel with the most row shapes is the
  * one that needs more than one of them in the fixture.
@@ -466,7 +466,7 @@ function rowsIn(body: Element): ReadonlyArray<Element> {
  * Every row SHAPE each panel can draw, not one specimen each.
  *
  * Three of the Background panel's four and the changed-files panel's artifact
- * branch were changed by this ticket and rendered by neither gate, so a later
+ * branch were changed and rendered by neither gate, so a later
  * edit could have reinstated a `py-1` on any of them and stayed green
  * (R6H-03, R6H-10). The queue is no longer one of these attached members
  * (G1-G2: it is a fixed slot, never a pill) - its two row shapes are pinned

@@ -1,7 +1,7 @@
 /**
  * `use-chat-queue-actions.ts`'s custody-seeding half: `editQueuedItem` puts a
  * re-opened queued prompt's image hashes into the host-held set (against the
- * REAL `host-held-image-hashes` module - not mocked, per the ticket) so
+ * REAL `host-held-image-hashes` module - not mocked) so
  * submit's byte resolver never re-inlines megabytes the host already holds.
  * `restoreQueuedEditDraft` (reachable via `cancelQueueEditMode`) is the other
  * half: it must clear that claim when the queue-edit is abandoned.

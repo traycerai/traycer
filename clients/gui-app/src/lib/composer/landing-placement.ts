@@ -110,7 +110,7 @@ export function createWithoutCloudVerdictMessage(hostLabel: string): string {
 }
 
 /**
- * Selection model §54's submit-time re-validation, as a pure function.
+ * The submit-time re-validation, as a pure function.
  *
  * "The composer additionally re-validates at submit time - submit re-validates
  * the resolved host is usable (refuse with an inline error, never create on a
@@ -148,7 +148,7 @@ export function resolveLandingPlacement(
       kind: "refused",
       // Deliberately offers no in-place remedy: this arm is reachable only
       // from a request that NAMED this device, and that surface's picker is
-      // inert (§55), so "pick another device" would point at a control the
+      // inert, so "pick another device" would point at a control the
       // reader cannot use.
       message: `${target.hostLabel} is offline. Start this from another device, or try again once it's back.`,
     };

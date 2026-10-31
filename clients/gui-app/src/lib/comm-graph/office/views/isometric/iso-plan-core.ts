@@ -14,8 +14,8 @@
  * width, and a district grows DOWNWARD inside its own band. That is what makes
  * City append-stable: a district that grows adds rows to the world, and rows
  * move the projected origin rather than any tile, so no seat ever moves and no
- * neighbouring district is ever displaced. It is also the diagonal the spec
- * asks for - in this projection a band to the right of another one is drawn
+ * neighbouring district is ever displaced. It is also a diagonal -
+ * in this projection a band to the right of another one is drawn
  * down and to the right of it.
  */
 import { officeSpriteSize } from "@/lib/comm-graph/office/office-pixel-art";

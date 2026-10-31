@@ -1,7 +1,7 @@
 /**
  * Query key builders for Git host RPC methods.
  * All keys are prefixed with hostQueryKeys.scope(hostId) to enable
- * broad invalidation by host scope, per ADR-0006.
+ * broad invalidation by host scope.
  */
 
 import type { GitStage } from "@traycer/protocol/host";

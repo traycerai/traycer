@@ -388,8 +388,8 @@ export const useInitialChatHandoffStore = create<InitialChatHandoffStore>()(
  * `hostId` stays on the record as data (which host created this), but keying
  * on it made the handoff unfindable the moment the two sides disagreed, and
  * per-surface pins made them disagree routinely: `useLandingComposerActions`
- * registers under the composer's PLACEMENT host (the pin - selection model
- * §54, "the composer is placement"), while the canvas that consumes it reads
+ * registers under the composer's PLACEMENT host (the pin - "the composer is
+ * placement"), while the canvas that consumes it reads
  * the app-wide pointer. Pin the landing composer to host B while host A is
  * effective and the seeded chat was never eager-opened, its pending mark never
  * cleared, and its projection lifecycle never advanced.

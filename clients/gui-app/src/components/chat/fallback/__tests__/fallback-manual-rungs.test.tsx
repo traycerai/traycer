@@ -656,7 +656,7 @@ describe("FallbackManualRungActions", () => {
   // unary RPC with nothing client-side in front of it.
   //
   // A VIEWER of someone else's chat has no standing to steer it, now or after a
-  // reconnect, so the actions are not drawn at all (spec Flow 4): greying them
+  // reconnect, so the actions are not drawn at all: greying them
   // with "Reconnecting…" would promise something that is not coming.
   it("draws no actions and no reconnecting label for a VIEWER, and dispatches nothing", () => {
     seedAttempt(
@@ -1326,7 +1326,7 @@ describe("FallbackManualRungActions", () => {
     expect(harness.mutate).not.toHaveBeenCalled();
   });
 
-  // Spec Flow 4: a toast never carries a refusal. The answer is written where
+  // A toast never carries a refusal. The answer is written where
   // the button was, as a status note, and nothing goes to sonner.
   it("answers a refused Retry inline with the literal sentence, never a toast, and keeps every button", () => {
     seedAttempt(
@@ -1471,7 +1471,7 @@ describe("FallbackManualRungActions", () => {
   });
 
   /**
-   * One render per refusal kind (spec Flow 4's table): the sentence the card
+   * One render per refusal kind: the sentence the card
    * writes, and the buttons it leaves. The expectations are literal and NOT read
    * from the copy module, so a change to the module is a change here.
    *

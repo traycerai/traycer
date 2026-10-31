@@ -20,7 +20,7 @@ import { resolveSurfaceReadiness } from "@/components/layout/host-readiness-cont
  *
  * SCOPE, stated because the omission is deliberate: only the `default-host`
  * arm reads leases. A tab is bound to its host for life and asks a
- * window-local question — "does a route to my host exist" — which §1b keeps
+ * window-local question — "does a route to my host exist" — which stays
  * distinct from the app-wide lease. The tab-host arm is asserted below to be
  * untouched by lease state, so that distinction cannot erode silently.
  */
@@ -163,7 +163,7 @@ describe("resolveSurfaceReadiness — absence of evidence keeps the old answer",
 
 describe("resolveSurfaceReadiness — the tab-host arm stays a ROUTE question", () => {
   /**
-   * §1b, pinned so it cannot erode. A tab bound to a host asks whether a route
+   * Pinned so it cannot erode. A tab bound to a host asks whether a route
    * to that host exists; the app-wide lease is a different question about a
    * different subject, and answering the first with the second is the
    * layering this epic removes.

@@ -59,7 +59,7 @@ const TRANSACTION: HostUpdateTransactionCapability = {
 };
 
 // Builds a WIRE observation. Retyped (annotation only — no assertion changed)
-// when Ticket 07 §5.2.7 made `FleetUpdateObservation` a union: `Partial<union>`
+// when Ticket 07 made `FleetUpdateObservation` a union: `Partial<union>`
 // does not narrow, so the literal below no longer identified an arm.
 function observation(
   overrides: Partial<FleetUpdateWireObservation>,
@@ -1297,7 +1297,7 @@ describe("holdsLifecycleGate — direct unit coverage", () => {
   });
 });
 
-// ---- Ticket 07 §5.2.7 — the record-derived arm ----------------------------
+// ---- Ticket 07 — the record-derived arm -----------------------------------
 
 /**
  * One instant for both legs, for the cases that are not ABOUT the split.
@@ -1399,7 +1399,7 @@ describe("projectFleetUpdateView — the durable-record arm (host-down window)",
   });
 
   it("distinguishes 'attempt exists, host unreachable' from 'attempt progressing'", () => {
-    // The §5.2.7 requirement, asserted directly rather than inferred from the
+    // The host-down requirement, asserted directly rather than inferred from the
     // shape. Same phase, two evidence sources, two different renderings.
     const fromWire = projectFleetUpdateView({
       observation: observation({
@@ -1580,7 +1580,7 @@ describe("projectFleetUpdateView — probed local liveness on a `restarting` rec
 
   it("a NEGATIVE age beyond the clock-slack bound projects unknown, gate released", () => {
     // Falsifies: dropping the lower bound entirely from
-    // `localLivenessProofHolds` (the ticket's own ablation) — a wall-clock
+    // `localLivenessProofHolds` — a wall-clock
     // step backward would otherwise read as "even fresher than new" to a
     // check that only looks at the upper bound. Stepped back well past
     // `LOCAL_LIVENESS_CLOCK_SLACK_MS` (1s) rather than by ~500ms, because a
@@ -1947,7 +1947,7 @@ describe("isQuietUpdateView", () => {
   });
 });
 
-// ---- record-derived parks (legacyFacts) — Ticket beside 07 §5.2.7 ----------
+// ---- record-derived parks (legacyFacts) — Ticket beside 07 -----------------
 //
 // `legacyFactsView` is consulted in BOTH the `operation === null` arm and the
 // `operation.kind === "none"` arm, AFTER the coarse `updateProgress` marker
@@ -2367,7 +2367,7 @@ describe("projectFleetUpdateView — terminal attempts yield to the record parks
  *
  * ## Why the pairing is pinned rather than the null arm
  *
- * The brief asked for a row where an observation with NO identity sends no
+ * The null arm is a row where an observation with NO identity sends no
  * `expected`. Through the panel that state does not exist: `deriveAttemptControl`
  * returns no offer unless `view.attemptId !== null`, and every site that builds
  * a view sets the two together — so a null position never reaches a dispatch.

@@ -16,7 +16,7 @@ import { invalidateChatPublicationTargets } from "@/hooks/chats/use-chat-publica
  * The client's whole remaining fork surface: an OBSERVATION, never a choice.
  *
  * There was a dialog and an app-wide banner here, and a `host.chatFork.resolve`
- * mutation beside this query. All three are gone (decision log, 2026-08-07,
+ * mutation beside this query. All three are gone (decision 2026-08-07,
  * "Fork resolution: detect everywhere, arbitrate nowhere, destroy nothing"):
  * the host now submits the deterministic decision itself and the user is told
  * by a notification afterwards, so there is nothing for a client to arbitrate
