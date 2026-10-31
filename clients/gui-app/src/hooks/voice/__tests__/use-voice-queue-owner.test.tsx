@@ -141,10 +141,11 @@ const REPLY_ROW: HydrationRow = {
  * with a waiting question and a waiting reply in the queue. Only the card's
  * records (the watcher's part) and the host APIs are fed by hand.
  */
-function mountOwnerWithWaitingItems() {
+function mountOwnerWithWaitingItems(arrival: "briefed" | "during-session") {
   const clock = createClock();
+  const appended: string[] = [];
   const scheduler = createSpeechScheduler({
-    append: () => undefined,
+    append: (text) => appended.push(text),
     now: clock.now,
     setTimer: clock.setTimer,
     clearTimer: clock.clearTimer,
@@ -167,14 +168,26 @@ function mountOwnerWithWaitingItems() {
   });
   const queue = result.current.queue;
   if (queue === null) throw new Error("the owner built no queue");
-  act(() => {
-    queue.begin(
-      [ref(QUESTION_ITEM, 5_000), ref(REPLY_ITEM, 4_000)],
-      () => "host-a",
-    );
-    queue.hydrated(QUESTION_ITEM, QUESTION_ROW, null);
-    queue.hydrated(REPLY_ITEM, REPLY_ROW, null);
-  });
+  if (arrival === "briefed") {
+    act(() => {
+      queue.begin(
+        [ref(QUESTION_ITEM, 5_000), ref(REPLY_ITEM, 4_000)],
+        () => "host-a",
+      );
+      queue.hydrated(QUESTION_ITEM, QUESTION_ROW, null);
+      queue.hydrated(REPLY_ITEM, REPLY_ROW, null);
+    });
+  } else {
+    act(() => {
+      queue.begin([], () => "host-a");
+    });
+    // The voice is speaking when the question arrives: its offer waits queued.
+    scheduler.noteOutputLevel(true);
+    act(() => {
+      queue.ingestReplies([ref(QUESTION_ITEM, 5_000)], () => "host-a");
+      queue.hydrated(QUESTION_ITEM, QUESTION_ROW, null);
+    });
+  }
   useVoiceSessionStore.setState({ phase: "live" });
 
   const api = {
@@ -225,9 +238,23 @@ function mountOwnerWithWaitingItems() {
       forwarded: () => null,
     };
     act(() => result.current.cardDesk?.observe(QUESTION_ITEM, facts, api));
+    // Whatever waited on the voice's speech is said now, and the list heard.
+    scheduler.noteOutputLevel(false);
+    clock.advance(OUTPUT_HANGOVER_MS * 3);
     await heard(latest());
   };
-  return { api, enqueued, withdrawn, latest, heard, say, readQuestion };
+  return {
+    api,
+    appended,
+    clock,
+    enqueued,
+    withdrawn,
+    owner: () => result.current,
+    latest,
+    heard,
+    say,
+    readQuestion,
+  };
 }
 
 beforeEach(() => {
@@ -242,7 +269,7 @@ afterEach(() => {
 
 describe("Later on a card that waits for the person's answer", () => {
   it("closes the card, so a yes to a heard candidate sends nothing", async () => {
-    const h = mountOwnerWithWaitingItems();
+    const h = mountOwnerWithWaitingItems("briefed");
     await h.readQuestion();
     h.say("Staging");
     await h.heard(h.latest());
@@ -263,7 +290,7 @@ describe("Later on a card that waits for the person's answer", () => {
   });
 
   it("takes back a candidate read-back not yet heard", async () => {
-    const h = mountOwnerWithWaitingItems();
+    const h = mountOwnerWithWaitingItems("briefed");
     await h.readQuestion();
     h.say("Staging");
     await h.heard(h.latest());
@@ -280,7 +307,7 @@ describe("Later on a card that waits for the person's answer", () => {
   });
 
   it("leaves the active card and its candidate alone when another item is set aside", async () => {
-    const h = mountOwnerWithWaitingItems();
+    const h = mountOwnerWithWaitingItems("briefed");
     await h.readQuestion();
     h.say("Staging");
     const candidateSay = h.latest();
@@ -297,6 +324,36 @@ describe("Later on a card that waits for the person's answer", () => {
       candidate: { kind: "option", label: "Staging" },
     });
     expect(h.withdrawn).not.toHaveBeenCalledWith(candidateSay.id);
+    h.say("yes");
+    expect(h.api.answerBotQuestion).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Read on a question whose offer is still queued", () => {
+  it("takes the offer back, so it is never said after the card and its candidate stays", async () => {
+    const h = mountOwnerWithWaitingItems("during-session");
+    const offer = h.enqueued.mock.calls
+      .map(([item]) => item)
+      .find((item) => item.text.includes("Want it?"));
+    if (offer === undefined) throw new Error("the question was never offered");
+    expect(h.appended).toEqual([]);
+    const desk = h.owner().cardDesk;
+    if (desk === null) throw new Error("the owner built no card desk");
+    const invalidate = vi.spyOn(desk, "invalidate");
+
+    await h.readQuestion();
+    h.say("Staging");
+    await h.heard(h.latest());
+    act(() => h.clock.advance(60_000));
+
+    expect(h.withdrawn).toHaveBeenCalledWith(offer.id);
+    expect(h.appended.filter((text) => text.includes("Want it?"))).toEqual([]);
+    expect(h.owner().keepsFromFocus(QUESTION_ITEM)).toBe(true);
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(useVoiceSessionStore.getState().activeCard).toMatchObject({
+      state: "proposed",
+      candidate: { kind: "option", label: "Staging" },
+    });
     h.say("yes");
     expect(h.api.answerBotQuestion).toHaveBeenCalledTimes(1);
   });

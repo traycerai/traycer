@@ -385,6 +385,31 @@ describe("two posts about the same approval", () => {
   });
 });
 
+describe("an item claimed for a card", () => {
+  it("has its queued offer and its queued Read taken back, and is left by the focused feed", () => {
+    scheduler.noteOutputLevel(true);
+    arrive(replyRef({}), botRow("r-1", REPLY_TEXT));
+    queue.run({ kind: "read", itemId: "r-1", delegationId: null });
+    expect(appended).toEqual([]);
+    queue.claimForCard("r-1");
+
+    scheduler.noteOutputLevel(false);
+    clock.advance(OUTPUT_HANGOVER_MS * 3);
+
+    expect(appended).toEqual([]);
+    expect(stateOf("r-1")).toBe("queued");
+  });
+
+  it("is not kept from the focused feed before it is claimed", () => {
+    scheduler.noteOutputLevel(true);
+    arrive(replyRef({}), botRow("r-1", REPLY_TEXT));
+
+    expect(queue.keepsFromFocus("r-1")).toBe(false);
+    queue.claimForCard("r-1");
+    expect(queue.keepsFromFocus("r-1")).toBe(true);
+  });
+});
+
 describe("later", () => {
   it("sets the item aside: nothing is marked read, its queued offer is never said, and Waiting leaves it out", () => {
     scheduler.noteInputTranscript();

@@ -1169,79 +1169,98 @@ describe("a card that is gone", () => {
   });
 });
 
-describe("a read-back confirmed by its first words", () => {
-  interface RealScheduled {
-    readonly scheduler: SpeechScheduler;
-    readonly cardDesk: CardDesk;
-    readonly actSurface: Mock<CardApi["actSurface"]>;
-    /** The sound ends and the hangover passes. */
-    readonly endPlayback: () => Promise<void>;
-  }
+interface RealScheduled {
+  readonly scheduler: SpeechScheduler;
+  readonly cardDesk: CardDesk;
+  readonly actSurface: Mock<CardApi["actSurface"]>;
+  readonly answerBotQuestion: Mock<CardApi["answerBotQuestion"]>;
+  /** The voice's sound starts and this much of the read-back is transcribed. */
+  readonly speak: (words: string) => void;
+  /** The sound ends and the hangover passes. */
+  readonly endPlayback: () => Promise<void>;
+}
 
-  /** The real scheduler on a fake clock, with healthy level detection, behind a desk with an approval open. */
-  async function approvalOnRealScheduler(): Promise<RealScheduled> {
-    const timers = createTimers();
-    const cancels = new Map<number, () => void>();
-    let handle = 0;
-    const scheduler = createSpeechScheduler({
-      append: () => undefined,
-      now: timers.now,
-      setTimer: (fn, ms) => {
-        handle += 1;
-        cancels.set(handle, timers.schedule(fn, ms));
-        return handle;
-      },
-      clearTimer: (timer) => {
-        if (typeof timer === "number") cancels.get(timer)?.();
-      },
-    });
-    scheduler.setReady(true);
-    scheduler.setLevelDetection(true);
-    const actSurface = vi.fn<CardApi["actSurface"]>(() =>
-      Promise.resolve({
-        kind: "answered",
-        response: { outcome: "settled", code: null },
-      }),
-    );
-    const api: CardApi = {
-      answerBotQuestion: () => Promise.resolve({ kind: "failed" }),
-      actSurface,
-      postInThread: () => Promise.resolve(true),
-    };
-    const cardDesk = createCardDesk({
-      store: useVoiceSessionStore,
-      speech: scheduler,
-      schedule: timers.schedule,
-      target: () => ({ family: "approval", ids: IDS }),
-      newActionId: () => "act-1",
-    });
-    const endPlayback = async (): Promise<void> => {
+/** The real scheduler on a fake clock, with healthy level detection, behind a desk with this card open and its records read. */
+function openOnRealScheduler(content: CardContent): RealScheduled {
+  const timers = createTimers();
+  const cancels = new Map<number, () => void>();
+  let handle = 0;
+  const scheduler = createSpeechScheduler({
+    append: () => undefined,
+    now: timers.now,
+    setTimer: (fn, ms) => {
+      handle += 1;
+      cancels.set(handle, timers.schedule(fn, ms));
+      return handle;
+    },
+    clearTimer: (timer) => {
+      if (typeof timer === "number") cancels.get(timer)?.();
+    },
+  });
+  scheduler.setReady(true);
+  scheduler.setLevelDetection(true);
+  const actSurface = vi.fn<CardApi["actSurface"]>(() =>
+    Promise.resolve({
+      kind: "answered",
+      response: { outcome: "settled", code: null },
+    }),
+  );
+  const answerBotQuestion = vi.fn<CardApi["answerBotQuestion"]>(() =>
+    Promise.resolve({ kind: "sent", delivery: "written" }),
+  );
+  const api: CardApi = {
+    answerBotQuestion,
+    actSurface,
+    postInThread: () => Promise.resolve(true),
+  };
+  const cardDesk = createCardDesk({
+    store: useVoiceSessionStore,
+    speech: scheduler,
+    schedule: timers.schedule,
+    target: () => ({ family: content.family, ids: IDS }),
+    newActionId: () => "act-1",
+  });
+  cardDesk.open(ITEM, null);
+  cardDesk.observe(
+    ITEM,
+    {
+      content,
+      settledBy: () => null,
+      gone: false,
+      forwarded: () => null,
+    },
+    api,
+  );
+  return {
+    scheduler,
+    cardDesk,
+    actSurface,
+    answerBotQuestion,
+    speak: (words) => {
+      scheduler.noteOutputLevel(true);
+      scheduler.noteOutputTranscript(words);
+    },
+    endPlayback: async () => {
       scheduler.noteOutputLevel(false);
       timers.advance(OUTPUT_HANGOVER_MS * 3);
       await Promise.resolve();
       expect(scheduler.activity().outputPlaying).toBe(false);
-    };
+    },
+  };
+}
 
-    cardDesk.open(ITEM, null);
-    cardDesk.observe(
-      ITEM,
-      {
-        content: APPROVAL,
-        settledBy: () => null,
-        gone: false,
-        forwarded: () => null,
-      },
-      api,
-    );
+describe("a read-back confirmed by its first words", () => {
+  /** An approval open on the real scheduler, its list heard, "approve" said: the candidate read-back is out. */
+  async function approvalOnRealScheduler(): Promise<RealScheduled> {
+    const h = openOnRealScheduler(APPROVAL);
     // The list plays whole and is heard.
-    scheduler.noteOutputLevel(true);
-    scheduler.noteOutputTranscript("Bash. Allow or deny.");
-    await endPlayback();
-    speakTo(cardDesk, "approve", "d-words");
+    h.speak("Bash. Allow or deny.");
+    await h.endPlayback();
+    speakTo(h.cardDesk, "approve", "d-words");
     expect(useVoiceSessionStore.getState().activeCard?.candidate).toEqual(
       option(0, "Allow"),
     );
-    return { scheduler, cardDesk, actSurface, endPlayback };
+    return h;
   }
 
   /** The yes said over the rest of the read-back sends nothing; one after it ends sends once. */
@@ -1276,6 +1295,87 @@ describe("a read-back confirmed by its first words", () => {
     h.scheduler.noteOutputLevel(true);
 
     await expectYesWaitsForPlayback(h);
+  });
+});
+
+describe("a read-back proven by its end", () => {
+  const QUESTION_ONLY =
+    "Release bot asks in the thread about Deploy: Which environment?";
+  const SINGLE: CardContent = {
+    ...BOT_QUESTION,
+    questions: [
+      {
+        text: "Ship build forty?",
+        options: ["Ship it"],
+        takesText: false,
+        questionId: null,
+      },
+    ],
+  };
+
+  it.each([
+    ["only its question was spoken", QUESTION_ONLY, null],
+    [
+      "its last choice was spoken",
+      `${QUESTION_ONLY} 1. Staging; 2. Production`,
+      option(0, "Staging"),
+    ],
+    [
+      "only its closing 'or skip' was spoken",
+      "Say one of them, or skip.",
+      option(0, "Staging"),
+    ],
+  ])(
+    "counts a question's list as heard only when the end was said: %s",
+    async (_name, transcript, candidate) => {
+      const h = openOnRealScheduler(BOT_QUESTION);
+
+      h.speak(transcript);
+      await h.endPlayback();
+      speakTo(h.cardDesk, "Staging", "d-words");
+      speakTo(h.cardDesk, "yes", "d-words");
+
+      expect(useVoiceSessionStore.getState().activeCard?.candidate).toEqual(
+        candidate,
+      );
+      expect(h.answerBotQuestion).not.toHaveBeenCalled();
+    },
+  );
+
+  it("arms a single choice as the candidate only once its end was said", async () => {
+    const h = openOnRealScheduler(SINGLE);
+
+    h.speak("Release bot asks in the thread about Deploy: Ship build forty?");
+    await h.endPlayback();
+    speakTo(h.cardDesk, "yes", "d-words");
+    expect(h.answerBotQuestion).not.toHaveBeenCalled();
+
+    h.speak(" The choices are: 1. Ship it. Say yes to send it, or skip.");
+    await h.endPlayback();
+    speakTo(h.cardDesk, "yes", "d-words");
+    expect(h.answerBotQuestion).toHaveBeenCalledExactlyOnceWith({
+      text: "Ship it",
+      questionIndex: 1,
+      skipped: false,
+    });
+  });
+
+  it("counts a candidate read-back as heard by its label, not by the tool it names", async () => {
+    const h = openOnRealScheduler(APPROVAL);
+    h.speak("Bash. Allow or deny.");
+    await h.endPlayback();
+    speakTo(h.cardDesk, "approve", "d-words");
+
+    h.speak("Bash: rm -rf build");
+    await h.endPlayback();
+    speakTo(h.cardDesk, "yes", "d-words");
+    expect(h.actSurface).not.toHaveBeenCalled();
+
+    // A further delta of the same utterance, as the transcript carries it.
+    h.speak(" Allow");
+    await h.endPlayback();
+    speakTo(h.cardDesk, "yes", "d-words");
+    expect(h.actSurface).toHaveBeenCalledTimes(1);
   });
 });
 
