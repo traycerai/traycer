@@ -1,7 +1,8 @@
 /**
- * A bot's picture (Tracy Bots, T97): two bots side by side never draw the
- * same initials on the same swatch when their names or swatches tell them
- * apart, and every surface draws one bot the same way.
+ * A bot's picture (Tracy Bots, T97, T111): a creature mark on a swatch, both
+ * from the bot's id alone. Two bots side by side never draw the same mark on
+ * the same swatch, every surface draws one bot the same way, and a rename
+ * changes nothing. A person is still initials or a photo in a circle.
  *
  * The ids are real derived main-bot ids, `personalAssistantBotId(envId)` in
  * the internal repository's `bot-schemas.ts`: the personal assistant of
@@ -14,27 +15,48 @@
 import type { ReactElement } from "react";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { BotAvatar, NamedBotAvatar } from "@/components/bots/bot-avatars";
+import {
+  AvatarStack,
+  BotAvatar,
+  MemberAvatar,
+  NamedBotAvatar,
+} from "@/components/bots/bot-avatars";
 import { BotIdentityContext } from "@/components/bots/bot-identity-context";
+import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
 
 const PERSONAL_MAIN_BOT_ID = "bot_019YFRXBQ551DN29WCTHKM3CEP";
 const TEAM_A_MAIN_BOT_ID = "bot_0RVWRHPMH8WPT9KW1NGKJB319D";
 const TEAM_S_MAIN_BOT_ID = "bot_0YVZD4PHYFAZS1MCR0D9GABAGV";
 
 interface DrawnAvatar {
-  readonly initials: string;
+  readonly path: string;
   readonly swatch: string;
   readonly ink: string;
 }
 
+function fallbackOf(avatar: HTMLElement): HTMLElement {
+  const fallback = avatar.querySelector<HTMLElement>(
+    '[data-slot="avatar-fallback"]',
+  );
+  if (fallback === null) throw new Error("the avatar drew no fallback");
+  return fallback;
+}
+
+function creatureOf(avatar: HTMLElement): SVGSVGElement {
+  const creature = avatar.querySelector<SVGSVGElement>(
+    '[data-slot="bot-creature"]',
+  );
+  if (creature === null) throw new Error("the avatar drew no creature");
+  return creature;
+}
+
 function drawn(): DrawnAvatar[] {
   return screen.getAllByTestId("bot-avatar").map((avatar) => {
-    const fallback = avatar.querySelector<HTMLElement>(
-      '[data-slot="avatar-fallback"]',
-    );
-    if (fallback === null) throw new Error("the avatar drew no initials");
+    const fallback = fallbackOf(avatar);
+    const paths = creatureOf(avatar).querySelectorAll("path");
+    if (paths.length !== 1) throw new Error("the creature is not one path");
     return {
-      initials: fallback.textContent,
+      path: paths[0].getAttribute("d") ?? "",
       swatch: fallback.style.getPropertyValue("--swatch"),
       ink: fallback.classList.contains("text-white") ? "light" : "dark",
     };
@@ -59,48 +81,124 @@ function sideBySide(
   return drawn();
 }
 
+function InBotContext(props: {
+  readonly children: ReactElement;
+}): ReactElement {
+  return (
+    <BotIdentityContext.Provider
+      value={{ botId: TEAM_S_MAIN_BOT_ID, title: "Team Tracy", owner: null }}
+    >
+      {props.children}
+    </BotIdentityContext.Provider>
+  );
+}
+
 afterEach(() => {
   cleanup();
 });
 
 describe("a bot's picture", () => {
-  it("draws the personal main bot and a team's main bot with different initials and swatches", () => {
+  it.each([
+    [
+      "a named bot",
+      <NamedBotAvatar
+        key="named"
+        botId={TEAM_S_MAIN_BOT_ID}
+        title="Team Tracy"
+        size="sm"
+      />,
+    ],
+    [
+      "the surface's bot",
+      <InBotContext key="surface">
+        <BotAvatar size="sm" />
+      </InBotContext>,
+    ],
+    [
+      "a stack's bot entry",
+      <InBotContext key="stack">
+        <AvatarStack
+          identities={[{ kind: "bot" }]}
+          max={3}
+          size="sm"
+          label="Members"
+          testId="members"
+        />
+      </InBotContext>,
+    ],
+  ])(
+    "is %s drawn as a hidden creature in a squircle, with no initials",
+    (_entry, element) => {
+      render(element);
+
+      const avatar = screen.getByTestId("bot-avatar");
+      expect(avatarShape(avatar)).toBe("squircle");
+      expect(creatureOf(avatar).getAttribute("aria-hidden")).toBe("true");
+      expect(fallbackOf(avatar).textContent).toBe("");
+    },
+  );
+
+  it("is a person's initials in a circle, with no creature", () => {
+    render(
+      <>
+        <MemberAvatar
+          userId="user_1"
+          name="Ada Lovelace"
+          avatarUrl={null}
+          size="sm"
+        />
+        <AvatarStack
+          identities={[
+            {
+              kind: "person",
+              userId: "user_2",
+              name: "Grace Hopper",
+              avatarUrl: null,
+            },
+          ]}
+          max={3}
+          size="sm"
+          label="Members"
+          testId="members"
+        />
+      </>,
+    );
+
+    const people = screen.getAllByTestId("chat-sender-avatar");
+    expect(people.map((person) => fallbackOf(person).textContent)).toEqual([
+      "AL",
+      "GH",
+    ]);
+    for (const person of people) {
+      expect(avatarShape(person)).toBe("circle");
+      expect(person.querySelector('[data-slot="bot-creature"]')).toBeNull();
+    }
+  });
+
+  it("draws the personal main bot and a team's main bot with different creatures and swatches", () => {
     const [personal, team] = sideBySide([
       { botId: PERSONAL_MAIN_BOT_ID, title: "Tracy" },
       { botId: TEAM_A_MAIN_BOT_ID, title: "Team Tracy" },
     ]);
 
-    expect(personal.initials).toBe("TR");
-    expect(team.initials).toBe("TT");
+    expect(personal.path).not.toBe(team.path);
     expect(personal.swatch).not.toBe(team.swatch);
   });
 
-  it("draws two bots of one name in different environments on different swatches", () => {
+  it("draws two bots of one name in different environments on different swatches with different creatures", () => {
     const [teamA, teamS] = sideBySide([
       { botId: TEAM_A_MAIN_BOT_ID, title: "Team Tracy" },
       { botId: TEAM_S_MAIN_BOT_ID, title: "Team Tracy" },
     ]);
 
-    // One hue in its two tones: the light swatch takes dark initials, the
-    // deep one white.
-    expect(teamA).toEqual({ initials: "TT", swatch: "#f97316", ink: "dark" });
-    expect(teamS).toEqual({ initials: "TT", swatch: "#c2410c", ink: "light" });
+    // One hue in its two tones: the light swatch takes dark ink, the deep one
+    // white.
+    expect(teamA).toMatchObject({ swatch: "#f97316", ink: "dark" });
+    expect(teamS).toMatchObject({ swatch: "#c2410c", ink: "light" });
+    expect(teamA.path).not.toBe(teamS.path);
   });
 
   it("draws one bot the same in a sidebar row as on its own surface's header and message rows", () => {
-    function OnItsSurface(): ReactElement {
-      return (
-        <BotIdentityContext.Provider
-          value={{
-            botId: TEAM_S_MAIN_BOT_ID,
-            title: "Team Tracy",
-            owner: null,
-          }}
-        >
-          <BotAvatar size="sm" />
-        </BotIdentityContext.Provider>
-      );
-    }
     render(
       <>
         <NamedBotAvatar
@@ -108,7 +206,9 @@ describe("a bot's picture", () => {
           title="Team Tracy"
           size="sm"
         />
-        <OnItsSurface />
+        <InBotContext>
+          <BotAvatar size="sm" />
+        </InBotContext>
       </>,
     );
 
@@ -116,14 +216,13 @@ describe("a bot's picture", () => {
     expect(row).toEqual(surface);
   });
 
-  it("keeps a bot's swatch through a rename", () => {
+  it("keeps a bot's creature, swatch and ink through a rename", () => {
     const [before] = sideBySide([
       { botId: TEAM_A_MAIN_BOT_ID, title: "Team Tracy" },
     ]);
     cleanup();
     const [after] = sideBySide([{ botId: TEAM_A_MAIN_BOT_ID, title: "Ops" }]);
 
-    expect(after.initials).toBe("OP");
-    expect(after.swatch).toBe(before.swatch);
+    expect(after).toEqual(before);
   });
 });
