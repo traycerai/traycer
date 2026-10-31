@@ -729,7 +729,7 @@ function shortAnswerPhrases(
     phrases.push(numeral, ...spokenNumeral(numeral));
   }
   for (const word of content) {
-    if (isContentWord(word)) phrases.push(word);
+    if (word.length >= 4 && isContentWord(word)) phrases.push(word);
   }
   if (numerals.length === 0) {
     const whole = wholeReplyOf(text);
@@ -874,11 +874,10 @@ function confirmedByContent(transcript: string, item: SpeechItem): boolean {
   if (item.confirmWords.length === 0) return false;
   if (isBackchannelOnly(transcript)) return false;
   const said = transcript.toLowerCase();
+  // Content words alone: a number, a whole reply or an opaque token is
+  // judged at completion, where it is known to be complete.
   return item.confirmWords.some(
-    (phrase) =>
-      !isBackchannelOnly(phrase) &&
-      !isNumberPhrase(phrase) &&
-      holdsPhrase(said, phrase),
+    (phrase) => isContentWord(phrase) && holdsPhrase(said, phrase),
   );
 }
 
@@ -972,11 +971,12 @@ function isOnly(said: string, phrase: string): boolean {
 }
 
 /**
- * Sentence punctuation between repetitions: followed by whitespace or the
- * end, so a reply's own dot or dash ("v1.2.3", "2026-10-31", "3.5") never
- * splits it.
+ * Punctuation between repetitions: sentence punctuation followed by
+ * whitespace or the end, or a comma followed by whitespace ("Yes, yes."),
+ * so a reply's own dot, dash, colon or grouping comma ("v1.2.3",
+ * "2026-10-31", "12:30", "1,000") never splits it.
  */
-const REPEAT_SPLIT_RE = /[.!?;:]+(?=\s|$)/u;
+const REPEAT_SPLIT_RE = /[.!?;:]+(?=\s|$)|,(?=\s)/u;
 
 /**
  * The lowercased output holds the phrase whole: a numeral as written, words

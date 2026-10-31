@@ -235,9 +235,70 @@ describe("delivery confirmation", () => {
     clock.advance(CONFIRM_WINDOW_MS);
     expect(appended).toHaveLength(2);
 
+    // The date is a streamed prefix of a longer token: nothing until the
+    // utterance is complete, and then it is not the reply.
+    scheduler.noteOutputTranscript("2026-10-31");
+    expect(date.delivered()).toBe(0);
+    scheduler.noteOutputTranscript("T12:30Z.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(date.delivered()).toBe(0);
+    clock.advance(CONFIRM_WINDOW_MS);
+    expect(appended).toHaveLength(3);
+
     scheduler.noteOutputTranscript("2026-10-31.");
+    expect(date.delivered()).toBe(0);
     clock.advance(OUTPUT_HANGOVER_MS);
     expect(date.delivered()).toBe(1);
+  });
+
+  it("proves a reply whose only letters are short connectives by itself whole, not by those connectives", () => {
+    const text = "2026-10-31 at 12:30";
+    expect(
+      confirmationWords({ botTitle: null, threadTitle: null, text }),
+    ).toEqual(["2026-10-31 at 12:30"]);
+    const when = numericAnswer(text);
+    scheduler.noteOutputTranscript("I'm looking at that now.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(when.delivered()).toBe(0);
+    clock.advance(CONFIRM_WINDOW_MS);
+    expect(appended).toHaveLength(2);
+
+    scheduler.noteOutputTranscript("2026-10-31 at 12:30.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(when.delivered()).toBe(1);
+  });
+
+  it("takes a comma between repetitions of the reply as a separator: Yes, yes. confirms Yes.", () => {
+    let delivered = 0;
+    scheduler.enqueue(
+      item("a", {
+        text: "Yes.",
+        confirmWords: confirmationWords({
+          botTitle: null,
+          threadTitle: null,
+          text: "Yes.",
+        }),
+        onDelivered: () => delivered++,
+      }),
+    );
+    scheduler.noteOutputTranscript("Yes,");
+    scheduler.noteOutputTranscript(" yes.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(delivered).toBe(1);
+  });
+
+  it("takes a comma between repeated times as a separator, the colon inside them splitting nothing", () => {
+    const time = numericAnswer("12:30");
+    scheduler.noteOutputTranscript("12:30, 12:30.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(time.delivered()).toBe(1);
+  });
+
+  it("keeps a grouping comma inside a number whole: 1,000. confirms 1,000", () => {
+    const grouped = numericAnswer("1,000");
+    scheduler.noteOutputTranscript("1,000.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(grouped.delivered()).toBe(1);
   });
 
   it("proves a version-only reply by itself whole, its dots kept", () => {
