@@ -563,20 +563,30 @@ interface IssuedFreeRestoreTarget {
  *  `maintainScrollAtEnd` regardless of reader input. Require row
  *  identity/order, scroll height, viewport height, and the target row's own
  *  position to still match what was issued before trusting the raw
- *  scrollTop comparison. */
+ *  scrollTop comparison.
+ *
+ *  The issued position is narrowed to a number rather than tested against
+ *  `null`, as `isStillSettling` narrows the same withheld reading: the list
+ *  gives no position for a row it has not laid out, and two withheld
+ *  readings are equal to each other, so comparing them would report the
+ *  position as unmoved on no evidence at all. The live position needs no
+ *  test of its own - it is compared for equality against a number, which a
+ *  withheld reading cannot satisfy. */
 function isDemonstrablyPastIssuedFreeRestoreTarget(
   issued: IssuedFreeRestoreTarget,
   liveRows: ReadonlyArray<TranscriptListRow>,
   live: FreeRestoreGeometry,
 ): boolean {
+  const issuedRowPosition = issued.geometry.rowPosition;
   const geometryAndContentUnchanged =
     liveRows === issued.rows &&
     issued.geometry.scrollHeight !== null &&
     live.scrollHeight === issued.geometry.scrollHeight &&
     issued.geometry.clientHeight !== null &&
     live.clientHeight === issued.geometry.clientHeight &&
-    issued.geometry.rowPosition !== null &&
-    live.rowPosition === issued.geometry.rowPosition;
+    typeof issuedRowPosition === "number" &&
+    Number.isFinite(issuedRowPosition) &&
+    live.rowPosition === issuedRowPosition;
   return (
     geometryAndContentUnchanged &&
     issued.targetScrollTop !== null &&
