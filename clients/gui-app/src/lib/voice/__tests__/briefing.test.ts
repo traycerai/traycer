@@ -106,7 +106,9 @@ describe("composeBriefing", () => {
 
   it("leaves out a reply the person set aside although its notification is still unread", () => {
     const text = composeBriefing({
-      answers: [answerRef({ messageId: "i-1", botId: "bot-2", threadId: "thread-x" })],
+      answers: [
+        answerRef({ messageId: "i-1", botId: "bot-2", threadId: "thread-x" }),
+      ],
       prompts: NO_PROMPTS,
       items: [queueItem({ state: "dismissed" })],
       botTitle,
