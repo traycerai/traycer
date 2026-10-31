@@ -272,9 +272,10 @@ function AgentMessageDisplayView({
     // tile, which picks it up whether it is already mounted or is being
     // opened by the call above. This row's own id IS the receipt the sender's
     // harness stamped on its send block, so the landing is the exact "Sent
-    // message" card. A terminal-agent sender has no transcript, and a send
+    // message" card. A terminal-agent sender has no transcript, a bot's
+    // session opens the bot's channel, which has no such card, and a send
     // persisted before receipts existed just leaves the tile open at rest.
-    if (sender.surface !== "gui") return;
+    if (sender.surface !== "gui" || sender.bot !== null) return;
     requestJump(sender.hostId, sender.agentId, {
       kind: "receipt",
       messageId,
