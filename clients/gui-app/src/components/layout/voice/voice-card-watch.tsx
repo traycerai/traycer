@@ -523,7 +523,10 @@ function VoiceSurfaceOpener(props: {
   const [waited, setWaited] = useState(!needsPark);
   useEffect(() => {
     if (waited) return;
-    const timer = window.setTimeout(() => setWaited(true), PARK_READ_TIMEOUT_MS);
+    const timer = window.setTimeout(
+      () => setWaited(true),
+      PARK_READ_TIMEOUT_MS,
+    );
     return () => window.clearTimeout(timer);
   }, [waited]);
   const ready =
