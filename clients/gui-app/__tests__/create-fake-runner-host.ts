@@ -199,6 +199,7 @@ export function createFakeRunnerHost(
     },
     onSystemResumed: () => ({ dispose: () => undefined }),
     onSystemSuspended: () => ({ dispose: () => undefined }),
+    onVoiceTrayAction: () => ({ dispose: () => undefined }),
     onNetworkPathChanged: () => ({ dispose: () => undefined }),
     // Voice is off for a shell with no server behind it: the dormant answers.
     getVoiceAvailability: () =>
@@ -212,6 +213,7 @@ export function createFakeRunnerHost(
         detail: "no router in this test",
       }),
     setVoiceSessionLive: () => Promise.resolve(),
+    setVoiceSessionIndicator: () => Promise.resolve(),
     requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
     forceRestartUnresponsiveHost: () =>
       Promise.resolve({ kind: "restarted" as const }),

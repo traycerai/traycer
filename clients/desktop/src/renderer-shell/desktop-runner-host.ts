@@ -156,8 +156,10 @@ import type {
 import type {
   VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
+  VoiceSessionIndicator,
   VoiceSessionMintFetchResult,
   VoiceSessionMintRequest,
+  VoiceTrayAction,
 } from "@traycer-clients/shared/host-client/voice-sessions";
 import type { VoiceRouteFetchResult } from "@traycer-clients/shared/host-client/voice-router";
 import type {
@@ -269,6 +271,7 @@ export interface DesktopPreloadBridge {
     requestBody: string,
   ): Promise<VoiceRouteFetchResult>;
   setVoiceSessionLive(live: boolean): Promise<void>;
+  setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void>;
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -409,6 +412,9 @@ export interface DesktopPreloadBridge {
   ): { dispose: () => void };
   onSystemResumed(handler: () => void): { dispose: () => void };
   onSystemSuspended(handler: () => void): { dispose: () => void };
+  onVoiceTrayAction(handler: (action: VoiceTrayAction) => void): {
+    dispose: () => void;
+  };
   requestHostRespawn(): Promise<HostRestartRequestResult>;
   forceRestartUnresponsiveHost(
     offer: LocalHostUnresponsiveOffer,
@@ -1316,6 +1322,10 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.setVoiceSessionLive(live);
   }
 
+  setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void> {
+    return this.bridge.setVoiceSessionIndicator(indicator);
+  }
+
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult> {
     return this.bridge.getTraycerModels(bearerToken);
   }
@@ -1503,6 +1513,10 @@ export class DesktopRunnerHost implements IRunnerHost {
     // carries no shell-side shaping, so there is nothing to fan out from one
     // place.
     return toDisposable(this.bridge.onSystemSuspended(handler));
+  }
+
+  onVoiceTrayAction(handler: (action: VoiceTrayAction) => void): Disposable {
+    return toDisposable(this.bridge.onVoiceTrayAction(handler));
   }
 
   onNetworkPathChanged(handler: () => void): Disposable {

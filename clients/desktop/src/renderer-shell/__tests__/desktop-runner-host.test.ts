@@ -164,6 +164,7 @@ function buildFakeBridge(
       detail: "test",
     }),
     setVoiceSessionLive: async () => undefined,
+    setVoiceSessionIndicator: async () => undefined,
     createSandbox: async () => ({
       kind: "network-error" as const,
       detail: "test",
@@ -331,6 +332,7 @@ function buildFakeBridge(
       };
     },
     onSystemSuspended: () => ({ dispose: () => undefined }),
+    onVoiceTrayAction: () => ({ dispose: () => undefined }),
     requestHostRespawn: async () => {
       respawnCounter.count += 1;
       return { kind: "restarted" as const };

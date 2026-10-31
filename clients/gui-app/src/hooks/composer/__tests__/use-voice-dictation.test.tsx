@@ -186,6 +186,8 @@ const incarnationBox: { current: ComposerEditorIncarnation | null } = {
   current: null,
 };
 
+const initialVoice = useVoiceSessionStore.getState();
+
 let getUserMediaImpl: () => Promise<FakeMediaStream> = () =>
   Promise.resolve(fakeMediaStream());
 let getUserMediaCalls = 0;
@@ -254,6 +256,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  useVoiceSessionStore.setState(initialVoice, true);
   useSettingsStore.setState({ voiceInputEnabled: true });
   globalWithAudio.AudioContext = originalAudioContext;
   if (originalMediaDevices !== undefined) {
@@ -310,6 +313,32 @@ describe("useVoiceDictation lifecycle", () => {
     expect(paused()).toBe(true);
     unmount();
     expect(paused()).toBe(false);
+  });
+
+  it("pauses a live voice session before the microphone opens, and leaves it paused for the person's Resume when the recording ends", async () => {
+    useVoiceSessionStore.setState({ phase: "live" });
+    let pausedAtCapture: boolean | null = null;
+    getUserMediaImpl = () => {
+      pausedAtCapture = useVoiceSessionStore.getState().pausedForDictation;
+      return Promise.resolve(fakeMediaStream());
+    };
+    const { result } = renderDictation();
+    act(() => {
+      result.current.start();
+    });
+    await flushAsync();
+    expect(getUserMediaCalls).toBe(1);
+    expect(pausedAtCapture).toBe(true);
+    act(() => {
+      lastSpeechClient().callbacks.onReady();
+    });
+
+    act(() => {
+      result.current.stop();
+    });
+    expect(result.current.state).toBe("transcribing");
+    expect(useVoiceSessionStore.getState().dictationHolds.size).toBe(0);
+    expect(useVoiceSessionStore.getState().pausedForDictation).toBe(true);
   });
 
   it("keeps another instance's pause: an idle hook mounting, or unmounting, releases no hold but its own", async () => {

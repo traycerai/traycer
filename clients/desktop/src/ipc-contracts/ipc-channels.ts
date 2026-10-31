@@ -87,6 +87,9 @@ export const RunnerHostInvoke = {
   // Whether the sender window holds a live voice session: such a window is
   // hidden, not destroyed, when the person closes it.
   setVoiceSessionLive: "runnerHost:voice:setLive",
+  // What the sender window's live session is doing (listening, muted,
+  // paused for dictation), for the voice item shown while it is away.
+  setVoiceSessionIndicator: "runnerHost:voice:setIndicator",
   createSandbox: "runnerHost:sandboxes:create",
   destroySandbox: "runnerHost:sandboxes:destroy",
   patchSandbox: "runnerHost:sandboxes:patch",
@@ -501,6 +504,9 @@ export const RunnerHostEvent = {
   // `lock-screen`), bridged so a live voice session ends and its microphone
   // closes. No payload.
   systemSuspended: "runnerHost:event:systemSuspended",
+  // The voice item's Mute, Unmute or End, sent to the one window whose live
+  // session it shows. Payload: `VoiceTrayAction`.
+  voiceTrayAction: "runnerHost:event:voiceTrayAction",
   notificationClick: "runnerHost:event:notificationClick",
   notificationForegroundDisplay:
     "runnerHost:event:notificationForegroundDisplay",

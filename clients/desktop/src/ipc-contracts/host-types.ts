@@ -113,7 +113,9 @@ export type {
   VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
   VoiceSessionMintFetchResult,
+  VoiceSessionIndicator,
   VoiceSessionMintRequest,
+  VoiceTrayAction,
 } from "@traycer-clients/shared/host-client/voice-sessions";
 export type { VoiceRouteFetchResult } from "@traycer-clients/shared/host-client/voice-router";
 export type {
