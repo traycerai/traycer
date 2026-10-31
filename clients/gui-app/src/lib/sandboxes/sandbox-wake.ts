@@ -384,8 +384,8 @@ function runSandboxWake(input: {
 
 /**
  * What a `pin` or `bind` picker calls with the row it was given: a sleeping,
- * non-frozen sandbox is woken (the pick is the user's next action, core
- * flows); every other row is left alone. The caller still stores its pick at
+ * non-frozen sandbox is woken (the pick is the user's next action);
+ * every other row is left alone. The caller still stores its pick at
  * once; its surface follows the fallback until the sandbox answers.
  *
  * Not a hook: a pick is an event, and the pickers render in places that have

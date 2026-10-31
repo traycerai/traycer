@@ -236,7 +236,7 @@ export interface TerminalSessionStoreHandle {
 /**
  * Result of appending to the pending-action ring: the updated map, plus
  * whether an unacked action was evicted to make room (T13's overflow
- * policy - drop-oldest + an honest "input lost" signal, Architecture §3/§8).
+ * policy - drop-oldest + an honest "input lost" signal).
  * An evicted action never got an `actionAck` and never will - it fell out of
  * the buffer that would have replayed it on reconnect, so the caller must
  * surface this rather than dropping it silently.
@@ -607,8 +607,8 @@ export function createTerminalSessionStore(
 
     /**
      * Replays every still-unacked `write` action after a reconnect (T13
-     * terminal action protocol - Architecture §3/§8's "in-flight keystrokes
-     * replay exactly-once-effect on reattach"). The host's per-session
+     * terminal action protocol: in-flight keystrokes
+     * replay exactly-once-effect on reattach). The host's per-session
      * idempotency window dedupes by `clientActionId`, so a write the old
      * subscriber already applied (only its `actionAck` was lost) just gets
      * re-acked, not re-typed into the PTY.

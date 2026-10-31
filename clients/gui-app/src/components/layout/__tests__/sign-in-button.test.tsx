@@ -1000,7 +1000,7 @@ describe("<SignInButton />", () => {
 
   it("keeps credentials file when a stored session is rejected (local plane held)", async () => {
     // Automatic failure paths never destroy the shared credentials file —
-    // only explicit sign-out does (tech plan §5). CLI seeding is gone; the
+    // only explicit sign-out does. CLI seeding is gone; the
     // file is the single store.
     const host = buildHost();
     await host.tokenStore.signIn(

@@ -29,7 +29,7 @@ function formatTokens(value: number): string {
  * Stat tiles: processed tokens, cached input, uncached input (`full`
  * only), output, cache savings. Every secondary line is conditional on a
  * real, non-null figure from `usage-stat-tiles.ts` - never an implied zero
- * for a signal a harness simply did not report (the ticket's binding
+ * for a signal a harness simply did not report (a binding
  * honesty rule).
  */
 export function UsageStatTiles(props: UsageStatTilesProps): ReactNode {

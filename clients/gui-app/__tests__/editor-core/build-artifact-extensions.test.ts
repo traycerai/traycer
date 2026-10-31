@@ -78,7 +78,7 @@ describe("buildArtifactExtensions", () => {
     const wireframe = schema.nodes.uiPreviewBlock;
     expect(mermaid).toBeDefined();
     expect(wireframe).toBeDefined();
-    // Atom + draggable + isolating contract - see plan §Atom schema.
+    // Atom + draggable + isolating contract.
     expect(mermaid.spec.atom).toBe(true);
     expect(mermaid.spec.draggable).toBe(false);
     expect(mermaid.spec.isolating).toBe(true);

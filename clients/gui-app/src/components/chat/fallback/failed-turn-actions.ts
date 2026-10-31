@@ -174,7 +174,7 @@ export function refusalForAttempt(
 }
 
 /**
- * Which actions a refusal leaves standing (the spec's "Buttons left" column).
+ * Which actions a refusal leaves standing.
  * No refusal yet leaves all of them.
  */
 export function refusalLeaves(

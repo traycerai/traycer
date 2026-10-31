@@ -229,7 +229,7 @@ export function chatCredentialNoticeText(
  * The header popover's per-provider display state - richer than
  * `resolveProviderRateLimitViewState` (which the Settings card uses) because
  * this surface distinguishes cold-load from degraded from never-fetched-error,
- * each with its own treatment (Core Flows: skeleton bars / dimmed stale reading
+ * each with its own treatment (skeleton bars / dimmed stale reading
  * / plain-language error + retry):
  *
  * - `cold`: no data has ever arrived and no fetch has failed yet -> skeleton.
@@ -317,7 +317,7 @@ export function resolvePopoverProviderRateLimitState(
   // below reports which transient reason it's standing in for). `props.isError`
   // covers the other degrade path: the query's own most recent (background)
   // fetch attempt threw (TanStack retaining old data across that exception) -
-  // Core Flows' degraded state, shown dimmed rather than replaced, generic
+  // the degraded state, shown dimmed rather than replaced, generic
   // copy since a thrown exception has no specific wire reason to report.
   const reason = envelopeDegradedReason(envelope);
   return {
@@ -350,8 +350,8 @@ export function titleCaseFromToken(value: string): string {
 
 /**
  * A provider's plan/tier label, where one is fetched - the header popover
- * shows this as a chip next to the provider name (Core Flows: "where the
- * provider reports one"). Codex (`planType`), Claude Code (`subscriptionType`),
+ * shows this as a chip next to the provider name, where the
+ * provider reports one. Codex (`planType`), Claude Code (`subscriptionType`),
  * Grok (`subscriptionTier`) and Antigravity (`planName`) report a plan/tier;
  * OpenRouter, Kilo Code,
  * Hugging Face and Cursor have no analogous field, so they always resolve to

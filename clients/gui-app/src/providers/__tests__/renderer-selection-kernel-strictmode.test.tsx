@@ -66,7 +66,7 @@ function buildAuthority(): TestAuthority {
     // A PROVISIONABLE local host, so the derivation this test reads is the
     // ordinary one. The `unavailable` port would be honest about a shell that
     // owns no host process, but here it just makes the local host `dead` and
-    // fails the window over to the remote - a real behaviour (registry §5),
+    // fails the window over to the remote - a real behaviour,
     // and a distraction from what is under test.
     localHostEnsure: { ensureReady: () => Promise.resolve({ ok: true }) },
     localOutage: inertLocalHostOutageSignal,

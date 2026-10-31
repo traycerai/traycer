@@ -573,7 +573,7 @@ describe("officeBench", () => {
     });
     expect(moving.steps.length).toBeGreaterThan(1);
     const last = moving.steps[moving.steps.length - 1];
-    // Clamp, not wrap: 999 and -4 are the ticket's indices, and
+    // Clamp, not wrap: 999 and -4 are the indices, and
     // `steps.length` is the wrap-killer (a wrap lands on the resting
     // map; a clamp stays on the last step).
     expect(officeBenchStatuses(999)).toBe(last);

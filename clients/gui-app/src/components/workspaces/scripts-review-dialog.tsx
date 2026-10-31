@@ -48,7 +48,7 @@ export function ScriptsReviewDialog(props: {
    * `null` to omit the path block entirely - the "Worktree environment"
    * dialog drops it for a staged new-branch target, since the branch name it
    * would show is now redundant with Branch naming's own effective-branch
-   * preview (core-flows/worktree-environment-layered-settings). One slot
+   * preview. One slot
    * instead of two independently-nullable `pathLabel`/`pathValue` props: the
    * two were never set or omitted independently, so the type says so.
    */

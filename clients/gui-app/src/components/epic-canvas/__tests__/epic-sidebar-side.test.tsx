@@ -354,7 +354,7 @@ describe("<EpicSurface /> sidebar side (S-06)", () => {
     const container = document.querySelector(`[data-epic-surface="${tabId}"]`);
     if (container === null) throw new Error("epic surface row not found");
     // The body slot is a plain wrapper div around `EpicRouteSessionBody`
-    // (unchanged by this ticket), so its own testid is one level down.
+    // so its own testid is one level down.
     return [...container.children].map((child) => {
       const element = child as HTMLElement;
       return (

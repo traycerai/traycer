@@ -5680,7 +5680,7 @@ describe("ChatMessages scroll policy", () => {
       // this component - `isEpicCanvasTileInstanceLive` already reads false
       // by the time our own cleanup fires. The earlier version of this pin
       // unmounted BEFORE evicting (the reverse order), which never actually
-      // exercised the guard this ticket depends on.
+      // exercised the guard the fix depends on.
       evictChatTabState([closedInstance]);
       tileLiveness.live = false;
       first.unmount();
@@ -10234,7 +10234,7 @@ describe("ChatMessages scroll policy", () => {
 
     it("pointerdown then stable past-target bottom, permanent close, new-instance reopen before row arrival: durable state stays following-end", async () => {
       // Companion to the hydration case above for the close/reopen route
-      // the ticket also requires.
+      // as well.
       enableLegendListBrowserScrollEvents();
       const fullMessages = makeCompletedTranscript(80);
       const missingAnchorIndexInFull = 40;

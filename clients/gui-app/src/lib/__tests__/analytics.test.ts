@@ -1438,7 +1438,7 @@ describe("analytics", () => {
       ).toBeNull();
     });
 
-    // The ticket's own rule: never draft text, titles, task/chat names, ids,
+    // The rule: never draft text, titles, task/chat names, ids,
     // host ids or paths. A payload carrying only those must fail closed.
     it("rejects a draft event payload carrying only what must never be sent", async () => {
       const { AnalyticsEvent, sanitizeAnalyticsProperties } =

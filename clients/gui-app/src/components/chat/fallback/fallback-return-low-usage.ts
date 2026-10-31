@@ -14,7 +14,7 @@ import { providerCliIdForHarness } from "@/lib/provider-ordering";
  * The banner OUTRANKS that advisory in `resolveComposerTopBannerKind`'s
  * one-at-a-time chain, so winning the slot silences it. Taking the slot and
  * dropping the sentence is what MF09 found: a user answering "Stay" lost the
- * one fact that argues against staying. UX §2 asks for one banner carrying both
+ * one fact that argues against staying. One banner carries both
  * facts, and these two functions are the rule that decides which facts.
  *
  * In its own module rather than beside the components that read it, for the

@@ -2057,8 +2057,7 @@ function pinImportedChatMarkers(
  * Filtered and identified THROUGH the projection's own helpers: the host
  * numbers this row's ordinal from `importedChatMarkerRowSource`, and a row that
  * existed here but not there is exactly what the windowed transcript used to
- * lose - an event no row needs is never served on reopen (spec
- * `session-import.md` §8e).
+ * lose - an event no row needs is never served on reopen.
  */
 function buildImportedChatMarkerMessages(
   events: ReadonlyArray<OpenChatEvent>,

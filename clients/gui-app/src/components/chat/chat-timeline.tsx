@@ -101,7 +101,7 @@ function resolveChatTimelineMvcp(
 }
 
 // Spacer alignment: the old 40px header/footer were
-// unsanctioned drift (decision log #30).
+// unsanctioned drift (decision #30).
 // Consumers read the live measured size via `onListMetricsChange`, so they
 // adapt automatically; nothing here is a hardcoded assumption elsewhere.
 const CHAT_TIMELINE_LIST_HEADER = (
@@ -491,7 +491,7 @@ export const ChatTimeline = memo(function ChatTimeline({
   // registration must be live before the browser can paint a state where a
   // drag could start. Cleared defensively on unmount (in addition to
   // unregistering) even though the unmounted DOM is about to be discarded
-  // anyway - matches the ticket's explicit "cleared ... at end/unmount"
+  // anyway - matches the explicit "cleared ... at end/unmount"
   // contract.
   useLayoutEffect(() => {
     const capture = (): void => {

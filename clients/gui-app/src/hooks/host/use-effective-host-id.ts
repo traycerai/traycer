@@ -1,7 +1,7 @@
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 
 /**
- * THE app-wide selection pointer (selection model §1): the host the authority
+ * THE app-wide selection pointer: the host the authority
  * derived for this app, which every following (`null`) surface resolves
  * against and every window-global consumer re-points on.
  *

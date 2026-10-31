@@ -1,5 +1,5 @@
 /**
- * Pure state resolution for the stateful scroll-to-end pill (decision log
+ * Pure state resolution for the stateful scroll-to-end pill (decision
  * #16). Split from `scroll-to-end-pill.tsx` so the component file only
  * exports the component (Fast Refresh boundary).
  */

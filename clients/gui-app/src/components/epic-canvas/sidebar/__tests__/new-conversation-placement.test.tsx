@@ -595,7 +595,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     expect(noticeText()).toContain("Build Box");
   });
 
-  // Codex review finding: a §54 refusal names the placement it refused, so
+  // Codex review finding: a placement refusal names the placement it refused, so
   // ANY change of the RESOLVED host retires it - a derivation move or the
   // picker writing a new pin. A surviving alert would keep naming a placement
   // this modal has already left.

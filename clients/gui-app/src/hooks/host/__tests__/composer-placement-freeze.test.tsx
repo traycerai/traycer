@@ -136,7 +136,7 @@ describe("composer placement freezes its submit client", () => {
     expect(result.current.submitTarget.client?.getActiveHostId()).toBe(
       "host-row",
     );
-    // §55: a caller-supplied host is a pin for D6 purposes, so a dead one is
+    // A caller-supplied host is a pin for D6 purposes, so a dead one is
     // refusable rather than silently substituted.
     expect(result.current.target.isPinned).toBe(true);
   });

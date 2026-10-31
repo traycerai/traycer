@@ -274,7 +274,7 @@ describe("collectComposerDirtyWrites: never-typed empty draft gate", () => {
  * T4's race rule: a pending inline image node means its background hash
  * rewrite has not landed yet, and publishing the draft NOW would put the
  * whole base64 snapshot on the wire - the exact megabyte-draft failure this
- * ticket exists to remove. The rewrite's own document change bumps
+ * change exists to remove. The rewrite's own document change bumps
  * `generation` again moments later, so the draft is collectable on the next
  * pass regardless.
  */
