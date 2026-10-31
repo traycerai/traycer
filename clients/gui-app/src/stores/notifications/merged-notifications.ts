@@ -2047,7 +2047,7 @@ function asAttentionCursor(
 
 /** `unreadRecent` pagination is a filtered view of Recent, not its own
  * analytics section - both collapse to `"recent"` so the section enum stays
- * two values. */
+ * at two values. */
 function trackNotificationPageLoadedSuccess(
   section: "attention" | "recent",
   entryCount: number,

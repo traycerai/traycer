@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
  * destination menu row the host could not resolve.
  *
  * The replacement for the old "family" tag, and a glyph rather than a word for
- * the reason the spec gives: the badge IS the syntax (`*` is the only
+ * one reason: the badge IS the syntax (`*` is the only
  * wildcard), so the thing that marks a pattern is also the thing that teaches
  * how to write one.
  *
