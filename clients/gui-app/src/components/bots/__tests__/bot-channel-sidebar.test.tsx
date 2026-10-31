@@ -21,13 +21,22 @@ import {
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import type {
   BotReadCursorReadResponse,
   BotRecord,
@@ -266,6 +275,7 @@ import {
   type BotThreadsViewState,
 } from "@/components/bots/bot-channel-sidebar";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { useBotColumnLayoutStore } from "@/stores/bots/bot-column-layout-store";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 
 const TAB_HOST = "host-tab";
@@ -411,6 +421,12 @@ beforeEach(() => {
   }
   mocks.readRequests.length = 0;
   useBotTabsStore.setState({ tabs: {} });
+  localStorage.clear();
+  useBotColumnLayoutStore.setState({
+    sectionOrder: [],
+    channelOrder: {},
+    collapsed: [],
+  });
 });
 
 afterEach(() => {
@@ -1240,5 +1256,248 @@ describe("<BotChannelSidebar /> create a team", () => {
     mocks.hasShell = false;
     mount("bot-notes");
     expect(screen.queryByTestId("bot-channel-create-team")).toBeNull();
+  });
+});
+
+const DRAG_ROW_HEIGHT = 30;
+const DRAG_SECTION_HEIGHT = 120;
+
+function rectAt(top: number, height: number): DOMRect {
+  return {
+    x: 0,
+    y: top,
+    top,
+    left: 0,
+    right: 200,
+    bottom: top + height,
+    width: 200,
+    height,
+    toJSON: () => ({}),
+  };
+}
+
+function indexAmong(element: HTMLElement, selector: string): number {
+  const parent = element.parentElement;
+  if (parent === null) return 0;
+  return Array.from(parent.children)
+    .filter((child) => child.matches(selector))
+    .indexOf(element);
+}
+
+/**
+ * jsdom lays nothing out, so dnd-kit would see every row at the origin. A
+ * channel's sortable node is its `li`, stacked 30px apart in its list; a
+ * section is stacked 120px apart in the column; the lifted copy dnd-kit
+ * positions over the dragged row, which dnd-kit measures through its child,
+ * is where that row stood. jsdom cannot read
+ * back the transforms dnd-kit puts on the nodes, so a rect never moves with
+ * them, as the transform-agnostic rect dnd-kit asks for does not.
+ */
+function layOutColumn(): MockInstance<() => DOMRect> {
+  return vi
+    .spyOn(Element.prototype, "getBoundingClientRect")
+    .mockImplementation(function (this: Element) {
+      if (!(this instanceof HTMLElement)) return rectAt(0, 0);
+      const overlay = this.parentElement;
+      if (overlay !== null && overlay.style.position === "fixed") {
+        return rectAt(
+          Number.parseFloat(overlay.style.top),
+          Number.parseFloat(overlay.style.height),
+        );
+      }
+      if (this.tagName === "LI") {
+        return rectAt(
+          indexAmong(this, "li") * DRAG_ROW_HEIGHT,
+          DRAG_ROW_HEIGHT,
+        );
+      }
+      if (this.dataset.testid === "bot-channel-section") {
+        return rectAt(
+          indexAmong(this, "[data-testid='bot-channel-section']") *
+            DRAG_SECTION_HEIGHT,
+          DRAG_SECTION_HEIGHT,
+        );
+      }
+      return rectAt(0, 0);
+    });
+}
+
+function pointerOptions(clientY: number): PointerEventInit {
+  return {
+    isPrimary: true,
+    button: 0,
+    pointerType: "mouse",
+    clientX: 10,
+    clientY,
+  };
+}
+
+/** The lifted copy dnd-kit draws while a row is dragged, gone once it is dropped. */
+async function liftedCopyGone(): Promise<void> {
+  await waitFor(() => {
+    expect(document.querySelector("[inert]")).toBeNull();
+  });
+}
+
+/**
+ * A mouse drag of `handle` by `distance` px: the press, a first move that
+ * crosses the activation distance, a second that carries the row, the release.
+ */
+async function dragBy(handle: HTMLElement, distance: number): Promise<void> {
+  fireEvent.pointerDown(handle, pointerOptions(0));
+  fireEvent.pointerMove(document, pointerOptions(10));
+  fireEvent.pointerMove(document, pointerOptions(distance));
+  expect(document.querySelector("[inert]")).not.toBeNull();
+  fireEvent.pointerUp(document, pointerOptions(distance));
+  await liftedCopyGone();
+}
+
+function botIdsIn(environmentId: string): Array<string | null> {
+  return within(section(environmentId))
+    .getAllByTestId("bot-channel-row")
+    .map((element) => element.getAttribute("data-bot-id"));
+}
+
+function sectionIdsInColumn(): Array<string | null> {
+  return screen
+    .getAllByTestId("bot-channel-section")
+    .map((element) => element.getAttribute("data-environment-id"));
+}
+
+describe("<BotChannelSidebar /> arranging the column", () => {
+  let layout: MockInstance<() => DOMRect>;
+
+  beforeEach(() => {
+    layout = layOutColumn();
+    // Rows of env-team by title: alerts-bot, release-bot, triage-bot.
+    mocks.state.bots.push(bot("bot-alerts", "env-team", "alerts-bot"));
+  });
+
+  afterEach(() => {
+    layout.mockRestore();
+  });
+
+  it("writes a channel's new place as its section's full order when it is dragged onto another, and the rows follow", async () => {
+    mount("bot-notes");
+    expect(botIdsIn("env-team")).toEqual([
+      "bot-alerts",
+      "bot-release",
+      "bot-triage",
+    ]);
+
+    await dragBy(row("bot-release"), DRAG_ROW_HEIGHT);
+
+    expect(useBotColumnLayoutStore.getState().channelOrder).toEqual({
+      "env-team": ["bot-alerts", "bot-triage", "bot-release"],
+    });
+    expect(botIdsIn("env-team")).toEqual([
+      "bot-alerts",
+      "bot-triage",
+      "bot-release",
+    ]);
+  });
+
+  it("changes nothing when a channel is dropped over nothing of its section", async () => {
+    mount("bot-notes");
+
+    await dragBy(row("bot-release"), 600);
+
+    expect(useBotColumnLayoutStore.getState().channelOrder).toEqual({});
+    expect(botIdsIn("env-team")).toEqual([
+      "bot-alerts",
+      "bot-release",
+      "bot-triage",
+    ]);
+    expect(useBotColumnLayoutStore.getState().sectionOrder).toEqual([]);
+  });
+
+  it("writes the sections' new order when a section is dragged by its label, and the sections follow", async () => {
+    mount("bot-notes");
+    const labels = screen.getAllByTestId("bot-channel-section-label");
+    expect(labels.map((label) => label.textContent)).toEqual([
+      "Personal",
+      "Acme",
+      "Quiet team",
+    ]);
+
+    await dragBy(labels[2], -2 * DRAG_SECTION_HEIGHT);
+
+    expect(useBotColumnLayoutStore.getState().sectionOrder).toEqual([
+      "env-empty",
+      "env-me",
+      "env-team",
+    ]);
+    expect(sectionIdsInColumn()).toEqual(["env-empty", "env-me", "env-team"]);
+  });
+
+  it("reorders a channel from the keyboard: Space lifts it, an arrow moves it, Space drops it", async () => {
+    mount("bot-notes");
+    const handle = row("bot-release");
+    handle.focus();
+
+    fireEvent.keyDown(handle, { code: "Space", key: " " });
+    expect(document.querySelector("[inert]")).not.toBeNull();
+    // dnd-kit starts listening for the arrows on a timer after the lift.
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    });
+    fireEvent.keyDown(document, { code: "ArrowDown", key: "ArrowDown" });
+    fireEvent.keyDown(document, { code: "Space", key: " " });
+    await liftedCopyGone();
+
+    expect(useBotColumnLayoutStore.getState().channelOrder).toEqual({
+      "env-team": ["bot-alerts", "bot-triage", "bot-release"],
+    });
+    expect(botIdsIn("env-team")).toEqual([
+      "bot-alerts",
+      "bot-triage",
+      "bot-release",
+    ]);
+  });
+});
+
+describe("<BotChannelSidebar /> putting a section away", () => {
+  beforeEach(() => {
+    mocks.state.bots.push(bot("bot-alerts", "env-team", "alerts-bot"));
+    mocks.state.epics = {
+      "bot-triage": { unreadDone: true, unreadFailure: false, unreadCount: 2 },
+    };
+  });
+
+  it("collapses to the channel in view and the channels with something unread, and opens again", async () => {
+    const user = userEvent.setup();
+    mount("bot-release");
+    const collapse = screen.getByRole("button", { name: "Collapse Acme" });
+    expect(collapse.getAttribute("aria-expanded")).toBe("true");
+    expect(botIdsIn("env-team")).toEqual([
+      "bot-alerts",
+      "bot-release",
+      "bot-triage",
+    ]);
+
+    await user.click(collapse);
+
+    const expand = screen.getByRole("button", { name: "Expand Acme" });
+    expect(expand.getAttribute("aria-expanded")).toBe("false");
+    expect(section("env-team").getAttribute("data-collapsed")).toBe("true");
+    expect(botIdsIn("env-team")).toEqual(["bot-release", "bot-triage"]);
+    // The other sections are left as they were.
+    expect(section("env-me").getAttribute("data-collapsed")).toBe("false");
+    expect(botIdsIn("env-me")).toEqual(["bot-notes"]);
+
+    await user.click(expand);
+
+    expect(
+      screen
+        .getByRole("button", { name: "Collapse Acme" })
+        .getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(botIdsIn("env-team")).toEqual([
+      "bot-alerts",
+      "bot-release",
+      "bot-triage",
+    ]);
   });
 });
