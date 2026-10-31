@@ -246,6 +246,7 @@ function ShownArtifact(props: {
           onTextSelection={null}
           onFrame={null}
           renderOverlay={null}
+          sourceEquivalent={undefined}
           toolbarControls={
             <InlineArtifactActions
               source={source}
