@@ -709,14 +709,15 @@ export function confirmationWords(input: {
 }
 
 /**
- * What proves a short answer. A reply with a number in it: each number as a
- * complete value, as written and as said, and its other short words that
- * are not filler; never the reply's words whole, which would lose the sign
- * and the decimal ("-5" read as the word "5"). A reply of one or two words
- * with no number: the reply whole, as written but for case and the
- * punctuation around it, since a "Yes." or an "OK." is all acknowledgement
- * vocabulary and would otherwise have no proof at all; it is proven only by
- * an output that is exactly it (see `isWholeAnswerSaid`).
+ * What proves a short answer (one with no content word). A reply with a
+ * number standing in it: each number as a complete value, as written and as
+ * said, and its other short words that are not filler; never the reply's
+ * words whole, which would lose the sign and the decimal ("-5" read as the
+ * word "5"). Any other: the reply whole, as written but for case and the
+ * punctuation around it, its own punctuation kept: a "Yes." or an "OK." is
+ * all acknowledgement vocabulary, and a date "2026-10-31" or a version
+ * "v1.2.3" is an opaque token that no number cut from it stands for; each
+ * is proven only by an output that is exactly it (see `confirmedAtCompletion`).
  */
 function shortAnswerPhrases(
   text: string,
@@ -730,28 +731,28 @@ function shortAnswerPhrases(
   for (const word of content) {
     if (isContentWord(word)) phrases.push(word);
   }
-  if (
-    numerals.length === 0 &&
-    content.length >= 1 &&
-    content.length <= WHOLE_REPLY_MAX_WORDS
-  ) {
-    phrases.push(wholeReplyOf(text));
+  if (numerals.length === 0) {
+    const whole = wholeReplyOf(text);
+    if (whole.length > 0) phrases.push(whole);
   }
   return phrases;
 }
 
-/** The reply as written, lowercased, the punctuation around it gone. */
+/** The reply as written, lowercased, the punctuation around it gone and its own kept. */
 function wholeReplyOf(text: string): string {
   return text.toLowerCase().replace(/^[\s"'“‘]+|[\s.!?,;:"'”’]+$/gu, "");
 }
 
-/** A reply this short is proven by being said whole; longer ones by their words. */
-const WHOLE_REPLY_MAX_WORDS = 2;
-
 /** A number as written: an optional sign, digits, an optional decimal part. */
 const NUMERAL_RE = /^-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$/u;
+/**
+ * A number standing on its own: bounded by whitespace or sentence
+ * punctuation, never cut out of an opaque token (a date "2026-10-31", a
+ * version "v1.2.3", a time "12:30", an id), so a letter, dot, comma, colon,
+ * slash or dash joined to it on either side disqualifies it.
+ */
 const NUMERALS_IN_TEXT_RE =
-  /(?<![\p{L}\p{N}.,\-$€£¥])-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\p{L}\p{N}])(?![.,]\d)(?!\s*(?:[%‰°$€£¥]|(?:percent|hundred|thousand|million|billion|trillion|point)\b))/giu;
+  /(?<![\p{L}\p{N}.,:/\-$€£¥])-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\p{L}\p{N}])(?![.,:/-]\S)(?!\s*(?:[%‰°$€£¥]|(?:percent|hundred|thousand|million|billion|trillion|point)\b))/giu;
 
 /** The same number written with or without grouping ("42,000" and "42000"). */
 function sameNumeral(a: string, b: string): boolean {
@@ -908,21 +909,18 @@ function confirmedAtCompletion(transcript: string, item: SpeechItem): boolean {
 
 /**
  * A phrase an output must be exactly to prove the item: a complete number,
- * or the item's own reply when that reply is acknowledgement vocabulary
- * ("Yes.", "OK."), which the item's text ends with.
+ * or the item's own reply whole ("Yes.", "2026-10-31", "v1.2.3"), which the
+ * item's text ends with (a seeded word that is not the reply is never one).
  */
 function isWholeAnswer(item: SpeechItem, phrase: string): boolean {
   if (isNumberPhrase(phrase)) return true;
-  if (!isBackchannelOnly(phrase)) return false;
-  const text = wordsOf(item.text).map(canonicalWord);
-  const reply = wordsOf(phrase).map(canonicalWord);
-  return (
-    reply.length > 0 &&
-    reply.length <= text.length &&
-    reply.every(
-      (word, index) => text[text.length - reply.length + index] === word,
-    )
-  );
+  const text = wholeReplyOf(item.text);
+  const reply = wholeReplyOf(phrase);
+  if (reply.length === 0 || reply.length > text.length) return false;
+  if (!text.endsWith(reply)) return false;
+  // The reply begins at a word's start in the text, not inside one.
+  const before = text.charAt(text.length - reply.length - 1);
+  return before === "" || /[\s"'“‘(]/u.test(before);
 }
 
 /** Spellings the transcriber chooses between for one word. */
@@ -950,17 +948,22 @@ function isNumberPhrase(phrase: string): boolean {
 
 /**
  * The lowercased output is the phrase and nothing else, or repetitions of
- * it with punctuation between ("Yes. Yes."), each said whole.
+ * it with sentence punctuation between ("Yes. Yes."), each said whole. A
+ * phrase with a digit in it is compared as written (a version's dots, a
+ * date's dashes), one of words by its words.
  */
 function isOnly(said: string, phrase: string): boolean {
-  const expected = phrase.toLowerCase();
+  const expected = wholeReplyOf(phrase);
   const parts = spokenOf(said)
     .split(REPEAT_SPLIT_RE)
-    .map((part) => part.replace(/^[\s"'“‘]+|[\s"'”’]+$/gu, ""))
+    .map((part) => wholeReplyOf(part))
     .filter((part) => part.length > 0);
   if (parts.length === 0) return false;
   if (NUMERAL_RE.test(expected)) {
     return parts.every((part) => sameNumeral(part, expected));
+  }
+  if (/\p{N}/u.test(expected)) {
+    return parts.every((part) => part === expected);
   }
   const words = wordsOf(expected).map(canonicalWord).join(" ");
   return parts.every(
@@ -968,8 +971,12 @@ function isOnly(said: string, phrase: string): boolean {
   );
 }
 
-/** Punctuation between repetitions; a dot or comma inside a number is not. */
-const REPEAT_SPLIT_RE = /[!?;:]+|\.(?!\d)|,(?!\d)/u;
+/**
+ * Sentence punctuation between repetitions: followed by whitespace or the
+ * end, so a reply's own dot or dash ("v1.2.3", "2026-10-31", "3.5") never
+ * splits it.
+ */
+const REPEAT_SPLIT_RE = /[.!?;:]+(?=\s|$)/u;
 
 /**
  * The lowercased output holds the phrase whole: a numeral as written, words

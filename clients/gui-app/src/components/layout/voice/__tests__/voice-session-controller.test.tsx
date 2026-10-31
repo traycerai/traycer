@@ -11,6 +11,10 @@ import {
   type Mock,
 } from "vitest";
 import { create, type StoreApi } from "zustand";
+import type { BotListResponse } from "@traycer/protocol/host/bot/schemas";
+import type { StreamFrameEnvelope } from "@traycer-clients/shared/host-transport/i-stream-session";
+import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
+import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
 import type { VoiceEngineEvents } from "@/lib/voice/engine";
 import type { ReplyRow } from "@/lib/voice/focused-replies";
 import { MOVED_ASK_TEXT } from "@/lib/voice/say-loop";
@@ -107,8 +111,39 @@ const fake = vi.hoisted(() => {
       };
     },
   };
+  function slot<T>(): { value: T | null } {
+    return { value: null };
+  }
+  // The bot list as `bot.list` answers it, read by a real query over the
+  // test's cache, so the change subscription's invalidation refetches it.
+  const mainBotList: BotListResponse = {
+    bots: [
+      {
+        botId: "bot-1",
+        environmentId: "env-1",
+        createdByUserId: "user-1",
+        title: "CI bot",
+        harness: "claude",
+        model: "opus",
+        effort: null,
+        profile: null,
+        trunkChatId: "trunk-bot-1",
+        boundHostId: "host-a",
+        hostEpoch: 0,
+        createdAt: 1_000,
+        archivedAt: null,
+        directive: null,
+        replyMode: "direct",
+        appConversationChatId: "chan-1",
+      },
+    ],
+    mainBotIds: { "env-1": "bot-1" },
+  };
   return {
     personalEnvironment,
+    mainBotList,
+    botList: { value: mainBotList },
+    doorbell: slot<MockWsStreamClient<StreamFrameEnvelope>>(),
     threadList,
     deferred,
     track,
@@ -160,20 +195,43 @@ vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostClientForHostId: () => null,
 }));
 
-const BOT_LIST = {
-  data: {
-    bots: [
-      {
-        botId: "bot-1",
-        environmentId: "env-1",
-        title: "CI bot",
-        appConversationChatId: "chan-1",
-        archivedAt: null,
-      },
-    ],
-    mainBotIds: { "env-1": "bot-1" },
-  },
+/** The app-wide stream the `bot.listChanged` doorbell rides, reporting the method supported. */
+class ServingStreamClient extends MockWsStreamClient<StreamFrameEnvelope> {
+  override getMethodSupport(): StreamMethodSupport {
+    return "supported";
+  }
+
+  override subscribeMethodSupport(): () => void {
+    return () => undefined;
+  }
+}
+const CHANGED: StreamFrameEnvelope = {
+  kind: "changed",
+  hasBinaryPayload: false,
 };
+
+vi.mock("@/hooks/bots/use-bot-list-query", async () => {
+  const { queryOptions, useQuery } = await import("@tanstack/react-query");
+  const { hostQueryKeys } = await import("@/lib/query-keys");
+  return {
+    useBotListQuery: (_client: unknown, enabled: boolean) =>
+      useQuery(
+        queryOptions<BotListResponse>({
+          queryKey: hostQueryKeys.methodScope("host-a", "bot.list"),
+          queryFn: () => Promise.resolve(fake.botList.value),
+          initialData: fake.botList.value,
+          enabled,
+        }),
+      ),
+  };
+});
+vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/host/stream-runtime-context")
+  >()),
+  useStreamHostId: () => "host-a",
+  useWsStreamClient: () => fake.doorbell.value,
+}));
 vi.mock(
   "@/hooks/environment/use-addressed-environment",
   async (importOriginal) => ({
@@ -196,9 +254,6 @@ const CONVERSATION_LIST = {
     ],
   },
 };
-vi.mock("@/hooks/bots/use-bot-list-query", () => ({
-  useBotListQuery: () => BOT_LIST,
-}));
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => CONVERSATION_LIST,
 }));
@@ -426,6 +481,8 @@ beforeEach(() => {
   fake.handles.clear();
   fake.threadList.set(undefined);
   fake.personalEnvironment.resolved();
+  fake.botList.value = fake.mainBotList;
+  fake.doorbell.value = new ServingStreamClient();
   fake.track.stop.mockClear();
   fake.setVoiceSessionLive.mockReset();
   fake.setVoiceSessionLive.mockImplementation(() => Promise.resolve());
@@ -1240,6 +1297,54 @@ describe("a Talk with no bot tab open", () => {
 
     await startTalk();
     await grantMicrophone();
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+    expect(fake.engines).toEqual([]);
+    expect(
+      queryClient
+        .getMutationCache()
+        .findAll({ mutationKey: voiceMutationKeys.mint() }),
+    ).toEqual([]);
+  });
+});
+
+describe("the bot list changing elsewhere", () => {
+  /** Rings the shared `bot.listChanged` doorbell the controller joined, and lets the refetch land. */
+  async function ringListChanged(): Promise<void> {
+    const doorbell = fake.doorbell.value?.getSession("bot.listChanged", {});
+    if (doorbell === undefined) throw new Error("bot.listChanged not joined");
+    await act(async () => {
+      doorbell.emitFrame(CHANGED);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+
+  it("enables Talk once a main bot created elsewhere reaches the list, with no Tracy entry and no Home", async () => {
+    fake.botList.value = { bots: [], mainBotIds: {} };
+    cleanup();
+    renderController();
+    await settle();
+    expect(useVoiceSessionStore.getState().destinationKnown).toBe(false);
+
+    fake.botList.value = fake.mainBotList;
+    await ringListChanged();
+
+    expect(useVoiceSessionStore.getState().destinationKnown).toBe(true);
+    await bringLive();
+    expect(useVoiceSessionStore.getState().focus).toEqual(CHANNEL_FOCUS);
+  });
+
+  it("disables Talk once the main bot is archived elsewhere, and refuses to start to it", async () => {
+    expect(useVoiceSessionStore.getState().destinationKnown).toBe(true);
+    const [main] = fake.mainBotList.bots;
+    fake.botList.value = {
+      bots: [{ ...main, archivedAt: 2_000 }],
+      mainBotIds: { "env-1": "bot-1" },
+    };
+    await ringListChanged();
+
+    expect(useVoiceSessionStore.getState().destinationKnown).toBe(false);
+    await startTalk();
     expect(useVoiceSessionStore.getState().phase).toBe("idle");
     expect(fake.engines).toEqual([]);
     expect(

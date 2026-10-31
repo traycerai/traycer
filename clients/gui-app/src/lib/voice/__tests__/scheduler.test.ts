@@ -218,6 +218,67 @@ describe("delivery confirmation", () => {
     expect(delivered).toBe(1);
   });
 
+  it("proves a date-only reply by itself whole, never by a number cut from it", () => {
+    expect(
+      confirmationWords({
+        botTitle: null,
+        threadTitle: null,
+        text: "2026-10-31",
+      }),
+    ).toEqual(["2026-10-31"]);
+    const date = numericAnswer("2026-10-31");
+    scheduler.noteOutputTranscript("2026.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    scheduler.noteOutputTranscript(" 2026-11-01.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(date.delivered()).toBe(0);
+    clock.advance(CONFIRM_WINDOW_MS);
+    expect(appended).toHaveLength(2);
+
+    scheduler.noteOutputTranscript("2026-10-31.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(date.delivered()).toBe(1);
+  });
+
+  it("proves a version-only reply by itself whole, its dots kept", () => {
+    expect(
+      confirmationWords({
+        botTitle: "Tracy",
+        threadTitle: null,
+        text: "v1.2.3",
+      }),
+    ).toEqual(["tracy", "v1.2.3"]);
+    const version = numericAnswer("v1.2.3");
+    scheduler.noteOutputTranscript("v1.2.4.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    scheduler.noteOutputTranscript(" 1.2.3.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(version.delivered()).toBe(0);
+    clock.advance(CONFIRM_WINDOW_MS);
+    expect(appended).toHaveLength(2);
+
+    scheduler.noteOutputTranscript("v1.2.3.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(version.delivered()).toBe(1);
+  });
+
+  it("proves a two-part version by itself whole, its internal dot splitting nothing", () => {
+    const short = numericAnswer("v1.2");
+    scheduler.noteOutputTranscript("v1.2.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(short.delivered()).toBe(1);
+  });
+
+  it("still proves a grouped signed number by its value: -1,000 by -1000., not by 1000.", () => {
+    const answer = numericAnswer("-1,000");
+    scheduler.noteOutputTranscript("1000.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(answer.delivered()).toBe(0);
+    scheduler.noteOutputTranscript(" -1000.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(answer.delivered()).toBe(1);
+  });
+
   it("takes no part of the number, nor filler that happens to hold one, as proof", () => {
     const answer = numericAnswer("42");
 

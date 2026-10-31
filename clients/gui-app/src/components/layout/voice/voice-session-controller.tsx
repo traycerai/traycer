@@ -17,6 +17,7 @@ import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { MicrophoneAccessStatus } from "@traycer-clients/shared/platform/runner-host";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
+import { useBotListChangedSubscriptionForApp } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
@@ -156,6 +157,12 @@ export function VoiceSessionController(): ReactNode {
   const appClient = useHostClient();
   const botsSupported = useHostMethodSupport(appHostId, "bot.list") === true;
   const bots = useBotListQuery(appClient, botsSupported);
+  // The destination follows the list as it changes elsewhere (a main bot
+  // created or archived on another window or host): this controller joins
+  // the shared change subscription itself, under the same capability gate as
+  // its list read, since with Show Tracy off and Home never opened nothing
+  // else would keep the list current.
+  useBotListChangedSubscriptionForApp(botsSupported);
   const phase = useVoiceSessionStore((state) => state.phase);
   const focus = useVoiceSessionStore((state) => state.focus);
   const focusClient = useHostClientForHostId(focus?.hostId ?? null);
