@@ -1,5 +1,5 @@
 /**
- * A header tear-off must
+ * Fix round, finding 1 (BLOCKER): a header tear-off must
  * not unmount/remount the hosted chat body. Reproduces the reviewer's exact
  * transfer-gap discriminator - a REAL tear-off action moves the tile's
  * canvas entry to a destination tab in one synchronous `EpicCanvasStore`
