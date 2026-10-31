@@ -94,7 +94,7 @@ import type {
  * This file's `LocalEpicsProbe` still drives `epic.listTasks` directly through
  * the same real `useHostQuery` primitive those components use internally,
  * WITHOUT their auth gate — now to keep this file testing only what THIS
- * ticket owns (whether the renderer ADMITS the user to a point where local,
+ * change owns (whether the renderer ADMITS the user to a point where local,
  * disk-served content renders and is interactive), rather than because the
  * surfaces cannot do it themselves.
  */

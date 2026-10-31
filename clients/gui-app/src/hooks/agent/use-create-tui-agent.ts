@@ -206,8 +206,7 @@ export interface CreateTuiAgentInput {
   readonly terminalAgentArgs: string | null;
   /**
    * Which of the harness's logged-in profiles (subscriptions) to launch this
-   * agent on. `null` = the ambient/host login. See the multi-profile decision
-   * log.
+   * agent on. `null` = the ambient/host login.
    */
   readonly profileId: string | null;
 }

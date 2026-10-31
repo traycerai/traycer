@@ -968,8 +968,8 @@ function ClaudeExtraUsageRow({
 
 /**
  * OpenRouter's usage detail: a request/credit bar when a hard `limit` exists,
- * plus its uncapped spend/credit/balance figures as plain neutral rows (Core
- * Flows: "Windows without a percentage" - no fabricated percentage, no severity
+ * plus its uncapped spend/credit/balance figures as plain neutral rows
+ * ("Windows without a percentage" - no fabricated percentage, no severity
  * color). All figures are $-denominated OpenRouter credits.
  */
 export function OpenRouterRateLimitView({
