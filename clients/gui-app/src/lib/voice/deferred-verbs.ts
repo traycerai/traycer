@@ -39,7 +39,12 @@ export function executeDeferredVerb(input: {
   switch (verb) {
     case "read":
     case "later": {
+      // A route that names a bot (or thread) and no item means that bot's
+      // newest waiting item; with none, nothing, never another bot's.
       const itemId = input.itemId ?? newestWaitingOf(target);
+      if (input.itemId === null && target !== null && itemId === null) {
+        return { kind: "refused", say: NOTHING_WAITING_NOTICE };
+      }
       const outcome =
         verb === "read"
           ? runVoiceQueueVerb({ kind: "read", itemId, delegationId })
@@ -69,8 +74,9 @@ export function executeDeferredVerb(input: {
 }
 
 /**
- * The newest waiting item of the bot (and thread) a route names, when it
- * names one and no item; `null` (the newest waiting item of all) otherwise.
+ * The newest waiting item of the bot (and thread) a route names; `null`
+ * when it names none (the queue then takes the newest waiting item of all)
+ * or that bot has none waiting.
  */
 function newestWaitingOf(target: BoundTarget | null): string | null {
   if (target === null) return null;
