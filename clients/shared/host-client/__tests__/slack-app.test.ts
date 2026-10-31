@@ -1,4 +1,12 @@
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import type {
   SlackAppRegisterRequest,
   SlackAppView,
@@ -14,6 +22,8 @@ import {
 const BASE = "https://server.example.test";
 const BEARER = "user-jwt";
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
+/** `SLACK_APP_READ_TIMEOUT_MS`, which the module under test keeps private. */
+const READ_TIMEOUT_MS = 10_000;
 
 const APP: SlackAppView = {
   botId: BOT_ID,
@@ -277,5 +287,48 @@ describe("Slack app transport results", () => {
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain(REGISTER_REQUEST.clientSecret);
     expect(serialized).not.toContain(REGISTER_REQUEST.signingSecret);
+  });
+});
+
+describe("Slack app transport on a fetch that ignores its signal", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("settles a read at the deadline as a network error, and a late answer does not change it", async () => {
+    // Like CapacitorHttp's patched fetch: the signal is dropped, so only the
+    // test can settle the request.
+    let answer: (response: Response) => void = () => undefined;
+    const fetchMock = vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    let settled = false;
+
+    const pending = readSlackAppViaHttp(BASE, BEARER, null, BOT_ID);
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    const timedOut = {
+      kind: "network-error",
+      detail: "the request never completed (TimeoutError)",
+    };
+    expect(await pending).toEqual(timedOut);
+
+    answer(jsonResponse(200, { app: APP }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await pending).toEqual(timedOut);
   });
 });

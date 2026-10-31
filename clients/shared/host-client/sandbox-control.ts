@@ -29,7 +29,7 @@ import {
   type GuiAgentModelOption,
 } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import { z } from "zod";
-import { composeRequestAbort } from "../auth/request-abort";
+import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 
 /**
  * The raw calls to traycer-server's sandbox control plane (`/api/sandboxes`)
@@ -256,12 +256,10 @@ async function callWithSignal(
 ): Promise<RawCall> {
   let response: Response;
   try {
-    response = await fetch(url, {
-      method: init.method,
-      headers,
-      body: init.body,
+    response = await untilAborted(
+      fetch(url, { method: init.method, headers, body: init.body, signal }),
       signal,
-    });
+    );
   } catch (error: unknown) {
     return {
       kind: "network-error",
@@ -275,7 +273,7 @@ async function callWithSignal(
   try {
     // An empty or non-JSON body (a proxy's HTML page, a 204) reads as `null`
     // rather than throwing before the status is classified.
-    const text = await response.text();
+    const text = await untilAborted(response.text(), signal);
     body = text.length === 0 ? null : JSON.parse(text);
   } catch {
     body = null;

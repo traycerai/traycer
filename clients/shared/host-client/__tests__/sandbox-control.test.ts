@@ -559,6 +559,49 @@ describe("on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)
   });
 });
 
+describe("listSandboxesViaHttp on a fetch that ignores its signal", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("settles at the deadline as a network error, and a late answer does not change it", async () => {
+    // Like CapacitorHttp's patched fetch: the signal is dropped, so only the
+    // test can settle the request.
+    let answer: (response: Response) => void = () => undefined;
+    const fetchMock = vi.fn<typeof fetch>(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    let settled = false;
+
+    const pending = listSandboxesViaHttp(BASE, BEARER, null);
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(LIST_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    const timedOut = {
+      kind: "network-error",
+      detail: "the request never completed (TimeoutError)",
+    };
+    expect(await pending).toEqual(timedOut);
+
+    answer(jsonResponse(200, { sandboxes: [SUMMARY] }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await pending).toEqual(timedOut);
+  });
+});
+
 describe("destroySandboxViaHttp", () => {
   it("sends the idle-only precondition and preserves the typed CAS conflict", async () => {
     const fetchMock = stubFetch(async () =>

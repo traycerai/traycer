@@ -8,7 +8,7 @@ import {
   type SlackAppView,
 } from "@traycer/protocol/host/slack-app";
 import type { z } from "zod";
-import { composeRequestAbort } from "../auth/request-abort";
+import { composeRequestAbort, untilAborted } from "../auth/request-abort";
 
 /**
  * The raw calls to traycer-server's Slack app routes (`/api/slack/apps/*`)
@@ -124,14 +124,19 @@ async function post<T>(
   let status: number;
   let parsedBody: unknown;
   try {
-    const response = await fetch(slackAppsUrl(serverBaseUrl, route), {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      signal: abort.signal,
-    });
+    const response = await untilAborted(
+      fetch(slackAppsUrl(serverBaseUrl, route), {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: abort.signal,
+      }),
+      abort.signal,
+    );
     status = response.status;
-    parsedBody = parseJsonOrNull(await response.text());
+    parsedBody = parseJsonOrNull(
+      await untilAborted(response.text(), abort.signal),
+    );
   } catch (error: unknown) {
     return {
       kind: "network-error",
