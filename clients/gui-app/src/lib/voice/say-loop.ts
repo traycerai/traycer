@@ -216,6 +216,10 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     if (after.pendingDelegationId === delegationId) {
       after.setPendingDelegation(null);
     }
+    // The post opened a thread only when it went where none was: a post into
+    // a thread, or under an anchor the rail already opens on, keeps its
+    // thread's anchor, and the rail is left where it is.
+    const openedThread = focus.threadId === null && response.threadId !== null;
     awaiting.set(response.requestId, {
       requestId: response.requestId,
       delegationId,
@@ -223,7 +227,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       botId: focus.botId,
       hostId: focus.hostId,
       threadId: response.threadId,
-      openedThread: focus.threadId === null && response.threadId !== null,
+      openedThread,
     });
     const moved =
       action.movedWhileSending ||
@@ -232,13 +236,22 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       response.threadId === null
         ? `${deps.botTitle(focus.botId)}'s channel`
         : `a thread with ${deps.botTitle(focus.botId)}`;
-    if (!moved && response.threadId !== null) {
-      after.setFocus({
-        ...focus,
-        threadId: response.threadId,
-        anchorMessageId: response.messageId,
-      });
-      deps.openThread(focus, response, action.text);
+    if (!moved && openedThread && response.threadId !== null) {
+      if (focus.anchorThread === "unopened") {
+        after.setFocus({
+          ...focus,
+          threadId: response.threadId,
+          anchorThread: null,
+        });
+      } else {
+        after.setFocus({
+          ...focus,
+          threadId: response.threadId,
+          anchorMessageId: response.messageId,
+          anchorThread: null,
+        });
+        deps.openThread(focus, response, action.text);
+      }
     }
     // One notice covers both facts: the voice says nothing about an ordinary
     // post beyond the reply itself.
@@ -289,8 +302,9 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         return;
       }
       const focus = state.focus;
-      // No destination yet: the words stay open for the request that has one.
-      if (focus === null) return;
+      // No destination yet (no focus, or a thread the list has not resolved):
+      // the words stay open for the request that has one.
+      if (focus === null || focus.anchorThread === "resolving") return;
       const actionId = `${state.sessionToken}:${boundary}`;
       const reservation = state.reserveOpenSpan(actionId);
       if (reservation === null) return;

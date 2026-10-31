@@ -14,6 +14,7 @@ import { create, type StoreApi } from "zustand";
 import type { VoiceEngineEvents } from "@/lib/voice/engine";
 import type { ReplyRow } from "@/lib/voice/focused-replies";
 import { MOVED_ASK_TEXT } from "@/lib/voice/say-loop";
+import { voiceMutationKeys } from "@/lib/query-keys";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -56,6 +57,7 @@ const CHANNEL_FOCUS: VoiceFocus = {
   hostId: "host-a",
   threadId: null,
   anchorMessageId: null,
+  anchorThread: null,
 };
 
 const fake = vi.hoisted(() => {
@@ -71,7 +73,23 @@ const fake = vi.hoisted(() => {
     getTracks: () => [track],
     getAudioTracks: () => [track],
   };
+  // The bot's thread list as the selection sync reads it: `undefined` until
+  // it answers; `set` answers it and re-renders the readers.
+  let threadListValue: unknown = undefined;
+  const threadListListeners = new Set<() => void>();
+  const threadList = {
+    get: (): unknown => threadListValue,
+    subscribe: (listener: () => void): (() => void) => {
+      threadListListeners.add(listener);
+      return () => threadListListeners.delete(listener);
+    },
+    set: (value: unknown): void => {
+      threadListValue = value;
+      for (const listener of threadListListeners) listener();
+    },
+  };
   return {
+    threadList,
     deferred,
     track,
     stream,
@@ -153,9 +171,17 @@ vi.mock("@/hooks/bots/use-bot-list-query", () => ({
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => CONVERSATION_LIST,
 }));
-vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
-  useBotThreadListQuery: () => ({ data: undefined }),
-}));
+vi.mock("@/hooks/bots/use-bot-thread-list-query", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    useBotThreadListQuery: () => ({
+      data: useSyncExternalStore(
+        fake.threadList.subscribe,
+        fake.threadList.get,
+      ),
+    }),
+  };
+});
 vi.mock("@/hooks/bots/use-bot-mutations", () => ({
   useBotConversationSendMutation: () => ({ mutateAsync: fake.sendMock }),
 }));
@@ -335,9 +361,12 @@ const ACCEPTED = {
   threadId: "t1",
 };
 
+let queryClient = new QueryClient();
+
 function renderController(): void {
+  queryClient = new QueryClient();
   render(
-    <QueryClientProvider client={new QueryClient()}>
+    <QueryClientProvider client={queryClient}>
       <VoiceSessionController />
     </QueryClientProvider>,
   );
@@ -350,6 +379,7 @@ beforeEach(() => {
   fake.send = fake.deferred<unknown>();
   fake.engines.length = 0;
   fake.handles.clear();
+  fake.threadList.set(undefined);
   fake.track.stop.mockClear();
   fake.setVoiceSessionLive.mockReset();
   fake.setVoiceSessionLive.mockImplementation(() => Promise.resolve());
@@ -922,5 +952,97 @@ describe("a channel announcement queued before a later top-level request", () =>
       await vi.advanceTimersByTimeAsync(30_000);
     });
     expect(commentary).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("the voice routes", () => {
+  it("mint and end run as keyed mutations the cache holds, awaited by the attempt", async () => {
+    await bringLive();
+    const cache = queryClient.getMutationCache();
+    const mints = cache.findAll({ mutationKey: voiceMutationKeys.mint() });
+    expect(mints.map((mutation) => mutation.state.status)).toEqual(["success"]);
+    expect(mints[0]?.state.variables).toEqual({
+      offerSdp: "offer",
+      input: "Listening.",
+    });
+    expect(cache.findAll({ mutationKey: voiceMutationKeys.end() })).toEqual([]);
+
+    act(() => useVoiceSessionStore.getState().driver?.end());
+    await settle();
+
+    const ends = cache.findAll({ mutationKey: voiceMutationKeys.end() });
+    expect(
+      ends.map((mutation) => [mutation.state.variables, mutation.state.status]),
+    ).toEqual([["vs1", "success"]]);
+    expect(fake.endVoiceSession).toHaveBeenCalledWith("vs1");
+  });
+});
+
+describe("a question nobody has replied under", () => {
+  it("holds the words until the thread list answers, then posts under the question as the reply that opens its thread, and follows that thread by the question", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    act(() =>
+      useBotOpenThreadStore.getState().setRail(BOT_ID, {
+        kind: "thread",
+        anchorMessageId: "q1",
+        announcement: true,
+        anchorKind: null,
+        sent: null,
+      }),
+    );
+    await bringLive();
+    const unresolved: VoiceFocus = {
+      ...CHANNEL_FOCUS,
+      anchorMessageId: "q1",
+      anchorThread: "resolving",
+    };
+    expect(useVoiceSessionStore.getState().focus).toEqual(unresolved);
+    const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+    await say("Yes,", "d1");
+    expect(fake.sendMock).not.toHaveBeenCalled();
+    expect(useVoiceSessionStore.getState().openSpan()).toBe("Yes,");
+
+    act(() => {
+      fake.threadList.set({ threads: [] });
+    });
+    expect(useVoiceSessionStore.getState().focus).toEqual({
+      ...unresolved,
+      anchorThread: "unopened",
+    });
+    // The list resolving the anchor is not the person moving.
+    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
+      generation,
+    );
+
+    await say(" merge it.", "d2");
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    expect(fake.sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Yes, merge it.",
+        threadId: null,
+        announcementId: "q1",
+      }),
+    );
+    await act(async () => {
+      fake.send.resolve({
+        messageId: "m1",
+        requestId: "r1",
+        delivery: "written",
+        threadId: "tq",
+      });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(useVoiceSessionStore.getState().focus).toEqual({
+      ...unresolved,
+      threadId: "tq",
+      anchorThread: null,
+    });
+    expect(useBotOpenThreadStore.getState().byBotId[BOT_ID]).toMatchObject({
+      kind: "thread",
+      anchorMessageId: "q1",
+      sent: null,
+    });
   });
 });

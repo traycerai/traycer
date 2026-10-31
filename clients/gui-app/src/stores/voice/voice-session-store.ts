@@ -19,10 +19,19 @@ export interface VoiceFocus {
   readonly botId: string;
   /** The host the bot's tab is bound to, which carries the send. */
   readonly hostId: string;
-  /** `null`: the channel's top level. */
+  /** `null`: the channel's top level, or a thread not yet known by its id (see `anchorThread`). */
   readonly threadId: string | null;
   /** The row the open thread hangs off; `null` with no thread. */
   readonly anchorMessageId: string | null;
+  /**
+   * The thread behind the anchor while `threadId` is `null`: `"unopened"`,
+   * nobody has replied under the anchor yet, so a post goes under it as the
+   * first reply that opens its thread (the thread panel's "Reply in a new
+   * thread"); `"resolving"`, the thread list has not said yet, so nothing is
+   * posted until it does. `null` when `threadId` says where, or there is no
+   * anchor and posts go to the channel's top level.
+   */
+  readonly anchorThread: "unopened" | "resolving" | null;
 }
 
 /**
@@ -396,7 +405,8 @@ export function sameFocus(a: VoiceFocus | null, b: VoiceFocus | null): boolean {
     a.botId === b.botId &&
     a.hostId === b.hostId &&
     a.threadId === b.threadId &&
-    a.anchorMessageId === b.anchorMessageId
+    a.anchorMessageId === b.anchorMessageId &&
+    a.anchorThread === b.anchorThread
   );
 }
 

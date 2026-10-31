@@ -19,6 +19,7 @@ const FOCUS: VoiceFocus = {
   hostId: "host-1",
   threadId: "thread-0",
   anchorMessageId: "msg-0",
+  anchorThread: null,
 };
 const OTHER_FOCUS: VoiceFocus = { ...FOCUS, threadId: "thread-9" };
 
@@ -118,30 +119,87 @@ beforeEach(() => {
 });
 
 describe("a delegation", () => {
-  it("posts the joined span once to the focus, consumes it and follows the new thread", async () => {
+  it("posts the joined span once into the focused thread and consumes it, keeping the thread's anchor and rail", async () => {
     const h = harness();
     const done = h.loop.onDelegationCreated("d-1");
-    h.resolve(response({}), 0);
+    h.resolve(response({ threadId: FOCUS.threadId }), 0);
     await done;
 
     expect(h.sends).toEqual([{ focus: FOCUS, text: "please check the build" }]);
     const state = useVoiceSessionStore.getState();
     expect(state.segments).toEqual([]);
     expect(state.pendingDelegationId).toBeNull();
-    expect(state.focus).toEqual({
-      ...FOCUS,
-      threadId: "thread-1",
-      anchorMessageId: "m-1",
-    });
-    expect(h.opened).toHaveLength(1);
+    // The follow-up is not the thread's opening post: adopting it as the
+    // anchor would rebuild the rail around it.
+    expect(state.focus).toEqual(FOCUS);
+    expect(h.opened).toEqual([]);
     expect(h.accepted).toEqual([
       {
         requestId: "r-1",
         botId: FOCUS.botId,
         hostId: FOCUS.hostId,
-        threadId: "thread-1",
+        threadId: "thread-0",
       },
     ]);
+  });
+
+  it("from the channel adopts the thread its post opened, by that post, and opens the rail on it", async () => {
+    const h = harness();
+    useVoiceSessionStore
+      .getState()
+      .setFocus({ ...FOCUS, threadId: null, anchorMessageId: null });
+    const done = h.loop.onDelegationCreated("d-1");
+    h.resolve(response({ messageId: "m-7", threadId: "thread-7" }), 0);
+    await done;
+
+    expect(useVoiceSessionStore.getState().focus).toEqual({
+      ...FOCUS,
+      threadId: "thread-7",
+      anchorMessageId: "m-7",
+    });
+    expect(h.opened.map((answer) => answer.threadId)).toEqual(["thread-7"]);
+  });
+
+  it("under a row nobody has replied under follows the thread the reply opened, keeping the row as its anchor and the rail where it is", async () => {
+    const h = harness();
+    const unopened: VoiceFocus = {
+      ...FOCUS,
+      threadId: null,
+      anchorMessageId: "q-1",
+      anchorThread: "unopened",
+    };
+    useVoiceSessionStore.getState().setFocus(unopened);
+    const done = h.loop.onDelegationCreated("d-1");
+    h.resolve(response({ messageId: "m-7", threadId: "thread-q" }), 0);
+    await done;
+
+    expect(h.sends).toEqual([
+      { focus: unopened, text: "please check the build" },
+    ]);
+    expect(useVoiceSessionStore.getState().focus).toEqual({
+      ...unopened,
+      threadId: "thread-q",
+      anchorThread: null,
+    });
+    expect(h.opened).toEqual([]);
+    expect(h.loop.awaitedIn("thread-q")).toBe("opened");
+  });
+
+  it("holds the words while the thread behind the anchor is unresolved", async () => {
+    const h = harness();
+    useVoiceSessionStore.getState().setFocus({
+      ...FOCUS,
+      threadId: null,
+      anchorMessageId: "q-1",
+      anchorThread: "resolving",
+    });
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(h.sends).toEqual([]);
+    expect(useVoiceSessionStore.getState().openSpan()).toBe(
+      "please check the build",
+    );
+    expect(useVoiceSessionStore.getState().pendingDelegationId).toBeNull();
   });
 
   it("says a queued delivery as queued, never paused", async () => {

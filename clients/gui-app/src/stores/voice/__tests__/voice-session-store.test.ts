@@ -13,6 +13,7 @@ const FOCUS: VoiceFocus = {
   hostId: "host-1",
   threadId: null,
   anchorMessageId: null,
+  anchorThread: null,
 };
 const THREAD_FOCUS: VoiceFocus = {
   ...FOCUS,

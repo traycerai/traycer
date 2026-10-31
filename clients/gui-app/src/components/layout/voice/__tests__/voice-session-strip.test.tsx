@@ -24,6 +24,7 @@ const FOCUS: VoiceFocus = {
   hostId: "host-a",
   threadId: null,
   anchorMessageId: null,
+  anchorThread: null,
 };
 
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));

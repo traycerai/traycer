@@ -25,12 +25,12 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import { useVoiceAvailabilityQuery } from "@/hooks/voice/use-voice-availability-query";
-import { voiceQueryKeys } from "@/lib/query-keys";
 import {
-  useAuthService,
-  useHostClient,
-  type HostRpcRegistry,
-} from "@/lib/host";
+  useVoiceSessionEndMutation,
+  useVoiceSessionMintMutation,
+} from "@/hooks/voice/use-voice-session-mutations";
+import { voiceQueryKeys } from "@/lib/query-keys";
+import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { appLogger, describeLogError } from "@/lib/logger";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
@@ -122,7 +122,10 @@ interface Attempt {
  */
 export function VoiceSessionController(): ReactNode {
   const runnerHost = useRunnerHost();
-  const auth = useAuthService();
+  // The voice routes, as keyed mutations; the controller awaits their
+  // promises and fences on the attempt, never on a per-call callback.
+  const { mutateAsync: mintAsync } = useVoiceSessionMintMutation();
+  const { mutateAsync: endAsync } = useVoiceSessionEndMutation();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   // Whether this deployment offers voice, read once per window before Talk
@@ -228,12 +231,16 @@ export function VoiceSessionController(): ReactNode {
       if (channelId === null) {
         throw new Error("The bot's channel is not known yet.");
       }
+      // Where the thread panel's box sends: into the thread by its id, or
+      // under an anchor nobody has replied under as the reply that opens
+      // its thread. A top-level post names neither.
       return sendAsync({
         botId: target.botId,
         conversationId: channelId,
         text,
         threadId: target.threadId,
-        announcementId: null,
+        announcementId:
+          target.anchorThread === "unopened" ? target.anchorMessageId : null,
         redeliver: null,
         supersedes: null,
         answer: null,
@@ -391,14 +398,14 @@ export function VoiceSessionController(): ReactNode {
         });
       }
       if (attempt.sessionId === null) return;
-      const result = await auth.endVoiceSession(attempt.sessionId);
+      const result = await endAsync(attempt.sessionId);
       if (result.kind !== "ok") {
         appLogger.warn("[voice] end route did not answer", {
           kind: result.kind,
         });
       }
     },
-    [auth],
+    [endAsync],
   );
 
   /**
@@ -468,7 +475,7 @@ export function VoiceSessionController(): ReactNode {
           micTrack,
           exchangeSdp: async (offerSdp) => {
             if (!owns()) throw closedBeforeStart();
-            const result = await auth.mintVoiceSession({ offerSdp, input });
+            const result = await mintAsync({ offerSdp, input });
             switch (result.kind) {
               case "ok":
                 // Owned from this moment: an End during the rest of the
@@ -478,7 +485,7 @@ export function VoiceSessionController(): ReactNode {
                 attempt.sessionId = result.session.voiceSessionId;
                 attempt.expiresAt = result.session.expiresAt;
                 if (!owns()) {
-                  void auth.endVoiceSession(result.session.voiceSessionId);
+                  void endAsync(result.session.voiceSessionId);
                   throw closedBeforeStart();
                 }
                 return result.session.answerSdp;
@@ -620,10 +627,11 @@ export function VoiceSessionController(): ReactNode {
       return true;
     },
     [
-      auth,
       clearTimers,
+      endAsync,
       ensureSpeech,
       finishLocal,
+      mintAsync,
       queryClient,
       sayLoop,
       setShellVoiceLive,
@@ -719,6 +727,7 @@ export function VoiceSessionController(): ReactNode {
           hostId: tab.hostId,
           threadId: null,
           anchorMessageId: null,
+          anchorThread: null,
         });
         navigateToTabIntent(navigate, botTabIntent(fixedBotId), undefined);
       }
@@ -886,12 +895,9 @@ function readSelection(): VoiceFocus | null {
   const { byBotId } = useBotOpenThreadStore.getState();
   const rail = Object.hasOwn(byBotId, ref.id) ? byBotId[ref.id] : null;
   const thread = rail !== null && rail.kind === "thread" ? rail : null;
-  return {
-    botId: ref.id,
-    hostId: tab.hostId,
-    threadId: thread?.sent?.threadId ?? null,
-    anchorMessageId: thread?.anchorMessageId ?? null,
-  };
+  // The thread list is not read here: the selection sync, mounted with the
+  // session, resolves the anchor against it.
+  return focusOf(ref.id, tab.hostId, thread, null);
 }
 
 /**
@@ -917,41 +923,65 @@ function VoiceSelectionSync(props: {
   const threads = useBotThreadListQuery(client, activeBotId ?? "", {
     enabled: activeBotId !== null && thread !== null && thread.sent === null,
   });
-  const anchorMessageId = thread?.anchorMessageId ?? null;
-  const threadId = threadIdOf(thread, threads.data?.threads ?? null);
+  const listed = threads.data?.threads ?? null;
 
   useEffect(() => {
     if (activeBotId === null || tab === null) return;
     applySelection(
-      { botId: activeBotId, hostId: tab.hostId, threadId, anchorMessageId },
+      focusOf(activeBotId, tab.hostId, thread, listed),
       onManualChange,
     );
-  }, [activeBotId, anchorMessageId, onManualChange, tab, threadId]);
+  }, [activeBotId, listed, onManualChange, tab, thread]);
 
   return null;
 }
 
 /**
- * The open thread's id: known from the send that opened it, else looked up
- * by its anchor in the thread list once that answers; `null` meanwhile.
+ * The rail as a focus. The open thread's id is known from the send that
+ * opened it, else looked up by its anchor in the thread list once that
+ * answers (`null` while it has not): a listed thread is the destination; an
+ * anchor the list has no thread for is unopened when the rail opens on a row
+ * nobody has replied under (an announcement, a question), where the panel's
+ * box sends the first reply, and unresolved otherwise, since a thread a row
+ * opened is listed before anything is posted into it.
  */
-function threadIdOf(
+function focusOf(
+  botId: string,
+  hostId: string,
   thread: BotOpenThread | null,
-  threads: ReadonlyArray<BotThreadSummary> | null,
-): string | null {
-  if (thread === null) return null;
-  if (thread.sent !== null) return thread.sent.threadId;
-  return (
-    threads?.find(
-      (candidate) => candidate.anchor?.messageId === thread.anchorMessageId,
-    )?.threadId ?? null
+  listed: ReadonlyArray<BotThreadSummary> | null,
+): VoiceFocus {
+  const channel: VoiceFocus = {
+    botId,
+    hostId,
+    threadId: null,
+    anchorMessageId: null,
+    anchorThread: null,
+  };
+  if (thread === null) return channel;
+  const anchored = { ...channel, anchorMessageId: thread.anchorMessageId };
+  if (thread.sent !== null) {
+    return { ...anchored, threadId: thread.sent.threadId };
+  }
+  if (listed === null) return { ...anchored, anchorThread: "resolving" };
+  const match = listed.find(
+    (candidate) => candidate.anchor?.messageId === thread.anchorMessageId,
   );
+  if (match !== undefined) return { ...anchored, threadId: match.threadId };
+  return {
+    ...anchored,
+    anchorThread: thread.announcement ? "unopened" : "resolving",
+  };
 }
 
 /**
- * Writes the app's selection to the focus. The thread list resolving the id
- * behind an anchor the focus already names is not a move; anything else is
- * the person's, moves the generation, and interrupts an open utterance.
+ * Writes the app's selection to the focus. A selection of the anchor the
+ * focus already names is not a move: the thread list resolving what is
+ * behind it (its thread's id, or that nobody has replied under it) moves the
+ * focus alone, and a list still behind a send that already named the thread
+ * (the reply that opened a thread under a row, which the rail stays on)
+ * changes nothing. Anything else is the person's, moves the generation, and
+ * interrupts an open utterance.
  */
 function applySelection(
   selection: VoiceFocus,
@@ -960,14 +990,16 @@ function applySelection(
   const store = useVoiceSessionStore.getState();
   const current = store.focus;
   if (sameFocus(current, selection)) return;
-  const resolvedOnly =
+  const sameAnchor =
     current !== null &&
     current.botId === selection.botId &&
-    current.anchorMessageId === selection.anchorMessageId &&
-    current.threadId === null &&
-    selection.threadId !== null;
-  if (resolvedOnly) {
-    store.setFocus(selection);
+    current.hostId === selection.hostId &&
+    current.anchorMessageId !== null &&
+    current.anchorMessageId === selection.anchorMessageId;
+  if (sameAnchor) {
+    if (current.threadId === null || selection.threadId !== null) {
+      store.setFocus(selection);
+    }
     return;
   }
   const wasOpen = isUtteranceOpen(store);
