@@ -35,7 +35,6 @@ interface Harness {
   readonly accepted: AcceptedRequest[];
   readonly opened: BotConversationSendResponse[];
   readonly loop: SayLoop;
-  inFlightCountIsZero(): boolean;
   /** Settles the send at `index` (the oldest by default). */
   resolve(response: BotConversationSendResponse, index: number): void;
   reject(index: number): void;
@@ -106,7 +105,6 @@ function harness(): Harness {
     accepted,
     opened,
     loop,
-    inFlightCountIsZero: () => loop.inFlightCount() === 0,
     resolve: (value, index) => settles[index]?.resolve(value),
     reject: (index) => settles[index]?.reject(new Error("refused")),
   };
@@ -301,7 +299,7 @@ describe("a request closed while the anchor's thread is unresolved", () => {
       "please check the build",
     ]);
     expect(h.notices).toEqual([]);
-    expect(h.inFlightCountIsZero()).toBe(true);
+    expect(h.loop.inFlightCount()).toBe(0);
     // Talk again: the ended session's held request does not post then either.
     useVoiceSessionStore.getState().sessionConnecting();
     useVoiceSessionStore
