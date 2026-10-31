@@ -487,7 +487,7 @@ describe("fallbackTraversalAnnouncement", () => {
   });
 
   it("hold: a due-now deadline names no switch on a resume or a wait either - the class is every non-switch plan, not just notify", () => {
-    // CodeRabbit flagged `notify`. The predicate is wider: a resume attempts
+    // The predicate is wider than `notify`: a resume attempts
     // the same tuple and a wait parks until a reset, so neither has a switch
     // to be due, and both read the same false sentence before this fix.
     const dueNowFor = (

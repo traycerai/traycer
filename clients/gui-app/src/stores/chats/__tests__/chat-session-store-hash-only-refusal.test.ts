@@ -1563,7 +1563,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
     // A is not silently destroyed - and "not destroyed" has to mean A's TEXT
     // is still recoverable, not that a sentence about A was shown. The first
     // version of this test asserted only the reason and a generic phrase, so
-    // it passed with A's content gone: exactly the failure the reviewer
+    // it passed with A's content gone: exactly the failure this
     // reproduced. The assertion that matters is the prompt itself.
     const aNotice = finalState.errorNotices.find(
       (notice) => notice.clientActionId === a.clientActionId,
@@ -1985,7 +1985,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
   });
 
   it("RRR1 (2, DRIVE RED): a chat whose retry is dispatched but not yet acknowledged is not evicted by warm-pool overflow, and a reacquire finds it intact", async () => {
-    // Re-review 3's finding. Drive red via `hasActiveWork`, which is the
+    // Drive red via `hasActiveWork`, which is the
     // predicate the cap walk actually reaches (see RR1 above).
     // `holdsUnrecordedPrompt` reads `hashOnlyRecoveries`, which
     // empties the MOMENT the retry is dispatched - before the host has seen
@@ -2123,7 +2123,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
   });
 
   it("RRR1 (3, DRIVE RED): a chat whose failed send is handed back but not yet consumed by the composer is not evicted by warm-pool overflow, and a reacquire finds it intact", () => {
-    // Re-review 3's finding: a refused dispatch moves the prompt into
+    // A refused dispatch moves the prompt into
     // `failedSendRestoration` and removes the recovery record in the same
     // step, so the predicate read this as settled even though nobody has
     // copied the restoration into the composer draft store yet. Drive red via
@@ -2219,10 +2219,10 @@ describe("chat session store - hash-only refusal (T5)", () => {
   });
 
   it("RRR1 (4, DRIVE RED): idle expiry defers disposal while a hash-only recovery is outstanding, and disposes once everything settles", async () => {
-    // Re-review 3's second entry to the same loss: the shared registry's
+    // The second entry to the same loss: the shared registry's
     // `expireIfIdle` never consults `isEvictable` at all - it defers only on
     // `hasActiveWork`, which pre-fix was bare `hasActiveChatWork`. The
-    // reviewer's concrete case: a recovery beginning 5s before the idle timer
+    // The concrete case: a recovery beginning 5s before the idle timer
     // fires is torn down well inside its own 30s recovery deadline.
     const hash = await seedConfirmedImage();
     localImageMocks.getImageBytes.mockImplementation(
@@ -2918,7 +2918,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
   }, 15_000);
 
   it("RRR2 (DRIVE RED): the shared deadline inlines whichever hash resolved and leaves only the stalled one bare, in the SAME document", async () => {
-    // Re-review 3's finding: pre-fix, `prepareDraftImageInlining`'s single
+    // Pre-fix, `prepareDraftImageInlining`'s single
     // all-or-nothing `commit` only ran once its WHOLE batch settled, so a
     // deadline firing while hash B was stalled harvested an EMPTY map -
     // hash A, which had resolved in milliseconds, went out bare beside B and

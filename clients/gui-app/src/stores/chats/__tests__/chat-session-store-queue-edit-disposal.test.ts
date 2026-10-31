@@ -27,7 +27,7 @@ vi.mock("@/lib/drafts/draft-mirror-coordinator", () => ({
 }));
 
 /**
- * Finding 1: an edited queued prompt in custody is held by this store alone
+ * An edited queued prompt in custody is held by this store alone
  * from the moment the composer clears. Disposal must hand it off, eviction
  * must wait for it, and a text already handed back must not be handed off a
  * second time.
