@@ -446,7 +446,8 @@ function EnableTeamCloudAction(props: {
         teamName: props.teamName,
       })
       .then(
-        (accepted) => store.accept(environmentId, accepted.sandboxId),
+        (accepted) =>
+          store.accept(environmentId, accepted.sandboxId, Date.now()),
         (error: unknown) =>
           store.fail(
             environmentId,

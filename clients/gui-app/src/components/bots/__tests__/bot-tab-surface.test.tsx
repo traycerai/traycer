@@ -1568,6 +1568,69 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
       expect(enableButton()).toHaveProperty("disabled", true);
     });
 
+    it("lets the team make another sandbox once a list read sent after the accepted create no longer carries it, and never on a read sent before", async () => {
+      const user = userEvent.setup();
+      // Only the clock is held, so which read was sent after the answer is
+      // decided by the test, not by how fast it ran.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(1_000_000);
+        auth().createSandbox.mockResolvedValue({
+          kind: "ok",
+          accepted: {
+            sandboxId: "sbx_team",
+            hostId: "host-sbx-team",
+            sandbox: sandboxSummaryFixture({ environmentId: "env-new" }),
+          },
+        });
+        render(surfaceFor(SETUP_BOT_ID));
+        await waitFor(() =>
+          expect(enableButton()).toHaveProperty("disabled", false),
+        );
+
+        // The create's own refresh is sent no later than its answer is heard:
+        // the row's absence there settles nothing.
+        await user.click(enableButton());
+        await waitFor(() =>
+          expect(auth().listSandboxes.mock.calls.length).toBeGreaterThan(1),
+        );
+        await waitFor(() =>
+          expect(
+            within(cloudOption()).queryByTestId("team-host-option-cloud-note")
+              ?.textContent,
+          ).toBe(
+            "The team has a cloud sandbox. Its bots start once it's running.",
+          ),
+        );
+        expect(
+          useTeamCloudCreateStore.getState().byEnvironmentId["env-new"]
+            ?.acceptedSandboxId,
+        ).toBe("sbx_team");
+
+        // The sandbox is destroyed elsewhere before this app lists it; the
+        // next read, sent later, does not carry it.
+        vi.setSystemTime(1_000_100);
+        await act(() => queryClient.invalidateQueries());
+        await waitFor(() =>
+          expect(enableButton()).toHaveProperty("disabled", false),
+        );
+        expect(
+          useTeamCloudCreateStore.getState().byEnvironmentId["env-new"],
+        ).toBeUndefined();
+
+        await user.click(enableButton());
+        await waitFor(() =>
+          expect(auth().createSandbox).toHaveBeenCalledTimes(2),
+        );
+        const keys = auth().createSandbox.mock.calls.map(
+          ([request]) => request.clientRequestId,
+        );
+        expect(new Set(keys).size).toBe(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("keeps a remounted card held while its create is still out, and sends no second create", async () => {
       const user = userEvent.setup();
       auth().createSandbox.mockImplementation(
