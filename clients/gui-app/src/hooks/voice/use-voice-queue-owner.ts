@@ -324,6 +324,8 @@ export function useVoiceQueueOwner(input: {
       speech: {
         enqueue: (item) => ensureSpeech().enqueue(item),
         withdraw: (itemId) => ensureSpeech().withdraw(itemId),
+        activity: () => ensureSpeech().activity(),
+        subscribe: (listener) => ensureSpeech().subscribe(listener),
       },
       schedule: (fn, ms) => {
         const handle = window.setTimeout(fn, ms);

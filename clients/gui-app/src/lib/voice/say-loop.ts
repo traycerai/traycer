@@ -10,6 +10,7 @@ import type {
 } from "@/lib/voice/router";
 import {
   joinSegments,
+  type CardKey,
   type RouterCard,
   type TranscriptSegment,
   type VoiceFocus,
@@ -262,6 +263,11 @@ interface RoutingEntry {
   readonly selectionGeneration: number;
   readonly sessionToken: number;
   readonly engineGeneration: number;
+  /**
+   * The card the router was shown, when one waited: a routed answer, or a
+   * drop of the candidate, acts on that card's opening and question only.
+   */
+  readonly card: CardKey | null;
 }
 
 /** A routed post held for the person's yes. */
@@ -1026,7 +1032,13 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     const driver = store.getState().cardDriver;
     const taken =
       driver !== null &&
-      driver.answerRouted(decision.choice, text, delegationOf(entry));
+      entry.card !== null &&
+      driver.answerRouted(
+        decision.choice,
+        text,
+        delegationOf(entry),
+        entry.card,
+      );
     if (!taken) deps.notify(NO_CARD_TEXT, delegationOf(entry));
   }
 
@@ -1041,12 +1053,12 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
    * new request: a yes said later must not send the card's candidate.
    */
   function afterCardRoute(
-    cardWaited: "route" | "none",
+    card: CardKey | null,
     decision: RoutedDecision,
   ): void {
-    if (cardWaited === "none") return;
+    if (card === null) return;
     if (decision.kind === "answer" || decision.kind === "fragment") return;
-    store.getState().cardDriver?.dropCandidate();
+    store.getState().cardDriver?.dropCandidate(card);
   }
 
   /** The held post goes, with its words; nothing is said. */
@@ -1251,6 +1263,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       const reservation = now.reserveOpenSpan(actionId);
       if (reservation === null) return;
       now.setPendingDelegation(delegationId);
+      const routerCard = routerCardFor(cardWaited);
       const entry: RoutingEntry = {
         actionId,
         delegationId,
@@ -1261,6 +1274,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         selectionGeneration: now.selectionGeneration,
         sessionToken: now.sessionToken,
         engineGeneration: now.engineGeneration,
+        card: routerCard?.key ?? null,
       };
       const asked =
         askedQuestion !== null &&
@@ -1274,7 +1288,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         decision = await deps.decide({
           segments: entry.segments.map((segment) => segment.text),
           askedQuestion: asked,
-          card: routerCardFor(cardWaited),
+          card: routerCard,
         });
       } catch {
         decision = { kind: "refused", reason: "unavailable" };
@@ -1283,7 +1297,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       // stale, and navigates and posts nothing. An ended session forgot them.
       if (!routing.delete(actionId)) return;
       if (store.getState().sessionToken !== entry.sessionToken) return;
-      afterCardRoute(cardWaited, decision);
+      afterCardRoute(entry.card, decision);
       await execute(entry, decision);
     },
 

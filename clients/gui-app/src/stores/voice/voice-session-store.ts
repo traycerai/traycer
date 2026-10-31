@@ -275,17 +275,29 @@ export interface VoiceCardDriver {
     choice: number | null,
     text: string,
     delegationId: string | null,
+    key: CardKey,
   ) => boolean;
   /** The question and choices the router is shown while the card waits; `null` otherwise. */
   readonly routerCard: () => RouterCard | null;
-  /** Words routed elsewhere: a yes said later must not bind to the candidate. */
-  readonly dropCandidate: () => void;
+  /** Words routed elsewhere: a yes said later must not bind to the candidate of the card the route was made against. */
+  readonly dropCandidate: (key: CardKey) => void;
   /** The person moved, or another card was interjected: the candidate is offered again. */
   readonly invalidate: (reason: "focus" | "interjection") => void;
 }
 
+/**
+ * Which card, and which of its questions, a route was made against: a
+ * routed answer, or a drop of the candidate, acts only on that one.
+ */
+export interface CardKey {
+  readonly opening: number;
+  readonly questionIndex: number;
+}
+
 /** The active card as the router sees it: what was asked, and the choices by number. */
 export interface RouterCard {
+  /** The card the route is made against; never shown to the router. */
+  readonly key: CardKey;
   readonly question: string;
   readonly choices: ReadonlyArray<string>;
   /** Whether the person may answer in their own words. */
