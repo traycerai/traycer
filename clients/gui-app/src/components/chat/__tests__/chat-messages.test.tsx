@@ -8162,12 +8162,18 @@ describe("ChatMessages scroll policy", () => {
       // position, so report the landing a real browser would have reported.
       await fireScrollTopAndFlush(beforeHide);
 
-      // The saved row's position never holds still while `measuring` is true:
-      // its position is a sum over the rows above it, which resolve from
-      // estimates over several commits, so the restore cannot accept yet.
-      // Same seam as the held-still witness above - spy `getState` and
-      // override this one row's `positionAtIndex` - so no other consumer's
-      // reads are disturbed.
+      // The saved row's position keeps moving while `measuring` is true: its
+      // position is a sum over the rows above it, which resolve from estimates
+      // over several commits. Each read drifts a further 100px, which is past
+      // CHAT_TIMELINE_RESTORE_POSITION_HELD_EPSILON_PX, so the restore reads
+      // its target as still settling and defers acceptance - the deferral this
+      // witness needs, reached by the mechanism it names. A drift inside that
+      // epsilon would instead read as having HELD STILL, and the restore would
+      // stay pending only for as long as its landing check happened to keep
+      // failing: still red here, but for a reason the test does not state and
+      // does not check. Same seam as the held-still witness above - spy
+      // `getState` and override this one row's `positionAtIndex` - so no other
+      // consumer's reads are disturbed.
       let measuring = true;
       let reads = 0;
       const originalGetState = list.getState.bind(list);
@@ -8189,14 +8195,35 @@ describe("ChatMessages scroll policy", () => {
               return real;
             }
             reads += 1;
-            return real + (reads % 2 === 0 ? 60 : 0);
+            return real + reads * 100;
           },
         };
       });
 
+      // ONE wrapper per placement call, installed before the restore's first
+      // settle and never nested: a second wrapper over one that is already
+      // live adds two placements to whatever the run would otherwise report,
+      // on both sides of the fix. Counts are therefore read as deltas, so only
+      // what the show itself issued is judged.
+      const scrollToIndexSpy = vi.spyOn(list, "scrollToIndex");
+      const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+
       try {
-        // One settle with the row still moving: the restore is mid-flight.
+        // Two settles with the row still moving: the restore is mid-flight.
         await settleLegendList();
+        const issuedEarly = scrollToIndexSpy.mock.calls.length;
+        await settleLegendList();
+
+        // The premise, asserted rather than assumed: the restore is still
+        // PENDING when the tile hides. A pending loop re-issues on every
+        // settle, so a placement count that grew across that second settle is
+        // the loop still running and its persistence gate still armed. A
+        // restore that had already accepted issues nothing further, and the
+        // hide would then be concealing a FINISHED restore - the defect this
+        // witness covers needs an unfinished one, so the run would pass while
+        // exercising nothing.
+        const issuedBeforeHide = scrollToIndexSpy.mock.calls.length;
+        expect(issuedBeforeHide).toBeGreaterThan(issuedEarly);
 
         // Conceal WITHOUT collapsing. The assertion is the premise: a hide
         // that zeroed the box would exercise the collapsed path instead, and
@@ -8212,27 +8239,19 @@ describe("ChatMessages scroll policy", () => {
           await settleLegendList();
         }
 
-        // ONE wrapper on `scrollToIndex`, installed here. Nesting a second
-        // one over a wrapper that was already live adds two placements to
-        // whatever the run would otherwise report - measured on both sides,
-        // and it survives a larger settle budget, so it is the nesting rather
-        // than timing. Counting from the hide needs only this one.
-        const scrollToIndexSpy = vi.spyOn(list, "scrollToIndex");
-        const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
-        try {
-          rerenderWith({ visible: true });
-          await settleLegendList();
-          await settleLegendList();
-          expect(scrollToIndexSpy).not.toHaveBeenCalled();
-          expect(scrollToOffsetSpy).not.toHaveBeenCalled();
-        } finally {
-          scrollToIndexSpy.mockRestore();
-          scrollToOffsetSpy.mockRestore();
-        }
+        const issuedBeforeShow = scrollToIndexSpy.mock.calls.length;
+        const placedBeforeShow = scrollToOffsetSpy.mock.calls.length;
+        rerenderWith({ visible: true });
+        await settleLegendList();
+        await settleLegendList();
+        expect(scrollToIndexSpy.mock.calls.length).toBe(issuedBeforeShow);
+        expect(scrollToOffsetSpy.mock.calls.length).toBe(placedBeforeShow);
         // The reader is where they were, and the mode survived the handoff.
         expect(getScrollNode().scrollTop).toBe(beforeHide);
         expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       } finally {
+        scrollToIndexSpy.mockRestore();
+        scrollToOffsetSpy.mockRestore();
         getStateSpy.mockRestore();
       }
     });
