@@ -18,7 +18,7 @@ import { createAppQueryClient } from "@/lib/query-client";
 import { useSnapshotDiffQuery } from "../use-snapshot-diff-query";
 
 /**
- * D15. Snapshot blobs are content-addressed and physically local: only the host
+ * Snapshot blobs are content-addressed and physically local: only the host
  * that wrote them holds them. This hook used to read `useHostClient()`, so a
  * chat/diff tile bound to host A asked whichever machine the app was pointed at
  * for A's blobs - which answers `blob_missing` for content that exists, and

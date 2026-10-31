@@ -18,7 +18,7 @@ import { useReactiveHostReadiness } from "@/hooks/host/use-reactive-host-readine
 
 /**
  * `client` is the CALLER's, and it must be the one that addresses `args.hostId`
- * - the tile's tab client, never the app-wide one (D15). This hook used to read
+ * - the tile's tab client, never the app-wide one. This hook used to read
  * `useHostClient()` here while taking `hostId` as an argument and asserting the
  * two were "correlated 1:1"; they were not. `hostId` came from the tile and the
  * client from the app, so a diff tile bound to host A kept its A-shaped query

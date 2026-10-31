@@ -74,7 +74,7 @@ function resetStores(): void {
   });
   useWorktreeIntentStagingStore.setState({ intentByKey: {} });
   // The draft's workspace bucket resolves through the authority projection now
-  // (P4.2/D17 retired the spine's active slot). SEEDED rather than stubbed -
+  // (P4.2 retired the spine's active slot). SEEDED rather than stubbed -
   // this mock spreads `importOriginal`, so the production read runs for real
   // and an unseeded store would silently select the unresolved-host bucket.
   // Same host the spine override above pins.

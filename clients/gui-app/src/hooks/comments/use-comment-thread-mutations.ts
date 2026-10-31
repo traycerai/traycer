@@ -91,7 +91,7 @@ function commentWriteErrorToast(error: HostRpcError, fallback: string): void {
  * wrapper: both mount contexts are Epic-scoped (the collab tile's floating
  * draft, the Epic sidebar's thread cards). An app-wide read wrote the comment
  * to whichever host the app was pointed at, and then invalidated THAT host's
- * cache key - so the surface the user was looking at never refreshed (D15).
+ * cache key - so the surface the user was looking at never refreshed.
  */
 interface MutationContext {
   readonly hostId: string | null;

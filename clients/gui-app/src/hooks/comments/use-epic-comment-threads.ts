@@ -103,7 +103,7 @@ export function commentThreadsShouldPoll(
  * mount of this query is Epic-scoped - the collab TILE and its hover popover
  * (tab client), and the Epic sidebar (session client). An app-wide read here
  * asked the machine the app happened to be pointed at for another host's
- * threads during an A→B re-point, and keyed the cache under that host (D15).
+ * threads during an A→B re-point, and keyed the cache under that host.
  */
 /**
  * The read twin of `assertCommentWriteAuthorized`, taken at DISPATCH.
