@@ -7,6 +7,7 @@ import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { VoiceWaitingControl } from "@/components/layout/voice/voice-waiting-control";
 import { useHostClient } from "@/lib/host";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
@@ -27,7 +28,7 @@ const THREAD_LABEL_MAX_CHARS = 48;
  * The session strip (V6): one row in the app chrome beneath the tab strip,
  * across every tab, while a voice session is live. It says the listening or
  * muted state, the destination the next post goes to with Change, the
- * Waiting slot (filled by a later ticket), Mute, End and the captions toggle.
+ * Waiting control, Mute, End and the captions toggle.
  * No running transcript is ever drawn: captions, off by default, show the
  * last few lines said and heard, and nothing is kept when they are off or the
  * session ends. After an end the strip stays one line to say why, then
@@ -43,7 +44,6 @@ export function VoiceSessionStrip(): ReactNode {
       pausedForDictation: s.pausedForDictation,
       captions: s.captions,
       captionLines: s.captionLines,
-      queueCount: s.queue.length,
       inputActive: s.activity.inputActiveUntil !== null,
       driver: s.driver,
     })),
@@ -108,11 +108,7 @@ export function VoiceSessionStrip(): ReactNode {
         </span>
         <ResumeAfterDictation />
         {state.focus === null ? null : <FocusLine focus={state.focus} />}
-        {state.queueCount > 0 ? (
-          <span data-testid="voice-strip-waiting" className="shrink-0">
-            Waiting · {state.queueCount}
-          </span>
-        ) : null}
+        <VoiceWaitingControl />
         <span className="min-w-0 flex-1" />
         <Button
           type="button"
