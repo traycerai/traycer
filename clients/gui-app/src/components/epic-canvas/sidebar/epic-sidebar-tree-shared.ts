@@ -4,12 +4,9 @@
  */
 
 import type { CSSProperties } from "react";
-import {
-  useReducedMotion,
-  type TargetAndTransition,
-  type Transition,
-} from "motion/react";
+import type { TargetAndTransition, Transition } from "motion/react";
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
+import { useReducedMotion } from "@/lib/animation/status-animation-clock";
 import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { SIDEBAR_NODE_REVEAL_VISIBILITY_MS } from "@/stores/epics/sidebar-node-reveal-store";
@@ -23,13 +20,17 @@ export const BASE_PAD_LEFT = 8;
  * exit, and one shared timing. Every row in the tree takes these, because a
  * row that snaps to its new place while its neighbours slide is drawn through
  * by them for the length of the transition.
+ *
+ * Reduced motion is read live, so a preference flipped while rows are mounted
+ * reaches the next layout change; the motion library's own hook holds the
+ * value it read at mount.
  */
 export function useTreeRowMotion(): {
   readonly layout: "position" | false;
   readonly exit: TargetAndTransition | undefined;
   readonly transition: Transition;
 } {
-  const shouldReduceMotion = useReducedMotion() === true;
+  const shouldReduceMotion = useReducedMotion();
   return {
     layout: shouldReduceMotion ? false : "position",
     exit: shouldReduceMotion ? undefined : { opacity: 0, x: -8 },
