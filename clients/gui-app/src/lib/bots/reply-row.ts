@@ -8,15 +8,14 @@ import type { ChatMessage } from "@/stores/composer/chat-store";
 /**
  * The rendered row that carries a persisted message (Tracy Bots).
  *
- * A user row's `conversationRequest.resolvedByMessageId` names the REPLY'S
- * MESSAGE id, but the transcript scrolls by RENDERED ROW key, and an
- * assistant row's key is not its message id: a row with no turn is keyed
- * `assistant:ts:<timestamp>`, and a multi-record turn renders as one row
- * carrying every record's id in `turnMessageIds` with the last record's id
- * as `persistentMessageId`. So the jump resolves the message to the row that
- * renders it, and only then asks the list to land there. `null` when no
- * rendered row carries it - the reply is outside the hydrated window and
- * has to be located and loaded first.
+ * A landing names a MESSAGE id, but the transcript scrolls by RENDERED ROW
+ * key, and an assistant row's key is not its message id: a row with no turn
+ * is keyed `assistant:ts:<timestamp>`, and a multi-record turn renders as
+ * one row carrying every record's id in `turnMessageIds` with the last
+ * record's id as `persistentMessageId`. So the jump resolves the message to
+ * the row that renders it, and only then asks the list to land there. `null`
+ * when no rendered row carries it - the message is outside the hydrated
+ * window and has to be located and loaded first.
  */
 export function replyRowIdFor(
   messages: ReadonlyArray<ChatMessage>,
@@ -49,28 +48,6 @@ export function sendCardFor(
     }
   }
   return null;
-}
-
-/**
- * Whether the reply `replyMessageId` renders in the row right after the post
- * `postMessageId`, where the reader sees the answer without a jump. `false`
- * when either is not in the rendered rows.
- */
-export function replyFollowsPost(
-  messages: ReadonlyArray<ChatMessage>,
-  postMessageId: string,
-  replyMessageId: string,
-): boolean {
-  const postIndex = messages.findIndex(
-    (message) => message.persistentMessageId === postMessageId,
-  );
-  if (postIndex === -1) return false;
-  const next = messages.at(postIndex + 1);
-  if (next === undefined) return false;
-  return (
-    next.persistentMessageId === replyMessageId ||
-    next.turnMessageIds?.includes(replyMessageId) === true
-  );
 }
 
 /**
