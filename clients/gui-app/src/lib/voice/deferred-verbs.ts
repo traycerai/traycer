@@ -33,6 +33,8 @@ export function executeDeferredVerb(input: {
   readonly verb: DeferredVerb;
   readonly target: BoundTarget | null;
   readonly itemId: string | null;
+  /** Whether the route named a thread itself, rather than inheriting the focus's. */
+  readonly threadNamed: boolean;
   readonly delegationId: string | null;
 }): VerbOutcome {
   const { verb, target, delegationId } = input;
@@ -44,7 +46,8 @@ export function executeDeferredVerb(input: {
       // item the route names is checked against the queue as it is now: the
       // route was made from an earlier snapshot, and the item may have been
       // heard or set aside since.
-      const itemId = input.itemId ?? newestWaitingOf(target);
+      const itemId =
+        input.itemId ?? newestWaitingOf(target, input.threadNamed);
       if (input.itemId === null && target !== null && itemId === null) {
         return { kind: "refused", say: NOTHING_WAITING_NOTICE };
       }
@@ -80,17 +83,22 @@ export function executeDeferredVerb(input: {
 }
 
 /**
- * The newest waiting item of the bot (and thread) a route names; `null`
- * when it names none (the queue then takes the newest waiting item of all)
- * or that bot has none waiting.
+ * The newest waiting item of the bot a route names, of the thread too when
+ * the route named one; `null` when it names no bot (the queue then takes
+ * the newest waiting item of all) or that bot has none waiting. A bot-only
+ * route searches all of the bot's threads: its bound thread is the focus's,
+ * not the person's choice.
  */
-function newestWaitingOf(target: BoundTarget | null): string | null {
+function newestWaitingOf(
+  target: BoundTarget | null,
+  threadNamed: boolean,
+): string | null {
   if (target === null) return null;
   const { botId, threadId } = target.tuple;
   const item = waitingItems(useVoiceSessionStore.getState().queue).find(
     (candidate) =>
       candidate.botId === botId &&
-      (threadId === null || candidate.threadId === threadId),
+      (!threadNamed || candidate.threadId === threadId),
   );
   return item?.id ?? null;
 }

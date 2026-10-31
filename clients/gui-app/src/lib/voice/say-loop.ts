@@ -906,6 +906,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
           verb: decision.verb,
           target: decision.target,
           itemId: decision.itemId,
+          threadNamed: decision.threadNamed,
           delegationId: delegationOf(entry),
         });
         if (outcome.kind === "refused") {

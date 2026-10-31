@@ -321,6 +321,12 @@ export type RoutedDecision =
       readonly target: BoundTarget | null;
       /** The queue item the route names, checked against the directory; `null` for none. */
       readonly itemId: string | null;
+      /**
+       * Whether the route itself named a thread. The bound target inherits
+       * the focused thread for a bot-only route, which says nothing about
+       * which of the bot's threads the person means.
+       */
+      readonly threadNamed: boolean;
       readonly span: SpanPick;
     }
   | { readonly kind: "refused"; readonly reason: RouteRefusal };
@@ -417,11 +423,25 @@ function resolveDeferred(
     }
   }
   if (named.botId === null && named.threadId === null) {
-    return { kind: "deferred", verb, target: null, itemId, span };
+    return {
+      kind: "deferred",
+      verb,
+      target: null,
+      itemId,
+      threadNamed: false,
+      span,
+    };
   }
   const target = bindTarget(directory, named);
   if (target === null) return { kind: "refused", reason: "unknown-target" };
-  return { kind: "deferred", verb, target, itemId, span };
+  return {
+    kind: "deferred",
+    verb,
+    target,
+    itemId,
+    threadNamed: named.threadId !== null,
+    span,
+  };
 }
 
 /**
