@@ -13,6 +13,7 @@ import {
   type BotSessionAccess,
 } from "@/components/bots/bot-session-context";
 import { TileFindScope } from "@/components/epic-canvas/tile-find/tile-find-scope";
+import { QuoteSinkContext } from "@/components/chat/quote/quote-sink-context";
 import {
   botMemberName,
   type BotMemberResolver,
@@ -227,17 +228,21 @@ export function BotSessionView(props: {
           epicId={botId}
           isActive
         >
-          <BotChatTranscript
-            botId={botId}
-            chatId={session.chatId}
-            hostId={hostId}
-            title={botTitle}
-            instanceId={instanceId}
-            surface={null}
-            resolveMember={resolveMember}
-            showConnecting
-            landOn={session.landOn}
-          />
+          {/* A session has no box to quote into: its text selects and
+              copies, and no Quote is offered. */}
+          <QuoteSinkContext value={null}>
+            <BotChatTranscript
+              botId={botId}
+              chatId={session.chatId}
+              hostId={hostId}
+              title={botTitle}
+              instanceId={instanceId}
+              surface={null}
+              resolveMember={resolveMember}
+              showConnecting
+              landOn={session.landOn}
+            />
+          </QuoteSinkContext>
         </TileFindScope>
       </BotSessionContext>
       <footer

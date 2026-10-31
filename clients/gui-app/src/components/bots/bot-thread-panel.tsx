@@ -20,6 +20,7 @@ import { botTurnIndexOf } from "@/lib/bots/bot-turn-receipt";
 import {
   BotMessageComposer,
   type BotComposerEdit,
+  type BotComposerQuote,
   type BotComposerSeed,
   type BotKeptDraft,
 } from "@/components/bots/bot-message-composer";
@@ -158,6 +159,8 @@ export function BotThreadPanel(props: {
   readonly onOpenSession: BotSessionOpen;
   /** A message of the thread its replies land on as they open; `null` keeps where they open. */
   readonly landOn: BotTranscriptLanding | null;
+  /** A quote for the panel's box to add to what it shows; `null` for none. */
+  readonly quote: BotComposerQuote | null;
 }): ReactNode {
   const { botTitle, onClose, onOpenActivity, onOpenSession } = props;
   const thread = props.thread.kind === "listed" ? props.thread.thread : null;
@@ -269,6 +272,7 @@ type ThreadPanelBodyProps = {
   readonly onEditPost: (edit: BotComposerEdit) => void;
   readonly onOpenTurn: BotTurnOpen;
   readonly landOn: BotTranscriptLanding | null;
+  readonly quote: BotComposerQuote | null;
   readonly sendFailure: BotSendFailure;
 };
 
@@ -647,6 +651,7 @@ function ThreadPanelBody(props: ThreadPanelBodyProps): ReactNode {
         onEditEnd={endEdit}
         seed={seed}
         keptDraft={keptDraft}
+        quote={props.quote}
         onSent={keepOpenThread}
       />
     </>
