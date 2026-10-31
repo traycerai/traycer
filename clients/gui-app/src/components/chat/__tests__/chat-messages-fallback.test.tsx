@@ -109,7 +109,7 @@ import { makeMessage } from "./chat-message-fixtures";
  * seam (`registerHarness`), unmocked. `useHostScopedMutationForClient` is
  * unmocked too, backed by a real `HostClient` + `MockHostMessenger`
  * requester (bound to `mockLocalHostEntry`, which `HOST_ID` is aligned to)
- * with a controllable/deferred response per test - the D71 unmount-survival
+ * with a controllable/deferred response per test - the unmount-survival
  * tests hold that response open across a real `unmount()` before resolving
  * it, so a per-call callback regression (torn down with the component)
  * would actually redden them.
@@ -123,11 +123,11 @@ import { makeMessage } from "./chat-message-fixtures";
  * (`createFallbackAnnouncementObserver`), the announcer's queue/effect
  * wiring, and `usePublishConfirmedManualFallbackAction`.
  *
- * SCOPE NOTE (D224/R1): a REAL windowed-snapshot foundation
+ * SCOPE NOTE (R1): a REAL windowed-snapshot foundation
  * (`createWindowedHarness`/`emptyWindowedSnapshot`/`deferredWindowedSnapshot`/
  * `completeTail`, adapted from G1's
  * `chat-session-store-last-fallback-outcome.test.ts`) is fully wired
- * through both D224 epoch arms below, and a separate R1 scenario (its own
+ * through both epoch arms below, and a separate R1 scenario (its own
  * harness, its own tail response, real `useRenderedMessages`) proves the
  * eventual-body/eventual-projection side of the same outcome-metadata
  * pipeline.
@@ -394,7 +394,7 @@ function createHarness(): Harness {
 }
 
 /**
- * The REAL windowed-snapshot foundation (D224/R1), adapted from G1's
+ * The REAL windowed-snapshot foundation (R1), adapted from G1's
  * `chat-session-store-last-fallback-outcome.test.ts` (`createWindowedHarness`
  * / `deferredWindowedSnapshot` / `completeTail`) - NOT a copy of that file,
  * read and re-derived against this file's own `HOST_ID`/`EPIC_ID`/`CHAT_ID`.
@@ -463,7 +463,7 @@ const WINDOWED_DERIVED: ChatTranscriptDerived = {
 /**
  * A windowed snapshot whose tail is deliberately UNHYDRATED
  * (`isTailHydrated` reads it false: `tail.fromOrdinal` is past ordinal 0 and
- * `rowCount` exceeds what `tail.messages` carries) - every D224 case below
+ * `rowCount` exceeds what `tail.messages` carries) - every case below
  * relies on this to exercise the DEFERRAL branch, not the ordinary fold, so
  * the outcome metadata seats before any row is ever hydrated.
  */
@@ -576,7 +576,7 @@ function emptyWindowedSnapshot(
 /**
  * A windowed snapshot whose tail is deliberately UNHYDRATED
  * (`isTailHydrated` reads it false: `tail.fromOrdinal` is past ordinal 0 and
- * `rowCount` exceeds what `tail.messages` carries) - every D224 case below
+ * `rowCount` exceeds what `tail.messages` carries) - every case below
  * relies on this to exercise the DEFERRAL branch, not the ordinary fold, so
  * the outcome metadata seats before any row is ever hydrated.
  */
@@ -2108,7 +2108,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     const queryClient = chat.queryClient;
 
     // The RPC response stays UNRESOLVED until this test says so - this is
-    // what actually proves D71: a synchronous mock's callback would already
+    // what actually proves it: a synchronous mock's callback would already
     // have fired before `unmount()` is ever called, proving nothing about
     // surviving it.
     const firstDeferred = makeDeferred<RunManualRungResponse>();
@@ -2671,7 +2671,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     });
   });
 
-  // D224: paired epoch-condition cases sharing ONE warm-baseline builder and
+  // Paired epoch-condition cases sharing ONE warm-baseline builder and
   // ONE held-outcome fixture - the only thing that differs between them is
   // whether a REAL reconnect happened WHILE `ChatMessages` was literally
   // unmounted (the real store/registry lease survives the unmount; only the
@@ -2700,7 +2700,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
   // `transcriptBaselineEpoch`; the DEFERRAL branch of
   // `applyOrDeferWindowedSnapshot` never reads or writes the latter pair at
   // all (only the FOLD does), so this value is fixed throughout and is not
-  // what drives either D224 arm.
+  // what drives either arm.
   const D224_WINDOW_EPOCH = 4;
 
   function establishD224Baseline(): {
@@ -2788,7 +2788,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
 
     // Step 5: the held outcome, delivered via a genuinely DEFERRED windowed
     // snapshot (unhydrated tail) - proves the metadata seats BEFORE any row
-    // does (D215/R1), not merely that a full fold can carry it. The
+    // does (R1), not merely that a full fold can carry it. The
     // deferral branch of `applyOrDeferWindowedSnapshot` never touches
     // `transcriptBaselineEpoch` (only the fold does), so it stays exactly
     // where step 4 already observed it.
@@ -2802,7 +2802,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       isTailHydrated(harness.handle.store.getState().transcriptWindow),
     ).toBe(false);
     expect(harness.handle.store.getState().transcriptBaselineEpoch).toBe(epoch);
-    // Metadata seats immediately, BEFORE any row is hydrated (D215/R1) - not
+    // Metadata seats immediately, BEFORE any row is hydrated (R1) - not
     // merely readable after a later fold.
     expect(harness.handle.store.getState().lastFallbackOutcome).toBe(
       heldOutcome,
@@ -2965,7 +2965,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
   // R1: independent outcome metadata reaching the announcer while its
   // anchor row is unloaded, followed by a REAL eventual hydration of that
   // SAME row/block through the real `useRenderedMessages` mapper - a
-  // separate scenario from D224 (which stays unchanged above). Reuses
+  // separate scenario from the epoch arms (which stay unchanged above). Reuses
   // `createWindowedHarness`/`emptyWindowedSnapshot`/`deferredWindowedSnapshot`
   // unmodified; only the tail response and the rendered-model wiring are
   // new.
@@ -3051,7 +3051,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     const harness = createWindowedHarness();
     registerHarness(harness);
     harness.callbacks().onConnectionStatus("open", null, null, null);
-    // A truly empty baseline folds immediately (same technique as D224).
+    // A truly empty baseline folds immediately (the same technique).
     // `D224_WINDOW_EPOCH` is the WIRE epoch for every snapshot/range below -
     // an independent coordinate from `epoch` (`transcriptBaselineEpoch`,
     // reads 0 off this empty fold), which is used ONLY for `ChatMessages`'s
@@ -3066,7 +3066,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     expect(liveRegionText()).toBe("");
 
     const outcome = r1EventualOutcome();
-    // The real D215 immediate-seat path: delivered via a genuinely DEFERRED
+    // The real immediate-seat path: delivered via a genuinely DEFERRED
     // windowed snapshot (unhydrated tail, rowCount: 2), never
     // `store.setState`.
     harness
