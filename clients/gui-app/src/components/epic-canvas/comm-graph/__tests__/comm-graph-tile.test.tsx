@@ -367,7 +367,7 @@ function seedEmptyDoc(doc: Y.Doc): void {
  * Every agent predates `Chat.hostId` / `TuiAgent.hostId` - a fully legacy
  * epic, never attributed to any host, unlike `seedDoc`'s mix. `useCommGraphAgents`
  * excludes a null `hostId` from `hostIds`, so this fixture drives that set to
- * empty while still populating real, drawable agents (Finding 38).
+ * empty while still populating real, drawable agents.
  */
 function seedAllHostlessDoc(doc: Y.Doc): void {
   const epic = doc.getMap("epic");
@@ -2250,7 +2250,7 @@ describe("CommGraphTile", () => {
 
   describe("the plan the settled feed owes (fixup 8c, P2)", () => {
     /**
-     * FIXUP 8 DREW THE OFFICE EARLY AND THEN LEFT IT THERE.
+     * THE OFFICE WAS DRAWN EARLY AND THEN LEFT THERE.
      *
      * The floor an explicit view draws while the feed is behind is planned
      * from statuses that are still arriving, so nobody is busy and the woken
@@ -2259,7 +2259,7 @@ describe("CommGraphTile", () => {
      * proves the drawn floor does too, which it did not: the agent set does
      * not change when a status finally arrives, and a status flip alone
      * deliberately never re-plans, so the rendered plan stayed the draft for
-     * the life of the mount. That is the cold reviewer's P2, reproduced here
+     * the life of the mount. That is P2, reproduced here
      * through the real tile.
      *
      * Read off the PLANNER's own calls rather than the store or the frame:
