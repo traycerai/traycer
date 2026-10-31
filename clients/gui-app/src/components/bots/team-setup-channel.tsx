@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { v4 as uuidv4 } from "uuid";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -43,6 +43,10 @@ import {
   type StageShape,
 } from "@/lib/sandboxes/sandbox-stage-model";
 import { createErrorNeedsFreshKey } from "@/lib/sandboxes/staged-sandbox-run";
+import {
+  useTeamCloudCreate,
+  useTeamCloudCreateStore,
+} from "@/stores/bots/team-cloud-create-store";
 
 /**
  * A team's main bot's channel while the bot is still to be set up (Tracy Bots
@@ -330,7 +334,7 @@ function teamStageShape(
 
 /**
  * Why Enable cloud cannot be pressed for the team in `environmentId`, or
- * `null` when it can. `unlisted` is a sandbox this surface's create was
+ * `null` when it can. `unlisted` is a sandbox a create from this app was
  * answered with that the list does not carry yet; `shape` is `undefined`
  * while the catalogue or the team's defaults are unread.
  */
@@ -393,37 +397,34 @@ function EnableTeamCloudAction(props: {
   const defaults = useSandboxDefaults([environmentId]).get(environmentId);
   const sandboxes = useSandboxList();
   const create = useSandboxCreate("inline");
-  // An unanswered request may already have created the sandbox. Reuse its key
-  // until the server accepts it or refuses it before creating anything.
-  const requestKey = useRef<string | null>(null);
-  // The sandbox the last accepted create made, until the list carries it: the
-  // create settles before the list's refresh answers, and a press in between
-  // would create a second one.
-  const [unlisted, setUnlisted] = useState<string | null>(null);
-  if (
-    unlisted !== null &&
-    sandboxes.data?.sandboxes.some((summary) => summary.id === unlisted) ===
-      true
-  ) {
-    setUnlisted(null);
-  }
+  // Held outside the card: a create outlives the card that sent it, and the
+  // list's refresh answers after the create settles, so a card mounted in
+  // between must still know the team's sandbox is coming.
+  const pressed = useTeamCloudCreate(environmentId, sandboxes.data);
+  const pending = pressed?.pending === true;
 
   const shape = teamStageShape(catalogue.data, defaults);
   const blocked = enableTeamCloudBlocked({
     environmentId,
     models,
     sandboxes,
-    unlisted,
+    unlisted: pressed?.acceptedSandboxId ?? null,
     catalogue,
     shape,
   });
 
   const enable = (): void => {
     if (blocked !== null || shape === undefined || shape === null) return;
-    if (create.isPending) return;
-    if (requestKey.current === null) requestKey.current = uuidv4();
-    create.mutate(
-      {
+    if (pending) return;
+    // An unanswered request may already have created the sandbox: its key is
+    // reused until the server accepts it or refuses it before creating.
+    const requestKey = pressed?.requestKey ?? uuidv4();
+    const store = useTeamCloudCreateStore.getState();
+    store.start(environmentId, requestKey);
+    // The promise, not `mutate`'s callbacks, which are dropped when the card
+    // unmounts before the answer.
+    void create
+      .mutateAsync({
         request: {
           os: shape.os,
           cpus: shape.cpus,
@@ -440,36 +441,34 @@ function EnableTeamCloudAction(props: {
           // configuration's default and `0` is never.
           destroyAfterRestingMinutes: shape.destroyAfterRestingMinutes ?? 0,
           createdByTaskId: null,
-          clientRequestId: requestKey.current,
+          clientRequestId: requestKey,
         },
         teamName: props.teamName,
-      },
-      {
-        onSuccess: (accepted) => {
-          requestKey.current = null;
-          setUnlisted(accepted.sandboxId);
-        },
-        onError: (error) => {
-          if (createErrorNeedsFreshKey(error)) requestKey.current = null;
-        },
-      },
-    );
+      })
+      .then(
+        (accepted) => store.accept(environmentId, accepted.sandboxId),
+        (error: unknown) =>
+          store.fail(
+            environmentId,
+            !(error instanceof Error && createErrorNeedsFreshKey(error)),
+          ),
+      );
   };
 
-  const note = create.isPending ? null : (blocked?.note ?? null);
-  const refusal = create.isPending ? null : createRefusalLine(create.error);
+  const note = pending ? null : (blocked?.note ?? null);
+  const refusal = pending ? null : createRefusalLine(create.error);
   return (
     <div className="flex min-w-0 flex-col items-start gap-1">
       <Button
         type="button"
         size="sm"
         variant="outline"
-        disabled={blocked !== null || create.isPending}
+        disabled={blocked !== null || pending}
         aria-describedby={note === null ? undefined : noteId}
         onClick={enable}
         data-testid={`${testId}-action`}
       >
-        {create.isPending ? (
+        {pending ? (
           <AgentSpinningDots
             className={undefined}
             testId={undefined}

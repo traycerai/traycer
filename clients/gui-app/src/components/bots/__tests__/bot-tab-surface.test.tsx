@@ -574,6 +574,7 @@ import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
+import { useTeamCloudCreateStore } from "@/stores/bots/team-cloud-create-store";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
@@ -788,6 +789,7 @@ beforeEach(() => {
   for (const key of Object.keys(mocks.reads)) delete mocks.reads[key];
   useBotTabsStore.setState({ tabs: {} });
   useBotOpenThreadStore.setState({ byBotId: {} });
+  useTeamCloudCreateStore.setState({ byEnvironmentId: {} });
   __resetAgentActivityStoreForTests();
   useBotTabsStore
     .getState()
@@ -1498,6 +1500,91 @@ describe("<BotTabSurface /> a team's main bot still to be set up", () => {
         expect(auth().createSandbox).toHaveBeenCalledTimes(1);
       },
     );
+
+    it("keeps a remounted card held while the list has not caught up with an accepted create, so a press there creates nothing", async () => {
+      const user = userEvent.setup();
+      auth().createSandbox.mockResolvedValue({
+        kind: "ok",
+        accepted: {
+          sandboxId: "sbx_team",
+          hostId: "host-sbx-team",
+          sandbox: sandboxSummaryFixture({ environmentId: "env-new" }),
+        },
+      });
+      const first = render(surfaceFor(SETUP_BOT_ID));
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+      let answerList: (result: SandboxListFetchResult) => void = () =>
+        undefined;
+      auth().listSandboxes.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            answerList = resolve;
+          }),
+      );
+      await user.click(enableButton());
+      await waitFor(() =>
+        expect(
+          within(cloudOption()).queryByTestId("team-host-option-cloud-note")
+            ?.textContent,
+        ).toBe(
+          "The team has a cloud sandbox. Its bots start once it's running.",
+        ),
+      );
+      first.unmount();
+
+      // The same app, the card mounted again: the list still holds the read
+      // from before the create.
+      render(surfaceFor(SETUP_BOT_ID));
+      expect(
+        within(cloudOption()).getByTestId("team-host-option-cloud-note")
+          .textContent,
+      ).toBe("The team has a cloud sandbox. Its bots start once it's running.");
+      expect(enableButton()).toHaveProperty("disabled", true);
+      await user.click(enableButton());
+      expect(auth().createSandbox).toHaveBeenCalledTimes(1);
+
+      // Once the list carries the sandbox, it speaks for the team.
+      act(() => {
+        answerList({
+          kind: "ok",
+          response: {
+            sandboxes: [
+              sandboxSummaryFixture({
+                id: "sbx_team",
+                environmentId: "env-new",
+                state: "creating",
+              }),
+            ],
+          },
+        });
+      });
+      await waitFor(() =>
+        expect(
+          useTeamCloudCreateStore.getState().byEnvironmentId["env-new"],
+        ).toBeUndefined(),
+      );
+      expect(enableButton()).toHaveProperty("disabled", true);
+    });
+
+    it("keeps a remounted card held while its create is still out, and sends no second create", async () => {
+      const user = userEvent.setup();
+      auth().createSandbox.mockImplementation(
+        () => new Promise(() => undefined),
+      );
+      const first = render(surfaceFor(SETUP_BOT_ID));
+      await waitFor(() =>
+        expect(enableButton()).toHaveProperty("disabled", false),
+      );
+      await user.click(enableButton());
+      first.unmount();
+
+      render(surfaceFor(SETUP_BOT_ID));
+      expect(enableButton()).toHaveProperty("disabled", true);
+      await user.click(enableButton());
+      expect(auth().createSandbox).toHaveBeenCalledTimes(1);
+    });
 
     it.each([
       [
