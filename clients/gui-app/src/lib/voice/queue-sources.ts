@@ -163,8 +163,9 @@ export type HydrationRow =
  * What a bot row asks of the person, read from the row's own metadata: an
  * open question (its choices kept for the read), or an open approval or
  * question of a task the row's surface points at. `null` for a row that
- * asks nothing. The one classification the hydration and the announcement
- * fallback share, so a question is never taken for an announcement.
+ * asks nothing open. Hydration reads a row's kind and choices from it; the
+ * announcement fallback keeps out every row that asked, open or settled,
+ * with `askedThePerson`.
  */
 export function promptOf(
   row: Pick<AssistantRow, "question" | "surface">,
