@@ -75,7 +75,7 @@ const ACTIVATION_DEBT_STATES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * In-app host update / activation-debt banner.
+ * In-app host update / activation-debt banner (D4).
  * Driven entirely by the canonical two-lane
  * `HostControllerStatus` - never the raw registry probe - so it never shows
  * for a merely-detected update, only once a stage is `updateReady` or the

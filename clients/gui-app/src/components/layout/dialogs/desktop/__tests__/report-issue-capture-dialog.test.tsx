@@ -2568,7 +2568,7 @@ describe("Report issue capture dialog (deep interactions)", () => {
       renderReportIssueDialog(createRunnerHost(harness));
       await flushDialogEffects();
 
-      // The gate is satisfied by the image alone (text or image, either
+      // The gate is satisfied by the image alone (T4/T5: text or image, either
       // satisfies) - Send must complete without ever typing
       // into the intent field.
       await attachPngAndWaitForThumbnail("image-only.png");

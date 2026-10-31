@@ -9,7 +9,7 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 
 /**
  * Hook for probing git.getCapabilities on a running directory.
- * Returns { available, gitVersion, reason, repoMode? }.
+ * Returns { available, gitVersion, reason, repoMode? } (Q5 lock).
  * Caches for 5 minutes with no retries - capability failures are stable.
  */
 export function useGitCapabilitiesQuery(args: {

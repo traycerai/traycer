@@ -361,7 +361,7 @@ function deriveGateFlags(input: {
     input.form.type === "bug" && input.form.locationChanged;
   const intentSatisfiesGate = input.form.intent.trim().length > 0;
   // The evidence gate: a sentence, an image, or (bug-only) an
-  // actively-changed location - any one satisfies it.
+  // actively-changed location - any one satisfies it (T4/T5).
   const gateSatisfied =
     !gateApplies ||
     intentSatisfiesGate ||

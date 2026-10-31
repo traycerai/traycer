@@ -21,7 +21,7 @@ import {
  * APPENDS errors as new blocks, and a retry that succeeds has no durable exit at
  * all - so a block here would leave a permanent "Retrying…" orphan in the
  * transcript of every chat a transient retry rescued. A component that unmounts
- * when the state moves is the whole design.
+ * when the state moves is the whole design (N5).
  *
  * It borrows the streaming notice's LOOK - the accent rule, the pulse, the muted
  * weight - so it reads as part of the turn rather than as a new kind of thing.
