@@ -11,6 +11,7 @@ import {
   estimateSpeechMs,
   confirmationWords,
   createSpeechScheduler,
+  repeatedWords,
   type SpeechItem,
   type SpeechPriority,
   type SpeechScheduler,
@@ -1135,5 +1136,57 @@ describe("confirmationWords", () => {
       expect.arrayContaining(["tracy", "billing", "fix", "invoice"]),
     );
     expect(words).not.toContain("please");
+  });
+});
+
+describe("repeatedWords", () => {
+  it("counts how often the part before the end says each of its content words", () => {
+    expect(
+      repeatedWords("Production skip", "Deploy production or skip? Production"),
+    ).toEqual([
+      { word: "production", beyond: 2 },
+      { word: "skip", beyond: 1 },
+    ]);
+    expect(repeatedWords("Allow Deny", "Bash: delete backups")).toEqual([
+      { word: "allow", beyond: 0 },
+      { word: "deny", beyond: 0 },
+    ]);
+  });
+
+  it("proves an item only when its word is said more often than the part before the end says it", () => {
+    let delivered = 0;
+    const text = "Deploy production or skip? 1. Production. Say yes or skip.";
+    scheduler.enqueue(
+      item("a", {
+        text,
+        confirmWords: repeatedWords("Production", "Deploy production or skip?"),
+        onDelivered: () => delivered++,
+      }),
+    );
+
+    scheduler.noteOutputTranscript("Deploy production or skip?");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(delivered).toBe(0);
+
+    scheduler.noteOutputTranscript(" 1. Production.");
+
+    expect(delivered).toBe(1);
+  });
+
+  it("proves an item by one saying of a word the part before it never says", () => {
+    let delivered = 0;
+    scheduler.enqueue(
+      item("a", {
+        text: "Bash: delete backups. Allow or deny.",
+        confirmWords: repeatedWords("Allow Deny", "Bash: delete backups"),
+        onDelivered: () => delivered++,
+      }),
+    );
+
+    scheduler.noteOutputTranscript("Bash: delete backups.");
+    expect(delivered).toBe(0);
+    scheduler.noteOutputTranscript(" Allow");
+
+    expect(delivered).toBe(1);
   });
 });

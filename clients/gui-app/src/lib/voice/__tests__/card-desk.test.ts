@@ -1360,6 +1360,56 @@ describe("a read-back proven by its end", () => {
     });
   });
 
+  /** A task agent's question with one choice that takes no words of its own, so a yes sends it. */
+  function soleChoice(question: string): CardContent {
+    return {
+      ...AGENT_QUESTION,
+      questions: [
+        {
+          text: question,
+          options: ["Production"],
+          takesText: false,
+          questionId: "q-deploy",
+        },
+      ],
+    };
+  }
+  const SPOKEN_LEAD = "Release bot says a task's agent asks in its channel:";
+
+  it.each([["Deploy production or skip?"], ["Deploy production?"]])(
+    "is not armed by the question alone, whatever of the choice and the skip it repeats: %s",
+    async (question) => {
+      const h = openOnRealScheduler(soleChoice(question));
+
+      h.speak(`${SPOKEN_LEAD} ${question}`);
+      await h.endPlayback();
+      speakTo(h.cardDesk, "yes", "d-words");
+
+      expect(h.actSurface).not.toHaveBeenCalled();
+      expect(useVoiceSessionStore.getState().activeCard?.state).toBe(
+        "proposed",
+      );
+    },
+  );
+
+  it.each([[" Production"], [" or skip"]])(
+    "is armed once the question's words are said again after it (%s)",
+    async (tail) => {
+      const question = "Deploy production or skip?";
+      const h = openOnRealScheduler(soleChoice(question));
+      h.speak(`${SPOKEN_LEAD} ${question}`);
+      await h.endPlayback();
+      speakTo(h.cardDesk, "yes", "d-words");
+      expect(h.actSurface).not.toHaveBeenCalled();
+
+      h.speak(tail);
+      await h.endPlayback();
+      speakTo(h.cardDesk, "yes", "d-words");
+
+      expect(h.actSurface).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("counts a candidate read-back as heard by its label, not by the tool it names", async () => {
     const h = openOnRealScheduler(APPROVAL);
     h.speak("Bash. Allow or deny.");
