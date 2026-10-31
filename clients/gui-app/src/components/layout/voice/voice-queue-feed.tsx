@@ -272,14 +272,20 @@ function VoiceStoppedWatch(props: {
   const { botId, hostId, channelChatId, noteStopped, forgetStopped } = props;
   const activity = useBotActivity(botId);
   useEffect(() => {
-    if (activity === null) return;
+    // No reading (the stream closed for good, or the bot is gone): what was
+    // read before no longer stands, and unknown is not idle, so nothing is
+    // seeded from it either.
+    if (activity === null) {
+      forgetStopped(botId);
+      return;
+    }
     noteStopped({
       botId,
       hostId,
       channelChatId,
       stopped: stoppedAnswersOf(activity),
     });
-  }, [activity, botId, channelChatId, hostId, noteStopped]);
+  }, [activity, botId, channelChatId, forgetStopped, hostId, noteStopped]);
   useEffect(() => () => forgetStopped(botId), [botId, forgetStopped]);
   return null;
 }
