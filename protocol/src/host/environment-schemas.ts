@@ -916,7 +916,7 @@ const secretBindingCandidateFields = {
  * the connection and the host seals it to authn's intake key before it is
  * written anywhere; the answer never carries it back. `plaintextConsent` is
  * the disclosure version shown when the protocol needs the plaintext-at-the-
- * gateway consent (the create route appends its acceptance).
+ * gateway consent (the create route records its acceptance).
  */
 export const environmentSecretsCreateRequestSchema = lazySchema(() =>
   z.object({
@@ -1269,10 +1269,10 @@ export type EnvironmentSecretsRotationResponse = z.infer<
 
 /**
  * `environment.secrets.consent@1.0` (`POST .../secrets/:secretId/consent`):
- * "appends a `SecretConsentAcceptance` row for the disclosure version shown,
- * the scope and the authenticated actor". The actor is the caller, never a
- * field. `disclosure` is that row's closed enum, open on this wire with
- * `plaintext_gateway` known.
+ * records the acceptance for the disclosure version shown, the scope and the
+ * authenticated actor. The actor is the caller, never a field. `disclosure`
+ * is a closed enum on the host, open on this wire with `plaintext_gateway`
+ * known.
  */
 export const SECRET_CONSENT_DISCLOSURES = ["plaintext_gateway"] as const;
 export const environmentSecretsConsentRequestSchema = lazySchema(() =>
