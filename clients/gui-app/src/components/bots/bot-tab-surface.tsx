@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
@@ -53,6 +54,10 @@ import {
   type HomeBotsGroup,
 } from "@/lib/home-bots/bots-model";
 import { selectTracyChannel } from "@/lib/bots/open-bot-channel";
+import {
+  subscribeTabNavigationPending,
+  tracyNavigationPending,
+} from "@/lib/tab-navigation";
 import { defaultTracyChannelOf } from "@/lib/bots/tracy-channel";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
 import { TRACY_TAB_LABEL } from "@/stores/tabs/kinds/tracy";
@@ -233,6 +238,10 @@ function TracySurfaceShell(props: {
   const channelTitle =
     botList.data?.bots.find((bot) => bot.botId === botId)?.title ??
     TRACY_TAB_LABEL;
+  // With no channel selected, the pane says there are none only when there
+  // are none; otherwise the default (or a navigation in flight) is coming.
+  const noChannel =
+    groups !== null && defaultTracyChannelOf(groups, null) === null;
 
   return (
     <div className="@container flex h-full min-h-0" data-testid="bot-tab">
@@ -263,7 +272,9 @@ function TracySurfaceShell(props: {
             onBack={leaveThreads}
           />
         ) : null}
-        {botId === null && !threadsShown ? <TracyNoChannel /> : null}
+        {botId === null && !threadsShown && noChannel ? (
+          <TracyNoChannel />
+        ) : null}
         {botId === null ? null : (
           <TracyChannelPane
             key={botId}
@@ -285,6 +296,11 @@ function TracySurfaceShell(props: {
  * longer carries it after carrying it, and returns the way the selected
  * channel's own pane reports one gone. With no channel selected, or the
  * selected one gone, `select`s the default channel once the lists answered.
+ *
+ * The default is the surface's own choice, never an opener's: while a
+ * navigation to the surface is in flight (a channel someone opened, not yet
+ * acknowledged) it waits, so it never supersedes that navigation, and a
+ * selected bot that goes away meanwhile is only deselected.
  */
 function useTracyChannelUpkeep(input: {
   readonly botId: string | null;
@@ -296,8 +312,13 @@ function useTracyChannelUpkeep(input: {
   const { botId, groups, listed, select } = input;
   const forget = useCallback(
     (goneBotId: string): void => {
-      useTracySurfaceStore.getState().forgetBot(goneBotId);
-      if (goneBotId !== useTracySurfaceStore.getState().botId) return;
+      const surface = useTracySurfaceStore.getState();
+      surface.forgetBot(goneBotId);
+      if (goneBotId !== surface.botId) return;
+      if (tracyNavigationPending()) {
+        surface.selectChannel(null);
+        return;
+      }
       select(groups === null ? null : defaultTracyChannelOf(groups, goneBotId));
     },
     [groups, select],
@@ -319,9 +340,14 @@ function useTracyChannelUpkeep(input: {
   }, [forget, listed, visitedBotIds]);
   const defaultBotId =
     groups === null ? null : defaultTracyChannelOf(groups, null);
+  const navigationPending = useSyncExternalStore(
+    subscribeTabNavigationPending,
+    tracyNavigationPending,
+  );
   useEffect(() => {
-    if (botId === null && defaultBotId !== null) select(defaultBotId);
-  }, [botId, defaultBotId, select]);
+    if (botId !== null || defaultBotId === null || navigationPending) return;
+    select(defaultBotId);
+  }, [botId, defaultBotId, navigationPending, select]);
   return forget;
 }
 

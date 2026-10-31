@@ -669,6 +669,35 @@ export function openOrFocusEpicIntent(input: {
   return openEpicTabIntent(input);
 }
 
+/**
+ * The navigations in flight, by envelope token, announcing every change so a
+ * surface can wait on its own navigation (`subscribePending`): one leaves
+ * when it is acknowledged, refused or superseded.
+ */
+class PendingNavigations extends Map<string, PendingNavigation> {
+  constructor(private readonly onChange: () => void) {
+    super();
+  }
+
+  override set(token: string, pending: PendingNavigation): this {
+    super.set(token, pending);
+    this.onChange();
+    return this;
+  }
+
+  override delete(token: string): boolean {
+    const deleted = super.delete(token);
+    if (deleted) this.onChange();
+    return deleted;
+  }
+
+  override clear(): void {
+    const had = this.size > 0;
+    super.clear();
+    if (had) this.onChange();
+  }
+}
+
 export class TabNavigationController {
   private sessionId = uuidv4();
   private clock = 0;
@@ -682,7 +711,10 @@ export class TabNavigationController {
   private queuedActivation: QueuedActivation | null = null;
   private queuedExternal: QueuedExternal | null = null;
   private resolutionFailure: TabNavigationResolutionFailure | null = null;
-  private readonly pending = new Map<string, PendingNavigation>();
+  private readonly pendingListeners = new Set<() => void>();
+  private readonly pending = new PendingNavigations(() =>
+    this.notifyPendingListeners(),
+  );
   private readonly latestRouteByRef = new Map<string, RepairRoute>();
   private readonly correctionKeys = new Set<string>();
   private readonly failureListeners = new Set<() => void>();
@@ -696,6 +728,7 @@ export class TabNavigationController {
     if (!this.hydrationReady) {
       const superseded = this.queuedActivation;
       this.queuedActivation = { navigate, intent, options };
+      this.notifyPendingListeners();
       superseded?.options?.onRejected?.(
         new Error("Another task was opened before this task could open."),
       );
@@ -923,6 +956,7 @@ export class TabNavigationController {
     const queuedActivation = this.queuedActivation;
     this.queuedActivation = null;
     if (queuedActivation !== null) {
+      this.notifyPendingListeners();
       const accepted = this.executeActivation(
         queuedActivation.navigate,
         queuedActivation.intent,
@@ -957,6 +991,29 @@ export class TabNavigationController {
   subscribeResolutionFailure(listener: () => void): () => void {
     this.failureListeners.add(listener);
     return () => this.failureListeners.delete(listener);
+  }
+
+  subscribePending(listener: () => void): () => void {
+    this.pendingListeners.add(listener);
+    return () => this.pendingListeners.delete(listener);
+  }
+
+  /**
+   * Whether a navigation to the Tracy surface is in flight or queued, on
+   * `botId`'s channel when it is a string, on any channel or none when it is
+   * `null`.
+   */
+  hasPendingTracyNavigation(botId: string | null): boolean {
+    const intents: Array<TabActivationIntent | null> = [
+      ...this.pending.values(),
+    ].map((pending) => pending.intent);
+    if (this.queuedActivation !== null) {
+      intents.push(this.queuedActivation.intent);
+    }
+    return intents.some(
+      (intent) =>
+        intent?.kind === "tracy" && (botId === null || intent.botId === botId),
+    );
   }
 
   hasResolutionFailure(state: unknown): boolean {
@@ -2103,6 +2160,10 @@ export class TabNavigationController {
   private notifyFailureListeners(): void {
     this.failureListeners.forEach((listener) => listener());
   }
+
+  private notifyPendingListeners(): void {
+    this.pendingListeners.forEach((listener) => listener());
+  }
 }
 
 export const tabNavigationController = new TabNavigationController();
@@ -2154,6 +2215,23 @@ export function subscribeTabNavigationResolutionFailure(
   listener: () => void,
 ): () => void {
   return tabNavigationController.subscribeResolutionFailure(listener);
+}
+
+/** Announces every change to the navigations in flight or queued. */
+export function subscribeTabNavigationPending(
+  listener: () => void,
+): () => void {
+  return tabNavigationController.subscribePending(listener);
+}
+
+/** Whether a navigation to the Tracy surface, on any channel, is in flight. */
+export function tracyNavigationPending(): boolean {
+  return tabNavigationController.hasPendingTracyNavigation(null);
+}
+
+/** Whether a navigation to `botId`'s Tracy channel is in flight. */
+export function tracyChannelNavigationPending(botId: string): boolean {
+  return tabNavigationController.hasPendingTracyNavigation(botId);
 }
 
 export function tabNavigationResolutionFailed(state: unknown): boolean {

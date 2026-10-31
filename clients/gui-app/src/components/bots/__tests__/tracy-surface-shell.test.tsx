@@ -25,6 +25,7 @@ import {
   createRouter,
   Outlet,
   RouterProvider,
+  type RouterHistory,
   type UseNavigateResult,
 } from "@tanstack/react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -273,15 +274,20 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
   BotChannelSettingsPanel: () => <div data-testid="stub-settings" />,
 }));
 
+import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import { openBotChannel, openTracyEntry } from "@/lib/bots/open-bot-channel";
-import { __resetTabNavigationControllerForTesting } from "@/lib/tab-navigation";
+import {
+  __resetTabNavigationControllerForTesting,
+  tracyNavigationPending,
+} from "@/lib/tab-navigation";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useBotSurfaceActionsStore } from "@/stores/bots/bot-surface-actions-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { useLayoutStore } from "@/stores/layout/layout-store";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
 import { emptyTabStripLayout } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -362,17 +368,17 @@ function setList(next: ListScript): void {
   script.notify();
 }
 
-function buildRouter() {
+function buildRouter(Host: () => ReactNode, initialPath: string) {
   const rootRoute = createRootRoute({
     component: () => (
       <QueryClientProvider client={new QueryClient()}>
         <TabNavigationRouteBridge />
-        <SurfaceHost />
+        <Host />
         <Outlet />
       </QueryClientProvider>
     ),
   });
-  const routes = ["/", "/bot", "/bot/$botId"].map((path) =>
+  const routes = ["/", "/home", "/bot", "/bot/$botId"].map((path) =>
     createRoute({
       getParentRoute: () => rootRoute,
       path,
@@ -381,7 +387,7 @@ function buildRouter() {
   );
   return createRouter({
     routeTree: rootRoute.addChildren(routes),
-    history: createMemoryHistory({ initialEntries: ["/"] }),
+    history: createMemoryHistory({ initialEntries: [initialPath] }),
   });
 }
 
@@ -394,20 +400,71 @@ function SurfaceHost(): ReactNode {
   return <BotTabSurface botId={botId} hostId={hostId} />;
 }
 
+/**
+ * `SurfaceHost` as the top-level tab host shows it: an inactive tab's surface
+ * stays mounted but hidden, so the shell sees `PaneVisibilityContext` false
+ * until the tracy tab is the active item.
+ */
+function PaneAwareSurfaceHost(): ReactNode {
+  const tracyActive = useTabsStore(
+    (state) => state.activeItemId === "tab:tracy:tracy",
+  );
+
+  return (
+    <PaneVisibilityContext.Provider value={tracyActive}>
+      <SurfaceHost />
+    </PaneVisibilityContext.Provider>
+  );
+}
+
 interface Mounted {
   readonly navigate: UseNavigateResult<string>;
+  readonly history: RouterHistory;
   readonly pathname: () => string;
 }
 
 async function mount(): Promise<Mounted> {
-  const router = buildRouter();
+  return mountWith(SurfaceHost, "/");
+}
+
+async function mountPaneAware(): Promise<Mounted> {
+  return mountWith(PaneAwareSurfaceHost, "/home");
+}
+
+async function mountWith(
+  Host: () => ReactNode,
+  initialPath: string,
+): Promise<Mounted> {
+  const router = buildRouter(Host, initialPath);
   render(<RouterProvider router={router} />);
   await waitFor(() => {
     expect(router.state.status).toBe("idle");
   });
   return {
     navigate: router.navigate,
+    history: router.history,
     pathname: () => router.state.location.pathname,
+  };
+}
+
+/** A navigation held in flight until the test releases or refuses it. */
+interface HeldNavigation {
+  readonly navigate: UseNavigateResult<string>;
+  readonly release: () => void;
+  readonly refuse: () => void;
+}
+
+function holdNavigation(mounted: Mounted): HeldNavigation {
+  let release: () => void = () => undefined;
+  let refuse: () => void = () => undefined;
+  const decision = new Promise<void>((resolve, reject) => {
+    release = resolve;
+    refuse = () => reject(new Error("navigation refused"));
+  });
+  return {
+    navigate: (options) => decision.then(() => mounted.navigate(options)),
+    release,
+    refuse,
   };
 }
 
@@ -490,6 +547,7 @@ function resetStores(): void {
   useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
   useBotSurfaceActionsStore.setState({ entries: {} });
   useBotTabLandingStore.setState({ byBotId: {} });
+  useLayoutStore.setState({ overrides: {} });
   useSelectionAuthorityStore.setState({
     attached: true,
     effectiveHostId: WINDOW_HOST,
@@ -669,5 +727,80 @@ describe("the Tracy surface shell", () => {
     expect(screen.getByTestId("bot-channel-sidebar")).toBeTruthy();
     expect(screen.queryByTestId("stub-channel")).toBeNull();
     expect(useTracySurfaceStore.getState().botId).toBeNull();
+  });
+
+  describe("an explicit open that is still in flight", () => {
+    /**
+     * The surface is open and rendered with the lists answered while the
+     * navigation that opened it has not been acknowledged: what the shell
+     * sees is no selected channel and a default it could choose.
+     */
+    async function openHeld(
+      mounted: Mounted,
+      held: HeldNavigation,
+      startPath: string,
+    ): Promise<void> {
+      act(() => {
+        openBotChannel(held.navigate, "bot-release", {
+          landing: null,
+          isConnectable: null,
+          onRejected: null,
+        });
+      });
+      await screen.findByTestId("bot-channel-sidebar");
+      expect(row("bot-notes")).toBeTruthy();
+      expect(row("bot-release")).toBeTruthy();
+      // The shell's effects have run on the committed render.
+      await act(() => Promise.resolve());
+      expect(tracyNavigationPending()).toBe(true);
+      expect(mounted.pathname()).toBe(startPath);
+    }
+
+    it("is not superseded by the shell's default channel while the navigation is held, and ends on the opened channel", async () => {
+      answerList([NOTES, RELEASE], { "env-me": "bot-notes" });
+      const mounted = await mount();
+      const selected: Array<string | null> = [];
+      const unsubscribe = useTracySurfaceStore.subscribe((state) => {
+        selected.push(state.botId);
+      });
+      const held = holdNavigation(mounted);
+
+      await openHeld(mounted, held, "/");
+      expect(useTracySurfaceStore.getState().botId).toBeNull();
+      expect(screen.queryByTestId("stub-channel")).toBeNull();
+
+      await act(() => Promise.resolve(held.release()));
+      await shownChannel("bot-release");
+      unsubscribe();
+
+      expect({
+        pathname: mounted.pathname(),
+        botId: useTracySurfaceStore.getState().botId,
+      }).toEqual({ pathname: "/bot/bot-release", botId: "bot-release" });
+      expect(selected).not.toContain("bot-notes");
+    });
+
+    it("leaves the URL where it was when the held navigation is refused on a hidden tab, never turning the refused open into a default navigation", async () => {
+      answerList([NOTES, RELEASE], { "env-me": "bot-notes" });
+      // Home is the tab the window is on, as in the running app: a refused
+      // activation returns to it.
+      useLayoutStore.setState({ overrides: { homeTab: { shown: "shown" } } });
+      const mounted = await mountPaneAware();
+      const held = holdNavigation(mounted);
+
+      await openHeld(mounted, held, "/home");
+      await act(() => Promise.resolve(held.refuse()));
+      await waitFor(() => {
+        expect(tracyNavigationPending()).toBe(false);
+      });
+      await act(() => Promise.resolve());
+
+      expect(mounted.pathname()).toBe("/home");
+      expect(mounted.history.length).toBe(1);
+      act(() => {
+        mounted.history.back();
+      });
+      expect(mounted.pathname()).toBe("/home");
+    });
   });
 });
