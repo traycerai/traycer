@@ -89,7 +89,7 @@ import { resetPendingHydrationRestoreForTesting } from "@/stores/chats/chat-tab-
 import type { Message } from "@traycer/protocol/persistence/epic/messages";
 
 /**
- * Ticket 21 slice 5 (jsdom half): the PERMANENT lifecycle-matrix gate for the
+ * The jsdom half of the PERMANENT lifecycle-matrix gate for the
  * REAL `ChatTile -> ChatMessages -> LegendList` chain, routed through the
  * REAL production wiring (`TileCanvas` + a real `StableTileSurfaceHost`
  * sibling using the REAL `renderHostedChatSurfaceBody` renderer), with the
@@ -1158,7 +1158,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     // NEITHER the move source NOR the move target, so this row is a clean
     // test of cross-pane geometry-move stability in isolation. (A two-pane
     // version where the target pane already has an active tab conflates
-    // this with decision #17's real, INTENDED remount-on-deactivation
+    // this with the real, INTENDED remount-on-deactivation
     // policy - see row 11's negative control - because dropping a tab onto
     // a pane makes the dropped tab that pane's new active tab, which
     // legitimately unmounts whatever was active there before.)
@@ -1801,7 +1801,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 14 - production visibility boundary: topLevelVisible handoff through real hosted chain restores free-reading position", async () => {
-    // Fixup requirement 3: every existing visibility-handoff
+    // Every existing visibility-handoff
     // case in `chat-messages.test.tsx` drives `ChatMessages.visible` via a
     // direct prop re-render, so a broken
     // `environment.presentation.topLevelVisible` bridge would still pass.

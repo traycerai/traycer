@@ -1083,7 +1083,7 @@ describe("browser sessions coordinator registry", () => {
     expect(moveFrames).toHaveLength(1);
     expect(moveFrames[0]).toMatchObject({ kind: "moveTab", tabId: "tab-1" });
 
-    // Settling it here is also the demux case (design D8): without
+    // Settling it here is also the demux case: without
     // `pendingMoves` wired into `handleActionAck`'s array, a `moveTab` ack is
     // matched against no map, this promise never resolves, and the tile's
     // button sits on "Moving…" until the coordinator's own 10s timeout.

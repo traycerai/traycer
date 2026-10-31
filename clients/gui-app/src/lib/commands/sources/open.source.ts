@@ -3,7 +3,7 @@
  * palette is bound to a target group (`ctx.targetGroupId !== null`); the global
  * palette never sees them. Each category pushes a sub-page (reusing the shell's
  * sub-page stack); its leaves open into the bound target group via
- * `openTileIntoTargetGroup` (Decision 2/3 of the pane-opener tech plan).
+ * `openTileIntoTargetGroup`.
  *
  * T5 fills Agents / Terminals / Artifacts (live projection + pinned
  * creation leaves, default-host bound). T6 fills Files / Diff (two-step

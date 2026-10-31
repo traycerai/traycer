@@ -1,5 +1,5 @@
 /**
- * Ticket 21 slice 2: the cold/ready environment registry for hosted tile
+ * The cold/ready environment registry for hosted tile
  * surfaces.
  *
  * A store-selected chat may be a stable-tile-surface-host member before
@@ -22,8 +22,8 @@
  *   `subscribeTileSurfaceMembership` and deletes a record (notifying its
  *   subscribers) only when the instance actually leaves membership - close,
  *   eviction past the pane's chat retention cap, or settled top-level MRU
- *   eviction. Deselecting a tab no longer removes anything (it did while
- *   decision #17 stood); it only flips the record out of
+ *   eviction. Deselecting a tab no longer removes anything (it did before
+ *   pane chat retention); it only flips the record out of
  *   `isTileSurfacePresented`. Nothing else deletes a record.
  *
  * `retractTileSurfacePresentation` is the one narrow exception, and it is
@@ -64,7 +64,7 @@
  * takes a placement-sensitive action (portal-mounting into
  * `panePortalContainer`, routing a focus request through `isPaneFocusedNow`)
  * MUST NOT do so purely because `getTileSurfaceEnvironment` returned
- * non-null. Slice 3+ is responsible for either (a) proving current
+ * non-null. The consumer is responsible for either (a) proving current
  * attachment via a separate slot/geometry signal before acting, or (b)
  * gating placement-sensitive actions until the destination slot's own
  * publish lands. This module intentionally does not add that gating itself -

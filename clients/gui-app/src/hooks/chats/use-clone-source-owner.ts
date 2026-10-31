@@ -6,14 +6,13 @@ import { useCloudChatList } from "@/hooks/chats/use-cloud-chat-queries";
 
 /**
  * The owner a clone surface is CURRENTLY SHOWING for its source chat, which is
- * what `epic.createChat`'s `forkSource.sourceOwnerUserId` carries
- * (chat-sync-v2 ticket 37).
+ * what `epic.createChat`'s `forkSource.sourceOwnerUserId` carries.
  *
  * ## Why the client sends this at all
  *
  * The clone's cloud tier refuses to seed history unless the host can check the
  * resolved publication's owner against an expectation it holds locally - the
- * anti-squatting guard from ticket 34 B2. A host with no registry facts for the
+ * anti-squatting guard (B2). A host with no registry facts for the
  * source (a post-restart swept chat, a fresh identity) refuses correctly and
  * the clone degrades to settings-only, losing the transcript. The client knew
  * the owner the whole time: it is on the record it projected, or on the cloud

@@ -976,7 +976,7 @@ export interface AnalyticsEventProperties {
   /**
    * How an MCP App's tool call ended: `approved` when the host ran it (with or
    * without asking), `denied` when the reader declined, `refused` when the
-   * host refused it. Never the server, tool or arguments (D31).
+   * host refused it. Never the server, tool or arguments.
    */
   readonly [AnalyticsEvent.McpAppCall]: {
     readonly outcome: "approved" | "denied" | "refused";
@@ -1142,7 +1142,7 @@ export interface AnalyticsEventProperties {
   readonly [AnalyticsEvent.ReportIssueOpened]: SourceProperties & {
     readonly surface: string | null;
   };
-  // Which report type's gate blocked the attempt (ticket 07's evidence gate,
+  // Which report type's gate blocked the attempt (the evidence gate,
   // manual opens only) - downstream funnels join this against a later
   // `ReportIssuePrivateSubmit` (or its absence) to compute abandon-after-block.
   // `blocked_action` - the gate guards every report-
@@ -3020,7 +3020,7 @@ export function analyticsBlockerFromError(error: unknown): AnalyticsBlocker {
  * exception from the mutation itself still goes through
  * `analyticsBlockerFromError` on the `onError` path.
  *
- * `attachmentCount` (ticket 08 / T5) is the number of images on the request
+ * `attachmentCount` (T5) is the number of images on the request
  * that produced `result` - a low-cardinality integer the count-property
  * validator already accepts, so it rides along on every outcome rather than
  * needing its own event.

@@ -28,7 +28,7 @@ import type { FallbackPolicyTestTierGroupsRequest } from "@/hooks/providers/use-
 import type { FallbackTestModelPanelProps } from "@/components/settings/panels/fallback/fallback-test-model-panel";
 
 /**
- * Panel-level coverage for the Test a model panel (ticket 05, clauses 2-6):
+ * Panel-level coverage for the Test a model panel:
  * the request built from defaults, the wireframe 4 fixture's rendering, the
  * three footers, the older-host fallback, and the announced verdict.
  *
@@ -323,9 +323,9 @@ const mocks = vi.hoisted(
     defaultServiceTier: string;
     /** Each harness's last-used account, as `composer-harness-memory-store` holds it. */
     lastProfileByHarness: Partial<Record<GuiHarnessId, string | null>>;
-    /** D2 - whether the tested provider's model catalog read failed. */
+    /** Whether the tested provider's model catalog read failed. */
     modelsWarmupError: boolean;
-    /** D2 - the retry the panel's "Try again" button calls; must return a Promise. */
+    /** The retry the panel's "Try again" button calls; must return a Promise. */
     modelsWarmupRetry: () => Promise<void>;
     /** T4 - the Provider picker's options; overridable per test. */
     harnesses: readonly HarnessFixture[];

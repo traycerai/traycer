@@ -1,7 +1,7 @@
 /**
  * CAMPUS: low buildings on grass, one room per TEAM, seen from the corner.
  *
- * A room is a team of the partition (D38): one cabin per lead-and-members
+ * A room is a team of the partition: one cabin per lead-and-members
  * team, the host's HQ in a cabin of its own, and one bullpen per district for
  * everybody the partition calls a solo. It is not a lineage subtree, and that
  * distinction is the whole view. The recording's 309-agent epic is one root
@@ -191,7 +191,7 @@ interface CampusRoomPlan extends IsoBlockSpec {
   /**
    * The room's identity, and the `roomId` every desk in it carries.
    *
-   * SYNTHETIC on purpose (D16). A team is named by its lead, so a room keyed
+   * SYNTHETIC on purpose. A team is named by its lead, so a room keyed
    * on the lead's bare agent id is a room that changes identity the day the
    * lead is archived and the second member takes over - and a room whose
    * second cabin would have no id at all. `<teamId>/room/<n>`, `<hq>/hq` and
@@ -445,7 +445,7 @@ interface RoomBuildArgs {
   readonly placed: IsoPlacedBlock;
   readonly floorIndex: number;
   readonly hostId: string | null;
-  /** The world's own origin, so a desk can say where it is painted (D53). */
+  /** The world's own origin, so a desk can say where it is painted. */
   readonly origin: IsoOrigin;
 }
 
@@ -469,7 +469,7 @@ function buildRoom(args: RoomBuildArgs): RoomBuild {
   // the partition's order renumbers every index after it, and a seat named by
   // one is a seat that changes name because somebody else showed up. Campus
   // re-packs, so it has no seat book to invalidate - but the name is free to
-  // get right, and the same defect on City was this fixup's F1.
+  // get right, and the same defect on City was this fix's F1.
   const seatGroup = [hostId ?? ISO_SEAT_ID_NONE, plan.roomId].join("/");
   const desks: OfficeDesk[] = [];
   for (const [index, agent] of plan.occupants.entries()) {
@@ -548,7 +548,7 @@ function buildRoom(args: RoomBuildArgs): RoomBuild {
   };
   return {
     room: {
-      // A room id, not an agent id (D16): every desk's `roomId` resolves here.
+      // A room id, not an agent id: every desk's `roomId` resolves here.
       rootAgentId: plan.roomId,
       name: plan.name,
       bounds,
@@ -1027,7 +1027,7 @@ export function planCampus(input: OfficePlanInput): OfficeLayout {
   const world = planWorld(input);
   const grid: IsoGrid = isoBlankGrid(world.cols, world.rows);
   // The whole world is measured before a desk is placed, which is what lets a
-  // seat carry the projected box it is painted in (D53) rather than a
+  // seat carry the projected box it is painted in rather than a
   // rectangle of tiles the painter never draws to.
   const origin: IsoOrigin = {
     rows: world.rows,

@@ -498,7 +498,7 @@ const NODE: PublishedChatTileRef = {
 
 /**
  * The SAME ref shape the canvas builds when this device's own connected host
- * answers `CHAT_NOT_VISIBLE` for one of its chats (tickets 47/48): the
+ * answers `CHAT_NOT_VISIBLE` for one of its chats: the
  * serving host and the owning host are one machine, which is exactly what
  * `hostId === ownerHostId` says. Nothing about it is probed - the copy's
  * footer has to read that off the ref.

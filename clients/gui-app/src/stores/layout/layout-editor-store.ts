@@ -97,7 +97,7 @@ export interface RegionInstance {
 }
 
 /**
- * The two surfaces a canvas selection can hold that are not regions (D14): the
+ * The two surfaces a canvas selection can hold that are not regions: the
  * tab strip and the sidebar, keyed by their `SurfaceGroupId`. Neither is a
  * region - the strip is not one at all, and the sidebar's regions are its rail
  * icons - so they are selected as surfaces and placed by the placement bar.

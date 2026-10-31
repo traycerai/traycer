@@ -1095,7 +1095,7 @@ describe("epic-parking - eligibility (C1, prune's own gates)", () => {
 
 // ── B1: the retention-pool / warm-session key ───────────────────────────────
 //
-// The fixup's whole reason to exist: a tab pushed out of the retention pool
+// The fix's whole reason to exist: a tab pushed out of the retention pool
 // (`TopLevelTabHost`'s `retainedTopLevelSurfaces` cap) is hidden by
 // definition, and its provider's `releaseMounted` drops demand to zero while
 // its session stays WARM with `epic.subscribe` still open. The old

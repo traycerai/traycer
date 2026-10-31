@@ -1,4 +1,4 @@
-// Ticket 06 D8/D17: the bound update dispatches (`host.update.activate` /
+// The bound update dispatches (`host.update.activate` /
 // `host.update.continue`), dispatch OWNERSHIP (the per-host `updateDispatch`
 // slot), and the one-shot activation dialog auto-open.
 //
@@ -1692,7 +1692,7 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
 });
 
 /**
- * The bound control behind the page's OWN gates (ticket 08).
+ * The bound control behind the page's OWN gates.
  *
  * `main` gave the card's three legacy controls a live status read plus the
  * two page-wide gates the header's Restart and the region's Update now take
@@ -1859,7 +1859,7 @@ describe("HostOverviewPanel — the bound control takes the page's gates (ticket
 });
 
 /**
- * WHAT DEFER PROMISES, by park (ticket 08, coordinator item 2).
+ * WHAT DEFER PROMISES, by park.
  *
  * The staged-wait force's Defer was rewritten because a stage on disk has
  * nobody scheduled to install it. The rule it established is about EVIDENCE,

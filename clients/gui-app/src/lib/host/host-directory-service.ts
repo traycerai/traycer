@@ -121,7 +121,7 @@ export type HostDirectoryListener = (
  *
  * Composes the event-only `IRunnerHost.onLocalHostChange(...)` stream with
  * the shared stubbed `fetchRemoteHosts` so the merged directory has a
- * stable shape regardless of remote discovery progress (D3).
+ * stable shape regardless of remote discovery progress.
  *
  * Selection is not decided here, and since redesign P4.2 it is not HELD here
  * either. The per-app selection authority owns `preferredHostId` and derives
@@ -648,7 +648,7 @@ export class HostDirectoryService implements IHostDirectoryService {
    * Rules:
    *   - If a local-kind entry exists (desktop path), prefer it. A live local
    *     snapshot always publishes a websocket URL and `available` status, so
-   *     this is already D7's "dialable local first" answer.
+   *     this is already the "dialable local first" answer.
    *   - Else, if the merged directory has exactly one entry, return it.
    *   - Else, return `null` - the zero/many mobile paths require an
    *     explicit user gesture before binding.

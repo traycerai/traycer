@@ -1,5 +1,5 @@
 /**
- * The record channel's FRESHNESS seam (chat-sync-v2 ticket 49).
+ * The record channel's FRESHNESS seam.
  *
  * Since the single-write pivot a created chat exists only in the host's chat
  * database: nothing pushes it to this renderer, so `epic.listChatRecords` is
@@ -17,7 +17,7 @@
  *
  * Ablations each test is written against:
  *  - drop `invalidateEpicChatRecords` from `useEpicCreateChatForHostClient`
- *    (the explicit-client twin, ticket 43) and the create tests hang on a
+ *    (the explicit-client twin) and the create tests hang on a
  *    record list that is never re-read: the user-visible spinning new tab.
  *  - drop `poll: true` from `useEpicSyncChatRecords` and the cadence test
  *    reads `false`, i.e. a list that only ever refreshes on window focus.

@@ -223,7 +223,7 @@ vi.mock("@/hooks/host/use-host-negotiated-method-version", () => ({
   useHostNegotiatedMethodVersion: () => ({ major: 1, minor: 2 }),
 }));
 vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
-  // Host-parametric clone create (redesign P1.2, D6): the panel now runs the
+  // Host-parametric clone create (redesign P1.2): the panel now runs the
   // clone on the target host's own client via this hook, not the app-wide one.
   useEpicCreateChatForHostClient: () => ({ mutate: vi.fn(), isPending: false }),
 }));

@@ -48,7 +48,7 @@ export interface TraycerReferenceOpenState {
  * - `same-epic-node` - open the resolved node as a replaceable preview tile in
  *   the open epic's current tab.
  * - `navigate` - navigate to the target epic and focus it, reusing
- *   `focusArtifactId` for a node (D1); `traycer-epic` carries `undefined`.
+ *   `focusArtifactId` for a node; `traycer-epic` carries `undefined`.
  */
 type OpenTarget =
   | { readonly kind: "none" }
@@ -75,7 +75,7 @@ type OpenTarget =
  *   replaceable preview tile. A `null` ref (not yet projected / not openable)
  *   yields a `null` handler so the chip stays plain text.
  * - CROSS epic: navigate to the target epic and reuse `focusArtifactId =
- *   nodeId` (D1 - the auto-open path already opens chat tiles, so chats reuse
+ *   nodeId` (the auto-open path already opens chat tiles, so chats reuse
  *   `focusArtifactId`; no `focusChatId`) with a fresh `focusedAt` (G2) so a
  *   re-click after closing the tab re-opens it. `<traycer-epic>` passes no
  *   artifact id and only focuses the epic.
@@ -131,7 +131,7 @@ export function useTraycerReferenceOpenHandler(input: {
           return;
         }
         case "navigate":
-          // `focusArtifactId` opens chat tiles too (D1); `traycer-epic` passes
+          // `focusArtifactId` opens chat tiles too; `traycer-epic` passes
           // `undefined`. A fresh `focusedAt` (G2) re-opens a closed tab on
           // re-click.
           navigateToTabIntent(
@@ -202,7 +202,7 @@ function resolveOpenTarget(input: {
   }
 
   // CROSS epic (or same-epic epic-only focus): navigate + focus. `traycer-epic`
-  // carries no artifact id (D1).
+  // carries no artifact id.
   return {
     kind: "navigate",
     epicId,

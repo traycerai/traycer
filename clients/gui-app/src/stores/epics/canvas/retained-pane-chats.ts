@@ -2,7 +2,7 @@
  * Which chat tiles a pane keeps ALIVE, as opposed to merely which one it
  * currently shows.
  *
- * Decision #17 originally excluded chat tabs from every keep-alive path: a
+ * Chat tabs were originally excluded from every keep-alive path: a
  * chat mounted only while it was its pane's active tab, and a same-pane tab
  * switch was a real unmount/remount that rebuilt the reading position from
  * the `chat-tab-state-cache` on the way back. That was defensible while the

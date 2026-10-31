@@ -233,7 +233,7 @@ function BrowserDevOriginsControl(props: {
 }
 
 /**
- * Settings > Browser's saved-logins group (decision #26).
+ * Settings > Browser's saved-logins group.
  * The one place a privacy-minded person sees where their website logins are
  * kept, turns them off, forgets them, and sees which sites they cover.
  *
@@ -244,7 +244,7 @@ function BrowserDevOriginsControl(props: {
  * Host-scoped like every other host read on this page: the site list comes from
  * THIS surface's host, and clearing goes back out to the browser streams of
  * whichever hosts are live. The toggle is the odd one out on purpose - it is
- * desktop-local, per machine (decision #18), so it is read from the desktop
+ * desktop-local, per machine, so it is read from the desktop
  * bridge rather than from any host.
  *
  * Renders nothing without a browser bridge (the web build, a host-less test

@@ -344,7 +344,7 @@ interface BrowserSessionsCoordinator {
   sweptSinceFailure: boolean;
   /**
    * Snapshot-only capture of one tab on this coordinator's host, for a chat
-   * pinned to ANOTHER host (spec decision #10). It hangs off the coordinator
+   * pinned to ANOTHER host. It hangs off the coordinator
    * rather than off `BrowserSessionsState` because only the mention picker
    * calls it, keyed by coordinator.
    */

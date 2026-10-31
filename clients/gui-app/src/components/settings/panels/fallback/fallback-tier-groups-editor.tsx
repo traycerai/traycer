@@ -756,7 +756,7 @@ function TestPanelSlot(props: {
  * marks the user, so an empty list means "you emptied this", not "nothing has
  * been set up". Restoring is therefore an explicit action with its own verb
  * rather than something the next read does silently - which is exactly what the
- * seed marker exists to guarantee (D116/D127).
+ * seed marker exists to guarantee.
  *
  * It calls the RESTORE op rather than saving a client-built list: only the host
  * can build the seed a first read would have produced, and a list assembled here

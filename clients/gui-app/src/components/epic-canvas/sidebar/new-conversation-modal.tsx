@@ -1301,7 +1301,7 @@ export function NewConversationModalBody(props: {
     workspaceCanStart &&
     !agentBlocked &&
     hasSubmittableContent;
-  // The staged sandbox's send (sandboxes plan D1). Its phase 2 resubmits from
+  // The staged sandbox's send (the sandboxes plan). Its phase 2 resubmits from
   // this body, which `NewConversationModalHost` keeps mounted until the stage
   // settles, though the modal closes. `handleSubmit` is declared below and
   // reads this hook, hence the ref.
@@ -1470,7 +1470,7 @@ export function NewConversationModalBody(props: {
   // worktree/branch intent names refs on the machine the user picked them on
   // and must not travel; the §51 folder set stays, per the orchestrator's
   // ruling on the landing row. A modal resting on its pin or on the Epic's
-  // host is not moved by the derivation and must not narrate a move (D6).
+  // host is not moved by the derivation and must not narrate a move.
   // A move that reset nothing stays silent: the switch itself is
   // `toastSelectionSwitched`'s to tell.
   useEffect(() => {

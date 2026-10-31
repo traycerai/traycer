@@ -26,7 +26,7 @@ import { containBox } from "@/components/epic-canvas/renderers/agent-cursor-cont
 import type { AgentCursorPosition } from "@/lib/browser-view/sessions/screencast-input-encoding";
 
 /**
- * Ticket 10, the client half: the agent ghost cursor through the REAL hook,
+ * The client half: the agent ghost cursor through the REAL hook,
  * transport and tile - the host's normalized coordinates in, a positioned
  * overlay out, on both display planes.
  */

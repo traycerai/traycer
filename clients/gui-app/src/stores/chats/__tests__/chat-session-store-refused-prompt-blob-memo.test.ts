@@ -822,7 +822,7 @@ describe("cancelling a queued row whose setup failed returns it to the composer"
   });
 
   it("restores nothing when the host refuses the cancel with WORKTREE_CREATE_FAILED", async () => {
-    // Ticket 7's host semantics: the cancel materializes the worktree first and
+    // The host semantics: the cancel materializes the worktree first and
     // is REJECTED when that fails, leaving the row queued. The prompt is still
     // in the dock, so handing a copy to the composer would fork it - the same
     // reason the queued guard declines in the first place.

@@ -25,7 +25,7 @@ interface QuoteSelectionPopoverProps {
    *  and rides the visible portion of a selection that scrolls past its start. */
   readonly boundaryRef: RefObject<HTMLElement | null>;
   /** Composer/queue dock height overlaying the bottom of `boundaryRef`'s
-   *  region (decision #3, #13, M3) - passed as a value, not read from the
+   *  region - passed as a value, not read from the
    *  DOM, so the clamp recomputes when the dock resizes while the popover is
    *  already open even though that doesn't resize the boundary element itself. */
   readonly bottomOverlayInsetPx: number;
@@ -84,8 +84,8 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
       }
       const container = boundaryRef.current;
       // Clamped, not the raw element: the composer/queue dock overlays the
-      // bottom of this region without shrinking its box (decision #3, #13,
-      // M3) - the raw rect's bottom edge extends behind the opaque dock.
+      // bottom of this region without shrinking its box - the raw rect's
+      // bottom edge extends behind the opaque dock.
       const clampedContainerRect =
         container === null
           ? null

@@ -2965,7 +2965,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
   // R1: independent outcome metadata reaching the announcer while its
   // anchor row is unloaded, followed by a REAL eventual hydration of that
   // SAME row/block through the real `useRenderedMessages` mapper - a
-  // separate scenario from D224 (which stays unchanged above). Reuses
+  // separate scenario from the epoch arms (which stay unchanged above). Reuses
   // `createWindowedHarness`/`emptyWindowedSnapshot`/`deferredWindowedSnapshot`
   // unmodified; only the tail response and the rendered-model wiring are
   // new.
@@ -3051,7 +3051,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     const harness = createWindowedHarness();
     registerHarness(harness);
     harness.callbacks().onConnectionStatus("open", null, null, null);
-    // A truly empty baseline folds immediately (same technique as D224).
+    // A truly empty baseline folds immediately (the same technique).
     // `D224_WINDOW_EPOCH` is the WIRE epoch for every snapshot/range below -
     // an independent coordinate from `epoch` (`transcriptBaselineEpoch`,
     // reads 0 off this empty fold), which is used ONLY for `ChatMessages`'s

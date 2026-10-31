@@ -707,7 +707,7 @@ describe("HostOverviewPanel — lifecycle gate matrix (G1)", () => {
 });
 
 /**
- * The RECORD leg (Ticket 06 D13), through the mounted Overview: the same
+ * The RECORD leg (D13), through the mounted Overview: the same
  * `useLocalAttemptRecordObservation` + `projectLocalUpdate` pair the pure
  * `fleet-update-view.test.ts` suite exercises directly, wired through a real
  * `hostManagement.getHostControllerStatus()` this time. `makeRunnerHost` above

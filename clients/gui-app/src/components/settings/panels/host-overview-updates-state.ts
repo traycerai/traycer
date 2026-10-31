@@ -176,7 +176,7 @@ export function useHostOverviewUpdates(input: {
    */
   readonly foregroundUpdateLine: string | null;
   /**
-   * The dispatching panel mount's token (D8), threaded to all three update
+   * The dispatching panel mount's token, threaded to all three update
    * dispatches so an `accepted` answer can be attributed to the mount that
    * asked for it. See `host-overview-rpc.ts`'s `settleUpdateDispatch`.
    */

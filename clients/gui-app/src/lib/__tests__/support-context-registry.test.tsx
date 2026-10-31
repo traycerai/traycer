@@ -47,7 +47,7 @@ describe("support-context registry", () => {
     // authenticated-runtime subtree that wrote this registry. A registry
     // backed by React context would lose its value at this exact point,
     // since the context provider is torn down along with the subtree; the
-    // module-scoped Zustand store (D5) must not.
+    // module-scoped Zustand store must not.
     unmount();
 
     expect(getSupportContextSnapshot().hostId).toEqual(knownField("host-abc"));

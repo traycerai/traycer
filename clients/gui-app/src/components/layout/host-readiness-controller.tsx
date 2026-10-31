@@ -536,7 +536,7 @@ export function SurfaceReadinessFallback(props: {
  * switch - and every transient probe failure on a host that was running the
  * whole time - throw away the entire DOM: editors, terminals, scroll
  * positions, popovers. The recovery actions did not disappear with the block:
- * they are the window modal's now (D10/D11), which derives from the
+ * they are the window modal's now (D11), which derives from the
  * authority's leases and narrates once, for the window, wherever the app is.
  *
  * Latch semantics: per-window runtime state, so a window reload always

@@ -608,7 +608,7 @@ const noopClone = (): void => undefined;
  * pool for an index-unavailable fallback), and an owner user id from the
  * projection or cloud row.
  *
- * ## Extended for a REACHABLE owner with a confirmed-absent chat (ticket 35)
+ * ## Extended for a REACHABLE owner with a confirmed-absent chat
  *
  * The bound host can be perfectly reachable and still have nothing to serve
  * for this specific chat - a leased "machine" identity that never adopted
@@ -624,16 +624,16 @@ const noopClone = (): void => undefined;
  * lands) rather than the reachability arm's upfront one - `chat-tile.tsx`
  * must attempt the open before this can possibly fire.
  *
- * ## Extended AGAIN for a SAME-host chat with no local record (ticket 36)
+ * ## Extended AGAIN for a SAME-host chat with no local record
  *
- * Ticket 35's `confirmedAbsent` needs `chat-tile.tsx` to have already
+ * The `confirmedAbsent` arm above needs `chat-tile.tsx` to have already
  * attempted `chat.subscribe` - and at the time this arm was written
  * `chat-tile.tsx`'s own `enabled` gate was the doc record alone, so it never
  * even TRIED for a same-host tab with no local record and `fatalClose` never
- * fired for this case (ticket 49 changed that; see the section below).
+ * fired for this case (the section below changed that).
  * Without this arm the tile fell through to
- * `computeIsRemoteDeleted`'s reap instead (a silent no-open, ticket 36's
- * bug report). `cloudChatRecord` reads the SAME already-fetched
+ * `computeIsRemoteDeleted`'s reap instead (a silent no-open, the
+ * original bug report). `cloudChatRecord` reads the SAME already-fetched
  * `useCloudChatList` data `use-epic-route-synchronization.ts`'s reap
  * exemption reads (`epic.listCloudChats`'s host-side filter already
  * excludes anything this host's registry has tombstoned, so cloud presence
@@ -642,13 +642,13 @@ const noopClone = (): void => undefined;
  * arm specifically, since a chat this arm targets by definition has no
  * local projection to read it from.
  *
- * ## NARROWED for a REACHABLE same-host owner (ticket 49)
+ * ## NARROWED for a REACHABLE same-host owner
  *
- * Ticket 36's arm above rested on "a same-host chat with no epic-doc record
+ * The arm above rested on "a same-host chat with no epic-doc record
  * is a chat this host genuinely does not hold". That equivalence was already
  * false when it landed: chat creation stopped projecting into the epic doc
- * (`chat-registry-writer.ts`, ticket 19) and `ChatDocEntrySweep` deletes
- * every entry whose publication it has proven (ticket 20), so "no doc
+ * (`chat-registry-writer.ts`) and `ChatDocEntrySweep` deletes
+ * every entry whose publication it has proven, so "no doc
  * record" became the ORDINARY steady state of a healthy, owned,
  * fully-present chat. The renderer's record set is a shrinking set of
  * pre-upgrade entries converging on empty, and every chat the sweep had
@@ -714,15 +714,15 @@ function resolveChatFallbackDecision(args: {
   // A published copy exists for this chat and it is the viewer's own (the
   // caller only resolves this row for a same-host chat with no local record -
   // see `wantsCloudChatFallback`). Necessary for a same-host substitution,
-  // never sufficient: post-ticket-19/20 this is the steady state of a healthy
-  // chat, not evidence of absence (ticket 49).
+  // never sufficient: post-sweep this is the steady state of a healthy
+  // chat, not evidence of absence.
   const sameHostCloudCopyAvailable = args.cloudChatOwnerUserId !== null;
   // The two honest absence causes, shared by both host arms. `hostUnreachable`
   // is upfront; `confirmedAbsent` is the host's own `CHAT_NOT_VISIBLE`
   // terminate, which lands only after `chat-tile.tsx` has attempted the open.
   const absent = args.hostUnreachable || args.confirmedAbsent;
   // Same-host needs the copy in hand as well - a same-host chat with no cloud
-  // fallback is a genuine local error, not a substitutable one (ticket 35's
+  // fallback is a genuine local error, not a substitutable one (the earlier
   // rule, preserved). Cross-host keeps deriving its owner from the projection
   // or the ref, so it does not need the row.
   const sameHostFallback =
@@ -1259,8 +1259,8 @@ interface ComputeIsRemoteDeletedArgs {
   /** The host whose projection `liveArtifact` was resolved from. */
   readonly projectionHostId: string | null;
   /**
-   * Same-host counterpart of the cross-host exemption below (chat-sync-v2
-   * ticket 36): true when this SAME-host chat has no local record but is
+   * Same-host counterpart of the cross-host exemption below:
+   * true when this SAME-host chat has no local record but is
    * still known to `epic.listCloudChats` (whose host-side filter already
    * excludes anything this host's own registry has tombstoned - see
    * `usePublishedChatFallbackRef`, which computes this alongside the

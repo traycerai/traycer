@@ -1,6 +1,6 @@
 /**
  * Glass-to-glass latency, read off the `requestVideoFrameCallback` metadata
- * the decode loop already receives (ticket 17, F7).
+ * the decode loop already receives.
  *
  * `VideoFrameCallbackMetadata` carries three timestamps in the RECEIVER's
  * `performance.now()` clock domain:

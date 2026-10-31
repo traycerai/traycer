@@ -28,8 +28,8 @@ export const SIDE_STRIP_MAX_WIDTH_CLASS = "max-w-[40vw]";
 export const SIDE_STRIP_TITLE_ROW_MIN_WIDTH_CLASS =
   "wco:min-w-[calc(var(--window-leading-inset)+8.5rem)]";
 /**
- * The collapsed, icon-only rail (D4). On macOS with the strip at the left it
- * widens to the traffic-light inset (D15), and the tiles stay centred.
+ * The collapsed, icon-only rail. On macOS with the strip at the left it
+ * widens to the traffic-light inset, and the tiles stay centred.
  */
 export const SIDE_STRIP_RAIL_WIDTH_PX = 60;
 /** A handle drag below this width snaps to the rail: the midpoint of the minimum and the rail. */
@@ -125,7 +125,7 @@ export const SIDE_TAB_SESSION_ACTIVE_CLASS = "bg-warning-foreground";
 /**
  * The per-tab colour accent (owner ruling, fix/layout-regression-and-improvements):
  * an expanded row's 4px bar down its own leading edge, inside the row's own
- * padding - never tinted, never auto-hashed (D11's `tabAutoTint` no longer
+ * padding - never tinted, never auto-hashed (`tabAutoTint` no longer
  * reaches this mark). Rendered on every row outside a group's block or column,
  * coloured through `--side-tab-accent`; a colourless tab sets it to
  * `transparent`, so the mark reserves its space without inventing a colour. A
@@ -211,7 +211,7 @@ export const SIDE_TAB_GROUP_NAME_CLASS =
 export const SIDE_TAB_GROUP_LABEL_CLASS =
   "flex h-5 shrink-0 items-center gap-1 px-2 text-overline font-medium select-none";
 /**
- * A collapsed-rail tile (D4): the collapsed row itself, 40x44 with a 10px
+ * A collapsed-rail tile: the collapsed row itself, 40x44 with a 10px
  * radius, stacking the monogram over the meter 4px apart.
  */
 export const SIDE_TAB_TILE_CLASS = "h-11 w-10 rounded-xl flex-col gap-1";
@@ -268,7 +268,7 @@ export const STRIP_AGENT_FADE_IN_CLASS =
 /** A collapsed group's badge on its header: the trailing 20px cell a row's status has. */
 export const SIDE_TAB_BADGE_CLASS = "size-5 shrink-0";
 /**
- * The rail tile's badge (D5): a 14px disc of the strip's ground holding a 12px
+ * The rail tile's badge: a 14px disc of the strip's ground holding a 12px
  * status glyph, at the tile's top-right, 1px above and 1px in.
  */
 export const SIDE_TAB_RAIL_BADGE_CLASS = cn(
@@ -358,7 +358,7 @@ export const SIDE_STRIP_FOOT_CLASS = "gap-2 p-2";
 export const SIDE_TAB_GROUP_COUNT_CLASS = "text-ui-xs tabular-nums";
 /**
  * A nav control's collapsed form - the expand toggle, Notifications, All tasks, New
- * Task and the avatar: a 32px icon tile (D6), on the rail's axis. The rail's
+ * Task and the avatar: a 32px icon tile, on the rail's axis. The rail's
  * nav tiles stand 4px apart.
  */
 export const SIDE_STRIP_NAV_TILE_CLASS = "size-8 rounded-lg";

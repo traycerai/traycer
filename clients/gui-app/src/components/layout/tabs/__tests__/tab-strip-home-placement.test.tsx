@@ -418,7 +418,7 @@ describe("<TabStrip /> - Home placement", () => {
     const homeTab = await screen.findByTestId("tab-home");
     // A manual colour paints an inline `--swatch`; Home renders none, because
     // `TabStripHomeItem` passes `color={null}` and has no menu that could set
-    // one. `--swatch`, not `background-color`: ticket 02's inline-style
+    // one. `--swatch`, not `background-color`: the inline-style
     // migration moved it, and a negative assertion against the property it
     // used to set passes whatever the component does.
     expect(homeTab.querySelector('[style*="--swatch"]')).toBeNull();

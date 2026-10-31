@@ -4,7 +4,7 @@ import type { ReactElement, ReactNode } from "react";
 import type { ChatQueuedItem } from "@traycer/protocol/host/agent/gui/subscribe";
 
 /**
- * Wave-3 fixup regression:
+ * Regression:
  *
  * - Should-fix 5 ("compact dock chips ignore dockOrder"): the compact chip
  *   row used to build chips in a fixed Files -> Agents -> Background order and

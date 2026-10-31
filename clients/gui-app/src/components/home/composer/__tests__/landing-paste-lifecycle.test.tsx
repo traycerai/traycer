@@ -1373,8 +1373,8 @@ describe("landing paste lifecycle (real draft-runtime registry + keyed LandingCo
     );
 
     // Only the first image's decode has started - the second job's own
-    // `prepare` call is queued behind it on the same mount's session (the
-    // ticket-1 fix), so NEITHER original job has settled, and both still
+    // `prepare` call is queued behind it on the same mount's session,
+    // so NEITHER original job has settled, and both still
     // hold their own anonymous reservation.
     await waitFor(() => expect(double.gates).toHaveLength(1));
     expect(double.events).toEqual(["decode-call:0"]);

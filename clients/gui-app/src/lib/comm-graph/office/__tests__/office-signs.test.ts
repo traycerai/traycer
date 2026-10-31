@@ -93,7 +93,7 @@ function boardWidthPx(widthTiles: number): number {
 }
 
 /**
- * FIXUP 7's OWN INVARIANT, shared between the sweep (below) and the real
+ * THE INVARIANT, shared between the sweep (below) and the real
  * 309 Building case: the HQ board's ladder no longer has a rung of
  * manufactured initials, because the third `nameRungs` element it used to
  * letter with is gone. Two regexes capture this, and both
@@ -369,7 +369,7 @@ describe("officeBoardText - F11 roster filtering and width", () => {
     // (38 chars, 266.4px) as both written and first names - and neither fits
     // 128px. The ladder falls straight to the roster's counts, which is
     // exactly what an ordinary `board` over the same roster would say: this
-    // is the fixup's own point, not a coincidence.
+    // is the point, not a coincidence.
     const sign = boardSign({
       kind: "hq-board",
       agentIds: ["a", "b", "c", "d", "e"],
@@ -461,7 +461,7 @@ describe("officeBoardText - F11 five HQ names, laid out to the board", () => {
   it("fixup 7: names all five hottest agents once the first-names rung fits, never dropping the fifth", () => {
     // EIGHT TILES no longer letters these five names - the ladder falls to
     // the roster's counts there instead (see the "agrees ... at the board's
-    // own eight tiles" case above). This pins the other half of the fixup's
+    // own eight tiles" case above). This pins the other half of the
     // promise: at a width wide enough for the FIRST-NAMES rung, all five are
     // still named, never four-plus-a-drop.
     const firstNamesJoined = "Alpha · Beta · Gamma · Delta · Epsilon";
@@ -586,7 +586,7 @@ for (const viewId of ["towers", "building"] as const) {
       // The same counts the spelt-out reading would have carried - the hidden
       // member excluded rather than defaulted to idle - said at the rung a
       // six-tile board has the pixels for. What this case is about is WHO was
-      // counted; the vocabulary is D55's ladder doing its own job.
+      // counted; the vocabulary is the ladder doing its own job.
       expect(drawn[0].text).toBe(`${counted}D · 0W · 0I`);
       // That rung is the one MEASUREMENT picks, not the one a character budget
       // would have. Six tiles is ninety-six pixels and the spelt-out reading
@@ -986,7 +986,7 @@ describe("officeBoardText - fixup 3 F11 the ladder never overflows its board", (
 });
 
 /**
- * Fixup 7 (finding L2): the HQ board used to letter its way down PAST the
+ * Finding L2: the HQ board used to letter its way down PAST the
  * first-names rung into manufactured initials - " · "-joined, then spaced,
  * then run together - and a real HQ board is eight tiles, which at office
  * zoom (0.92x) is well under the first-names rung's own width for any real
@@ -1272,7 +1272,7 @@ describe("compareHeat - the comparator contract", () => {
 });
 
 /**
- * Fixup 6, rule 1 (finding M2): `officeFloorSignsToDraw` used to gate on
+ * Rule 1 (finding M2): `officeFloorSignsToDraw` used to gate on
  * `floors.length <= 1`, so a host holding several floors got a label on
  * EVERY ONE of them - `host-a` x9 and `host-b` x10 down the two towers,
  * `Unattributed` x21 down the thousand-agent Building. The plan already
@@ -1402,13 +1402,13 @@ describe("officeFloorSignsToDraw - fixup 6 rule 1: one host label per building, 
 });
 
 /**
- * Fixup 6, rule 3 (finding L1): the resolver used to hand the renderer the
+ * Rule 3 (finding L1): the resolver used to hand the renderer the
  * plan's literal text unconditionally, so a bullpen plate's `Bullpen · 9 live
  * solos` (22 characters) went in whole and the RENDERER's own twelve-char
  * budget (`OFFICE_SIGN_PLATE_MAX_CHARS`, `truncateSign` in the canvas) cut it
  * to `BULLPEN · 9…` - the count is the part that got cut, because it sits
  * after everything else in the string being trimmed. That assertion would
- * have passed before this fixup too: the ellipsis was never the resolver's to
+ * have passed before this change too: the ellipsis was never the resolver's to
  * add or withhold. What is actually new is that the RESOLVER now steps the
  * reading down itself, so nothing it hands the renderer is left for that
  * budget to cut - proven here by size (the character budget) and by pixels

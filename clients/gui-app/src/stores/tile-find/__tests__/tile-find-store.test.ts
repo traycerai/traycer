@@ -21,7 +21,7 @@ import {
 import { promoteTileFindUiToDurable } from "@/stores/tile-find/tile-find-store";
 import type { TileKindId } from "@/stores/epics/canvas/tile-kinds";
 
-// Ticket 5: scheduleUiReclaim also checks canvas liveness. Default false
+// scheduleUiReclaim also checks canvas liveness. Default false
 // preserves existing "permanently torn down" reclaim coverage (empty canvas).
 const tileLiveness = vi.hoisted(() => ({ live: false }));
 
@@ -660,7 +660,7 @@ describe("useTileFindStore", () => {
     ).toBe(true);
 
     // Live in the canvas (switched-away chat tile will remount with the same
-    // instanceId) - Ticket 5 must NOT reclaim ui after the deferred microtask.
+    // instanceId) - must NOT reclaim ui after the deferred microtask.
     tileLiveness.live = true;
     unregister();
     await Promise.resolve();

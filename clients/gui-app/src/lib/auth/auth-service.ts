@@ -2905,8 +2905,8 @@ export class AuthService {
     // else. This method cannot READ its bearer from that accessor - the repair
     // path below needs the whole `LiveSessionAuthority` to fence its rotation
     // on - but it is a cloud product read like the eight that do, and the
-    // panel that drives it mounts under `unverified` since this change
-    // admitted the settings surfaces.
+    // panel that drives it mounts under `unverified` since the settings
+    // surfaces were admitted.
     //
     // Refusing here also keeps an unverified session out of the REPAIR, which
     // spends a single-use refresh rotation. That spend belongs to the recovery

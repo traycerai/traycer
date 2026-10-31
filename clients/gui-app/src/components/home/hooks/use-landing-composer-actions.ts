@@ -799,7 +799,7 @@ export function useLandingComposerActions(
         }
         // Content changed after send: keep that later edit. A close during
         // create used to be the same branch because close destroyed the row;
-        // now close retains, so `"closed"` must still delete (decision #13) or
+        // now close retains, so `"closed"` must still delete, or
         // the sent text stays as a draft alongside the new epic.
         placeCreatedEpicInBackground(epicId, epicTitle);
         if (settlement.kind === "closed") {

@@ -163,10 +163,10 @@ describe("useWorktreeWorkspacesRefresh", () => {
   });
 
   it("waits for the VISIBLE branch list before reporting done", async () => {
-    // Supersedes "settles without awaiting the branch-list fan-out (D3
-    // reversal)", which pinned fire-and-forget outright.
+    // Supersedes "settles without awaiting the branch-list fan-out",
+    // which pinned fire-and-forget outright.
     //
-    // D3's concern was awaiting INACTIVE branch queries - the list usually
+    // The earlier concern was awaiting INACTIVE branch queries - the list usually
     // lives in an unmounted nested form - which wedged "Checking…" on relay
     // round-trips nobody was watching. That concern survives and is still
     // pinned, one test below. What did not survive is the conclusion: an
@@ -249,7 +249,7 @@ describe("useWorktreeWorkspacesRefresh", () => {
     // `refetchType: "active"` rather than a plain await.
     //
     // The branch list usually lives in an unmounted nested form. Awaiting THAT
-    // is what D3 correctly refused: it wedged "Checking…" on serial relay
+    // is what the earlier design correctly refused: it wedged "Checking…" on serial relay
     // round-trips for a list nobody had on screen. An active-only invalidation
     // never fetches an inactive entry, so this must settle even with branch
     // reads held.
@@ -634,7 +634,7 @@ function usePicker(
   client: HostClient<HostRpcRegistry>,
   workspacePaths: ReadonlyArray<string>,
   // `false` leaves the branch cache entry populated but UNOBSERVED, which is
-  // the "unmounted nested form" case D3 was actually about.
+  // the "unmounted nested form" case it was actually about.
   observeBranches: boolean,
 ): {
   readonly branch: string | null;

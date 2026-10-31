@@ -102,7 +102,7 @@ export interface AppFrame {
 
 /** A task tab in the picture, which is chrome rather than a region. */
 interface AppFrameTask {
-  /** Seeds the auto tint (D11), as an epic id does. */
+  /** Seeds the auto tint, as an epic id does. */
   readonly id: string;
   readonly label: string;
   readonly monogram: string;
@@ -193,7 +193,7 @@ function AppFrameTabEntries({ values, arrangement }: AppFrame): ReactNode {
   );
 }
 
-/** A task's monogram chip, the strip's and the panel header's own (D11). */
+/** A task's monogram chip, the strip's and the panel header's own. */
 function AppFrameTaskChip(props: { readonly task: AppFrameTask }): ReactNode {
   return (
     <MonogramChip
@@ -205,7 +205,7 @@ function AppFrameTaskChip(props: { readonly task: AppFrameTask }): ReactNode {
 }
 
 /**
- * The vertical strip as the shell draws it on the ground (D3-D6, F1, F7): the
+ * The vertical strip as the shell draws it on the ground (F1, F7): the
  * top row (history arrows, the collapse toggle), the Notifications and All tasks
  * rows, Home, the primary New Task row, "Tasks" and its count, the task rows,
  * and the foot with the header-hosted readings over the account row.

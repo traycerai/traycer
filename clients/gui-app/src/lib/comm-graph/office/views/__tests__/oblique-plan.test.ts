@@ -1411,7 +1411,7 @@ describe("oblique fit ranges", () => {
 });
 
 /**
- * Fixup 6, rule 2 (finding M3-towers): a plate's box used to be centred on its
+ * Rule 2 (finding M3-towers): a plate's box used to be centred on its
  * text at whatever length the plan wrote, never checked against the pod it
  * sat over - `TEAM-6-LE│TEAM-8-LEAD│TEAM-10-LEAD` clipped across three
  * neighbouring pods because nothing shrank the reading OR checked its box
@@ -1641,7 +1641,7 @@ describe("oblique plates: fixup 6 rule 2 - plates fit their pods and never overl
 });
 
 /**
- * Fixup 6, rule 4 (finding L4): `seatProps` used to draw a `reserve` label
+ * Rule 4 (finding L4): `seatProps` used to draw a `reserve` label
  * under EVERY empty desk at close-up, so a vacant fifteen-desk storey painted
  * the same word fifteen times and competed with the name tags close-up exists
  * to show. `obliqueReserveLabelSeatId` now names one seat per storey - the one
@@ -2236,7 +2236,7 @@ describe("plaza civic rooms", () => {
  * plate keeps the tile. The pods that gave way the other way round were the
  * two-tile ones, where a one-tile plate resolved `A-ROOT` to `AR`: manufactured
  * initials, which read as a different agent rather than as a short name, and are
- * the rung T3 fixup 6 removed from the HQ board's ladder for that reason.
+ * the rung T3 removed from the HQ board's ladder for that reason.
  *
  * The negative half is the point of this case: a WIDE pod must still letter its
  * count. A rule that suppressed every board would pass an overlap sweep too.

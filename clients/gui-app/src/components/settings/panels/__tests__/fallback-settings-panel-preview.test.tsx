@@ -19,7 +19,7 @@ import {
 } from "@traycer/protocol/host/fallback-policy";
 
 /**
- * The per-row "matches ... today" verdicts (ticket 08, clause 4).
+ * The per-row "matches ... today" verdicts.
  *
  * Separate from `fallback-settings-panel.test.tsx`, which makes the preview hook
  * inert: this suite's whole subject is what that hook's answer renders, so it

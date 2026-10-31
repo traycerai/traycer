@@ -2213,8 +2213,8 @@ describe("createOpenEpicStore", () => {
   });
 
   it("defers the snapshot reconcile until a fresh editor root snapshot after reopen", async () => {
-    // Reproduces the reconnect ordering gap that ticket
-    // 4a598302-ac79-47a5-a686-cc9e35bde18b fixes: a fresh `artifactRoomSnapshot`
+    // Reproduces the reconnect ordering gap in reconnect-safe body edits:
+    // a fresh `artifactRoomSnapshot`
     // can land while `connectionStatus` is still `connecting` /
     // `reconnecting` (after the host transitions before the
     // status frame is observed). The merge must preserve every local
@@ -2293,7 +2293,7 @@ describe("createOpenEpicStore", () => {
 
     // ── 3. Stream reopens - raw open alone must not flush.
     //
-    // Acceptance for ticket 4a598302-ad33-…: the outbound surface after
+    // Acceptance: the outbound surface after
     // the fresh editor root snapshot carries EXACTLY one `artifactRoomApplyUpdate`
     // for the correct `artifactRoomId`. That single frame is the snapshot-derived
     // reconcile; it must subsume any locally-buffered edits captured during

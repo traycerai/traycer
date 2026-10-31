@@ -277,7 +277,7 @@ export interface FallbackPolicyDraftState {
    * Correlating instead of serialising is deliberate: serialising would delay
    * the second request until the first settled, which changes WHEN a commit is
    * dispatched. Nothing about FC3 needs that, and the commit-on-blur/Enter rule
-   * (D181) is pinned on the dispatch being synchronous with the gesture.
+   * is pinned on the dispatch being synchronous with the gesture.
    */
   readonly pendingSaves: readonly PendingFallbackSave[];
   /**
@@ -1130,8 +1130,8 @@ export type FallbackPolicyValidation =
  *
  * Validating locally at all (rather than letting the host refuse) is what keeps
  * the draft: a rejected save reverts the control, and reverting someone's
- * half-typed family name because it is half-typed is the behaviour the reducer
- * separates the two failure kinds to prevent.
+ * half-typed family name because it is half-typed is the behaviour the two
+ * failure kinds are separated to prevent.
  *
  * A model in two tiers is NOT a validation failure - see
  * {@link fallbackTierConflicts}.
@@ -1286,7 +1286,7 @@ export function createFallbackPolicyDraftState(
     draft: policy,
     displayOrder: fallbackDisplayOrder(policy.ladder),
     // Hydration: the stored rows get their identities as they enter the draft,
-    // once, here. This is the seeding D174 names - a row loaded from the policy
+    // once, here. This is the seeding - a row loaded from the policy
     // is as much a row as one the user adds, and the two are indistinguishable
     // from then on.
     keyedTierGroups: toKeyedGroups(policy.tierGroups),

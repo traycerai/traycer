@@ -116,7 +116,7 @@ export interface FleetUpdateWireObservation {
 
 /**
  * What the DURABLE RECORD on this machine establishes, for the host-down
- * window (Ticket 07).
+ * window.
  *
  * ## Why this is a second arm rather than a synthesized `operation`
  *
@@ -550,7 +550,7 @@ export function projectFleetUpdateView(
     return UNKNOWN_FLEET_UPDATE_VIEW;
   }
 
-  // THE HOST-DOWN WINDOW (Ticket 07). Handled before the wire arms
+  // THE HOST-DOWN WINDOW. Handled before the wire arms
   // because it answers a different question with different evidence, and the
   // guards below all presuppose a peer that spoke.
   //
@@ -1342,7 +1342,7 @@ export function offersForceRestart(view: FleetUpdateView): boolean {
  * hold a page-wide lifecycle gate.
  *
  * This exists because the coarse `updateProgress` field cannot answer it, and
- * the difference is a shipped-defect-sized gap. Ticket 04's derivation maps a
+ * the difference is a shipped-defect-sized gap. The coarse derivation maps a
  * PARKED attempt (`waiting-for-work`, `waiting-to-activate`) to
  * `{state:"updating"}` — correctly, for its own purpose: bytes or an activation
  * really are still pending, and calling it `failed` would be worse. But a
@@ -1468,8 +1468,7 @@ function kindWarrantsFastPoll(kind: FleetUpdateViewKind): boolean {
 }
 
 /**
- * Precedence between a live read and the durable record (Ticket 07,
- * ordering per D13).
+ * Precedence between a live read and the durable record (ordering per D13).
  *
  * A FRESH wire observation always wins: a running host reporting on itself is
  * strictly better evidence than a file describing what it last wrote, and the

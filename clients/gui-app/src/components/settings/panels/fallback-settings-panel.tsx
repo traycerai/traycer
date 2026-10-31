@@ -845,7 +845,7 @@ function FallbackPolicyEditor(props: {
     setOverrideSavePolicy(null);
     const requestId = createFallbackSaveRequestId();
     // A restore sends nothing from the screen - the host picks the default
-    // groups - so it must not make the displayed values count as dispatched
+    // groups - so it must not make the displayed values count as dispatched,
     // (D339), and if its own reply is lost the notice has to say that the
     // RESTORE is what went unanswered (D347).
     dispatch({

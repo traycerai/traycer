@@ -19,7 +19,7 @@ import {
 } from "@/stores/layout/layout-store";
 
 /**
- * The app column plus two regions, mounted the way ticket 07's shell will
+ * The app column plus two regions, mounted the way the shell will
  * mount them: the hook is handed the column element and nothing else.
  */
 function Canvas(props: {

@@ -104,8 +104,8 @@ export interface AuthBoundHostDirectoryOptions {
  * `AuthService`.
  *
  * A named factory rather than an object literal inside the provider's effect,
- * because the three auth-derived arguments below ARE the fix this change
- * closes, and they were previously reachable only by mounting React. Every
+ * because the three auth-derived arguments below ARE the fix, and they were
+ * previously reachable only by mounting React. Every
  * round of this bug was signed off against tests that re-typed these
  * arguments — a plausible accessor, a hand-driven counter — and passed while
  * production wired something subtly different underneath. A composition test

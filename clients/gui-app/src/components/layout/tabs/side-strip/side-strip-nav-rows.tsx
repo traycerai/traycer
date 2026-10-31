@@ -42,7 +42,7 @@ import {
 } from "./side-strip-tokens";
 
 /**
- * The strip's nav rows under the top block's controls (D6): Notifications, which
+ * The strip's nav rows under the top block's controls: Notifications, which
  * opens the notification center as a drawer on the strip's edge, and All
  * tasks, which opens History. Collapsed, both are 32px icon tiles.
  */

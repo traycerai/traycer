@@ -14,7 +14,7 @@ import type { GuiHarnessId } from "@traycer/protocol/host/agent/shared";
 import type { FallbackPolicyTestTierGroupsRequest } from "@/hooks/providers/use-fallback-policy-test-tier-groups-query";
 
 /**
- * Ticket 05, clause 6: the REAL wiring in `fallback-settings-panel.tsx` -
+ * The REAL wiring in `fallback-settings-panel.tsx` -
  * `simulates={patternLines.blankPreviewRows}` and
  * `unsimulatedPreview={previewQuery.data?.candidates ?? null}` - through the
  * whole `FallbackSettingsPanel`, not through `FallbackTestModelPanel`

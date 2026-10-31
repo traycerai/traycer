@@ -1,5 +1,5 @@
 /**
- * Local IndexedDB stash -> closed start-page drafts (D19). The stash schema
+ * Local IndexedDB stash -> closed start-page drafts. The stash schema
  * is driven through a real `fake-indexeddb` database, so the reader's
  * version pin and its refusal to CREATE the database are exercised for real;
  * the landing image partition is the usual `idb-keyval` fake.

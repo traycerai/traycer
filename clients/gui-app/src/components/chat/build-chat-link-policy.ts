@@ -150,7 +150,7 @@ export type ChatLinkHandler = (
  *   `openChatWorkspaceFilePreview` with out-of-root synthesis DISABLED, so an
  *   artifact `index.md` (which normally lives under `~/.traycer`, outside the
  *   chat's roots) stays a safe no-op rather than opening a raw / error tile
- *   (D5 / CL-1).
+ *   (CL-1).
  * - **Plain file links** resolve against the chat's working directories and
  *   open as a replaceable workspace-file preview tab, stamped with the chat's
  *   own `hostId` for life. An ABSOLUTE path belonging to no bound root is still
@@ -252,7 +252,7 @@ export function openResolvedArtifact(
   if (artifactEpicId === deps.openEpicId && epicHandle !== null) {
     // Same epic: open a replaceable PREVIEW tile stamped with the active
     // host. Route through the projection waiter (passing the PREVIEW
-    // opener, D3) so an artifact not yet projected opens as soon as it
+    // opener) so an artifact not yet projected opens as soon as it
     // lands, and the tile name comes from the loaded projection. Any prior
     // wait was already silently cancelled at click time (supersession at
     // the top of the handler); retain the new handle so a later superseding
@@ -371,7 +371,7 @@ function resolveAndOpenArtifactLink(
  * deliberate "open any agent-emitted file" capability. Only the plain-file
  * branch passes `true`; the artifact-resolve fallbacks pass `false`, so a
  * deleted / not-yet-minted artifact whose `index.md` is out-of-root stays a safe
- * no-op rather than opening an error tile (D5 / CL-1).
+ * no-op rather than opening an error tile (CL-1).
  *
  * Returns `false` (unhandled) for a torn-down tab, a missing host, a directory,
  * or a path that resolves to neither a bound root nor (when permitted) an

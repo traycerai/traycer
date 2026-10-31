@@ -200,7 +200,6 @@ describe("isTileRefRecordLive", () => {
     ).toBe(true);
   });
 
-  // chat-sync-v2 ticket 36
   it("is live for a SAME-host CHAT ref with no local record but still cloud-known", () => {
     expect(
       isTileRefRecordLive(

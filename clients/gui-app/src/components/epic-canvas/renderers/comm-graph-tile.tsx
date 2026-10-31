@@ -80,7 +80,7 @@ const NEUTRAL_CAMERA: CommGraphTileCamera = {
  * view since long before the move (a tile saved under a Settings default of
  * Building, reopened while the default is Floor, carries
  * `officeCameraView: "building"` over a camera nothing has touched). That was
- * fixup 12's defect, and no cleverer key fixes it: a camera-object key leaks
+ * the defect, and no cleverer key fixes it: a camera-object key leaks
  * on the two above - `officeCamera: null` is a legitimate armed
  * value, so `null` cannot also be the unarmed sentinel, and a write the store
  * collapses by value produces no new reference to notice.
@@ -162,7 +162,7 @@ function useWitnessedOfficeViewMove(
     view: resolvedViewId,
     defaultChoice,
     // A fresh mount watched nothing happen: what its camera frames is the
-    // record's question, and D52 answers a `null` one by keeping the framing.
+    // record's question, and the resolver answers a `null` one by keeping the framing.
     armed: false,
   }));
   const next = nextOfficeCameraWitness(witness, resolvedViewId, defaultChoice);
@@ -196,7 +196,7 @@ function useWitnessedOfficeViewMove(
  * what a tile reopened after a default moved has; the witness is what a tile
  * that watched the default move has, and is the only evidence a camera saved
  * before the record existed leaves behind. A `null` record on its own still
- * means "nobody framed this", which D52 keeps rather than reset.
+ * means "nobody framed this", which is kept rather than reset.
  *
  * They are read as an OR rather than folded together on purpose: the witness
  * fires on a default change whatever the record says, including a record that
@@ -213,7 +213,7 @@ function officeViewForCanvas(
   resolvedViewId: OfficeViewId,
   witnessedMove: boolean,
 ): CommGraphTileViewState {
-  // The Graph reads `x`, `y`, `zoom` as its own, which since D68 is exactly
+  // The Graph reads `x`, `y`, `zoom` as its own, which since the camera split is exactly
   // what they are. Nothing to project.
   if (view.mode !== "office") return view;
   const framesAnotherView =
@@ -442,7 +442,7 @@ export function CommGraphTile(props: CommGraphTileProps) {
     // NO MODE GATE, deliberately. This used to skip while the Graph was up,
     // because the camera it retired was the one BOTH renderers shared and
     // neutralising it would have thrown away a framing the office had no
-    // claim on. D68 removed the sharing: the two fields written below are the
+    // claim on. The camera split removed the sharing: the two fields written below are the
     // office's alone and the Graph reads neither, so this can settle its own
     // fields with the Graph on screen and no office canvas mounted at all.
     // That is what stops the Graph-mode default move from reaching the office

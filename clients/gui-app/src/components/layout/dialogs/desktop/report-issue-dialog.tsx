@@ -445,7 +445,7 @@ export function ReportIssueDialog(
 
   // Flow 1 (error-triggered) vs Flow 2 (manual): an error envelope is either
   // a structured cause or a fingerprint captured at catch time. The evidence
-  // gate (D7/tech-plan T4) and the type-chip row are both keyed off this.
+  // gate (T4) and the type-chip row are both keyed off this.
   const { cause, fingerprint, hasErrorEnvelope } =
     errorEnvelopeFromContext(draftContext);
 
@@ -654,7 +654,7 @@ export function ReportIssueDialog(
     submitErrorRef.current?.focus();
   }, [showsHonestBanner]);
 
-  // Sole call site for `support:buildPublicDraft` (ticket 09/07) across every
+  // Sole call site for `support:buildPublicDraft` across every
   // route to GitHub - the opt-in "Also post publicly", the unconfirmed/failed
   // "Report on GitHub instead" fallback, and the no-DSN "Open a GitHub issue"
   // fallback all fetch the same preview before anything opens, so the preview
@@ -1232,7 +1232,7 @@ function ReportIssueDialogFooter(props: {
   readonly isSaveBundlePending: boolean;
   readonly isBuildingDraft: boolean;
   readonly isOpeningPublicDraft: boolean;
-  // Screenshot ingest (paste/drop/browse, ticket 08) runs async; `buildRequest`
+  // Screenshot ingest (paste/drop/browse) runs async; `buildRequest`
   // only ever snapshots already-committed images, so any capture-screen
   // action that fires while a paste is still being read would silently ship
   // without it. Gates Send/Try again/Report on GitHub instead/Save
@@ -1676,7 +1676,7 @@ function isImageFile(file: File): boolean {
 }
 
 /**
- * The dialog's attachment target (ticket 08 / T5): paste, drop, and
+ * The dialog's attachment target (T5): paste, drop, and
  * click-to-browse all funnel into `attachments.addFiles`, which owns every
  * attach-time rejection (count/type/size/budget - see
  * `use-report-issue-attachments.ts`). The review-warning line renders only
@@ -1837,7 +1837,7 @@ function ConsentPanel(props: {
   readonly onToggleDiagnostics: (checked: boolean) => void;
 }): ReactNode {
   // Honest per build: the no-DSN bundle never includes screenshots (a
-  // deliberate ticket 08 choice - see `saveDiagnosticBundle`'s own doc
+  // deliberate choice - see `saveDiagnosticBundle`'s own doc
   // comment) and log tails only when their toggle is on below, so the
   // summary must say exactly that rather than implying screenshots are
   // "in the GitHub draft" (the public draft never carries images either -
@@ -1942,7 +1942,7 @@ function ConsentLogToggleRow(props: {
   );
 }
 
-// One consent flag, one row, two files (ticket 03 / plan D3): there is no
+// One consent flag, one row, two files (plan D3): there is no
 // scenario where a user wants `browser-telemetry.jsonl` attached but not
 // `browser-trace.jsonl` (or vice versa), so a single switch covers both -
 // unlike `ConsentLogToggleRow`'s single target, this offers two independent

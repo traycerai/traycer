@@ -48,7 +48,7 @@ export type EdgeSide = "left" | "right";
 export type TabStripPlacement = "top" | EdgeSide;
 
 /**
- * What the vertical strip shows (D8): `layered` keeps it to tabs, `activity`
+ * What the vertical strip shows: `layered` keeps it to tabs, `activity`
  * also lists the active task's live agents under its row.
  */
 export type SideStripView = "layered" | "activity";
@@ -241,7 +241,7 @@ export interface LayoutArrangement {
    * of the tab strip's own placement (S-06).
    */
   readonly sidebarSide: EdgeSide;
-  /** What the vertical strip shows (D8); ignored while the tabs are at the top. */
+  /** What the vertical strip shows; ignored while the tabs are at the top. */
   readonly sideStripView: SideStripView;
   /** Tab overflow: scroll the tabs, or shrink them to fit. */
   readonly taskTabLayout: TaskTabLayout;

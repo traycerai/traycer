@@ -1,6 +1,6 @@
 /**
  * Real-`@legendapp/list` integration coverage for the chat-timeline follow
- * latch wiring (fixup: callback-synchronous-follow).
+ * latch wiring.
  *
  * The pure/hook-level latch suite (`chat-timeline-follow-latch.test.ts`) already
  * proves the latch itself is sound against a hand-constructed `LegendListRef`.

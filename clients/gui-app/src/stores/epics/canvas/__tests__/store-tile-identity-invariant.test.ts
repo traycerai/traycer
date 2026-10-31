@@ -1,6 +1,6 @@
 /**
  * Store-integration pins for the canvas-store-wide immutable tile identity
- * invariant (Ticket 21 slice 1). `tile-identity-invariant.test.ts` pins the
+ * invariant. `tile-identity-invariant.test.ts` pins the
  * pure detection/policy functions in isolation; this file drives the SAME
  * invariant through the real store wiring: the wrapped internal `set()`
  * (every action below `updateTabCanvas` AND the handful of actions - like

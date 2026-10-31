@@ -478,7 +478,7 @@ describe("CodexRateLimitView (extended fields)", () => {
   });
 
   it("shows a relative countdown for a short popover window", () => {
-    // Fixup C #1: the popover reverts to the same relative-for-short /
+    // The popover reverts to the same relative-for-short /
     // exact-for-weekly split as the Settings card. `primary` is a 5h window, so
     // it reads as a relative countdown ("Resets in 4h 7m"), not an absolute date.
     render(

@@ -1603,7 +1603,7 @@ export interface ChatSessionState {
   readonly lastFailedAttempt: LastFailedAttempt | undefined;
   /**
    * The last CONFIRMED fallback result for the current incident
-   * (`chat.subscribe@1.10`, D215/D218), or `undefined` when there is none.
+   * (`chat.subscribe@1.10`, D215), or `undefined` when there is none.
    *
    * Same derived-per-frame contract, same assign-straight-across rule and same
    * BY-VALUE read as the three above. What is different is what a reader may
@@ -12446,7 +12446,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // registry disposes whatever the predicate says. A longer timer is not
         // a handoff. So before this store goes, anything that exists ONLY here
         // is installed as a closed start-page draft - the app's durable,
-        // user-visible home for an unsent prompt (D01/D03), which outlives the
+        // user-visible home for an unsent prompt, which outlives the
         // session and has its own UI, the composer's Drafts control, for
         // finding and reopening it.
         //
@@ -14158,7 +14158,7 @@ function refusalCauseOf(
  * `status: "rejected"` becomes `refused` rather than `null`, deliberately. The
  * menu has to tell "the host declined this hold" from "no hold was ever asked
  * for": the first puts "Couldn't pause the countdown." on the chooser's footer
- * - no cause, since a refusal proves no advancement (D220) - the second is the
+ * - no cause, since a refusal proves no advancement - the second is the
  * ordinary closed state, and collapsing them would make a refusal look like a
  * menu that simply never opened.
  */
