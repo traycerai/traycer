@@ -83,7 +83,7 @@ const fallbackMocks = vi.hoisted(
      *
      * It used to be a `vi.fn()` minted inside the module mock's factory, which
      * is unreachable by construction - a fresh function every call, so no test
-     * could ever arm it. This needs the restore's OWN lost reply, not a
+     * could ever arm it. D347 needs the restore's OWN lost reply, not a
      * stand-in, so it routes through the fixture the way `set` and `reset` do.
      * The hook itself stays mocked, which was the reason it was inert: it
      * would otherwise reach `useHostClient()` outside a provider.
@@ -1148,7 +1148,7 @@ describe("FallbackSettingsPanel - R8 a confirmed reset whose read fails is not s
     // notice, and a page showing settings the host no longer has as though
     // they had just been read. This `findByTestId` is what goes red.
     const banner = await screen.findByTestId("fallback-reset-unrefreshed");
-    // Re-specified. This asserted `toContain("out of
+    // Re-specified under D330. This asserted `toContain("out of
     // date")` when written: an inequality claim - a reset of an ALREADY-DEFAULT
     // policy leaves the host holding exactly what is on screen, so "out of
     // date" is a fact about the host that the failed read is precisely what
@@ -3211,7 +3211,7 @@ describe("FallbackSettingsPanel - sixth pass: no sentence asserts host knowledge
     // Same falsification as above, and this is the arm where the old wording
     // was furthest from the truth: the host has stored exactly what is on
     // screen, and the page said it had never been sent.
-    // Re-specified. This asserted
+    // Re-specified under D347. This asserted
     // `toContain("has been saved")`, quoting "A change you made since has been
     // saved." - a HISTORY claim the state cannot support, since a read-back can
     // adopt a policy nobody authored. The sentence now describes the display's
@@ -3351,7 +3351,7 @@ describe('FallbackSettingsPanel - seventh pass: "hasn\'t been sent" is claimed o
     // confirmation at this revision, falls to the final arm, and tells the user
     // the values a read-back just confirmed have never been sent.
     expect(notice.textContent).not.toContain(NEVER_SENT);
-    // Re-specified. This asserted
+    // Re-specified under D347. This asserted
     // `toContain("has been saved")`, quoting "A change you made since has been
     // saved." - a HISTORY claim the state cannot support, since a read-back can
     // adopt a policy nobody authored. The sentence now describes the display's
@@ -3414,7 +3414,7 @@ describe('FallbackSettingsPanel - seventh pass: "hasn\'t been sent" is claimed o
     // confirmed them.
     expect(notice.textContent).not.toContain(NEVER_SENT);
     expect(notice.textContent).not.toContain(SENT_UNKNOWN);
-    // Re-specified. This asserted
+    // Re-specified under D347. This asserted
     // `toContain("has been saved")`, quoting "A change you made since has been
     // saved." - a HISTORY claim the state cannot support, since a read-back can
     // adopt a policy nobody authored. The sentence now describes the display's
@@ -3564,7 +3564,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
   it("CONTROL: when the read-back returns the displayed change, the display account still holds", async () => {
     // The positive control for the pin above: the same shape, except the
     // read-back returns B. The sentence is unchanged - it describes the
-    // display's relation to the host either way, which is the point -
+    // display's relation to the host either way, which is the point of D347 -
     // so this pin is what stops the fix being "delete the confirmed arm".
     fallbackMocks.queryData = respond(
       policy({ enabled: false, graceWindowSeconds: 15 }),

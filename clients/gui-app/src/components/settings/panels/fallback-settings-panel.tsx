@@ -846,8 +846,8 @@ function FallbackPolicyEditor(props: {
     const requestId = createFallbackSaveRequestId();
     // A restore sends nothing from the screen - the host picks the default
     // groups - so it must not make the displayed values count as dispatched,
-    // and if its own reply is lost the notice has to say that the
-    // RESTORE is what went unanswered.
+    // (D339), and if its own reply is lost the notice has to say that the
+    // RESTORE is what went unanswered (D347).
     dispatch({
       type: "save-started",
       field: "tierGroups",
@@ -909,8 +909,8 @@ function FallbackPolicyEditor(props: {
     setOverrideSavePolicy(null);
     const requestId = createFallbackSaveRequestId();
     // As the restore above: a reset sends DEFAULTS, not the values on screen,
-    // so "what's on screen was sent" must stay unsupported by it, and a
-    // lost reply is described as the reset's, not the display's.
+    // so "what's on screen was sent" must stay unsupported by it (D339), and a
+    // lost reply is described as the reset's, not the display's (D347).
     dispatch({
       type: "save-started",
       field: "danger",
@@ -1463,7 +1463,7 @@ type UnrefreshedResetSubject = "pre-reset-values" | "own-edit" | "rollback";
  */
 function unrefreshedResetBody(subject: UnrefreshedResetSubject): string {
   switch (subject) {
-    // A reset that succeeded proves the host WROTE something, not that
+    // D330: a reset that succeeded proves the host WROTE something, not that
     // what it wrote differs from this. Resetting an already-default policy
     // yields the same values back, and the follow-up get that would have shown
     // that is exactly the request that failed - so the old "not what this host
@@ -1605,7 +1605,7 @@ function FallbackSaveStatus(props: {
     unknownSave,
     lastConfirmedRequestId,
   } = props.state;
-  // After a reset whose read failed, `persisted` is the PRE-reset policy
+  // D330. After a reset whose read failed, `persisted` is the PRE-reset policy
   // and the host's row has been replaced by something nobody here has seen. It
   // stops being unverified only when a post-reset write is confirmed (a read
   // that succeeds clears the banner outright, so `unrefreshedReset !== null`
@@ -1956,7 +1956,7 @@ function TierStepHint({
  *    actively using and the stale sentence becomes the false one. Hence
  *    `persistedUnverified` rather than a bare "is the page stale".
  *  - `refused-kept` claims the DISPLAYED values are stored, and that takes TWO
- *    facts, not one. Comparing the values against `persisted`
+ *    facts, not one (**D330**). Comparing the values against `persisted`
  *    settles only SAMENESS - see {@link fallbackPolicyValuesEqual} - and
  *    sameness with a copy the host may have discarded is not storage. So this
  *    arm consults `persistedUnverified` too, and where `persisted` is
@@ -1984,8 +1984,8 @@ function TierStepHint({
  */
 /**
  * What the DISPLAYED values' own request is doing, from that request's actual
- * state rather than from a revision comparison, and from POSITIVE
- * evidence rather than from elimination.
+ * state rather than from a revision comparison (D330), and from POSITIVE
+ * evidence rather than from elimination (D339).
  *
  * Two rewrites, one direction. `unknownSave.revision !== revision` was standing
  * in for "the display was never sent" and covered four situations, three of
@@ -2057,7 +2057,7 @@ function displayDispatchState(input: {
    * arms answered `true` and both got the rollback's sentence.
    */
   readonly refused: FallbackRefusedDraft | null;
-  /** Whether the displayed values equal `persisted` - SAMENESS only. */
+  /** Whether the displayed values equal `persisted` - SAMENESS only (D330). */
   readonly matchesPersisted: boolean;
 }): FallbackDisplayDispatch {
   // The display IS the unanswered draft - the most specific thing that can be
@@ -2069,7 +2069,7 @@ function displayDispatchState(input: {
   // draft and neither moves it. Without this check that request's uncertainty
   // is attached to whatever happens to be on screen, including an invalid edit
   // that was never sent anywhere: this arm returns before the positive gate is
-  // ever consulted, so the gate cannot save it.
+  // ever consulted, so the gate cannot save it (D347).
   if (
     input.unknownSave !== null &&
     input.unknownSave.carries === "draft" &&
@@ -2099,7 +2099,7 @@ function displayDispatchState(input: {
   ) {
     return "confirmed";
   }
-  // The last two arms are the split, and the ORDER is the point: "never
+  // The last two arms are the D339 split, and the ORDER is the point: "never
   // sent" is now claimed only on evidence, never by elimination.
   //
   // A display above every revision this editor has dispatched is an edit made
@@ -2205,7 +2205,7 @@ function saveNoticeStatus(
  * The account of the display given while `persisted` is a pre-reset policy the
  * host has replaced with something nobody here has read.
  *
- * Forbidden: "is in force", "is what this host is using now", and "no longer"
+ * D330 forbids "is in force", "is what this host is using now", and "no longer"
  * in use while that is true. A successful reset proves the host WROTE
  * something; it does not prove the result differs from what is on screen - an
  * already-default policy reset to defaults yields identical values - so this
@@ -2389,7 +2389,7 @@ function displayAccount(status: {
         return `What's on screen was confirmed as saved on this host. A ${operationNoun(status.authorityInvalidated)} ${OUTSTANDING_OPERATION_TAIL}`;
       }
       // Describes the DISPLAY's relation to the host, and says nothing about
-      // who authored it or when. `confirmedViewRevision` records that
+      // who authored it or when (D347). `confirmedViewRevision` records that
       // the values on screen ARE the host's row; it does not record that they
       // are a change the user made. A read-back can adopt the ORIGINAL policy -
       // neither of the two saves in flight having committed - and confirmation
@@ -2407,7 +2407,7 @@ function displayAccount(status: {
       // Deliberately neutral, and deliberately NOT a dispatch verdict either
       // way. These values reached the host; what it did with them is the one
       // thing nobody here knows, and the two sentences that would resolve it -
-      // "hasn't been sent" and "has been saved" - are both false.
+      // "hasn't been sent" and "has been saved" - are both false (D339).
       return "These settings were sent, but we couldn't confirm they were saved.";
     case "loaded-unchanged":
       // No host claim at all, which is why this arm has no authority branch:

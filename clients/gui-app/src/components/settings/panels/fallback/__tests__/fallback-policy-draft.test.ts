@@ -533,7 +533,7 @@ describe("fallbackPolicyDraftReducer - save-started / save-failed / save-succeed
     expect(fallbackSaveInFlight(next)).toBe(true);
     expect(next.hostError).toBeNull();
     expect(next.activeField).toBe("danger");
-    // `carries` is part of the record - a reset's pending entry has
+    // `carries` is part of the record as of D347 - a reset's pending entry has
     // to remember that it sent DEFAULTS, because the notice's first arm asks.
     // This assertion seeing the new field is the shape pin working.
     expect(next.pendingSaves).toEqual([
@@ -884,7 +884,7 @@ describe("fallbackPolicyDraftReducer - F21 unknown outcome + reconciled", () => 
       message: "Lost contact with this host before it answered.",
       outcome: "unknown",
     });
-    // `carries` travels from the pending record into the ticket:
+    // `carries` travels from the pending record into the ticket as of D347:
     // the notice's first arm - "what's on screen IS the unanswered draft" - is
     // only true of a draft request, and a ticket that has forgotten what its
     // request sent cannot say. This assertion seeing the field is the shape pin
@@ -1202,7 +1202,7 @@ describe("fallbackPolicyDraftReducer - composition-table cells (U / R / S togeth
    * reset ones - so the older sequences modelled a discriminator that did not
    * exist and could not have caught a no-draft request being described as the
    * display's. Making it a parameter is what puts those compositions back in
-   * contact with the distinction.
+   * contact with the distinction (D347).
    */
   function start(
     state: FallbackPolicyDraftState,
@@ -1314,7 +1314,7 @@ describe("fallbackPolicyDraftReducer - composition-table cells (U / R / S togeth
     // return in `applySaveSucceeded`. The controls then show exactly the policy
     // the host just confirmed while the banner beside them calls those values
     // pre-reset ones the host's settings haven't been re-read since. The
-    // banner's wording was hedged in the sixth pass and this stays a
+    // banner's wording was hedged in the sixth pass (D330) and this stays a
     // defect under either: the reset's result IS known here, because a later
     // write was confirmed.
     expect(corrected.unrefreshedReset).toBeNull();
