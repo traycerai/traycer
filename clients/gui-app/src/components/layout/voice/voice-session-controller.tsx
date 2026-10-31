@@ -105,6 +105,12 @@ import {
   type VoiceFocus,
 } from "@/stores/voice/voice-session-store";
 
+/** A navigation by voice from one bot's tab to another's, until the new tab is active. */
+interface VoiceNavigation {
+  /** The bot whose tab was active when the voice moved; `null` for none. */
+  readonly fromBotId: string | null;
+}
+
 /**
  * One vendor session attempt: the engine and what the mint said about it.
  * Every engine event and every async stage checks that the attempt is still
@@ -158,6 +164,11 @@ export function VoiceSessionController(): ReactNode {
   useEffect(() => {
     navigateRef.current = navigate;
   }, [navigate]);
+  /**
+   * A navigation by voice to another bot, until its tab is the active one:
+   * the selection sync does not read the tab it leaves as a move.
+   */
+  const voiceNavigationRef = useRef<VoiceNavigation | null>(null);
   /** The strip's own actions by voice; set once the session's controls exist. */
   const controlRef = useRef<(verb: ControlVerb) => void>(() => undefined);
   // Whether this deployment offers voice, read once per window before Talk
@@ -443,7 +454,13 @@ export function VoiceSessionController(): ReactNode {
       onAccepted: (request) => reconcileRef.current(request),
       decide: (request) => decideRef.current(request),
       recheck: (tuple) => tupleHolds(recheckRef.current(), tuple),
-      navigate: (target) => openTarget(target, navigateRef.current),
+      navigate: (target) => {
+        const from = selectHostFocusedRef(useTabsStore.getState());
+        const fromBotId = from !== null && from.kind === "bot" ? from.id : null;
+        voiceNavigationRef.current =
+          fromBotId === target.tuple.botId ? null : { fromBotId };
+        openTarget(target, navigateRef.current);
+      },
       think: (text, delegationId) => {
         const attempt = attemptRef.current;
         if (attempt === null || attempt.cancelled || !attempt.started) return;
@@ -1080,6 +1097,7 @@ export function VoiceSessionController(): ReactNode {
     <>
       {running ? (
         <VoiceSelectionSync
+          voiceNavigationRef={voiceNavigationRef}
           onManualChange={() => sayLoop().onSelectionChanged()}
           onResolved={() => void sayLoopRef.current?.onFocusResolved()}
         />
@@ -1220,11 +1238,13 @@ function readSelection(): VoiceFocus | null {
  * the person across tasks, and their words still go to the last bot.
  */
 function VoiceSelectionSync(props: {
+  /** The voice's own navigation to another bot, while its tab has not come up. */
+  readonly voiceNavigationRef: { current: VoiceNavigation | null };
   readonly onManualChange: () => void;
   /** The thread list resolved the anchor the focus already names. */
   readonly onResolved: () => void;
 }): null {
-  const { onManualChange, onResolved } = props;
+  const { voiceNavigationRef, onManualChange, onResolved } = props;
   const focusedRef = useTabsStore(selectHostFocusedRef);
   const activeBotId = focusedRef?.kind === "bot" ? focusedRef.id : null;
   const tab = useBotTabsStore((state) =>
@@ -1240,12 +1260,26 @@ function VoiceSelectionSync(props: {
 
   useEffect(() => {
     if (activeBotId === null || tab === null) return;
+    const navigation = voiceNavigationRef.current;
+    if (navigation !== null) {
+      // The tab the voice is leaving is still the active one: not a move.
+      if (activeBotId === navigation.fromBotId) return;
+      voiceNavigationRef.current = null;
+    }
     applySelection(
       focusOf(activeBotId, tab.hostId, thread, listed),
       onManualChange,
       onResolved,
     );
-  }, [activeBotId, listed, onManualChange, onResolved, tab, thread]);
+  }, [
+    activeBotId,
+    listed,
+    onManualChange,
+    onResolved,
+    tab,
+    thread,
+    voiceNavigationRef,
+  ]);
 
   return null;
 }

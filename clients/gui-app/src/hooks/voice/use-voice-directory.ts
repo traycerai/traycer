@@ -58,7 +58,9 @@ export function useVoiceDirectory(
     useHostMethodSupport(appHostId, "bot.thread.list") === true && enabled;
   const environments = useEnvironmentListQuery(client, environmentsSupported);
   const botList = useBotListQuery(client, botsSupported);
-  const bots = botList.data?.bots ?? NO_BOTS;
+  // No session, no bots: the per-bot reads below (thread lists, follows) are
+  // made only while a session runs.
+  const bots = enabled ? (botList.data?.bots ?? NO_BOTS) : NO_BOTS;
   const lists = useHostQueries<HostRpcRegistry, "bot.thread.list">({
     client,
     requests: useMemo(
