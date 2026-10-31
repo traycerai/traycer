@@ -37,7 +37,7 @@ export interface DesktopDialogState {
    * Full draft context (public prefill + private diagnostics), captured
    * immutably at open time alongside `reportIssueDraftId`. `reportIssueContext`
    * stays the back-compat field existing readers use; this is additive so
-   * ticket 04's IPC wiring can read `privateDiagnostics` without touching the
+   * the IPC wiring can read `privateDiagnostics` without touching the
    * existing contract.
    */
   readonly reportIssueDraftContext: ReportIssueDraftContext | null;

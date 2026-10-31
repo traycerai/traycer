@@ -4,7 +4,7 @@
  *
  * Nothing here touches a store: `resolve-tile-open.ts` turns an intent plus
  * settings/canvas/viewport into a {@link TileOpenPlan}, and the executor
- * (ticket 05) is the only thing that runs one.
+ * is the only thing that runs one.
  */
 import type { AnalyticsSource } from "@/lib/analytics";
 import type { EdgeDropPosition } from "@/stores/epics/canvas/tile-tree";

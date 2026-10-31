@@ -752,7 +752,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       name: "failed",
       operation: baseAttempt({ phase: "downloading", liveness: "interrupted" }),
       // No coarse mirror for a terminal outcome — a failed attempt was never
-      // the shape Ticket 04's mapping locked on.
+      // the shape the coarse mapping locked on.
       updateProgress: null,
     },
     {
@@ -762,7 +762,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
         execution: "parked",
       }),
       // A @1.3 host still mirrors the rich attempt into the legacy coarse
-      // field for pre-@1.3 siblings mid-fleet-update, and Ticket 04's mapping
+      // field for pre-@1.3 siblings mid-fleet-update, and the coarse mapping
       // reads ANY non-terminal attempt — parked included — as `"updating"`.
       // Without this mirrored alongside `updateOperation`, this case cannot
       // tell `holdsLifecycleGate(operationView)` (the fix) apart from the
@@ -1430,7 +1430,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     });
   });
 
-  // 9. The host-down window reaching THIS surface (Ticket 07 §5.2.7).
+  // 9. The host-down window reaching THIS surface.
   //
   // The projector's record arm always returns `kind: "unknown"` carrying
   // `lastKnownKind`, and this banner's supersede predicate rejected `unknown`

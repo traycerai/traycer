@@ -53,7 +53,7 @@ import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
  * Every entry point - the palette, the chrome's context menus, the Appearance
  * card, a Settings search result - lands here, because the canvas, the lease,
  * the width gate and the teardown are session facts and not properties of
- * whichever gesture reached them. The entry points themselves are ticket 10;
+ * whichever gesture reached them. The entry points live elsewhere;
  * what this module owns is what happens once one of them fires.
  *
  * The canvas is ALWAYS the sample workspace (L-87, superseding L-15): a user

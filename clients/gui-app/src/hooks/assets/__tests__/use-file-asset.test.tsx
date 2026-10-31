@@ -615,7 +615,7 @@ describe("useFileAsset", () => {
     // `emitBytes` above feeds); `second` resolves from the shared cache
     // without ever invoking its own fetcher - a genuine cache hit, and
     // exactly the case a fresh `<img>` remount can't detect via
-    // `img.complete` (ticket 07 closing E2E item).
+    // `img.complete`.
     expect(first.result.current.servedFromCache).toBe(false);
     expect(second.result.current.servedFromCache).toBe(true);
     expect(createObjectUrlMock).toHaveBeenCalledTimes(1);

@@ -1038,7 +1038,7 @@ describe("useEpicArchiveChat", () => {
     };
     // Still no optimistic CACHE WRITE - nothing here fabricates an archived
     // row. What the handlers do is refresh the host's record list, and that is
-    // a correction rather than an addition (chat-sync-v2 ticket 49): this test
+    // a correction rather than an addition: this test
     // used to assert both were absent, on the premise that "the archive flag
     // lives in the epic Y.Doc, so the host's write replicates back through the
     // epic stream". Since the single-write pivot `archivedAt` is a chat-DATABASE

@@ -5,7 +5,7 @@ import {
 
 /**
  * The global top-level-surface MRU/retention policy, shared by
- * `TopLevelTabHost`'s keep-alive layer and Ticket 21 slice 2's stable
+ * `TopLevelTabHost`'s keep-alive layer and the stable
  * tile-surface-host membership mirror (`tile-surface-membership.ts`).
  *
  * Pure recency + cap algorithm over kind-qualified `TabRef` keys (the

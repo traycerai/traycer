@@ -121,7 +121,7 @@ export function useLocalHostUpdateOperation(): LocalHostUpdateOperation {
           legacyFacts: null,
         });
 
-  // Ticket 07 §5.2.7 — the host-down window.
+  // The host-down window.
   //
   // Desktop re-reads `update-attempt.json` and publishes the facts on the
   // controller status for exactly this moment: the host is unreachable, so the

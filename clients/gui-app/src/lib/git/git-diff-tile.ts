@@ -163,10 +163,10 @@ export interface GitImageDiffRouting {
  * still route for its old side) - route when EITHER the current or previous
  * path is allowlisted, and (re-review P1) OR the previous path into the SVG
  * check too (`old.svg -> new.txt` is text to git on the rename). A
- * conflicted file is exempted from the `isBinary` check entirely (live E2E
- * finding, ticket 06): the host's bulk `listChangedFiles` numstat pipeline
+ * conflicted file is exempted from the `isBinary` check entirely (a live
+ * E2E finding): the host's bulk `listChangedFiles` numstat pipeline
  * now resolves a `MERGE_HEAD`/`CHERRY_PICK_HEAD` peer ref for conflicted
- * paths (`resolveConflictedIsBinary`, ticket 08), but falls back to leaving
+ * paths (`resolveConflictedIsBinary`), but falls back to leaving
  * `isBinary: false` unchanged when no such peer ref can be found - decision
  * #10 routes every conflicted image unconditionally regardless, so the
  * extension gate stays the correct signal for that residual gap. Shared

@@ -15,8 +15,8 @@ import { useFleetUpdateViews } from "@/hooks/host/use-fleet-update-views";
 import { hostQueryKeys } from "@/lib/query-keys";
 import type { HostRpcRegistry } from "@/lib/host";
 
-// `useFleetUpdateViews` is the Settings selector's WHOLE data source (Ticket
-// 06, subject F): one bounded sweep over borrowed sessions, projected per
+// `useFleetUpdateViews` is the Settings selector's WHOLE data source:
+// one bounded sweep over borrowed sessions, projected per
 // host id from a map keyed by that id. Per-host isolation is therefore a
 // property of the DATA SHAPE (`ObservationsByHostId`, read by exact hostId
 // key) rather than of any per-row rendering code - this suite proves it at

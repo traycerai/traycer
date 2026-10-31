@@ -56,7 +56,7 @@ function seedCanvasWithTile(tile: EpicCanvasTileRef, hostId: string): void {
 }
 
 /**
- * Ticket 11: a parked browser session's notification deep-links to the tile
+ * A parked browser session's notification deep-links to the tile
  * showing that session, on the host the session lives on. It is the terminal
  * row's shape - an exact tile addressed by id - not a chat row's.
  */

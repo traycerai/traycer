@@ -13,7 +13,7 @@ import type {
 import { hostQueryKeys } from "@/lib/query-keys";
 
 /**
- * PR 2150 cold-review fix: a menu-open retry can put an `epic.getTaskContexts`
+ * A menu-open retry can put an `epic.getTaskContexts`
  * refetch in flight BEFORE a sibling tab's pin write, and that refetch can
  * still be running when the write's own RPC comes back - so without
  * intervention its stale response lands AFTER the commit and puts the
@@ -241,7 +241,7 @@ describe("useEpicSetPinned - task-contexts cache race (PR 2150 cold review)", ()
   });
 
   /**
-   * Small review fix on top of the above: the committed-bit re-patch in
+   * On top of the above: the committed-bit re-patch in
    * `onSuccess` now scopes `setEpicPinnedInTaskContextsCaches` with
    * `hostId: null` - every host's task-contexts cache for this user, not just
    * the dispatch host's. Before, an unpin dispatched to host-1 left a SECOND
@@ -324,7 +324,7 @@ describe("useEpicSetPinned - task-contexts cache race (PR 2150 cold review)", ()
   });
 
   /**
-   * Review fix on top of the above two: `onSuccess` now also calls
+   * On top of the above two: `onSuccess` now also calls
    * `restartInFlightFirstTaskContextsReads`. `cancelInFlightTaskContextsReads`
    * (the helper the first test in this file exercises) deliberately skips a
    * FIRST fetch - one that holds no data yet - because cancelling it alone

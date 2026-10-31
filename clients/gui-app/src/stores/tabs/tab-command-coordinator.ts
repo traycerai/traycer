@@ -1796,7 +1796,7 @@ export class TabCommandCoordinator {
     // whether any tab for them is currently open (a chat can leave a
     // durable entry behind long after its own tab closed).
     //
-    // Ticket 15 review round 5 (item 2): ONE batched call, not a `forEach`
+    // ONE batched call, not a `forEach`
     // of the singular per-epic evict - the canvas close sweep below writes
     // durable state back for whichever of these epics still had open tiles,
     // so every epic in this access-loss batch must still be fenced by the

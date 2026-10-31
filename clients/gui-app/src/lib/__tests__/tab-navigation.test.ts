@@ -1,10 +1,10 @@
 /**
- * Tab navigation single-path guard (ticket 12).
+ * Tab navigation single-path guard.
  *
  * Every entry point that switches the active tab must funnel through
  * `navigateToTabIntent` so cross-cutting behavior (per-kind store
- * activation, route resolution) lands once. The ESLint rule from
- * ticket 05 blocks raw `setActiveTab` / `setActiveDraft` /
+ * activation, route resolution) lands once. The ESLint rule
+ * blocks raw `setActiveTab` / `setActiveDraft` /
  * `epicTabRoute` outside the seam at compile time; this test locks
  * down the runtime contract: the seam itself wires
  * `descriptor.activate -> router.navigate`, and keybinding dispatch

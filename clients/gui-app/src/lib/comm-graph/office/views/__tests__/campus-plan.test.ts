@@ -1847,8 +1847,8 @@ describe("planCampus", () => {
       // does; Campus draws it from the plan.
       if (seat.civicRoomId !== null) continue;
       const occupantId = occupantBySeatId.get(seat.seatId) ?? null;
-      // Occupied, not sheeted, `openRequests: 3` - the union the ticket
-      // measures the box against.
+      // Occupied, not sheeted, `openRequests: 3` - the union the box is
+      // measured against.
       const occupiedBoxes = spriteBoxesOf(layout, seat, {
         agentId: occupantId,
         name: occupantId,

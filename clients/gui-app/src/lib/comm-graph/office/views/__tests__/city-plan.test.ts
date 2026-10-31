@@ -1448,8 +1448,8 @@ describe("planCity", () => {
       if (seat.civicRoomId !== null) continue;
       const occupantId = occupantBySeatId.get(seat.seatId) ?? null;
 
-      // Occupied, not sheeted, `openRequests: 3` - the state the ticket
-      // measures the union against.
+      // Occupied, not sheeted, `openRequests: 3` - the state the union is
+      // measured against.
       const boxes = spriteBoxesOf(layout, seat, stateFor(occupantId, false));
       const mast = boxes.find((entry) => entry.name === "spire");
       const nonMast = boxes.filter((entry) => entry.name !== "spire");

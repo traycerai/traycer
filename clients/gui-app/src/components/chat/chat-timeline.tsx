@@ -100,8 +100,7 @@ function resolveChatTimelineMvcp(
     : CHAT_TIMELINE_MVCP_SIZE_ONLY;
 }
 
-// Spacer alignment: the old 40px header/footer were
-// unsanctioned drift (decision log #30).
+// Spacer alignment: the old 40px header/footer were unsanctioned drift.
 // Consumers read the live measured size via `onListMetricsChange`, so they
 // adapt automatically; nothing here is a hardcoded assumption elsewhere.
 const CHAT_TIMELINE_LIST_HEADER = (
