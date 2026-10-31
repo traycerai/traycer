@@ -9,8 +9,8 @@ import {
 } from "@traycer-clients/shared/support/image-attachment-guards";
 
 /**
- * Renderer-side ingest for the report-issue dialog's attachment target
- * (tech-plan T5). Reuses the composer's ingest RULES (image/*
+ * Renderer-side ingest for the report-issue dialog's attachment target.
+ * Reuses the composer's ingest RULES (image/*
  * only, 5 MiB per image, 15s read timeout - see `use-composer-paste.ts`) but
  * not its hook: that hook inserts into a tiptap editor document, while this
  * one holds a flat list of up to 3 images for a thumbnail strip with
