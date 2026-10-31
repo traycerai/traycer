@@ -3414,3 +3414,46 @@ describe("a provisional answer on the focused channel", () => {
     expect(commentary).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("a bot whose stream ends for good under a live session", () => {
+  it("takes its stopped answer out of the queue, and a read of it still waiting is never said", async () => {
+    fake.activity.set(BOT_ID, {
+      trunk: {
+        state: "parked",
+        startedAt: null,
+        step: null,
+        requestId: "req-7",
+        reason: null,
+      },
+      threads: {},
+    });
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    focusOn(CHANNEL_FOCUS);
+    await bringLive();
+    expect(
+      useVoiceSessionStore.getState().queue.map((item) => item.kind),
+    ).toEqual(["failed"]);
+    const commentary = fake.engines[0]?.appendCommentary;
+
+    // The voice is busy, so the read waits its turn.
+    act(() => eventsOf(0).onOutputTranscriptDelta("Working on it."));
+    act(() => {
+      runVoiceQueueVerb({
+        kind: "read",
+        itemId: "stopped:bot-1:req-7",
+        delegationId: null,
+      });
+    });
+    expect(commentary).not.toHaveBeenCalled();
+
+    act(() => fake.activity.remove(BOT_ID));
+    await settle();
+    expect(useVoiceSessionStore.getState().queue).toEqual([]);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(commentary).not.toHaveBeenCalled();
+  });
+});
