@@ -75,7 +75,7 @@ describe("<LandingNewTabChooser />", () => {
   // about there being two kinds of tab, so a paraphrase here is a product
   // change, not a wording tweak. The two card blurbs are still verbatim; the
   // hint line's SHAPE is fixed and its chords are read from the bindings,
-  // because a literal chord is Mac-only.
+  // because the old literal chord was Mac-only.
   //
   // This suite runs on jsdom's non-Mac user agent, which is the reader the old
   // literal was wrong for.
