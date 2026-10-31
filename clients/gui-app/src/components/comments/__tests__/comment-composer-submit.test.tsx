@@ -72,7 +72,6 @@ function composerElement(args: RenderComposerArgs) {
         isPending={args.isPending}
         onSubmit={args.onSubmit}
         onCancel={null}
-        leadingActions={null}
         className={undefined}
         ref={args.handleRef}
       />

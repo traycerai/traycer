@@ -6,10 +6,15 @@ import {
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
 
-import { appendCommentTextToDraft } from "../append-comment-text-to-draft";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
+import {
+  appendCommentTextToDraft,
+  appendCommentTextToNewConversationDraft,
+} from "../append-comment-text-to-draft";
 
 afterEach(() => {
   useComposerDraftStore.setState({ drafts: {} });
+  useNewConversationModalStore.setState({ draftPatchesByEpicId: {} });
 });
 
 function paragraph(...content: JsonContent[]): JsonContent {
@@ -79,5 +84,40 @@ describe("appendCommentTextToDraft", () => {
     appendCommentTextToDraft("chat-1", doc(paragraph(), paragraph(text("  "))));
 
     expect(readComposerDraftSnapshot("chat-1")).toBe(before);
+  });
+});
+
+describe("appendCommentTextToNewConversationDraft", () => {
+  const modalContent = (): JsonContent[] => [
+    ...(useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
+      ?.content?.content ?? []),
+  ];
+
+  it("appends below what the modal already holds, with a blank paragraph between, and drops the selection", () => {
+    const store = useNewConversationModalStore.getState();
+    store.setContent("epic-1", doc(paragraph(text("already typed"))));
+
+    appendCommentTextToNewConversationDraft(
+      "epic-1",
+      doc(paragraph(text("from the box"))),
+    );
+
+    expect(modalContent()).toEqual([
+      paragraph(text("already typed")),
+      { type: "paragraph" },
+      paragraph(text("from the box")),
+    ]);
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
+        ?.selection,
+    ).toBeNull();
+  });
+
+  it("leaves the modal untouched for a comment with no text", () => {
+    appendCommentTextToNewConversationDraft("epic-1", doc(paragraph()));
+
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+    ).toBeUndefined();
   });
 });

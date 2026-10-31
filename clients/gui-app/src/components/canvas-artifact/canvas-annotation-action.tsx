@@ -17,6 +17,7 @@ import {
 } from "./canvas-annotation-send";
 import type { CanvasSelection } from "./canvas-selection-store";
 import { useCanvasAnnotationChatTargets } from "./use-canvas-annotation-chat-targets";
+import { useCanvasAnnotationNewChat } from "./use-canvas-annotation-new-chat";
 
 export interface CanvasAnnotationScope {
   readonly epicId: string;
@@ -58,6 +59,7 @@ export function CanvasAnnotationAction(props: {
   readonly captureRect: () => CanvasBox | null;
 }) {
   const targets = useCanvasAnnotationChatTargets(props.scope);
+  const newChat = useCanvasAnnotationNewChat(props.scope);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuClosed = useChatTargetMenuClosed(setMenuOpen);
   const [attached, setAttached] = useState<{
@@ -67,9 +69,18 @@ export function CanvasAnnotationAction(props: {
   const revealChat = useRevealChatInTab(props.scope);
   const mutation = useMutation({
     mutationKey: canvasMutationKeys.attach(props.scope.artifactId),
-    mutationFn: async (chatId: string) => {
+    mutationFn: async (chatId: string | null) => {
       // Capture on the explicit action, before revealing another tile.
       const annotation = props.record();
+      if (chatId === null) {
+        await newChat.send({
+          record: annotation,
+          captureRect: props.captureRect,
+          awaitPickerClosed: menuClosed.awaitClosed,
+          text: null,
+        });
+        return null;
+      }
       const record = await captureAndAttachCanvasAnnotation({
         chatId,
         record: annotation,
@@ -79,8 +90,9 @@ export function CanvasAnnotationAction(props: {
       return { chatId, record };
     },
     onSuccess: (result) => {
-      setAttached(result);
       setMenuOpen(false);
+      if (result === null) return;
+      setAttached(result);
       revealChat(result.chatId);
     },
   });
@@ -111,7 +123,9 @@ export function CanvasAnnotationAction(props: {
         <ChatTargetMenu
           targets={targets}
           onSelectChat={selectTarget}
-          onSelectNewChat={null}
+          onSelectNewChat={
+            newChat.supported ? () => mutation.mutate(null) : null
+          }
           open={menuOpen}
           onOpenChange={menuClosed.onOpenChange}
           onClosed={menuClosed.onClosed}
@@ -120,7 +134,10 @@ export function CanvasAnnotationAction(props: {
               label="Send to chat"
               tooltip={null}
               className="tc-editor-toolbar-action"
-              disabled={mutation.isPending || targets.length === 0}
+              disabled={
+                mutation.isPending ||
+                (targets.length === 0 && !newChat.supported)
+              }
               onMouseDown={(event) => event.preventDefault()}
               icon={
                 mutation.isPending ? (
@@ -137,7 +154,7 @@ export function CanvasAnnotationAction(props: {
           }
         />
       </div>
-      {targets.length === 0 ? (
+      {targets.length === 0 && !newChat.supported ? (
         <span className="rounded bg-popover p-1 text-ui-xs text-popover-foreground">
           Create a chat to attach this selection.
         </span>
