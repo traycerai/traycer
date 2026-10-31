@@ -84,7 +84,8 @@ export function CanvasSelectionMenu(props: {
       props.selection,
       props.registry,
     );
-    if (!moved) action.setMessage("The page changed. Select the element again.");
+    if (!moved)
+      action.setMessage("The page changed. Select the element again.");
   };
   return (
     <div className="flex flex-col gap-1">

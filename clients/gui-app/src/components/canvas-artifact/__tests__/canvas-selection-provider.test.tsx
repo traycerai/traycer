@@ -50,6 +50,7 @@ vi.mock("../canvas-editing-overlay", () => ({
       onPick={props.onPick}
       onRetire={props.onRetire}
       onEscape={props.onEscape}
+      onSelectParent={props.onSelectParent}
     />
   ),
 }));

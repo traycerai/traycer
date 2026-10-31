@@ -120,7 +120,9 @@ export function AnchoredDraftPopover(props: {
       triggerId === null || triggerId === undefined
         ? null
         : document.getElementById(triggerId);
-    return trigger !== null && (floatingRef.current?.contains(trigger) ?? false);
+    return (
+      trigger !== null && (floatingRef.current?.contains(trigger) ?? false)
+    );
   };
   const outside = useEffectEvent((event: PointerEvent) => {
     if (
@@ -341,7 +343,9 @@ export function AnchoredDraftPopover(props: {
             onSent={() => {
               // Sent, not saved: the box closes without the discard prompt,
               // because the text now lives in the chat composer.
-              useAnchoredDraftStore.getState().clearDraft(epicId, draft.draftId);
+              useAnchoredDraftStore
+                .getState()
+                .clearDraft(epicId, draft.draftId);
               onClosed();
             }}
             onFailure={(text) => setFailure({ draftId: draft.draftId, text })}
