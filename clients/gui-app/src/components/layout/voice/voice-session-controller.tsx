@@ -35,12 +35,16 @@ import { appLogger, describeLogError } from "@/lib/logger";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
-import { watchAudioLevel } from "@/lib/voice/audio-level";
+import { watchAudioLevel, type AudioLevelWatch } from "@/lib/voice/audio-level";
 import { VoiceEngineError, type VoiceEngine } from "@/lib/voice/engine";
 import {
+  baselineReplyWatch,
+  createReplyWatchMemory,
   replySpeechText,
-  seenMessageIds,
+  requestIdAnsweredBy,
   takeNewBotReplies,
+  type ReplyRow,
+  type ReplyWatchMemory,
 } from "@/lib/voice/focused-replies";
 import { createBrowserGptLiveEngine } from "@/lib/voice/gpt-live-engine";
 import { createSayLoop, type SayLoop } from "@/lib/voice/say-loop";
@@ -74,16 +78,38 @@ import {
 } from "@/stores/voice/voice-session-store";
 
 /**
+ * One vendor session attempt: the engine and what the mint said about it.
+ * Every engine event and every async stage checks that the attempt is still
+ * the controller's and not cancelled before touching anything; an End, a
+ * replacement or an unmount cancels it, and its vendor accounting (the
+ * close, the end route) finishes on its own afterwards.
+ */
+interface Attempt {
+  /** The store's session token the attempt was made under. */
+  readonly token: number;
+  readonly engine: VoiceEngine;
+  /** The server's id, owned the moment the mint answers. */
+  sessionId: string | null;
+  expiresAt: number;
+  started: boolean;
+  /** What the mint refused with, so a pre-start failure keeps its reason. */
+  failure: VoiceEndReason | null;
+  cancelled: boolean;
+}
+
+/**
  * Owns the voice session for this window (Tracy Bots voice, VT2): the
  * microphone, the engine behind the seam, the speech scheduler, the say loop
  * and the focused hear loop. Mounted once, app-wide; the Talk control and the
  * session strip reach it through the store's `driver`.
  *
- * Desktop lifecycle (Tanveer, 2026-10-29): window close and blur keep the
- * session; lock, sleep and quit end it, so an open microphone never outlives
- * the person at the machine. The shell's `onSystemSuspended` is the lock and
- * sleep edge; a page going away closes the engine, which ends the vendor
- * session, and the server finalizes the rest from its own side.
+ * Ending is a terminal latch, whatever the close reason: local capture stops
+ * at once (the microphone tracks, the voice's playback), replacement timers
+ * are cancelled, every engine event is fenced, and the vendor accounting
+ * finishes asynchronously. Desktop lifecycle (Tanveer, 2026-10-29): window
+ * close and blur keep the session (the shell hides a window whose voice is
+ * live instead of destroying it); lock, sleep and quit end it, so an open
+ * microphone never outlives the person at the machine.
  */
 export function VoiceSessionController(): ReactNode {
   const runnerHost = useRunnerHost();
@@ -125,7 +151,7 @@ export function VoiceSessionController(): ReactNode {
   // session's end, mirroring its three facts into the store for the strip.
   // Held twice: the ref for the engine's events and the say loop, which run
   // outside render, and the state for the feed that renders with it.
-  const engineRef = useRef<VoiceEngine | null>(null);
+  const attemptRef = useRef<Attempt | null>(null);
   const speechRef = useRef<SpeechScheduler | null>(null);
   const [speech, setSpeech] = useState<SpeechScheduler | null>(null);
   const ensureSpeech = useCallback((): SpeechScheduler => {
@@ -133,8 +159,10 @@ export function VoiceSessionController(): ReactNode {
     if (existing !== null) return existing;
     const created = createSpeechScheduler({
       append: (text, delegationId) => {
+        const attempt = attemptRef.current;
+        if (attempt === null || attempt.cancelled || !attempt.started) return;
         try {
-          engineRef.current?.appendCommentary(text, delegationId);
+          attempt.engine.appendCommentary(text, delegationId);
         } catch (error) {
           appLogger.warn("[voice] append failed", {
             error: describeLogError(error),
@@ -208,6 +236,9 @@ export function VoiceSessionController(): ReactNode {
     viewerRef.current = viewerUserId;
   }, [viewerUserId]);
 
+  // One say loop per user session: its request bindings and in-flight actions
+  // carry the store's session token, so a late acceptance from an ended or
+  // replaced session changes nothing.
   const sayLoopRef = useRef<SayLoop | null>(null);
   const sayLoop = useCallback((): SayLoop => {
     const existing = sayLoopRef.current;
@@ -267,19 +298,46 @@ export function VoiceSessionController(): ReactNode {
   // ---- Session lifecycle ----------------------------------------------- //
   const micStreamRef = useRef<MediaStream | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const stopLevelWatchRef = useRef<(() => void) | null>(null);
+  const levelWatchRef = useRef<AudioLevelWatch | null>(null);
   const expiryTimerRef = useRef<number | null>(null);
   const remintWhenClearRef = useRef<(() => void) | null>(null);
-  const endingRef = useRef<VoiceEndReason | null>(null);
-  const sessionIdRef = useRef<string | null>(null);
-  // The re-mint paths are declared below `connectEngine`, which the engine's
-  // own events call them from; the refs break the cycle.
-  const remintRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  // What each watched chat has shown, for the user session: a feed remount
+  // re-baselines nothing. State, not a ref, because render hands a chat's
+  // memory to its feed; the map itself is mutated in place.
+  const [watchMemories] = useState(() => new Map<string, ReplyWatchMemory>());
+  const watchMemoryFor = useCallback(
+    (chatId: string): ReplyWatchMemory => {
+      const existing = watchMemories.get(chatId);
+      if (existing !== undefined) return existing;
+      const created = createReplyWatchMemory();
+      watchMemories.set(chatId, created);
+      return created;
+    },
+    [watchMemories],
+  );
+  // The re-mint path is declared below `connectEngine`, which the engine's
+  // own events reach it from; the refs break the cycle.
+  const remintRef = useRef<(attempt: Attempt) => Promise<void>>(() =>
+    Promise.resolve(),
+  );
   const requestRemintWhenClearRef = useRef<() => void>(() => undefined);
+  const endRef = useRef<(reason: VoiceEndReason) => void>(() => undefined);
 
+  const setShellVoiceLive = useCallback(
+    (live: boolean) => {
+      void runnerHost.setVoiceSessionLive(live).catch((error: unknown) => {
+        appLogger.warn("[voice] shell live flag failed", {
+          error: describeLogError(error),
+        });
+      });
+    },
+    [runnerHost],
+  );
+
+  /** Stops local capture and playback at once; nothing async. */
   const releaseAudio = useCallback(() => {
-    stopLevelWatchRef.current?.();
-    stopLevelWatchRef.current = null;
+    levelWatchRef.current?.stop();
+    levelWatchRef.current = null;
     const audio = audioRef.current;
     if (audio !== null) {
       audio.pause();
@@ -302,29 +360,69 @@ export function VoiceSessionController(): ReactNode {
     remintWhenClearRef.current = null;
   }, []);
 
-  const finishSession = useCallback(
+  /**
+   * The vendor side of an attempt that is no longer the controller's: the
+   * peer's close (confirmed or timed out) and then the server's end route,
+   * for every attempt that was minted, started or not.
+   */
+  const settleAttempt = useCallback(
+    async (attempt: Attempt): Promise<void> => {
+      try {
+        await attempt.engine.close();
+      } catch (error) {
+        appLogger.warn("[voice] engine close failed", {
+          error: describeLogError(error),
+        });
+      }
+      if (attempt.sessionId === null) return;
+      const result = await auth.endVoiceSession(attempt.sessionId);
+      if (result.kind !== "ok") {
+        appLogger.warn("[voice] end route did not answer", {
+          kind: result.kind,
+        });
+      }
+    },
+    [auth],
+  );
+
+  /**
+   * Everything local a session leaves: capture, playback, timers, the
+   * scheduler's items, the say loop and the feeds' memory. Synchronous, so
+   * a page going away releases the microphone before it is gone.
+   */
+  const finishLocal = useCallback(
     (reason: VoiceEndReason | null) => {
       clearTimers();
-      const sessionId = sessionIdRef.current;
-      sessionIdRef.current = null;
-      engineRef.current = null;
-      endingRef.current = null;
       releaseAudio();
       speechRef.current?.reset();
       sayLoopRef.current = null;
-      if (sessionId !== null) {
-        void auth.endVoiceSession(sessionId).then((result) => {
-          if (result.kind !== "ok") {
-            appLogger.warn("[voice] end route did not answer", {
-              kind: result.kind,
-            });
-          }
-        });
-      }
+      watchMemories.clear();
+      setShellVoiceLive(false);
       useVoiceSessionStore.getState().sessionEnded(reason);
     },
-    [auth, clearTimers, releaseAudio],
+    [clearTimers, releaseAudio, setShellVoiceLive, watchMemories],
   );
+
+  /**
+   * The terminal latch: takes the attempt away so no event of it is heard
+   * again, stops capture now, and lets the vendor accounting finish on its
+   * own. Idempotent; a session that is not running has nothing to end.
+   */
+  const end = useCallback(
+    (reason: VoiceEndReason) => {
+      const store = useVoiceSessionStore.getState();
+      const attempt = attemptRef.current;
+      if (store.phase === "idle" && attempt === null) return;
+      attemptRef.current = null;
+      if (attempt !== null) attempt.cancelled = true;
+      finishLocal(reason === "ended" ? null : reason);
+      if (attempt !== null) void settleAttempt(attempt);
+    },
+    [finishLocal, settleAttempt],
+  );
+  useEffect(() => {
+    endRef.current = end;
+  }, [end]);
 
   /** Opens an engine on the current microphone; `input` is what it opens knowing. */
   const connectEngine = useCallback(
@@ -332,41 +430,58 @@ export function VoiceSessionController(): ReactNode {
       const stream = micStreamRef.current;
       const micTrack = stream?.getAudioTracks()[0] ?? null;
       if (micTrack === null) return false;
-      const engine = createBrowserGptLiveEngine();
-      engineRef.current = engine;
-      // Written by the exchange callback below, read after `connect` settles.
-      const minted: {
-        id: string | null;
-        expiresAt: number;
-        failure: VoiceEndReason | null;
-      } = { id: null, expiresAt: 0, failure: null };
-      const store = useVoiceSessionStore.getState();
+      const attempt: Attempt = {
+        token: useVoiceSessionStore.getState().sessionToken,
+        engine: createBrowserGptLiveEngine(),
+        sessionId: null,
+        expiresAt: 0,
+        started: false,
+        failure: null,
+        cancelled: false,
+      };
+      attemptRef.current = attempt;
+      const owns = (): boolean =>
+        attemptRef.current === attempt && !attempt.cancelled;
+      const closedBeforeStart = (): VoiceEngineError =>
+        new VoiceEngineError(
+          "PEER_FAILED",
+          "The voice session was ended before it started.",
+        );
       try {
-        await engine.connect({
+        await attempt.engine.connect({
           micTrack,
           exchangeSdp: async (offerSdp) => {
+            if (!owns()) throw closedBeforeStart();
             const result = await auth.mintVoiceSession({ offerSdp, input });
             switch (result.kind) {
               case "ok":
-                minted.id = result.session.voiceSessionId;
-                minted.expiresAt = result.session.expiresAt;
+                // Owned from this moment: an End during the rest of the
+                // handshake still reaches the end route for it. One that
+                // came while the mint was out already settled the attempt
+                // without an id, so the id just minted is ended here.
+                attempt.sessionId = result.session.voiceSessionId;
+                attempt.expiresAt = result.session.expiresAt;
+                if (!owns()) {
+                  void auth.endVoiceSession(result.session.voiceSessionId);
+                  throw closedBeforeStart();
+                }
                 return result.session.answerSdp;
               case "dormant":
                 // The fallback when the availability read was wrong or
                 // stale: hide Talk now, and read the answer again.
-                store.setAvailability("dormant");
+                useVoiceSessionStore.getState().setAvailability("dormant");
                 void queryClient.invalidateQueries({
                   queryKey: voiceQueryKeys.availabilityAll(),
                 });
-                minted.failure = "unavailable";
+                attempt.failure = "unavailable";
                 break;
               case "credits-exhausted":
-                minted.failure = "credits";
+                attempt.failure = "credits";
                 break;
               case "unavailable":
               case "unauthorized":
               case "network-error":
-                minted.failure = "unavailable";
+                attempt.failure = "unavailable";
                 break;
             }
             throw new VoiceEngineError(
@@ -375,43 +490,48 @@ export function VoiceSessionController(): ReactNode {
             );
           },
           onRemoteAudio: (remote) => {
-            if (engineRef.current !== engine) return;
-            stopLevelWatchRef.current?.();
+            if (!owns()) return;
+            levelWatchRef.current?.stop();
             const audio = audioRef.current ?? new Audio();
             audioRef.current = audio;
             audio.autoplay = true;
             audio.srcObject = remote;
+            // Sound that cannot play is a session nobody can hear: it ends,
+            // and says so, rather than confirming deliveries by transcript.
             void audio.play().catch((error: unknown) => {
               appLogger.warn("[voice] remote audio play failed", {
                 error: describeLogError(error),
               });
+              if (owns()) endRef.current("playback");
             });
-            stopLevelWatchRef.current = watchAudioLevel(remote, (speaking) =>
-              speechRef.current?.noteOutputLevel(speaking),
-            );
+            const watch = watchAudioLevel(remote, (speaking) => {
+              if (owns()) speechRef.current?.noteOutputLevel(speaking);
+            });
+            levelWatchRef.current = watch;
+            ensureSpeech().setLevelDetection(watch.available);
           },
           events: {
             onInputTranscriptDelta: (text) => {
-              if (engineRef.current !== engine) return;
+              if (!owns()) return;
               const current = useVoiceSessionStore.getState();
               current.appendInputSegment(text, Date.now());
               current.pushCaptionLine({ direction: "input", text });
               ensureSpeech().noteInputTranscript();
             },
             onOutputTranscriptDelta: (text) => {
-              if (engineRef.current !== engine) return;
+              if (!owns()) return;
               useVoiceSessionStore
                 .getState()
                 .pushCaptionLine({ direction: "output", text });
               ensureSpeech().noteOutputTranscript(text);
             },
             onDelegationCreated: (delegationId) => {
-              if (engineRef.current !== engine) return;
+              if (!owns() || !attempt.started) return;
               ensureSpeech().noteDelegationCreated();
               void sayLoop().onDelegationCreated(delegationId);
             },
             onUsage: (usage) => {
-              if (engineRef.current !== engine) return;
+              if (!owns()) return;
               if (
                 usage.contextUsageRatio !== null &&
                 usage.contextUsageRatio >= REMINT_CONTEXT_USAGE_RATIO
@@ -420,92 +540,132 @@ export function VoiceSessionController(): ReactNode {
               }
             },
             onClosed: (reason) => {
-              if (engineRef.current !== engine) return;
-              if (reason === "app") {
-                finishSession(endingRef.current);
-                return;
-              }
+              // A cancelled attempt is being settled by whoever cancelled
+              // it; one that never started is finished by `connect`'s own
+              // failure path, with the mint's reason intact.
+              if (!owns() || !attempt.started) return;
+              attemptRef.current = null;
+              attempt.cancelled = true;
               // The vendor or the network ended a session that had time
               // left: a fresh one carries on with the same focus and words.
               // A session the server closed for credits refuses the re-mint
               // with 402, which ends it with the reason said.
-              if (Date.now() < minted.expiresAt - REMINT_BEFORE_EXPIRY_MS) {
-                void remintRef.current();
+              if (
+                reason !== "app" &&
+                Date.now() < attempt.expiresAt - REMINT_BEFORE_EXPIRY_MS
+              ) {
+                void remintRef.current(attempt);
                 return;
               }
-              finishSession("connection");
+              finishLocal("connection");
+              void settleAttempt(attempt);
             },
           },
         });
       } catch (error) {
-        if (engineRef.current !== engine) return false;
-        engineRef.current = null;
+        // An End or a replacement during the handshake has already finished
+        // locally and is settling the attempt (its minted id included).
+        if (attempt.cancelled) return false;
+        attemptRef.current = null;
+        attempt.cancelled = true;
         appLogger.warn("[voice] session connect failed", {
           error: describeLogError(error),
         });
-        finishSession(minted.failure ?? "connection");
+        finishLocal(attempt.failure ?? "connection");
+        void settleAttempt(attempt);
         return false;
       }
-      if (engineRef.current !== engine || minted.id === null) return false;
-      sessionIdRef.current = minted.id;
+      if (!owns() || attempt.sessionId === null) return false;
+      attempt.started = true;
       useVoiceSessionStore.getState().sessionLive({
-        id: minted.id,
-        expiresAt: minted.expiresAt,
-        engine,
+        id: attempt.sessionId,
+        expiresAt: attempt.expiresAt,
+        engine: attempt.engine,
       });
+      ensureSpeech().setReady(true);
+      setShellVoiceLive(true);
       clearTimers();
       const untilRemint =
-        minted.expiresAt - REMINT_BEFORE_EXPIRY_MS - Date.now();
+        attempt.expiresAt - REMINT_BEFORE_EXPIRY_MS - Date.now();
       expiryTimerRef.current = window.setTimeout(
         () => {
           expiryTimerRef.current = null;
-          void remintRef.current();
+          if (owns()) void remintRef.current(attempt);
         },
         Math.max(0, untilRemint),
       );
       return true;
     },
-    [auth, clearTimers, finishSession, queryClient, sayLoop, ensureSpeech],
+    [
+      auth,
+      clearTimers,
+      ensureSpeech,
+      finishLocal,
+      queryClient,
+      sayLoop,
+      setShellVoiceLive,
+      settleAttempt,
+    ],
   );
 
   /**
-   * Replaces the vendor session under the same focus, segments and queue:
-   * the old engine is closed and its end reported, the new one opens seeded
-   * with a summary of where the person is. Nothing is replayed.
+   * Replaces the vendor session under the same focus, segments and queue,
+   * one at a time: the old attempt is taken away and retired (its peer
+   * closed, its end reported) BEFORE the microphone track is offered to a
+   * new peer, so two sessions never carry the person's audio at once. The
+   * scheduler keeps its items but forgets the old engine's facts, and the
+   * new engine opens seeded with a summary of where the person is. Nothing
+   * is replayed.
    */
-  const remint = useCallback(async (): Promise<void> => {
-    const old = engineRef.current;
-    const oldId = sessionIdRef.current;
-    if (old === null) return;
-    clearTimers();
-    engineRef.current = null;
-    sessionIdRef.current = null;
-    old.close();
-    if (oldId !== null) void auth.endVoiceSession(oldId);
-    const state = useVoiceSessionStore.getState();
-    state.sessionConnecting();
-    state.setPendingDelegation(null);
-    await connectEngine(
-      remintInput({
-        focus: state.focus,
-        botTitle: botTitleRef.current,
-        queue: state.queue,
-      }),
-    );
-  }, [auth, clearTimers, connectEngine]);
+  const remint = useCallback(
+    async (old: Attempt): Promise<void> => {
+      if (attemptRef.current === old) attemptRef.current = null;
+      old.cancelled = true;
+      clearTimers();
+      const store = useVoiceSessionStore.getState();
+      if (store.phase === "idle") {
+        void settleAttempt(old);
+        return;
+      }
+      ensureSpeech().handoff();
+      store.sessionConnecting();
+      const token = useVoiceSessionStore.getState().sessionToken;
+      await settleAttempt(old);
+      // The person ended, or another replacement began, while the old one
+      // closed: nothing to open.
+      const now = useVoiceSessionStore.getState();
+      if (
+        now.phase !== "connecting" ||
+        now.sessionToken !== token ||
+        micStreamRef.current === null
+      ) {
+        return;
+      }
+      await connectEngine(
+        remintInput({
+          focus: now.focus,
+          botTitle: botTitleRef.current,
+          queue: now.queue,
+        }),
+      );
+    },
+    [clearTimers, connectEngine, ensureSpeech, settleAttempt],
+  );
 
   const requestRemintWhenClear = useCallback(() => {
     if (remintWhenClearRef.current !== null) return;
     const current = ensureSpeech();
+    const attempt = attemptRef.current;
+    if (attempt === null) return;
     if (current.isClear()) {
-      void remint();
+      void remint(attempt);
       return;
     }
     const unsubscribe = current.subscribe(() => {
       if (!current.isClear()) return;
       unsubscribe();
       remintWhenClearRef.current = null;
-      void remint();
+      if (attemptRef.current === attempt) void remint(attempt);
     });
     remintWhenClearRef.current = unsubscribe;
   }, [remint, ensureSpeech]);
@@ -517,8 +677,9 @@ export function VoiceSessionController(): ReactNode {
 
   const start = useCallback(async (): Promise<void> => {
     const store = useVoiceSessionStore.getState();
-    if (store.phase !== "idle" || store.availability === "dormant") return;
+    if (store.phase !== "idle" || store.availability !== "live") return;
     store.sessionConnecting();
+    const token = useVoiceSessionStore.getState().sessionToken;
     // The session starts focused on the channel or thread the person has
     // open, or on personal Tracy when none is (V6); Tracy's tab opens then.
     const selected = readSelection();
@@ -536,6 +697,10 @@ export function VoiceSessionController(): ReactNode {
         navigateToTabIntent(navigate, botTabIntent(fixedBotId), undefined);
       }
     }
+    const stillStarting = (): boolean => {
+      const now = useVoiceSessionStore.getState();
+      return now.phase === "connecting" && now.sessionToken === token;
+    };
     let access: MicrophoneAccessStatus;
     try {
       access = await runnerHost.requestMicrophoneAccess();
@@ -543,53 +708,35 @@ export function VoiceSessionController(): ReactNode {
       appLogger.warn("[voice] microphone access request failed", {
         error: describeLogError(error),
       });
-      finishSession("microphone");
+      if (stillStarting()) finishLocal("microphone");
       return;
     }
+    if (!stillStarting()) return;
     if (access === "denied") {
-      finishSession("microphone");
+      finishLocal("microphone");
       return;
     }
+    let stream: MediaStream;
     try {
-      micStreamRef.current = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         audio: dictationCaptureConstraints(),
       });
     } catch (error) {
       appLogger.warn("[voice] microphone open failed", {
         error: describeLogError(error),
       });
-      finishSession("microphone");
+      if (stillStarting()) finishLocal("microphone");
       return;
     }
-    if (useVoiceSessionStore.getState().phase !== "connecting") {
-      releaseAudio();
+    // Ended while the permission prompt was up: the microphone just opened
+    // is closed again before anything hears it.
+    if (!stillStarting()) {
+      for (const track of stream.getTracks()) track.stop();
       return;
     }
+    micStreamRef.current = stream;
     await connectEngine(FIRST_SESSION_INPUT);
-  }, [
-    connectEngine,
-    finishSession,
-    fixedBotId,
-    navigate,
-    releaseAudio,
-    runnerHost,
-  ]);
-
-  const end = useCallback(
-    (reason: VoiceEndReason) => {
-      const store = useVoiceSessionStore.getState();
-      if (store.phase === "idle") return;
-      const engine = engineRef.current;
-      if (engine === null) {
-        finishSession(reason === "ended" ? null : reason);
-        return;
-      }
-      endingRef.current = reason === "ended" ? null : reason;
-      store.sessionEnding();
-      engine.close();
-    },
-    [finishSession],
-  );
+  }, [connectEngine, finishLocal, fixedBotId, navigate, runnerHost]);
 
   const setMuted = useCallback((muted: boolean) => {
     const stream = micStreamRef.current;
@@ -613,44 +760,44 @@ export function VoiceSessionController(): ReactNode {
     };
   }, [end, setMuted, start]);
 
-  // Lock and sleep end the session; the page going away closes the engine,
-  // which tells the vendor, while the server finalizes from its sideband.
+  // Lock and sleep end the session. A page going away releases the
+  // microphone synchronously and asks the vendor to close; the server
+  // finalizes the rest from its sideband.
   useEffect(() => {
     const subscription = runnerHost.onSystemSuspended(() => end("locked"));
     const onPageHide = (): void => {
-      engineRef.current?.close();
+      const attempt = attemptRef.current;
+      attemptRef.current = null;
+      if (attempt !== null) attempt.cancelled = true;
+      releaseAudio();
+      if (attempt !== null) void attempt.engine.close();
     };
     window.addEventListener("pagehide", onPageHide);
     return () => {
       subscription.dispose();
       window.removeEventListener("pagehide", onPageHide);
     };
-  }, [end, runnerHost]);
+  }, [end, releaseAudio, runnerHost]);
 
   // Unmount ends everything; the microphone never outlives the controller.
-  // Through a ref, so a new `finishSession` identity never ends a live
-  // session by re-running the cleanup.
-  const finishSessionRef = useRef(finishSession);
-  useEffect(() => {
-    finishSessionRef.current = finishSession;
-  }, [finishSession]);
+  // Through a ref, so a new `end` identity never ends a live session by
+  // re-running the cleanup.
   useEffect(
     () => () => {
-      engineRef.current?.close();
-      finishSessionRef.current(null);
+      endRef.current("ended");
     },
     [],
   );
 
-  const live = phase === "live";
+  const running = phase !== "idle";
   return (
     <>
-      {live ? (
+      {running ? (
         <VoiceSelectionSync
           onManualChange={() => sayLoopRef.current?.onSelectionChanged()}
         />
       ) : null}
-      {live && focus !== null && channelId !== null && speech !== null ? (
+      {running && focus !== null && channelId !== null && speech !== null ? (
         <VoiceFocusedReplyFeed
           key={`${focus.botId}:${focus.threadId ?? channelId}`}
           focus={focus}
@@ -659,6 +806,10 @@ export function VoiceSessionController(): ReactNode {
           speaksAsThisBot={focus.botId === fixedBotId}
           botTitle={botTitle(focus.botId)}
           scheduler={speech}
+          memory={watchMemoryFor(focus.threadId ?? channelId)}
+          delegationFor={(requestId) =>
+            sayLoopRef.current?.delegationFor(requestId) ?? null
+          }
         />
       ) : null}
     </>
@@ -707,12 +858,12 @@ function readSelection(): VoiceFocus | null {
 }
 
 /**
- * Selection → focus, while the session is live. A manual change of channel
- * or thread moves the focus and the generation; a change that only resolves
- * the thread behind an anchor the focus already names (the thread list
- * catching up with the rail) moves the focus alone. A tab that is not a
- * bot's leaves the focus where it was: the strip follows the person across
- * tasks, and their words still go to the last bot.
+ * Selection → focus, for as long as a session runs, a replacement included.
+ * A manual change of channel or thread moves the focus and the generation; a
+ * change that only resolves the thread behind an anchor the focus already
+ * names (the thread list catching up with the rail) moves the focus alone. A
+ * tab that is not a bot's leaves the focus where it was: the strip follows
+ * the person across tasks, and their words still go to the last bot.
  */
 function VoiceSelectionSync(props: {
   readonly onManualChange: () => void;
@@ -790,10 +941,15 @@ function applySelection(
 /**
  * The hear loop's focused source: a new row of the bot on the focused
  * thread's (or channel's) chat store becomes the focused item, appended
- * under the current delegation when the scheduler finds a clear moment, and
- * the thread is marked read once the voice is confirmed to have said it,
- * with the entity-level call looking makes. Keyed by chat, so a focus move
- * starts a fresh watch whose history is never spoken.
+ * under the delegation of the request it answers (none for a request of a
+ * replaced session) when the scheduler finds a clear moment, and the thread
+ * is marked read once the voice is confirmed to have said it, with the
+ * entity-level call looking makes.
+ *
+ * Hydration is not arrival: the baseline is the first loaded snapshot, so a
+ * cold store's history is never spoken, and `seen` outlives this component
+ * (the controller keeps it per chat for the user session), so a remount
+ * across a replacement speaks what landed in the gap and nothing older.
  */
 function VoiceFocusedReplyFeed(props: {
   readonly focus: VoiceFocus;
@@ -802,8 +958,19 @@ function VoiceFocusedReplyFeed(props: {
   readonly speaksAsThisBot: boolean;
   readonly botTitle: string;
   readonly scheduler: SpeechScheduler;
+  readonly memory: ReplyWatchMemory;
+  readonly delegationFor: (requestId: string) => string | null;
 }): null {
-  const { focus, chatId, client, speaksAsThisBot, botTitle, scheduler } = props;
+  const {
+    focus,
+    chatId,
+    client,
+    speaksAsThisBot,
+    botTitle,
+    scheduler,
+    memory,
+    delegationFor,
+  } = props;
   const handle = useChatSessionHandleForContainer(
     focus.botId,
     chatId,
@@ -815,22 +982,34 @@ function VoiceFocusedReplyFeed(props: {
   useEffect(() => {
     markReadRef.current = markRead;
   }, [markRead]);
+  const delegationForRef = useRef(delegationFor);
+  useEffect(() => {
+    delegationForRef.current = delegationFor;
+  }, [delegationFor]);
 
   useEffect(() => {
     if (handle === null) return;
-    const seen = seenMessageIds(handle.store.getState().messages);
-    return handle.store.subscribe((state) => {
-      for (const reply of takeNewBotReplies(state.messages, seen)) {
+    // A watch that already has a baseline carries on; a fresh one takes the
+    // first loaded snapshot as history.
+    const watch = (state: ReplyWatchState): void => {
+      if (!state.snapshotLoaded) return;
+      if (!memory.baselined) {
+        baselineReplyWatch(memory, state.messages);
+        return;
+      }
+      for (const reply of takeNewBotReplies(state.messages, memory)) {
         const text = replySpeechText({
           botTitle,
           speaksAsThisBot,
           content: reply.text,
         });
+        const requestId = requestIdAnsweredBy(state.messages, reply.messageId);
         scheduler.enqueue({
           id: `reply:${reply.messageId}`,
           priority: "focused",
           text,
-          delegationId: useVoiceSessionStore.getState().pendingDelegationId,
+          delegationId:
+            requestId === null ? null : delegationForRef.current(requestId),
           confirmWords: confirmationWords({
             botTitle,
             threadTitle: null,
@@ -840,8 +1019,24 @@ function VoiceFocusedReplyFeed(props: {
             markReadRef.current({ epicId: focus.botId, chatId }),
         });
       }
-    });
-  }, [botTitle, chatId, focus.botId, handle, scheduler, speaksAsThisBot]);
+    };
+    watch(handle.store.getState());
+    return handle.store.subscribe(watch);
+  }, [
+    botTitle,
+    chatId,
+    focus.botId,
+    handle,
+    memory,
+    scheduler,
+    speaksAsThisBot,
+  ]);
 
   return null;
+}
+
+/** The slice of the chat store the watch reads. */
+interface ReplyWatchState {
+  readonly snapshotLoaded: boolean;
+  readonly messages: ReadonlyArray<ReplyRow>;
 }

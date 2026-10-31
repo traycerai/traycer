@@ -767,6 +767,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.getVoiceAvailability,
           RunnerHostInvoke.mintVoiceSession,
           RunnerHostInvoke.endVoiceSession,
+          RunnerHostInvoke.setVoiceSessionLive,
           // The secrets broker, on authn.
           RunnerHostInvoke.getSandboxGrants,
           RunnerHostInvoke.getTeamEnvironment,

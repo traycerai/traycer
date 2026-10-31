@@ -74,8 +74,10 @@ export interface VoiceEngineConnectInput {
 
 /**
  * One voice session, start to end. `connect` resolves once the vendor
- * reports the session started; it rejects, with `onClosed("failed")` already
- * delivered, when the exchange or the peer fails first.
+ * reports the session started; it rejects, with `onClosed` already
+ * delivered, when the exchange or the peer fails first, when the session
+ * does not start within the engine's bound, or when `close` was called
+ * before it started.
  */
 export interface VoiceEngine {
   connect(input: VoiceEngineConnectInput): Promise<void>;
@@ -92,9 +94,10 @@ export interface VoiceEngine {
   appendThinking(text: string, delegationId: string): void;
   /**
    * Ends the session from the app's side: asks the vendor to close, waits
-   * briefly for its confirmation, then tears the peer down. Idempotent.
+   * briefly for its confirmation, then tears the peer down. Resolves once
+   * the peer is down and `onClosed` has fired; idempotent.
    */
-  close(): void;
+  close(): Promise<void>;
 }
 
 /** A factory, so the controller picks an engine without naming its module. */

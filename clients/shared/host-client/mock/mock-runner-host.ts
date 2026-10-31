@@ -706,6 +706,14 @@ export class MockRunnerHost implements IRunnerHost {
     );
   }
 
+  /** The last value a window reported, for a test to read back. */
+  voiceSessionLive = false;
+
+  setVoiceSessionLive(live: boolean): Promise<void> {
+    this.voiceSessionLive = live;
+    return Promise.resolve();
+  }
+
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,

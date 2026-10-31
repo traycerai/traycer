@@ -99,6 +99,7 @@ import {
   registryCloseToTrayWindows,
   type CloseToTrayNoticeState,
 } from "../windows/close-to-tray";
+import { voiceLiveWindows } from "../windows/voice-live-windows";
 import { createJsonFileStore } from "../app/json-file-store";
 import { trayHostLifecyclePresentation } from "../tray/tray-host-lifecycle";
 import {
@@ -937,6 +938,7 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
     requestQuit: () => {
       app.quit();
     },
+    voiceLive: (windowId) => voiceLiveWindows.isLive(windowId),
     showNoticeOnce: createCloseToTrayNoticeOnce({
       store: createJsonFileStore<CloseToTrayNoticeState>(
         join(app.getPath("userData"), CLOSE_TO_TRAY_NOTICE_FILE_NAME),

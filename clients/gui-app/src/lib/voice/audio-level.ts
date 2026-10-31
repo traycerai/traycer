@@ -11,16 +11,25 @@ export const SPEAKING_HANGOVER_MS = 500;
 const SAMPLE_MS = 100;
 const FFT_SIZE = 1024;
 
-/**
- * Watches `stream` and reports each change of the speaking state. Returns the
- * stop function; stopping closes the context it opened. A browser that
- * refuses the context leaves `onSpeaking` silent, which the scheduler reads as
- * "not playing" and falls back to the output transcript's hangover.
- */
+export interface AudioLevelWatch {
+  /**
+   * Whether the detector is actually listening. `false` when the browser
+   * refused the audio context: `onSpeaking` then never fires, and the
+   * scheduler must not read its silence as quiet.
+   */
+  readonly available: boolean;
+  /**
+   * Stops watching. A watch that last reported speaking reports quiet on the
+   * way out, so its contribution never outlives it; nothing fires after.
+   */
+  stop(): void;
+}
+
+/** Watches `stream` and reports each change of the speaking state. */
 export function watchAudioLevel(
   stream: MediaStream,
   onSpeaking: (speaking: boolean) => void,
-): () => void {
+): AudioLevelWatch {
   let context: AudioContext;
   try {
     context = new AudioContext();
@@ -28,7 +37,7 @@ export function watchAudioLevel(
     appLogger.warn("[voice] audio level context failed", {
       error: describeLogError(error),
     });
-    return () => undefined;
+    return { available: false, stop: () => undefined };
   }
   const source = context.createMediaStreamSource(stream);
   const analyser = context.createAnalyser();
@@ -36,27 +45,36 @@ export function watchAudioLevel(
   source.connect(analyser);
   const samples = new Float32Array(analyser.fftSize);
   let speaking = false;
+  let stopped = false;
   let lastLoudAt = 0;
+  const report = (next: boolean): void => {
+    if (next === speaking) return;
+    speaking = next;
+    onSpeaking(speaking);
+  };
   const timer = setInterval(() => {
+    if (stopped) return;
     analyser.getFloatTimeDomainData(samples);
     let sum = 0;
     for (const sample of samples) sum += sample * sample;
     const rms = Math.sqrt(sum / samples.length);
     const now = Date.now();
     if (rms >= SPEAKING_RMS) lastLoudAt = now;
-    const next = now - lastLoudAt < SPEAKING_HANGOVER_MS;
-    if (next !== speaking) {
-      speaking = next;
-      onSpeaking(speaking);
-    }
+    report(now - lastLoudAt < SPEAKING_HANGOVER_MS);
   }, SAMPLE_MS);
-  return () => {
-    clearInterval(timer);
-    source.disconnect();
-    void context.close().catch((error: unknown) => {
-      appLogger.warn("[voice] audio level context close failed", {
-        error: describeLogError(error),
+  return {
+    available: true,
+    stop: () => {
+      if (stopped) return;
+      stopped = true;
+      clearInterval(timer);
+      report(false);
+      source.disconnect();
+      void context.close().catch((error: unknown) => {
+        appLogger.warn("[voice] audio level context close failed", {
+          error: describeLogError(error),
+        });
       });
-    });
+    },
   };
 }

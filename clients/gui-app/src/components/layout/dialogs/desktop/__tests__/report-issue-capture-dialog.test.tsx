@@ -331,6 +331,7 @@ function createBaseRunnerHost(): IRunnerHost {
     mintVoiceSession: () => Promise.resolve({ kind: "dormant" as const }),
     endVoiceSession: () =>
       Promise.resolve({ kind: "ok" as const, closedAt: null }),
+    setVoiceSessionLive: () => Promise.resolve(),
     requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
     forceRestartUnresponsiveHost: () =>
       Promise.resolve({ kind: "restarted" as const }),

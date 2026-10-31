@@ -81,6 +81,9 @@ export const RunnerHostInvoke = {
   getVoiceAvailability: "runnerHost:voice:availability",
   mintVoiceSession: "runnerHost:voice:sessions:mint",
   endVoiceSession: "runnerHost:voice:sessions:end",
+  // Whether the sender window holds a live voice session: such a window is
+  // hidden, not destroyed, when the person closes it.
+  setVoiceSessionLive: "runnerHost:voice:setLive",
   createSandbox: "runnerHost:sandboxes:create",
   destroySandbox: "runnerHost:sandboxes:destroy",
   patchSandbox: "runnerHost:sandboxes:patch",

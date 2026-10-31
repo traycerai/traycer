@@ -179,4 +179,13 @@ describe("VoiceSessionStrip", () => {
     expect(useVoiceSessionStore.getState().endReason).toBeNull();
     expect(screen.queryByTestId("voice-session-strip")).toBeNull();
   });
+
+  it("says the sound could not be played when the end was a playback failure", () => {
+    useVoiceSessionStore.setState({ phase: "idle", endReason: "playback" });
+    render(<VoiceSessionStrip />);
+
+    expect(screen.getByTestId("voice-strip-state").textContent).toBe(
+      "Voice ended: the sound could not be played.",
+    );
+  });
 });

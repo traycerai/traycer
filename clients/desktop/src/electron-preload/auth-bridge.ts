@@ -147,6 +147,7 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     voiceSessionId: string,
   ): Promise<VoiceSessionEndFetchResult>;
+  setVoiceSessionLive(live: boolean): Promise<void>;
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -317,6 +318,12 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
         voiceSessionId,
       ) as Promise<VoiceSessionEndFetchResult>,
+
+    setVoiceSessionLive: (live) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setVoiceSessionLive,
+        live,
+      ) as Promise<void>,
 
     getTraycerModels: (bearerToken) =>
       ipcRenderer.invoke(

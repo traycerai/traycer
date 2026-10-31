@@ -28,6 +28,12 @@ export function createRealtimeEngine(): VoiceEngine {
       ),
     appendCommentary: refuse,
     appendThinking: refuse,
-    close: refuse,
+    close: (): Promise<void> =>
+      Promise.reject(
+        new VoiceEngineError(
+          "NOT_IMPLEMENTED",
+          "The realtime voice engine is not implemented.",
+        ),
+      ),
   };
 }

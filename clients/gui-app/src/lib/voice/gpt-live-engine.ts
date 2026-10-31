@@ -31,6 +31,12 @@ const DATA_CHANNEL_LABEL = "oai-events";
 const ICE_GATHERING_TIMEOUT_MS = 2_000;
 /** After `session.close`, how long the vendor's `session.closed` is waited for. */
 const CLOSE_CONFIRM_TIMEOUT_MS = 2_000;
+/**
+ * After the answer is installed, how long `session.started` is waited for
+ * (the probe saw it within a second, two on a cold start). A session that
+ * never starts fails rather than holding the microphone open.
+ */
+export const SESSION_STARTED_TIMEOUT_MS = 10_000;
 
 /**
  * The slice of a data channel the engine drives, so a test can hand it a
@@ -127,11 +133,24 @@ export function createGptLiveEngine(deps: GptLiveEngineDeps): VoiceEngine {
   let started = false;
   let closed = false;
   let closeTimer: number | null = null;
+  let startTimer: number | null = null;
   /** Rejects a `connect` still waiting for `session.started`. */
   let rejectStart: (() => void) | null = null;
   // Read through a call: `closed` is written by `finish` from event handlers,
   // which control flow cannot see.
   const isClosed = (): boolean => closed;
+  /** Settled by `finish`: what `close()` resolves on. */
+  let resolveFinished: () => void = () => undefined;
+  const finished = new Promise<void>((resolve) => {
+    resolveFinished = resolve;
+  });
+
+  // Through a call, like `isClosed`: `finish` runs from event handlers.
+  const clearStartTimer = (): void => {
+    if (startTimer === null) return;
+    window.clearTimeout(startTimer);
+    startTimer = null;
+  };
 
   const finish = (reason: VoiceEngineCloseReason): void => {
     if (closed) return;
@@ -140,6 +159,7 @@ export function createGptLiveEngine(deps: GptLiveEngineDeps): VoiceEngine {
       window.clearTimeout(closeTimer);
       closeTimer = null;
     }
+    clearStartTimer();
     const pendingStart = rejectStart;
     rejectStart = null;
     pendingStart?.();
@@ -154,6 +174,7 @@ export function createGptLiveEngine(deps: GptLiveEngineDeps): VoiceEngine {
       });
     }
     events?.onClosed(reason);
+    resolveFinished();
   };
 
   const send = (payload: Record<string, unknown>): void => {
@@ -192,6 +213,11 @@ export function createGptLiveEngine(deps: GptLiveEngineDeps): VoiceEngine {
         // session itself; `closeTimer` is set only in the first case.
         finish(closeTimer !== null ? "app" : "vendor");
         return;
+      case "error":
+        appLogger.warn("[voice] vendor error event", {
+          code: stringAt(event, "error", "code") ?? "unknown",
+        });
+        return;
       default:
         return;
     }
@@ -217,9 +243,14 @@ export function createGptLiveEngine(deps: GptLiveEngineDeps): VoiceEngine {
       };
       // A `disconnected` state is left alone: one that recovers is nothing
       // the app needs to know, and one that does not ends in `failed`.
+      // While the app's own close is waiting for the vendor's confirmation,
+      // a peer failure is that close finishing, not a connection lost.
       activePeer.onconnectionstatechange = () => {
         const state = activePeer.connectionState;
-        if (state === "failed" || state === "closed") {
+        if (state !== "failed" && state !== "closed") return;
+        if (closeTimer !== null) {
+          finish("app");
+        } else {
           finish(started ? "connection" : "failed");
         }
       };
@@ -251,20 +282,31 @@ export function createGptLiveEngine(deps: GptLiveEngineDeps): VoiceEngine {
           });
         };
       });
+      // Observed here as well as awaited below: a close during the exchange
+      // rejects it while `connect` is still throwing the exchange's own
+      // error, and an unobserved rejection is a crash report.
+      startedPromise.catch(() => undefined);
 
+      const closedBeforeStart = (): VoiceEngineError =>
+        new VoiceEngineError(
+          "PEER_FAILED",
+          "The voice session closed before it started.",
+        );
       try {
         const offer = await activePeer.createOffer();
         await activePeer.setLocalDescription(offer);
         await waitForIceGathering(activePeer);
+        if (isClosed()) throw closedBeforeStart();
         const offerSdp = activePeer.localDescription?.sdp ?? offer.sdp ?? "";
         const answerSdp = await input.exchangeSdp(offerSdp);
-        // The peer may have failed while the exchange was out; `finish`
-        // already reported it.
-        if (isClosed()) return;
+        // Closed while the exchange was out (the app ended, or the peer
+        // failed and `finish` already reported it): never a live session.
+        if (isClosed()) throw closedBeforeStart();
         await activePeer.setRemoteDescription({
           type: "answer",
           sdp: answerSdp,
         });
+        if (isClosed()) throw closedBeforeStart();
       } catch (error) {
         const failure =
           error instanceof VoiceEngineError
@@ -276,7 +318,13 @@ export function createGptLiveEngine(deps: GptLiveEngineDeps): VoiceEngine {
         finish("failed");
         throw failure;
       }
+      startTimer = window.setTimeout(() => {
+        startTimer = null;
+        finish("failed");
+      }, SESSION_STARTED_TIMEOUT_MS);
       await startedPromise;
+      clearStartTimer();
+      if (isClosed()) throw closedBeforeStart();
     },
 
     appendCommentary(text: string, delegationId: string | null): void {
@@ -295,11 +343,12 @@ export function createGptLiveEngine(deps: GptLiveEngineDeps): VoiceEngine {
       });
     },
 
-    close(): void {
-      if (closed) return;
+    close(): Promise<void> {
+      if (closed) return finished;
+      if (closeTimer !== null) return finished;
       if (channel === null || channel.readyState !== "open") {
         finish("app");
-        return;
+        return finished;
       }
       try {
         channel.send(JSON.stringify({ type: "session.close" }));
@@ -308,12 +357,13 @@ export function createGptLiveEngine(deps: GptLiveEngineDeps): VoiceEngine {
           error: describeLogError(error),
         });
         finish("app");
-        return;
+        return finished;
       }
       closeTimer = window.setTimeout(() => {
         closeTimer = null;
         finish("app");
       }, CLOSE_CONFIRM_TIMEOUT_MS);
+      return finished;
     },
   };
 }

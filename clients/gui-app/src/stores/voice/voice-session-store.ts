@@ -25,10 +25,25 @@ export interface VoiceFocus {
   readonly anchorMessageId: string | null;
 }
 
-/** One fragment of what the person said, as it was transcribed. */
+/**
+ * One fragment of what the person said, exactly as it was transcribed. A
+ * segment belongs to the open utterance until an action reserves it; a
+ * reserved segment is that action's alone until the action consumes or
+ * releases it.
+ */
 export interface TranscriptSegment {
+  /** Monotonic within the window: the order the person said things in. */
+  readonly seq: number;
   readonly text: string;
   readonly at: number;
+  /** The action that owns this segment, or `null` while it is open. */
+  readonly reservedBy: string | null;
+}
+
+/** The segments an action took: their raw text and which ones. */
+export interface SpanReservation {
+  readonly text: string;
+  readonly seqs: ReadonlyArray<number>;
 }
 
 /**
@@ -45,16 +60,18 @@ export interface QueueItem {
 }
 
 /**
- * A routed action bound to its target and awaiting acceptance. The router
- * (a later ticket) fills it; without one the whole utterance posts to the
- * focus and nothing is pending between the boundary and the send.
+ * Words the voice holds instead of posting: the open utterance when the
+ * person moved to another channel or thread mid-sentence. The voice asks
+ * where they belong; the router (a later ticket) consumes the person's
+ * answer through this action. Until then the next spoken request stands on
+ * its own and the held words are let go.
  */
 export interface PendingAction {
-  readonly kind: "post";
-  readonly delegationId: string;
-  readonly focus: VoiceFocus;
+  readonly kind: "interrupted";
   readonly text: string;
-  /** The selection generation the action was bound at. */
+  /** The delegation that was open when the person moved, if one was. */
+  readonly delegationId: string | null;
+  /** The selection generation the move produced. */
   readonly selectionGeneration: number;
 }
 
@@ -63,13 +80,20 @@ export type VoicePhase = "idle" | "connecting" | "live" | "ending";
 /** Why the last session ended, for the strip's one line about it. */
 export type VoiceEndReason =
   /** The person ended it, or the shell is going away. */
-  "ended" | "credits" | "connection" | "locked" | "microphone" | "unavailable";
+  | "ended"
+  | "credits"
+  | "connection"
+  | "locked"
+  | "microphone"
+  /** The voice's sound could not be played, so nothing could be heard. */
+  | "playback"
+  | "unavailable";
 
 export type VoiceAvailability =
-  /** No mint has answered yet: Talk is offered. */
+  /** The server has not said yet: Talk waits. */
   | "unknown"
   | "live"
-  /** The server answered the dormant empty 200: Talk hides for this window. */
+  /** The server offers no voice: Talk hides for this window. */
   | "dormant";
 
 export interface VoiceSessionRecord {
@@ -104,8 +128,14 @@ export interface VoiceSessionState {
   readonly endReason: VoiceEndReason | null;
   readonly availability: VoiceAvailability;
   readonly session: VoiceSessionRecord | null;
+  /**
+   * Bumped whenever a session attempt begins or ends. An action or a reply
+   * binding carries the token it was made under and is inert once the token
+   * has moved: a late acceptance from an ended session recreates nothing.
+   */
+  readonly sessionToken: number;
   readonly focus: VoiceFocus | null;
-  /** Every input segment since the last consumed span, oldest first. */
+  /** Every segment not yet consumed, oldest first: open ones and reserved ones. */
   readonly segments: ReadonlyArray<TranscriptSegment>;
   /** The delegation whose request has not been acted on yet. */
   readonly pendingDelegationId: string | null;
@@ -127,6 +157,7 @@ export interface VoiceSessionState {
   readonly driver: VoiceSessionDriver | null;
 
   readonly setAvailability: (availability: VoiceAvailability) => void;
+  /** A session attempt begins (first, or a replacement): a new token. */
   readonly sessionConnecting: () => void;
   readonly sessionLive: (session: VoiceSessionRecord) => void;
   readonly sessionEnding: () => void;
@@ -145,10 +176,19 @@ export interface VoiceSessionState {
   /** The person selected something else: the focus follows, the generation moves. */
   readonly selectionChanged: (focus: VoiceFocus | null) => void;
   readonly appendInputSegment: (text: string, at: number) => void;
-  /** The utterance so far: every segment since the last consumed span, joined. */
+  /** The open utterance: every unreserved segment, as said. */
   readonly openSpan: () => string;
-  /** The open span was posted (or deliberately dropped): the buffer starts over. */
-  readonly consumeSpan: () => void;
+  /**
+   * Takes every open segment for `actionId`: they are that action's from now
+   * on, and no later action sees them. `null` with nothing open.
+   */
+  readonly reserveOpenSpan: (actionId: string) => SpanReservation | null;
+  /** The action's segments are posted (or deliberately dropped): gone. */
+  readonly consumeReservation: (actionId: string) => void;
+  /** The action's segments return to the open utterance, in order. */
+  readonly releaseReservation: (actionId: string) => void;
+  /** Lets the open utterance go, returning what it said; `null` with nothing open. */
+  readonly dropOpenSpan: () => string | null;
   readonly setPendingDelegation: (delegationId: string | null) => void;
   readonly setActivity: (activity: SpeechActivity) => void;
   readonly setQueue: (queue: ReadonlyArray<QueueItem>) => void;
@@ -170,11 +210,15 @@ const NO_SEGMENTS: ReadonlyArray<TranscriptSegment> = [];
 const NO_QUEUE: ReadonlyArray<QueueItem> = [];
 const NO_CAPTIONS: ReadonlyArray<CaptionLine> = [];
 
+/** One per window; a segment's `seq` never repeats within it. */
+let nextSegmentSeq = 1;
+
 export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   phase: "idle",
   endReason: null,
   availability: "unknown",
   session: null,
+  sessionToken: 0,
   focus: null,
   segments: NO_SEGMENTS,
   pendingDelegationId: null,
@@ -191,7 +235,12 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
 
   setAvailability: (availability) => set({ availability }),
   sessionConnecting: () =>
-    set({ phase: "connecting", endReason: null, session: null }),
+    set({
+      phase: "connecting",
+      endReason: null,
+      session: null,
+      sessionToken: get().sessionToken + 1,
+    }),
   sessionLive: (session) =>
     set({ phase: "live", session, availability: "live", endReason: null }),
   sessionEnding: () => set({ phase: "ending" }),
@@ -200,6 +249,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
       phase: "idle",
       endReason: reason,
       session: null,
+      sessionToken: get().sessionToken + 1,
       focus: null,
       segments: NO_SEGMENTS,
       pendingDelegationId: null,
@@ -224,12 +274,53 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   },
   appendInputSegment: (text, at) => {
     if (text.length === 0) return;
-    set({ segments: [...get().segments, { text, at }] });
+    const seq = nextSegmentSeq;
+    nextSegmentSeq += 1;
+    set({
+      segments: [...get().segments, { seq, text, at, reservedBy: null }],
+    });
   },
-  openSpan: () => joinSegments(get().segments),
-  consumeSpan: () => {
-    if (get().segments.length === 0) return;
-    set({ segments: NO_SEGMENTS });
+  openSpan: () => joinSegments(openSegments(get().segments)),
+  reserveOpenSpan: (actionId) => {
+    const open = openSegments(get().segments);
+    if (open.length === 0) return null;
+    set({
+      segments: get().segments.map((segment) =>
+        segment.reservedBy === null
+          ? { ...segment, reservedBy: actionId }
+          : segment,
+      ),
+    });
+    return {
+      text: joinSegments(open),
+      seqs: open.map((segment) => segment.seq),
+    };
+  },
+  consumeReservation: (actionId) => {
+    const kept = get().segments.filter(
+      (segment) => segment.reservedBy !== actionId,
+    );
+    if (kept.length !== get().segments.length) set({ segments: kept });
+  },
+  releaseReservation: (actionId) => {
+    if (!get().segments.some((segment) => segment.reservedBy === actionId)) {
+      return;
+    }
+    set({
+      segments: get().segments.map((segment) =>
+        segment.reservedBy === actionId
+          ? { ...segment, reservedBy: null }
+          : segment,
+      ),
+    });
+  },
+  dropOpenSpan: () => {
+    const open = openSegments(get().segments);
+    if (open.length === 0) return null;
+    set({
+      segments: get().segments.filter((segment) => segment.reservedBy !== null),
+    });
+    return joinSegments(open);
   },
   setPendingDelegation: (delegationId) => {
     if (get().pendingDelegationId === delegationId) return;
@@ -269,6 +360,12 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   setDriver: (driver) => set({ driver }),
 }));
 
+function openSegments(
+  segments: ReadonlyArray<TranscriptSegment>,
+): ReadonlyArray<TranscriptSegment> {
+  return segments.filter((segment) => segment.reservedBy === null);
+}
+
 export function sameFocus(a: VoiceFocus | null, b: VoiceFocus | null): boolean {
   if (a === null || b === null) return a === b;
   return (
@@ -280,32 +377,30 @@ export function sameFocus(a: VoiceFocus | null, b: VoiceFocus | null): boolean {
 }
 
 /**
- * The transcript deltas joined as the person said them: the vendor's deltas
- * carry their own spacing, so a bare join keeps the words; a delta that
- * starts a new word without a space gets one.
+ * The transcript deltas joined exactly as they arrived. A delta is a
+ * transport chunk, not a word: the vendor's deltas carry their own spacing,
+ * and a chunk boundary can fall inside a word or a path, so nothing is added
+ * between them. Only the ends are trimmed.
  */
 export function joinSegments(
   segments: ReadonlyArray<TranscriptSegment>,
 ): string {
-  let text = "";
-  for (const segment of segments) {
-    const piece = segment.text;
-    if (piece.length === 0) continue;
-    if (
-      text.length > 0 &&
-      !/\s$/.test(text) &&
-      !/^[\s.,;:!?'’)\]]/.test(piece)
-    ) {
-      text += " ";
-    }
-    text += piece;
-  }
-  return text.trim();
+  return segments
+    .map((segment) => segment.text)
+    .join("")
+    .trim();
 }
 
-/** Whether a spoken request is still open: words not yet posted, or a request not yet acted on. */
+/**
+ * Whether a spoken request is still open: words not yet taken by an action,
+ * words an action holds but has not posted, or a request not yet acted on.
+ */
 export function isUtteranceOpen(state: VoiceSessionState): boolean {
-  return state.segments.length > 0 || state.pendingDelegationId !== null;
+  return (
+    state.segments.length > 0 ||
+    state.pendingDelegationId !== null ||
+    state.pendingAction !== null
+  );
 }
 
 /** Whether the session is live and drawn: the strip is on screen. */

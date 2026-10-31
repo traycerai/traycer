@@ -34,6 +34,7 @@ import {
   voiceSessionsMintViaHttp,
   type VoiceSessionMintRequest,
 } from "@traycer-clients/shared/host-client/voice-sessions";
+import { voiceLiveWindows } from "../windows/voice-live-windows";
 import {
   decideSecretRequestViaHttp,
   fetchEnvironmentProvidersViaHttp,
@@ -191,6 +192,17 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         bearerToken,
         await iapProxyToken(),
       );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.setVoiceSessionLive,
+    (event, live: unknown) => {
+      assertBoolean(live, "setVoiceSessionLive.live");
+      const windowId = bridge.resolveSenderWindowId(event);
+      if (windowId === null) return Promise.resolve();
+      voiceLiveWindows.set(windowId, live);
+      return Promise.resolve();
     },
   );
 

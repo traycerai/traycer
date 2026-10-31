@@ -427,6 +427,15 @@ export interface IRunnerHost {
     bearerToken: string,
     voiceSessionId: string,
   ): Promise<VoiceSessionEndFetchResult>;
+  /**
+   * Tells the shell whether this window holds a live voice session. A
+   * desktop window whose voice is live is hidden rather than destroyed when
+   * the person closes it (the microphone and the session live in its
+   * renderer; Tanveer, 2026-10-29: window close keeps the session, lock,
+   * sleep and quit end it). Shells with one window and no close (mobile,
+   * web) take no action.
+   */
+  setVoiceSessionLive(live: boolean): Promise<void>;
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,

@@ -1,16 +1,23 @@
-import { describe, expect, it, vi, type Mock } from "vitest";
-import type { VoiceEngineEvents } from "../engine";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
+  VoiceEngineError,
+  type VoiceEngineConnectInput,
+  type VoiceEngineEvents,
+} from "../engine";
+import {
+  SESSION_STARTED_TIMEOUT_MS,
   createGptLiveEngine,
   type GptLiveDataChannel,
   type GptLivePeer,
 } from "../gpt-live-engine";
 
 interface FakeChannel extends GptLiveDataChannel {
+  readyState: RTCDataChannelState;
   send: Mock<(data: string) => void>;
 }
 
 interface FakePeer extends GptLivePeer {
+  connectionState: RTCPeerConnectionState;
   setRemoteDescription: Mock<() => Promise<void>>;
   close: Mock<() => void>;
 }
@@ -125,7 +132,7 @@ describe("createGptLiveEngine", () => {
     const { engine, channel, peer, events, push, connect } = setup();
     await connect();
 
-    engine.close();
+    void engine.close();
     expect(JSON.parse(channel.send.mock.calls[0]?.[0] ?? "")).toEqual({
       type: "session.close",
     });
@@ -161,5 +168,161 @@ describe("createGptLiveEngine", () => {
       }),
     ).rejects.toThrow("402");
     expect(events.onClosed).toHaveBeenCalledWith("failed");
+  });
+});
+
+/** Lets every already-settled promise continuation run. */
+async function flush(): Promise<void> {
+  await vi.advanceTimersByTimeAsync(0);
+}
+
+function connectInput(
+  events: VoiceEngineEvents,
+  exchangeSdp: (offer: string) => Promise<string>,
+): VoiceEngineConnectInput {
+  return {
+    micTrack: { kind: "audio" } as MediaStreamTrack,
+    exchangeSdp,
+    onRemoteAudio: () => undefined,
+    events,
+  };
+}
+
+describe("createGptLiveEngine lifecycle", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reports app, not connection, when the peer fails while the app's close is pending", async () => {
+    const t = setup();
+    await t.connect();
+
+    void t.engine.close();
+    t.peer.connectionState = "failed";
+    t.peer.onconnectionstatechange?.(new Event("connectionstatechange"));
+
+    expect(t.events.onClosed).toHaveBeenCalledTimes(1);
+    expect(t.events.onClosed).toHaveBeenCalledWith("app");
+  });
+
+  it("resolves close only after session.closed, with onClosed already fired", async () => {
+    const t = setup();
+    await t.connect();
+    const order: string[] = [];
+    t.events.onClosed.mockImplementation(() => order.push("closed"));
+
+    const closing = t.engine.close().then(() => order.push("resolved"));
+    await Promise.resolve();
+    expect(order).toEqual([]);
+
+    t.push({ type: "session.closed" });
+    await closing;
+
+    expect(order).toEqual(["closed", "resolved"]);
+    expect(t.peer.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves close after the two second fallback when the vendor never confirms", async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    const connecting = t.engine.connect(connectInput(t.events, t.exchangeSdp));
+    await flush();
+    t.push({ type: "session.started" });
+    await connecting;
+    const order: string[] = [];
+    t.events.onClosed.mockImplementation(() => order.push("closed"));
+
+    const closing = t.engine.close().then(() => order.push("resolved"));
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(order).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await closing;
+    expect(order).toEqual(["closed", "resolved"]);
+    expect(t.events.onClosed).toHaveBeenCalledWith("app");
+  });
+
+  it("rejects connect when the app closes during the exchange, without an unhandled rejection", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const t = setup();
+      t.channel.readyState = "connecting";
+      let answer: (sdp: string) => void = () => undefined;
+      const exchange = vi.fn<(offer: string) => Promise<string>>(
+        () =>
+          new Promise<string>((resolve) => {
+            answer = resolve;
+          }),
+      );
+      const outcome = t.engine.connect(connectInput(t.events, exchange)).then(
+        () => "resolved",
+        (error: unknown) => error,
+      );
+      await vi.waitFor(() => {
+        expect(exchange).toHaveBeenCalled();
+      });
+
+      await t.engine.close();
+      answer("late-answer");
+      const result = await outcome;
+
+      expect(result).toBeInstanceOf(Error);
+      expect(t.events.onClosed).toHaveBeenCalledTimes(1);
+      expect(t.events.onClosed).toHaveBeenCalledWith("app");
+      expect(t.peer.setRemoteDescription).not.toHaveBeenCalled();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("rejects connect and reports failed when session.started never arrives", async () => {
+    vi.useFakeTimers();
+    const t = setup();
+    const outcome = t.engine
+      .connect(connectInput(t.events, t.exchangeSdp))
+      .then(
+        () => "resolved",
+        (error: unknown) => error,
+      );
+    await flush();
+    expect(t.peer.setRemoteDescription).toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(SESSION_STARTED_TIMEOUT_MS - 1);
+    expect(t.events.onClosed).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await outcome).toBeInstanceOf(Error);
+    expect(t.events.onClosed).toHaveBeenCalledTimes(1);
+    expect(t.events.onClosed).toHaveBeenCalledWith("failed");
+    expect(t.peer.close).toHaveBeenCalled();
+  });
+
+  it("delivers onClosed(failed) before connect rejects with the exchange's error as EXCHANGE_FAILED", async () => {
+    const t = setup();
+    const order: string[] = [];
+    t.events.onClosed.mockImplementation((reason) =>
+      order.push(`closed:${reason}`),
+    );
+    t.exchangeSdp.mockRejectedValueOnce(new Error("402"));
+
+    const failure = await t.engine
+      .connect(connectInput(t.events, t.exchangeSdp))
+      .then(
+        () => null,
+        (error: unknown) => {
+          order.push("rejected");
+          return error;
+        },
+      );
+
+    expect(order).toEqual(["closed:failed", "rejected"]);
+    expect(failure).toBeInstanceOf(VoiceEngineError);
+    expect(failure).toMatchObject({ code: "EXCHANGE_FAILED", message: "402" });
   });
 });

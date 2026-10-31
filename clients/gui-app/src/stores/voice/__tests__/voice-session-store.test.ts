@@ -64,6 +64,38 @@ describe("sessionEnded", () => {
   });
 });
 
+describe("reservations", () => {
+  it("reserves every open segment, consumes only its own and releases in order", () => {
+    const store = useVoiceSessionStore.getState();
+    store.appendInputSegment("Check build A.", 1);
+    const a = store.reserveOpenSpan("a");
+    store.appendInputSegment(" Then check build B.", 2);
+    const b = useVoiceSessionStore.getState().reserveOpenSpan("b");
+
+    expect(a?.text).toBe("Check build A.");
+    expect(b?.text).toBe("Then check build B.");
+    expect(useVoiceSessionStore.getState().reserveOpenSpan("c")).toBeNull();
+
+    useVoiceSessionStore.getState().consumeReservation("a");
+    expect(
+      useVoiceSessionStore.getState().segments.map((s) => s.reservedBy),
+    ).toEqual(["b"]);
+
+    useVoiceSessionStore.getState().releaseReservation("b");
+    expect(useVoiceSessionStore.getState().openSpan()).toBe(
+      "Then check build B.",
+    );
+  });
+
+  it("moves the session token on connecting and on ended", () => {
+    const store = useVoiceSessionStore.getState();
+    store.sessionConnecting();
+    const connecting = useVoiceSessionStore.getState().sessionToken;
+    store.sessionEnded(null);
+    expect(useVoiceSessionStore.getState().sessionToken).toBe(connecting + 1);
+  });
+});
+
 describe("pushCaptionLine", () => {
   it("stores nothing while captions are off", () => {
     useVoiceSessionStore
@@ -97,25 +129,37 @@ describe("pushCaptionLine", () => {
 });
 
 describe("joinSegments", () => {
-  const seg = (text: string) => ({ text, at: 0 });
+  const seg = (text: string) => ({ seq: 0, text, at: 0, reservedBy: null });
 
-  it("adds a space between words, none before punctuation or after a space", () => {
-    expect(
-      joinSegments([
-        seg("hello"),
-        seg("world"),
-        seg("."),
-        seg(" ok"),
-        seg("yes"),
-      ]),
-    ).toBe("hello world. ok yes");
+  it("joins a word split across deltas without inventing a space", () => {
+    expect(joinSegments([seg("hel"), seg("lo")])).toBe("hello");
+  });
+
+  it("joins a path split across deltas without inventing a space", () => {
+    expect(joinSegments([seg("/src/"), seg("voice.ts")])).toBe("/src/voice.ts");
+  });
+
+  it("keeps the vendor's own spacing and trims only the ends", () => {
+    expect(joinSegments([seg(" Check "), seg("build. ")])).toBe("Check build.");
   });
 });
 
 describe("isUtteranceOpen and sameFocus", () => {
-  it("is open with segments or a pending delegation, closed otherwise", () => {
+  it("is open with segments, a pending delegation or a pending action, closed otherwise", () => {
     expect(isUtteranceOpen(useVoiceSessionStore.getState())).toBe(false);
     useVoiceSessionStore.getState().setPendingDelegation("d-1");
+    expect(isUtteranceOpen(useVoiceSessionStore.getState())).toBe(true);
+    useVoiceSessionStore.getState().setPendingDelegation(null);
+    useVoiceSessionStore.getState().appendInputSegment("hi", 1);
+    expect(isUtteranceOpen(useVoiceSessionStore.getState())).toBe(true);
+    useVoiceSessionStore.getState().dropOpenSpan();
+    expect(isUtteranceOpen(useVoiceSessionStore.getState())).toBe(false);
+    useVoiceSessionStore.getState().setPendingAction({
+      kind: "interrupted",
+      text: "x",
+      delegationId: null,
+      selectionGeneration: 0,
+    });
     expect(isUtteranceOpen(useVoiceSessionStore.getState())).toBe(true);
   });
 

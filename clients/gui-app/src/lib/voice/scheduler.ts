@@ -75,7 +75,27 @@ export interface SpeechScheduler {
   noteOutputTranscript(text: string): void;
   /** The remote track's sound level crossed the speaking threshold, or fell under it. */
   noteOutputLevel(playing: boolean): void;
+  /**
+   * Whether a sound-level detector watches the voice's track. Without one,
+   * "quiet" is inferred from the output transcript alone, which runs ahead
+   * of the sound, so the hangover after a delta is the conservative
+   * {@link OUTPUT_HANGOVER_WITHOUT_LEVEL_MS} rather than {@link OUTPUT_HANGOVER_MS}.
+   */
+  setLevelDetection(available: boolean): void;
   noteDelegationCreated(): void;
+  /**
+   * Whether the engine can take appends. Nothing is appended while `false`:
+   * before the first session starts, during a replacement, after an end.
+   */
+  setReady(ready: boolean): void;
+  /**
+   * The vendor session is being replaced under the same person: every fact
+   * the old engine produced is retired (its playback, its acknowledgement,
+   * its in-flight append and the detector it was heard through), while the
+   * items themselves stay queued, now under no delegation (the old session's
+   * ids mean nothing to the new one). Appends wait for `setReady(true)`.
+   */
+  handoff(): void;
   activity(): SpeechActivity;
   /** Whether nothing holds an append back right now. */
   isClear(): boolean;
@@ -93,8 +113,17 @@ export interface SpeechScheduler {
 
 /** Input transcript deltas this close together are one stretch of speech. */
 export const INPUT_ACTIVE_WINDOW_MS = 1_200;
-/** An output transcript delta means the voice is still speaking this long after it. */
+/**
+ * An output transcript delta means the voice is still speaking this long
+ * after it, when a sound-level detector will say when it actually stops.
+ */
 export const OUTPUT_HANGOVER_MS = 700;
+/**
+ * The same hangover with no detector: the transcript runs ahead of the
+ * sound (probe P5: text 0.64 s after the append, speech 0.94 s, nine seconds
+ * of it for 33 words), so a short item's whole audio fits inside this wait.
+ */
+export const OUTPUT_HANGOVER_WITHOUT_LEVEL_MS = 4_000;
 /**
  * The model's automatic acknowledgement starts about half a second after a
  * delegation and is a few words long. One that never comes (a request the
@@ -111,7 +140,8 @@ export const MAX_DELIVERY_ATTEMPTS = 3;
 export const CHUNK_MAX_CHARS = 2_000;
 
 interface QueuedItem {
-  readonly item: SpeechItem;
+  /** Re-labelled at a handoff: the delegation id belongs to one session. */
+  item: SpeechItem;
   attempts: number;
 }
 
@@ -136,6 +166,11 @@ export function createSpeechScheduler(
   let ackTimer: unknown = null;
   let inFlight: InFlight | null = null;
   let disposed = false;
+  let ready = false;
+  let levelDetection = false;
+
+  const outputHangoverMs = (): number =>
+    levelDetection ? OUTPUT_HANGOVER_MS : OUTPUT_HANGOVER_WITHOUT_LEVEL_MS;
 
   const outputPlaying = (): boolean =>
     outputLevelPlaying ||
@@ -203,7 +238,7 @@ export function createSpeechScheduler(
   };
 
   const dispatch = (): void => {
-    if (disposed || inFlight !== null || !isClear()) return;
+    if (disposed || !ready || inFlight !== null || !isClear()) return;
     const next = takeNext();
     if (next === null) return;
     for (const chunk of chunkText(next.item.text, CHUNK_MAX_CHARS)) {
@@ -253,7 +288,8 @@ export function createSpeechScheduler(
         }
       }
       if (ackPending) ackHeardSpeech = true;
-      outputTranscriptUntil = deps.now() + OUTPUT_HANGOVER_MS;
+      const hangover = outputHangoverMs();
+      outputTranscriptUntil = deps.now() + hangover;
       if (outputTimer !== null) deps.clearTimer(outputTimer);
       outputTimer = deps.setTimer(() => {
         outputTimer = null;
@@ -261,7 +297,7 @@ export function createSpeechScheduler(
         // quiet after speaking.
         if (ackPending && ackHeardSpeech && !outputLevelPlaying) clearAck();
         onFactsChanged();
-      }, OUTPUT_HANGOVER_MS);
+      }, hangover);
       notify();
     },
     noteOutputLevel(playing) {
@@ -270,6 +306,22 @@ export function createSpeechScheduler(
       if (playing && ackPending) ackHeardSpeech = true;
       if (!playing && ackPending && ackHeardSpeech) clearAck();
       onFactsChanged();
+    },
+    setLevelDetection(available) {
+      levelDetection = available;
+      if (!available) outputLevelPlaying = false;
+    },
+    setReady(next) {
+      ready = next;
+      if (ready) dispatch();
+    },
+    handoff() {
+      const carried = retireFacts();
+      ready = false;
+      for (const entry of carried) {
+        entry.item = { ...entry.item, delegationId: null };
+      }
+      notify();
     },
     noteDelegationCreated() {
       ackPending = true;
@@ -300,9 +352,22 @@ export function createSpeechScheduler(
   };
 
   function reset(): void {
+    retireFacts();
     queue.length = 0;
+    ready = false;
+    notify();
+  }
+
+  /**
+   * Forgets every fact and timer of the engine that produced them. An item
+   * whose append was in flight goes back to the front of its queue with its
+   * attempts unchanged: its words were never confirmed heard. Returns the
+   * queue's entries for the caller to re-label.
+   */
+  function retireFacts(): QueuedItem[] {
     if (inFlight !== null) {
       if (inFlight.timer !== null) deps.clearTimer(inFlight.timer);
+      queue.unshift(inFlight.queued);
       inFlight = null;
     }
     for (const timer of [inputTimer, outputTimer, ackTimer]) {
@@ -314,9 +379,10 @@ export function createSpeechScheduler(
     inputActiveUntil = null;
     outputTranscriptUntil = null;
     outputLevelPlaying = false;
+    levelDetection = false;
     ackPending = false;
     ackHeardSpeech = false;
-    notify();
+    return queue;
   }
 }
 
@@ -412,13 +478,61 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
   "your",
 ]);
 
+/**
+ * What the voice says to hold the floor or acknowledge without saying
+ * anything: never proof that an item was spoken, and never a confirmation
+ * word of one, however the item's own text begins (probe P1: "Mm-hmm" was
+ * the whole output of an append that was never spoken).
+ */
+const BACKCHANNEL_WORDS: ReadonlySet<string> = new Set([
+  "mm",
+  "mmm",
+  "mhm",
+  "mm-hmm",
+  "mmhmm",
+  "mhmm",
+  "uh-huh",
+  "uhuh",
+  "uh",
+  "um",
+  "hmm",
+  "hm",
+  "ah",
+  "oh",
+  "ok",
+  "okay",
+  "yes",
+  "yeah",
+  "yep",
+  "yup",
+  "sure",
+  "right",
+  "alright",
+  "got",
+  "it",
+  "one",
+  "moment",
+  "second",
+  "checking",
+  "noted",
+  "understood",
+  "absolutely",
+  "certainly",
+]);
+
 /** How many content words an item keeps as its proof of delivery. */
 const MAX_CONFIRM_WORDS = 40;
 
+/** Whether a word can stand as proof: neither filler nor a backchannel. */
+function isDiscriminative(word: string): boolean {
+  return !STOP_WORDS.has(word) && !BACKCHANNEL_WORDS.has(word);
+}
+
 /**
  * The words that prove an item was spoken: the bot's name and the thread's
- * title whole, and the item's own content words of four letters or more that
- * are not filler. Numbers count: a paraphrase keeps a version or a count.
+ * title whole, and the item's own content words of four letters or more,
+ * none of them filler or acknowledgement vocabulary. Numbers count: a
+ * paraphrase keeps a version or a count.
  */
 export function confirmationWords(input: {
   readonly botTitle: string | null;
@@ -429,18 +543,30 @@ export function confirmationWords(input: {
   for (const source of [input.botTitle, input.threadTitle]) {
     if (source === null) continue;
     for (const word of wordsOf(source)) {
-      if (word.length >= 3) words.add(word);
+      if (word.length >= 3 && isDiscriminative(word)) words.add(word);
     }
   }
   for (const word of wordsOf(input.text)) {
     if (words.size >= MAX_CONFIRM_WORDS) break;
-    if (word.length >= 4 && !STOP_WORDS.has(word)) words.add(word);
+    if (word.length >= 4 && isDiscriminative(word)) words.add(word);
   }
   return Array.from(words);
 }
 
+/**
+ * Whether an output transcript is nothing but acknowledgement: every word a
+ * backchannel or filler. Such output proves no item was spoken.
+ */
+export function isBackchannelOnly(transcript: string): boolean {
+  const words = wordsOf(transcript);
+  return words.every(
+    (word) => BACKCHANNEL_WORDS.has(word) || STOP_WORDS.has(word),
+  );
+}
+
 function containsConfirmWord(transcript: string, item: SpeechItem): boolean {
   if (item.confirmWords.length === 0) return false;
+  if (isBackchannelOnly(transcript)) return false;
   const spoken = new Set(wordsOf(transcript));
   return item.confirmWords.some((word) => spoken.has(word.toLowerCase()));
 }

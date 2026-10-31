@@ -255,6 +255,7 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     voiceSessionId: string,
   ): Promise<VoiceSessionEndFetchResult>;
+  setVoiceSessionLive(live: boolean): Promise<void>;
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -1272,6 +1273,10 @@ export class DesktopRunnerHost implements IRunnerHost {
     voiceSessionId: string,
   ): Promise<VoiceSessionEndFetchResult> {
     return this.bridge.endVoiceSession(bearerToken, voiceSessionId);
+  }
+
+  setVoiceSessionLive(live: boolean): Promise<void> {
+    return this.bridge.setVoiceSessionLive(live);
   }
 
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult> {

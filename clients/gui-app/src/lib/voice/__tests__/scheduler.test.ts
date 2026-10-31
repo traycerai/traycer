@@ -5,6 +5,8 @@ import {
   CONFIRM_WINDOW_MS,
   INPUT_ACTIVE_WINDOW_MS,
   MAX_DELIVERY_ATTEMPTS,
+  OUTPUT_HANGOVER_MS,
+  OUTPUT_HANGOVER_WITHOUT_LEVEL_MS,
   chunkText,
   confirmationWords,
   createSpeechScheduler,
@@ -76,6 +78,8 @@ beforeEach(() => {
     clearTimer: clock.clearTimer,
     append: (text, delegationId) => appended.push({ text, delegationId }),
   });
+  scheduler.setLevelDetection(true);
+  scheduler.setReady(true);
 });
 
 function item(
@@ -169,6 +173,97 @@ describe("delivery confirmation", () => {
   });
 });
 
+describe("a bare backchannel", () => {
+  it("never confirms an item that itself opens with a backchannel word", () => {
+    const text = "Mm-hmm, the deployment completed successfully.";
+    const words = confirmationWords({
+      botTitle: null,
+      threadTitle: null,
+      text,
+    });
+    expect(words).not.toContain("mm-hmm");
+
+    let delivered = 0;
+    scheduler.enqueue(
+      item("a", {
+        text,
+        confirmWords: ["mm-hmm", ...words],
+        onDelivered: () => delivered++,
+      }),
+    );
+
+    scheduler.noteOutputTranscript("Mm-hmm.");
+    expect(delivered).toBe(0);
+    expect(scheduler.pendingCount()).toBe(1);
+
+    scheduler.noteOutputTranscript(" The deployment completed");
+    expect(delivered).toBe(1);
+    expect(scheduler.pendingCount()).toBe(0);
+  });
+});
+
+describe("handoff", () => {
+  it("retires old engine facts, requeues the in-flight item unlabelled and waits for ready", () => {
+    scheduler.enqueue(item("a", {}));
+    scheduler.noteOutputLevel(true);
+    expect(appended).toHaveLength(1);
+    expect(scheduler.activity().outputPlaying).toBe(true);
+
+    scheduler.handoff();
+
+    expect(scheduler.activity().outputPlaying).toBe(false);
+    expect(scheduler.pendingCount()).toBe(1);
+    clock.advance(CONFIRM_WINDOW_MS * 2);
+    expect(appended).toHaveLength(1);
+
+    scheduler.setReady(true);
+    expect(appended).toEqual([
+      { text: "reply a", delegationId: "d-a" },
+      { text: "reply a", delegationId: null },
+    ]);
+  });
+
+  it("relabels queued items too and does not dispatch them before ready", () => {
+    scheduler.noteOutputLevel(true);
+    scheduler.enqueue(item("a", {}));
+    scheduler.handoff();
+    scheduler.setLevelDetection(true);
+    scheduler.noteOutputLevel(false);
+    expect(appended).toEqual([]);
+
+    scheduler.setReady(true);
+    expect(appended).toEqual([{ text: "reply a", delegationId: null }]);
+  });
+});
+
+describe("the output hangover", () => {
+  function afterFirstTranscript(): void {
+    scheduler.enqueue(item("a", {}));
+    scheduler.noteOutputTranscript("Tracy says hello");
+    scheduler.enqueue(item("b", {}));
+    expect(appended).toHaveLength(1);
+  }
+
+  it("without a level detector holds the next item well past 700 ms", () => {
+    scheduler.setLevelDetection(false);
+    afterFirstTranscript();
+
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(appended).toHaveLength(1);
+
+    clock.advance(OUTPUT_HANGOVER_WITHOUT_LEVEL_MS - OUTPUT_HANGOVER_MS);
+    expect(appended).toHaveLength(2);
+  });
+
+  it("with a detector reporting quiet, 700 ms suffices", () => {
+    scheduler.setLevelDetection(true);
+    afterFirstTranscript();
+
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(appended).toHaveLength(2);
+  });
+});
+
 describe("reset", () => {
   it("forgets queued items and every fact, and stays usable", () => {
     scheduler.noteDelegationCreated();
@@ -183,6 +278,7 @@ describe("reset", () => {
       outputPlaying: false,
       ackPending: false,
     });
+    scheduler.setReady(true);
     scheduler.enqueue(item("b", {}));
     expect(appended).toEqual([{ text: "reply b", delegationId: "d-b" }]);
   });

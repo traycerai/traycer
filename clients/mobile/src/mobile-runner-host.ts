@@ -779,6 +779,13 @@ export class MobileRunnerHost implements IRunnerHost {
     );
   }
 
+  setVoiceSessionLive(live: boolean): Promise<void> {
+    // The phone has one window and no close; its background edge ends the
+    // session instead (the mobile voice ticket).
+    void live;
+    return Promise.resolve();
+  }
+
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,

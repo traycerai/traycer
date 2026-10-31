@@ -197,6 +197,8 @@ function endedLine(reason: VoiceEndReason): string {
       return "Voice ended: the screen locked.";
     case "microphone":
       return "Voice did not start: the microphone is not available.";
+    case "playback":
+      return "Voice ended: the sound could not be played.";
     case "unavailable":
       return "Voice did not start. Try again in a moment.";
     case "ended":
