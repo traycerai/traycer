@@ -90,9 +90,13 @@ export interface VoiceQueue {
     refs: ReadonlyArray<ReplyRef>,
     hostOf: (ref: ReplyRef) => string,
   ): void;
-  /** The references whose rows are being read now, a bounded number at a time. */
-  pendingHydrations(): ReadonlyArray<PendingHydration>;
-  subscribePending(listener: () => void): () => void;
+  /**
+   * The references whose rows are being read now, newest first, a bounded
+   * number at a time. The same array until the set changes, so a store
+   * subscription can read it as a snapshot.
+   */
+  readonly pendingHydrations: () => ReadonlyArray<PendingHydration>;
+  readonly subscribePending: (listener: () => void) => () => void;
   /** The records answered for a reference: its row, or `null` when they have none. */
   hydrated(messageId: string, row: HydrationRow | null): void;
   /** The focused feed scheduled this row: it is said there, not here. */
@@ -143,12 +147,14 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
   /** Message ids settled without an item: said by the focused feed, or not hydratable. */
   const settled = new Set<string>();
   const pendingListeners = new Set<() => void>();
+  let pendingSnapshot: ReadonlyArray<PendingHydration> | null = null;
   let speechSeq = 0;
 
   const publish = (): void => {
     deps.publish(Array.from(entries.values(), (entry) => entry.item));
   };
   const notifyPending = (): void => {
+    pendingSnapshot = null;
     for (const listener of pendingListeners) listener();
   };
   const setState = (entry: Entry, state: QueueItem["state"]): void => {
@@ -302,10 +308,11 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       add(refs, hostOf, true);
     },
     pendingHydrations() {
-      return Array.from(pending.values())
+      pendingSnapshot ??= Array.from(pending.values())
         .map((entry) => entry.hydration)
         .sort((a, b) => b.ref.at - a.ref.at)
         .slice(0, MAX_CONCURRENT_HYDRATIONS);
+      return pendingSnapshot;
     },
     subscribePending(listener) {
       pendingListeners.add(listener);

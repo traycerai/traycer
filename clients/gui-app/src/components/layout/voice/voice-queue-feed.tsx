@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import type {
   BotRecord,
   BotTaskEntry,
@@ -106,13 +112,10 @@ function VoiceQueueFeed(props: {
     queue.ingestReplies(attention.answers, (ref) => hostOfRef.current(ref));
   }, [attention.answers, queue]);
 
-  const [pending, setPending] = useState<ReadonlyArray<PendingHydration>>(() =>
-    queue.pendingHydrations(),
+  const pending = useSyncExternalStore(
+    queue.subscribePending,
+    queue.pendingHydrations,
   );
-  useEffect(() => {
-    setPending(queue.pendingHydrations());
-    return queue.subscribePending(() => setPending(queue.pendingHydrations()));
-  }, [queue]);
 
   // Announcements: the bots' channels the bot records name.
   useEffect(() => {
