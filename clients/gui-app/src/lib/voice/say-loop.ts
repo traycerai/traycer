@@ -1053,13 +1053,10 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
    * Words the router took for something else than the card's answer are a
    * new request: a yes said later must not send the card's candidate.
    */
-  function afterCardRoute(
-    card: CardKey | null,
-    decision: RoutedDecision,
-  ): void {
-    if (card === null) return;
+  function afterCardRoute(entry: RoutingEntry, decision: RoutedDecision): void {
+    if (entry.card === null) return;
     if (decision.kind === "answer" || decision.kind === "fragment") return;
-    store.getState().cardDriver?.dropCandidate(card);
+    store.getState().cardDriver?.dropCandidate(entry.card, entry.seqs);
   }
 
   /** The held post goes, with its words; nothing is said. */
@@ -1298,7 +1295,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       // stale, and navigates and posts nothing. An ended session forgot them.
       if (!routing.delete(actionId)) return;
       if (store.getState().sessionToken !== entry.sessionToken) return;
-      afterCardRoute(entry.card, decision);
+      afterCardRoute(entry, decision);
       await execute(entry, decision);
     },
 

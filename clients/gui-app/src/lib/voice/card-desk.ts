@@ -427,54 +427,68 @@ function wordsOfText(text: string): ReadonlyArray<string> {
 }
 
 /**
- * What proves a card's list was read to its end: the words of its last part
- * (the final choice and the "or skip" of a question, Allow and Deny of an
- * approval), each to be said more often than everything said before it
- * says it (the bot, the place, the question and every earlier choice, or
- * the tool and summary). A word only
- * the end says needs one saying; one the question says too must be said
- * again, so the question alone, however its words repeat the choices,
- * proves nothing. Not every word of every choice: a paraphrase may drop
- * some, and the end is enough.
+ * What proves a spoken text was said through its tail, the part starting
+ * at `tailStart`: each content word of the tail, to be said more often than
+ * the text before it says it. Counted against the very text the voice is
+ * given, never one rebuilt from the card's fields, so the template's own
+ * words ("a task's agent asks") count as much as the question's: a word
+ * only the tail says needs one saying, a word said before it must be said
+ * again. A tail not found in the text (`-1`) proves nothing: the card stays
+ * unarmed rather than armed by the wrong words.
  */
-function listEndWords(
-  content: CardContent,
-  question: CardQuestion | null,
+function tailProof(
+  spoken: string,
+  tailStart: number,
 ): ReadonlyArray<ConfirmWord> {
-  const approval = content.family === "approval" ? content.approval : null;
-  if (approval === null) {
-    const options = question?.options ?? [];
-    return repeatedWords(
-      `${options.at(-1) ?? ""} skip`,
-      [
-        content.botTitle,
-        content.place,
-        question?.text ?? "",
-        ...options.slice(0, -1),
-      ].join(" "),
-    );
-  }
-  return repeatedWords(
-    APPROVAL_CHOICES.join(" "),
-    `${content.botTitle} ${content.place} ${approval.tool} ${approval.summary}`,
-  );
+  if (tailStart < 0) return [];
+  return repeatedWords(spoken.slice(tailStart), spoken.slice(0, tailStart));
 }
 
 /**
- * What proves a candidate was read back: its own label's words, said more
- * often than what precedes the label says them (the line a re-offer opens
- * with). A label too short to prove anything by its words alone ("No",
- * "Go") is proven by the read-back's words instead.
+ * What proves a card's list was read to its end: its tail, the last
+ * numbered choice and what follows it (an approval's whole choice list, or
+ * a question with no choices its closing line). Not every word of every
+ * choice: a paraphrase may drop some, and the end is enough.
+ */
+function listEndWords(
+  spoken: string,
+  content: CardContent,
+  question: CardQuestion | null,
+): ReadonlyArray<ConfirmWord> {
+  if (content.family === "approval") {
+    return tailProof(
+      spoken,
+      spoken.lastIndexOf(choicesSentence(APPROVAL_CHOICES)),
+    );
+  }
+  if (question === null) return [];
+  const last = question.options.at(-1);
+  const marker =
+    last === undefined
+      ? answerTail(question)
+      : `${question.options.length}. ${last}`;
+  return tailProof(spoken, spoken.lastIndexOf(marker));
+}
+
+/**
+ * What proves a candidate was read back: its own label's words, counted
+ * against what the voice says before the label (a re-offer's opening
+ * line). A label too short to prove anything by its words alone ("No",
+ * "Go") is proven by the rest of the read-back from the label on.
  */
 function candidateWords(
   choice: CardChoice,
-  prefix: string,
-  readBack: string,
+  spoken: string,
+  prefixLength: number,
 ): ReadonlyArray<ConfirmWord> {
-  const label = repeatedWords(choiceText(choice), prefix);
-  return label.some((entry) => entry.word.length >= 4)
-    ? label
-    : wordsOfText(readBack);
+  const label = choice.kind === "skip" ? "Skip" : choiceText(choice);
+  const start = spoken.indexOf(label, prefixLength);
+  if (start < 0) return [];
+  const before = spoken.slice(0, start);
+  const words = repeatedWords(label, before);
+  return words.some((entry) => entry.word.length >= 4)
+    ? words
+    : tailProof(spoken, start);
 }
 
 /** One speech item's say, kept for its withdrawal and its heard mark. */
@@ -714,7 +728,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
       // Only the list's end proves it was read whole: a read-back cut off
       // after its question, or with its choices left out, arms nothing.
       confirmWords: content.actable
-        ? listEndWords(content, question)
+        ? listEndWords(text, content, question)
         : wordsOfText(text),
       onHeard: (spoken) => {
         if (!content.actable) {
@@ -740,11 +754,12 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     }
     held.cancelWindow();
     setCard({ candidate: choice, state: "proposed" });
-    const text = cardCandidateText(content, choice);
+    const opener = prefix.length > 0 ? `${prefix} ` : "";
+    const spoken = `${opener}${cardCandidateText(content, choice)}`;
     held.candidateSay = say(held, {
-      text: prefix.length > 0 ? `${prefix} ${text}` : text,
+      text: spoken,
       priority: "ask",
-      confirmWords: candidateWords(choice, prefix, text),
+      confirmWords: candidateWords(choice, spoken, opener.length),
       onHeard: () => startWindow(held),
       onGivenUp: () => {
         held.candidateSay = null;
@@ -1450,11 +1465,16 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
       };
     },
 
-    dropCandidate(key) {
+    dropCandidate(key, seqs) {
       const held = desk;
       const active = card();
       // A route made against another card drops nothing of this one.
       if (held === null || active === null || !sameKey(active, key)) return;
+      // Nor does a request said before the latest choice: that choice is
+      // newer than it, and stands.
+      if (seqs.length > 0 && Math.max(...seqs) <= held.latestChoiceSeq) {
+        return;
+      }
       if (held.offer !== null) {
         close(held);
         return;

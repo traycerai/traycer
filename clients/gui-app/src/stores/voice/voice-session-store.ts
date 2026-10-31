@@ -278,7 +278,7 @@ export interface VoiceCardDriver {
   /** The question and choices the router is shown while the card waits; `null` otherwise. */
   readonly routerCard: () => RouterCard | null;
   /** Words routed elsewhere: a yes said later must not bind to the candidate of the card the route was made against. */
-  readonly dropCandidate: (key: CardKey) => void;
+  readonly dropCandidate: (key: CardKey, seqs: ReadonlyArray<number>) => void;
   /** The person moved, or another card was interjected: the candidate is offered again. */
   readonly invalidate: (reason: "focus" | "interjection") => void;
 }
