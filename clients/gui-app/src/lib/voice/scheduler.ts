@@ -189,6 +189,8 @@ export function createSpeechScheduler(
   let outputTimer: unknown = null;
   /** The transcript fell quiet while trusted playback went on: the completion check waits for it. */
   let completionPending = false;
+  /** When the last output transcript delta arrived; the quiet deadline is measured from it. */
+  let lastOutputTranscriptAt: number | null = null;
   let ackPending = false;
   let ackHeardSpeech = false;
   let ackTimer: unknown = null;
@@ -259,6 +261,40 @@ export function createSpeechScheduler(
     }
     return null;
   };
+
+  /**
+   * Arms the quiet deadline: the hangover in force, measured from the last
+   * transcript delta. Re-armed when the rule changes with the detector's
+   * health, so a deadline is never judged early under the shorter rule.
+   */
+  function armOutputQuiet(): void {
+    if (lastOutputTranscriptAt === null) return;
+    completionPending = false;
+    const deadline = lastOutputTranscriptAt + outputHangoverMs();
+    outputTranscriptUntil = deadline;
+    if (outputTimer !== null) deps.clearTimer(outputTimer);
+    outputTimer = deps.setTimer(
+      onOutputQuiet,
+      Math.max(0, deadline - deps.now()),
+    );
+  }
+
+  /** The transcript has been quiet for the hangover in force. */
+  function onOutputQuiet(): void {
+    outputTimer = null;
+    // The utterance is complete once the transcript has fallen quiet AND
+    // trusted playback has stopped: a healthy detector still hearing speech
+    // says the utterance goes on, whatever the transcript's gap.
+    if (levelDetection && outputLevelPlaying) {
+      completionPending = true;
+    } else {
+      completeUtterance();
+    }
+    // The acknowledgement has been spoken through once the voice falls quiet
+    // after speaking.
+    if (ackPending && ackHeardSpeech && !outputLevelPlaying) clearAck();
+    onFactsChanged();
+  }
 
   /**
    * The utterance is complete: a short answer is proven now, by the complete
@@ -363,26 +399,9 @@ export function createSpeechScheduler(
           settleInFlight(true);
         }
       }
-      completionPending = false;
       if (ackPending) ackHeardSpeech = true;
-      const hangover = outputHangoverMs();
-      outputTranscriptUntil = deps.now() + hangover;
-      if (outputTimer !== null) deps.clearTimer(outputTimer);
-      outputTimer = deps.setTimer(() => {
-        outputTimer = null;
-        // The utterance is complete once the transcript has fallen quiet AND
-        // trusted playback has stopped: a healthy detector still hearing
-        // speech says the utterance goes on, whatever the transcript's gap.
-        if (levelDetection && outputLevelPlaying) {
-          completionPending = true;
-        } else {
-          completeUtterance();
-        }
-        // The acknowledgement has been spoken through once the voice falls
-        // quiet after speaking.
-        if (ackPending && ackHeardSpeech && !outputLevelPlaying) clearAck();
-        onFactsChanged();
-      }, hangover);
+      lastOutputTranscriptAt = deps.now();
+      armOutputQuiet();
       notify();
     },
     noteOutputLevel(playing) {
@@ -399,8 +418,14 @@ export function createSpeechScheduler(
       onFactsChanged();
     },
     setLevelDetection(available) {
+      if (levelDetection === available) return;
       levelDetection = available;
       if (!available) outputLevelPlaying = false;
+      // The quiet deadline follows the rule in force: lost health moves it
+      // to the longer hangover from the last delta (never a judgement now,
+      // and no level event to wait for); regained health moves it back to
+      // the shorter one, with playback quiet still required.
+      if (outputTimer !== null || completionPending) armOutputQuiet();
     },
     setReady(next) {
       ready = next;
@@ -477,6 +502,8 @@ export function createSpeechScheduler(
     floorUntil = null;
     inputActiveUntil = null;
     outputTranscriptUntil = null;
+    completionPending = false;
+    lastOutputTranscriptAt = null;
     outputLevelPlaying = false;
     levelDetection = false;
     ackPending = false;

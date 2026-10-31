@@ -195,12 +195,10 @@ describe("delivery confirmation", () => {
     clock.advance(OUTPUT_HANGOVER_MS);
     expect(answer.delivered()).toBe(0);
 
-    const spelled = clock.now();
     scheduler.noteOutputTranscript(" forty two");
     scheduler.noteOutputTranscript(" thousand.");
     clock.advance(OUTPUT_HANGOVER_MS);
     expect(answer.delivered()).toBe(0);
-    expect(clock.now()).toBeGreaterThan(spelled);
     clock.advance(CONFIRM_WINDOW_MS);
     expect(appended).toHaveLength(2);
   });
@@ -397,6 +395,46 @@ describe("delivery confirmation", () => {
     expect(first.delivered()).toBe(0);
     scheduler.noteOutputLevel(false);
     expect(first.delivered()).toBe(1);
+  });
+
+  it("moves the quiet deadline to the longer hangover from the last delta when the detector's health is lost before it fires, and judges nothing early", () => {
+    const first = numericAnswer("1");
+    scheduler.noteOutputLevel(true);
+    scheduler.noteOutputTranscript("One");
+    clock.advance(500);
+    // The detector goes unhealthy (health first, then quiet, as the audio
+    // watch reports them).
+    scheduler.setLevelDetection(false);
+    scheduler.noteOutputLevel(false);
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(first.delivered()).toBe(0);
+
+    clock.advance(2_000 - 500 - OUTPUT_HANGOVER_MS);
+    scheduler.noteOutputTranscript(" moment.");
+    clock.advance(OUTPUT_HANGOVER_WITHOUT_LEVEL_MS - 1);
+    expect(first.delivered()).toBe(0);
+    clock.advance(1);
+    expect(first.delivered()).toBe(0);
+    clock.advance(CONFIRM_WINDOW_MS);
+    expect(appended).toHaveLength(2);
+  });
+
+  it("judges at the no-detector deadline from the last delta when health is lost while completion waits for quiet, with no further level event", () => {
+    const first = numericAnswer("1");
+    scheduler.noteOutputLevel(true);
+    scheduler.noteOutputTranscript("One.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    // The transcript is quiet, playback goes on: completion waits.
+    expect(first.delivered()).toBe(0);
+    scheduler.setLevelDetection(false);
+    scheduler.noteOutputLevel(false);
+    expect(first.delivered()).toBe(0);
+
+    clock.advance(OUTPUT_HANGOVER_WITHOUT_LEVEL_MS - OUTPUT_HANGOVER_MS - 1);
+    expect(first.delivered()).toBe(0);
+    clock.advance(1);
+    expect(first.delivered()).toBe(1);
+    expect(scheduler.pendingCount()).toBe(0);
   });
 
   it("takes repetitions of the whole reply as the reply, and nothing else beside them: Yes. Yes. confirms Yes., Yes. Right. does not", () => {
