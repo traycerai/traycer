@@ -79,6 +79,7 @@ describe("executeDeferredVerb", () => {
       verb: "read",
       target: null,
       itemId: "i-1",
+      threadNamed: false,
       delegationId: "d-1",
     });
 
@@ -100,12 +101,78 @@ describe("executeDeferredVerb", () => {
       verb: "read",
       target: boundTo("bot-2", null),
       itemId: null,
+      threadNamed: false,
       delegationId: "d-1",
     });
 
     expect(run.mock.calls).toEqual([
       [{ kind: "read", itemId: "new", delegationId: "d-1" }],
     ]);
+  });
+
+  it.each([
+    [
+      "searches all of the bot's threads when the route named only the bot",
+      false,
+      "in-b",
+    ],
+    ["keeps to the thread the route named", true, "in-a"],
+  ])("a read that %s", (_name, threadNamed, expected) => {
+    // The bot-only route is bound to the focused thread A, which says
+    // nothing about which of the bot's threads the person means.
+    goLive([
+      queueItem({
+        id: "in-a",
+        botId: "bot-2",
+        threadId: "thread-a",
+        at: 1_000,
+      }),
+      queueItem({
+        id: "in-b",
+        botId: "bot-2",
+        threadId: "thread-b",
+        at: 3_000,
+      }),
+    ]);
+
+    executeDeferredVerb({
+      verb: "read",
+      target: boundTo("bot-2", "thread-a"),
+      itemId: null,
+      threadNamed,
+      delegationId: "d-1",
+    });
+
+    expect(run.mock.calls).toEqual([
+      [{ kind: "read", itemId: expected, delegationId: "d-1" }],
+    ]);
+  });
+
+  it("sets aside a bot's newest waiting item across its threads with later, when only the bot is named", () => {
+    goLive([
+      queueItem({
+        id: "in-a",
+        botId: "bot-2",
+        threadId: "thread-a",
+        at: 1_000,
+      }),
+      queueItem({
+        id: "in-b",
+        botId: "bot-2",
+        threadId: "thread-b",
+        at: 3_000,
+      }),
+    ]);
+
+    executeDeferredVerb({
+      verb: "later",
+      target: boundTo("bot-2", "thread-a"),
+      itemId: null,
+      threadNamed: false,
+      delegationId: "d-1",
+    });
+
+    expect(run.mock.calls).toEqual([[{ kind: "later", itemId: "in-b" }]]);
   });
 
   it("sets an item aside with later", () => {
@@ -115,6 +182,7 @@ describe("executeDeferredVerb", () => {
       verb: "later",
       target: null,
       itemId: "i-1",
+      threadNamed: false,
       delegationId: "d-1",
     });
 
@@ -131,6 +199,7 @@ describe("executeDeferredVerb", () => {
         verb: "read",
         target: null,
         itemId: null,
+        threadNamed: false,
         delegationId: "d-1",
       }),
     ).toEqual({ kind: "refused", say: NOTHING_WAITING_NOTICE });
@@ -144,6 +213,7 @@ describe("executeDeferredVerb", () => {
       verb: "status",
       target: null,
       itemId: null,
+      threadNamed: false,
       delegationId: "d-1",
     });
 
@@ -160,6 +230,7 @@ describe("executeDeferredVerb", () => {
       verb: "status",
       target: boundTo("bot-3", null),
       itemId: null,
+      threadNamed: false,
       delegationId: "d-1",
     });
 
@@ -177,6 +248,7 @@ describe("executeDeferredVerb", () => {
         verb: "brief",
         target: null,
         itemId: null,
+        threadNamed: false,
         delegationId: "d-1",
       }),
     ).toEqual({ kind: "refused", say: NOT_LIVE_NOTICE });
@@ -190,6 +262,7 @@ describe("executeDeferredVerb", () => {
       verb: "open",
       target: null,
       itemId: "i-1",
+      threadNamed: false,
       delegationId: "d-1",
     });
 
@@ -208,6 +281,7 @@ describe("executeDeferredVerb", () => {
       verb: "read",
       target: boundTo("bot-2", null),
       itemId: null,
+      threadNamed: false,
       delegationId: "d-1",
     });
 

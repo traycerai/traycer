@@ -660,6 +660,22 @@ describe("a routed read of a queue item", () => {
       kind: "deferred",
       verb: "read",
       itemId: "i-tracy-thread",
+      threadNamed: true,
+    });
+  });
+
+  it("does not take the thread a bot-only route is bound to for one the person named", () => {
+    const decision = resolveRoute(
+      routerResult("read", ids(null, TRACY, null), 0, 3),
+      QUEUE_DIRECTORY,
+      4,
+    );
+
+    expect(decision).toMatchObject({
+      kind: "deferred",
+      verb: "read",
+      itemId: null,
+      threadNamed: false,
     });
   });
 });

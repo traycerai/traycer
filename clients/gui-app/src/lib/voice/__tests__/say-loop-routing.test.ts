@@ -1,4 +1,7 @@
-import type { BotConversationSendResponse } from "@traycer/protocol/host/bot/conversation-schemas";
+import type {
+  BotConversationSendResponse,
+  BotThreadSummary,
+} from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import type { OpenTextBlock } from "@traycer/protocol/persistence/epic/open-harness-records";
@@ -458,11 +461,14 @@ describe("a routed verb on the queue", () => {
     routedItem("read", itemId);
 
   /**
-   * The live queue holding one waiting reply, `r-1` of the CI bot, and the
-   * directory that lists it. `briefed`: it was waiting when the session
+   * The live queue holding one waiting reply, `r-1` of the CI bot in
+   * `threadId` (its channel for `null`), and the directory that lists it. `briefed`: it was waiting when the session
    * began; `arrived`: it came while the session ran, so it is offered.
    */
-  function withWaitingItem(arrival: "briefed" | "arrived") {
+  function withWaitingItem(
+    arrival: "briefed" | "arrived",
+    threadId: string | null,
+  ) {
     const live = liveQueue();
     const text: OpenTextBlock = {
       blockId: "block-1",
@@ -476,8 +482,8 @@ describe("a routed verb on the queue", () => {
     const ref = {
       messageId: "r-1",
       botId: CI,
-      threadId: null,
-      chatId: "chan-ci",
+      threadId,
+      chatId: threadId ?? "chan-ci",
       originHostId: "host-1",
       at: NOW,
       blocking: false,
@@ -497,7 +503,7 @@ describe("a routed verb on the queue", () => {
   }
 
   it("reads the item it names, under the request's delegation, and posts nothing", async () => {
-    const { enqueued, directory } = withWaitingItem("briefed");
+    const { enqueued, directory } = withWaitingItem("briefed", null);
     const h = buildFor({ recheckHolds: true, canSend: true }, directory);
     h.answers.push(() => Promise.resolve(readOf("r-1")));
 
@@ -513,7 +519,7 @@ describe("a routed verb on the queue", () => {
   });
 
   it("does not read an item the person set aside while the route was being made", async () => {
-    const { queue, enqueued, directory } = withWaitingItem("briefed");
+    const { queue, enqueued, directory } = withWaitingItem("briefed", null);
     const h = buildFor({ recheckHolds: true, canSend: true }, directory);
     const held = heldAnswer();
     h.answers.push(held.answer);
@@ -531,7 +537,7 @@ describe("a routed verb on the queue", () => {
   });
 
   it("does not set aside an item that was heard while the route was being made", async () => {
-    const { queue, enqueued, directory } = withWaitingItem("briefed");
+    const { queue, enqueued, directory } = withWaitingItem("briefed", null);
     const h = buildFor({ recheckHolds: true, canSend: true }, directory);
     const held = heldAnswer();
     h.answers.push(held.answer);
@@ -550,8 +556,10 @@ describe("a routed verb on the queue", () => {
   });
 
   it("does not say the offer of an item the person is routed to", async () => {
-    const { queue, enqueued, withdrawn, directory } =
-      withWaitingItem("arrived");
+    const { queue, enqueued, withdrawn, directory } = withWaitingItem(
+      "arrived",
+      null,
+    );
     const offers = enqueued.filter((item) => item.text.endsWith("Want it?"));
     expect(offers).toHaveLength(1);
     const h = buildFor({ recheckHolds: true, canSend: true }, directory);
@@ -575,6 +583,83 @@ describe("a routed verb on the queue", () => {
       ["r-1", "queued"],
     ]);
     expect(h.sends).toEqual([]);
+  });
+
+  describe("on the CI bot focused in thread A, with a reply of its in thread B only", () => {
+    const FOCUS_THREAD_A: VoiceFocus = {
+      botId: CI,
+      hostId: "host-1",
+      threadId: "thread-a",
+      anchorMessageId: "msg-a",
+      anchorThread: null,
+    };
+    const THREAD_A: BotThreadSummary = {
+      threadId: "thread-a",
+      conversationId: "conv-a",
+      sessionChatId: "chat-a",
+      anchor: {
+        messageId: "msg-a",
+        requestId: "req-a",
+        senderUserId: VIEWER,
+        sentAt: NOW - 1_000,
+        resolvedAt: null,
+      },
+      replyCount: 1,
+      lastReplyAt: NOW - 500,
+      openRequestCount: 0,
+      costUsd: null,
+    };
+
+    function directoryOfThreadB() {
+      const live = withWaitingItem("briefed", "thread-b");
+      useVoiceSessionStore.getState().setFocus(FOCUS_THREAD_A);
+      const directory = composeVoiceDirectory({
+        ...SOURCES,
+        focus: FOCUS_THREAD_A,
+        threadsByBot: new Map([[CI, [THREAD_A]]]),
+        queue: live.queue.items(),
+      });
+      return { ...live, directory };
+    }
+
+    function readNaming(threadId: string | null): RouterResult {
+      return {
+        ...route("read", CI, PERSONAL, 2),
+        target: {
+          environmentId: PERSONAL,
+          botId: CI,
+          threadId,
+          itemId: null,
+        },
+      };
+    }
+
+    it("reads the bot's reply of another thread when the route names only the bot", async () => {
+      const { enqueued, directory } = directoryOfThreadB();
+      const h = buildFor({ recheckHolds: true, canSend: true }, directory);
+      h.answers.push(() => Promise.resolve(readNaming(null)));
+
+      speak("read", " ci");
+      await h.loop.onDelegationCreated("d-1");
+
+      expect(enqueued.map((item) => [item.text, item.delegationId])).toEqual([
+        ["bot_ci said: The Safari fix landed in build forty.", "d-1"],
+      ]);
+      expect(h.notices).toEqual([]);
+    });
+
+    it("says that nothing is waiting when the route names the thread, which has none", async () => {
+      const { enqueued, directory } = directoryOfThreadB();
+      const h = buildFor({ recheckHolds: true, canSend: true }, directory);
+      h.answers.push(() => Promise.resolve(readNaming("thread-a")));
+
+      speak("read", " thread a");
+      await h.loop.onDelegationCreated("d-1");
+
+      expect(enqueued).toEqual([]);
+      expect(h.notices).toEqual([NOTHING_WAITING_NOTICE]);
+      expect(h.noticeDelegations).toEqual(["d-1"]);
+    });
   });
 
   it("says that nothing is waiting, under the request's delegation, when there is nothing to read", async () => {
