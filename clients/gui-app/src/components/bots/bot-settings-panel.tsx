@@ -1,4 +1,5 @@
 import {
+  useContext,
   useEffect,
   useId,
   useMemo,
@@ -55,6 +56,11 @@ import {
   SettingsGroup,
 } from "@/components/bots/bot-settings-group";
 import { BotSlackSettings } from "@/components/bots/bot-slack-settings";
+import {
+  BotMemoryContext,
+  type BotMemoryAccess,
+} from "@/components/bots/bot-memory-context";
+import { useBotMemory } from "@/hooks/bots/use-bot-memory";
 
 const BOT_TITLE_MAX = 500;
 
@@ -70,7 +76,8 @@ const BOT_TITLE_MAX = 500;
  * - Slack: the bot's own Slack app, from its manifest to its install, on
  *   traycer-server with the person's own session rather than the tab host;
  * - Usage: what the bot's chats have cost, in the usage graph (decision 118),
- *   where the tab's host can read it;
+ *   where the tab's host can read it, and what it knows, which opens the
+ *   pane the bot's card opens (decision 148);
  * - deleting the bot, behind a confirmation.
  *
  * Every write goes through the tab host's client - the host `bot.open` chose
@@ -151,7 +158,7 @@ export function BotChannelSettingsPanel(props: {
           <BotsInChannel bots={environmentBots} />
         )}
         <BotSlackSettings botId={bot.botId} />
-        <BotUsageSection botId={bot.botId} />
+        <BotUsageSection botId={bot.botId} onClose={onClose} />
         <BotDeleteSection bot={bot} />
       </div>
     </aside>
@@ -160,34 +167,113 @@ export function BotChannelSettingsPanel(props: {
 
 /**
  * What the bot has cost, behind a button: the usage graph of everything its
- * chats ran, opened on demand. Nothing where the tab's host cannot read it.
+ * chats ran, opened on demand, where the tab's host can read it. Beside it,
+ * inside a bot tab, what the bot knows.
  */
-function BotUsageSection(props: { readonly botId: string }): ReactNode {
+function BotUsageSection(props: {
+  readonly botId: string;
+  /** Closes the settings, which the memory pane opens in place of. */
+  readonly onClose: () => void;
+}): ReactNode {
+  const memory = useContext(BotMemoryContext);
+  if (memory === null)
+    return <BotUsageGroup botId={props.botId} memoryEntry={null} />;
+  return (
+    <BotUsageWithMemory
+      botId={props.botId}
+      access={memory}
+      onClose={props.onClose}
+    />
+  );
+}
+
+/** The Usage group with the memory entry, where the host serves the memory. */
+function BotUsageWithMemory(props: {
+  readonly botId: string;
+  readonly access: BotMemoryAccess;
+  readonly onClose: () => void;
+}): ReactNode {
+  const { access, onClose } = props;
+  const reading = useBotMemory({ ...access, enabled: true });
+  const count = reading.kind === "ready" ? reading.memory.entries.length : null;
+  return (
+    <BotUsageGroup
+      botId={props.botId}
+      memoryEntry={
+        reading.kind === "unsupported" ? null : (
+          <BotMemoryEntry
+            count={count}
+            onOpen={() => {
+              onClose();
+              access.open();
+            }}
+          />
+        )
+      }
+    />
+  );
+}
+
+/** The group, drawn only when it holds a button. */
+function BotUsageGroup(props: {
+  readonly botId: string;
+  readonly memoryEntry: ReactNode;
+}): ReactNode {
   const client = useTabHostClient();
   const hostId = useTabHostId();
   const supported = useUsageSummarySupported(hostId);
   const [open, setOpen] = useState(false);
-  if (!supported) return null;
+  if (!supported && props.memoryEntry === null) return null;
   return (
     <SettingsGroup title="Usage" testId="bot-settings-usage">
-      <div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          data-testid="bot-settings-usage-open"
-          onClick={() => setOpen(true)}
-        >
-          View usage
-        </Button>
+      <div className="flex flex-wrap items-center gap-2">
+        {supported ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-testid="bot-settings-usage-open"
+            onClick={() => setOpen(true)}
+          >
+            View usage
+          </Button>
+        ) : null}
+        {props.memoryEntry}
       </div>
-      <EpicUsageDialog
-        epicId={props.botId}
-        client={client}
-        open={open}
-        onOpenChange={setOpen}
-      />
+      {supported ? (
+        <EpicUsageDialog
+          epicId={props.botId}
+          client={client}
+          open={open}
+          onOpenChange={setOpen}
+        />
+      ) : null}
     </SettingsGroup>
+  );
+}
+
+/**
+ * "What it knows · 9 memories": how many entries the bot reads before every
+ * reply (`null` while unread), opening them beside the channel as the bot's
+ * card does.
+ */
+function BotMemoryEntry(props: {
+  readonly count: number | null;
+  readonly onOpen: () => void;
+}): ReactNode {
+  const { count } = props;
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      data-testid="bot-settings-memory-open"
+      onClick={props.onOpen}
+    >
+      {count === null
+        ? "What it knows"
+        : `What it knows · ${count} ${count === 1 ? "memory" : "memories"}`}
+    </Button>
   );
 }
 
