@@ -227,7 +227,7 @@ function usePanelRootIds(
   // .type` is the same value space this `treeFilter` already uses for CHILD
   // nodes (`usePanelChildIds`), so the result is identical.
   //
-  // ## Subscribed to the ANSWER (epic-sync-overhaul finding 12, round 2)
+  // ## Subscribed to the ANSWER
   //
   // That earlier fix read `useEpicTreeIndex()` and derived in a `useMemo`, on
   // the stated premise that "the tree index does NOT change on chat tokens".

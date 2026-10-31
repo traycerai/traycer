@@ -595,7 +595,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     expect(noticeText()).toContain("Build Box");
   });
 
-  // Codex review finding: a §54 refusal names the placement it refused, so
+  // A §54 refusal names the placement it refused, so
   // ANY change of the RESOLVED host retires it - a derivation move or the
   // picker writing a new pin. A surviving alert would keep naming a placement
   // this modal has already left.
@@ -855,7 +855,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     expect(testState.recordPlacement).toHaveBeenCalledWith("host-a");
   });
 
-  // Codex review finding: `clearForAllHosts` reaches every host's copy of the
+  // `clearForAllHosts` reaches every host's copy of the
   // slot, so the "was anything staged" check that decides whether to toast
   // must reach just as far. The narrower `readStagedWorktreeIntent` (scoped to
   // the RESOLVED bucket) reported "nothing staged" here even though the clear

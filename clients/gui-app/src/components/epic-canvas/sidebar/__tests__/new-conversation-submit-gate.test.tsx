@@ -821,7 +821,7 @@ describe("NewConversationModalBody direct submit gate", () => {
     expect(testState.createChat).toHaveBeenCalledTimes(1);
   });
 
-  // Finding 3: pure path-resolution must also hold submit open.
+  // Pure path-resolution must also hold submit open.
   it("blocks the actual new-conversation submit path while file-path resolution is pending", () => {
     testState.resolvingPaths = true;
     const view = render(

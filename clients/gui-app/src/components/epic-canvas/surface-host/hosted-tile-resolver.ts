@@ -1,5 +1,5 @@
 /**
- * Ticket 21 slice 3: the one shared resolver design-review finding 4 asks
+ * Ticket 21 slice 3: the one shared resolver asked
  * for, mapping pane/instance ownership across the hosted DOM identity
  * (`hosted-tile-dom.ts`) instead of physical pane ancestry.
  *
