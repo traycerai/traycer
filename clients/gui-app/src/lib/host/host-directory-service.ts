@@ -276,8 +276,7 @@ export class HostDirectoryService implements IHostDirectoryService {
    * Coalesces concurrent `refresh()` callers onto a single in-flight fetch
    * (T20 / audit P4) - a foundation for T21's interval + open-time triggers,
    * which would otherwise stack requests.
-   */
-  /**
+   *
    * The in-flight refresh, WITH the credential era it was started for. Joining
    * is only legal for a caller in that same era — see `refreshForEra`.
    */
@@ -1230,24 +1229,6 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   /**
-   * The shell's answer WINS over the persisted one whenever it has one.
-   *
-   * Consulting the shell only when the cache was empty made the persisted value
-   * authoritative, and it is not: the host can be re-enrolled while the
-   * renderer is not running, leaving a stale id behind. On the next launch that
-   * stale value would neutralise an obsolete twin while THIS machine's current
-   * registry entry stayed remote-kind - relay-dialable and auto-selectable -
-   * which is the exact failure this seed exists to prevent, just pointed at a
-   * different id.
-   *
-   * The persisted value survives only as the fallback for a shell that cannot
-   * answer (web/mobile, or a machine that has never enrolled).
-   *
-   * Best-effort throughout: a shell that throws must not stop the directory
-   * from starting. Failing closed here would trade a mislabelled row for an app
-   * that lists no hosts at all.
-   */
-  /**
    * Re-attempt the shell seed while this machine's id is still UNKNOWN.
    *
    * `start()` asks exactly once, and the ask can come back `null` for reasons
@@ -1278,6 +1259,24 @@ export class HostDirectoryService implements IHostDirectoryService {
     await this.seedLocalHostIdFromShell();
   }
 
+  /**
+   * The shell's answer WINS over the persisted one whenever it has one.
+   *
+   * Consulting the shell only when the cache was empty made the persisted value
+   * authoritative, and it is not: the host can be re-enrolled while the
+   * renderer is not running, leaving a stale id behind. On the next launch that
+   * stale value would neutralise an obsolete twin while THIS machine's current
+   * registry entry stayed remote-kind - relay-dialable and auto-selectable -
+   * which is the exact failure this seed exists to prevent, just pointed at a
+   * different id.
+   *
+   * The persisted value survives only as the fallback for a shell that cannot
+   * answer (web/mobile, or a machine that has never enrolled).
+   *
+   * Best-effort throughout: a shell that throws must not stop the directory
+   * from starting. Failing closed here would trade a mislabelled row for an app
+   * that lists no hosts at all.
+   */
   private async seedLocalHostIdFromShell(): Promise<void> {
     let hostId: string | null;
     try {
