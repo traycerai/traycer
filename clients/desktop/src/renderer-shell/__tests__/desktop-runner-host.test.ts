@@ -147,6 +147,19 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    getVoiceAvailability: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    mintVoiceSession: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    endVoiceSession: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    setVoiceSessionLive: async () => undefined,
     createSandbox: async () => ({
       kind: "network-error" as const,
       detail: "test",
@@ -313,6 +326,7 @@ function buildFakeBridge(
         },
       };
     },
+    onSystemSuspended: () => ({ dispose: () => undefined }),
     requestHostRespawn: async () => {
       respawnCounter.count += 1;
       return { kind: "restarted" as const };
