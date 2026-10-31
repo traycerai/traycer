@@ -26,8 +26,10 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import { useVoiceAvailabilityQuery } from "@/hooks/voice/use-voice-availability-query";
 import {
+  useVoiceMicrophoneAccessMutation,
   useVoiceSessionEndMutation,
   useVoiceSessionMintMutation,
+  useVoiceShellLiveMutation,
 } from "@/hooks/voice/use-voice-session-mutations";
 import { voiceQueryKeys } from "@/lib/query-keys";
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
@@ -64,8 +66,10 @@ import {
 } from "@/lib/voice/scheduler";
 import {
   FIRST_SESSION_INPUT,
+  MAX_SHORT_SESSIONS,
   REMINT_BEFORE_EXPIRY_MS,
   REMINT_CONTEXT_USAGE_RATIO,
+  SHORT_SESSION_MS,
   remintInput,
 } from "@/lib/voice/session-input";
 import { useRunnerHost } from "@/providers/use-runner-host";
@@ -101,6 +105,8 @@ interface Attempt {
   sessionId: string | null;
   expiresAt: number;
   started: boolean;
+  /** When the engine reported started; `0` until then. */
+  startedAt: number;
   /** What the mint refused with, so a pre-start failure keeps its reason. */
   failure: VoiceEndReason | null;
   cancelled: boolean;
@@ -122,10 +128,15 @@ interface Attempt {
  */
 export function VoiceSessionController(): ReactNode {
   const runnerHost = useRunnerHost();
-  // The voice routes, as keyed mutations; the controller awaits their
-  // promises and fences on the attempt, never on a per-call callback.
+  // The voice routes and the shell's two voice calls, as keyed mutations;
+  // the controller awaits their promises and fences on the attempt, never
+  // on a per-call callback. The mint runs inside the engine's SDP exchange
+  // and is fenced the same way: ownership is checked after it answers.
   const { mutateAsync: mintAsync } = useVoiceSessionMintMutation();
   const { mutateAsync: endAsync } = useVoiceSessionEndMutation();
+  const { mutateAsync: shellLiveAsync } = useVoiceShellLiveMutation();
+  const { mutateAsync: microphoneAccessAsync } =
+    useVoiceMicrophoneAccessMutation();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   // Whether this deployment offers voice, read once per window before Talk
@@ -343,18 +354,20 @@ export function VoiceSessionController(): ReactNode {
   const remintRef = useRef<(attempt: Attempt) => Promise<void>>(() =>
     Promise.resolve(),
   );
+  /** Consecutive replaced sessions that ended short-lived; a new Talk starts at none. */
+  const shortSessionsRef = useRef(0);
   const requestRemintWhenClearRef = useRef<() => void>(() => undefined);
   const endRef = useRef<(reason: VoiceEndReason) => void>(() => undefined);
 
   const setShellVoiceLive = useCallback(
     (live: boolean) => {
-      void runnerHost.setVoiceSessionLive(live).catch((error: unknown) => {
+      void shellLiveAsync(live).catch((error: unknown) => {
         appLogger.warn("[voice] shell live flag failed", {
           error: describeLogError(error),
         });
       });
     },
-    [runnerHost],
+    [shellLiveAsync],
   );
 
   /** Stops local capture and playback at once; nothing async. */
@@ -459,6 +472,7 @@ export function VoiceSessionController(): ReactNode {
         sessionId: null,
         expiresAt: 0,
         started: false,
+        startedAt: 0,
         failure: null,
         cancelled: false,
       };
@@ -607,6 +621,7 @@ export function VoiceSessionController(): ReactNode {
       }
       if (!owns() || attempt.sessionId === null) return false;
       attempt.started = true;
+      attempt.startedAt = Date.now();
       useVoiceSessionStore.getState().sessionLive({
         id: attempt.sessionId,
         expiresAt: attempt.expiresAt,
@@ -658,6 +673,19 @@ export function VoiceSessionController(): ReactNode {
         void settleAttempt(old);
         return;
       }
+      // Every path here (the vendor's close, the expiry timer, the usage
+      // threshold) counts the session it replaces: one that did not outlive
+      // its own handshake ceiling gave the person nothing, and a run of them
+      // is a vendor or server that is not coming back for now.
+      shortSessionsRef.current =
+        Date.now() - old.startedAt < SHORT_SESSION_MS
+          ? shortSessionsRef.current + 1
+          : 0;
+      if (shortSessionsRef.current >= MAX_SHORT_SESSIONS) {
+        finishLocal("connection");
+        void settleAttempt(old);
+        return;
+      }
       ensureSpeech().handoff();
       // A new engine generation under the SAME user session: an action
       // whose send is still out completes as this session's work.
@@ -682,7 +710,7 @@ export function VoiceSessionController(): ReactNode {
         }),
       );
     },
-    [clearTimers, connectEngine, ensureSpeech, settleAttempt],
+    [clearTimers, connectEngine, ensureSpeech, finishLocal, settleAttempt],
   );
 
   const requestRemintWhenClear = useCallback(() => {
@@ -712,6 +740,7 @@ export function VoiceSessionController(): ReactNode {
     const store = useVoiceSessionStore.getState();
     if (store.phase !== "idle" || store.availability !== "live") return;
     store.sessionConnecting();
+    shortSessionsRef.current = 0;
     const { sessionToken: token, engineGeneration: generation } =
       useVoiceSessionStore.getState();
     // The session starts focused on the channel or thread the person has
@@ -742,7 +771,7 @@ export function VoiceSessionController(): ReactNode {
     };
     let access: MicrophoneAccessStatus;
     try {
-      access = await runnerHost.requestMicrophoneAccess();
+      access = await microphoneAccessAsync();
     } catch (error) {
       appLogger.warn("[voice] microphone access request failed", {
         error: describeLogError(error),
@@ -775,7 +804,7 @@ export function VoiceSessionController(): ReactNode {
     }
     micStreamRef.current = stream;
     await connectEngine(FIRST_SESSION_INPUT);
-  }, [connectEngine, finishLocal, fixedBotId, navigate, runnerHost]);
+  }, [connectEngine, finishLocal, fixedBotId, microphoneAccessAsync, navigate]);
 
   const setMuted = useCallback((muted: boolean) => {
     const stream = micStreamRef.current;

@@ -46,3 +46,22 @@ export const REMINT_CONTEXT_USAGE_RATIO = 0.8;
 
 /** The latest a re-mint happens before the session's expiry, whatever the usage says. */
 export const REMINT_BEFORE_EXPIRY_MS = 60_000;
+
+/**
+ * A started session that ends within this is short-lived: it did not outlive
+ * the ceiling the engine gives its own handshake (`SESSION_STARTED_TIMEOUT_MS`,
+ * 10 s), so nobody got a word in or out of it. The window is measured from
+ * the session's start, so a vendor close, a connection drop and an expiry
+ * the server set inside the re-mint lead all count the same way.
+ */
+export const SHORT_SESSION_MS = 10_000;
+
+/**
+ * Consecutive short-lived sessions before the re-mint stops and the session
+ * ends with "connection": the same budget the scheduler gives a spoken item
+ * (`MAX_DELIVERY_ATTEMPTS`), the layer's one retry budget. Each re-mint is
+ * a billed server row and a vendor connect, so a vendor or server that keeps
+ * handing back sessions that die at once is not retried without bound; the
+ * person presses Talk again when it is back.
+ */
+export const MAX_SHORT_SESSIONS = 3;

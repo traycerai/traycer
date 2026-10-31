@@ -4,8 +4,10 @@ import type {
   VoiceSessionMintFetchResult,
   VoiceSessionMintRequest,
 } from "@traycer-clients/shared/host-client/voice-sessions";
+import type { MicrophoneAccessStatus } from "@traycer-clients/shared/platform/runner-host";
 import { useAuthService } from "@/lib/host";
 import { voiceMutationKeys } from "@/lib/query-keys";
+import { useRunnerHost } from "@/providers/use-runner-host";
 
 /**
  * `POST /api/voice/sessions`: mints a voice session for the offer. The
@@ -39,5 +41,40 @@ export function useVoiceSessionEndMutation(): UseMutationResult<
   return useMutation({
     mutationKey: voiceMutationKeys.end(),
     mutationFn: (voiceSessionId) => auth.endVoiceSession(voiceSessionId),
+  });
+}
+
+/**
+ * The shell's flag that this window's voice is live, so its close hides the
+ * window instead of destroying it. Best effort: a shell without the flag
+ * (the browser, mobile) answers at once, and a failure is logged by the
+ * controller, which keeps the session either way.
+ */
+export function useVoiceShellLiveMutation(): UseMutationResult<
+  void,
+  Error,
+  boolean
+> {
+  const runnerHost = useRunnerHost();
+  return useMutation({
+    mutationKey: voiceMutationKeys.shellLive(),
+    mutationFn: (live) => runnerHost.setVoiceSessionLive(live),
+  });
+}
+
+/**
+ * The microphone permission prompt, through the shell: the person decides,
+ * so there is nothing to retry or toast; the controller ends the start with
+ * "microphone" on a refusal or a failure.
+ */
+export function useVoiceMicrophoneAccessMutation(): UseMutationResult<
+  MicrophoneAccessStatus,
+  Error,
+  void
+> {
+  const runnerHost = useRunnerHost();
+  return useMutation({
+    mutationKey: voiceMutationKeys.microphoneAccess(),
+    mutationFn: () => runnerHost.requestMicrophoneAccess(),
   });
 }

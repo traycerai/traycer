@@ -92,8 +92,15 @@ describe("VoiceSessionStrip", () => {
   it("says Listening and where the next post goes", () => {
     goLive(makeDriver());
 
-    expect(screen.getByTestId("voice-strip-state").textContent).toBe(
-      "Listening",
+    // The state word alone is announced; the controls and the captions
+    // sit in the plain region around it.
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("Listening");
+    expect(
+      screen.getByRole("region", { name: "Voice session" }).contains(status),
+    ).toBe(true);
+    expect(status.contains(screen.getByRole("button", { name: "Mute" }))).toBe(
+      false,
     );
     expect(screen.getByTestId("voice-strip-focus").textContent).toContain(
       "Personal›Tracy",
@@ -163,6 +170,7 @@ describe("VoiceSessionStrip", () => {
       store.pushCaptionLine({ direction: "output", text: "hi there" });
     });
     const lines = screen.getByTestId("voice-strip-captions-lines");
+    expect(screen.getByRole("status").contains(lines)).toBe(false);
     expect(lines.textContent).toContain("You: hello");
     expect(lines.textContent).toContain("Tracy: hi there");
     expect(lines.textContent).not.toContain("never kept");

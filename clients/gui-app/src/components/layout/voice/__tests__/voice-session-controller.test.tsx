@@ -956,9 +956,20 @@ describe("a channel announcement queued before a later top-level request", () =>
 });
 
 describe("the voice routes", () => {
-  it("mint and end run as keyed mutations the cache holds, awaited by the attempt", async () => {
+  it("mint, end, the microphone prompt and the shell flag run as keyed mutations the cache holds, awaited by the attempt", async () => {
     await bringLive();
     const cache = queryClient.getMutationCache();
+    const statusesOf = (mutationKey: ReadonlyArray<string>): string[] =>
+      cache
+        .findAll({ mutationKey })
+        .map(
+          (mutation) =>
+            `${String(mutation.state.variables)}:${mutation.state.status}`,
+        );
+    expect(statusesOf(voiceMutationKeys.microphoneAccess())).toEqual([
+      "undefined:success",
+    ]);
+    expect(statusesOf(voiceMutationKeys.shellLive())).toEqual(["true:success"]);
     const mints = cache.findAll({ mutationKey: voiceMutationKeys.mint() });
     expect(mints.map((mutation) => mutation.state.status)).toEqual(["success"]);
     expect(mints[0]?.state.variables).toEqual({
@@ -975,6 +986,37 @@ describe("the voice routes", () => {
       ends.map((mutation) => [mutation.state.variables, mutation.state.status]),
     ).toEqual([["vs1", "success"]]);
     expect(fake.endVoiceSession).toHaveBeenCalledWith("vs1");
+    expect(statusesOf(voiceMutationKeys.shellLive())).toEqual([
+      "true:success",
+      "false:success",
+    ]);
+  });
+});
+
+describe("a run of sessions that die at once", () => {
+  it("re-mints twice, then ends with connection and mints no more", async () => {
+    await bringLive();
+    const cache = queryClient.getMutationCache();
+
+    for (const index of [0, 1]) {
+      act(() => eventsOf(index).onClosed("vendor"));
+      await settle();
+      expect(fake.engines).toHaveLength(index + 2);
+      await startEngine(index + 1);
+      expect(useVoiceSessionStore.getState().phase).toBe("live");
+    }
+    act(() => eventsOf(2).onClosed("connection"));
+    await settle();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.endReason).toBe("connection");
+    expect(fake.engines).toHaveLength(3);
+    expect(
+      cache.findAll({ mutationKey: voiceMutationKeys.mint() }),
+    ).toHaveLength(3);
+    expect(fake.endVoiceSession).toHaveBeenCalledTimes(3);
+    expect(fake.track.stop).toHaveBeenCalled();
   });
 });
 

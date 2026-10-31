@@ -79,8 +79,11 @@ export function VoiceSessionStrip(): ReactNode {
   const driver = state.driver;
   const listening =
     state.phase === "live" && !state.muted && !state.pausedForDictation;
+  // Only the state word is a live region: the strip holds the controls and
+  // the captions, which change with every transcript delta and would be
+  // re-announced whole from a live container.
   return (
-    <output
+    <section
       aria-label="Voice session"
       data-testid="voice-session-strip"
       data-state={state.phase}
@@ -97,6 +100,7 @@ export function VoiceSessionStrip(): ReactNode {
           )}
         />
         <span
+          role="status"
           data-testid="voice-strip-state"
           className="shrink-0 font-medium text-foreground"
         >
@@ -172,7 +176,7 @@ export function VoiceSessionStrip(): ReactNode {
           )}
         </ul>
       ) : null}
-    </output>
+    </section>
   );
 }
 
