@@ -701,17 +701,20 @@ export function VoiceSessionController(): ReactNode {
   /**
    * What the microphone carries and what the speaker plays, both switched
    * locally with no network wait. The microphone carries nothing while the
-   * person muted it or while the voice is paused for dictation
-   * (`pausedForDictation`); the voice's sound is silent while paused, so it
-   * never reaches the dictation capture. The mute is the person's own and
-   * outlives the pause.
+   * person muted it, while the voice is paused for dictation
+   * (`pausedForDictation`), or under push-to-talk while the talk button is
+   * not held; the voice's sound is silent while paused, so it never reaches
+   * the dictation capture. The mute is the person's own and outlives the
+   * pause.
    */
   const applyCapture = useCallback(() => {
-    const { muted, pausedForDictation } = useVoiceSessionStore.getState();
+    const { muted, pausedForDictation, pushToTalk, talkHeld } =
+      useVoiceSessionStore.getState();
     const stream = micStreamRef.current;
     if (stream !== null) {
       for (const track of stream.getAudioTracks()) {
-        track.enabled = !muted && !pausedForDictation;
+        track.enabled =
+          !muted && !pausedForDictation && (!pushToTalk || talkHeld);
       }
     }
     const remote = remoteStreamRef.current;
@@ -742,6 +745,23 @@ export function VoiceSessionController(): ReactNode {
         // and the next request must not inherit them. A request already
         // sent finishes on its own.
         if (state.pausedForDictation) state.dropOpenSpan();
+      }),
+    [applyCapture],
+  );
+
+  // The phone's talk button and its push-to-talk switch write the store; the
+  // microphone follows at once.
+  useEffect(
+    () =>
+      useVoiceSessionStore.subscribe((state, previous) => {
+        if (
+          state.muted === previous.muted &&
+          state.pushToTalk === previous.pushToTalk &&
+          state.talkHeld === previous.talkHeld
+        ) {
+          return;
+        }
+        applyCapture();
       }),
     [applyCapture],
   );
@@ -1159,7 +1179,7 @@ export function VoiceSessionController(): ReactNode {
     }
     if (!stillStarting()) return;
     if (access === "denied") {
-      finishLocal("microphone");
+      finishLocal("microphone-denied");
       return;
     }
     let stream: MediaStream;
@@ -1171,7 +1191,11 @@ export function VoiceSessionController(): ReactNode {
       appLogger.warn("[voice] microphone open failed", {
         error: describeLogError(error),
       });
-      if (stillStarting()) finishLocal("microphone");
+      if (stillStarting()) {
+        finishLocal(
+          isPermissionRefusal(error) ? "microphone-denied" : "microphone",
+        );
+      }
       return;
     }
     // Ended while the permission prompt was up: the microphone just opened
@@ -1181,6 +1205,9 @@ export function VoiceSessionController(): ReactNode {
       return;
     }
     micStreamRef.current = stream;
+    watchCapture(stream, () => {
+      if (micStreamRef.current === stream) end("interrupted");
+    });
     applyCapture();
     await connectEngine(briefing);
   }, [
@@ -1188,6 +1215,7 @@ export function VoiceSessionController(): ReactNode {
     applyCapture,
     beginQueue,
     connectEngine,
+    end,
     finishLocal,
     microphoneAccessAsync,
     navigate,
@@ -1251,15 +1279,16 @@ export function VoiceSessionController(): ReactNode {
     return () => subscription.dispose();
   }, [end, runnerHost, setMuted]);
 
-  // Lock, sleep and the page going away all end the session through the
-  // one latch: the store's tokens move first, so a microphone prompt still
-  // open resolves into nothing, local capture and playback stop
-  // synchronously, and the vendor accounting is best effort from a document
-  // that may not outlive it. The shell's own close keeps a voice window
-  // alive, so this is the lock, the quit and a reload, not an ordinary
-  // close; the server finalizes the rest from its sideband.
+  // Lock, sleep, the app going to the background, an interruption and the
+  // page going away all end the session through the one latch: the store's
+  // tokens move first, so a microphone prompt still open resolves into
+  // nothing, local capture and playback stop synchronously, and the vendor
+  // accounting is best effort from a document that may not outlive it. The
+  // shell's own close keeps a voice window alive, so this is the lock, the
+  // quit and a reload, not an ordinary close; the server finalizes the rest
+  // from its sideband. The cause is what the person reads on return.
   useEffect(() => {
-    const subscription = runnerHost.onSystemSuspended(() => end("locked"));
+    const subscription = runnerHost.onSystemSuspended((cause) => end(cause));
     const onPageHide = (): void => end("ended");
     window.addEventListener("pagehide", onPageHide);
     return () => {
@@ -1327,6 +1356,27 @@ export function VoiceSessionController(): ReactNode {
       ) : null}
     </>
   );
+}
+
+/**
+ * Calls `onLost` once when the OS takes the microphone away from a live
+ * capture: the track ends, or it is muted (a call, Siri, another app's
+ * recording) while the page is on screen. A track muted while the page is
+ * hidden is the app leaving, which the shell's background edge reports with
+ * its own cause. Our own mute is `enabled`, which raises neither event.
+ */
+function watchCapture(stream: MediaStream, onLost: () => void): void {
+  const track = stream.getAudioTracks().at(0);
+  if (track === undefined) return;
+  track.addEventListener("ended", onLost, { once: true });
+  track.addEventListener("mute", () => {
+    if (document.visibilityState === "visible") onLost();
+  });
+}
+
+/** A `getUserMedia` refusal: the person (or the OS on their behalf) said no. */
+function isPermissionRefusal(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "NotAllowedError";
 }
 
 /**

@@ -88,7 +88,13 @@ const fake = vi.hoisted(() => {
     });
     return { promise, resolve };
   }
-  const track = { kind: "audio", enabled: true, stop: vi.fn() };
+  // An event target, as a real track is: the controller listens for the OS
+  // taking the microphone away (`ended`, `mute`).
+  const track = Object.assign(new EventTarget(), {
+    kind: "audio",
+    enabled: true,
+    stop: vi.fn(),
+  });
   const stream = {
     getTracks: () => [track],
     getAudioTracks: () => [track],
