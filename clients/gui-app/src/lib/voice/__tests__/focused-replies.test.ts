@@ -129,7 +129,14 @@ describe("takeNewBotReplies with a question", () => {
 
     expect(
       takeNewBotReplies(
-        [question({ answer: "Ship", skipped: false, by: { kind: "bot" }, at: 25 })],
+        [
+          question({
+            answer: "Ship",
+            skipped: false,
+            by: { kind: "bot" },
+            at: 25,
+          }),
+        ],
         memory,
       ),
     ).toEqual([{ messageId: "q-1", text: "Ready to release. Ship or hold?" }]);

@@ -11,7 +11,10 @@ import {
   type Mock,
 } from "vitest";
 import { create, type StoreApi } from "zustand";
-import type { BotListResponse } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotActivity,
+  BotListResponse,
+} from "@traycer/protocol/host/bot/schemas";
 import type { StreamFrameEnvelope } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
@@ -152,6 +155,9 @@ const fake = vi.hoisted(() => {
       attentionValue = noAttention;
     },
   };
+  // Each bot's activity as `useBotActivity` answers it: none unless a test
+  // sets it before the bot's tab opens.
+  const activity = { byBot: new Map<string, BotActivity>() };
   function slot<T>(): { value: T | null } {
     return { value: null };
   }
@@ -183,6 +189,7 @@ const fake = vi.hoisted(() => {
   return {
     personalEnvironment,
     attention,
+    activity,
     mainBotList,
     botList: { value: mainBotList },
     doorbell: slot<MockWsStreamClient<StreamFrameEnvelope>>(),
@@ -354,7 +361,7 @@ vi.mock("@/hooks/voice/use-voice-attention", async () => {
 });
 vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
-  useBotActivity: () => null,
+  useBotActivity: (botId: string) => fake.activity.byBot.get(botId) ?? null,
 }));
 vi.mock("@/hooks/voice/use-voice-availability-query", () => ({
   useVoiceAvailabilityQuery: () => ({ data: true }),
@@ -562,6 +569,7 @@ beforeEach(() => {
   fake.handles.clear();
   fake.threadList.set(undefined);
   fake.attention.reset();
+  fake.activity.byBot.clear();
   fake.personalEnvironment.resolved();
   fake.botList.value = fake.mainBotList;
   fake.doorbell.value = new ServingStreamClient();
@@ -2190,7 +2198,9 @@ describe("a bot's question at the focused channel's top level", () => {
       useVoiceSessionStore.getState().queue.map((item) => item.kind),
     ).not.toContain("announcement");
 
-    act(() => eventsOf(0).onOutputTranscriptDelta("CI bot asks: ready to release"));
+    act(() =>
+      eventsOf(0).onOutputTranscriptDelta("CI bot asks: ready to release"),
+    );
 
     // The notification names the same message, as a blocking row.
     act(() =>
@@ -2220,3 +2230,34 @@ describe("a bot's question at the focused channel's top level", () => {
   });
 });
 
+describe("an answer a bot stopped on, before Talk", () => {
+  it("is named in the mint's input and queued as a failed item, with nothing else waiting", async () => {
+    fake.activity.byBot.set(BOT_ID, {
+      trunk: {
+        state: "parked",
+        startedAt: null,
+        step: null,
+        requestId: "req-7",
+        reason: null,
+      },
+      threads: {},
+    });
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    focusOn(CHANNEL_FOCUS);
+
+    await bringLive();
+
+    const mints = queryClient
+      .getMutationCache()
+      .findAll({ mutationKey: voiceMutationKeys.mint() });
+    expect(mints[0]?.state.variables).toEqual({
+      offerSdp: "offer",
+      input:
+        "Here is what needs your attention. CI bot stopped before answering in its channel.",
+    });
+    expect(
+      useVoiceSessionStore.getState().queue.map((item) => [item.id, item.kind]),
+    ).toEqual([["stopped:bot-1:req-7", "failed"]]);
+  });
+});

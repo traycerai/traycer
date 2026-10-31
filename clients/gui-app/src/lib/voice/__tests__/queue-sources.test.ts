@@ -484,9 +484,9 @@ describe("announcementsOf", () => {
       }),
     ];
 
-    expect(announcementsOf(rows, 1_000).map((found) => found.messageId)).toEqual(
-      ["a-settled"],
-    );
+    expect(
+      announcementsOf(rows, 1_000).map((found) => found.messageId),
+    ).toEqual(["a-settled"]);
   });
 });
 
