@@ -424,13 +424,6 @@ interface DrawerTaskListProps {
 }
 
 /**
- * Inline recent-task list under "New task". Same data source as the landing
- * page's embedded list (`useHistoryQuery` → `useCloudEpicTasksQuery`) and the
- * same ambient search memory every history surface shares - the drawer shows
- * the list the way the user last filtered it, with no filter/sort/selection
- * chrome of its own; the full surface stays one tap away on the landing page.
- */
-/**
  * The visible half of a drawer row's provenance: "Not synced" or "Deleted,
  * edits kept" after the timestamp, on the rows that have one. Rendered as
  * plain text rather than a tooltip because this row's tap opens the task,
@@ -454,6 +447,13 @@ function DrawerRowProvenanceLabel(props: {
   );
 }
 
+/**
+ * Inline recent-task list under "New task". Same data source as the landing
+ * page's embedded list (`useHistoryQuery` → `useCloudEpicTasksQuery`) and the
+ * same ambient search memory every history surface shares - the drawer shows
+ * the list the way the user last filtered it, with no filter/sort/selection
+ * chrome of its own; the full surface stays one tap away on the landing page.
+ */
 function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });

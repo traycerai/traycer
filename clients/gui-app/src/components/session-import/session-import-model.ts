@@ -647,7 +647,6 @@ export function candidateDisplayTitle(
     : prompt;
 }
 
-/** "Claude Code" / "Codex" - what the user calls the CLI they ran. */
 /**
  * The sentence a provider failure leads with.
  *
@@ -674,6 +673,7 @@ export function sessionImportProviderFailureLead(
     : `Couldn’t read ${name} sessions.`;
 }
 
+/** "Claude Code" / "Codex" - what the user calls the CLI they ran. */
 export function harnessDisplayName(harness: GuiHarnessId): string {
   const providerId = guiHarnessIdToProviderId(harness);
   return providerId === null ? harness : providerDisplayName(providerId);
