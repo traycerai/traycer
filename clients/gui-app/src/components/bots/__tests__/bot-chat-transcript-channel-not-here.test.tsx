@@ -26,6 +26,7 @@ import {
   type Mock,
 } from "vitest";
 import type { FatalErrorDetails } from "@traycer/protocol/framework/ws-protocol";
+import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import type {
   ChatSessionState,
   ChatSessionStoreHandle,
@@ -86,11 +87,19 @@ vi.mock("@/hooks/bots/use-bot-turn-locate-query", () => ({
 vi.mock("@/hooks/chats/use-chat-locate-row", () => ({
   useChatLocateRowAnswer: () => ({ status: "waiting" }),
 }));
-vi.mock("@/components/chat/chat-messages", () => ({
-  ChatMessages: (props: { messages: ReadonlyArray<unknown> }) => (
-    <div data-testid="chat-messages-stub" data-rows={props.messages.length} />
-  ),
-}));
+// The stub draws what the real list draws above its first row.
+vi.mock("@/components/chat/chat-messages", async () => {
+  const { use } = await import("react");
+  const { ChatTimelineHeaderContext } =
+    await import("@/components/chat/chat-timeline-header-context");
+  return {
+    ChatMessages: (props: { messages: ReadonlyArray<unknown> }) => (
+      <div data-testid="chat-messages-stub" data-rows={props.messages.length}>
+        {use(ChatTimelineHeaderContext)}
+      </div>
+    ),
+  };
+});
 
 import {
   BotChatTranscript,
@@ -122,6 +131,7 @@ const CHANNEL_SURFACE: BotTranscriptSurface = {
   openTurn: null,
   sessionChatId: null,
   intro: { botTitle: "Release Bot", directive: null },
+  history: null,
 };
 
 let retry: Mock<() => void>;
@@ -348,5 +358,69 @@ describe("<BotChatTranscript /> on a channel the host has not created yet", () =
 
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.getByTestId("chat-messages-stub")).toBeTruthy();
+  });
+});
+
+describe("<BotChatTranscript /> on a team main bot's channel with its setup history", () => {
+  const HISTORY_SURFACE: BotTranscriptSurface = {
+    ...CHANNEL_SURFACE,
+    history: <div data-testid="setup-history-probe" />,
+  };
+  const POST: Message = {
+    role: "user",
+    messageId: "post-1",
+    sender: { type: "user", userId: "owner-1" },
+    message: {
+      kind: "user",
+      content: {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "hello" }] },
+        ],
+      },
+      browserAnnotations: [],
+    },
+    timestamp: 1_000,
+    sessionAnchor: null,
+  };
+
+  it("shows the history in place of the intro before the host has created the channel", () => {
+    mountTranscript(HISTORY_SURFACE);
+
+    expect(
+      within(screen.getByTestId("bot-channel-not-here-yet")).getByTestId(
+        "setup-history-probe",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("bot-channel-intro")).toBeNull();
+  });
+
+  it("shows the history in place of the intro on an empty channel", () => {
+    mountTranscript(HISTORY_SURFACE);
+    act(() => {
+      store.setState({ fatalClose: null, snapshotLoaded: true });
+    });
+
+    expect(screen.getByTestId("setup-history-probe")).toBeTruthy();
+    expect(screen.queryByTestId("bot-channel-intro")).toBeNull();
+    expect(screen.queryByTestId("chat-messages-stub")).toBeNull();
+  });
+
+  it("hands the history to the list once the channel has posts", () => {
+    mountTranscript(HISTORY_SURFACE);
+    act(() => {
+      store.setState({
+        fatalClose: null,
+        snapshotLoaded: true,
+        messages: [POST],
+      });
+    });
+
+    expect(
+      within(screen.getByTestId("chat-messages-stub")).getByTestId(
+        "setup-history-probe",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("bot-channel-intro")).toBeNull();
   });
 });

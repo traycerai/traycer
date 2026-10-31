@@ -586,6 +586,38 @@ async function hideWithCollapsedScrollBox(
   await settleLegendList();
 }
 
+/** Holds a list command's promise open until the test settles it, so the
+ *  test - not real timing - decides when the command's own settle loop
+ *  continues. Module scope: both the "list still holds a command" tests
+ *  and a visibility-handoff test below share this one definition. */
+function holdListCommands() {
+  const settlers: Array<() => void> = [];
+  return {
+    hold: (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        settlers.push(resolve);
+      }),
+    settleAll: (): void => {
+      for (const settle of settlers.splice(0)) settle();
+    },
+    // Holds the first command only. Later ones (the latch's own end
+    // correction, issued behind the pill's) run to completion, so the
+    // pill's is the one command left held.
+    holdFirst: (): Promise<void> => {
+      if (settlers.length > 0) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        settlers.push(resolve);
+      });
+    },
+  };
+}
+
+function requireList(): import("@legendapp/list/react").LegendListRef {
+  const list = legendListRefHolder.current;
+  if (list === null) throw new Error("LegendList ref is not mounted");
+  return list;
+}
+
 /**
  * Ticket 15 review (live pass S5 round 3): sets `scrollTop` and fires the
  * scroll event WITHOUT yielding an animation frame afterward - deliberately
@@ -1703,6 +1735,126 @@ describe("ChatMessages scroll policy", () => {
         );
       });
       expect(getScrollNode().scrollTop).toBe(scrollBefore);
+    });
+
+    // A reader who departed, then was held at the strict bottom when the end
+    // came to them with no turn running (an end pad dropping clamps them onto
+    // the new end: the list's doing, not their arrival). A wheel down there
+    // asks the latch for the end; a toward-end key that moves nothing does too.
+    describe("a toward-end key meets a reader the idle end held at the strict bottom", () => {
+      const IDLE_END_PAD_PX = 56;
+
+      async function heldAtStrictBottomWhileIdle(scrollStateKey: string) {
+        installLegendListTestClock();
+        const messages = makeCompletedTranscript(20);
+        const baseHeight = LEGEND_LIST_HEADER_PX + messages.length * 90 + 40;
+        setLegendListScrollContainerScrollHeightOverride(
+          baseHeight + IDLE_END_PAD_PX,
+        );
+        const view = renderChatMessages({
+          messages,
+          scrollStateKey,
+        });
+        await settleLegendList();
+        const scrollNode = getScrollNode();
+        const paddedEnd = maxScrollTopFor(scrollNode);
+        act(() => {
+          scrollNode.scrollTop = paddedEnd;
+          fireEvent.scroll(scrollNode);
+        });
+        await advanceLegendListFrames(2);
+        expect(scrollNode.dataset.scrollMode).toBe("following-end");
+
+        fireEvent.wheel(scrollNode, { deltaY: -40 });
+        act(() => {
+          scrollNode.scrollTop = paddedEnd - 40;
+          fireEvent.scroll(scrollNode);
+        });
+        await advanceLegendListFrames(2);
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+
+        // The pad drops with no turn running, and the browser clamps them
+        // onto the new end: held there, not their own arrival.
+        setLegendListScrollContainerScrollHeightOverride(baseHeight);
+        const end = maxScrollTopFor(scrollNode);
+        act(() => {
+          scrollNode.scrollTop = end;
+          fireEvent.scroll(scrollNode);
+        });
+        await advanceLegendListFrames(2);
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+        await waitForPillVisible();
+        return { view, scrollNode };
+      }
+
+      function dispatchCommandArrowDown(scrollNode: HTMLElement): void {
+        act(() => {
+          scrollNode.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: "ArrowDown",
+              metaKey: true,
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        });
+      }
+
+      it.each([
+        { name: "End", dispatch: () => dispatchKeyInScope("End") },
+        { name: "PageDown", dispatch: () => dispatchKeyInScope("PageDown") },
+        { name: "ArrowDown", dispatch: () => dispatchKeyInScope("ArrowDown") },
+        {
+          name: "Cmd+ArrowDown",
+          dispatch: () => dispatchCommandArrowDown(getScrollNode()),
+        },
+      ])(
+        "$name re-attaches a reader the idle end held at the strict bottom",
+        async ({ name, dispatch }) => {
+          const { view } = await heldAtStrictBottomWhileIdle(
+            `kbd-idle-held-${name}`,
+          );
+
+          act(() => {
+            dispatch();
+          });
+          await advanceLegendListFrames(2);
+
+          expect(getScrollNode().dataset.scrollMode).toBe("following-end");
+          expect(isJumpPillVisible()).toBe(false);
+          view.unmount();
+        },
+      );
+
+      // A toward-end key that moves the view is decided by its scroll report,
+      // as on main: one that lands the reader on the strict bottom leaves
+      // them free until that report comes, and the report re-attaches them.
+      it("re-attaches a free reader a toward-end step lands at the strict bottom at its scroll report, not before", async () => {
+        const messages = makeCompletedTranscript(20);
+        renderChatMessages({
+          messages,
+          scrollStateKey: "kbd-lands-at-bottom-sync",
+        });
+        await settleLegendList();
+        await enterFreeScrollingAwayFromEnd();
+        await waitForPillVisible();
+        const scrollNode = getScrollNode();
+        const max = maxScrollTopFor(scrollNode);
+        await fireScrollTopAndFlush(max - 10);
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+
+        act(() => {
+          dispatchKeyInScope("PageDown");
+        });
+
+        expect(scrollNode.scrollTop).toBe(max);
+        expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+        expect(isJumpPillVisible()).toBe(true);
+
+        await fireScrollTopAndFlush(max);
+        expect(scrollNode.dataset.scrollMode).toBe("following-end");
+        expect(isJumpPillVisible()).toBe(false);
+      });
     });
   });
 
@@ -4055,6 +4207,243 @@ describe("ChatMessages scroll policy", () => {
       view.unmount();
     });
 
+    it("doesn't accept a mount-time restore until the saved row's position has held still across a settle", async () => {
+      const messages = makeCompletedTranscript(30);
+      const targetIndex = 20;
+      const targetId = messages[targetIndex].id;
+      const viewOffset = -12;
+      const instanceId = `t5-still-settling-restore-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(instanceId);
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: targetId,
+        anchorIndex: targetIndex,
+        offset: viewOffset,
+      });
+
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages,
+        scrollStateKey: instanceId,
+        instanceId,
+      });
+      const list = legendListRefHolder.current;
+      expect(list).not.toBeNull();
+      if (list === null) throw new Error("LegendList ref did not mount");
+
+      const expectedScrollTop = LEGEND_LIST_HEADER_PX + targetIndex * 90 + 12;
+      const scrollNode = getScrollNode();
+      // Load-bearing premise: the mount-time restore issues and lands
+      // synchronously within render, before any spy below can see it - the
+      // same contract the "re-lands..." test above relies on. Assert it
+      // here so a future change to that ordering fails loudly, at the
+      // point it would silently invalidate the setup below, instead of
+      // leaving this test to pass (or fail) for an unrelated reason.
+      expect(scrollNode.scrollTop).toBe(expectedScrollTop);
+
+      // Knock the already-correct landing to a position that agrees with
+      // the HALF-MEASURED ESTIMATE this test is about to report for the
+      // saved row (not its real one), so the existing position check -
+      // unchanged by the fix - would pass on it alone.
+      const estimatedScrollTop = 0;
+      scrollNode.scrollTop = estimatedScrollTop;
+      // positionAtIndex + topOffsetAdjustment - viewOffset must equal
+      // estimatedScrollTop, so the fake estimate agrees with the write
+      // above exactly as a real half-measured estimate would agree with
+      // the bootstrap's own clamp.
+      const fakeRowTop =
+        estimatedScrollTop - LEGEND_LIST_HEADER_PX + viewOffset;
+
+      // A SECOND, still-wrong position the row moves to before it settles -
+      // far enough from both the estimate above and the real position below
+      // (> CHAT_TIMELINE_RESTORE_POSITION_HELD_EPSILON_PX in both
+      // directions) that only a check requiring the position to have HELD
+      // STILL across a settle - not merely "non-null twice" - can tell it
+      // apart from having arrived. The write below lands here too, so the
+      // one-shot position check would agree and accept if the held-still
+      // requirement were not enforced: without that, this phase is
+      // indistinguishable from a real landing and proves nothing.
+      const movedScrollTop = 900;
+      const movedRowTop = movedScrollTop - LEGEND_LIST_HEADER_PX + viewOffset;
+
+      const originalScrollToIndex = list.scrollToIndex.bind(list);
+      // States each phase change explicitly rather than inferring it from a
+      // count: measurement first arrives at a position that is itself still
+      // wrong, and only settles on the SECOND reissue. Not a raw count of
+      // `positionAtIndex` reads, which other consumers (viewability, the
+      // minimap, ...) make many of regardless of this restore, and which
+      // would flip the fakes off before the loop's own first settle even
+      // finishes; `scrollToIndex` is only ever called by a
+      // navigation/restore issuing a command, so this phase is reacting to
+      // this loop specifically, not causing anything itself.
+      let measurementPhase: "estimate" | "moved" | "settled" = "estimate";
+      const scrollToIndexSpy = vi
+        .spyOn(list, "scrollToIndex")
+        .mockImplementation((options) => {
+          if (measurementPhase === "estimate") {
+            // The row's measured position moved, but only to another wrong
+            // value - the rows above it are still resolving. The write
+            // lands there too, exactly as a real placement aimed at that
+            // reading would.
+            measurementPhase = "moved";
+            scrollNode.scrollTop = movedScrollTop;
+            return Promise.resolve();
+          }
+          const result = originalScrollToIndex(options);
+          measurementPhase = "settled";
+          return result;
+        });
+      const originalGetState = list.getState.bind(list);
+      // Mirrors `measurementPhase`: the saved row reads at whichever wrong
+      // position this phase reports, then at its real, settled position
+      // once the second reissue's write belongs to it.
+      const getStateSpy = vi.spyOn(list, "getState").mockImplementation(() => {
+        const state = originalGetState();
+        return {
+          ...state,
+          positionAtIndex: (index: number) => {
+            if (index !== targetIndex) return state.positionAtIndex(index);
+            if (measurementPhase === "estimate") return fakeRowTop;
+            if (measurementPhase === "moved") return movedRowTop;
+            return state.positionAtIndex(index);
+          },
+        };
+      });
+
+      try {
+        for (let round = 0; round < 6; round += 1) {
+          await settleLegendList();
+        }
+
+        // On main, and on a fix whose held-still check does not actually
+        // compare the two readings, this must read `movedScrollTop` (900):
+        // the one-shot position check agreed with the write that landed
+        // there, against a reading indistinguishable from a real
+        // half-measured one, and the restore retired for good one placement
+        // early. The real fix requires the saved row's position to have
+        // held still since the previous settle before the landing check may
+        // speak, so it keeps re-issuing through BOTH wrong readings above
+        // and only then lands at the row's real, settled position.
+        expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      } finally {
+        scrollToIndexSpy.mockRestore();
+        getStateSpy.mockRestore();
+      }
+      view.unmount();
+    });
+
+    it("doesn't accept a mount-time restore while the saved row's position reads as unmeasured", async () => {
+      const messages = makeCompletedTranscript(30);
+      const targetIndex = 20;
+      const targetId = messages[targetIndex].id;
+      const viewOffset = -12;
+      const instanceId = `t5-unmeasured-settling-restore-${Math.random().toString(36).slice(2)}`;
+      const identity = makeDefaultTestIdentity(instanceId);
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: targetId,
+        anchorIndex: targetIndex,
+        offset: viewOffset,
+      });
+
+      tileLiveness.live = true;
+      const view = renderChatMessages({
+        messages,
+        scrollStateKey: instanceId,
+        instanceId,
+      });
+      const list = legendListRefHolder.current;
+      expect(list).not.toBeNull();
+      if (list === null) throw new Error("LegendList ref did not mount");
+
+      const expectedScrollTop = LEGEND_LIST_HEADER_PX + targetIndex * 90 + 12;
+      const scrollNode = getScrollNode();
+      expect(scrollNode.scrollTop).toBe(expectedScrollTop);
+
+      // Knock the already-correct landing to a position that agrees with a
+      // WRONG finite reading the second phase below reports for the saved
+      // row - not its real one - so the existing landing check alone would
+      // accept it if reached with nothing else wrong.
+      const wrongScrollTop = 0;
+      scrollNode.scrollTop = wrongScrollTop;
+      const wrongRowTop = wrongScrollTop - LEGEND_LIST_HEADER_PX + viewOffset;
+
+      const originalScrollToIndex = list.scrollToIndex.bind(list);
+      // `positionAtIndex` is typed `number` but - per `expectedTimelineScrollTop`'s
+      // own guard at the top of this file, and CodeRabbit's finding on this
+      // exact predicate - does not always answer one: an unmeasured row can
+      // report `undefined`. "unmeasured" models that row; "wrong" is a
+      // distinct, otherwise-plausible finite reading the row moves to next
+      // (not its real one); "settled" is the real, final position.
+      let measurementPhase: "unmeasured" | "wrong" | "settled" = "unmeasured";
+      const scrollToIndexSpy = vi
+        .spyOn(list, "scrollToIndex")
+        .mockImplementation((options) => {
+          if (measurementPhase === "unmeasured") {
+            // The row has not rendered to be measured yet. The write still
+            // lands - a command can resolve before its target is
+            // measurable - but nowhere near the real target, so an accept
+            // here could never be mistaken for a lucky coincidence.
+            measurementPhase = "wrong";
+            scrollNode.scrollTop = wrongScrollTop;
+            return Promise.resolve();
+          }
+          const result = originalScrollToIndex(options);
+          measurementPhase = "settled";
+          return result;
+        });
+      const originalGetState = list.getState.bind(list);
+      const getStateSpy = vi.spyOn(list, "getState").mockImplementation(() => {
+        const state = originalGetState();
+        return {
+          ...state,
+          positionAtIndex: (index: number) => {
+            if (index !== targetIndex) return state.positionAtIndex(index);
+            if (measurementPhase === "unmeasured") {
+              // `NaN` rather than `undefined`, which the real implementation
+              // can also answer despite this signature's declared `number`
+              // (`expectedTimelineScrollTop` guards the same call for exactly
+              // that). Both reach the predicate's one non-finite branch, and
+              // `NaN` IS a number, so modelling the unmeasured row with it
+              // needs no cast and no suppressed error - the signature stays
+              // honest about what this mock returns.
+              return Number.NaN;
+            }
+            if (measurementPhase === "wrong") return wrongRowTop;
+            return state.positionAtIndex(index);
+          },
+        };
+      });
+
+      try {
+        for (let round = 0; round < 6; round += 1) {
+          await settleLegendList();
+        }
+
+        // On a guard that only checks `=== null` (this predicate's state
+        // before the fix), the "unmeasured" phase's `undefined` reading is
+        // stored as the previous position, and the NEXT settle's
+        // `Math.abs(wrongRowTop - undefined)` is `NaN` - `NaN > 64` is
+        // `false` - so the row reads as held still one placement early, the
+        // one-shot landing check agrees with the write that landed there,
+        // and the restore accepts at `wrongScrollTop` (0) instead of
+        // deferring until a real position arrives. The fix requires the
+        // reading itself to be finite before it may anchor a comparison at
+        // all, so it keeps re-issuing through the unmeasured and wrong
+        // phases above and only then lands at the row's real, settled
+        // position.
+        expect(getScrollNode().scrollTop).toBe(expectedScrollTop);
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      } finally {
+        scrollToIndexSpy.mockRestore();
+        getStateSpy.mockRestore();
+      }
+      view.unmount();
+    });
+
     it("keeps a mount-time free restore running through a wheel the top edge cannot answer", async () => {
       const messages = makeCompletedTranscript(20);
       const targetIndex = 8;
@@ -4421,39 +4810,11 @@ describe("ChatMessages scroll policy", () => {
       // when a settle loop times out and gives up. These hold the command's
       // promise until the test settles it.
       describe("a command the list still holds after its loop has given up", () => {
-        function holdListCommands() {
-          const settlers: Array<() => void> = [];
-          return {
-            hold: (): Promise<void> =>
-              new Promise<void>((resolve) => {
-                settlers.push(resolve);
-              }),
-            settleAll: (): void => {
-              for (const settle of settlers.splice(0)) settle();
-            },
-            // Holds the first command only. Later ones (the latch's own end
-            // correction, issued behind the pill's) run to completion, so the
-            // pill's is the one command left held.
-            holdFirst: (): Promise<void> => {
-              if (settlers.length > 0) return Promise.resolve();
-              return new Promise<void>((resolve) => {
-                settlers.push(resolve);
-              });
-            },
-          };
-        }
-
         // Longer than every attempt of a bounded loop whose waits all time out.
         async function exhaustTimedOutSettleLoop(): Promise<void> {
           await advanceLegendListTime(
             5 * CHAT_TIMELINE_ANCHOR_SCROLL_PROMISE_TIMEOUT_MS,
           );
-        }
-
-        function requireList() {
-          const list = legendListRefHolder.current;
-          if (list === null) throw new Error("LegendList ref is not mounted");
-          return list;
         }
 
         it("cancels a restore's command until it settles, and only then leaves the list alone", async () => {
@@ -4472,6 +4833,19 @@ describe("ChatMessages scroll policy", () => {
 
           fireEvent.wheel(getScrollNode(), { deltaY: -40 });
           expect(cancel).toHaveBeenCalledTimes(1);
+
+          // A wheel that can move delivers its scroll. The restore has placed
+          // the reader on the saved row, so this wheel has somewhere to go and
+          // a browser both applies the delta and reports it; jsdom does
+          // neither. The arm such a wheel leaves waits for that report before
+          // a strict bottom may resume follow, so without it the landing below
+          // is read as a free reader's scroll that may yet land. Deliver it
+          // here rather than relax the arm.
+          const wheeledNode = getScrollNode();
+          act(() => {
+            wheeledNode.scrollTop = Math.max(0, wheeledNode.scrollTop - 40);
+            fireEvent.scroll(wheeledNode);
+          });
 
           held.settleAll();
           const scrollNode = getScrollNode();
@@ -8251,6 +8625,422 @@ describe("ChatMessages scroll policy", () => {
       expect(restoredTop).toBeLessThan(maxScrollTopFor(getScrollNode()) - 1);
       expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
       expect(getScrollNode().dataset.scrollMode).not.toBe("following-end");
+    });
+
+    it("a hide while a restore's re-issue is still held leaves the concealed list alone", async () => {
+      const messages = makeCompletedTranscript(200);
+      const anchorIndex = 20;
+      const savedViewOffset = 24;
+      const anchorId = messages[anchorIndex]?.id ?? null;
+      expect(anchorId).toBeTruthy();
+      const identity = makeDefaultTestIdentity(
+        `t-visibility-held-reissue-${Math.random().toString(36).slice(2)}`,
+      );
+      const key = identity.tileInstanceId;
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+      );
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        anchorIndex,
+        offset: savedViewOffset,
+      });
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: key,
+      });
+      await settleLegendList();
+      await hideWithCollapsedScrollBox(rerenderWith);
+
+      // Install the hold only now, before showing again: the test - not
+      // real timing - decides when the replay's settle loop continues, so
+      // nothing here depends on a race. The spy still calls through, unlike
+      // the one in "cancels a restore's command...", because this witness
+      // has to observe the re-issue's actual write landing on the concealed
+      // node, not merely that a command was issued.
+      const held = holdListCommands();
+      const list = requireList();
+      const placeRow = list.scrollToIndex.bind(list);
+      vi.spyOn(list, "scrollToIndex").mockImplementation((params) => {
+        void placeRow(params);
+        return held.hold();
+      });
+
+      rerenderWith({ visible: true });
+
+      // Premise: the replay's placement landed the saved row for real while
+      // visible, before anything below conceals it again. If this isn't
+      // true the hold is in the wrong place and nothing past this point
+      // proves anything.
+      const shownScrollTop = getScrollNode().scrollTop;
+      expect(shownScrollTop).toBeGreaterThan(0);
+      const expectedShownScrollTop =
+        LEGEND_LIST_HEADER_PX +
+        anchorIndex * TICKET_13_ROW_HEIGHT_PX -
+        savedViewOffset;
+      expect(shownScrollTop).toBe(expectedShownScrollTop);
+
+      await hideWithCollapsedScrollBox(rerenderWith);
+      expect(getScrollNode().scrollTop).toBe(0);
+
+      // Settle the held command now, with the list already hidden and its
+      // box already collapsed - the whole point, and why this test has no
+      // timing in it: the loop's continuation must not write the saved
+      // position back onto a node the reader can no longer see.
+      act(() => {
+        held.settleAll();
+      });
+      await settleLegendList();
+
+      expect(getScrollNode().scrollTop).toBe(0);
+    });
+
+    it("a hide while a restore's re-issue is held still cancels it even with a not-yet-hydrated scroll request pending", async () => {
+      const messages = makeCompletedTranscript(200);
+      const anchorIndex = 20;
+      const savedViewOffset = 24;
+      const anchorId = messages[anchorIndex]?.id ?? null;
+      expect(anchorId).toBeTruthy();
+      const identity = makeDefaultTestIdentity(
+        `t-visibility-held-reissue-missing-request-${Math.random().toString(36).slice(2)}`,
+      );
+      const key = identity.tileInstanceId;
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+      );
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        anchorIndex,
+        offset: savedViewOffset,
+      });
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: key,
+      });
+      await settleLegendList();
+      await hideWithCollapsedScrollBox(rerenderWith);
+
+      // Same hold as the sibling above: the test decides when the replay's
+      // settle loop continues.
+      const held = holdListCommands();
+      const list = requireList();
+      const placeRow = list.scrollToIndex.bind(list);
+      vi.spyOn(list, "scrollToIndex").mockImplementation((params) => {
+        void placeRow(params);
+        return held.hold();
+      });
+
+      rerenderWith({ visible: true });
+
+      // Premise: the replay's placement landed the saved row for real
+      // while visible, before anything below conceals it again.
+      const shownScrollTop = getScrollNode().scrollTop;
+      expect(shownScrollTop).toBeGreaterThan(0);
+      const expectedShownScrollTop =
+        LEGEND_LIST_HEADER_PX +
+        anchorIndex * TICKET_13_ROW_HEIGHT_PX -
+        savedViewOffset;
+      expect(shownScrollTop).toBe(expectedShownScrollTop);
+
+      // A cross-tile scroll request for a row NOT in this transcript, issued
+      // immediately before the second hide. Deliberately not a numeric
+      // `message-<n>` id, so it cannot collide with a row
+      // `makeCompletedTranscript` ever generates. `landScrollRequestRow`
+      // returns before it registers any loop of its own for a row absent
+      // from the rendered index, so this request is PENDING but UNISSUED:
+      // the restore above - still held - remains the registered owner of
+      // `activeNavigationSettleCleanupRef`. That is the exact case the
+      // owner-tag fix exists for: the old guard read whether a request was
+      // pending (true here) rather than who owned the loop, and so skipped
+      // the cancel below, leaving the restore running against a concealed
+      // node.
+      const notYetHydratedRowId = "row-not-yet-hydrated-pending-request";
+      expect(
+        messages.some((message) => message.id === notYetHydratedRowId),
+      ).toBe(false);
+      rerenderWith({
+        scrollRequest: {
+          kind: "message",
+          messageId: notYetHydratedRowId,
+          blockId: null,
+          requestId: 999,
+        },
+      });
+
+      await hideWithCollapsedScrollBox(rerenderWith);
+      expect(getScrollNode().scrollTop).toBe(0);
+
+      // Settle the restore's held command now, with the list hidden and its
+      // box already collapsed - the pending-but-unissued request must not
+      // have kept it running.
+      act(() => {
+        held.settleAll();
+      });
+      await settleLegendList();
+
+      expect(getScrollNode().scrollTop).toBe(0);
+    });
+
+    it("a hide cancelling a held replay while a request is pending for a not-yet-hydrated row leaves the persistence gate armed, re-committing the pre-restore snapshot", async () => {
+      const fullMessages = makeCompletedTranscript(200);
+      const missingIndex = 100;
+      const missingMessageId = fullMessages[missingIndex]?.id ?? null;
+      expect(missingMessageId).toBeTruthy();
+      const initialMessages = fullMessages.filter(
+        (_message, index) => index !== missingIndex,
+      );
+      const anchorIndex = 20;
+      const savedViewOffset = 24;
+      const anchorId = initialMessages[anchorIndex]?.id ?? null;
+      expect(anchorId).toBeTruthy();
+      const identity = makeDefaultTestIdentity(
+        `t-visibility-held-reissue-armed-${Math.random().toString(36).slice(2)}`,
+      );
+      const key = identity.tileInstanceId;
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + initialMessages.length * 90 + 40,
+      );
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        anchorIndex,
+        offset: savedViewOffset,
+      });
+      const { rerenderWith, instanceId, unmount } = renderChatMessages({
+        messages: initialMessages,
+        scrollStateKey: key,
+      });
+      await settleLegendList();
+      const mountedScrollTop = getScrollNode().scrollTop;
+      expect(mountedScrollTop).toBeGreaterThan(0);
+      const expectedMountedScrollTop =
+        LEGEND_LIST_HEADER_PX +
+        anchorIndex * TICKET_13_ROW_HEIGHT_PX -
+        savedViewOffset;
+      expect(mountedScrollTop).toBe(expectedMountedScrollTop);
+
+      await hideWithCollapsedScrollBox(rerenderWith);
+
+      // Show again - the show branch's own replay re-arms the persistence
+      // gate and issues a NEW restore (`restorePersistencePendingRef.current
+      // = true` right before issuing, same as mount). The mock lands every
+      // command at a position far from the saved anchor's own (wrong on
+      // purpose, like the P3 settle-position mock above): replaying the SAME
+      // semantic target would otherwise always land at the SAME scrollTop
+      // the frozen pre-restore snapshot already names, so a released gate's
+      // live capture and an armed gate's re-commit would read identically by
+      // construction and the assertion below would prove nothing either way.
+      // Resolving immediately (not held) lets a cancel-less loop actually
+      // exhaust its retry budget against repeated `validate()` failures.
+      const wrongLandingScrollTop = 120;
+      const list = requireList();
+      let scrollToIndexCallCount = 0;
+      vi.spyOn(list, "scrollToIndex").mockImplementation(() => {
+        scrollToIndexCallCount += 1;
+        getScrollNode().scrollTop = wrongLandingScrollTop;
+        return Promise.resolve();
+      });
+      rerenderWith({ visible: true });
+
+      // A cross-tile scroll request for a row missing from the middle of
+      // this transcript, issued while the replay restore above is still
+      // converging. `landScrollRequestRow` returns before registering any
+      // loop of its own for a row absent from the rendered index, so this
+      // request is pending but unissued: the restore remains the registered
+      // owner.
+      expect(
+        initialMessages.some((message) => message.id === missingMessageId),
+      ).toBe(false);
+      rerenderWith({
+        scrollRequest: {
+          kind: "message",
+          messageId: missingMessageId,
+          blockId: null,
+          requestId: 999,
+        },
+      });
+
+      // Hide while the request is pending-but-unissued and the replay
+      // restore - still converging, still the registered owner - is
+      // cancelled. A cancel runs neither `onValidated` nor `onExhausted`, so
+      // `restorePersistencePendingRef` is left armed by this hide, not
+      // released by it. Without the cancel, this hide's own internal settle
+      // already lets the (resolve-immediately) mock's command complete and
+      // write the wrong landing before this check runs, so this is where a
+      // deleted cancel actually goes red - not merely a sanity check.
+      await hideWithCollapsedScrollBox(rerenderWith);
+      expect(getScrollNode().scrollTop).toBe(0);
+
+      // Drive the replay's settle loop toward its own terminal outcome: with
+      // the cancel above, there is nothing left to drive (the loop is
+      // already torn down) and these settles are no-ops; without it, every
+      // wait resolves immediately at the wrong position, `validate()` keeps
+      // failing against the saved anchor's real geometry, and the loop
+      // consumes its bounded retries until `onSettledInvalid` fires.
+      for (let settleAttempt = 0; settleAttempt < 4; settleAttempt += 1) {
+        await settleLegendList();
+      }
+      // The cancelled loop issued once and never again. A cancel-less one
+      // would have spent its whole budget by now - the initial issue plus
+      // `CHAT_TIMELINE_NAVIGATION_MAX_RETRIES` reissues - so the exact count
+      // is what separates them; an upper bound of 4 would hold either way.
+      expect(scrollToIndexCallCount).toBe(1);
+
+      // Close right here and read what actually got persisted: armed means
+      // this re-commits `rawSavedTabState` - the exact pre-restore snapshot
+      // saved at the top of this test - rather than any live-captured
+      // position (which, released, would read the wrong landing above
+      // instead).
+      evictChatTabState([instanceId]);
+      tileLiveness.live = false;
+      unmount();
+      const persisted = peekSavedChatTabState(identity);
+      expect(persisted).not.toBeNull();
+      expect(persisted?.mode).toBe("free-scrolling");
+      expect(persisted?.anchorMessageId).toBe(anchorId);
+      expect(persisted?.anchorIndex).toBe(anchorIndex);
+      expect(persisted?.offset).toBe(savedViewOffset);
+    });
+
+    it("a request pending for a not-yet-hydrated mid-transcript row lands once it hydrates and the landing releases the gate the cancel left armed", async () => {
+      const fullMessages = makeCompletedTranscript(200);
+      const missingIndex = 100;
+      const missingMessageId = fullMessages[missingIndex]?.id ?? null;
+      expect(missingMessageId).toBeTruthy();
+      const initialMessages = fullMessages.filter(
+        (_message, index) => index !== missingIndex,
+      );
+      const anchorIndex = 20;
+      const savedViewOffset = 24;
+      const anchorId = initialMessages[anchorIndex]?.id ?? null;
+      expect(anchorId).toBeTruthy();
+      const identity = makeDefaultTestIdentity(
+        `t-visibility-held-reissue-releases-${Math.random().toString(36).slice(2)}`,
+      );
+      const key = identity.tileInstanceId;
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + initialMessages.length * 90 + 40,
+      );
+      saveChatTabState({
+        identity,
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        anchorIndex,
+        offset: savedViewOffset,
+      });
+      const { rerenderWith, rerenderMessages, instanceId, unmount } =
+        renderChatMessages({
+          messages: initialMessages,
+          scrollStateKey: key,
+        });
+      await settleLegendList();
+      const mountedScrollTop = getScrollNode().scrollTop;
+      expect(mountedScrollTop).toBeGreaterThan(0);
+      const expectedMountedScrollTop =
+        LEGEND_LIST_HEADER_PX +
+        anchorIndex * TICKET_13_ROW_HEIGHT_PX -
+        savedViewOffset;
+      expect(mountedScrollTop).toBe(expectedMountedScrollTop);
+
+      await hideWithCollapsedScrollBox(rerenderWith);
+
+      const held = holdListCommands();
+      const list = requireList();
+      const placeRow = list.scrollToIndex.bind(list);
+      vi.spyOn(list, "scrollToIndex").mockImplementation((params) => {
+        void placeRow(params);
+        return held.hold();
+      });
+      rerenderWith({ visible: true });
+
+      // A cross-tile scroll request for a row missing from the middle of
+      // this transcript, issued while the replay restore above is still
+      // held and remains the registered owner (same premise as the armed
+      // sibling above).
+      expect(
+        initialMessages.some((message) => message.id === missingMessageId),
+      ).toBe(false);
+      rerenderWith({
+        scrollRequest: {
+          kind: "message",
+          messageId: missingMessageId,
+          blockId: null,
+          requestId: 999,
+        },
+      });
+
+      await hideWithCollapsedScrollBox(rerenderWith);
+      expect(getScrollNode().scrollTop).toBe(0);
+
+      // Show again: the pending request is the newer intent, so the show
+      // branch re-issues it instead of replaying the saved reading position.
+      // The row is still absent, so this re-issue cannot land either; the
+      // cancelled restore's gate is untouched by this branch either way.
+      rerenderWith({ visible: true });
+      await settleLegendList();
+
+      // The row hydrates mid-transcript, not at either end, so a landing on
+      // it reads as a placement rather than the list simply clamping to its
+      // end or start. The `listRows`-keyed effect re-attempts the
+      // still-pending request's landing against the grown transcript.
+      const hydratedMessages = fullMessages;
+      expect(hydratedMessages[missingIndex]?.id).toBe(missingMessageId);
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + hydratedMessages.length * 90 + 40,
+      );
+      rerenderMessages(hydratedMessages);
+      await settleLegendList();
+
+      // Resolve the cancelled replay's held command so nothing is left
+      // pending at the unmount below. It cannot affect the outcome either
+      // way - the hide cancelled that loop, and the request's landing goes
+      // through `scrollToOffset`, which this hold does not cover - and that
+      // was confirmed by running this test with and without it.
+      act(() => {
+        held.settleAll();
+      });
+      await settleLegendList();
+
+      // Report what actually happened rather than an assumed outcome: a
+      // landed request and a released gate are two SEPARATE claims, and
+      // this fix touches only the first. Read the real consumer for each.
+      expect(
+        screen.queryByTestId(`mock-message-${missingMessageId}`),
+      ).not.toBeNull();
+      const placedScrollTop = getScrollNode().scrollTop;
+      const maxScrollTop =
+        getScrollNode().scrollHeight - getScrollNode().clientHeight;
+      // Not an end clamp: the request's row sits well short of the bottom,
+      // so a real placement must land short of the max by at least a
+      // handful of rows.
+      expect(placedScrollTop).toBeGreaterThan(0);
+      expect(placedScrollTop).toBeLessThan(
+        maxScrollTop - TICKET_13_ROW_HEIGHT_PX * 5,
+      );
+      expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+
+      // Observe the gate the same way the hidden-permanent-close test does:
+      // evict + liveness-false + unmount, then read what got persisted.
+      evictChatTabState([instanceId]);
+      tileLiveness.live = false;
+      unmount();
+      const persisted = peekSavedChatTabState(identity);
+      expect(persisted).not.toBeNull();
+      expect(persisted?.mode).toBe("free-scrolling");
+      // Released, not re-committing the pre-restore snapshot from the top
+      // of this test (the armed sibling above confirms that snapshot is
+      // `anchorId` / anchorIndex 20 / offset 24) - the exact match below
+      // already implies this.
+      expect(persisted?.offset).not.toBe(savedViewOffset);
+      // The persisted anchor is exactly the row the request landed - not
+      // merely "somewhere else" from the pre-restore snapshot.
+      expect(persisted?.anchorMessageId).toBe(missingMessageId);
+      expect(persisted?.anchorIndex).toBe(missingIndex);
     });
   });
 

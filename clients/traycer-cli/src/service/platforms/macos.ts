@@ -7,6 +7,11 @@ import {
   readHostPidMetadata,
   readHostPidMetadataEvidence,
 } from "../../host/pid-metadata";
+import {
+  observePublishedProcess,
+  waitForPublishedProcessExit,
+  type PublishedProcess,
+} from "../../host/published-process-exit";
 import { hostPidMetadataPath } from "../../store/paths";
 import { probeHostHealth } from "../health-probe";
 import { createCliLogger } from "../../logger";
@@ -2410,6 +2415,59 @@ async function probeAgentWedge(
   }
 }
 
+/**
+ * The host this CLI label's own supervisor runs, captured before the bootout.
+ * `none` only on positive evidence: the label runs no process, nothing is
+ * published, the published host is another supervisor's child (Desktop's
+ * agent's host, which a retirement keeps), or it has already exited. Only a
+ * host whose parent IS the job is waited on. A host whose parent cannot be
+ * read, or an unreadable `pid.json`, is `unidentified`: it may be the label's
+ * host or Desktop's, so it is neither waited on (Desktop's would never exit)
+ * nor started beside.
+ */
+type RetiredCliHost =
+  | { readonly kind: "none" }
+  | { readonly kind: "published"; readonly host: PublishedProcess }
+  | { readonly kind: "unidentified" };
+
+async function readRetiredCliHost(
+  label: ServiceLabel,
+  ownership: LaunchdOwnership,
+  run: ProcessRunner,
+): Promise<RetiredCliHost> {
+  if (ownership.kind !== "cli-or-other" || ownership.pid === null) {
+    return { kind: "none" };
+  }
+  const evidence = await readHostPidMetadataEvidence(label.environment);
+  if (evidence.kind === "absent") return { kind: "none" };
+  if (evidence.kind === "unreadable") return { kind: "unidentified" };
+  const { pid, processStartIdentity } = evidence.metadata;
+  const parentPid = await run("ps", ["-o", "ppid=", "-p", String(pid)], {
+    env: undefined,
+    cwd: undefined,
+    timeoutMs: LAUNCHCTL_CALL_TIMEOUT_MS,
+    tolerateNonZeroExit: true,
+  }).then(
+    (result) =>
+      result.exitCode === 0 ? Number.parseInt(result.stdout.trim(), 10) : null,
+    (cause: unknown) => {
+      if (isServiceMutationAuthorityError(cause)) throw cause;
+      return null;
+    },
+  );
+  const host = { pid, startIdentity: processStartIdentity };
+  if (parentPid === ownership.pid) return { kind: "published", host };
+  if (parentPid !== null && !Number.isNaN(parentPid)) return { kind: "none" };
+  // `ps -p` also fails for a pid that no longer runs - a stale `pid.json` -
+  // so one identity read clears a host that is already gone.
+  const seen = await observePublishedProcess(
+    getPublishedProcessIdentityVerdict,
+    host,
+    () => {},
+  );
+  return seen === "gone" ? { kind: "none" } : { kind: "unidentified" };
+}
+
 async function retireCompetingRegistration(
   label: ServiceLabel,
   run: ProcessRunner,
@@ -2490,6 +2548,7 @@ async function retireCompetingRegistration(
   // also set below when NO bootout runs. The record decorator reads this as
   // "the registration may be gone" (see `CompetingRegistrationRetirement`).
   let bootoutIndeterminate = false;
+  let retiredHost: RetiredCliHost = { kind: "none" };
   if (ownership === null) {
     // Deliberately no bootout on an unknown owner. The one thing that would
     // make eviction catastrophic here is the CLI label BEING Desktop's
@@ -2506,18 +2565,18 @@ async function retireCompetingRegistration(
       { label: label.id, agentLabel: agentLabelId },
     );
   } else if (ownership.kind !== "not-loaded") {
+    // Captured before the bootout, which is what ends it: the host this CLI
+    // label's own supervisor runs, never the one Desktop's agent runs.
+    retiredHost = await readRetiredCliHost(label, ownership, run);
     try {
       // The wait is load-bearing, not tidiness: a bare bootout returns when
       // launchd ACCEPTS the request, not when the process is gone, and the
       // agent we start below runs `findLiveIncumbentHost` as its very first
-      // act. The evicted host publishes `pid.json` until the very end of its
-      // teardown (the RPC handle closes last, after adapter/child-server and
-      // store shutdown, budgeted at `SHUTDOWN_FORCE_EXIT_MS`), so without
-      // this barrier the new agent would routinely see the corpse as a live
-      // incumbent, decline, and exit 0 - which `KeepAlive{SuccessfulExit:
-      // false}` leaves DOWN until the next login. That is the exact outcome
-      // this whole repair exists to prevent. Same barrier, same timeout as
-      // `uninstallService`'s bootout.
+      // act. Without this barrier the new agent would routinely meet the
+      // evicted host still holding the host home, decline, and exit 0 -
+      // which `KeepAlive{SuccessfulExit: false}` leaves DOWN until the next
+      // login. That is the exact outcome this whole repair exists to
+      // prevent. Same barrier, same timeout as `uninstallService`'s bootout.
       await bootoutAndWait(serviceTarget, run, false);
       bootedOut = true;
     } catch (cause) {
@@ -2601,6 +2660,41 @@ async function retireCompetingRegistration(
       );
     }
   }
+  // The label leaving launchd is not the host leaving: a job still on
+  // launchd's default 5 s `ExitTimeOut` has only its supervisor SIGKILLed, and
+  // the host lives on in its own session through its graceful shutdown. The
+  // agent started below would meet it, decline, and exit 0, so wait for the
+  // captured host itself first. After the manifest removal, so the durable
+  // half never waits behind it.
+  let retiredHostStillExiting = false;
+  if (bootedOut && retiredHost.kind === "unidentified") {
+    retiredHostStillExiting = true;
+  } else if (bootedOut && retiredHost.kind === "published") {
+    const captured = retiredHost.host;
+    retiredHostStillExiting =
+      (await waitForPublishedProcessExit(
+        getPublishedProcessIdentityVerdict,
+        captured,
+        () => {
+          logger.info(
+            "Service repair: waiting for the evicted CLI-label host to finish shutting down.",
+            { label: label.id, pid: captured.pid },
+          );
+        },
+        (cause) => {
+          logger.warn(
+            "Service repair: could not probe the evicted CLI-label host.",
+            { label: label.id, pid: captured.pid, cause: describeCause(cause) },
+          );
+        },
+      )) !== "gone";
+  }
+  if (retiredHostStillExiting) {
+    logger.warn(
+      "Service repair: removed the competing CLI registration, but its host may still be running; Traycer starts its own host once it has exited (open Traycer, or log out and back in, if the host stays unreachable).",
+      { label: label.id, agentLabel: agentLabelId },
+    );
+  }
   // ONLY after an eviction actually happened. A failed bootout means the
   // competing host is still running, and starting the agent beside it would
   // manufacture the very dual-host state this repair removes. Plain
@@ -2608,9 +2702,10 @@ async function retireCompetingRegistration(
   // force-killing a healthy agent would make launchd block its respawn.
   // Starting an already-loaded job does not touch BTM, so it stays within
   // the "CLI must not mutate Desktop's registration" rule that
-  // `installService`'s refusals enforce.
+  // `installService`'s refusals enforce. Not while the evicted host is still
+  // exiting either: the agent's host would decline beside it and stay down.
   let agentStartRequested = false;
-  if (bootedOut) {
+  if (bootedOut && !retiredHostStillExiting) {
     // A spawn edge, awaited outside the `try` below: that catch downgrades a
     // failed kickstart to a warning, and a refused publication must not be.
     await atServiceSpawnEdge();
@@ -2647,10 +2742,14 @@ async function retireCompetingRegistration(
       bootedOut,
       bootoutIndeterminate,
       manifestRemoved,
+      retiredHostStillExiting,
     };
   }
   if (!bootedOut && !manifestRemoved) {
     return { kind: "nothing-to-retire" };
+  }
+  if (retiredHostStillExiting) {
+    return { kind: "removed-host-still-exiting", manifestRemoved };
   }
   logger.info("Service repair: retired the competing CLI registration.", {
     label: label.id,
@@ -3114,6 +3213,9 @@ ${programArgsXml}
 const PROGRAM_ARGUMENTS_PATTERN =
   /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/;
 
+const EXIT_TIMEOUT_PATTERN =
+  /<key>ExitTimeOut<\/key>\s*<integer>(\d+)<\/integer>/;
+
 async function readRegisteredCliInvocation(
   label: ServiceLabel,
 ): Promise<CliInvocation | null> {
@@ -3170,6 +3272,8 @@ type MacosDefinitionPlan =
       readonly kind: "stale";
       readonly form: ServiceDefinitionForm;
       readonly appliesAt: ServiceDefinitionAppliesAt;
+      /** Whether the launcher file is rewritten. */
+      readonly writeLauncher: boolean;
       /** The patched plist, or `null` when only the launcher file changes. */
       readonly plistText: string | null;
     };
@@ -3265,6 +3369,37 @@ function patchProgramArguments(
   );
 }
 
+/**
+ * Whether the plist gives the job at least today's `ExitTimeOut`. A job
+ * without one gets launchd's 5 s default, and a stop then SIGKILLs the
+ * supervisor while the host it runs is still shutting down.
+ */
+function exitTimeOutIsCurrent(xml: string): boolean {
+  const seconds = xml.match(EXIT_TIMEOUT_PATTERN)?.[1];
+  return (
+    seconds !== undefined &&
+    Number.parseInt(seconds, 10) >= LAUNCHD_EXIT_TIMEOUT_SECONDS
+  );
+}
+
+/**
+ * The plist with today's `ExitTimeOut`: the existing value replaced, or the
+ * key added at the end of the top-level dict. The rest is kept byte for
+ * byte, as in {@link patchProgramArguments}. `null` when the key holds
+ * something other than an integer, or the plist has no closing dict to add
+ * it to.
+ */
+function patchExitTimeOut(xml: string): string | null {
+  const entry = `<key>ExitTimeOut</key>\n  <integer>${LAUNCHD_EXIT_TIMEOUT_SECONDS}</integer>`;
+  if (EXIT_TIMEOUT_PATTERN.test(xml)) {
+    return xml.replace(EXIT_TIMEOUT_PATTERN, () => entry);
+  }
+  if (xml.includes("<key>ExitTimeOut</key>")) return null;
+  const close = xml.lastIndexOf("</dict>");
+  if (close === -1) return null;
+  return `${xml.slice(0, close)}  ${entry}\n${xml.slice(close)}`;
+}
+
 async function planMacosDefinition(
   label: ServiceLabel,
 ): Promise<MacosDefinitionPlan> {
@@ -3294,35 +3429,52 @@ async function planMacosDefinition(
       reason: "its ProgramArguments are not a Traycer host start",
     };
   }
+  // The loaded job keeps the plist launchd read until it is unloaded (a
+  // loaded job whose file is gone keeps running from memory until logout -
+  // see `retireCompetingRegistration`), and unloading it is the `bootout`
+  // this path must not run. So a plist rewrite waits for the next load.
+  const exitTimeOutStale = !exitTimeOutIsCurrent(xml);
   if (registered.form === "launcher-file") {
     // `ProgramArguments` already names the launcher with the registered
     // invocation after it, which is exactly the vector `buildPlist` emits,
-    // so the launcher file's body is the whole question.
-    if (await launcherFileIsCurrent(label)) return { kind: "current" };
-    // launchd execs `ProgramArguments[0]` on every spawn, so a rewritten
-    // launcher file applies from the next one - in-session respawns too.
+    // so the launcher file's body is the rest of the question.
+    const launcherStale = !(await launcherFileIsCurrent(label));
+    if (!launcherStale && !exitTimeOutStale) return { kind: "current" };
+    const plistText = exitTimeOutStale ? patchExitTimeOut(xml) : null;
+    if (exitTimeOutStale && plistText === null) return unreadableExitTimeOut;
     return {
       kind: "stale",
-      form: "launcher-file",
-      appliesAt: "next-start",
-      plistText: null,
+      form: launcherStale ? "launcher-file" : "exit-timeout",
+      // launchd execs `ProgramArguments[0]` on every spawn, so a rewritten
+      // launcher file alone applies from the next one - in-session respawns
+      // too.
+      appliesAt: exitTimeOutStale ? "next-login" : "next-start",
+      writeLauncher: launcherStale,
+      plistText,
     };
   }
+  const withLauncher = patchProgramArguments(xml, [
+    serviceLauncherScriptPath(label),
+    registered.cli.command,
+    ...registered.cli.args,
+  ]);
+  const plistText = exitTimeOutStale
+    ? patchExitTimeOut(withLauncher)
+    : withLauncher;
+  if (plistText === null) return unreadableExitTimeOut;
   return {
     kind: "stale",
     form: registered.form,
-    // The loaded job keeps the `ProgramArguments` launchd cached until it is
-    // unloaded (a loaded job whose file is gone keeps running from memory
-    // until logout - see `retireCompetingRegistration`), and unloading it is
-    // the `bootout` this path must not run. So the rewrite waits for login.
     appliesAt: "next-login",
-    plistText: patchProgramArguments(xml, [
-      serviceLauncherScriptPath(label),
-      registered.cli.command,
-      ...registered.cli.args,
-    ]),
+    writeLauncher: true,
+    plistText,
   };
 }
+
+const unreadableExitTimeOut: MacosDefinitionPlan = {
+  kind: "unrecognized",
+  reason: "its ExitTimeOut is not an integer",
+};
 
 /** Read-only: what a refresh would find. No write, no `launchctl`. */
 export async function inspectMacosServiceDefinition(
@@ -3334,9 +3486,10 @@ export async function inspectMacosServiceDefinition(
 }
 
 /**
- * Write the current launcher file and, for a plist that predates it, patch
- * the plist's `ProgramArguments` to run it - the launcher first, because the
- * plist it is patched into executes it. No `launchctl` at all.
+ * Write the current launcher file when it is stale and, for a plist that
+ * predates it or gives the job less than today's `ExitTimeOut`, patch the
+ * plist - the launcher first, because the plist it is patched into executes
+ * it. No `launchctl` at all.
  */
 export async function refreshMacosServiceDefinition(
   label: ServiceLabel,
@@ -3357,14 +3510,16 @@ export async function refreshMacosServiceDefinition(
       break;
   }
   try {
-    const launcherPath = serviceLauncherScriptPath(label);
     await verifyServiceMutationAuthority();
-    await mkdir(dirname(launcherPath), { recursive: true });
-    await replaceDefinitionFile(
-      launcherPath,
-      buildHostStartLauncherScript(label.id),
-      0o755,
-    );
+    if (plan.writeLauncher) {
+      const launcherPath = serviceLauncherScriptPath(label);
+      await mkdir(dirname(launcherPath), { recursive: true });
+      await replaceDefinitionFile(
+        launcherPath,
+        buildHostStartLauncherScript(label.id),
+        0o755,
+      );
+    }
     if (plan.plistText !== null) {
       const manifestPath = serviceManifestPath(label);
       await replaceDefinitionFile(
@@ -3377,7 +3532,7 @@ export async function refreshMacosServiceDefinition(
     if (isServiceMutationAuthorityError(cause)) throw cause;
     throw serviceDefinitionRefreshFailed({
       subject,
-      reason: `the launcher could not be rewritten (${describeCause(cause)})`,
+      reason: `the definition could not be rewritten (${describeCause(cause)})`,
       remedy: SERVICE_REFRESH_COMMAND,
     });
   }

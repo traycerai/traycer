@@ -215,7 +215,9 @@ const SETUP_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
 /** What the host answers for a new team: its main bot, still to be set up. */
 function setupRead(title: string): ReadScript {
-  return { setup: { botId: SETUP_BOT_ID, title } };
+  return {
+    setup: { botId: SETUP_BOT_ID, title, state: "needs_host", arrival: null },
+  };
 }
 
 /**
@@ -224,7 +226,7 @@ function setupRead(title: string): ReadScript {
  */
 function degradedSetupRead(title: string): ReadScript {
   return {
-    setup: { botId: SETUP_BOT_ID, title },
+    setup: { botId: SETUP_BOT_ID, title, state: "needs_host", arrival: null },
     github: {
       state: "needs_installing_admin",
       installingAdmin: null,

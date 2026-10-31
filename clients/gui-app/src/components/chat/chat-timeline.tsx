@@ -18,6 +18,7 @@ import {
 import { cn } from "@/lib/utils";
 import { ChatEmptyState } from "@/components/chat/chat-empty-state";
 import { ChatBotPresentationContext } from "@/components/chat/chat-bot-presentation-context";
+import { ChatTimelineHeaderContext } from "@/components/chat/chat-timeline-header-context";
 import {
   ChatMessage,
   type ChatMessageActions,
@@ -316,6 +317,20 @@ export const ChatTimeline = memo(function ChatTimeline({
     navigationHighlightedBlockId,
   );
 
+  const header = use(ChatTimelineHeaderContext);
+  const listHeader = useMemo(
+    () =>
+      header === null ? (
+        CHAT_TIMELINE_LIST_HEADER
+      ) : (
+        <>
+          {CHAT_TIMELINE_LIST_HEADER}
+          {header}
+        </>
+      ),
+    [header],
+  );
+
   const sharedState = useMemo<ChatTimelineRowSharedState>(
     () => ({
       taskTitle,
@@ -576,7 +591,7 @@ export const ChatTimeline = memo(function ChatTimeline({
             className,
           )}
           {...TRANSCRIPT_LAYOUT_PASSIVE}
-          ListHeaderComponent={CHAT_TIMELINE_LIST_HEADER}
+          ListHeaderComponent={listHeader}
           ListFooterComponent={CHAT_TIMELINE_LIST_FOOTER}
           {...rest}
         />

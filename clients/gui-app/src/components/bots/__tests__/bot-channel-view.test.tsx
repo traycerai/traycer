@@ -442,6 +442,7 @@ function mount(options: MountOptions): {
             openThread={openThread}
             onOpenThread={onOpenThread}
             onOpenActivity={onOpenActivity}
+            setupHistory={null}
           />
         </ChatExpansionTestProviders>
       </TooltipProvider>

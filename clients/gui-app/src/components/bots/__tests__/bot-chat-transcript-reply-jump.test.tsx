@@ -485,6 +485,7 @@ describe("<BotChatTranscript /> in the channel", () => {
       openTurn: null,
       sessionChatId: null,
       intro: { botTitle: "Release Bot", directive: null },
+      history: null,
     };
   }
 
@@ -564,6 +565,7 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       openTurn: null,
       sessionChatId: null,
       intro: { botTitle: "Release Bot", directive: null },
+      history: null,
     };
   }
 
