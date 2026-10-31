@@ -142,11 +142,15 @@ export function stageTracyLanding(botId: string, landing: BotTabLanding): void {
 }
 
 /**
- * `botId`'s channel shows: the landing staged for it is its own to spend from
- * here, and is forgotten with the channel.
+ * `botId`'s channel shows `landing`: that request is its own to spend from
+ * here, and is forgotten with the channel. A newer request for the channel,
+ * which it has not shown yet, stays staged.
  */
-export function handTracyLandingToChannel(botId: string): void {
-  stagedLandings.delete(botId);
+export function handTracyLandingToChannel(
+  botId: string,
+  landing: BotTabLanding,
+): void {
+  if (stagedLandings.get(botId) === landing) stagedLandings.delete(botId);
 }
 
 /**

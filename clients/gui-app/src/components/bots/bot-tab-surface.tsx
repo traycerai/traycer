@@ -552,13 +552,21 @@ function TracyChannelPane(props: {
 }): ReactNode {
   const { botId, hostId, threadsShown } = props;
   const client = useTabHostClient();
-  // The channel shows: it is visited, and takes over the landing staged for
-  // it. Before any passive effect of the pane's, so a channel reported gone on
-  // its first commit is forgotten after it was marked visited, not before.
+  // The channel shows: it is visited. Before any passive effect of the
+  // pane's, so a channel reported gone on its first commit is forgotten after
+  // it was marked visited, not before.
   useLayoutEffect(() => {
     useTracySurfaceStore.getState().markVisited(botId);
-    handTracyLandingToChannel(botId);
   }, [botId]);
+  // Each landing the shown channel observes is its own from that commit on,
+  // including one asked of it while it was already showing, so a later
+  // navigation elsewhere does not withdraw it as never landed.
+  const landing = useBotTabLandingStore((state) =>
+    Object.hasOwn(state.byBotId, botId) ? state.byBotId[botId] : null,
+  );
+  useLayoutEffect(() => {
+    if (landing !== null) handTracyLandingToChannel(botId, landing);
+  }, [botId, landing]);
   const { route, botList, retry } = useChannelRoute(botId, hostId);
   if (threadsShown && route.kind !== "bot") return null;
   if (route.kind === "connecting") return <BotTabConnecting />;

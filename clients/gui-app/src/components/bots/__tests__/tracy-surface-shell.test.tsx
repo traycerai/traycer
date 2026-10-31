@@ -51,9 +51,12 @@ interface EnvironmentsScript {
   readonly hasData: boolean;
 }
 
-/** What one bot's thread-list read holds; a bot with none holds no threads. */
+/**
+ * What one bot's thread-list read holds; a bot with none holds no threads.
+ * `null` threads is a read that has not answered.
+ */
 interface ThreadListScript {
-  readonly threads: ReadonlyArray<BotThreadSummary>;
+  readonly threads: ReadonlyArray<BotThreadSummary> | null;
   readonly isFetching: boolean;
   readonly isError: boolean;
 }
@@ -224,7 +227,7 @@ vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
     const read = Object.hasOwn(lists, botId) ? lists[botId] : undefined;
     if (read === undefined) return { data: { threads: [] } };
     return {
-      data: { threads: read.threads },
+      data: read.threads === null ? undefined : { threads: read.threads },
       isFetching: read.isFetching,
       isError: read.isError,
     };
@@ -325,6 +328,7 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
 import { PaneVisibilityContext } from "@/components/epic-tabs/pane-visibility-context";
 import { TabNavigationRouteBridge } from "@/components/layout/bridges/tab-navigation-route-bridge";
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
+import { tracyRoute } from "@/lib/routes";
 import { openBotChannel, openTracyEntry } from "@/lib/bots/open-bot-channel";
 import {
   __resetTabNavigationControllerForTesting,
@@ -969,6 +973,74 @@ describe("the Tracy surface shell", () => {
         mounted.history.back();
       });
       expect(mounted.pathname()).toBe("/home");
+    });
+
+    it("keeps a thread landing the shown channel observed when another channel is selected before its thread list answers, and lands it on return", async () => {
+      const THREAD: BotThreadSummary = {
+        threadId: "thread-x",
+        conversationId: "conversation-x",
+        sessionChatId: "session-x",
+        anchor: {
+          messageId: "post-of-thread-x",
+          requestId: "request-x",
+          senderUserId: null,
+          sentAt: 1_000,
+          resolvedAt: null,
+          excerpt: null,
+        },
+        replyCount: 0,
+        lastReplyAt: null,
+        openRequestCount: 0,
+        costUsd: null,
+      };
+      answerList([NOTES, RELEASE, TRIAGE], { "env-me": "bot-notes" });
+      const mounted = await mount();
+      open(mounted, "bot-release");
+      await shownChannel("bot-release");
+      act(() =>
+        setThreadList("bot-release", {
+          threads: null,
+          isFetching: true,
+          isError: false,
+        }),
+      );
+      const held = holdNavigation(mounted);
+
+      // Opening the channel already shown: the landing waits for the list.
+      act(() => {
+        openBotChannel(held.navigate, "bot-release", {
+          landing: { kind: "thread", threadId: "thread-x", messageId: null },
+          isConnectable: null,
+          onRejected: null,
+        });
+      });
+      expect(tracyNavigationPending()).toBe(true);
+      await act(() => Promise.resolve());
+
+      // An arrival from outside supersedes the held open.
+      await act(() => mounted.navigate(tracyRoute("bot-triage")));
+      await shownChannel("bot-triage");
+      await act(() => Promise.resolve());
+
+      expect(keptState("bot-release").landing).toBe(true);
+
+      fireEvent.click(row("bot-release"));
+      const channel = await shownChannel("bot-release");
+      expect(channel.getAttribute("data-open-thread")).toBe("none");
+      act(() =>
+        setThreadList("bot-release", {
+          threads: [THREAD],
+          isFetching: false,
+          isError: false,
+        }),
+      );
+
+      await waitFor(() => {
+        expect(channel.getAttribute("data-open-thread")).toBe(
+          "post-of-thread-x",
+        );
+      });
+      expect(keptState("bot-release").landing).toBe(false);
     });
   });
 
