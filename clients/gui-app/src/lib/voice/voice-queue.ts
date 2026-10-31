@@ -148,6 +148,15 @@ export interface VoiceQueue {
    * leaves the item where it is.
    */
   noteSwitched(itemId: string): void;
+  /**
+   * A queued question or surfaced prompt was settled by someone else (its
+   * row no longer asks anything open): it no longer waits on the person, so
+   * it leaves the queue unsaid, its offer and any Read withdrawn, and is not
+   * queued again.
+   */
+  promptSettled(itemId: string): void;
+  /** The ids of prompts settled by someone else, for a briefing to leave out. */
+  settledPromptIds(): ReadonlySet<string>;
   /** Runs `read`, `switch`, `later` or `brief`; `status` is the controller's. */
   run(verb: Exclude<QueueVerb, { readonly kind: "status" }>): QueueVerbOutcome;
   items(): ReadonlyArray<QueueItem>;
@@ -180,6 +189,8 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
   const pending = new Map<string, Pending>();
   /** Message ids settled without an item: said by the focused feed, or not hydratable. */
   const settled = new Set<string>();
+  /** Prompts someone else settled: message and surface ids, for the briefing. */
+  const settledPrompts = new Set<string>();
   const pendingListeners = new Set<() => void>();
   let pendingSnapshot: ReadonlyArray<PendingHydration> | null = null;
   let speechSeq = 0;
@@ -379,6 +390,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       prompts: attention.prompts,
       items: Array.from(entries.values(), (entry) => entry.item),
       botTitle: deps.botTitle,
+      settledIds: settledPrompts,
       maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
     });
     speechSeq += 1;
@@ -600,6 +612,23 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
     items() {
       return Array.from(entries.values(), (entry) => entry.item);
     },
+    promptSettled(itemId) {
+      const entry = entries.get(itemId);
+      if (entry === undefined) return;
+      if (entry.item.kind !== "question" && entry.item.kind !== "surface") {
+        return;
+      }
+      withdrawOffer(entry);
+      withdrawRead(entry);
+      entries.delete(itemId);
+      settled.add(itemId);
+      settledPrompts.add(itemId);
+      if (entry.item.surfaceId !== null) settledPrompts.add(entry.item.surfaceId);
+      publish();
+    },
+    settledPromptIds() {
+      return settledPrompts;
+    },
     noteSwitched(itemId) {
       const entry = entries.get(itemId);
       if (entry !== undefined) switchedTo(entry);
@@ -621,6 +650,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       entries.clear();
       pending.clear();
       settled.clear();
+      settledPrompts.clear();
       notifyPending();
       publish();
     },

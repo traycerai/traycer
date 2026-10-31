@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -41,10 +42,18 @@ import {
 } from "@/lib/registries/chat-session-registry";
 import { watchAnnouncements } from "@/lib/voice/announcement-watch";
 import { composeBotStatus } from "@/lib/voice/bot-status";
-import { stoppedAnswersOf, type ReplyRef } from "@/lib/voice/queue-sources";
+import {
+  promptOf,
+  stoppedAnswersOf,
+  type ReplyRef,
+} from "@/lib/voice/queue-sources";
 import type { PendingHydration, VoiceQueue } from "@/lib/voice/voice-queue";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
-import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
+import {
+  useVoiceSessionStore,
+  waitingItems,
+  type QueueItem,
+} from "@/stores/voice/voice-session-store";
 
 /**
  * How long a reference waits for its row in the records before it is left
@@ -133,9 +142,19 @@ function VoiceQueueFeed(props: {
   const queueHosts = useVoiceSessionStore((state) =>
     uniqueHosts(state.queue.map((item) => item.hostId)),
   );
+  // The waiting questions and surfaced prompts, each watched until it
+  // settles: one answered or resolved elsewhere no longer waits.
+  const queueItems = useVoiceSessionStore((state) => state.queue);
+  const prompts = useMemo(
+    () => waitingItems(queueItems).filter(isPromptItem),
+    [queueItems],
+  );
 
   return (
     <>
+      {prompts.map((item) => (
+        <VoicePromptWatch key={item.id} item={item} queue={queue} />
+      ))}
       {pending.map((hydration) => (
         <VoiceReplyHydrator
           key={hydration.ref.messageId}
@@ -260,6 +279,44 @@ export function VoiceStoppedSources(props: {
       ))}
     </>
   );
+}
+
+/** A question or surfaced prompt the queue holds, which settles where it was asked. */
+function isPromptItem(item: QueueItem): boolean {
+  return item.kind === "question" || item.kind === "surface";
+}
+
+/**
+ * Keeps reading a queued prompt's row, through the same handle its
+ * hydration read it from, until the row no longer asks anything open (the
+ * question answered or skipped, the surface resolved, by anyone, anywhere):
+ * then the item leaves the queue unsaid.
+ */
+function VoicePromptWatch(props: {
+  readonly item: QueueItem;
+  readonly queue: VoiceQueue;
+}): null {
+  const { item, queue } = props;
+  const handle = useChatSessionHandleForContainer(
+    item.botId,
+    item.chatId,
+    item.hostId,
+    true,
+  );
+  useEffect(() => {
+    if (handle === null) return;
+    const look = (): void => {
+      const row = handle.store
+        .getState()
+        .messages.find((message) => message.messageId === item.messageId);
+      if (row?.role === "assistant" && promptOf(row) === null) {
+        queue.promptSettled(item.id);
+      }
+    };
+    look();
+    return handle.store.subscribe(look);
+  }, [handle, item.id, item.messageId, queue]);
+  return null;
 }
 
 /**

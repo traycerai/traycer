@@ -111,18 +111,25 @@ export function composeBriefing(input: {
    */
   readonly items: ReadonlyArray<QueueItem>;
   readonly botTitle: (botId: string) => string;
+  /**
+   * Prompts settled by someone else since they were queued (their message
+   * and surface ids): no longer waiting on the person, even while their
+   * notification is still in the attention tier.
+   */
+  readonly settledIds: ReadonlySet<string>;
   readonly maxChars: number;
 }): string {
   const waiting = input.items
     .filter((item) => item.state === "queued" || item.state === "offered")
     .sort((a, b) => b.at - a.at);
-  const known = new Set(
-    input.items.flatMap((item) =>
+  const known = new Set([
+    ...input.settledIds,
+    ...input.items.flatMap((item) =>
       [item.messageId, item.surfaceId].filter(
         (id): id is string => id !== null,
       ),
     ),
-  );
+  ]);
   const lineOf = (item: QueueItem): string =>
     `${itemLineOf(item, input.botTitle(item.botId))}.`;
 

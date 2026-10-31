@@ -371,6 +371,7 @@ export function useVoiceQueueOwner(input: {
       prompts: briefed.prompts,
       items: queue.items(),
       botTitle: (botId) => botTitleRef.current(botId),
+      settledIds: queue.settledPromptIds(),
       maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
     });
   }, [ensureQueue]);
