@@ -11,23 +11,46 @@ import {
 } from "@/lib/safe-area-insets";
 import { useSideStripCollapsed } from "@/stores/layout/side-tab-strip-store";
 
-const PHONE_PORTRAIT_QUERY = `(orientation: portrait) and (width < ${MOBILE_PHONE_PORTRAIT_WIDTH_LIMIT_PX}px)`;
+const PHONE_WIDTH_QUERY = `(width < ${MOBILE_PHONE_PORTRAIT_WIDTH_LIMIT_PX}px)`;
+
+/** Absent on iOS before 16.4, whatever the DOM types say. */
+function readScreenOrientation(): ScreenOrientation | null {
+  return "orientation" in window.screen ? window.screen.orientation : null;
+}
 
 function subscribeToPhonePortrait(onChange: () => void): () => void {
-  const mql = window.matchMedia(PHONE_PORTRAIT_QUERY);
+  const mql = window.matchMedia(PHONE_WIDTH_QUERY);
   mql.addEventListener("change", onChange);
   // The same self-heal as `use-narrow-window.ts`: a `change` WKWebView drops
   // cannot wedge the form, because the resize accompanying it re-asks.
   window.addEventListener("resize", onChange);
+  const orientation = readScreenOrientation();
+  orientation?.addEventListener("change", onChange);
   return () => {
     mql.removeEventListener("change", onChange);
     window.removeEventListener("resize", onChange);
+    orientation?.removeEventListener("change", onChange);
   };
 }
 
-/** Reads the query for the reason `use-narrow-window.ts` records: `innerWidth` settles late. */
+/**
+ * The SCREEN, not the viewport's shape: Android resizes the viewport for the
+ * keyboard, so `(orientation: portrait)` would flip a portrait phone to
+ * landscape while the person types, moving the navigation under them.
+ *
+ * iOS before 16.4 has no `screen.orientation`, and its `screen` keeps its
+ * portrait dimensions in every orientation. That reads as portrait throughout,
+ * which the width half corrects: no phone there is under the limit on its side.
+ */
+function readScreenPortrait(): boolean {
+  const orientation = readScreenOrientation();
+  if (orientation !== null) return orientation.type.startsWith("portrait");
+  return window.screen.width < window.screen.height;
+}
+
+/** The width reads the query for the reason `use-narrow-window.ts` records: `innerWidth` settles late. */
 function readPhonePortrait(): boolean {
-  return window.matchMedia(PHONE_PORTRAIT_QUERY).matches;
+  return readScreenPortrait() && window.matchMedia(PHONE_WIDTH_QUERY).matches;
 }
 
 function readPhonePortraitServerSnapshot(): boolean {
