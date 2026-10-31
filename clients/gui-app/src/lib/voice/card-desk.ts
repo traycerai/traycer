@@ -1277,10 +1277,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
    * then is), or before a choice the person has made since (an exact
    * "Production" said while "use staging" was still being routed stands).
    */
-  const routedTooEarly = (
-    held: Desk,
-    seqs: ReadonlyArray<number>,
-  ): boolean => {
+  const routedTooEarly = (held: Desk, seqs: ReadonlyArray<number>): boolean => {
     const list = held.list;
     if (list === null || !answerable(held)) return true;
     if (seqs.some((seq) => seq <= list.heardAfterSeq)) return true;
