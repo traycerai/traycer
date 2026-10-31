@@ -6,6 +6,7 @@ import {
   attachCanvasAnnotation,
   canvasAnnotationElement,
   canvasWindowCaptureBridge,
+  captureCanvasRegionWithoutChrome,
 } from "./canvas-annotation-attach";
 import type { CanvasSelection } from "./canvas-selection-store";
 
@@ -52,18 +53,28 @@ export function canvasSelectionAnnotationRecord(
  * record to a chat's composer draft. The capture happens here, on the explicit
  * send, before anything else moves on screen: the selection bar and the
  * comment draft box both route through this one path so their cards match.
+ *
+ * The crop is cut from the app window as composited, so the picture is taken
+ * only once the caller's picker has left the screen (`awaitPickerClosed`) and
+ * with the selection chrome hidden; the rectangle is measured right before the
+ * capture, since the board can move while the picker closes.
  */
 export async function captureAndAttachCanvasAnnotation(input: {
   readonly chatId: string;
   readonly record: CanvasAnnotationRecord;
-  readonly captureRect: CanvasBox | null;
+  readonly captureRect: () => CanvasBox | null;
+  readonly awaitPickerClosed: () => Promise<void>;
 }): Promise<CanvasAnnotationRecord> {
   const bridge = canvasWindowCaptureBridge();
-  const crop =
-    input.captureRect !== null && bridge !== null
-      ? await bridge.captureRegion(input.captureRect)
-      : null;
-  if (input.captureRect !== null && bridge !== null && crop === null)
+  // Whether there is anything on screen to photograph is decided now; the
+  // rectangle itself is measured again right before the capture.
+  const capturable = bridge !== null && input.captureRect() !== null;
+  let crop: ArrayBuffer | null = null;
+  if (capturable) {
+    await input.awaitPickerClosed();
+    crop = await captureCanvasRegionWithoutChrome(bridge, input.captureRect);
+  }
+  if (capturable && crop === null)
     throw new Error("The selected region could not be captured. Try again.");
   return attachCanvasAnnotation({
     chatId: input.chatId,

@@ -174,10 +174,10 @@ function sideFixedRows(
   if (!props.homeTabDrawn && props.tracy === null && !talkDrawn) return null;
   const collapsed = props.variant === "collapsed";
   const talk = collapsed ? (
-    <TalkControl compact />
+    <TalkControl form="glyph" />
   ) : (
     <div className="flex">
-      <TalkControl compact={false} />
+      <TalkControl form="label" />
     </div>
   );
   return (

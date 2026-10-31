@@ -11,6 +11,9 @@ import { EllipsisVertical } from "lucide-react";
 import type { BotOpenResponse } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import { TalkControl } from "@/components/layout/voice/talk-control";
+import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1187,7 +1190,9 @@ function ErrorNotice(props: {
  * its name with the main bot's star, the ⋮ that opens the channel's settings
  * (and marks it read, where the host keeps read cursors), and the channel's views
  * under it. What the bot is for is the top of its channel; nothing else
- * sits here. Activity's label is the bot's indicator: what stopped, in red
+ * sits here but, on the phone, Talk: the phone has no tab strip to carry it,
+ * so every bot channel does (V5), and a session started here is focused on
+ * this channel. Activity's label is the bot's indicator: what stopped, in red
  * and first, what runs and the tasks it tracks.
  */
 function BotChannelHeader(props: {
@@ -1200,6 +1205,7 @@ function BotChannelHeader(props: {
   readonly activityLabel: ReadonlyArray<BotActivityLabelPart>;
 }): ReactNode {
   const { settingsOpen } = props;
+  const phoneLayout = useIsMobileViewport();
   // Focus goes back to the ⋮ when the settings close.
   const settingsButtonRef = useRef<HTMLButtonElement | null>(null);
   const wasOpenRef = useRef(settingsOpen);
@@ -1228,6 +1234,13 @@ function BotChannelHeader(props: {
         </h1>
         {props.isMain ? (
           <MainBotBadge testId="bot-tab-main" tone="muted" />
+        ) : null}
+        {UNRELEASED_FEATURES_ENABLED && phoneLayout ? (
+          <>
+            {/* Takes the free space, so Talk sits beside the ⋮. */}
+            <span className="min-w-0 flex-1" />
+            <TalkControl form="touch" />
+          </>
         ) : null}
         {props.onMarkRead === null ? (
           <Button
