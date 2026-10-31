@@ -66,18 +66,24 @@ describe("sessionEnded", () => {
 });
 
 describe("the dictation pause", () => {
-  it("outlives the session: no session transition writes it, only dictation clears it", () => {
+  it("is held per owner: it outlives the session, and ends only when every owner has released its own hold", () => {
     const store = useVoiceSessionStore.getState();
-    store.setPausedForDictation(true);
+    store.acquireDictationHold("composer-a");
     store.sessionConnecting();
     store.engineReplacing();
     store.sessionEnded("ended");
     expect(useVoiceSessionStore.getState().pausedForDictation).toBe(true);
 
     store.sessionConnecting();
+    store.acquireDictationHold("composer-b");
+    // An owner that never acquired releases nothing; one that did releases
+    // only its own.
+    store.releaseDictationHold("composer-idle");
+    store.releaseDictationHold("composer-a");
     expect(useVoiceSessionStore.getState().pausedForDictation).toBe(true);
-    store.setPausedForDictation(false);
+    store.releaseDictationHold("composer-b");
     expect(useVoiceSessionStore.getState().pausedForDictation).toBe(false);
+    expect(useVoiceSessionStore.getState().dictationHolds.size).toBe(0);
   });
 });
 

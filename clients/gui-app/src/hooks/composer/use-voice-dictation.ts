@@ -2,7 +2,7 @@
    deliberately to capture PCM without a separate AudioWorklet asset (which would
    need CSP `script-src` widening for `file://`); migrating to AudioWorklet is a
    follow-up. */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { SPEECH_INPUT_SAMPLE_RATE } from "@traycer/protocol/host/speech/schemas";
 import { SpeechStreamClient } from "@traycer-clients/shared/host-transport/speech-stream-client";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
@@ -875,20 +875,22 @@ export function useVoiceDictation(
     if (wasEnabled && !voiceInputEnabled) cancelRef.current();
   }, [voiceInputEnabled]);
 
-  // While dictation holds the microphone (the prompt and the recording), a
-  // live voice session pauses its capture, so dictated words never reach the
-  // say loop; it resumes when the capture ends or fails. Through the store,
-  // so it holds with no voice controller mounted. Who wins, the indicators
-  // and the shortcut are VT6's; this is the safety wiring alone.
+  // While this instance holds the microphone (the prompt and the recording),
+  // a live voice session pauses its capture, so dictated words never reach
+  // the say loop; the hold is this instance's own, released when its capture
+  // ends or fails, or it unmounts, and never another instance's (several
+  // composers mount this hook). Through the store, so it holds with no voice
+  // controller mounted. Who wins, the indicators and the shortcut are VT6's;
+  // this is the safety wiring alone.
+  const holdOwner = useId();
+  const capturing = state === "requesting" || state === "recording";
   useEffect(() => {
-    const capturing = state === "requesting" || state === "recording";
-    useVoiceSessionStore.getState().setPausedForDictation(capturing);
+    if (!capturing) return;
+    useVoiceSessionStore.getState().acquireDictationHold(holdOwner);
     return () => {
-      if (capturing) {
-        useVoiceSessionStore.getState().setPausedForDictation(false);
-      }
+      useVoiceSessionStore.getState().releaseDictationHold(holdOwner);
     };
-  }, [state]);
+  }, [capturing, holdOwner]);
 
   // Tear everything down on unmount. Mark closing first so a stream-close
   // callback that lands after teardown is treated as an expected close, not the

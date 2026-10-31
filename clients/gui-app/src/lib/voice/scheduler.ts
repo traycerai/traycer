@@ -596,13 +596,17 @@ function isDiscriminative(word: string): boolean {
 }
 
 /**
- * The words that prove an item was spoken: the bot's name and the thread's
- * title whole, and the item's own content words of four letters or more,
- * none of them filler or acknowledgement vocabulary. Numbers count: a
- * paraphrase keeps a version or a count. An answer whose content has no
- * such word (a short one: "42", "yes it is") is proven by its own short
- * words instead, a number by its spoken form too ("forty-two", "forty two"),
- * so a short answer is confirmed rather than repeated and given up on.
+ * What proves an item was spoken, each entry a phrase the output transcript
+ * must hold whole: the bot's name and the thread's title, and the item's own
+ * content words of four letters or more, none of them filler or
+ * acknowledgement vocabulary. Numbers count: a paraphrase keeps a version or
+ * a count. An answer whose content has no such word (a short one: "42",
+ * "-5", "3.5") is proven by its complete value instead: the numeral as
+ * written, sign and decimal kept, and its spoken forms ("forty-two" or
+ * "forty two", "minus five" or "negative five", "three point five"), never a
+ * part of it; 0 to 99 and their decimals are spoken, a larger value only by
+ * its digits (a "100" said as "one hundred" is not confirmed and is given up
+ * on).
  */
 export function confirmationWords(input: {
   readonly botTitle: string | null;
@@ -623,14 +627,40 @@ export function confirmationWords(input: {
     if (word.length >= 4 && isDiscriminative(word)) words.add(word);
   }
   if (words.size === before) {
-    for (const word of content) {
+    for (const phrase of shortAnswerPhrases(input.text, content)) {
       if (words.size >= MAX_CONFIRM_WORDS) break;
-      if (!isDiscriminative(word)) continue;
-      words.add(word);
-      for (const spoken of spokenNumberWords(word)) words.add(spoken);
+      words.add(phrase);
     }
   }
   return Array.from(words);
+}
+
+/**
+ * What proves a short answer: each number in it as a complete value, as
+ * written and as said, then its other short words that are not filler.
+ */
+function shortAnswerPhrases(
+  text: string,
+  content: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const phrases: string[] = [];
+  for (const numeral of numeralsOf(text)) {
+    phrases.push(numeral, ...spokenNumeral(numeral));
+  }
+  for (const word of content) {
+    if (!NUMERAL_RE.test(word) && isDiscriminative(word)) phrases.push(word);
+  }
+  return phrases;
+}
+
+/** A number as written: an optional sign, digits, an optional decimal part. */
+const NUMERAL_RE = /^-?\d+(?:\.\d+)?$/u;
+const NUMERALS_IN_TEXT_RE =
+  /(?<![\p{L}\p{N}.-])-?\d+(?:\.\d+)?(?![\p{L}\p{N}])(?!\.\d)/gu;
+
+/** The numbers written in `text`, sign and decimal kept, as they stand. */
+function numeralsOf(text: string): ReadonlyArray<string> {
+  return Array.from(text.matchAll(NUMERALS_IN_TEXT_RE), (match) => match[0]);
 }
 
 const ONES = [
@@ -668,19 +698,44 @@ const TENS = [
   "ninety",
 ];
 
-/**
- * How a small integer is said, as the words a transcript would hold: "42" is
- * "forty-two" when the transcriber hyphenates and "forty" "two" when it does
- * not, so all three are offered. Anything but 0 to 99 is left to its digits.
- */
-function spokenNumberWords(word: string): ReadonlyArray<string> {
-  if (!/^\d{1,2}$/.test(word)) return [];
-  const value = Number(word);
+/** The spellings of a whole number from 0 to 99: hyphenated and spaced. */
+function spokenInteger(value: number): ReadonlyArray<string> {
   if (value < 20) return [ONES[value]];
   const tens = TENS[Math.floor(value / 10)];
   const one = value % 10;
   if (one === 0) return [tens];
-  return [`${tens}-${ONES[one]}`, tens, ONES[one]];
+  return [`${tens}-${ONES[one]}`, `${tens} ${ONES[one]}`];
+}
+
+/**
+ * How a numeral is said, as complete phrases: the sign as "minus" or
+ * "negative", a decimal part digit by digit after "point". Empty for a whole
+ * part beyond 99, which has only its digits.
+ */
+function spokenNumeral(numeral: string): ReadonlyArray<string> {
+  if (!NUMERAL_RE.test(numeral)) return [];
+  const negative = numeral.startsWith("-");
+  const digits = negative ? numeral.slice(1) : numeral;
+  const dot = digits.indexOf(".");
+  const whole = dot === -1 ? digits : digits.slice(0, dot);
+  const fraction = dot === -1 ? "" : digits.slice(dot + 1);
+  if (whole.length > 2) return [];
+  const integers = spokenInteger(Number(whole));
+  const decimals =
+    fraction.length === 0
+      ? [""]
+      : [
+          ` point ${Array.from(fraction, (digit) => ONES[Number(digit)]).join(" ")}`,
+        ];
+  const signs = negative ? ["minus ", "negative "] : [""];
+  const phrases: string[] = [];
+  for (const prefix of signs) {
+    for (const integer of integers) {
+      for (const decimal of decimals)
+        phrases.push(`${prefix}${integer}${decimal}`);
+    }
+  }
+  return phrases;
 }
 
 /**
@@ -694,11 +749,70 @@ export function isBackchannelOnly(transcript: string): boolean {
   );
 }
 
+/**
+ * Whether the output so far proves the item: it says one of the item's
+ * phrases whole (a numeral as written, a multi-word spelling as adjacent
+ * words), and is more than acknowledgement. An output that is EXACTLY the
+ * expected answer confirms even where the same words alone would be
+ * acknowledgement ("One." for the answer 1); "one moment" is not the answer.
+ */
 function containsConfirmWord(transcript: string, item: SpeechItem): boolean {
   if (item.confirmWords.length === 0) return false;
+  const said = transcript.toLowerCase();
+  if (
+    item.confirmWords.some(
+      (phrase) => isNumberPhrase(phrase) && isExactly(said, phrase),
+    )
+  ) {
+    return true;
+  }
   if (isBackchannelOnly(transcript)) return false;
-  const spoken = new Set(wordsOf(transcript));
-  return item.confirmWords.some((word) => spoken.has(word.toLowerCase()));
+  return item.confirmWords.some((phrase) => holdsPhrase(said, phrase));
+}
+
+const NUMBER_WORDS: ReadonlySet<string> = new Set([
+  ...ONES,
+  ...TENS.filter((word) => word.length > 0),
+  "minus",
+  "negative",
+  "point",
+]);
+
+/** A complete number, as written or as said, and nothing else. */
+function isNumberPhrase(phrase: string): boolean {
+  const expected = phrase.toLowerCase();
+  if (NUMERAL_RE.test(expected)) return true;
+  const words = wordsOf(expected).flatMap((word) => word.split("-"));
+  return words.length > 0 && words.every((word) => NUMBER_WORDS.has(word));
+}
+
+/** The lowercased output is the phrase and nothing else, but for the punctuation around it. */
+function isExactly(said: string, phrase: string): boolean {
+  const trimmed = said.replace(/^[\s"'“‘]+|[\s.!?,;:"'”’]+$/gu, "");
+  const expected = phrase.toLowerCase();
+  if (NUMERAL_RE.test(expected)) return trimmed === expected;
+  return wordsOf(trimmed).join(" ") === wordsOf(expected).join(" ");
+}
+
+/** The lowercased output holds the phrase whole: a numeral as written, words adjacent. */
+function holdsPhrase(said: string, phrase: string): boolean {
+  const expected = phrase.toLowerCase();
+  if (NUMERAL_RE.test(expected)) {
+    for (const numeral of numeralsOf(said)) {
+      if (numeral === expected) return true;
+    }
+    return false;
+  }
+  const needle = wordsOf(expected);
+  if (needle.length === 0) return false;
+  const spoken = wordsOf(said);
+  outer: for (let start = 0; start + needle.length <= spoken.length; start++) {
+    for (let offset = 0; offset < needle.length; offset++) {
+      if (spoken[start + offset] !== needle[offset]) continue outer;
+    }
+    return true;
+  }
+  return false;
 }
 
 /**

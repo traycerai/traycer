@@ -413,9 +413,13 @@ export function VoiceSessionController(): ReactNode {
   useEffect(
     () =>
       useVoiceSessionStore.subscribe((state, previous) => {
-        if (state.pausedForDictation !== previous.pausedForDictation) {
-          applyCapture();
-        }
+        if (state.pausedForDictation === previous.pausedForDictation) return;
+        applyCapture();
+        // Words said before dictation took the microphone and not closed
+        // yet are let go: their boundary, if it comes, falls in the pause,
+        // and the next request must not inherit them. A request already
+        // sent finishes on its own. (VT6 decides what the voice says here.)
+        if (state.pausedForDictation) state.dropOpenSpan();
       }),
     [applyCapture],
   );

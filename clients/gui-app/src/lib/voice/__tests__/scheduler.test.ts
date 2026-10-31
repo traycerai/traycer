@@ -143,30 +143,72 @@ describe("when an item is appended", () => {
 });
 
 describe("delivery confirmation", () => {
-  it("confirms a short numeric answer by its spoken form, once, instead of repeating it", () => {
+  function numericAnswer(text: string): { delivered: () => number } {
     let delivered = 0;
     const words = confirmationWords({
       botTitle: null,
       threadTitle: null,
-      text: "42",
+      text,
     });
-    expect(words).toEqual(
-      expect.arrayContaining(["42", "forty-two", "forty", "two"]),
-    );
     scheduler.enqueue(
-      item("a", {
-        text: "42",
-        confirmWords: words,
-        onDelivered: () => delivered++,
-      }),
+      item("a", { text, confirmWords: words, onDelivered: () => delivered++ }),
     );
     expect(appended).toHaveLength(1);
+    return { delivered: () => delivered };
+  }
 
-    scheduler.noteOutputTranscript("Forty-two.");
+  it("confirms a short numeric answer by its complete value, spelled or written, once", () => {
+    const answer = numericAnswer("42");
+    expect(
+      confirmationWords({ botTitle: null, threadTitle: null, text: "42" }),
+    ).toEqual(["42", "forty-two", "forty two"]);
+
+    scheduler.noteOutputTranscript("The answer is forty two.");
     clock.advance(CONFIRM_WINDOW_MS * MAX_DELIVERY_ATTEMPTS);
 
-    expect(delivered).toBe(1);
+    expect(answer.delivered()).toBe(1);
     expect(appended).toHaveLength(1);
+    expect(scheduler.pendingCount()).toBe(0);
+  });
+
+  it("takes no part of the number, nor filler that happens to hold one, as proof", () => {
+    const answer = numericAnswer("42");
+
+    scheduler.noteOutputTranscript("Give me two seconds.");
+    scheduler.noteOutputTranscript(" Forty, roughly.");
+    expect(answer.delivered()).toBe(0);
+    clock.advance(CONFIRM_WINDOW_MS);
+    expect(appended).toHaveLength(2);
+
+    scheduler.noteOutputTranscript("It is 42.");
+    expect(answer.delivered()).toBe(1);
+  });
+
+  it("keeps the sign: minus five confirms -5, five alone does not", () => {
+    const negative = numericAnswer("-5");
+    scheduler.noteOutputTranscript("Five.");
+    expect(negative.delivered()).toBe(0);
+    scheduler.noteOutputTranscript(" Minus five.");
+    expect(negative.delivered()).toBe(1);
+  });
+
+  it("keeps the decimal: three point five confirms 3.5, three alone does not", () => {
+    const decimal = numericAnswer("3.5");
+    scheduler.noteOutputTranscript("Three.");
+    expect(decimal.delivered()).toBe(0);
+    scheduler.noteOutputTranscript(" Three point five.");
+    expect(decimal.delivered()).toBe(1);
+  });
+
+  it("confirms the answer 1 by an output that is exactly it, and not by the acknowledgement one moment", () => {
+    const first = numericAnswer("1");
+    scheduler.noteOutputTranscript("One moment");
+    expect(first.delivered()).toBe(0);
+    clock.advance(CONFIRM_WINDOW_MS);
+    expect(appended).toHaveLength(2);
+
+    scheduler.noteOutputTranscript("One.");
+    expect(first.delivered()).toBe(1);
     expect(scheduler.pendingCount()).toBe(0);
   });
 

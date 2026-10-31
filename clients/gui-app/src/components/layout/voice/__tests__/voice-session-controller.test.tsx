@@ -1093,14 +1093,14 @@ describe("dictation while a session is live", () => {
     focusOn(CHANNEL_FOCUS);
     expect(fake.track.enabled).toBe(true);
 
-    act(() => useVoiceSessionStore.getState().setPausedForDictation(true));
+    act(() => useVoiceSessionStore.getState().acquireDictationHold("composer"));
     expect(fake.track.enabled).toBe(false);
     await say("Dear team, the invoice", "d1");
     expect(fake.sendMock).not.toHaveBeenCalled();
     expect(useVoiceSessionStore.getState().openSpan()).toBe("");
     expect(useVoiceSessionStore.getState().pendingDelegationId).toBeNull();
 
-    act(() => useVoiceSessionStore.getState().setPausedForDictation(false));
+    act(() => useVoiceSessionStore.getState().releaseDictationHold("composer"));
     expect(fake.track.enabled).toBe(true);
     await say("Merge it.", "d2");
     expect(fake.sendMock).toHaveBeenCalledTimes(1);
@@ -1111,8 +1111,8 @@ describe("dictation while a session is live", () => {
     // Muted by the person: the pause and its end leave the mute in place.
     act(() => useVoiceSessionStore.getState().driver?.setMuted(true));
     expect(fake.track.enabled).toBe(false);
-    act(() => useVoiceSessionStore.getState().setPausedForDictation(true));
-    act(() => useVoiceSessionStore.getState().setPausedForDictation(false));
+    act(() => useVoiceSessionStore.getState().acquireDictationHold("composer"));
+    act(() => useVoiceSessionStore.getState().releaseDictationHold("composer"));
     expect(fake.track.enabled).toBe(false);
     expect(useVoiceSessionStore.getState().muted).toBe(true);
     act(() => useVoiceSessionStore.getState().driver?.setMuted(false));
@@ -1120,11 +1120,36 @@ describe("dictation while a session is live", () => {
   });
 });
 
+describe("words open when dictation starts", () => {
+  it("are let go: their boundary in the pause posts nothing, and the next request after it posts only its own words", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    act(() => eventsOf(0).onInputTranscriptDelta("Delete branch A. "));
+    expect(useVoiceSessionStore.getState().openSpan()).toBe("Delete branch A.");
+
+    act(() => useVoiceSessionStore.getState().acquireDictationHold("composer"));
+    expect(useVoiceSessionStore.getState().openSpan()).toBe("");
+    await act(async () => {
+      eventsOf(0).onDelegationCreated("d1");
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(fake.sendMock).not.toHaveBeenCalled();
+
+    act(() => useVoiceSessionStore.getState().releaseDictationHold("composer"));
+    await say("Check branch B.", "d2");
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    expect(fake.sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Check branch B." }),
+    );
+  });
+});
+
 describe("a Talk ended and started again while dictation records", () => {
   it("starts with capture paused and drops its words until dictation ends", async () => {
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
     await bringLive();
-    act(() => useVoiceSessionStore.getState().setPausedForDictation(true));
+    act(() => useVoiceSessionStore.getState().acquireDictationHold("composer"));
     expect(fake.track.enabled).toBe(false);
 
     act(() => useVoiceSessionStore.getState().driver?.end());
@@ -1147,7 +1172,7 @@ describe("a Talk ended and started again while dictation records", () => {
     expect(fake.sendMock).not.toHaveBeenCalled();
     expect(useVoiceSessionStore.getState().openSpan()).toBe("");
 
-    act(() => useVoiceSessionStore.getState().setPausedForDictation(false));
+    act(() => useVoiceSessionStore.getState().releaseDictationHold("composer"));
     expect(fake.track.enabled).toBe(true);
     await act(async () => {
       eventsOf(1).onInputTranscriptDelta("Merge it.");

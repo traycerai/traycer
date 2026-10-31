@@ -180,12 +180,18 @@ export interface VoiceSessionState {
   readonly captions: boolean;
   readonly captionLines: ReadonlyArray<CaptionLine>;
   /**
-   * Dictation holds the microphone (set by the dictation hook while it does):
-   * a live session's capture pauses. Dictation's state, not the session's:
-   * no session transition writes it, so a Talk ended and started again while
-   * dictation records starts paused.
+   * Dictation holds the microphone: a live session's capture pauses. True
+   * while `dictationHolds` has an owner. Dictation's state, not the
+   * session's: no session transition writes it, so a Talk ended and started
+   * again while dictation records starts paused.
    */
   readonly pausedForDictation: boolean;
+  /**
+   * Who holds the microphone for dictation, by owner token: one per
+   * dictation hook instance while it takes or records. An owner releases
+   * only its own hold, so an idle instance never frees another's.
+   */
+  readonly dictationHolds: ReadonlySet<string>;
   readonly muted: boolean;
   readonly driver: VoiceSessionDriver | null;
 
@@ -230,7 +236,8 @@ export interface VoiceSessionState {
   readonly setPendingAction: (action: PendingAction | null) => void;
   readonly setCaptions: (on: boolean) => void;
   readonly pushCaptionLine: (line: CaptionDelta) => void;
-  readonly setPausedForDictation: (paused: boolean) => void;
+  readonly acquireDictationHold: (owner: string) => void;
+  readonly releaseDictationHold: (owner: string) => void;
   readonly setMuted: (muted: boolean) => void;
   readonly setDriver: (driver: VoiceSessionDriver | null) => void;
 }
@@ -244,6 +251,7 @@ const CLEAR_ACTIVITY: SpeechActivity = {
 const NO_SEGMENTS: ReadonlyArray<TranscriptSegment> = [];
 const NO_QUEUE: ReadonlyArray<QueueItem> = [];
 const NO_CAPTIONS: ReadonlyArray<CaptionLine> = [];
+const NO_HOLDS: ReadonlySet<string> = new Set();
 
 /** One per window; a segment's `seq` never repeats within it. */
 let nextSegmentSeq = 1;
@@ -266,6 +274,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   captions: false,
   captionLines: NO_CAPTIONS,
   pausedForDictation: false,
+  dictationHolds: NO_HOLDS,
   muted: false,
   driver: null,
 
@@ -393,7 +402,18 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
         : [...lines, { ...line, id: (last?.id ?? 0) + 1 }];
     set({ captionLines: next.slice(-CAPTION_LINES_KEPT) });
   },
-  setPausedForDictation: (pausedForDictation) => set({ pausedForDictation }),
+  acquireDictationHold: (owner) => {
+    if (get().dictationHolds.has(owner)) return;
+    const dictationHolds = new Set(get().dictationHolds);
+    dictationHolds.add(owner);
+    set({ dictationHolds, pausedForDictation: true });
+  },
+  releaseDictationHold: (owner) => {
+    if (!get().dictationHolds.has(owner)) return;
+    const dictationHolds = new Set(get().dictationHolds);
+    dictationHolds.delete(owner);
+    set({ dictationHolds, pausedForDictation: dictationHolds.size > 0 });
+  },
   setMuted: (muted) => set({ muted }),
   setDriver: (driver) => set({ driver }),
 }));

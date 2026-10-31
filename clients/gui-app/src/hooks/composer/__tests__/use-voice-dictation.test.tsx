@@ -312,6 +312,34 @@ describe("useVoiceDictation lifecycle", () => {
     expect(paused()).toBe(false);
   });
 
+  it("keeps another instance's pause: an idle hook mounting, or unmounting, releases no hold but its own", async () => {
+    const paused = (): boolean =>
+      useVoiceSessionStore.getState().pausedForDictation;
+    const recording = renderDictation();
+    act(() => {
+      recording.result.current.start();
+    });
+    await flushAsync();
+    act(() => {
+      lastSpeechClient().callbacks.onReady();
+    });
+    expect(recording.result.current.state).toBe("recording");
+    expect(paused()).toBe(true);
+
+    // Another composer mounts its own dictation, idle.
+    const idle = renderDictation();
+    expect(idle.result.current.state).toBe("idle");
+    expect(paused()).toBe(true);
+    idle.unmount();
+    expect(paused()).toBe(true);
+    expect(recording.result.current.state).toBe("recording");
+
+    act(() => {
+      recording.result.current.stop();
+    });
+    expect(paused()).toBe(false);
+  });
+
   it("does not open the microphone just because the hook is mounted", () => {
     renderDictation();
     expect(getUserMediaCalls).toBe(0);
