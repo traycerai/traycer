@@ -106,6 +106,21 @@ export type VoiceSessionEndFetchResult =
   | { readonly kind: "unauthorized" }
   | { readonly kind: "network-error"; readonly detail: string };
 
+/**
+ * What a live session's shell item shows (the desktop's menu-bar and
+ * notification-area item): whether the person muted the session, and
+ * whether it is paused for dictation.
+ */
+export interface VoiceSessionIndicator {
+  readonly muted: boolean;
+  readonly pausedForDictation: boolean;
+}
+
+/** What the shell item asks of the window whose session it shows. */
+export type VoiceTrayAction =
+  | { readonly kind: "setMuted"; readonly muted: boolean }
+  | { readonly kind: "end" };
+
 interface RawResponse {
   readonly status: number;
   readonly body: unknown;

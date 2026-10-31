@@ -169,6 +169,17 @@ const fake = vi.hoisted(() => {
     sendMock: vi.fn(),
     markRead: vi.fn(),
     setVoiceSessionLive: vi.fn(),
+    setVoiceSessionIndicator: vi.fn(),
+    // The shell item's action handler the controller subscribed, if any.
+    trayAction: {
+      handler: null as
+        | ((
+            action:
+              | { readonly kind: "setMuted"; readonly muted: boolean }
+              | { readonly kind: "end" },
+          ) => void)
+        | null,
+    },
     endVoiceSession: vi.fn(),
     engines: [] as FakeEngine[],
     handles: new Map<string, { store: StoreApi<ChatState> }>(),
@@ -180,6 +191,19 @@ vi.mock("@/providers/use-runner-host", () => ({
     requestMicrophoneAccess: () => fake.micAccess.promise,
     onSystemSuspended: () => ({ dispose: () => undefined }),
     setVoiceSessionLive: fake.setVoiceSessionLive,
+    setVoiceSessionIndicator: fake.setVoiceSessionIndicator,
+    onVoiceTrayAction: (
+      handler: NonNullable<typeof fake.trayAction.handler>,
+    ) => {
+      fake.trayAction.handler = handler;
+      return {
+        dispose: () => {
+          if (fake.trayAction.handler === handler) {
+            fake.trayAction.handler = null;
+          }
+        },
+      };
+    },
   }),
 }));
 
@@ -505,6 +529,8 @@ beforeEach(() => {
   fake.remoteTrack.enabled = true;
   fake.setVoiceSessionLive.mockReset();
   fake.setVoiceSessionLive.mockImplementation(() => Promise.resolve());
+  fake.setVoiceSessionIndicator.mockReset();
+  fake.setVoiceSessionIndicator.mockImplementation(() => Promise.resolve());
   fake.endVoiceSession.mockReset();
   fake.endVoiceSession.mockImplementation(() =>
     Promise.resolve({ kind: "ok", closedAt: 1 }),
@@ -1278,6 +1304,50 @@ describe("dictation while a session is live", () => {
       expect.stringContaining("Merged."),
       "d1",
     );
+  });
+});
+
+describe("the shell's voice item", () => {
+  it("hears what the live session is doing, and its Mute and End act on the session", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    await bringLive();
+    await settle();
+    expect(fake.setVoiceSessionIndicator.mock.lastCall).toEqual([
+      { muted: false, pausedForDictation: false },
+    ]);
+
+    act(() => useVoiceSessionStore.getState().driver?.setMuted(true));
+    await settle();
+    expect(fake.setVoiceSessionIndicator.mock.lastCall).toEqual([
+      { muted: true, pausedForDictation: false },
+    ]);
+    act(() => useVoiceSessionStore.getState().acquireDictationHold("composer"));
+    await settle();
+    expect(fake.setVoiceSessionIndicator.mock.lastCall).toEqual([
+      { muted: true, pausedForDictation: true },
+    ]);
+    act(() => useVoiceSessionStore.getState().releaseDictationHold("composer"));
+    act(() => useVoiceSessionStore.getState().resumeFromDictation());
+
+    act(() => fake.trayAction.handler?.({ kind: "setMuted", muted: false }));
+    expect(useVoiceSessionStore.getState().muted).toBe(false);
+    expect(fake.track.enabled).toBe(true);
+
+    act(() => fake.trayAction.handler?.({ kind: "end" }));
+    await settle();
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+    expect(fake.track.stop).toHaveBeenCalled();
+    expect(fake.endVoiceSession).toHaveBeenCalledWith("vs1");
+    expect(fake.setVoiceSessionLive.mock.lastCall).toEqual([false]);
+  });
+
+  it("reports a session that goes live under dictation as paused", async () => {
+    act(() => useVoiceSessionStore.getState().acquireDictationHold("composer"));
+    await bringLive();
+    await settle();
+    expect(fake.setVoiceSessionIndicator.mock.lastCall).toEqual([
+      { muted: false, pausedForDictation: true },
+    ]);
   });
 });
 

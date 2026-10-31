@@ -32,6 +32,7 @@ import {
   useVoiceMicrophoneAccessMutation,
   useVoiceSessionEndMutation,
   useVoiceSessionMintMutation,
+  useVoiceShellIndicatorMutation,
   useVoiceShellLiveMutation,
 } from "@/hooks/voice/use-voice-session-mutations";
 import { voiceQueryKeys } from "@/lib/query-keys";
@@ -139,6 +140,8 @@ export function VoiceSessionController(): ReactNode {
   const { mutateAsync: mintAsync } = useVoiceSessionMintMutation();
   const { mutateAsync: endAsync } = useVoiceSessionEndMutation();
   const { mutateAsync: shellLiveAsync } = useVoiceShellLiveMutation();
+  const { mutateAsync: shellIndicatorAsync } =
+    useVoiceShellIndicatorMutation();
   const { mutateAsync: microphoneAccessAsync } =
     useVoiceMicrophoneAccessMutation();
   const queryClient = useQueryClient();
@@ -399,15 +402,47 @@ export function VoiceSessionController(): ReactNode {
   const requestRemintWhenClearRef = useRef<() => void>(() => undefined);
   const endRef = useRef<(reason: VoiceEndReason) => void>(() => undefined);
 
-  const setShellVoiceLive = useCallback(
-    (live: boolean) => {
-      void shellLiveAsync(live).catch((error: unknown) => {
-        appLogger.warn("[voice] shell live flag failed", {
+  /** What the shell's voice item shows for this window's live session. */
+  const reportShellIndicator = useCallback(() => {
+    const { muted, pausedForDictation } = useVoiceSessionStore.getState();
+    void shellIndicatorAsync({ muted, pausedForDictation }).catch(
+      (error: unknown) => {
+        appLogger.warn("[voice] shell indicator failed", {
           error: describeLogError(error),
         });
-      });
+      },
+    );
+  }, [shellIndicatorAsync]);
+
+  const setShellVoiceLive = useCallback(
+    (live: boolean) => {
+      // The shell keeps an indicator only for a live window, so a session
+      // going live reports it once the flag has landed.
+      void shellLiveAsync(live)
+        .then(() => {
+          if (live) reportShellIndicator();
+        })
+        .catch((error: unknown) => {
+          appLogger.warn("[voice] shell live flag failed", {
+            error: describeLogError(error),
+          });
+        });
     },
-    [shellLiveAsync],
+    [reportShellIndicator, shellLiveAsync],
+  );
+  useEffect(
+    () =>
+      useVoiceSessionStore.subscribe((state, previous) => {
+        if (state.phase !== "live") return;
+        if (
+          state.muted === previous.muted &&
+          state.pausedForDictation === previous.pausedForDictation
+        ) {
+          return;
+        }
+        reportShellIndicator();
+      }),
+    [reportShellIndicator],
   );
 
   /** Stops local capture and playback at once; nothing async. */
@@ -949,6 +984,21 @@ export function VoiceSessionController(): ReactNode {
   // that may not outlive it. The shell's own close keeps a voice window
   // alive, so this is the lock, the quit and a reload, not an ordinary
   // close; the server finalizes the rest from its sideband.
+  // The shell's voice item, shown while this window is away: its Mute or
+  // Unmute and its End act on this window's session as the strip's do.
+  useEffect(() => {
+    const subscription = runnerHost.onVoiceTrayAction((action) => {
+      if (action.kind === "end") {
+        end("ended");
+        return;
+      }
+      if (useVoiceSessionStore.getState().phase === "live") {
+        setMuted(action.muted);
+      }
+    });
+    return () => subscription.dispose();
+  }, [end, runnerHost, setMuted]);
+
   useEffect(() => {
     const subscription = runnerHost.onSystemSuspended(() => end("locked"));
     const onPageHide = (): void => end("ended");

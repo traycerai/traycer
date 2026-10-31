@@ -32,6 +32,7 @@ import {
   voiceSessionsAvailabilityViaHttp,
   voiceSessionsEndViaHttp,
   voiceSessionsMintViaHttp,
+  type VoiceSessionIndicator,
   type VoiceSessionMintRequest,
 } from "@traycer-clients/shared/host-client/voice-sessions";
 import { voiceLiveWindows } from "../windows/voice-live-windows";
@@ -113,6 +114,18 @@ function voiceSessionMintRequestOf(value: unknown): VoiceSessionMintRequest {
   assertString(offerSdp, "mintVoiceSession.request.offerSdp");
   assertString(input, "mintVoiceSession.request.input");
   return { offerSdp, input };
+}
+
+/** The renderer's voice indicator, checked field by field. */
+function voiceSessionIndicatorOf(value: unknown): VoiceSessionIndicator {
+  if (typeof value !== "object" || value === null) {
+    throw new Error("setVoiceSessionIndicator requires an object argument");
+  }
+  const muted: unknown = Reflect.get(value, "muted");
+  const pausedForDictation: unknown = Reflect.get(value, "pausedForDictation");
+  assertBoolean(muted, "setVoiceSessionIndicator.muted");
+  assertBoolean(pausedForDictation, "setVoiceSessionIndicator.pausedForDictation");
+  return { muted, pausedForDictation };
 }
 
 /**
@@ -211,6 +224,17 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
       const windowId = bridge.resolveSenderWindowId(event);
       if (windowId === null) return Promise.resolve();
       voiceLiveWindows.set(windowId, live);
+      return Promise.resolve();
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.setVoiceSessionIndicator,
+    (event, indicator: unknown) => {
+      const checked = voiceSessionIndicatorOf(indicator);
+      const windowId = bridge.resolveSenderWindowId(event);
+      if (windowId === null) return Promise.resolve();
+      voiceLiveWindows.setIndicator(windowId, checked);
       return Promise.resolve();
     },
   );
