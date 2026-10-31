@@ -991,9 +991,8 @@ export function repeatedWords(
     .filter((phrase) => isContentWord(phrase))
     .map((word) => ({
       word,
-      beyond: earlier.filter(
-        (candidate) => candidate === canonicalWord(word),
-      ).length,
+      beyond: earlier.filter((candidate) => candidate === canonicalWord(word))
+        .length,
     }));
 }
 
