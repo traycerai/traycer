@@ -10,12 +10,14 @@ import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPlatformMock } from "@/__tests__/create-platform-mock";
 import { useDictationHotkey } from "@/hooks/composer/use-dictation-hotkey";
+import { reservedBrowserChordsFor } from "@/lib/browser-view/reserved-chords-registration";
 import { actionsSource } from "@/lib/commands/sources/actions.source";
 import type { CommandContext } from "@/lib/commands/types";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { routeTree } from "@/routeTree.gen";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import { useScreencastArmedStore } from "@/stores/screencast-armed-store";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import {
   useVoiceSessionStore,
@@ -156,6 +158,45 @@ describe("the Talk shortcut", () => {
     expect(dictation.start).toHaveBeenCalledTimes(1);
     expect(driver.start).not.toHaveBeenCalled();
     expect(driver.end).not.toHaveBeenCalled();
+  });
+});
+
+describe("the Talk shortcut while a browser tile has the keyboard", () => {
+  it("starts and ends the session from a streamed tile, default chord and a rebind alike", () => {
+    useScreencastArmedStore.getState().claim("streamed-tile", vi.fn());
+    try {
+      const first = pressTalk(false);
+      expect(first.defaultPrevented).toBe(true);
+      expect(driver.start).toHaveBeenCalledTimes(1);
+      setPhase("live");
+      pressTalk(false);
+      expect(driver.end).toHaveBeenCalledTimes(1);
+
+      setPhase("idle");
+      useKeybindingStore
+        .getState()
+        .setBinding("voice.talk.toggle", "mod+shift+y");
+      press({ code: "KeyY", key: "Y", ctrlKey: true, shiftKey: true });
+      expect(driver.start).toHaveBeenCalledTimes(2);
+      expect(dictation.start).not.toHaveBeenCalled();
+    } finally {
+      useScreencastArmedStore.getState().release("streamed-tile");
+    }
+  });
+
+  it("is forwarded from a focused native tile by its live binding, and its old chord goes back to the page", () => {
+    const talkTokens = (): ReadonlyArray<string> =>
+      reservedBrowserChordsFor(useKeybindingStore.getState().bindings, {
+        landingSurfaceActive: false,
+      })
+        .filter((row) => row.command === null)
+        .map((row) => row.token);
+    expect(talkTokens()).toContain("shift+alt+t");
+    useKeybindingStore
+      .getState()
+      .setBinding("voice.talk.toggle", "mod+shift+y");
+    expect(talkTokens()).toContain("mod+shift+y");
+    expect(talkTokens()).not.toContain("shift+alt+t");
   });
 });
 

@@ -109,6 +109,9 @@ const APP_FORWARDED_ACTIONS: readonly ActionId[] = [
   "tab.prev",
   "epic.next",
   "epic.prev",
+  // Talk starts and ends a voice session from wherever the person is,
+  // browsing included. Forwarded only in a build that has it.
+  "voice.talk.toggle",
 ];
 
 const NATIVE_ONLY_FORWARDED_ACTIONS: readonly ActionId[] = [
