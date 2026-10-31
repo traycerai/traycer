@@ -650,7 +650,7 @@ describe("host method poll policy table", () => {
     );
   });
 
-  // P7. Before this lane an `error` cell fell straight to `providers.steady`,
+  // Before this lane an `error` cell fell straight to `providers.steady`,
   // so a wifi blip the host recovered from in a minute left "Setup failed" on
   // screen for up to fifteen - and post-cutover that is a user who cannot run
   // the turn that would have refreshed the list.

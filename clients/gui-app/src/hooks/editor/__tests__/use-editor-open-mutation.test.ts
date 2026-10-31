@@ -12,12 +12,12 @@ vi.mock("sonner", () => ({
 const fakeClient = { __isFakeClient: true };
 vi.mock("@/lib/host", () => ({
   useHostClient: () => fakeClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => fakeClient,
 }));
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => fakeClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => fakeClient,
 }));
 

@@ -262,7 +262,7 @@ describe("F11: manualRungAnchorId over a turn that splits", () => {
     expect(assistantRows[0].manualRungAnchorId).toBe("err-terminal-u");
   });
 
-  // F11: every case above also carries a terminal `err-terminal*`
+  // Every case above also carries a terminal `err-terminal*`
   // block, so `lastWithFailure` always wins and the QUEUE_PAUSED_AFTER_ERROR_CODE
   // skip in `manualRungAnchorSegmentId` could be deleted without turning any
   // of them red. This case removes the terminal failure entirely, so

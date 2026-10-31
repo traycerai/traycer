@@ -1639,7 +1639,7 @@ function FallbackSaveStatus(props: {
   // the failure also claims `activeField`, so its own notice landed in a group
   // whose status line was already spoken for, and an early return took the
   // notice AND the only "Check saved settings" off the page while its ticket stayed
-  // open. That is the R9 defect from the other side - an affordance dropped
+  // open. That is the defect from the other side - an affordance dropped
   // because a rendered claim was keyed on something other than the fact it
   // describes - and it predates the preservation on the `refused-kept` arm,
   // which never wrote `localError` and so could always be masked by one.

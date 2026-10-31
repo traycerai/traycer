@@ -1,5 +1,5 @@
 /**
- * The account menu's Host section (F5): `UserMenuHostSection` inside
+ * The account menu's Host section: `UserMenuHostSection` inside
  * `<UserMenu />`. `useHostOptions` and `useMakeActiveHost` are mocked
  * module-level, as every host-picker suite does (see
  * `host-scope-fixture.ts`), so this suite is about the SECTION's own
@@ -219,7 +219,7 @@ function mountMenu(host: MockRunnerHost, children: ReactNode): void {
 /**
  * Overrides `scrollWidth`/`clientWidth` for whichever element's ENTIRE text
  * content equals `hostName` - the name span `HostOptionRow` attaches its
- * `nameRef` to, and nothing else in the row (G4).
+ * `nameRef` to, and nothing else in the row.
  */
 function stubHostNameOverflow(
   hostName: string,

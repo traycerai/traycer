@@ -1036,7 +1036,7 @@ describe("updateCommGraphTileView", () => {
   });
 
   it("stores a write that changes only officeCameraView", () => {
-    // R2: this comparison used to cover six fields, dropping a write that
+    // This comparison used to cover six fields, dropping a write that
     // changed only the seventh - a whole-view write differing solely in the
     // camera's framing record would compare equal and vanish.
     const state = stateWith();

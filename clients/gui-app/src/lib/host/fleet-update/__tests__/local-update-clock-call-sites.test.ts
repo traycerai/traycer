@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
  *
  * The wire leg reads the status query's own `dataUpdatedAt`; the record leg
  * reads a renderer tick. Feeding the tick to both demotes a live attempt and
- * drops the page-wide lifecycle gate once per slow round trip (F3); feeding
+ * drops the page-wide lifecycle gate once per slow round trip; feeding
  * `dataUpdatedAt` to both freezes a liveness proof that nothing ever ages out.
  * Both are well-typed calls that `projectLocalUpdate` will faithfully honour,
  * so no pin on the PROJECTOR can see either one — the mistake is made at the

@@ -65,7 +65,7 @@ import "@/index.css";
 import "@/components/layout-editor/layout-editor.css";
 
 /**
- * THE PARITY REGRESSION (P2, L-11, L-53, L-85), in real Chrome with the real
+ * THE PARITY REGRESSION (L-11, L-53, L-85), in real Chrome with the real
  * stylesheet.
  *
  * What a unit test cannot decide is whether a picture of a region LOOKS like
@@ -79,7 +79,7 @@ import "@/components/layout-editor/layout-editor.css";
  *    where it does not. A region this fixture cannot mount live is named in
  *    {@link NO_LIVE_LEAF} with the reason, and the driver PRINTS those rather
  *    than counting them as covered - a coverage claim nobody can rely on is
- *    worse than an honest gap (G3-02). The two picture entry points are one
+ *    worse than an honest gap. The two picture entry points are one
  *    function since L-77, so comparing them with each other proved nothing.
  * 2. **The live surfaces.** Three of them, and each is a mount the app itself
  *    makes. The sample workspace's rail is a real surface built from the app's
@@ -328,7 +328,7 @@ function LiveDockChips(): ReactNode {
 /**
  * The clip fade, on the one picture that can outgrow the inspector (LV2-14).
  *
- * The Usage limits picture draws EVERY shown windowed provider since R3-03:
+ * The Usage limits picture draws EVERY shown windowed provider:
  * six segments, calm ones a bare bar and the running-low specimen expanded in
  * place, which together do not fit the 292px a docked stage gives them. With
  * every specimen calm they would fit exactly, so the case depends on the one

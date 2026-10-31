@@ -14,8 +14,8 @@
  *
  * Nothing is mocked on the destination side: the handoff's last step is a
  * synchronous `installLandingDraft`, so the REAL landing draft store is both
- * the observation surface and the durability proof. That is the whole point of
- * R5F1 - a document that merely "looks right" to a mock can still be one the
+ * the observation surface and the durability proof: a document that merely
+ * "looks right" to a mock can still be one the
  * real destination refuses, and here there is no gap between the two.
  */
 import {

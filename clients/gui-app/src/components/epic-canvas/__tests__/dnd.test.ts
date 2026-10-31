@@ -871,7 +871,7 @@ describe("getEpicCanvasDropPreview", () => {
     });
   });
 
-  // R5R-08: an unmeasured rail slot commits nothing rather than defaulting to
+  // An unmeasured rail slot commits nothing rather than defaulting to
   // "before" - the caller could not read where the pointer actually was.
   it("returns no preview for a left panel rail item with no measured rect", () => {
     expect(

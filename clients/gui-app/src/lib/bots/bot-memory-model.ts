@@ -8,7 +8,7 @@ import type {
 const SHARED_TAG = "all";
 
 /**
- * The bot's memory as its pane lists it (Tracy Bots T87): its own entries,
+ * The bot's memory as its pane lists it: its own entries,
  * then the shared ones, each newest-confirmed first, and only the entries
  * whose text holds `query` (any case). An entry is shared or its own, never
  * both (decision 148): one that also carries the bot's tag beside the shared

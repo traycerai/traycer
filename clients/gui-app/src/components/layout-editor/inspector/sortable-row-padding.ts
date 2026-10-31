@@ -12,7 +12,7 @@ export interface SortableRowPadding {
  * puts beside the list.
  *
  * The page reads at the Settings form's scale and the dock at the instrument
- * panel's (P-4), so the answer depends on the host and, on the page, on the
+ * panel's, so the answer depends on the host and, on the page, on the
  * density the modal and the routed pane pick between. A divider is a hairline
  * rather than a member, so its row is about half a member's height (LV2-12).
  *

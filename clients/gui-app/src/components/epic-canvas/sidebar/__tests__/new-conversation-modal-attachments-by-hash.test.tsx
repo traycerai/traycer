@@ -1058,7 +1058,7 @@ function stageWorktreeIntent(): void {
     });
 }
 
-// Item 40 (G40): `deferWorktreeProvisioning` shares its negotiated minor
+// `deferWorktreeProvisioning` shares its negotiated minor
 // (`@1.2`) with the by-hash gate, and the modal's own hold/seed bookkeeping -
 // this suite already carries every OTHER fact the predicate needs
 // (`hasInitialMessage`, a non-folderless workspace via `stageWorktreeIntent`

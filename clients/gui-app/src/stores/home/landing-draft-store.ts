@@ -103,7 +103,7 @@ export interface LandingDraftTab {
   readonly content: JsonContent;
   /** Cursor position (from/to), mirroring the in-epic composer draft. */
   readonly selection: DraftSelection | null;
-  /** Bumped on every content/selection edit; drives LRU eviction (T5). */
+  /** Bumped on every content/selection edit; drives LRU eviction. */
   readonly lastTouchedAt: number;
   readonly settings: ChatRunSettings | null;
   readonly composerMode: ComposerMode;
@@ -246,8 +246,8 @@ interface LandingDraftStoreState {
    */
   closeDraft: (id: string) => void;
   /**
-   * Explicit destroy — local row plus host delete when adopted. T11
-   * surfaces this; submit/replace-with-epic also uses it. Close does not.
+   * Explicit destroy — local row plus host delete when adopted.
+   * Submit/replace-with-epic also uses it. Close does not.
    */
   deleteDraft: (id: string) => void;
   /**
@@ -259,7 +259,7 @@ interface LandingDraftStoreState {
   applyHostDelete: (id: string) => void;
   /**
    * Restore a retained draft to the tab strip (`closed: false`) and make
-   * it active. T11's "open" action. No-op if id is not in the store.
+   * it active. The "open" action. No-op if id is not in the store.
    */
   openDraft: (id: string) => void;
   /**

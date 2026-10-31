@@ -23,7 +23,7 @@
  *
  * H2 - `isoBlockOverhang` walked every floor, amenity and room on EVERY
  * overview frame, before the scene's floor cache was consulted, which
- * reintroduced the full-population work T5's painter index removed. The scene
+ * reintroduced the full-population work the painter index removed. The scene
  * memoises the painter's declared overhang per plan now, and the case below
  * pins the repeat walks at none. The memo and its invalidation are unchanged
  * by the shape - the scalar it caches is simply zero on these two views now -
@@ -128,7 +128,7 @@ interface OverviewMiss {
  * Nine points per region - both near corners, both edge midpoints and the
  * centre, along each of its own two edges - checked against a real per-rect
  * `scene.frame(0, …)` query rather than the whole-map floor it is compared to.
- * The T5 probe (`t5-overview-handoff.test.ts`) uses the same nine
+ * The probe (`t5-overview-handoff.test.ts`) uses the same nine
  * fractions; they walk the region's edges rather than a bounding box because
  * an isometric region is a parallelogram and the corners of ITS box are ground
  * it does not paint (see `overview-shapes.ts`).

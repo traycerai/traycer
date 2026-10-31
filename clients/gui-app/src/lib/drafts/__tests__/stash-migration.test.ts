@@ -243,7 +243,7 @@ describe("local stash migration", () => {
     expect(byTime[0]?.lastTouchedAt).toBeGreaterThan(
       byTime[1]?.lastTouchedAt ?? 0,
     );
-    // The active draft is the user's, never the migration's (C4).
+    // The active draft is the user's, never the migration's.
     expect(useLandingDraftStore.getState().activeDraftId).toBe("live-draft");
     // Bytes moved into this window's landing partition under the same
     // content hash, so the rewritten nodes resolve.

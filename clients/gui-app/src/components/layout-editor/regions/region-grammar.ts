@@ -25,7 +25,7 @@ import type {
  * the fixed grammar order and one renderer draws them, which is what keeps the
  * docked inspector and the full-width `Settings > Layout` host the same form
  * (L-03). Every row is generic over the region id, so a row naming a key the
- * region does not have is a compile error rather than a runtime test (C-20).
+ * region does not have is a compile error rather than a runtime test.
  *
  * The regions themselves are the five per-surface tables beside this file; the
  * index that joins them is `layout-regions.ts`.
@@ -219,7 +219,7 @@ export const DOCK_DISPLAY_OPTIONS: ReadonlyArray<SegmentOption> = [
   { value: "hidden", label: "Hidden" },
 ];
 
-/** Access's `size`, which has no Hidden (G6). */
+/** Access's `size`, which has no Hidden. */
 export const ACCESS_DISPLAY_OPTIONS: ReadonlyArray<SegmentOption> = [
   { value: "full", label: "Icon and label" },
   { value: "chip", label: "Icon only" },
@@ -325,5 +325,5 @@ export const SIZED_VERBS: ReadonlyArray<QuickVerbId> = [
   "chip",
   "full",
 ];
-/** A region that resizes but never hides: the Access pill (G6). */
+/** A region that resizes but never hides: the Access pill. */
 export const SIZE_ONLY_VERBS: ReadonlyArray<QuickVerbId> = ["chip", "full"];

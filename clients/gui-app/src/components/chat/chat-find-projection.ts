@@ -136,7 +136,7 @@ interface ChatFindRendering {
    */
   readonly splitLongTurns: boolean;
   /**
-   * In a bot's session (Tracy Bots T94), what a question's send card says of
+   * In a bot's session, what a question's send card says of
    * each question, read from the post the send wrote as the card reads it;
    * `null` outside a session.
    */
@@ -178,7 +178,7 @@ export function buildChatFindRows(
 }
 
 /**
- * A question's send card in a bot's session whose post is read (T94): what
+ * A question's send card in a bot's session whose post is read: what
  * it posted, and under each settled question what the card says of it.
  * `null` for every other item, which indexes as any tool row does.
  */

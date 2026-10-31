@@ -1,13 +1,13 @@
 /**
  * Surfacing for a tab the HOST opened - the agent driving a session, or a page
- * inside one spawning a popup (decisions A4, B5, B6, C9, C10).
+ * inside one spawning a popup (decisions A4, B5, B6).
  *
  * The `tabOpened` frame arrives on the browser-sessions coordinator, which is
  * module-global and outside React, so this file opens through the non-React
  * `openTileWithNavigation` seam using the active React consumer's injected
  * router commit. Everything about WHERE the tile lands is the resolver's;
  * what stays here is the part the resolver cannot see: the `agentTabSurfacing`
- * gate and the PiP suppression rules (C9).
+ * gate and the PiP suppression rules.
  */
 import type { BrowserTabOpenedSource } from "@traycer/protocol/host/browser/contracts";
 import { isMobileViewport } from "@/hooks/ui/use-mobile-viewport";
@@ -45,7 +45,7 @@ export type HostTabSuppressReason =
  * - every other placement always lands a tile, even in a hidden epic: layout
  *   mutations are fine where an overlay would be invisible.
  *
- * `browserPlacement` is the EFFECTIVE placement, not the raw setting (R4) -
+ * `browserPlacement` is the EFFECTIVE placement, not the raw setting -
  * see {@link effectiveBrowserPlacement}.
  */
 export function hostOpenedTabSuppressReason(input: {
@@ -65,9 +65,9 @@ export function hostOpenedTabSuppressReason(input: {
 /**
  * What the resolver will DO with this push, as far as the pip gate cares. Only
  * a float can be suppressed, and two things upstream of the setting turn a
- * `pip` setting into a plain tab: an explicit grouped pane (C7) and the
- * single-tile viewport (C10). Gating on the raw setting instead dropped those
- * tabs entirely (R4).
+ * `pip` setting into a plain tab: an explicit grouped pane and the
+ * single-tile viewport. Gating on the raw setting instead dropped those
+ * tabs entirely.
  */
 function effectiveBrowserPlacement(input: {
   readonly configured: BrowserTilePlacement;

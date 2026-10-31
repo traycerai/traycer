@@ -253,7 +253,7 @@ describe("useFleetUpdateViews — per-host isolation (Ticket 06 subject F)", () 
   });
 });
 
-// G3: per-host cadence, coalescing with the canonical `host.status` cache, and
+// Per-host cadence, coalescing with the canonical `host.status` cache, and
 // retention across a declined read. The defect
 // was that a single fleet-shaped query applied ONE cadence to the whole
 // list — an active host on one machine fast-polled every idle host — and that

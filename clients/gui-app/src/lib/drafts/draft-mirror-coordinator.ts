@@ -375,7 +375,7 @@ const INHERITABLE_LANDING_TABS_CAP = 64;
  * retire. An old host without `drafts.retract` answers the fall-back delete
  * `deleted: false` and keeps listing the row, so without this the same
  * retire would go out on every `drafts.list` forever; one wasted request per
- * session per zombie row is the accepted cost (G5).
+ * session per zombie row is the accepted cost.
  */
 const retiredStashIdsThisSession = new Set<string>();
 

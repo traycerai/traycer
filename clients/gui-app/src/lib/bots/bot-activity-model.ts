@@ -12,7 +12,7 @@ import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic
 import type { EpicAgentActivity } from "@/lib/agent-activity";
 
 /**
- * What a bot's Activity page reads (Tracy Bots T86, decision 115): one page
+ * What a bot's Activity page reads (Tracy Bots, decision 115): one page
  * for the bot, across its trunk and every thread. A row is the bot's when
  * the bot, through its trunk or any thread, started the thing or owns it:
  * the tasks on its task list (T82), and the chats that live under the bot

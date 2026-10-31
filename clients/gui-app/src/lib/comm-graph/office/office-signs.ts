@@ -693,7 +693,7 @@ export function officeSignLetteredAt(args: {
  * HOW LONG ONE FRAME OF A WARD'S BEACON IS UP.
  *
  * Mission control has no street, so no ambulance can come for the agent lying
- * in its medbay (C6) - the light on the ward's own sign is the whole of the
+ * in its medbay - the light on the ward's own sign is the whole of the
  * alarm there. A quarter-second is the vehicles' own cadence, stated once
  * here because the two are meant to read as the same light.
  */
@@ -759,7 +759,7 @@ function archivedFor(room: OfficeCivicRoom, tally: OfficeCivicTally): number {
  * - a ward or a waiting room says how many of ITS OWN seats are taken, because
  *   "is there a bed free" is the question somebody looking at it has;
  * - the archive says how many records it holds, which is its whole content
- *   (C5: no crate per agent, the number is the room) - ITS OWN host's records
+ *   (no crate per agent, the number is the room) - ITS OWN host's records
  *   in a view whose storeys belong to one host each, and every host's in a view
  *   whose one floor serves them all. `room.hostScope` is what says which, and
  *   it is a field rather than a reading of `hostId` because `null` there is the
@@ -863,10 +863,10 @@ export function officeCivicSignText(args: {
  * WHICH FRAME OF THE BEACON A WARD'S SIGN SHOWS, or `null` for a sign that
  * carries no beacon.
  *
- * A ward carries one exactly where NO AMBULANCE CAN COME: decision C6 gives
- * every view with a street a vehicle and gives the one without - Mission
- * control, whose amphitheatre has no road - a light on the medbay's own sign
- * instead. Derived from the room and its storey rather than from a table of
+ * A ward carries one exactly where NO AMBULANCE CAN COME: every view with a
+ * street has a vehicle, while Mission control - whose amphitheatre has no
+ * road - has a light on the medbay's own sign instead.
+ * This is derived from the room and its storey rather than from a table of
  * view names, so a later view that plans a ward on a roadless floor lights up
  * without a line of code here.
  *
@@ -967,7 +967,7 @@ function civicSignToDraw(args: {
   // A BEACON IS A REPORT, and it hangs off this plate's own top edge - so a
   // ward whose counter did not fit is still lettered when it carries one.
   // Dropping the plate here would take the lamp with it, and on a roadless
-  // floor that lamp is the whole of the alarm (C6): Mission control has no
+  // floor that lamp is the whole of the alarm: Mission control has no
   // street for an ambulance to come down.
   if (
     sirenFrame === null &&

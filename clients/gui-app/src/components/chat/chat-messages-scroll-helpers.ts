@@ -363,7 +363,7 @@ function nearestHydratedMessageId(
  *
  * Sole caller is the free-scroll save path (`scheduleActiveViewportUpdate`
  * in chat-messages.tsx) - NOT the minimap, which derives its own active-dot
- * highlighting independently. That single-purpose scope is what makes the P4
+ * highlighting independently. That single-purpose scope is what makes the
  * fallback below safe here: an A2A-only transcript (zero human user rows)
  * has no candidate for `selectActiveUserMessageId`'s human-only gate (it
  * returns `null` in that case ONLY - any human row anywhere in `messages`

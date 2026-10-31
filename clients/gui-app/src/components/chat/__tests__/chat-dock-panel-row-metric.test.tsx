@@ -146,7 +146,7 @@ const ONE_FILE_CHANGE: AccumulatedChangeRow = {
 };
 
 /**
- * The other branch of the same row (R6H-03).
+ * The other branch of the same row.
  *
  * `AccumulatedChangeRow` draws `ArtifactAccumulatedHeader` instead of
  * `FileChangeHeader` when `artifact` is set, and that branch used a third text
@@ -285,7 +285,7 @@ const ONE_QUEUED_MESSAGE: ChatSessionState["queue"] = {
 };
 
 /**
- * The Background panel's other three row shapes (R6H-10).
+ * The Background panel's other three row shapes.
  *
  * `HeldManagedCommandRow`, `ManagedCommandRow` and `PortForwardRow` are all
  * changed and none of them is reachable through
@@ -467,8 +467,8 @@ function rowsIn(body: Element): ReadonlyArray<Element> {
  *
  * Three of the Background panel's four and the changed-files panel's artifact
  * branch were changed and rendered by neither gate, so a later
- * edit could have reinstated a `py-1` on any of them and stayed green
- * (R6H-03, R6H-10). The queue is no longer one of these attached members
+ * edit could have reinstated a `py-1` on any of them and stayed green.
+ * The queue is no longer one of these attached members
  * (G1-G2: it is a fixed slot, never a pill) - its two row shapes are pinned
  * separately below.
  */
@@ -562,7 +562,7 @@ describe("the five attached dock panels share one row metric", () => {
   }
 
   /**
-   * The same list on its OTHER surface (R6H-06).
+   * The same list on its OTHER surface.
    *
    * `AgentStopList` is one list drawn twice - the Active agents panel and the
    * TUI agent tile's popover - and it took this metric unconditionally, which
@@ -606,19 +606,19 @@ describe("the five attached dock panels share one row metric", () => {
    * Its rows are the only PROSE in the dock, so they need a row boundary most:
    * two wrapped messages are four 15px lines with the list's 1.875px gap
    * somewhere in the middle, and without a boundary the block reads as one
-   * paragraph (R6H-01). `divide-y` genuinely had to go, because a 1px rule per
+   * paragraph. `divide-y` genuinely had to go, because a 1px rule per
    * boundary breaks the N-row formula, so the hairline comes back as a
    * pseudo-element in the gap and the row takes the siblings' hover fill.
    *
    * `self-start` is the same story one level down: the row went from
    * `items-start` to the recipe's `items-center`, which on a three-line
    * message left the grip pointing at the middle of a paragraph while the
-   * toolbar it pairs with stayed pinned at the top (R6H-02).
+   * toolbar it pairs with stayed pinned at the top.
    *
    * And the toolbar keeps its own spacing, paid for out of the row's padding
    * rather than by shrinking: `gap-1` puts two `size-6` centres 26.25px apart
    * instead of 24.375px, and `-my-0.5` cancels `p-0.5` so the float's margin
-   * box stays at 24.5px inside the 26.25px budget (R6H-05).
+   * box stays at 24.5px inside the 26.25px budget.
    */
   it("keeps the queue's row boundary, grip and toolbar spacing", () => {
     // The queue is a fixed slot now (G1-G2), not one of the attached members,
@@ -655,7 +655,7 @@ describe("the five attached dock panels share one row metric", () => {
   });
 
   /**
-   * The port-forward row's twisty belongs to the glyph it opens (R6H-08).
+   * The port-forward row's twisty belongs to the glyph it opens.
    *
    * The shared content class carries `gap-2`, which the row had never had, so
    * adopting it put the same 7.5px between the chevron and the `Cable` as

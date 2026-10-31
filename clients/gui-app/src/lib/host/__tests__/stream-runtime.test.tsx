@@ -192,7 +192,7 @@ import {
 
 /**
  * HOW THIS SUITE POINTS THE PROVIDER AT A HOST, and why it never calls
- * `HostClient.bind()` (redesign P4.1 Leg D).
+ * `HostClient.bind()`.
  *
  * P4.2 deletes `bind()` and the active slot. Every case below therefore drives
  * the provider the way production will after that deletion: the window holds a
@@ -689,7 +689,7 @@ describe("HostStreamProvider", () => {
   });
 
   // WHERE THE OLD "publishes the host its client was built for, not the
-  // render's" CASE WENT (redesign P4.1 Leg D).
+  // render's" CASE WENT.
   //
   // That case drove a `bind()` to a DIFFERENT hostId from a child's layout
   // effect, so the render's `readiness.hostId` and the effect's live
@@ -713,7 +713,7 @@ describe("HostStreamProvider", () => {
   // rather than kept green: a case that can no longer fail is not coverage.
   //
   // The `hostId: target.hostId` publish itself is deliberately LEFT IN PLACE in
-  // `stream-runtime.tsx`. It is correct, it is free, and P4.2 re-points this
+  // `stream-runtime.tsx`. It is correct, it is free, and the redesign re-points this
   // provider next - a guard removed because today's binding shape cannot
   // exercise it is a guard missing when the shape changes again.
 

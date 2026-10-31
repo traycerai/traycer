@@ -202,7 +202,7 @@ export function SampleWorkspaceBody() {
   return (
     <ComposerTileIdProvider tileId={SAMPLE_TILE_ID}>
       <div className="flex min-h-0 flex-1 bg-canvas" data-sample-workspace-body>
-        {/* DOM order follows `sidebarSide` (S-06), never CSS `order`, so the
+        {/* DOM order follows `sidebarSide`, never CSS `order`, so the
             layout editor's sample scene shows the real side. */}
         {sidebarSide === "right" ? null : <SampleWorkspaceSidebar />}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -498,14 +498,14 @@ function SampleTranscript() {
       />
     );
   return (
-    // One menu for the whole transcript, naming the region under the pointer
-    // (G3-10): the timestamps, activity rows and the minimap - the rail or
+    // One menu for the whole transcript, naming the region under the pointer:
+    // the timestamps, activity rows and the minimap - the rail or
     // the stand-in that explains why there is none (L-144).
     <LayoutClusterContextMenu>
       <div className="relative min-h-0 flex-1">
         {/* The conversation's CONTENT is marked passive leaf by leaf - each
           prompt bubble and each reply - so it reads as calm content under lit
-          chrome (C-03, L-87). Not the scroller: the transcript now holds
+          chrome (L-87). Not the scroller: the transcript now holds
           regions of its own (the activity rows and the timestamps, L-175,
           L-178), and a marker on their ancestor would dim them with it. The
           minimap region is a SIBLING of this scroller for the same reason. */}

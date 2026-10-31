@@ -322,7 +322,7 @@ describe("R7F3: a sticky per-consumer sweep record survives another consumer cle
     // retry has not dispatched yet. `beginHashOnlyRecovery` folds the
     // still-visible host-wide sweep into this recovery's sticky record
     // SYNCHRONOUSLY, in the same tick, before B gets a chance to clear the
-    // host-wide mark below - R9F2's fix, and the only thing that captures
+    // host-wide mark below - the only step that captures
     // this evidence: nothing else touches the staging store between the
     // purge above and B's own stage next, so there is no OTHER write to fire
     // the consumer-observing subscription and fold the fact in that way.

@@ -46,7 +46,7 @@ export function useBotListChangedSubscriptionForHost(
  * holds a `bot.listChanged` subscription on `hostId` and invalidates every
  * host's `bot.list` on each `changed` frame, the way the app's own bot writes
  * do, and every host's `bot.onboarding.read`, whose team setup turns live
- * when the team's main bot is created on the team's host (T67b). The frame
+ * when the team's main bot is created on the team's host. The frame
  * carries nothing; the reads are refetched.
  *
  * ONE session per host, however many surfaces ask (Home and an open bot tab

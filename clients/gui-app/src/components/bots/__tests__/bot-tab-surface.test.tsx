@@ -1,14 +1,14 @@
 /**
  * The bot tab's surface (Tracy Bots): the tab asks `bot.open` through its own
  * host and follows the answer - serving, or paused with a reason - and never
- * names the machine a bot runs on or moves to it (T65).
+ * names the machine a bot runs on or moves to it.
  * Also: the stream's states, the re-subscribe and re-open when the pane comes
  * back into view, the tab closing when the bot is gone from `bot.list`, and a
  * team's main bot still to be set up (T67): a tab on its id shows the channel
  * where the team is set up, with nothing opened, subscribed or closed (the
- * real hook, over a scripted `bot.onboarding.read`). Its Enable cloud (T100)
+ * real hook, over a scripted `bot.onboarding.read`). Its Enable cloud
  * runs the real sandbox reads and create over a scripted control plane.
- * The three views and the bot's session view (T93) are replaced by stubs
+ * The three views and the bot's session view are replaced by stubs
  * that expose their props, so what the surface PASSES them is what is
  * asserted. The tab strip's Activity label
  * reads the real summary hook over the real agent-activity store.

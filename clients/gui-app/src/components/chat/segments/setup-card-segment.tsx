@@ -46,7 +46,7 @@ import { LiveElapsed } from "./segment-elapsed";
 
 /**
  * Lifecycle state of a single workspace's worktree setup, projected from the
- * persisted `setup.*` chat events (T2 owns the derivation; this component only
+ * persisted `setup.*` chat events (this component only
  * renders).
  *
  * Two in-flight states: `creating` (the host's `git worktree add` is running
@@ -114,7 +114,7 @@ export interface SetupCardAggregate {
 }
 
 /**
- * The full view-model the setup card consumes - the contract T2 produces by
+ * The full view-model the setup card consumes - the contract produced by
  * grouping `setup.*` events per `workspacePath` and taking the latest state.
  * `createdAt` is the earliest setup event's wall-clock ms; it seeds the live
  * elapsed counter (placement is pinned by the renderer, not sorted on it).

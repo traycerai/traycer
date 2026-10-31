@@ -7,7 +7,7 @@
  * ## Why this is its own module
  *
  * Parking is keyed on the OPEN TAB rather than on a mounted `EpicSurface`
- * (plan C, C1) - a tab past `retainedTopLevelSurfaces` is unmounted,
+ * - a tab past `retainedTopLevelSurfaces` is unmounted,
  * therefore hidden by definition, and its session sits warm with
  * `epic.subscribe` open. Reading that set means reading the canvas store.
  *

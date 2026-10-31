@@ -1,7 +1,7 @@
 /**
  * A separate file from `chat-session-store.test.ts` (another agent's file at
  * time of writing) so both can land without touching the same lines. Covers
- * T3's byte-custody roots: `pendingActions[*].restore.content`,
+ * The byte-custody roots: `pendingActions[*].restore.content`,
  * `pendingUserMessages[*].restore.content` and `failedSendRestoration.content`
  * keep an image hash live in `landingLiveImageRootHashes()` for as long as the
  * send is outstanding or its restoration is what the composer will get back.

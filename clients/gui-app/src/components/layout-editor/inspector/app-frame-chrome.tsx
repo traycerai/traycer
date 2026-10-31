@@ -205,7 +205,7 @@ function AppFrameTaskChip(props: { readonly task: AppFrameTask }): ReactNode {
 }
 
 /**
- * The vertical strip as the shell draws it on the ground (F1, F7): the
+ * The vertical strip as the shell draws it on the ground: the
  * top row (history arrows, the collapse toggle), the Notifications and All tasks
  * rows, Home, the primary New Task row, "Tasks" and its count, the task rows,
  * and the foot with the header-hosted readings over the account row.
@@ -327,7 +327,7 @@ export function AppFrameSideStrip({
           collapsed ? "items-center" : "items-stretch",
         )}
       >
-        {/* The live foot's readings row (F6): one equal share each, so two
+        {/* The live foot's readings row: one equal share each, so two
             split the row and one takes all of it; collapsed, stacked tiles. */}
         <div
           className={cn(
@@ -668,7 +668,7 @@ export function AppFrameComposerStack({
  *
  * The pills go ABOVE the joined frame, both at the composer's left edge. Drawn
  * as separate cards, the Compact card had nothing left to claim: the fold to
- * chips IS the claim (G1-02), so the two shapes have to look different from
+ * chips IS the claim, so the two shapes have to look different from
  * each other here.
  */
 function AppFrameDock({ values, arrangement }: AppFrame): ReactNode {
@@ -771,8 +771,7 @@ function AppFrameToolbarCluster(props: {
  *
  * Which of the two readings leads and where the spacer goes is ASSEMBLY
  * rather than placement, and it lives here once: the preset card and the
- * Settings band draw the strip through this, so they cannot disagree about it
- * (R1-04, R2-02).
+ * Settings band draw the strip through this, so they cannot disagree about it.
  *
  * The bar's own BOX stays with each caller, and so does each one's answer for
  * a strip with nothing left in it, because those two genuinely differ: the
@@ -903,7 +902,7 @@ function depictRailRegion(
  * `auto | shown | hidden` and `auto` is the shipped default for all nine
  * panels (L-93) - so `!== "shown"` would hide every panel nobody has touched.
  *
- * The parameter excludes `RailRegionId` for that reason (R2-06): the signature
+ * The parameter excludes `RailRegionId` for that reason: the signature
  * used to invite a caller to draw a rail panel through here, and every
  * untouched panel would have vanished from that picture with nothing red
  * anywhere.

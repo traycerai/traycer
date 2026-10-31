@@ -1087,8 +1087,8 @@ export function getEpicCanvasDropPreview(
     };
   }
   if (target.kind === "left-panel-rail-item") {
-    // A slot nothing has measured yet answers NO preview rather than a side
-    // (R5R-08): committing "before" from a position the function could not
+    // A slot nothing has measured yet answers NO preview rather than a side:
+    // committing "before" from a position the function could not
     // read is a reorder the user did not aim, and `resolveRailForDrop`
     // already treats a null preview as "commit nothing".
     if (rect === null) return null;

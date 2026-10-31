@@ -374,7 +374,7 @@ export function projectChat(
     isTitleEditedByUser: readMaybeBoolean(entry, "isTitleEditedByUser"),
     // A chat projected FROM THE DOC is doc-homed by construction - the doc is
     // where this row lives, whatever the registry may also hold - so this arm
-    // is the one place the fact needs no plane to state it. T9's ruling reads
+    // is the one place the fact needs no plane to state it. The rule reads
     // the same way from the host side: a legacy-hydrated row is `home: "doc"`,
     // and the routing gate must see `true` rather than today's `false`, which
     // would send its rename to a writer that cannot address it.

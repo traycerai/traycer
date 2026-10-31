@@ -70,7 +70,7 @@ export interface BotSwatch {
 }
 
 /**
- * A bot's swatch (T97): the profile palette's 12 hues in two tones, so two
+ * A bot's swatch: the profile palette's 12 hues in two tones, so two
  * bots of one name share a swatch half as often as on the 12 alone. A pure
  * function of the bot's id, so a rename never recolours it; a bot keeps the
  * hue it had on the 12 and the hash's next bit picks the tone.

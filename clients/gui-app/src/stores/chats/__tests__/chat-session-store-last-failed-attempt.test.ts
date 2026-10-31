@@ -16,7 +16,7 @@ import { isTailHydrated } from "@/stores/chats/transcript-window";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 /**
- * F14 (`lastFailedAttempt`) pins - the biggest gap: nothing in the
+ * `lastFailedAttempt` pins - the biggest gap: nothing in the
  * store test directory asserted this DTO exists at all.
  *
  * Its own file, matching `chat-session-store-last-fallback-outcome.test.ts`'s

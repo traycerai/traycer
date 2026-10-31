@@ -315,7 +315,7 @@ describe("useLocalHostUpdateOperation — F1 host-down window (Ticket 07 §5.2.7
       expect(result.current.view.targetVersion).toBe("2.5.0");
       expect(result.current.hostId).toBe(LOCAL_HOST_ID);
 
-      // R2 fix-round-2 pin: the record's observation time must be stamped by
+      // The record's observation time must be stamped by
       // the CONTROLLER query that actually read it, never by the live
       // `host.status` query. In this fixture `host.status` throws and never
       // succeeds, so its `dataUpdatedAt` is `0` — the previous source, which
@@ -489,7 +489,7 @@ describe("useLocalHostUpdateOperation — the 1s renderer tick ages the live-res
  * `restarting` never appears at all.
  *
  * This is the WIRE slot's, and it needs the opposite fixture: a host that
- * ANSWERS, slowly. Falsifies `clock: { wireNowMs: nowMs, … }` here — F3
+ * ANSWERS, slowly. Falsifies `clock: { wireNowMs: nowMs, … }` here — the same defect
  * re-introduced one file over from where it was found.
  */
 describe("useLocalHostUpdateOperation — the WIRE leg's freshness is its own read's instant (C-H3)", () => {

@@ -162,8 +162,8 @@ export interface ChatBotPresentation {
     | null;
   /**
    * The rows beyond a post, a question, a proposal and a direct post that
-   * the bot's host opens a thread under (`threadAnchors.kinds`, decision 114
-   * and T68): a row it names opens its own thread and carries its line.
+   * the bot's host opens a thread under (`threadAnchors.kinds`, decision 114):
+   * a row it names opens its own thread and carries its line.
    * Empty where it does not say: a direct reply then opens the thread under
    * the post it answers, and any other row of the bot opens none.
    */

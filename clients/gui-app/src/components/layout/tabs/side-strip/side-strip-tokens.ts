@@ -20,7 +20,7 @@ export const SIDE_STRIP_MAX_WIDTH_PX = 400;
 export const SIDE_STRIP_MAX_WIDTH_CLASS = "max-w-[40vw]";
 /**
  * When the strip owns the title bar (macOS, left) the expanded strip is never
- * narrower than the traffic-light inset plus the title row's controls (S-43):
+ * narrower than the traffic-light inset plus the title row's controls:
  * back and forward, New task, the collapse toggle, their gaps and the 8px
  * trailing inset. It follows the inset, so it shrinks when the inspector docks
  * left and takes the lights.
@@ -370,7 +370,7 @@ export const SIDE_STRIP_RAIL_NAV_CLASS = "flex flex-col items-center gap-1";
  */
 const SIDE_STRIP_RAIL_HAIRLINE_CLASS = "h-px w-6 bg-foreground/15";
 /**
- * The rail's divider between New Task and Home (F1): the hairline, 8px from
+ * The rail's divider between New Task and Home: the hairline, 8px from
  * each, so the rail keeps its 8px rhythm from there down.
  */
 export const SIDE_STRIP_RAIL_DIVIDER_CLASS = cn(

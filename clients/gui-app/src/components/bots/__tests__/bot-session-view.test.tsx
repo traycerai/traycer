@@ -1,5 +1,5 @@
 /**
- * A bot's session, readable whole (Tracy Bots T93): the REAL `BotSessionView`
+ * A bot's session, readable whole: the REAL `BotSessionView`
  * over the REAL `BotChatTranscript` and `ChatMessages`, reading a scripted
  * session store the way the tab's session registry hands it one. What a
  * reader sees is asserted as they see it: the session's rows in time order,

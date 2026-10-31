@@ -47,7 +47,7 @@ function truncateAtSentence(text: string, maxChars: number): string {
 
 /**
  * The re-mint threshold on the vendor's context usage ratio. The probe
- * (2026-10-30, P3) measured the window filling at about 0.0094 a minute on
+ * (2026-10-30) measured the window filling at about 0.0094 a minute on
  * near-silence, reaching the vendor's own 0.9 engine replacement near
  * minute 95; re-minting at 0.8 (about minute 85) keeps the replacement the
  * app's, seeded with what it chooses to carry.

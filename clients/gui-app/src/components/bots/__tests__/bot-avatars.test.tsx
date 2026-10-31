@@ -1,15 +1,15 @@
 /**
- * A bot's picture (Tracy Bots, T97, T111): a creature mark on a swatch, both
- * from the bot's id alone. Two bots side by side never draw the same mark on
- * the same swatch, every surface draws one bot the same way, and a rename
- * changes nothing. A person is still initials or a photo in a circle.
+ * A bot's picture: a creature mark on a swatch, both from the bot's id
+ * alone. Two bots side by side never draw the same mark on the same swatch,
+ * every surface draws one bot the same way, and a rename changes nothing. A
+ * person is still initials or a photo in a circle.
  *
  * The ids are real derived main-bot ids, `personalAssistantBotId(envId)` in
  * the internal repository's `bot-schemas.ts`: the personal assistant of
  * `env_personal`, and the team main bots of `env_team_a` and `env_team_s`.
  * `env_team_s` was found by deriving `env_team_b`, `env_team_c`, ... in turn
  * and keeping the first whose FNV-1a hash lands on `env_team_a`'s hash mod 12
- * (the 12 swatches bots drew from before T97) and off it mod 24, so the two
+ * (the original 12-swatch palette) and off it mod 24, so the two
  * "Team Tracy" bots shared one swatch then and differ now.
  */
 import type { ReactElement } from "react";

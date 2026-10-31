@@ -58,7 +58,7 @@ export interface CreatedChatOpenIntent {
   readonly hostId: string;
   /**
    * Explicit placement for the created tile, or `null` to let the configured
-   * conversation placement decide (C3, C8). The opener path (palette
+   * conversation placement decide. The opener path (palette
    * open-into-target, side chat beside its source) is the only thing that
    * names a pane.
    */

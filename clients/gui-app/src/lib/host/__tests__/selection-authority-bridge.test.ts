@@ -220,7 +220,7 @@ describe("mountSelectionAuthorityBridge", () => {
       kernel,
     });
 
-    // C2: kernel already started; the opening bind is subscribe-time
+    // Kernel already started; the opening bind is subscribe-time
     // apply(kernel.snapshot()), not a later change event.
     expect(pushes.calls.length).toBe(1);
     expect(pushes.calls.at(-1)).toBe("L");

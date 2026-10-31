@@ -39,7 +39,7 @@ export interface SetupCardBinding {
 
 /**
  * One injectable transcript row carrying the consolidated setup-card view-model
- * and its `createdAt` sort key (mirrors `model.createdAt`). T3 merges this into
+ * and its `createdAt` sort key (mirrors `model.createdAt`). The renderer merges this into
  * the `createdAt`-sorted message list; the explicit key keeps that merge from
  * reaching into the model.
  */

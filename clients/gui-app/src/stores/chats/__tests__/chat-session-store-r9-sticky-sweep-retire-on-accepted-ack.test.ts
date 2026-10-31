@@ -328,7 +328,7 @@ describe("retireSweptEvidenceOnAck: an ACCEPTED ack retires the settled action's
 
     // Give the retry SOMETHING in the sticky map to retire: a sweep while it
     // is live folds evidence into its record via the consumer-observing
-    // subscription (same mechanism R9F2/R9F3 exercise).
+    // subscription.
     useWorktreeIntentStagingStore
       .getState()
       .purgeRemovedWorktreeIntents(HOST_ID, {

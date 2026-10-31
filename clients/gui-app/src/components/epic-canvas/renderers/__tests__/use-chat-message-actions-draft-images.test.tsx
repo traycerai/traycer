@@ -765,7 +765,7 @@ describe("performEditSubmit (via revertOnEdit.onDontRevert)", () => {
     expect(editUserMessage).not.toHaveBeenCalled();
   });
 
-  // F2: cancel-and-reopen of the SAME message is a NEW
+  // Cancel-and-reopen of the SAME message is a NEW
   // editing session even though `targetMessageId` is unchanged. Before the
   // fix, only `targetMessageId` was checked, so the stale job's read would
   // land and submit the newly reopened edit's content under the OLD job's

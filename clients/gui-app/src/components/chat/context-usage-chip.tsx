@@ -98,7 +98,7 @@ export function ContextUsageChip(props: ContextUsageChipProps) {
     regionId: "contextUsage",
     instanceId: tileId,
   });
-  // Layout ▸ Chat ▸ Context usage can hide the chip (G6: the switch had no
+  // Layout ▸ Chat ▸ Context usage can hide the chip (the switch had no
   // reader). A hidden chip still materialises while the editor points at it
   // (L-14), the same rule every hideable control follows.
   const shown = useRegionShown("contextUsage") || ghost;

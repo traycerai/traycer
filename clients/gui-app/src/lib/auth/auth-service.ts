@@ -768,7 +768,7 @@ export class AuthService {
   private sessionRecoveryDelayMs: number = SESSION_RECOVERY_INITIAL_DELAY_MS;
   private sessionRecoveryAttempt: number = 0;
   // Single-flight for the ASYNC probe, distinct from `sessionRecoveryTimer`
-  // which only covers the WAIT before it (P2-6). The timer nulls
+  // which only covers the WAIT before it. The timer nulls
   // itself the instant it fires, so between that and the probe settling there
   // is a window - three `withAuthNetworkRetry` attempts wide - in which the
   // loop looks idle to anything that checks the timer. A wake landing there
@@ -1863,7 +1863,7 @@ export class AuthService {
     }
     // A probe is already running. Record the intent and let it re-arm from the
     // floor when it settles - starting a second one here is exactly the overlap
-    // P2-6 names, and the running probe is already asking the question this
+    // we need to avoid, and the running probe is already asking the question this
     // event wants asked.
     if (this.sessionRecoveryInFlight) {
       this.sessionRecoveryRerunRequested = true;
@@ -3850,7 +3850,7 @@ export class AuthService {
   /**
    * The ordinary mid-session expiry: a signed-in user editing local work whose
    * refresh authn rejects with a verdict about the TOKEN. This arm used to
-   * `clearUiSession()`, which is P1-4 - it produced a real
+   * `clearUiSession()` - it produced a real
    * `signed-out`, redirecting the shell out from under the work and firing
    * `useAuthIdentityTransition`'s destructive arm (which PURGES account-scoped
    * persisted state; reading positions are deleted from disk). The
@@ -5647,7 +5647,7 @@ export class AuthService {
    * shell out from under someone editing local work AND made
    * `useAuthIdentityTransition` run its destructive arm, purging account-scoped
    * persisted state (reading positions are deleted from disk outright). That
-   * was P1-4.
+   * was the defect.
    *
    * Deliberately bypasses {@link applyUnverifiedSession}'s live-session guard
    * rather than weakening it, because the two callers mean opposite things by
@@ -5710,7 +5710,7 @@ export class AuthService {
     // projects: `retired` means the identity is gone and PURGES account-scoped
     // state (reading positions are deleted from disk). Nothing about a refused
     // refresh token says the account is gone, and the person may sign straight
-    // back in. This keeps P1-4's ruling - a server verdict must not
+    // back in. This keeps the ruling - a server verdict must not
     // destroy local state - on the shell where the rest of that fix (holding
     // the plane) has nothing to act on.
     const projected = this.shellServesLocalPlane()

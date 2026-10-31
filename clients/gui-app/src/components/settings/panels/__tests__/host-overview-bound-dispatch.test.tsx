@@ -853,7 +853,7 @@ describe("HostOverviewPanel — dispatch ownership: unusable scope and unmount-b
     // dispatch SLOT alone. The
     // attempt itself finishing is what releases the LIFECYCLE gate (a
     // `preparing` attempt legitimately disables the header while it runs,
-    // same as G1's own matrix) — clear it here to prove the page as a whole
+    // same as the lifecycle-gate matrix) — clear it here to prove the page as a whole
     // is not bricked by the earlier unmount, not to re-test the gate itself.
     phase = "idle";
     await vi.advanceTimersByTimeAsync(11_000);
@@ -1163,7 +1163,7 @@ describe("HostOverviewPanel — a host without the two methods keeps the legacy 
     // No auto-open and no bound dispatch reachable: `updates.activate` /
     // `updates.continueAttempt` are both `null` for this host, and this
     // legacy-facts park carries no `attemptId` at all, so
-    // `deriveAttemptControl` returns `null` regardless. T2's notices strip
+    // `deriveAttemptControl` returns `null` regardless. The notices strip
     // carries the debt sentence while it is in-flight - the answer card
     // withholds its own answer for any in-flight kind (see
     // host-overview-notices.test.tsx's duplication regression).

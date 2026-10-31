@@ -147,7 +147,7 @@ function seedTicket5PerTabState(epicId: string): void {
   toolOpenInitializedScopes.add(CHAT_A.instanceId);
   useSubagentOpenStore.getState().setOpen(CHAT_A.instanceId, "sub-1", true);
   subagentOpenInitializedScopes.add(CHAT_A.instanceId);
-  // F4: models a chat tile whose find bar was open when it switched away
+  // Models a chat tile whose find bar was open when it switched away
   // (unregistered while live, so scheduleUiReclaim left this `ui` entry in
   // place) - the sweep below is the ONLY thing that can ever reclaim it now.
   useTileFindStore.setState((state) => ({

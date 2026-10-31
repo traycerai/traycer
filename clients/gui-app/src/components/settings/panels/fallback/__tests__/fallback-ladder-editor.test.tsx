@@ -80,7 +80,7 @@ describe("FallbackLadderEditor", () => {
   });
 
   it("AX7: the drag handle is hidden from assistive technology and out of the tab order, for EVERY row - not just `notify`", () => {
-    // R4/AX7 rewrite. The handle used to be exposed to AT for movable rows and
+    // AX7 rewrite. The handle used to be exposed to AT for movable rows and
     // only withheld from `notify` (the "Reorder <label>" label this cell used
     // to assert). That is gone now: dnd-kit's default handle attributes
     // promise a space-bar-and-arrows keyboard gesture this editor does not

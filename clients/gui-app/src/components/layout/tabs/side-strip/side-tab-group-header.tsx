@@ -46,7 +46,7 @@ export interface SideTabGroupHeaderProps {
 }
 
 /**
- * A tab group's header in the vertical strip (S-19): expanded, the 28px top row
+ * A tab group's header in the vertical strip: expanded, the 28px top row
  * of the group's block (`SideTabGroupBlock`) with the name in the group's
  * colour, the member count only while the group is collapsed, and a chevron on
  * hover; in the rail the first tile
@@ -54,7 +54,7 @@ export interface SideTabGroupHeaderProps {
  * grapheme on a chip in the group colour. A click
  * collapses or expands the group; right-click, F2 and the context-menu keys
  * open the shared group editor. A collapsed group carries its members' worst
- * notification badge (S-30), at the trailing edge of its header.
+ * notification badge, at the trailing edge of its header.
  */
 export function SideTabGroupHeader(props: SideTabGroupHeaderProps): ReactNode {
   const { groupId, group } = props;

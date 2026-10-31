@@ -16,7 +16,7 @@ import type { SupportEnvironmentSection } from "@/lib/support-environment-sectio
  * lives ONLY here, never in {@link ReportIssueContext} (the public prefill) -
  * see `ReportIssueDraftContext`.
  *
- * Guardrail G9: this is the single nullable field the redesign adds for
+ * This is the single nullable field the redesign adds for
  * surfaces that DO have a cause. It is not a new function parameter, so the
  * ~160 existing `createReportIssueContext`/`reportableErrorToast` call sites
  * that only ever pass a plain {@link ReportIssueContext} are untouched; only

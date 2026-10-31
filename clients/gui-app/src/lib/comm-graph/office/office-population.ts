@@ -845,7 +845,7 @@ export function partitionOfficePopulation(
 /**
  * HOW MANY OF EACH BUILDING'S AGENTS HAVE BEEN ARCHIVED, as of the cursor.
  *
- * What the archive's sign counts (C5). It is asked of the PARTITION and the
+ * What the archive's sign counts. It is asked of the PARTITION and the
  * archive MOMENT rather than of the scene's walk-outs, and that is the whole
  * point: a walk-out is a character that happened to leave while somebody was
  * watching, so a floor opened at a cursor where three hundred records were

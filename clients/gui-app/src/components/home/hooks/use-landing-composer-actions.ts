@@ -444,7 +444,7 @@ export function useLandingComposerActions(
       // (e.g. chat-tile's availability query, which resolves via the tab host)
       // read this seed. Keep the create-time tab binding and the placement
       // host in lockstep, or seed under the host the initial tabs bind to
-      // instead. (Before P1.2 this was the app-wide active host, which the
+      // instead. (Before the redesign this was the app-wide active host, which the
       // picker rebound; it is now the surface pin's resolved host.)
       const seededBindingsKey =
         optimisticRows.length > 0

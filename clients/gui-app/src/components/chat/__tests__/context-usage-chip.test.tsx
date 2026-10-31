@@ -368,7 +368,7 @@ describe("ContextUsageChip", () => {
     ).toBe("25%");
   });
 
-  // G6: the chip mounted unconditionally, so Layout â¸ Chat â¸ Context usage's
+  // The chip mounted unconditionally, so Layout â¸ Chat â¸ Context usage's
   // Shown switch had no reader. `useRegionShown` now gates it, with the same
   // L-14 ghost exception every hideable region gets: the editor can still
   // materialise it as a preview while pointing at the region.

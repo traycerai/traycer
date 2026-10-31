@@ -1,5 +1,5 @@
 /**
- * The bot's live activity (Tracy Bots T64): `bot.subscribe`'s snapshot
+ * The bot's live activity: `bot.subscribe`'s snapshot
  * carries the whole `activity`, and each `activity` frame replaces or removes
  * one entry. The real `useBotActivity` reads it from the host the bot's tab
  * is bound to (the real bot-tabs store), outside any tab as the Tracy entry

@@ -1034,7 +1034,7 @@ describe("chat session viewport hydration: review fixes", () => {
     }
   });
 
-  // The upgrade, which a kept store now meets (G1): the chat's scope no longer
+  // The upgrade, which a kept store now meets: the chat's scope no longer
   // carries the host version, so a host restarted onto a build that serves the
   // windowed snapshot hands it to the store that held the legacy one, rather
   // than to a new store. The downgrade is the test above.

@@ -630,7 +630,7 @@ const MIRRORED_PROP_NAMES: ReadonlySet<string> = new Set<OfficeSpriteName>([
  * A view draws its vans the way it draws everything else, and the two answers
  * are the two projections the office has: a side view for the views whose
  * ground is axis-aligned, a three-quarter view for the two that are seen from
- * the corner. Mission control has no road at all (decision C6) and its entry is
+ * the corner. Mission control has no road at all and its entry is
  * therefore never read - it is here because the record is exhaustive over the
  * view union, which is what makes adding a seventh view a compile error rather
  * than a silently missing sprite.

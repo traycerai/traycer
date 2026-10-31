@@ -30,7 +30,7 @@ import { NewConversationModalBody } from "../new-conversation-modal";
 import { NewConversationTransientContext } from "../new-conversation-transient-context";
 
 /**
- * F2: the in-Epic new-conversation modal shares the landing composer's
+ * The in-Epic new-conversation modal shares the landing composer's
  * placement SEMANTICS (one chip, one frozen submit client, one refusal),
  * resolved for its EPIC (`useEpicConversationPlacement`: per-Epic pin - the
  * Epic's last created chat's host - ?? the session's host ?? effective).
@@ -362,7 +362,7 @@ vi.mock("@/hooks/composer/use-composer-paste", async () => {
   return {
     ...actual,
     useComposerPaste: stubPasteResult,
-    // The modal calls `useComposerHashPaste` (T4's hash-only adapter), not
+    // The modal calls `useComposerHashPaste` (the hash-only adapter), not
     // `useComposerPaste` above - without this the real hook ran underneath.
     useComposerHashPaste: stubPasteResult,
   };

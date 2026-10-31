@@ -484,7 +484,7 @@ type OfficeErrand =
  * as it ends a walk to a moved desk. A second name for "sitting down" would be
  * a second answer to a question already answered.
  *
- * C1 is why `civic-*` belongs on this side of the line: a claim is WALKED LIKE
+ * `civic-*` belongs on this side of the line because a claim is WALKED LIKE
  * A SUMMONS. A crashed agent that had to wait for an errand slot would sit at
  * its desk with a crashed screen while thirty-two colleagues watered plants,
  * and the bed it had already been given would stand empty for as long as that
@@ -1900,7 +1900,7 @@ export class OfficeScene {
     this.pulse = input.pulse;
     this.partition = input.partition;
     // The archive's counter, taken here because this is where every part of it
-    // arrives. Not from the walk-outs (C5): a floor opened at a cursor where
+    // arrives. Not from the walk-outs: a floor opened at a cursor where
     // three hundred records were already archived has watched nobody leave.
     // And not from `statusById` either - that says how a desk is PAINTED, and
     // an archived agent carrying a failure or an unanswered request is painted
@@ -2727,7 +2727,7 @@ export class OfficeScene {
    * storey where that storey has one, ELSE ANY ARCHIVE IN ITS OWN BUILDING, and
    * through the storey's own entrance only where its building has none at all.
    *
-   * C5: the archive is a door with a counter rather than a room somebody sits
+   * The archive is a door with a counter rather than a room somebody sits
    * in, so walking into it is the whole of being archived. Every view that plans
    * no civic rooms keeps the entrance, which is what it always used.
    *
@@ -2780,7 +2780,7 @@ export class OfficeScene {
   }
 
   /**
-   * C4: A CRASHED AGENT GOES TO THE INFIRMARY, NOT TO THE COUNTER.
+   * A CRASHED AGENT GOES TO THE INFIRMARY, NOT TO THE COUNTER.
    *
    * This read `attention || failure`, because before there was an infirmary the
    * counter was the only place an office could send somebody who needed help.
@@ -2929,7 +2929,7 @@ export class OfficeScene {
    * The civic seat this agent's STATUS asks for, or `null` for a status that
    * asks for nothing.
    *
-   * C4: a crash goes to a bed, a wait goes to a chair, and `attention` is the
+   * A crash goes to a bed, a wait goes to a chair, and `attention` is the
    * one that still wants a person rather than a room - it queues at the counter
    * instead, which is `needsReception`.
    */
@@ -2946,7 +2946,7 @@ export class OfficeScene {
    * Who gets the next free bed: the agent that has been waiting for one
    * longest.
    *
-   * C3, and it is a list for the same reason the reception queue is one -
+   * It is a list for the same reason the reception queue is one -
    * "who started needing this first" is not recoverable from the statuses,
    * which say only who needs it NOW. Newcomers within a single sync break their
    * tie by id, so the order is still a function of the data and two runs of the
@@ -2967,7 +2967,7 @@ export class OfficeScene {
    * and `civicArrivalOrder` concatenates per-key lists in `characters` order:
    * arrival order kept inside each key and thrown away across them, so a freed
    * bed went to whoever sorted first in character order. Keying at the pool's
-   * granularity makes key and pool one-to-one, and C3 holds again.
+   * granularity makes key and pool one-to-one, preserving arrival order.
    *
    * A FLOOR KEY IS NOT EVEN STABLE FOR ONE AGENT ACROSS ITS OWN CLAIM, which
    * is the sharper form of the same point: `effectiveSeat` moves
@@ -2988,7 +2988,7 @@ export class OfficeScene {
   /**
    * WHO WANTS A ROOM, and the order in which they asked - per `(host, kind)`.
    *
-   * C3. "Who started needing this first" is not recoverable from the statuses,
+   * "Who started needing this first" is not recoverable from the statuses,
    * which say only who needs one now, so the order is KEPT rather than
    * re-derived: an agent that has been waiting keeps its place, one that has
    * stopped asking is dropped from it, and newcomers within a single sync break
@@ -3140,7 +3140,7 @@ export class OfficeScene {
         roomId: null,
         floorIndex: this.floorIndexOfAgent(agentId),
         wants: want,
-        // C2: the ward is as big as it is. An agent that finds it full keeps
+        // The ward is as big as it is. An agent that finds it full keeps
         // its desk and its glyph and stays on this list, so the next bed to
         // come free is its rather than whoever sorts first.
         shortfall: "none",
@@ -3225,7 +3225,7 @@ export class OfficeScene {
    */
   private startCivicWalk(character: OfficeCharacter, seat: OfficeSeat): void {
     const start = this.startTileOf(character);
-    // NO HANDOVER, deliberately, and this is C1's "walked like a SUMMONS"
+    // NO HANDOVER, deliberately: "walked like a SUMMONS" is
     // read as a rule about the desk rather than about the walk.
     //
     // The handover is for a seat an agent has genuinely left for a new home -
@@ -6902,7 +6902,7 @@ export class OfficeScene {
       // WANTING ONE IS ENOUGH - the wake pass is not for an agent the civic
       // pass is handling, whether or not that pass found it a seat.
       //
-      // Two things go wrong without this, and the second is the worse. C2:
+      // Two things go wrong without this, and the second is the worse:
       // an agent whose civic claim came back empty is the WARD being full,
       // not the office being short of desks, so waking it here takes a desk
       // shortfall and asks the planner to grow the storey on a status flip -
@@ -6947,7 +6947,7 @@ export class OfficeScene {
     layout: OfficeLayout,
     character: OfficeCharacter,
   ): string {
-    // C7: the counter people queue at IS the help desk, so it is called that
+    // The counter people queue at IS the help desk, so it is called that
     // wherever it is named - there was never a second reception.
     if (this.inReceptionQueue(character)) return "Help desk";
     if (character.errand === "arriving" || character.errand === "leaving") {

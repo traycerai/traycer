@@ -38,7 +38,7 @@ export function PicturedOptions(props: {
         Sample
       </span>
       {/* The radios need an owner, or a screen reader announces orphans with
-        no group name and no position in a set (G1-16). */}
+        no group name and no position in a set. */}
       <RadioGroupPrimitive.Root
         aria-label={label}
         value={value ?? ""}

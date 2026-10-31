@@ -44,7 +44,7 @@ const ASK_BY_REASON: Readonly<Record<NeedsYouReason, string>> = {
  * Browser prompts belong to their browser tab and are not agent asks.
  *
  * An approval an auto-judge is still reviewing never reaches here: the host
- * files no notification until the judge escalates it (S-41).
+ * files no notification until the judge escalates it.
  */
 export function needsYouReasonOf(
   row: MergedNotificationRow,

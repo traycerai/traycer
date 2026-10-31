@@ -1049,7 +1049,7 @@ describe("managed-command output window", () => {
     expect(sentFrames).toHaveLength(1);
   });
 
-  // S5's property - `checking` and `host-starting` render a WORDED,
+  // The property - `checking` and `host-starting` render a WORDED,
   // phase-named, bounded wait rather than a bare endless spinner - is owned
   // by the availability notice since the #1149 merge, and is pinned above by
   // "names the host-directory wait by phase" / "names the host-process wait

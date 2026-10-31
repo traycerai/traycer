@@ -6,7 +6,7 @@ import { useLayoutStore } from "@/stores/layout/layout-store";
  * Every arrangement write, as ONE recorded gesture.
  *
  * The one writer every section shares - the inspector's rows, the canvas's
- * drag, the rail's own "Move sidebar to..." item (S-32, `rail-view.ts`'s
+ * drag, the rail's own "Move sidebar to..." item (`rail-view.ts`'s
  * `setSidebarSide`) - so a write that skipped `recordGesture` would be a
  * change the undo stack never saw, invisible until someone pressed undo and
  * the wrong thing moved. It is also what makes a whole drag one step: the

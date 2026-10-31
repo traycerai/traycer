@@ -14,7 +14,7 @@ import type { RefusalNoteCopy } from "./fallback-copy";
  * The refusal used to be the card's local state, which the banner could not
  * see: a bare Retry refused as `message_changed` removed every button on the
  * card, `lastFailedAttempt` stayed as it was, and the banner - held back
- * because the card "offered" a switch - never returned (F4).
+ * because the card "offered" a switch - never returned.
  * Two copies of the rule would disagree on exactly that frame, so there is one,
  * here, and both read it.
  *
@@ -45,7 +45,7 @@ export interface FailedTurnRefusal {
  * draws its own card for the same attempt from this one entry. So the entry
  * lives exactly as long as SOME card of its turn is mounted - each card holds
  * it ({@link useHoldFailedTurnRefusal}), and only the last to leave takes it
- * along (F7). One card's leaving must not hand the others
+ * along. One card's leaving must not hand the others
  * back the buttons the host refused; and the last card's leaving must, so a
  * returning attempt never reappears under a stale refusal - which the card's
  * local state used to guarantee by being destroyed with it.

@@ -4,7 +4,7 @@ import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/s
 import { resolveSurfaceReadiness } from "@/components/layout/host-readiness-controller-context";
 
 /**
- * The DEFAULT-HOST arm's lease input (redesign P4.3, ruling D).
+ * The DEFAULT-HOST arm's lease input (ruling D).
  *
  * `resolveSurfaceReadiness` had no direct coverage at all before this file,
  * which is how the arm below kept its proxy for as long as it did: with the
@@ -140,7 +140,7 @@ describe("resolveSurfaceReadiness — absence of evidence keeps the old answer",
 
   /**
    * Looked up BY ID. Seeded with another host's death, this window must not
-   * inherit it — the P12 shape, at the gate.
+   * inherit it at the gate.
    */
   it("does not borrow another host's lease", () => {
     expect(

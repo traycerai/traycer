@@ -123,7 +123,7 @@ export function FallbackManualRungActions({
  * {@link FallbackManualRungActions} for a caller that names the chat itself:
  * a bot's channel, whose rows are not the failed session's transcript, offers
  * the actions of its trunk or a thread's session for the post that session
- * failed on (Tracy Bots T86).
+ * failed on.
  */
 export function ManualRungActions({
   turnId,

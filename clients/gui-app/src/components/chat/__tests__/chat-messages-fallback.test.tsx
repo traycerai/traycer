@@ -92,7 +92,7 @@ import {
 import { makeMessage } from "./chat-message-fixtures";
 
 /**
- * F22 integration pins for the fallback announcer's real wiring: props ->
+ * Integration pins for the fallback announcer's real wiring: props ->
  * store -> `ChatFallbackAnnouncementSource` -> `createFallbackAnnouncementObserver`
  * -> the polite live region, and the manual-switch publisher's real
  * mutation-outlives-unmount path. The pure-deriver contract itself (absorb
@@ -125,7 +125,7 @@ import { makeMessage } from "./chat-message-fixtures";
  *
  * SCOPE NOTE (D224/R1): a REAL windowed-snapshot foundation
  * (`createWindowedHarness`/`emptyWindowedSnapshot`/`deferredWindowedSnapshot`/
- * `completeTail`, adapted from G1's
+ * `completeTail`, adapted from
  * `chat-session-store-last-fallback-outcome.test.ts`) is fully wired
  * through both D224 epoch arms below, and a separate R1 scenario (its own
  * harness, its own tail response, real `useRenderedMessages`) proves the
@@ -214,7 +214,7 @@ const PREFERRED_PROFILE_LABEL = FAILED_PROFILE_LABEL;
 // chat is failing away FROM, which is worth saying even on a same-provider
 // destination switch. The destination (`TARGET_IDENTITY`) is the one that
 // omits the provider clause on a same-provider switch (`includeProvider:
-// false`, F5's same-provider case) - these two are NOT symmetric, and using
+// false`) - these two are NOT symmetric, and using
 // the destination's rule for the failed side was the actual bug this
 // literal fixes.
 const FAILED_IDENTITY = `Codex · gpt-6-astra · high on ${FAILED_PROFILE_LABEL}`;
@@ -394,7 +394,7 @@ function createHarness(): Harness {
 }
 
 /**
- * The REAL windowed-snapshot foundation (D224/R1), adapted from G1's
+ * The REAL windowed-snapshot foundation (D224/R1), adapted from
  * `chat-session-store-last-fallback-outcome.test.ts` (`createWindowedHarness`
  * / `deferredWindowedSnapshot` / `completeTail`) - NOT a copy of that file,
  * read and re-derived against this file's own `HOST_ID`/`EPIC_ID`/`CHAT_ID`.
@@ -1018,7 +1018,7 @@ interface ChatRenderState {
   hydrationSequence: number;
   coldRewrittenMessageIds: ReadonlySet<string>;
   visible: boolean;
-  // `null` everywhere except the T4 real-windowed-hydration case, which
+  // `null` everywhere except the real-windowed-hydration case, which
   // passes the harness's actual `state.transcriptWindow` instead.
   transcriptWindow: TranscriptWindow | null;
   // `HOST_ID` everywhere except the parent rebase reset control below, which
@@ -2678,7 +2678,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
   // rendered observer goes away and comes back). A shared fixture keeps a
   // positive arm's unrelated changes from masking a dead held-snapshot path.
   //
-  // Exact paired sequence, per the coordinator's R3 gate:
+  // Exact paired sequence:
   //   1. Establish a real store baseline with NO outcome; the registry lease
   //      is independent of the rendered component (`registerHarness` seeds
   //      it directly).
@@ -2949,7 +2949,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     chat.rerenderWith({ baselineEpoch: newEpoch });
     await flushAnnouncer();
     // Absorbed as the re-established baseline (`changedEpoch`), never
-    // spoken - G1's rule: a pre-baseline block is absorbed forever, with no
+    // spoken: a pre-baseline block is absorbed forever, with no
     // later replay once tail hydration catches up either.
     expect(liveRegionText()).toBe("");
 
@@ -3676,7 +3676,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       // Deferring instead carries the event PAST that window: the hold outlives
       // every absorbing frame and the deadline then waits for a speaking one,
       // which is exactly the frame the filter is down. Falsification: gate only
-      // the deferred exits on `canSpeak` (the P1 fix alone) - the hold is taken
+      // the deferred exits on `canSpeak` (the fix alone) - the hold is taken
       // while not ready, survives the restore, and the last block below speaks
       // a switch the user already lived through.
       vi.useFakeTimers();

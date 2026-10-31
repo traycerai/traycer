@@ -342,7 +342,7 @@ describe("projectFleetUpdateView — staleness", () => {
   });
 });
 
-// G4: staleness used to overwrite the
+// Staleness used to overwrite the
 // observed phase with `unknown` and drop it. `lastKnownKind` is what a surface
 // reads to say "last seen preparing v1.2.3" instead of a bare "offline" — and
 // the invariant that makes it SAFE to add beside `kind` is that it can never
@@ -1074,7 +1074,7 @@ describe("projectFleetUpdateView — progress", () => {
     });
   });
 
-  // G5: the wire makes `percent`,
+  // The wire makes `percent`,
   // `bytes` and `totalBytes` independently nullable, so an active operation
   // with no percentage can still have MEASURED bytes — a host streaming an
   // unsized body. The first shape of `projectProgress` discarded them the
@@ -1246,7 +1246,7 @@ describe("warrantsFastPoll", () => {
   );
 });
 
-// G8: direct `holdsLifecycleGate` unit coverage, independently of any banner
+// Direct `holdsLifecycleGate` unit coverage, independently of any banner
 // or Overview seam — the finding-7 gap was that the only proof lived behind an
 // interaction test that could not fail for the right reason.
 describe("holdsLifecycleGate — direct unit coverage", () => {
@@ -1739,7 +1739,7 @@ describe("preferLiveOverRecord — same-attempt ordering and the different-attem
     // green. This is the case that separates them.
     //
     // The split is not contrived, it is the steady state this two-clock design
-    // exists for (round-1 F3): `wireNowMs` is the status query's own
+    // exists for: `wireNowMs` is the status query's own
     // `dataUpdatedAt`, which STOPS ADVANCING exactly when the host goes down,
     // while `recordNowMs` is a one-second renderer tick that keeps running.
     // So a current record judged against a frozen wire instant is rejected as
@@ -1755,7 +1755,7 @@ describe("preferLiveOverRecord — same-attempt ordering and the different-attem
     // the wire clock too, so a window measured against the tick would let the
     // frozen instant read as fresh and the pin would never reach the bound it
     // is about. This is the shape an unhealthy read actually has — the health
-    // is folded into `freshUntilMs`, which is what round-1 F3 established.
+    // is folded into `freshUntilMs`.
     const staleWire = observation({
       freshUntilMs: NOW_MS - 20_000,
       operation: attemptOperation({ attemptId: "attempt-1" }),

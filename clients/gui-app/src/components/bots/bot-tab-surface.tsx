@@ -114,7 +114,7 @@ function isBotTabView(value: string): value is BotTabView {
 /**
  * A bot's tab (Tracy Bots). The person never picks the machine a bot runs
  * on: the tab opens through the host it was created on (this host, from
- * Home), asks it `bot.open`, and stays there whatever the answer (T65) -
+ * Home), asks it `bot.open`, and stays there whatever the answer -
  * the tab's host serves the bot's channel, its threads and what the bot is
  * doing, whether it runs the bot (bound here, or claimed here because its
  * host was away) or another host does; the bot's host only runs its turns.
@@ -481,7 +481,7 @@ function useBotTabRail(
 }
 
 /**
- * The bot's session shown in place of the channel's views (Tracy Bots T93),
+ * The bot's session shown in place of the channel's views,
  * and where the channel lands once it is back. A receipt, a check-in's link
  * or a thread's "Thread session" opens a session; each open is a new visit,
  * so the same turn opened again lands again. The session's links show the

@@ -21,8 +21,8 @@
  * existing pattern - and reads the REAL landing draft store rather than a
  * mock, which is where the handoff's durable row now lands.
  *
- * The retired prompt stash's own mechanisms - a queued transaction (R9F1), an
- * aborted live one (R10F1) and a hydrate-time switch (R8F1) - had their suites
+ * The retired prompt stash's own mechanisms - a queued transaction, an
+ * aborted live one and a hydrate-time switch - had their suites
  * deleted with it: the install is synchronous now, so none of those phases
  * exists to fence.
  */

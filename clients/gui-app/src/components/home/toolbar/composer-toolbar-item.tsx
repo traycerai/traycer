@@ -48,7 +48,7 @@ export interface ComposerToolbarItemsProps {
  * (`LayoutClusterContextMenu`) and resolves the region from the element the
  * pointer was over, because a Radix root per item cost twenty-eight mounted
  * roots on a four-tile canvas for a gesture used a handful of times a session
- * (L-19, G3-10).
+ * (L-19).
  */
 export function renderToolbarItem(
   id: ToolbarRegionId,

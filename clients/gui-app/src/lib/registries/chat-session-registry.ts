@@ -274,7 +274,7 @@ export function disposeAllChatSessions(): void {
 }
 
 /**
- * Renderer parking (plan C, decision C1): a parked epic holds no
+ * Renderer parking: a parked epic holds no
  * `chat.subscribe`.
  *
  * Wired here, on the plane that OWNS chat sessions, rather than called from

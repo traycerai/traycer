@@ -24,7 +24,7 @@ export interface NotificationCenterOpenLifecycle {
 }
 
 /**
- * Owns the T04 focus/modality contract for the bell-anchored popover:
+ * Owns the focus/modality contract for the bell-anchored popover:
  * keyboard and programmatic opens move focus to the surface's heading;
  * pointer opens do not steal focus. Escape restores focus to the trigger;
  * every other close reason (successful activation, settings navigation,

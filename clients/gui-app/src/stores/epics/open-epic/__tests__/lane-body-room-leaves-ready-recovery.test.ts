@@ -377,7 +377,7 @@ describe("a body whose room leaves ready while a lease is still held", () => {
   it("a last release must not drop the worker's demand while another acquire is still resolving it", async () => {
     // The recipe: A holds the body, the room drops, and a SECOND
     // mount (B) starts acquiring the same artifact while A's release is still
-    // in flight. Before the P1 fix, the last KNOWN holder's release posted
+    // in flight. Before the fix, the last KNOWN holder's release posted
     // `body/release` (or the equivalent awaiting release) as soon as its own
     // count hit zero, with no regard for an acquire that was ABOUT to be told
     // it shared that exact demand - so B's materialize resolved to a body the

@@ -370,7 +370,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
             ? bounds.chairs
             : 0,
         );
-        // C5 and C7: a door with a counter and a counter with a queue. Neither
+        // A door with a counter and a counter with a queue. Neither
         // is a room anybody sits down in.
         expect(seatsOf("archive")).toBe(0);
         expect(seatsOf("help-desk")).toBe(0);
@@ -506,7 +506,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
             }).text;
           expect(readingAt(plate.widthTiles)).toBe(readingAt(GENEROUS_TILES));
         } else if (room.kind === "archive") {
-          // WIDER THAN THE ROOM, on purpose: C5's archive is a DOOR, one tile,
+          // WIDER THAN THE ROOM, on purpose: the archive is a DOOR, one tile,
           // and a one-tile plate holds no word. The constant is shared so that
           // every FRONTAGE view's records door is labelled the same width; the
           // fixed-width view plates its door like its other three, wider.
@@ -762,7 +762,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
     /**
      * A KERB IS A PROMISE, and this is the whole of it.
      *
-     * C6 says which rooms make it - a vehicle drives to a ward and to a counter,
+     * A vehicle drives to a ward and to a counter,
      * and to neither a bench nor a records door - and ruling 6 says what it
      * means: a road tile one step from that room's own door.
      */
@@ -771,7 +771,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
       roadTiles: ReadonlySet<string>,
     ): void => {
       const kerb = room.kerbTile;
-      // Only the two rooms something drives to name one (C6).
+      // Only the two rooms something drives to name one.
       if (room.kind === "waiting-room" || room.kind === "archive") {
         expect(kerb).toBeNull();
         return;
@@ -1739,7 +1739,7 @@ describe("floor civic sign width", () => {
  * `null` a wildcard, or the floor preference a free-for-all - passes every case
  * about the hall and fails this one. The falsifier is a ward that is FULL on one
  * host while another host's ward has beds going spare: the overflowing agent
- * keeps its desk (C2 - capacity is the cap) and does not cross the building line
+ * keeps its desk (capacity is the cap) and does not cross the building line
  * to lie down.
  */
 describe.each(["floor", "towers", "building"] as const)(
@@ -1819,7 +1819,7 @@ describe.each(["floor", "towers", "building"] as const)(
       expect(theirs.seatIds.length).toBeGreaterThan(0);
       expect(tally.occupiedByRoom.get(theirs.civicRoomId) ?? 0).toBe(0);
 
-      // And the overflow kept its desk rather than being dropped somewhere: C2,
+      // And the overflow kept its desk rather than being dropped somewhere:
       // capacity is the cap, and an agent that finds the ward full stays put
       // with its glyph up.
       const inWard = patients.filter(

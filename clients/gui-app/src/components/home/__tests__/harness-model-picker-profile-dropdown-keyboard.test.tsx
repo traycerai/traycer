@@ -278,7 +278,7 @@ function OpenProfileDropdownSurface() {
 }
 
 /**
- * T5: the load-bearing gap named the ACTUAL Radix
+ * The load-bearing gap named the ACTUAL Radix
  * `DropdownMenu` primitive - `terminal-agent-fork-dialog-real-picker.test.tsx`
  * mocks it as native `<button disabled>` elements, which don't reproduce
  * Radix's own roving-tabindex/focus-skip behavior for a disabled item. This

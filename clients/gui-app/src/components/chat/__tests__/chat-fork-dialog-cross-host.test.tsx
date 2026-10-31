@@ -1471,7 +1471,7 @@ describe("ChatForkDialog cross-host routing", () => {
     const scope = dialogMocks.lastWorkspace?.hostScope;
     expect(scope?.kind === "selected" ? scope.hostId : null).toBe(TAB_HOST_ID);
 
-    // F2: a 1.0 / negotiated-absent row is still in the directory. Inert
+    // A 1.0 / negotiated-absent row is still in the directory. Inert
     // leads, so those rows must not also carry "needs update".
     const oldRow = screen.getByTestId(`fork-host-${OLD_HOST_ID}`);
     const absentRow = screen.getByTestId(`fork-host-${ABSENT_HOST_ID}`);

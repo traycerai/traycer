@@ -487,7 +487,7 @@ function PrNumberAnchor(props: {
   readonly children: ReactNode;
 }): ReactNode {
   // In-flight guarded: a double click on the badge would otherwise fire two
-  // bridge requests and open two OS tabs (R10).
+  // bridge requests and open two OS tabs.
   const { isPending, openLink } = useOpenLinkWithPending();
   const handleClick = useCallback(
     (event: MouseEvent<HTMLAnchorElement>): void => {

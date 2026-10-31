@@ -1,5 +1,5 @@
 /**
- * A bot's session holding a message FROM a task agent (Tracy Bots T108): the
+ * A bot's session holding a message FROM a task agent: the
  * REAL `BotSessionView` over the REAL `BotChatTranscript` and `ChatMessages`,
  * with no `<EpicSessionProvider>` anywhere above it, as a bot tab mounts it.
  * Tracy's trunk answers every A2A request a task agent sends it, so its

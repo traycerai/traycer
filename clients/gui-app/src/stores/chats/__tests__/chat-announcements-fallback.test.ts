@@ -44,7 +44,7 @@ import {
 } from "@/stores/chats/chat-announcements";
 
 /**
- * F22 pure-deriver pins for `chat-announcements.ts`'s fallback exports.
+ * Pure-deriver pins for `chat-announcements.ts`'s fallback exports.
  *
  * These test the ADAPTER's frozen sentences and the OBSERVER's provenance
  * rules, entirely independent of React, the store, and the eventual
@@ -534,7 +534,7 @@ describe("fallbackTraversalAnnouncement", () => {
   });
 
   it("hold: a null plan (host found no takeable rung) states exhaustion truthfully, distinct from a genuinely still-resolving 'checking' plan and from an unresolved switch destination", () => {
-    // `impendingAction: null` on the real F5 DTO means exhaustion, not
+    // `impendingAction: null` on the real DTO means exhaustion, not
     // "still resolving" - `plan === null` here must read the same way.
     const exhausted = fallbackTraversalAnnouncement({
       pending: pendingFallback({

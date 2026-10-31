@@ -71,7 +71,7 @@ const REASON_CASES: ReadonlyArray<
     { hostKind: "interview.requested", payload: INTERVIEW_PAYLOAD },
     "reply",
   ],
-  // Auto-judge (S-41) never files an approval otherwise.
+  // Auto-judge never files an approval otherwise.
   ["a resolved approval", { resolvedAt: 2_000 }, null],
   [
     "a resolved interview",

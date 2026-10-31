@@ -241,7 +241,7 @@ vi.mock("@/lib/host/runtime", () => ({
   // `useHostClient()` rather than `useHostBinding()?.hostClient` - both must
   // resolve to the same fixture client or the component throws on render.
   useHostClient: () => hostBindingMock.current?.hostClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => hostBindingMock.current?.hostClient,
 }));
 

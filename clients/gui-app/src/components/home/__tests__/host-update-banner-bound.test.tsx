@@ -30,7 +30,7 @@ interface HostBindingFixture {
     readonly onChange: (cb: () => void) => { dispose: () => void };
   };
   /**
-   * G8's isolation test additionally mounts the REAL `HostOverviewPanel`
+   * The isolation test additionally mounts the REAL `HostOverviewPanel`
    * (`@/lib/host`'s `useHostBinding` re-exports from `./runtime`, so this
    * mock covers both call sites) — which reads `binding.hostClient`, not
    * `binding.directory`. One fixture object carries both shapes so the
@@ -46,7 +46,7 @@ vi.mock("@/lib/host/runtime", async (importOriginal) => {
   return { ...actual, useHostBinding: () => hostBindingMock.current };
 });
 
-// G8's isolation test needs the real `HostSettingsPanel` seam, which reads
+// The isolation test needs the real `HostSettingsPanel` seam, which reads
 // its host scope through this hook rather than through props.
 const scopeOverrides = vi.hoisted((): { current: Record<string, unknown> } => ({
   current: {},
@@ -111,7 +111,7 @@ vi.mock("sonner", () => ({
   },
 }));
 
-// G7: the banner's Diagnostics button now routes through the in-app Settings
+// The banner's Diagnostics button now routes through the in-app Settings
 // modal (`useSystemTabModalActions().openSettings`), which needs a mounted
 // `<RouterProvider>` this file's harness does not stand up. Mocked rather than
 // wired for the same reason `use-host-directory-list-query` and
@@ -366,7 +366,7 @@ async function findPhaseText(): Promise<string> {
 }
 
 /**
- * G8's isolation replacement: the REAL production composition — this
+ * The isolation proof uses the REAL production composition — this
  * computer's `HostOverviewPanel` (Restart, Diagnostics and the overflow menu
  * all live on it) mounted beside the real `HostUpdateBanner`, both reading the
  * SAME fixture. Any regression that made the failing attempt inert
@@ -562,7 +562,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     expect(percentEl.textContent).toBe("55%");
   });
 
-  // G5 — measured byte progress, independently of percentage.
+  // Measured byte progress, independently of percentage.
   it("bytes-only (no percent measured) renders the byte text AND keeps the bar indeterminate", async () => {
     bindLocalHost({
       "host.status": () =>
@@ -733,7 +733,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
 
   // 5. The banner never blocks host controls.
   //
-  // G8: the ORIGINAL version of this
+  // The ORIGINAL version of this
   // test mounted two arbitrary sibling `<button>`s and asserted their
   // `.disabled` property. That renders neither Restart, Diagnostics,
   // Activate nor the overflow menu — none of the production controls the
@@ -885,7 +885,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     });
   });
 
-  // G7. Terminal lifecycle: Retry / Diagnostics / Dismiss for a failed rich
+  // Terminal lifecycle: Retry / Diagnostics / Dismiss for a failed rich
   // attempt, evidence retention on the Overview, dismissal re-arming on a
   // newer attempt, and complete's auto-collapse.
   describe("G7 — terminal lifecycle", () => {
@@ -1136,7 +1136,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
   });
 
   // G9 — the landing page never shows a success view at all. Product decision
-  // (superseding G7's now-removed auto-collapse test and the "complete" case
+  // (superseding the now-removed auto-collapse test and the "complete" case
   // in STATE_CASES above): a completed or finalizing-record update is
   // Settings-only. Landing shows nothing for it, on first read, once retained
   // as a stale record, and across a genuine live transition into it — and it

@@ -412,7 +412,7 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
     );
   });
 
-  // G1's control: the scope dropped the websocket URL, but only for a LOCAL
+  // Control: the scope dropped the websocket URL, but only for a LOCAL
   // host. A remote host's relay attach URL is part of its owner identity, so
   // a move there still rebuilds, exactly as the public-key rotation above does.
   it("still rebuilds when a remote host's relay attach URL changes", async () => {
@@ -446,7 +446,7 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
 });
 
 /**
- * The P0's actual user-visible failure, composed end to end.
+ * The actual user-visible failure, composed end to end.
  *
  * The isolated tests all passed while this was broken, which is the point of
  * putting it here: the mapper collapsed `unknown` into a non-dialable entry,
@@ -622,7 +622,7 @@ describe("a live chat session survives a degraded liveness read", () => {
     expect(tracked.records()[0].closeCount).toBe(0);
   });
 
-  // G1 for a remote host, which has no booting shape: what changes when it
+  // A remote host has no booting shape: what changes when it
   // restarts is the cloud's verdict, and a confirmed `offline` nulls the
   // transport key. The lease is what knows the restart was announced. The
   // control is the test above that still releases on the same verdict with no
@@ -708,7 +708,7 @@ describe("a live chat session survives a degraded liveness read", () => {
 });
 
 /**
- * G1: a local host restart keeps the chat's store. The scope is the chat's
+ * A local host restart keeps the chat's store. The scope is the chat's
  * identity (host id, kind and owner identity), so neither the websocket URL
  * nor the host version is part of it, and the handle is held while the host is
  * coming back. Before this, every restart disposed the store and its

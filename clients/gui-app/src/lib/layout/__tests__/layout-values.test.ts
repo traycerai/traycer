@@ -43,7 +43,7 @@ describe("what each preset ships", () => {
     expect(PRESET_VALUES.detailed.model.reasoningControl).toBe("list");
   });
 
-  // Chat display settings (audit R1, R3): Tool activity, Thinking and
+  // Chat display settings: Tool activity, Thinking and
   // Timestamps per preset.
   it("ships toolActivity, thinking and timestamps per preset", () => {
     // Default: toolActivity chip, thinking shown+chip, timestamps shown.
@@ -290,7 +290,7 @@ describe("resolvePersistedOverrides on model.reasoningControl", () => {
   });
 });
 
-// Chat display settings (audit R1, R3).
+// Chat display settings.
 describe("resolvePersistedOverrides on toolActivity/thinking/timestamps", () => {
   it("keeps a valid patch for each: toolActivity (Access's one-leaf size shape), thinking (shown and size), timestamps (shown alone)", () => {
     const overrides = resolvePersistedOverrides({

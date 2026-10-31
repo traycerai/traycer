@@ -79,7 +79,7 @@ const hostBindingMock = vi.hoisted(() => ({
 vi.mock("@/lib/host/runtime", () => ({
   useHostBinding: () => hostBindingMock.current,
   useHostClient: () => hostBindingMock.current?.hostClient ?? null,
-  // The spine, a separate export since redesign P2.1.
+  // The spine, a separate export.
   useHostRuntimeClient: () => hostBindingMock.current?.hostClient ?? null,
 }));
 
@@ -170,8 +170,8 @@ function isRefetchInterval(
   return typeof value === "function";
 }
 
-// Real-hook regression coverage for the removed model-query interval (F1 /
-// R2-F1): unlike availability above, model queries must never install a
+// Real-hook regression coverage for the removed model-query interval:
+// unlike availability above, model queries must never install a
 // `refetchInterval` - on success OR error - at EITHER call site
 // (`useGuiHarnessModelsQuery` and `useGuiHarnessCatalog`'s batched fan-out).
 // A surviving interval on a persistently-failing model fetch would keep

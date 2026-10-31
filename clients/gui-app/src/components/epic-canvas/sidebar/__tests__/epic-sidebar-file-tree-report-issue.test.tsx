@@ -122,8 +122,8 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-1",
 }));
 
-// The surface pin (`useSurfaceHostPin` -> `useEffectiveHostId`, redesign
-// P1.2) resolves against this, not the directory's active-host hook.
+// The surface pin (`useSurfaceHostPin` -> `useEffectiveHostId`)
+// resolves against this, not the directory's active-host hook.
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-1",
 }));
@@ -148,7 +148,7 @@ vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
 }));
 
 // `useSurfaceHostClient` (also reached from `FileTreePanelBodyLive`, same
-// P0.2 pin chain) resolves via this hook's real implementation, which needs
+// pin chain) resolves via this hook's real implementation, which needs
 // a full `HostClient` shape (`resolveHostById`, `getActiveHost`) this
 // suite's `@/lib/host/runtime` stub never carried - stub it directly, same
 // pattern the sibling picker suites use.
@@ -196,7 +196,7 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => ({ getActiveHostId: () => "host-1" }),
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => ({ getActiveHostId: () => "host-1" }),
 }));
 
@@ -289,7 +289,7 @@ vi.mock("@/stores/epics/epic-sidebar-expansion-store", () => ({
 }));
 
 // The rail's shape and its per-panel Hide/Show live beside the bijection
-// now, not on the panel store (G1-09), so the sidebar's two reads are
+// now, not on the panel store, so the sidebar's two reads are
 // stubbed where they are actually imported from.
 vi.mock("@/lib/layout/rail-view", () => ({
   useLayoutRail: () => [{ kind: "panel", id: "railFileTree" }],
@@ -431,7 +431,7 @@ function fileTreeBindingsResult() {
 
 vi.mock("@/hooks/worktree/use-worktree-list-bindings-for-epic-query", () => ({
   useWorktreeListBindingsForEpic: () => fileTreeBindingsResult(),
-  // `useFileTreeWorkspaceSelection` (also reached from the P0.2 pin chain)
+  // `useFileTreeWorkspaceSelection` (also reached from the pin chain)
   // calls the host-client-parametric variant, not the app-wide one above.
   useWorktreeListBindingsForEpicForClient: () => fileTreeBindingsResult(),
 }));

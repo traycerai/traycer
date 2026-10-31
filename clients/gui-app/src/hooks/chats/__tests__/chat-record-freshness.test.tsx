@@ -77,7 +77,7 @@ const runtime: { client: HostClient<HostRpcRegistry> | null } = vi.hoisted(
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
   useHostClient: () => runtime.client,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => runtime.client,
   useHostBinding: () =>
     runtime.client === null

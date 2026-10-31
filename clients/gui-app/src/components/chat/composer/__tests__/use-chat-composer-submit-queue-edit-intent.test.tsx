@@ -161,7 +161,7 @@ function mountSubmit(
         onSideChat: null,
         targetHostId: null,
         queueEditTargetId: props.queueEditTargetId,
-        // T5's gate is off in this fixture: it predates the gate and asserts the
+        // The gate is off in this fixture: it predates the gate and asserts the
         // inline behaviour, which is what `false` preserves exactly.
         getDraftBlobBridgeSupported: () => false,
       }),

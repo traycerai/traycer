@@ -196,7 +196,7 @@ const JOIN_ON_REVEAL_CLASS =
 
 /**
  * The row's per-tab accent colour: the tab's own colour, ignored while the
- * title is still generating (the tile stays neutral then, S-17) and never a
+ * title is still generating (the tile stays neutral then) and never a
  * stand-in for the auto-tint hash - that no longer reaches this row at
  * all. `null` means no colour: `SideTabAccent` renders it transparent.
  */

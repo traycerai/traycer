@@ -25,7 +25,7 @@ import { firstLineOf } from "@/lib/bots/bot-trunk-model";
 import { postTextOf } from "@/lib/bots/reply-row";
 
 /**
- * One of the bot's sends in its session, read-only (Tracy Bots T93): where it
+ * One of the bot's sends in its session, read-only: where it
  * went - the channel, or the session's thread named by its post - and what it
  * posted, its Markdown rendered as the channel renders it, a reply's choices and a question's options drawn as they read, with
  * nothing to press but the link to where it landed. What in a task a send

@@ -72,7 +72,7 @@ describe("deriveHostHealth — absence of evidence is not death", () => {
    * nothing for the attach flag to gate, so the test passes identically
    * whether `authorityAttached` is consulted or ignored entirely. It would be
    * an assertion about an input the code never reaches, which is the same
-   * vacuity that let sealed probe P12 survive. A ready lease that must NOT be
+   * vacuity that let a sealed probe survive. A ready lease that must NOT be
    * believed is what makes the flag load-bearing.
    */
   it("ignores even a READY lease until the authority has attached", () => {
@@ -142,7 +142,7 @@ describe("deriveHostHealth — the lease outranks the cloud DTO", () => {
   /**
    * The direction the DTO can never produce. The cloud still holds a
    * `connectable` lease — it has up to 15 minutes to notice — while this app's
-   * own transports have concluded the host is gone. F26's window, narrowed by
+   * own transports have concluded the host is gone. This window is narrowed by
    * evidence instead of waited out.
    */
   it("says Offline for a dead lease even while the cloud still reports connectable", () => {
@@ -158,7 +158,7 @@ describe("deriveHostHealth — the lease outranks the cloud DTO", () => {
   });
 
   /**
-   * `degraded` is a live SERVING state, not a demotion (P3.2's disambiguation:
+   * `degraded` is a live SERVING state, not a demotion (disambiguation:
    * `HostCompatibility.degraded` died as user-facing, `HostLeaseSnapshot`'s
    * `degraded` is a lease that still works). Rendering it as a failure would
    * put a fault on a host that is answering.

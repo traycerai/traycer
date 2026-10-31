@@ -150,7 +150,7 @@ interface UseChatComposerSubmitArgs {
   readonly queueEditTargetId: string | null;
   /**
    * Whether THIS chat's live stream can materialize a hash-only draft image at
-   * send (T1's `chat.subscribe` 1.12 capability). The gate is per-session and
+   * send (`chat.subscribe` 1.12 capability). The gate is per-session and
    * not app-wide: one host can serve one chat on a bridging stream and another
    * on a 1.9 one.
    *

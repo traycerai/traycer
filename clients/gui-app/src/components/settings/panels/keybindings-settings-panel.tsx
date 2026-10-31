@@ -65,7 +65,7 @@ export function KeybindingsSettingsPanel() {
 
   // Lifted (rather than owned by `SummonHotkeyRow`) so the "Reset all to
   // defaults" button below can share the exact same in-flight mutation - one
-  // request at a time, and the row's pending-disable (R3) also covers a
+  // request at a time, and the row's pending-disable also covers a
   // reset triggered from here.
   const { bridge: summonBridge, status: summonStatus } = useSummonHotkey();
   const summonMutation: SummonHotkeyMutation = useMutation({
@@ -292,7 +292,7 @@ interface SummonHotkeyRowProps {
 function SummonHotkeyRow(props: SummonHotkeyRowProps) {
   const { status, mutation } = props;
   const bindings = useKeybindingStore((s) => s.bindings);
-  // Local, capture-session-scoped: a blocked ENABLE attempt (R1) is a
+  // Local, capture-session-scoped: a blocked ENABLE attempt is a
   // distinct event from the OS `rejected` status and from a capture-time
   // conflict (which `ChordCaptureCore` already renders itself) - it needs
   // its own message slot, cleared on the next attempt.

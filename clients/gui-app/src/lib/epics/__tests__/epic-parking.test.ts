@@ -4745,7 +4745,7 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
     }
   });
 
-  // Pin 15 (P1 - consumed send restoration). An accepted send's content is
+  // Pin 15 (consumed send restoration). An accepted send's content is
   // consumed by `takeSetupFailedRestoration` (what a setup-failed replay
   // calls once the composer takes the content back), nulling `restore` while
   // `confirmedByHost` stays `false` forever. This is the case

@@ -12,7 +12,7 @@ import { admitsLocalPlane, type AuthStatus } from "@/stores/auth/auth-store";
 export type HostReadinessScope = "none" | "default-host" | "tab-host";
 
 /**
- * COMPATIBILITY IS NOT A READINESS KIND (D13, P3.2).
+ * COMPATIBILITY IS NOT A READINESS KIND (D13).
  *
  * There used to be three more members here - `compatibility-checking`,
  * `compatibility-error`, `incompatible-host` - and a `readinessForCompatibility`
@@ -139,7 +139,7 @@ export interface DefaultHostReadinessPresentation {
   readonly openSettings: () => void;
   // `requestRespawn`/`respawnPending` sat here too, owned once so two
   // default-host slots in a split shared one respawn lock. Their last renderer
-  // was the host-boot body's slow-stage Retry, which P3.4 deleted along with
+  // was the host-boot body's slow-stage Retry, which the redesign deleted along with
   // the wrappers - respawn is the desktop MENU command's job now (and the
   // health monitor's), both of which the window narrator already narrates
   // through the shared mutation lane.
@@ -149,7 +149,7 @@ export interface DefaultHostReadinessPresentation {
    *
    * It is diagnostics, not narration. The fields that drove narration -
    * `errorMessage`, `retry`, `retrying` - went with the surfaces that read
-   * them (the status strip and the gate's two compat cards, P3.2); leaving
+   * them (the status strip and the gate's two compat cards); leaving
    * them here would be the retry wiring orphaned rather than deleted. What a
    * user is TOLD about compatibility now comes from the lease's `incompatible`
    * arm, via the window narrator and the surface chip.
@@ -606,7 +606,7 @@ export function projectDefaultHostReadiness(args: {
  * reason: `mobile-no-host` is a shell with no host concept at all (not a
  * lease state); `restoring-request-context` is an auth fact;
  * `provisioning-error` and `removed-host` are local lifecycle terminals that
- * P3.4 re-homes with the machinery that owns them. (The `compatibility-*`
+ * were re-homed with the machinery that owns them. (The `compatibility-*`
  * pair that used to be listed here is gone entirely - see `SurfaceReadiness`.)
  * Adding a kind here without a matching modal variant would silently delete
  * its narration.

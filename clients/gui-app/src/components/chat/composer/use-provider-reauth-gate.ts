@@ -222,7 +222,7 @@ export function useProviderReauthGate(
   profileId: string | null,
   active: boolean,
   /**
-   * S11: the SAME `ComposerSeedSource.kind` the caller's `useComposerToolbarStore`
+   * The SAME `ComposerSeedSource.kind` the caller's `useComposerToolbarStore`
    * call is fed - `"authoritative"` when `profileId` came from the chat's own
    * authoritative settings (a real pin), anything else when it came from a
    * fallback/picker-default seed. Consuming the identical discriminant (not a
