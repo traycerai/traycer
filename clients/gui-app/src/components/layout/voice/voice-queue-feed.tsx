@@ -252,6 +252,7 @@ export function VoiceStoppedSources(props: {
           }
           noteStopped={owner.noteStopped}
           forgetStopped={owner.forgetStopped}
+          dropStopped={owner.dropStopped}
         />
       ))}
     </>
@@ -268,15 +269,25 @@ function VoiceStoppedWatch(props: {
   readonly channelChatId: string;
   readonly noteStopped: VoiceQueueOwner["noteStopped"];
   readonly forgetStopped: (botId: string) => void;
+  readonly dropStopped: (botId: string) => void;
 }): null {
-  const { botId, hostId, channelChatId, noteStopped, forgetStopped } = props;
+  const {
+    botId,
+    hostId,
+    channelChatId,
+    noteStopped,
+    forgetStopped,
+    dropStopped,
+  } = props;
   const activity = useBotActivity(botId);
   useEffect(() => {
     // No reading (the stream closed for good, or the bot is gone): what was
-    // read before no longer stands, and unknown is not idle, so nothing is
-    // seeded from it either.
+    // read before no longer stands, in the kept reading or in the live
+    // queue, and unknown is not idle, so nothing is seeded from it either.
+    // (Before the first snapshot there is nothing of this bot's to drop; the
+    // snapshot, when it comes, is read as usual.)
     if (activity === null) {
-      forgetStopped(botId);
+      dropStopped(botId);
       return;
     }
     noteStopped({
@@ -285,7 +296,7 @@ function VoiceStoppedWatch(props: {
       channelChatId,
       stopped: stoppedAnswersOf(activity),
     });
-  }, [activity, botId, channelChatId, forgetStopped, hostId, noteStopped]);
+  }, [activity, botId, channelChatId, dropStopped, hostId, noteStopped]);
   useEffect(() => () => forgetStopped(botId), [botId, forgetStopped]);
   return null;
 }

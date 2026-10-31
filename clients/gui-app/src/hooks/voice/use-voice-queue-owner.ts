@@ -103,6 +103,12 @@ export interface VoiceQueueOwner {
   readonly noteStopped: (facts: StoppedFacts) => void;
   /** The bot's tab closed: its reading is no longer kept. */
   readonly forgetStopped: (botId: string) => void;
+  /**
+   * The bot's stream closed for good, or the bot is gone: no reading will
+   * come again, so its stopped answers leave the live queue too (their
+   * pending reads and offers withdrawn), besides the kept reading.
+   */
+  readonly dropStopped: (botId: string) => void;
 }
 
 /** One bot's stopped answers, as `syncStopped` takes them less the time. */
@@ -334,6 +340,19 @@ export function useVoiceQueueOwner(input: {
   const forgetStopped = useCallback((botId: string) => {
     stoppedRef.current.delete(botId);
   }, []);
+  const dropStopped = useCallback((botId: string) => {
+    const kept = stoppedRef.current.get(botId);
+    stoppedRef.current.delete(botId);
+    // The recovery path: a reading with nothing stopped takes the bot's
+    // stopped items out, withdrawing what was about to be said of them.
+    queueRef.current?.syncStopped({
+      botId,
+      hostId: kept?.hostId ?? "",
+      channelChatId: kept?.channelChatId ?? "",
+      stopped: [],
+      seenAt: Date.now(),
+    });
+  }, []);
 
   const beginQueue = useCallback((): string => {
     const briefed = attentionRef.current;
@@ -390,5 +409,6 @@ export function useVoiceQueueOwner(input: {
     noteAnnouncement,
     noteStopped,
     forgetStopped,
+    dropStopped,
   };
 }
