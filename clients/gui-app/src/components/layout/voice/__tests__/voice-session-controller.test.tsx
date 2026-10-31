@@ -157,6 +157,38 @@ const fake = vi.hoisted(() => {
     endVoiceSession: vi.fn(),
     engines: [] as FakeEngine[],
     handles: new Map<string, { store: StoreApi<ChatState> }>(),
+    /**
+     * The router's answer for these cases: every utterance posts, whole, to
+     * the focus, which is what the say loop's post path they pin needs.
+     */
+    routeToFocus: (body: string): unknown => {
+      const segments = body.split(String.raw`\"segment\":`).length - 1;
+      return {
+        output: [
+          {
+            type: "message",
+            content: [
+              {
+                type: "output_text",
+                text: JSON.stringify({
+                  action: "post",
+                  target: {
+                    environmentId: null,
+                    botId: null,
+                    threadId: null,
+                    itemId: null,
+                  },
+                  span: { fromSegment: 0, toSegment: segments - 1 },
+                  uncertain: false,
+                  question: null,
+                  control: null,
+                }),
+              },
+            ],
+          },
+        ],
+      };
+    },
   };
 });
 
@@ -181,9 +213,35 @@ vi.mock("@/lib/host", async (importOriginal) => ({
         },
       }),
     endVoiceSession: fake.endVoiceSession,
+    routeVoiceUtterance: (body: string) =>
+      Promise.resolve({ kind: "ok", body: fake.routeToFocus(body) }),
   }),
   useHostClient: () => null,
 }));
+// The router's directory: the bots these cases talk to, both the person's
+// own, read with the focus as the store holds it.
+vi.mock("@/hooks/voice/use-voice-directory", async () => {
+  const { useVoiceSessionStore: voiceStore } =
+    await import("@/stores/voice/voice-session-store");
+  const directory = () => ({
+    bots: ["bot-1", "bot-2"].map((botId) => ({
+      botId,
+      title: botId === "bot-1" ? "CI bot" : "Release bot",
+      environmentId: "env-1",
+      environmentLabel: "Personal",
+      environmentKind: "personal" as const,
+      hostId: "host-a",
+    })),
+    threads: [],
+    queue: [],
+    focus: voiceStore.getState().focus,
+  });
+  const handle = {
+    current: directory,
+    refresh: () => Promise.resolve(directory()),
+  };
+  return { useVoiceDirectory: () => handle };
+});
 
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-a",
@@ -241,21 +299,28 @@ vi.mock(
     usePersonalEnvironment: () => fake.personalEnvironment.value,
   }),
 );
-const CONVERSATION_LIST = {
-  data: {
-    conversations: [
-      {
-        conversationId: "chan-1",
-        botId: "bot-1",
-        title: null,
-        createdAt: 1,
-        updatedAt: 1,
+/** Each bot's channel, as `bot.conversation.list` answers it: bot-1's is `chan-1`. */
+const CONVERSATION_LISTS = new Map(
+  ["bot-1", "bot-2"].map((botId) => [
+    botId,
+    {
+      data: {
+        conversations: [
+          {
+            conversationId: botId === "bot-1" ? "chan-1" : `chan-${botId}`,
+            botId,
+            title: null,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ],
       },
-    ],
-  },
-};
+    },
+  ]),
+);
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
-  useBotConversationListQuery: () => CONVERSATION_LIST,
+  useBotConversationListQuery: (_client: unknown, botId: string) =>
+    CONVERSATION_LISTS.get(botId) ?? { data: undefined },
 }));
 vi.mock("@/hooks/bots/use-bot-thread-list-query", async () => {
   const { useSyncExternalStore } = await import("react");

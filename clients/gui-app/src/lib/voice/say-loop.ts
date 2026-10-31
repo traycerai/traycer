@@ -1,21 +1,36 @@
 import type { BotConversationSendResponse } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { StoreApi } from "zustand";
+import { executeDeferredVerb } from "@/lib/voice/deferred-verbs";
+import type { BoundTarget } from "@/lib/voice/directory";
 import type {
-  VoiceFocus,
-  VoiceSessionState,
+  ControlVerb,
+  RouteRefusal,
+  RoutedDecision,
+} from "@/lib/voice/router";
+import {
+  joinSegments,
+  type TranscriptSegment,
+  type VoiceFocus,
+  type VoiceSessionState,
+  type VoiceTargetTuple,
 } from "@/stores/voice/voice-session-store";
 
 /**
- * The say loop, first cut (Tracy Bots voice, VT2): words become one action.
+ * The say loop (Tracy Bots voice, VT2, routed in VT3): words become one
+ * action.
  *
  * The vendor's delegation event closes the utterance. Each delegation makes
  * one ACTION, which reserves the segments open at that moment: they are its
  * alone, so a second delegation arriving while the first is in flight posts
  * only the words said since, and an acceptance consumes exactly what its
  * action reserved. A boundary is handled once per engine generation: the
- * same delegation id arriving again changes nothing. With no router yet, the
- * whole reserved span posts to the focus as the person's own words; without
- * a focus nothing is reserved, and the words wait for one. The commit
+ * same delegation id arriving again changes nothing. The router (`decide`)
+ * chooses the action, its target and the span of the reserved words it acts
+ * on; what posts is always that span of the person's own words, verbatim,
+ * and the rest of the reservation is spent with it (a greeting before the
+ * request, the answer to the voice's own question). `fragment` and `ask`
+ * return the words to the open utterance for the next boundary. Without a
+ * focus nothing is reserved, and the words wait for one. The commit
  * boundary is the send's acceptance: a thread the answer opens becomes the
  * focus if the person has not moved since, and a queued delivery is said as
  * "queued", never "paused". The app appends nothing for the acknowledgement:
@@ -28,6 +43,13 @@ import type {
  * thread is adopted under the selection fence, its request is bound for the
  * reply, and what the voice says about it goes under no delegation, since the
  * old engine's ids mean nothing to the new one.
+ *
+ * Every routed action binds its target as one tuple the directory vouched
+ * for, and the selection generation; the tuple is checked again before it
+ * executes. A manual selection change from the first segment through the
+ * route to the send's acceptance interrupts: a route still out is dropped
+ * (its completion navigates nothing and posts nothing) and its words join
+ * the interruption, as does a post waiting for its confirmation.
  *
  * A manual selection change while an utterance is open interrupts it: the
  * words so far are held in `pendingAction`, never posted, and the voice asks
@@ -58,10 +80,36 @@ export interface SayLoopDeps {
    */
   readonly notify: (text: string, delegationId: string | null) => void;
   /**
-   * Something the voice says on its own: here, the question after a move.
-   * The scheduler reports whether it was heard, or given up on.
+   * A question the voice puts to the person: after a move (under no
+   * delegation), or before a routed post (under its request's). The
+   * scheduler reports whether it was heard, or given up on.
    */
-  readonly ask: (text: string, outcome: AskOutcome) => void;
+  readonly ask: (
+    text: string,
+    delegationId: string | null,
+    outcome: AskOutcome,
+  ) => void;
+  /**
+   * The router: one action for the reserved words, checked against the
+   * directory. Rejects only on a transport failure, which is refused.
+   */
+  readonly decide: (request: RouteRequest) => Promise<RoutedDecision>;
+  /** Whether a bound tuple still holds against the directory as it is now. */
+  readonly recheck: (tuple: VoiceTargetTuple) => boolean;
+  /** Opens the target's tab and sets its rail; the loop writes the focus. */
+  readonly navigate: (target: BoundTarget) => void;
+  /**
+   * State the voice needs about a request and need not say as an answer:
+   * where the person is now, after a navigation.
+   */
+  readonly think: (text: string, delegationId: string) => void;
+  /** The strip's own actions, by voice. */
+  readonly control: (verb: ControlVerb) => void;
+  /**
+   * Whether a post to `focus` can be sent now: the bot's channel is known.
+   * A post that cannot waits, and is sent on {@link SayLoop.onFocusResolved}.
+   */
+  readonly canSend: (focus: VoiceFocus) => boolean;
   /** Opens the rail on the thread a post's answer landed in. */
   readonly openThread: (
     focus: VoiceFocus,
@@ -76,6 +124,13 @@ export interface SayLoopDeps {
    * a snapshot before the acceptance came back).
    */
   readonly onAccepted: (request: AcceptedRequest) => void;
+}
+
+/** What the router is given: the reserved words, segment by segment, as said. */
+export interface RouteRequest {
+  readonly segments: ReadonlyArray<string>;
+  /** The question the voice asked about these words, when it just asked one. */
+  readonly askedQuestion: string | null;
 }
 
 export interface AskOutcome {
@@ -115,9 +170,10 @@ export interface SayLoop {
   /** The person selected another channel or thread by hand. */
   onSelectionChanged(): void;
   /**
-   * The thread list resolved the focused anchor (to its thread, or to none
-   * yet): requests closed while it was unresolved post now, in order, each
-   * under its own delegation, to the focus as it stands.
+   * The focus became sendable: the thread list resolved the focused anchor
+   * (to its thread, or to none yet), or the channel of a bot the voice
+   * navigated to became known. Requests closed while it was not post now,
+   * in order, each under its own delegation, to the focus as it stands.
    */
   onFocusResolved(): Promise<void>;
   /**
@@ -177,8 +233,118 @@ interface RequestBinding {
   readonly openedThread: boolean;
 }
 
+/** Reserved words while the router decides what they are. */
+interface RoutingEntry {
+  readonly actionId: string;
+  readonly delegationId: string;
+  readonly seqs: ReadonlyArray<number>;
+  /** The reserved segments, in order: the router's segments, by index. */
+  readonly segments: ReadonlyArray<TranscriptSegment>;
+  readonly selectionGeneration: number;
+  readonly sessionToken: number;
+  readonly engineGeneration: number;
+}
+
+/** A routed post held for the person's yes. */
+interface Confirming {
+  readonly entry: RoutingEntry;
+  readonly target: BoundTarget;
+  readonly text: string;
+}
+
 export const MOVED_ASK_TEXT =
   "You moved while you were talking, so I did not post that. When you are ready, say the whole request again.";
+
+const REFUSAL_TEXT: Record<RouteRefusal | "gone", string> = {
+  unparseable:
+    "Nothing was posted: the request was not clear enough to act on. The person can say it again.",
+  "unknown-target":
+    "Nothing was posted: the bot or thread named was not one the person has. The person can say it again.",
+  "invalid-span":
+    "Nothing was posted: the request was not clear enough to act on. The person can say it again.",
+  unavailable:
+    "Nothing was posted: the request could not be routed just now. The person can say it again.",
+  gone: "Nothing was posted: that bot or thread is no longer available. The person can say it again.",
+};
+
+const DECLINED_TEXT = "Okay, I did not post it.";
+
+/** The destination as the voice names it: a channel, or a thread by its post. */
+function placeName(target: BoundTarget): string {
+  if (target.tuple.threadId === null) return target.botTitle;
+  if (target.anchorExcerpt === null) return `a thread with ${target.botTitle}`;
+  return `${target.botTitle}'s thread about "${target.anchorExcerpt}"`;
+}
+
+/** What the voice asks before a routed post it confirms. */
+export function confirmQuestion(
+  target: BoundTarget,
+  uncertain: boolean,
+): string {
+  const scoped = `${placeName(target)} in ${target.environmentLabel}`;
+  return uncertain
+    ? `Did you mean ${scoped}? Say yes to post it there, or no.`
+    : `Should I post that to ${scoped}? Say yes or no.`;
+}
+
+/** Where the person is after a navigation, for the voice to keep. */
+function landedText(target: BoundTarget): string {
+  const where =
+    target.tuple.threadId === null
+      ? `${target.botTitle}'s channel`
+      : placeName(target);
+  return `The person is now in ${where}, in ${target.environmentLabel}.`;
+}
+
+const AFFIRMATIVE = new Set([
+  "yes",
+  "yeah",
+  "yep",
+  "yup",
+  "sure",
+  "correct",
+  "right",
+  "ok",
+  "okay",
+  "absolutely",
+  "definitely",
+  "affirmative",
+]);
+const AFFIRMATIVE_PHRASES = ["go ahead", "do it", "post it", "please do"];
+const NEGATIVE = new Set([
+  "no",
+  "nope",
+  "nah",
+  "don't",
+  "dont",
+  "not",
+  "cancel",
+  "stop",
+  "wait",
+  "never",
+]);
+
+/**
+ * The person's answer to a confirmation, read locally: a yes posts, anything
+ * else (a no, or words that are not an answer) does not. Never posted itself.
+ */
+export function confirmationAnswer(text: string): "yes" | "no" | "unclear" {
+  const words = text
+    .toLowerCase()
+    .replace(/[^a-z' ]+/g, " ")
+    .split(/\s+/)
+    .filter((word) => word.length > 0);
+  if (words.some((word) => NEGATIVE.has(word))) return "no";
+  const joined = words.join(" ");
+  const first = words.at(0);
+  if (
+    (first !== undefined && AFFIRMATIVE.has(first)) ||
+    AFFIRMATIVE_PHRASES.some((phrase) => joined.includes(phrase))
+  ) {
+    return "yes";
+  }
+  return "unclear";
+}
 
 export function createSayLoop(deps: SayLoopDeps): SayLoop {
   const { store } = deps;
@@ -196,6 +362,15 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   const unresolved: Action[] = [];
   /** A resume is posting them, one at a time. */
   let resuming = false;
+  /** Routes out, by action id; a move takes them away, and their completion is dropped. */
+  const routing = new Map<string, RoutingEntry>();
+  /** The routed post waiting for the person's yes; mirrored by the store's `pendingAction`. */
+  let confirming: Confirming | null = null;
+  /** The question the voice just asked about words it handed back, for the next route. */
+  let askedQuestion: {
+    readonly text: string;
+    readonly sessionToken: number;
+  } | null = null;
 
   const delegationOf = (
     binding: Pick<RequestBinding, "engineGeneration" | "delegationId">,
@@ -308,6 +483,207 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     });
   }
 
+  /** Clears the request's delegation when it is still the pending one. */
+  function settleDelegation(delegationId: string): void {
+    const state = store.getState();
+    if (state.pendingDelegationId === delegationId) {
+      state.setPendingDelegation(null);
+    }
+  }
+
+  /** The words are spent and nothing is posted; the voice says why. */
+  function refuse(entry: RoutingEntry, reason: RouteRefusal | "gone"): void {
+    store.getState().consumeReservation(entry.seqs);
+    settleDelegation(entry.delegationId);
+    deps.notify(REFUSAL_TEXT[reason], delegationOf(entry));
+  }
+
+  /** The words go back to the open utterance, for the next boundary. */
+  function handBack(entry: RoutingEntry): void {
+    store.getState().releaseReservation(entry.seqs);
+    settleDelegation(entry.delegationId);
+  }
+
+  /** Opens the target and makes it the focus; the selection follows, so the generation does not move. */
+  function goTo(target: BoundTarget): void {
+    deps.navigate(target);
+    store.getState().setFocus(target.focus);
+  }
+
+  /**
+   * Posts the span to its bound target: the tuple is checked again, the
+   * target opened when it is not the focus, and the send leaves once the
+   * focus can carry it.
+   */
+  async function postRouted(
+    entry: RoutingEntry,
+    target: BoundTarget,
+    text: string,
+  ): Promise<void> {
+    if (!deps.recheck(target.tuple)) {
+      refuse(entry, "gone");
+      return;
+    }
+    if (!target.isFocus) goTo(target);
+    const action: Action = {
+      actionId: entry.actionId,
+      delegationId: entry.delegationId,
+      focus: target.isFocus
+        ? (store.getState().focus ?? target.focus)
+        : target.focus,
+      text,
+      seqs: entry.seqs,
+      selectionGeneration: entry.selectionGeneration,
+      sessionToken: entry.sessionToken,
+      engineGeneration: entry.engineGeneration,
+      movedWhileSending: false,
+    };
+    // The anchor's thread is not known yet, or the bot's channel is not: the
+    // request is complete, its words are its own, and it posts under this
+    // delegation once the focus can carry it. A later utterance reserves
+    // only its own words.
+    if (
+      action.focus.anchorThread === "resolving" ||
+      !deps.canSend(action.focus)
+    ) {
+      unresolved.push(action);
+      return;
+    }
+    inFlight.set(action.actionId, action);
+    await post(action);
+  }
+
+  /** Carries out one routed decision for the words `entry` reserved. */
+  async function execute(
+    entry: RoutingEntry,
+    decision: RoutedDecision,
+  ): Promise<void> {
+    switch (decision.kind) {
+      case "refused":
+        refuse(entry, decision.reason);
+        return;
+      case "fragment":
+        handBack(entry);
+        return;
+      case "ask":
+        handBack(entry);
+        askedQuestion = {
+          text: decision.question,
+          sessionToken: entry.sessionToken,
+        };
+        deps.notify(decision.question, delegationOf(entry));
+        return;
+      case "control":
+        store.getState().consumeReservation(entry.seqs);
+        settleDelegation(entry.delegationId);
+        deps.control(decision.verb);
+        return;
+      case "deferred": {
+        store.getState().consumeReservation(entry.seqs);
+        settleDelegation(entry.delegationId);
+        const outcome = executeDeferredVerb(
+          decision.verb,
+          decision.target,
+          decision.span,
+        );
+        if (outcome.kind === "refused") {
+          deps.notify(outcome.say, delegationOf(entry));
+        }
+        return;
+      }
+      case "navigate":
+      case "switch": {
+        const { target } = decision;
+        if (!deps.recheck(target.tuple)) {
+          refuse(entry, "gone");
+          return;
+        }
+        store.getState().consumeReservation(entry.seqs);
+        settleDelegation(entry.delegationId);
+        if (!target.isFocus) goTo(target);
+        const delegationId = delegationOf(entry);
+        if (delegationId === null) deps.notify(landedText(target), null);
+        else deps.think(landedText(target), delegationId);
+        return;
+      }
+      case "post": {
+        const text = joinSegments(
+          entry.segments.slice(decision.span.from, decision.span.to + 1),
+        );
+        if (text.length === 0) {
+          refuse(entry, "invalid-span");
+          return;
+        }
+        if (decision.confirm === null) {
+          await postRouted(entry, decision.target, text);
+          return;
+        }
+        confirming = { entry, target: decision.target, text };
+        store.getState().setPendingAction({
+          kind: "confirming",
+          target: decision.target.tuple,
+          text,
+          delegationId: entry.delegationId,
+          selectionGeneration: entry.selectionGeneration,
+        });
+        const held = confirming;
+        deps.ask(
+          confirmQuestion(decision.target, decision.confirm === "uncertain"),
+          delegationOf(entry),
+          {
+            onDelivered: () => undefined,
+            // The person never heard the question, so no answer is coming:
+            // the post is dropped, and words said since stand on their own.
+            onGivenUp: () => {
+              if (confirming !== held) return;
+              dropConfirmation(held);
+            },
+          },
+        );
+        return;
+      }
+    }
+  }
+
+  /** The held post goes, with its words; nothing is said. */
+  function dropConfirmation(held: Confirming): void {
+    confirming = null;
+    const state = store.getState();
+    state.consumeReservation(held.entry.seqs);
+    if (state.pendingAction?.kind === "confirming")
+      state.setPendingAction(null);
+    settleDelegation(held.entry.delegationId);
+  }
+
+  /**
+   * A boundary while a post waits for its yes: the words are the answer,
+   * consumed by the held post and never posted themselves.
+   */
+  async function answerConfirmation(boundary: string): Promise<void> {
+    const held = confirming;
+    const state = store.getState();
+    const answer = state.reserveOpenSpan(`answer:${boundary}`);
+    if (held === null) {
+      if (state.pendingAction?.kind === "confirming")
+        state.setPendingAction(null);
+      if (answer !== null) state.releaseReservation(answer.seqs);
+      return;
+    }
+    // A boundary with no words answers nothing yet.
+    if (answer === null) return;
+    state.consumeReservation(answer.seqs);
+    confirming = null;
+    state.setPendingAction(null);
+    if (held.entry.sessionToken !== store.getState().sessionToken) return;
+    if (confirmationAnswer(answer.text) === "yes") {
+      await postRouted(held.entry, held.target, held.text);
+      return;
+    }
+    state.consumeReservation(held.entry.seqs);
+    settleDelegation(held.entry.delegationId);
+    deps.notify(DECLINED_TEXT, delegationOf(held.entry));
+  }
+
   /**
    * A boundary while an interruption is pending. Unheard ask: the words are
    * held with the interrupted ones. Heard, or given up with an utterance
@@ -317,7 +693,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   function holdInterruptedBoundary(): void {
     const state = store.getState();
     const pending = state.pendingAction;
-    if (pending === null) return;
+    if (pending?.kind !== "interrupted") return;
     const more = state.dropOpenSpan();
     if (pending.askState !== "asking") {
       state.setPendingAction(null);
@@ -334,37 +710,52 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       const boundary = `${state.engineGeneration}:${delegationId}`;
       if (handledBoundaries.has(boundary)) return;
       handledBoundaries.add(boundary);
-      if (state.pendingAction !== null) {
+      if (state.pendingAction?.kind === "interrupted") {
         holdInterruptedBoundary();
         return;
       }
-      const focus = state.focus;
+      if (state.pendingAction?.kind === "confirming" || confirming !== null) {
+        await answerConfirmation(boundary);
+        return;
+      }
       // No destination yet: the words stay open for the request that has one.
-      if (focus === null) return;
+      if (state.focus === null) return;
       const actionId = `${state.sessionToken}:${boundary}`;
       const reservation = state.reserveOpenSpan(actionId);
       if (reservation === null) return;
       state.setPendingDelegation(delegationId);
-      const action: Action = {
+      const entry: RoutingEntry = {
         actionId,
         delegationId,
-        focus,
-        text: reservation.text,
         seqs: reservation.seqs,
+        segments: store
+          .getState()
+          .segments.filter((segment) => segment.reservedBy === actionId),
         selectionGeneration: state.selectionGeneration,
         sessionToken: state.sessionToken,
         engineGeneration: state.engineGeneration,
-        movedWhileSending: false,
       };
-      // The anchor's thread is not known yet: the request is complete, its
-      // words are its own, and it posts under this delegation once the list
-      // says where. A later utterance reserves only its own words.
-      if (focus.anchorThread === "resolving") {
-        unresolved.push(action);
-        return;
+      const asked =
+        askedQuestion !== null &&
+        askedQuestion.sessionToken === entry.sessionToken
+          ? askedQuestion.text
+          : null;
+      askedQuestion = null;
+      routing.set(actionId, entry);
+      let decision: RoutedDecision;
+      try {
+        decision = await deps.decide({
+          segments: entry.segments.map((segment) => segment.text),
+          askedQuestion: asked,
+        });
+      } catch {
+        decision = { kind: "refused", reason: "unavailable" };
       }
-      inFlight.set(actionId, action);
-      await post(action);
+      // A move took the words while the route was out: the completion is
+      // stale, and navigates and posts nothing. An ended session forgot them.
+      if (!routing.delete(actionId)) return;
+      if (store.getState().sessionToken !== entry.sessionToken) return;
+      await execute(entry, decision);
     },
 
     async onFocusResolved() {
@@ -396,7 +787,8 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
             focus === null ||
             focus.anchorThread === "resolving" ||
             focus.botId !== action.focus.botId ||
-            focus.anchorMessageId !== action.focus.anchorMessageId
+            focus.anchorMessageId !== action.focus.anchorMessageId ||
+            !deps.canSend(focus)
           ) {
             return;
           }
@@ -411,6 +803,23 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     },
 
     onSelectionChanged() {
+      // Routes still out are dropped and a post waiting for its yes is let
+      // go: their words return to the open utterance, which the move
+      // interrupts below with everything else said.
+      const before = store.getState();
+      for (const entry of Array.from(routing.values())) {
+        if (entry.sessionToken !== before.sessionToken) continue;
+        routing.delete(entry.actionId);
+        before.releaseReservation(entry.seqs);
+      }
+      if (confirming !== null) {
+        before.releaseReservation(confirming.entry.seqs);
+        confirming = null;
+      }
+      if (before.pendingAction?.kind === "confirming") {
+        before.setPendingAction(null);
+      }
+      askedQuestion = null;
       const state = store.getState();
       for (const action of inFlight.values()) {
         if (action.sessionToken === state.sessionToken) {
@@ -426,12 +835,13 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       }
       // A move during an interruption already pending adds nothing: the
       // words are held and the ask is out.
-      if (state.pendingAction !== null) {
+      const interrupted = state.pendingAction;
+      if (interrupted?.kind === "interrupted") {
         const more = state.dropOpenSpan();
         if (more !== null) {
           state.setPendingAction({
-            ...state.pendingAction,
-            text: `${state.pendingAction.text} ${more}`,
+            ...interrupted,
+            text: `${interrupted.text} ${more}`,
           });
         }
         return;
@@ -449,12 +859,14 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         askState: "asking",
       });
       if (inFlight.size === 0) state.setPendingDelegation(null);
-      deps.ask(MOVED_ASK_TEXT, {
+      deps.ask(MOVED_ASK_TEXT, null, {
         onDelivered: () => {
           const now = store.getState();
           if (now.sessionToken !== sessionToken) return;
           const pending = now.pendingAction;
-          if (pending === null || pending.askState === "heard") return;
+          if (pending?.kind !== "interrupted" || pending.askState === "heard") {
+            return;
+          }
           now.setPendingAction({ ...pending, askState: "heard" });
         },
         onGivenUp: () => {
@@ -466,7 +878,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
           const now = store.getState();
           if (now.sessionToken !== sessionToken) return;
           const pending = now.pendingAction;
-          if (pending === null) return;
+          if (pending?.kind !== "interrupted") return;
           if (pending.askState === "heard") return;
           if (now.openSpan().length > 0) {
             now.setPendingAction({ ...pending, askState: "closing" });

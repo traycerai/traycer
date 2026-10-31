@@ -28,8 +28,10 @@ import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
 import { useVoiceAvailabilityQuery } from "@/hooks/voice/use-voice-availability-query";
+import { useVoiceDirectory } from "@/hooks/voice/use-voice-directory";
 import {
   useVoiceMicrophoneAccessMutation,
+  useVoiceRouteMutation,
   useVoiceSessionEndMutation,
   useVoiceSessionMintMutation,
   useVoiceShellLiveMutation,
@@ -42,6 +44,7 @@ import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { mainBotOf } from "@/lib/bots/bot-main";
 import { watchAudioLevel, type AudioLevelWatch } from "@/lib/voice/audio-level";
+import { tupleHolds, type BoundTarget } from "@/lib/voice/directory";
 import { VoiceEngineError, type VoiceEngine } from "@/lib/voice/engine";
 import {
   baselineReplyWatchExcept,
@@ -57,10 +60,18 @@ import {
 } from "@/lib/voice/focused-replies";
 import { createBrowserGptLiveEngine } from "@/lib/voice/gpt-live-engine";
 import {
+  parseRouterResponse,
+  resolveRoute,
+  routerRequestBody,
+  type ControlVerb,
+  type RoutedDecision,
+} from "@/lib/voice/router";
+import {
   createSayLoop,
   type AcceptedRequest,
   type ReplyPlace,
   type ReplyPlacement,
+  type RouteRequest,
   type SayLoop,
 } from "@/lib/voice/say-loop";
 import {
@@ -143,6 +154,12 @@ export function VoiceSessionController(): ReactNode {
     useVoiceMicrophoneAccessMutation();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const navigateRef = useRef(navigate);
+  useEffect(() => {
+    navigateRef.current = navigate;
+  }, [navigate]);
+  /** The strip's own actions by voice; set once the session's controls exist. */
+  const controlRef = useRef<(verb: ControlVerb) => void>(() => undefined);
   // Whether this deployment offers voice, read once per window before Talk
   // is drawn; a dormant mint invalidates it, so the answer is read again.
   const availability = useVoiceAvailabilityQuery(true);
@@ -259,28 +276,41 @@ export function VoiceSessionController(): ReactNode {
     focus?.botId ?? "",
     focus !== null,
   );
-  const channelId = useMemo(() => {
+  // The focused bot's channel, named with the bot it is the channel of: the
+  // conversation list can still be the previous bot's for a render after a
+  // navigation by voice, and a send must never borrow it.
+  const channel = useMemo(() => {
     if (focus === null || conversations.data === undefined) return null;
     const appConversationChatId =
       bots.data?.bots.find((bot) => bot.botId === focus.botId)
         ?.appConversationChatId ?? null;
-    return (
-      channelConversation(
-        conversations.data.conversations,
-        appConversationChatId,
-      )?.conversationId ?? null
+    const rows = conversations.data.conversations.filter(
+      (row) => row.botId === focus.botId,
     );
+    const conversationId =
+      channelConversation(rows, appConversationChatId)?.conversationId ?? null;
+    return conversationId === null
+      ? null
+      : { botId: focus.botId, hostId: focus.hostId, conversationId };
   }, [bots.data, conversations.data, focus]);
+  const channelId = conversationIdOf(channel);
   const viewerUserId = useAuthStore((state) => state.profile?.userId ?? null);
   const { mutateAsync: sendAsync } = send;
   const sendRef = useRef<
     (focus: VoiceFocus, text: string) => Promise<BotConversationSendResponse>
   >(() => Promise.reject(new Error("not ready")));
+  const channelRef = useRef(channel);
   useEffect(() => {
+    channelRef.current = channel;
     sendRef.current = async (target, text) => {
-      if (channelId === null) {
+      if (
+        channel === null ||
+        channel.botId !== target.botId ||
+        channel.hostId !== target.hostId
+      ) {
         throw new Error("The bot's channel is not known yet.");
       }
+      const channelId = channel.conversationId;
       // Where the thread panel's box sends: into the thread by its id, or
       // under an anchor nobody has replied under as the reply that opens
       // its thread. A top-level post names neither.
@@ -296,11 +326,59 @@ export function VoiceSessionController(): ReactNode {
         answer: null,
       });
     };
-  }, [channelId, sendAsync]);
+  }, [channel, sendAsync]);
   const viewerRef = useRef(viewerUserId);
   useEffect(() => {
     viewerRef.current = viewerUserId;
   }, [viewerUserId]);
+
+  // ---- Routing ---------------------------------------------------------- //
+  // The router's directory, read while a session runs, and the router's one
+  // call per utterance. A route that names a thread outside the focused bot
+  // is checked against a directory read fresh, before anything navigates.
+  const directory = useVoiceDirectory(
+    appClient,
+    appHostId,
+    botsSupported && phase !== "idle",
+  );
+  const { mutateAsync: routeAsync } = useVoiceRouteMutation();
+  const decideRef = useRef<(request: RouteRequest) => Promise<RoutedDecision>>(
+    () => Promise.resolve({ kind: "refused", reason: "unavailable" }),
+  );
+  const recheckRef = useRef(directory.current);
+  useEffect(() => {
+    recheckRef.current = directory.current;
+    decideRef.current = async (request) => {
+      let snapshot = directory.current();
+      const answer = await routeAsync(
+        routerRequestBody(
+          snapshot,
+          {
+            segments: request.segments,
+            askedQuestion: request.askedQuestion,
+          },
+          Date.now(),
+        ),
+      );
+      if (answer.kind !== "ok") {
+        appLogger.warn("[voice] route did not answer", { kind: answer.kind });
+        return { kind: "refused", reason: "unavailable" };
+      }
+      const result = parseRouterResponse(answer.body);
+      const namedThread = result?.target.threadId ?? null;
+      if (
+        namedThread !== null &&
+        !snapshot.threads.some(
+          (thread) =>
+            thread.threadId === namedThread &&
+            thread.botId === snapshot.focus?.botId,
+        )
+      ) {
+        snapshot = await directory.refresh();
+      }
+      return resolveRoute(result, snapshot, request.segments.length);
+    };
+  }, [directory, routeAsync]);
 
   // One say loop per user session: its request bindings and in-flight actions
   // carry the store's session token, so a late acceptance from an ended or
@@ -330,12 +408,12 @@ export function VoiceSessionController(): ReactNode {
           onDelivered: null,
           onGivenUp: null,
         }),
-      ask: (text, outcome) =>
+      ask: (text, delegationId, outcome) =>
         ensureSpeech().enqueue({
           id: `ask:${Date.now()}`,
           priority: "ask",
           text,
-          delegationId: null,
+          delegationId,
           confirmWords: confirmationWords({
             botTitle: null,
             threadTitle: null,
@@ -363,10 +441,40 @@ export function VoiceSessionController(): ReactNode {
       },
       botTitle: (botId) => botTitleRef.current(botId),
       onAccepted: (request) => reconcileRef.current(request),
+      decide: (request) => decideRef.current(request),
+      recheck: (tuple) => tupleHolds(recheckRef.current(), tuple),
+      navigate: (target) => openTarget(target, navigateRef.current),
+      think: (text, delegationId) => {
+        const attempt = attemptRef.current;
+        if (attempt === null || attempt.cancelled || !attempt.started) return;
+        try {
+          attempt.engine.appendThinking(text, delegationId);
+        } catch (error) {
+          appLogger.warn("[voice] thinking append failed", {
+            error: describeLogError(error),
+          });
+        }
+      },
+      control: (verb) => controlRef.current(verb),
+      canSend: (target) => {
+        const known = channelRef.current;
+        return (
+          known !== null &&
+          known.botId === target.botId &&
+          known.hostId === target.hostId
+        );
+      },
     });
     sayLoopRef.current = created;
     return created;
   }, [ensureSpeech]);
+
+  // A post the voice navigated for waits for the bot's channel: once it is
+  // known, the loop sends what waits.
+  useEffect(() => {
+    if (channel === null) return;
+    void sayLoopRef.current?.onFocusResolved();
+  }, [channel]);
 
   // ---- Session lifecycle ----------------------------------------------- //
   const micStreamRef = useRef<MediaStream | null>(null);
@@ -906,6 +1014,27 @@ export function VoiceSessionController(): ReactNode {
   );
 
   useEffect(() => {
+    controlRef.current = (verb) => {
+      switch (verb) {
+        case "end":
+          end("ended");
+          return;
+        case "mute":
+          setMuted(true);
+          return;
+        case "resume":
+          setMuted(false);
+          return;
+        case "captions": {
+          const store = useVoiceSessionStore.getState();
+          store.setCaptions(!store.captions);
+          return;
+        }
+      }
+    };
+  }, [end, setMuted]);
+
+  useEffect(() => {
     const store = useVoiceSessionStore.getState();
     store.setDriver({
       start: () => {
@@ -983,6 +1112,12 @@ export function VoiceSessionController(): ReactNode {
   );
 }
 
+function conversationIdOf(
+  channel: { readonly conversationId: string } | null,
+): string | null {
+  return channel === null ? null : channel.conversationId;
+}
+
 /**
  * The channel conversation among a bot's conversations: the one the bot
  * record names, else the earliest. Mirrors the channel view's own rule.
@@ -1025,6 +1160,37 @@ function openMainBot(
     anchorMessageId: null,
     anchorThread: null,
   };
+}
+
+/**
+ * Opens a routed destination as the person would: the bot's tab (on the
+ * host it is bound to, or the target's), its rail on the thread named or
+ * on the channel, and the tab brought to the front. The rail is written
+ * before the tab moves, so the selection the sync reads is the focus the
+ * voice writes next, not a move of the person's.
+ */
+function openTarget(
+  target: BoundTarget,
+  navigate: UseNavigateResult<string>,
+): void {
+  const { botId, hostId, threadId } = target.tuple;
+  const anchorMessageId = target.focus.anchorMessageId;
+  useBotOpenThreadStore.getState().setRail(
+    botId,
+    threadId === null || anchorMessageId === null
+      ? null
+      : {
+          kind: "thread",
+          anchorMessageId,
+          announcement: false,
+          anchorKind: null,
+          sent: null,
+        },
+  );
+  useBotTabsStore
+    .getState()
+    .openBotTab({ botId, hostId, title: target.botTitle });
+  navigateToTabIntent(navigate, botTabIntent(botId), undefined);
 }
 
 /**

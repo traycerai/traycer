@@ -5,6 +5,7 @@ import {
   type VoiceFocus,
 } from "@/stores/voice/voice-session-store";
 import { requestIdAnsweredIn, type ReplyRow } from "../focused-replies";
+import type { RoutedDecision } from "../router";
 import {
   MOVED_ASK_TEXT,
   createSayLoop,
@@ -35,6 +36,12 @@ interface Harness {
   readonly accepted: AcceptedRequest[];
   readonly opened: BotConversationSendResponse[];
   readonly loop: SayLoop;
+  /**
+   * Waits until the last boundary's route has been acted on: its send, if
+   * it posts, is out. Here every route posts the whole reservation to the
+   * focus, the say loop's post path these cases pin.
+   */
+  routed(): Promise<void>;
   /** Settles the send at `index` (the oldest by default). */
   resolve(response: BotConversationSendResponse, index: number): void;
   reject(index: number): void;
@@ -76,6 +83,7 @@ function harness(): Harness {
     resolve: (value: BotConversationSendResponse) => void;
     reject: (reason: Error) => void;
   }> = [];
+  const routes: Array<Promise<RoutedDecision>> = [];
   const loop = createSayLoop({
     store: useVoiceSessionStore,
     send: (focus, text) => {
@@ -88,13 +96,43 @@ function harness(): Harness {
       notices.push(text);
       noticeDelegations.push(delegationId);
     },
-    ask: (text, outcome) => {
+    ask: (text, _delegationId, outcome) => {
       asks.push(text);
       outcomes.push(outcome);
     },
     openThread: (_focus, answer) => opened.push(answer),
     botTitle: () => "Tracy",
     onAccepted: (request) => accepted.push(request),
+    decide: (request) => {
+      const focus = useVoiceSessionStore.getState().focus ?? FOCUS;
+      const decision: RoutedDecision = {
+        kind: "post",
+        target: {
+          tuple: {
+            environmentId: "env-1",
+            botId: focus.botId,
+            threadId: focus.threadId,
+            hostId: focus.hostId,
+          },
+          focus,
+          isFocus: true,
+          botTitle: "Tracy",
+          environmentLabel: "Personal",
+          environmentKind: "personal",
+          anchorExcerpt: null,
+        },
+        span: { from: 0, to: request.segments.length - 1 },
+        confirm: null,
+      };
+      const route = Promise.resolve(decision);
+      routes.push(route);
+      return route;
+    },
+    recheck: () => true,
+    navigate: () => undefined,
+    think: () => undefined,
+    control: () => undefined,
+    canSend: () => true,
   });
   return {
     sends,
@@ -105,6 +143,9 @@ function harness(): Harness {
     accepted,
     opened,
     loop,
+    routed: async () => {
+      await routes.at(-1);
+    },
     resolve: (value, index) => settles[index]?.resolve(value),
     reject: (index) => settles[index]?.reject(new Error("refused")),
   };
@@ -122,6 +163,7 @@ describe("a delegation", () => {
   it("posts the joined span once into the focused thread and consumes it, keeping the thread's anchor and rail", async () => {
     const h = harness();
     const done = h.loop.onDelegationCreated("d-1");
+    await h.routed();
     h.resolve(response({ threadId: FOCUS.threadId }), 0);
     await done;
 
@@ -149,6 +191,7 @@ describe("a delegation", () => {
       .getState()
       .setFocus({ ...FOCUS, threadId: null, anchorMessageId: null });
     const done = h.loop.onDelegationCreated("d-1");
+    await h.routed();
     h.resolve(response({ messageId: "m-7", threadId: "thread-7" }), 0);
     await done;
 
@@ -170,6 +213,7 @@ describe("a delegation", () => {
     };
     useVoiceSessionStore.getState().setFocus(unopened);
     const done = h.loop.onDelegationCreated("d-1");
+    await h.routed();
     h.resolve(response({ messageId: "m-7", threadId: "thread-q" }), 0);
     await done;
 
@@ -334,6 +378,7 @@ describe("a request closed while the anchor's thread is unresolved", () => {
   it("says a queued delivery as queued, never paused", async () => {
     const h = harness();
     const done = h.loop.onDelegationCreated("d-1");
+    await h.routed();
     h.resolve(response({ delivery: "queued" }), 0);
     await done;
 
@@ -345,6 +390,7 @@ describe("a request closed while the anchor's thread is unresolved", () => {
   it("does not reopen the rail when the person moved during the send, and says where it landed", async () => {
     const h = harness();
     const done = h.loop.onDelegationCreated("d-1");
+    await h.routed();
     useVoiceSessionStore.getState().selectionChanged(OTHER_FOCUS);
     h.resolve(response({}), 0);
     await done;
@@ -358,6 +404,7 @@ describe("a request closed while the anchor's thread is unresolved", () => {
   it("covers moved and queued in one notice", async () => {
     const h = harness();
     const done = h.loop.onDelegationCreated("d-1");
+    await h.routed();
     useVoiceSessionStore.getState().selectionChanged(OTHER_FOCUS);
     h.resolve(response({ delivery: "queued" }), 0);
     await done;
@@ -371,6 +418,7 @@ describe("a request closed while the anchor's thread is unresolved", () => {
   it("clears the pending delegation on a rejected send, consumes only its own words and notifies once", async () => {
     const h = harness();
     const done = h.loop.onDelegationCreated("d-1");
+    await h.routed();
     h.reject(0);
     await done;
 
@@ -390,8 +438,10 @@ describe("two delegations before any acceptance", () => {
     const h = harness();
     store.appendInputSegment("Check build A.", 1);
     const first = h.loop.onDelegationCreated("d-1");
+    await h.routed();
     store.appendInputSegment(" Then check build B.", 2);
     const second = h.loop.onDelegationCreated("d-2");
+    await h.routed();
 
     expect(h.sends.map((send) => send.text)).toEqual([
       "Check build A.",
@@ -418,8 +468,10 @@ describe("two delegations before any acceptance", () => {
     const h = harness();
     store.appendInputSegment("Check build A.", 1);
     const first = h.loop.onDelegationCreated("d-1");
+    await h.routed();
     store.appendInputSegment(" Then check build B.", 2);
     void h.loop.onDelegationCreated("d-2");
+    await h.routed();
 
     h.reject(0);
     await first;
@@ -464,6 +516,7 @@ describe("a selection change mid-utterance", () => {
   it("lets an in-flight send land as moved while the next delegation posts only its new words", async () => {
     const h = harness();
     const first = h.loop.onDelegationCreated("d-1");
+    await h.routed();
     useVoiceSessionStore.getState().selectionChanged(OTHER_FOCUS);
     h.loop.onSelectionChanged();
     // Everything open was already reserved by the first send.
@@ -471,6 +524,7 @@ describe("a selection change mid-utterance", () => {
 
     useVoiceSessionStore.getState().appendInputSegment("Now do this.", 3);
     const second = h.loop.onDelegationCreated("d-2");
+    await h.routed();
     expect(h.sends.map((send) => send.text)).toEqual([
       "please check the build",
       "Now do this.",
@@ -489,6 +543,7 @@ describe("a selection change mid-utterance", () => {
   it("drops open words after a send began, asks once, closes the heard interruption at the next boundary and posts only the one after", async () => {
     const h = harness();
     const first = h.loop.onDelegationCreated("d-1");
+    await h.routed();
     useVoiceSessionStore.getState().appendInputSegment("Delete the branch.", 3);
     useVoiceSessionStore.getState().selectionChanged(OTHER_FOCUS);
     h.loop.onSelectionChanged();
@@ -503,6 +558,7 @@ describe("a selection change mid-utterance", () => {
 
     useVoiceSessionStore.getState().appendInputSegment("Fresh words.", 4);
     const third = h.loop.onDelegationCreated("d-3");
+    await h.routed();
     expect(h.sends.map((send) => send.text)).toEqual([
       "please check the build",
       "Fresh words.",
@@ -524,6 +580,7 @@ describe("a session that ended or was replaced during a send", () => {
     useVoiceSessionStore.getState().setFocus(FOCUS);
     useVoiceSessionStore.getState().appendInputSegment("old words", 1);
     const done = h.loop.onDelegationCreated("d-1");
+    await h.routed();
     useVoiceSessionStore.getState().sessionEnded(null);
 
     h.resolve(response({ requestId: "r-1" }), 0);
@@ -545,6 +602,7 @@ describe("a session that ended or was replaced during a send", () => {
     useVoiceSessionStore.getState().setFocus(FOCUS);
     useVoiceSessionStore.getState().appendInputSegment("old words", 1);
     const done = h.loop.onDelegationCreated("d-1");
+    await h.routed();
     useVoiceSessionStore.getState().sessionConnecting();
     useVoiceSessionStore.getState().appendInputSegment("new words", 2);
 
@@ -569,6 +627,7 @@ describe("placementFor", () => {
     useVoiceSessionStore.getState().setFocus(FOCUS);
     useVoiceSessionStore.getState().appendInputSegment("hello", 1);
     const done = h.loop.onDelegationCreated("d-7");
+    await h.routed();
     h.resolve(response({ requestId: "r-7", messageId: "u-7" }), 0);
     await done;
 
@@ -604,6 +663,7 @@ describe("placementFor", () => {
       .getState()
       .setFocus({ ...FOCUS, threadId: null, anchorMessageId: null });
     const done = h.loop.onDelegationCreated("d-1");
+    await h.routed();
     h.resolve(response({ threadId: "t1" }), 0);
     await done;
 
@@ -621,6 +681,7 @@ describe("placementFor", () => {
   it("calls a post into an existing thread joined, not opened", async () => {
     const h = harness();
     const done = h.loop.onDelegationCreated("d-1");
+    await h.routed();
     h.resolve(response({ threadId: FOCUS.threadId }), 0);
     await done;
 
@@ -650,6 +711,7 @@ describe("the interrupted utterance's continuation", () => {
 
     store.appendInputSegment("Check the build.", 3);
     const second = h.loop.onDelegationCreated("d-2");
+    await h.routed();
     expect(h.sends.map((send) => send.text)).toEqual(["Check the build."]);
     h.resolve(response({ threadId: null }), 0);
     await second;
@@ -661,6 +723,7 @@ describe("a delegation boundary handled once", () => {
     const h = harness();
     const store = useVoiceSessionStore.getState();
     const first = h.loop.onDelegationCreated("d-1");
+    await h.routed();
     store.appendInputSegment(" and newer words", 3);
     await h.loop.onDelegationCreated("d-1");
 
@@ -691,6 +754,7 @@ describe("a delegation boundary handled once", () => {
 
     store.setFocus(FOCUS);
     const second = h.loop.onDelegationCreated("d-2");
+    await h.routed();
     expect(h.sends.map((send) => send.text)).toEqual([
       "please check the build",
     ]);
@@ -709,6 +773,7 @@ describe("an engine replacement during a send", () => {
       .setFocus({ ...FOCUS, threadId: null, anchorMessageId: null });
     useVoiceSessionStore.getState().appendInputSegment("merge it", 1);
     const done = h.loop.onDelegationCreated("d-1");
+    await h.routed();
     expect(useVoiceSessionStore.getState().pendingDelegationId).toBe("d-1");
     useVoiceSessionStore.getState().engineReplacing();
     useVoiceSessionStore.getState().appendInputSegment("later words", 2);
@@ -762,6 +827,7 @@ describe("an interruption whose ask is not yet heard", () => {
       .getState()
       .appendInputSegment("Run the new build.", 12);
     const second = h.loop.onDelegationCreated("d-2");
+    await h.routed();
     expect(h.sends.map((send) => send.text)).toEqual(["Run the new build."]);
     h.resolve(response({ threadId: null }), 0);
     await second;
@@ -784,6 +850,7 @@ describe("an interruption whose ask is not yet heard", () => {
 
     useVoiceSessionStore.getState().appendInputSegment("Check the logs.", 12);
     const second = h.loop.onDelegationCreated("d-2");
+    await h.routed();
     expect(h.sends.map((send) => send.text)).toEqual(["Check the logs."]);
     h.resolve(response({ threadId: null }), 0);
     await second;
@@ -813,6 +880,7 @@ describe("an ask given up during an utterance", () => {
 
     store.appendInputSegment("Run the build.", 3);
     const fresh = h.loop.onDelegationCreated("d-2");
+    await h.routed();
     expect(h.sends.map((send) => send.text)).toEqual(["Run the build."]);
     h.resolve(response({ threadId: null }), 0);
     await fresh;
@@ -824,6 +892,7 @@ describe("placementFor fallbacks", () => {
     const h = harness();
     useVoiceSessionStore.getState().setFocus({ ...FOCUS, threadId: "t1" });
     const done = h.loop.onDelegationCreated("d-1");
+    await h.routed();
     h.resolve(response({ requestId: "r-new", threadId: "t1" }), 0);
     await done;
 
@@ -850,6 +919,7 @@ describe("placementFor fallbacks", () => {
     store.setFocus(accept.focus);
     store.appendInputSegment(`words for ${accept.delegationId}`, 20 + index);
     const done = h.loop.onDelegationCreated(accept.delegationId);
+    await h.routed();
     h.resolve(response({ requestId: accept.requestId, threadId: null }), index);
     await done;
   }
