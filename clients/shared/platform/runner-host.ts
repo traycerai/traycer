@@ -43,7 +43,9 @@ import type {
   VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
   VoiceSessionMintFetchResult,
+  VoiceSessionIndicator,
   VoiceSessionMintRequest,
+  VoiceTrayAction,
 } from "../host-client/voice-sessions";
 import type {
   SlackAppInstallUrlResult,
@@ -443,6 +445,13 @@ export interface IRunnerHost {
    * web) take no action.
    */
   setVoiceSessionLive(live: boolean): Promise<void>;
+  /**
+   * Tells the shell what this window's live session is doing, for the item
+   * the desktop shows while the window is away (macOS menu bar, the Windows
+   * and Linux notification area): listening, muted, or paused for
+   * dictation. Shells with no such item take no action.
+   */
+  setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void>;
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -757,6 +766,13 @@ export interface IRunnerHost {
    * never fires.
    */
   onSystemSuspended(handler: () => void): Disposable;
+
+  /**
+   * Subscribes to the shell item's actions on this window's live session:
+   * Mute or Unmute, and End. The desktop sends them only to the window
+   * whose session the item shows; shells with no such item never fire.
+   */
+  onVoiceTrayAction(handler: (action: VoiceTrayAction) => void): Disposable;
 
   /**
    * Subscribes to network-path changes the shell can observe natively:

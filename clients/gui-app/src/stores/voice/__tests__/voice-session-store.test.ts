@@ -82,8 +82,40 @@ describe("the dictation pause", () => {
     store.releaseDictationHold("composer-a");
     expect(useVoiceSessionStore.getState().pausedForDictation).toBe(true);
     store.releaseDictationHold("composer-b");
-    expect(useVoiceSessionStore.getState().pausedForDictation).toBe(false);
     expect(useVoiceSessionStore.getState().dictationHolds.size).toBe(0);
+    // The session started under a hold: it stays paused for the Resume.
+    expect(useVoiceSessionStore.getState().pausedForDictation).toBe(true);
+    store.resumeFromDictation();
+    expect(useVoiceSessionStore.getState().pausedForDictation).toBe(false);
+  });
+
+  it("outlives dictation while a session runs: only Resume ends it, and Resume waits for the microphone", () => {
+    const store = useVoiceSessionStore.getState();
+    store.sessionConnecting();
+    store.acquireDictationHold("composer");
+    store.resumeFromDictation();
+    // Dictation still records: Resume is refused.
+    expect(useVoiceSessionStore.getState().pausedForDictation).toBe(true);
+
+    store.releaseDictationHold("composer");
+    expect(useVoiceSessionStore.getState().pausedForDictation).toBe(true);
+    store.resumeFromDictation();
+    expect(useVoiceSessionStore.getState().pausedForDictation).toBe(false);
+
+    // Paused again, then the session ends: the pause goes with it.
+    store.acquireDictationHold("composer");
+    store.releaseDictationHold("composer");
+    store.sessionEnded("ended");
+    expect(useVoiceSessionStore.getState().pausedForDictation).toBe(false);
+    expect(useVoiceSessionStore.getState().dictationPauseLatched).toBe(false);
+  });
+
+  it("is dictation's alone with no session: a hold taken and released while idle leaves nothing to resume", () => {
+    const store = useVoiceSessionStore.getState();
+    store.acquireDictationHold("composer");
+    store.releaseDictationHold("composer");
+    expect(useVoiceSessionStore.getState().pausedForDictation).toBe(false);
+    expect(useVoiceSessionStore.getState().dictationPauseLatched).toBe(false);
   });
 });
 

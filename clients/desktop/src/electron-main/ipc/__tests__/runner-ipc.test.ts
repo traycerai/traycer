@@ -810,6 +810,7 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.mintVoiceSession,
           RunnerHostInvoke.endVoiceSession,
           RunnerHostInvoke.setVoiceSessionLive,
+          RunnerHostInvoke.setVoiceSessionIndicator,
           // A bot's Slack app, on traycer-server too.
           RunnerHostInvoke.readSlackApp,
           RunnerHostInvoke.getSlackAppManifest,

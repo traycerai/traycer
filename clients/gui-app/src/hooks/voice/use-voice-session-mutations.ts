@@ -1,6 +1,7 @@
 import { useMutation, type UseMutationResult } from "@tanstack/react-query";
 import type {
   VoiceSessionEndFetchResult,
+  VoiceSessionIndicator,
   VoiceSessionMintFetchResult,
   VoiceSessionMintRequest,
 } from "@traycer-clients/shared/host-client/voice-sessions";
@@ -59,6 +60,24 @@ export function useVoiceShellLiveMutation(): UseMutationResult<
   return useMutation({
     mutationKey: voiceMutationKeys.shellLive(),
     mutationFn: (live) => runnerHost.setVoiceSessionLive(live),
+  });
+}
+
+/**
+ * What this window's live session reports to the shell's voice item (the
+ * desktop's menu-bar or notification-area item): muted, paused for
+ * dictation. Best effort, like the live flag: a failure is logged by the
+ * controller.
+ */
+export function useVoiceShellIndicatorMutation(): UseMutationResult<
+  void,
+  Error,
+  VoiceSessionIndicator
+> {
+  const runnerHost = useRunnerHost();
+  return useMutation({
+    mutationKey: voiceMutationKeys.shellIndicator(),
+    mutationFn: (indicator) => runnerHost.setVoiceSessionIndicator(indicator),
   });
 }
 

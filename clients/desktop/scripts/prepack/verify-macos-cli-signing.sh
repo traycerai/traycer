@@ -93,9 +93,31 @@ if [ "${mach_o_count}" -eq 0 ]; then
 fi
 
 # 4. Verify the .app itself is notarized via a valid staple.
+#
+# `stapler validate` looks the ticket up at Apple's ticket-delivery service on
+# every call, so a dropped connection there (NSURLErrorDomain -1005, "The
+# network connection was lost", exit 68) fails an app whose staple is fine.
+# Two staging trains in a row lost their macOS desktop to it on 2026-10-31.
+# A staple that is really missing or invalid fails every attempt the same
+# way, so the retries change nothing for a bad app.
+STAPLER_VALIDATE_ATTEMPTS=5
+STAPLER_VALIDATE_RETRY_DELAY_SECONDS=15
 echo "${PREFIX} validating notarization staple on '${APP_PATH}'"
-if ! stapler validate "${APP_PATH}"; then
-  echo "::error::${PREFIX} stapler validate failed for '${APP_PATH}'. The .app is missing a valid notarization staple; the bundled CLI is not covered by notarization."
+staple_valid=0
+attempt=1
+while [ "${attempt}" -le "${STAPLER_VALIDATE_ATTEMPTS}" ]; do
+  if stapler validate "${APP_PATH}"; then
+    staple_valid=1
+    break
+  fi
+  if [ "${attempt}" -lt "${STAPLER_VALIDATE_ATTEMPTS}" ]; then
+    echo "${PREFIX} stapler validate failed (attempt ${attempt} of ${STAPLER_VALIDATE_ATTEMPTS}); retrying in ${STAPLER_VALIDATE_RETRY_DELAY_SECONDS}s in case Apple's ticket lookup dropped the connection."
+    sleep "${STAPLER_VALIDATE_RETRY_DELAY_SECONDS}"
+  fi
+  attempt=$((attempt + 1))
+done
+if [ "${staple_valid}" -ne 1 ]; then
+  echo "::error::${PREFIX} stapler validate failed for '${APP_PATH}' on ${STAPLER_VALIDATE_ATTEMPTS} attempts. The .app is missing a valid notarization staple; the bundled CLI is not covered by notarization."
   failure_count=$((failure_count + 1))
 fi
 

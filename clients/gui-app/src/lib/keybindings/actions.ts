@@ -1,5 +1,7 @@
 import { canonicalChord, type ChordString } from "@/lib/keybindings/chord";
 import { isMac } from "@/lib/keybindings/platform";
+import { isMobileApp } from "@/lib/mobile-app";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * Stable identifiers for every keyboard-bindable action in the app. Adding
@@ -71,6 +73,7 @@ export const ACTION_IDS = [
   "app.zoom.out",
   "app.zoom.reset",
   "composer.dictation.toggle",
+  "voice.talk.toggle",
   "composer.suggestion.accept",
   "composer.drafts",
   "composer.model-picker.toggle",
@@ -912,6 +915,26 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     secondaryTerminalPolicy: undefined,
     desktopOnly: false,
   },
+  "voice.talk.toggle": {
+    id: "voice.talk.toggle",
+    label: "Talk",
+    description:
+      "Start or stop talking with your bots. Costs credits while on.",
+    category: "app",
+    kind: "chord",
+    // Its own chord, apart from dictation's ⌃⇧M. Per-platform like the model
+    // picker's: ⌃⌥T keeps Control distinct from ⌘ on macOS, and Alt+Shift+T
+    // avoids the Windows/Linux Ctrl+Alt=AltGr conflict. Unbound while the
+    // voice layer is unreleased, so the chord is not reserved for nothing.
+    defaultChord: UNRELEASED_FEATURES_ENABLED
+      ? { mac: "ctrl+alt+t", other: "alt+shift+t" }
+      : null,
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    // The phone's Talk is its own surface (the mobile voice ticket).
+    desktopOnly: true,
+  },
   "composer.suggestion.accept": {
     id: "composer.suggestion.accept",
     label: "Accept suggested reply",
@@ -999,6 +1022,36 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     desktopOnly: false,
   },
 };
+/**
+ * Actions that belong to features this build does not ship
+ * (`UNRELEASED_FEATURES_ENABLED`): the voice layer's Talk.
+ */
+const UNRELEASED_ACTION_IDS: ReadonlySet<ActionId> = new Set([
+  "voice.talk.toggle",
+]);
+
+/**
+ * Whether `id` can run in this app: the build ships it, and it is not a
+ * desktop-only action in the installed mobile app, where its handler is
+ * never registered. One that cannot is bound to nothing, whatever a profile
+ * stored for it: it matches no key, reserves no chord, is forwarded from no
+ * browser tile, conflicts with no rebind and has no Settings row. The stored
+ * chord itself is kept, so an app that can run the action again finds it
+ * where the person left it.
+ */
+export function isActionAvailable(id: ActionId): boolean {
+  if (ACTION_META[id].desktopOnly && isMobileApp()) return false;
+  return UNRELEASED_FEATURES_ENABLED || !UNRELEASED_ACTION_IDS.has(id);
+}
+
+/** The chord `id` is bound to in this app: the stored one, or none. */
+export function effectiveBinding(
+  bindings: Readonly<Record<ActionId, ChordString | null>>,
+  id: ActionId,
+): ChordString | null {
+  return isActionAvailable(id) ? (bindings[id] ?? null) : null;
+}
+
 export function getDefaultBindings(): Readonly<
   Record<ActionId, ChordString | null>
 > {

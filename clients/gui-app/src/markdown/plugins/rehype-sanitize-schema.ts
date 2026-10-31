@@ -10,6 +10,7 @@ import {
 } from "./const";
 import type { Schema } from "hast-util-sanitize";
 import { defaultSchema } from "rehype-sanitize";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 // Windows drive pseudo-schemes (`C:\…` → scheme `c`). Sanitize runs before
 // react-markdown's urlTransform, so a bare drive href is dropped here unless its
@@ -31,7 +32,10 @@ const TRAYCER_TAG_NAMES = [
   TRAYCER_TICKET_TAG,
   TRAYCER_MERMAID_TAG,
   TRAYCER_WIREFRAME_TAG,
-  TRAYCER_MENTION_TAG,
+  // Without the features there are no mentions, and a raw tag is unwrapped
+  // to its text, as the release before did. Its attributes below are read
+  // only for a listed tag.
+  ...(UNRELEASED_FEATURES_ENABLED ? [TRAYCER_MENTION_TAG] : []),
 ] as const;
 
 const TRAYCER_TAG_ATTRIBUTES: Schema["attributes"] = {

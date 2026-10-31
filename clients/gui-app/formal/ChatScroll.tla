@@ -670,11 +670,11 @@ Arrived(x) ==
 ReconcileStrictBottom(x, native, top) == ReconcileAt(x, native, top, FALSE)
 
 \* Fixed ("followguard"): a follow the latch starts itself leaves a free
-\* reader free while a blocking gesture arm of theirs not headed for the end
+\* reader free while a blocking gesture arm of theirs headed away from the end
 \* still waits for its scroll: following them would retire it.
 FollowGuarded(x) ==
     /\ "followguard" \in Fixes /\ ~x.perm
-    /\ x.armed.src = "gesture" /\ x.armed.blocks /\ x.armed.dir # "toward-end"
+    /\ x.armed.src = "gesture" /\ x.armed.blocks /\ x.armed.dir = "away-from-end"
 
 \* The row form re-recorded the end and step at each observation. Hybrid
 \* keeps the lift's target content and announced-write travel baseline.
