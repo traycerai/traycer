@@ -15,7 +15,9 @@ import { create, type StoreApi } from "zustand";
 import type {
   BotActivity,
   BotListResponse,
+  BotRecord,
 } from "@traycer/protocol/host/bot/schemas";
+import type { BotSubscriptionResult } from "@/hooks/bots/use-bot-subscription";
 import type { StreamFrameEnvelope } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport/ws-stream-client";
 import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
@@ -196,6 +198,16 @@ const fake = vi.hoisted(() => {
       activityByBot.clear();
     },
   };
+  // Each bot's stream as `useBotSubscriptionForHost` answers it: pending (no
+  // snapshot yet) unless a test gives a bot one.
+  const pendingSubscription: BotSubscriptionResult = {
+    snapshot: null,
+    deleted: false,
+    error: null,
+    isPending: true,
+    resubscribe: () => undefined,
+  };
+  const subscriptions = { byBot: new Map<string, BotSubscriptionResult>() };
   function slot<T>(): { value: T | null } {
     return { value: null };
   }
@@ -320,6 +332,8 @@ const fake = vi.hoisted(() => {
     personalEnvironment,
     attention,
     activity,
+    pendingSubscription,
+    subscriptions,
     mainBotList,
     botList: { value: mainBotList },
     doorbell: slot<MockWsStreamClient<StreamFrameEnvelope>>(),
@@ -588,6 +602,25 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => {
       ),
   };
 });
+vi.mock("@/hooks/bots/use-bot-subscription", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/bots/use-bot-subscription")
+  >()),
+  useBotSubscriptionForHost: (args: { readonly botId: string }) =>
+    fake.subscriptions.byBot.get(args.botId) ?? fake.pendingSubscription,
+}));
+vi.mock("@/hooks/usage-analytics/use-usage-summary-support", () => ({
+  useUsageSummarySupported: () => false,
+}));
+vi.mock(
+  "@/hooks/usage-analytics/use-usage-summary-query",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/usage-analytics/use-usage-summary-query")
+    >()),
+    useUsageSummaryForClient: () => ({ data: undefined, isError: false }),
+  }),
+);
 vi.mock("@/hooks/voice/use-voice-availability-query", () => ({
   useVoiceAvailabilityQuery: () => ({ data: true }),
 }));
@@ -839,6 +872,7 @@ beforeEach(() => {
   fake.threadList.set(undefined);
   fake.attention.reset();
   fake.activity.clear();
+  fake.subscriptions.byBot.clear();
   fake.personalEnvironment.resolved();
   fake.botList.value = fake.mainBotList;
   fake.doorbell.value = new ServingStreamClient();
@@ -3637,5 +3671,76 @@ describe("a bot's question answered elsewhere while it waits in the queue", () =
       await vi.advanceTimersByTimeAsync(30_000);
     });
     expect(commentary).not.toHaveBeenCalled();
+  });
+});
+
+describe("two statuses asked inside the wait", () => {
+  it("are both answered, each under its own request, in the order asked, though the second was ready first", async () => {
+    const releaseBot: BotRecord = {
+      ...fake.mainBotList.bots[0],
+      botId: "bot-2",
+      title: "Release bot",
+    };
+    // Bot-2's stream has answered; bot-1's has not, so it composes at the timeout.
+    fake.subscriptions.byBot.set("bot-2", {
+      snapshot: {
+        bot: releaseBot,
+        tasks: [],
+        openRequestCount: 0,
+        conversationsRevision: null,
+        notificationSubscriptions: null,
+        surfaceActions: null,
+        stoppedNotificationWatches: null,
+        boundHost: { hostId: "host-a", epoch: 0, isThisHost: false },
+        activity: null,
+      },
+      deleted: false,
+      error: null,
+      isPending: false,
+      resubscribe: () => undefined,
+    });
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    act(() =>
+      useBotTabsStore
+        .getState()
+        .openBotTab({ botId: "bot-2", hostId: "host-a", title: "Release bot" }),
+    );
+    focusOn(CHANNEL_FOCUS);
+    await bringLive();
+    const commentary = fake.engines[0]?.appendCommentary;
+
+    act(() => {
+      runVoiceQueueVerb({ kind: "status", botId: BOT_ID, delegationId: "d-1" });
+      runVoiceQueueVerb({
+        kind: "status",
+        botId: "bot-2",
+        delegationId: "d-2",
+      });
+    });
+    await settle();
+    // The later ask composed already, and waits for the earlier one.
+    expect(commentary).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4_000);
+    });
+    expect(commentary).toHaveBeenCalledTimes(1);
+    expect(commentary).toHaveBeenLastCalledWith(
+      expect.stringContaining("CI bot"),
+      "d-1",
+    );
+    act(() =>
+      eventsOf(0).onOutputTranscriptDelta("Nothing is known about CI bot"),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+
+    expect(commentary).toHaveBeenCalledTimes(2);
+    expect(commentary).toHaveBeenLastCalledWith(
+      expect.stringContaining("Release bot"),
+      "d-2",
+    );
   });
 });

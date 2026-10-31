@@ -146,7 +146,7 @@ function ownerAsking(): VoiceQueueOwner {
     bots: [],
     registerMark: () => undefined,
     voiceSwitch: { current: null },
-    statusRequest: REQUEST,
+    statusRequests: [REQUEST],
     onStatusComposed,
     beginQueue: () => "",
     resetQueue: () => undefined,
