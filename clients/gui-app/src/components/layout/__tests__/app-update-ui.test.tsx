@@ -420,7 +420,7 @@ describe("desktop app update UI", () => {
     // In-flight is disabled, but not blocked - its icon stays at full
     // strength (a `disabled:` variant never matches a span).
     expect(row.firstElementChild?.className).not.toContain("opacity-60");
-    // The restart announcement is exposed in row mode too (finding 5), and
+    // The restart announcement is exposed in row mode too, and
     // the action label stays the stable "Restart to update to v…" - not
     // renamed to describe the in-flight state.
     expect(
@@ -451,7 +451,7 @@ describe("desktop app update UI", () => {
     const blockedRow = await screen.findByTestId("app-update-row");
     expect(blockedRow.className.split(" ")).toContain("min-h-8");
     expect(blockedRow.firstElementChild?.className).toContain("opacity-60");
-    // A real reason is a full line the row wraps, not truncates (finding 6):
+    // A real reason is a full line the row wraps, not truncates:
     // the row is disabled, its accessible name is the whole reason, and the
     // label element carries no `truncate` class that would clip it.
     expect(blockedRow.hasAttribute("disabled")).toBe(true);

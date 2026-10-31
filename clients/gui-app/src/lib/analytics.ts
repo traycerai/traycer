@@ -1145,7 +1145,7 @@ export interface AnalyticsEventProperties {
   // Which report type's gate blocked the attempt (ticket 07's evidence gate,
   // Flow 2 manual opens only) - downstream funnels join this against a later
   // `ReportIssuePrivateSubmit` (or its absence) to compute abandon-after-block.
-  // `blocked_action` (review round N1) - the gate guards every report-
+  // `blocked_action` - the gate guards every report-
   // producing action, not just Send, so this says which one the user hit.
   readonly [AnalyticsEvent.ReportIssueBlocked]: {
     readonly report_type: "bug" | "idea" | "other";

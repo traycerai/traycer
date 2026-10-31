@@ -279,7 +279,7 @@ const HOST_UPDATE_FOREGROUND_SENTENCE =
   "Update ready. A host you started in a terminal is running; stop it to finish the update.";
 
 /**
- * The review's foreground-sentence ruling: the sentence above is true only when THIS APP
+ * The foreground-sentence ruling: the sentence above is true only when THIS APP
  * can finish the update itself
  * (`applied.localHostCapability === "managed" && pending !== "restart-app"`).
  * Otherwise a foreground run gets this one instead - the constant this names
@@ -741,8 +741,8 @@ describe("HostUpdateBanner (Host Update Layer Redesign, D4)", () => {
   // still announce with alert semantics. `describeUpdateOperation` has
   // nothing to say here (the attempt is idle/unknown), so `aria-live` MUST be
   // derived from the branch actually rendered (`terminal-outcome`), not from
-  // the local view's own copy — which is exactly the defect the independent
-  // cold review's finding 6 named: the live region kept reading the
+  // the local view's own copy — which is exactly the defect:
+  // the live region kept reading the
   // non-rendered attempt lane while the visible text, label and styling all
   // correctly said "failed".
   it("G6(i) — a controller-lane terminal outcome is aria-live: assertive even though the local rich view has nothing to say", async () => {

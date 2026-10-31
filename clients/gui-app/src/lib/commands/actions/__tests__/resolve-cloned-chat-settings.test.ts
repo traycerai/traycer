@@ -387,7 +387,7 @@ describe("resolveClonedChatSettings", () => {
   });
 });
 
-// JOB 3 (Codex ivFes, P1): `permissionModeForTarget` runs before the profile
+// JOB 3: `permissionModeForTarget` runs before the profile
 // remap, clamping `auto` against the TARGET's own harness catalog rather than
 // letting it ride through to a create the target host would refuse outright.
 describe("resolveClonedChatSettings clamps auto against the target catalog", () => {
@@ -559,7 +559,7 @@ describe("resolveClonedChatSettings clamps auto against the target catalog", () 
     });
   });
 
-  // JOB 2 (Codex, P1): the sibling of the case above, under the MIXED
+  // JOB 2: the sibling of the case above, under the MIXED
   // catalog that used to be asserted the other way. `settings.harnessId` is
   // `claude`, and the target's `claude` row offers no `auto` - the presence
   // of `codex`'s `auto` elsewhere in the catalog is not evidence about the
