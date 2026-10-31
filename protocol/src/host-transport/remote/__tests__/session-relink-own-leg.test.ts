@@ -1277,6 +1277,137 @@ describe("RemoteSession relink on an own-leg loss", () => {
     });
   });
 
+  describe("prev across dials that never attached", () => {
+    interface NeverAttached {
+      readonly name: string;
+      readonly behavior: DialBehavior;
+      /** What else ends the dial, when the plan alone does not. */
+      readonly end: (relay: FakeRelay) => void;
+      readonly settleMs: number;
+    }
+
+    const failures: NeverAttached[] = [
+      {
+        name: "a socket error",
+        behavior: "swallow",
+        end: (relay) => relay.legs[1]?.onerror?.({ message: "boom" }),
+        settleMs: 5_000,
+      },
+      {
+        name: "a refused dial",
+        behavior: "refuse",
+        end: () => undefined,
+        settleMs: 5_000,
+      },
+      {
+        name: "an ack that never arrives",
+        behavior: "swallow",
+        end: () => undefined,
+        settleMs: ATTACH_ACK_TIMEOUT_MS + 5_000,
+      },
+      {
+        name: "a dial that never opens",
+        behavior: "never-open",
+        end: () => undefined,
+        settleMs: RELAY_DIAL_TIMEOUT_MS + 5_000,
+      },
+    ];
+
+    it.each(failures)(
+      "keeps the close that ended the carrying leg for the claim after $name",
+      async ({ behavior, end, settleMs }) => {
+        const fixture = await readyFixture(LIVE);
+        const { relay } = fixture;
+        const held = relay.host();
+        relay.plan = [behavior];
+
+        relay.dropLeg(1006, "net");
+        await advanceUntil(() => relay.legs.length === 2, 5_000);
+        end(relay);
+        await advanceUntil(() => relay.legs.length === 3, settleMs);
+        await untilResumed(fixture, 1);
+
+        expect(relay.legs[2]?.claim).toBe(claimOf(held));
+        expect(relay.legs[2]?.params.get("prev")).toBe("1006:net");
+        expect(relay.handshakes).toBe(1);
+        expect(relay.sessions).toHaveLength(1);
+      },
+      240_000,
+    );
+
+    it("keeps it across any number of failed dials in a row", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { relay } = fixture;
+      const held = relay.host();
+      relay.plan = ["refuse", "swallow", "never-open", "refuse"];
+
+      relay.dropLeg(1006, "net");
+      await advanceUntil(() => relay.legs.length === 6, 240_000);
+      await untilResumed(fixture, 1);
+
+      for (const leg of relay.legs.slice(1)) {
+        expect(leg.claim).toBe(claimOf(held));
+        expect(leg.params.get("prev")).toBe("1006:net");
+      }
+      expect(relay.handshakes).toBe(1);
+    });
+
+    // A guard, not a pin: `prev` keeps advancing, even after a dial that never
+    // attached, to the close of the next leg that did.
+    it("replaces it once a later leg has attached and is then lost", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { relay } = fixture;
+      relay.plan = ["refuse"];
+
+      relay.dropLeg(1006, "net");
+      await advanceUntil(() => relay.legs.length === 3, 30_000);
+      await untilResumed(fixture, 1);
+      relay.dropLeg(1012, "session-superseded");
+      await advanceUntil(() => relay.legs.length === 4, 30_000);
+
+      expect(relay.legs[3]?.params.get("prev")).toBe("1012:session-superseded");
+    });
+
+    // The adoption tears the old connection down KEEPING the leg it re-installs;
+    // that leg has not ended, so the teardown must not stand in for its close.
+    it("is not replaced by the teardown of a leg a rebuild adopts, when the adoption fails", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { relay } = fixture;
+      vi.spyOn(NoiseChannel, "begin").mockRejectedValueOnce(
+        new Error("the key could not be imported"),
+      );
+      relay.expireRows = true;
+
+      relay.dropLeg(1006, "net");
+      await advanceUntil(() => relay.legs.length === 3, 30_000);
+
+      expect(relay.legs[2]?.params.has("resume")).toBe(false);
+      expect(relay.legs[2]?.params.get("prev")).toBe("1006:net");
+    });
+
+    // Past RESUME_HOLD_MS the claim ladder keeps claiming, so a fresh attach is
+    // reached through a rebuild instead: a frame that fails to decode ends the
+    // relink and the session attaches afresh.
+    it("carries it onto the fresh attach a rebuild makes after failed claim dials", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { relay } = fixture;
+      const held = holdNextDecrypt();
+      await relay.sendUndecodable();
+      await until(() => held.spy.mock.calls.length === 1);
+      relay.plan = ["refuse", "refuse"];
+
+      relay.dropLeg(1006, "net");
+      await advanceUntil(() => relay.legs.length === 3, 30_000);
+      held.release();
+      await advanceUntil(() => relay.handshakes === 2, 30_000);
+      await until(() => fixture.session.isReady());
+
+      const fresh = relay.legs[3];
+      expect(fresh?.params.has("resume")).toBe(false);
+      expect(fresh?.params.get("prev")).toBe("1006:net");
+    });
+  });
+
   describe("readiness and streams across the outage", () => {
     it("takes the resumed edge from down: held, then continued, with fresh ids", async () => {
       const fixture = await readyFixture(LIVE);

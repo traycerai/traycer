@@ -1038,6 +1038,12 @@ interface ActiveConnection {
   /** How this leg's socket ended, when it ended on its own. */
   legEnd: RelayLegEnd | null;
   /**
+   * Whether this leg reached its own attach ack - whether it ever carried the
+   * session. A connection outlives its legs, because a claim dial replaces the
+   * socket in place, so this is cleared with `legEnd` for each new leg.
+   */
+  legAttached: boolean;
+  /**
    * When this connection last received a frame THROUGH THE NOISE CHANNEL -
    * the host's own voice, as opposed to the relay's.
    *
@@ -1382,7 +1388,10 @@ export class RemoteSession<
    * phase timer) cannot strand the session on its old rung either way.
    */
   private pendingForceGeneration: number | null = null;
-  /** How the leg the next dial replaces ended; sent as `prev`. */
+  /**
+   * How the last leg that CARRIED the session ended; sent as `prev`. Written
+   * only through {@link recordReplacedLeg}, which is where the rule lives.
+   */
   private replacedLeg: RelayLegEnd | null = null;
   /** A fresh relay leg waiting on a rebuild's Noise channel, or `null`. */
   private adoptingLeg: AdoptingLeg | null = null;
@@ -2791,6 +2800,7 @@ export class RemoteSession<
     connection.socket = relaySocket;
     connection.attachGrant = grant;
     connection.legEnd = null;
+    connection.legAttached = false;
     this.armPhaseTimer(generation, ATTACH_ACK_TIMEOUT_MS, "attach-ack-timeout");
   }
 
@@ -2928,6 +2938,7 @@ export class RemoteSession<
       admittedExchanges: 0,
       inboundTail: Promise.resolve(),
       legEnd: null,
+      legAttached: false,
       lastInChannelInboundAt: Date.now(),
       inChannelFrames: 0,
       refusedMethods: new Map(),
@@ -2955,6 +2966,7 @@ export class RemoteSession<
     if (this.phase !== "connecting") {
       return;
     }
+    connection.legAttached = true;
     connection.relayClaim = resumeKey === null ? null : { sid, key: resumeKey };
     this.reattachMarks.attachAckAt = Date.now();
     const handshake = connection.channel.handshake;
@@ -5397,11 +5409,41 @@ export class RemoteSession<
 
   /** Gives a leg up without giving the session up; see the close code. */
   private leaveLeg(connection: ActiveConnection): void {
-    this.replacedLeg = connection.legEnd ?? {
-      code: RELAY_RELINK_CLOSE_CODE,
-      reason: RELAY_RELINK_CLOSE_REASON,
-    };
+    this.recordReplacedLeg(
+      connection,
+      connection.legEnd ?? {
+        code: RELAY_RELINK_CLOSE_CODE,
+        reason: RELAY_RELINK_CLOSE_REASON,
+      },
+    );
     connection.socket.close(RELAY_RELINK_CLOSE_CODE, RELAY_RELINK_CLOSE_REASON);
+  }
+
+  /**
+   * Records how the leg being left ended, as the `prev` of every later dial.
+   *
+   * Only a leg that ATTACHED may move it. `prev` is the relay's measurement of
+   * how the leg that CARRIED a session was lost, and a dial that never reached
+   * its ack carried nothing - so it has nothing to report, and reporting its
+   * own dial failure instead overwrites the one close the measurement is for.
+   * Those dials come in numbers: a refused claim walks the whole ladder, and
+   * every rung arrives here through {@link leaveLeg} or the teardown. Without
+   * this gate the first failed redial after a lost live leg replaced its close
+   * with `4005:relay-socket-error`, and every dial after that - the next claim,
+   * and the fresh attach once the session is gone - reported that instead of
+   * the close that ended the session's leg.
+   *
+   * So the value SURVIVES any number of failed claim and redial dials, and is
+   * replaced only by the end of the next leg that attaches.
+   */
+  private recordReplacedLeg(
+    connection: ActiveConnection,
+    end: RelayLegEnd,
+  ): void {
+    if (!connection.legAttached) {
+      return;
+    }
+    this.replacedLeg = end;
   }
 
   /**
@@ -5441,6 +5483,7 @@ export class RemoteSession<
     this.clearPhaseTimer();
     connection.relinking = false;
     connection.activeClaimDial = null;
+    connection.legAttached = true;
     if (sid !== connection.relayClaim?.sid) {
       this.adoptFreshLeg(generation, connection, sid, resumeKey);
       return;
@@ -7146,7 +7189,14 @@ export class RemoteSession<
     if (connection === null) {
       return;
     }
-    this.replacedLeg = connection.legEnd ?? { code: 1000, reason };
+    if (connection.legEnd !== null) {
+      this.recordReplacedLeg(connection, connection.legEnd);
+    } else if (!keepLeg) {
+      // The synthetic 1000 is the close below, so a leg this teardown KEEPS (a
+      // rebuild adopting it) has not ended and reports nothing: its own end,
+      // when it comes, arrives here under the connection it was adopted into.
+      this.recordReplacedLeg(connection, { code: 1000, reason });
+    }
     connection.scheduler.stop();
     connection.reassembler.reset();
     if (!keepLeg) {
