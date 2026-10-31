@@ -43,6 +43,10 @@ import {
   shouldApplyDesktopTabsSnapshot,
 } from "@/stores/tabs/desktop-tabs-persistence";
 import { readPersistedCurrentRoute } from "@/lib/persistent-history";
+import {
+  bindTracySurfaceToWindow,
+  forgetClosedTracySurfaceWindows,
+} from "@/stores/bots/tracy-surface-store";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import type {
   DesktopPerWindowSnapshot,
@@ -219,6 +223,9 @@ function installDesktopWindowsBridge(
   bridge: DesktopWindowsBridge,
   hydrationRequest: WindowsBridgeHydrationRequest,
 ): () => void {
+  // This window's own Tracy surface record, before any layout restore reads
+  // whether the surface is open.
+  bindTracySurfaceToWindow(bridge.windowId);
   const lifecycle = { cancelled: false };
   let tabsCompatible = false;
   const projectionBridge = createDebouncedDesktopPerWindowProjectionBridge(
@@ -286,6 +293,16 @@ function installDesktopWindowsBridge(
     bridge.perWindowState.onChange(applyNewestSnapshot);
 
   const isCancelled = (): boolean => lifecycle.cancelled;
+
+  void Promise.resolve()
+    .then(() => bridge.list())
+    .then((windows) => {
+      if (isCancelled()) return;
+      forgetClosedTracySurfaceWindows(
+        new Set(windows.map((summary) => summary.windowId)),
+      );
+    })
+    .catch(() => undefined);
 
   void (async () => {
     if (isCancelled()) return;

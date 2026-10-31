@@ -9,7 +9,7 @@ import { WindowsBridgeProvider } from "@/providers/windows-bridge-provider";
 import { EpicCanvasPersistLifecycleBridge } from "@/providers/epic-canvas-persist-lifecycle-bridge";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { fileEditRuntimeRegistry } from "@/lib/workspace/file-edit-runtime-registry";
-import { epicCanvasKey } from "@/lib/persist";
+import { epicCanvasKey, persistKey, STORE_KEYS } from "@/lib/persist";
 import {
   useWindowsBridge,
   useWindowsBridgeHydrated,
@@ -40,7 +40,8 @@ import {
   setLandingDraftDesktopProjectionBridge,
   useLandingDraftStore,
 } from "@/stores/home/landing-draft-store";
-import { emptyTabStripLayout } from "@/stores/tabs/layout";
+import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import { emptyTabStripLayout, flattenLayoutRefs } from "@/stores/tabs/layout";
 import { useTabsStore } from "@/stores/tabs/store";
 import { getTabSplitCompatibility } from "@/stores/tabs/tab-split-compatibility";
 import {
@@ -524,6 +525,83 @@ describe("<WindowsBridgeProvider />", () => {
       );
     });
     expect(getTabSplitCompatibility().supported).toBe(false);
+  });
+
+  it("restores the window's own Tracy surface before its layout and sweeps the records of windows the desktop no longer has", async () => {
+    const surfaceKey = persistKey(STORE_KEYS.botTabs);
+    const record = JSON.stringify({
+      state: { open: true, hostId: "host-1", botId: "bot-x" },
+      version: 2,
+    });
+    for (const windowId of ["window-1", "window-2", "window-3"]) {
+      window.localStorage.setItem(`${surfaceKey}:${windowId}`, record);
+    }
+    const fake = createDesktopWindowsBridge();
+    const capabilities = {
+      schemaVersion: 2,
+      features: ["tab-strip-layout-v2", "active-route-v1"],
+    } as const;
+    const windowSummary = (windowId: string): DesktopWindowSummary => ({
+      windowId,
+      title: windowId,
+      isFocused: false,
+      isVisible: true,
+    });
+    const tracyBridge = {
+      ...fake.bridge,
+      list: () =>
+        Promise.resolve([windowSummary("window-1"), windowSummary("window-3")]),
+      perWindowState: {
+        ...fake.bridge.perWindowState,
+        get: () =>
+          Promise.resolve({
+            ...emptyPerWindowSnapshot(),
+            revision: 1,
+            tabStripLayout: {
+              version: 2,
+              items: [
+                {
+                  kind: "tab",
+                  id: "tab:tracy:tracy",
+                  ref: { kind: "tracy", id: "tracy" },
+                },
+              ],
+              activeItemId: "tab:tracy:tracy",
+              systemTabs: { history: null, settings: null },
+            },
+            activeRoute: "/bot/bot-x",
+          }),
+        capabilities: () => Promise.resolve(capabilities),
+        update: () => Promise.resolve({ capabilities, revision: 2 }),
+      },
+    } satisfies DesktopWindowsBridge;
+
+    render(
+      <RunnerHostProvider runnerHost={createRunnerHostWithWindows(tracyBridge)}>
+        <WindowsBridgeProvider>
+          <HydrationProbe />
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("hydration-state").textContent).toBe(
+        "hydrated",
+      );
+      expect(window.localStorage.getItem(`${surfaceKey}:window-2`)).toBeNull();
+    });
+    expect({
+      refs: flattenLayoutRefs(useTabsStore.getState()),
+      surface: useTracySurfaceStore.getState().botId,
+      kept: [
+        window.localStorage.getItem(`${surfaceKey}:window-1`),
+        window.localStorage.getItem(`${surfaceKey}:window-3`),
+      ],
+    }).toEqual({
+      refs: [{ kind: "tracy", id: "tracy" }],
+      surface: "bot-x",
+      kept: [record, record],
+    });
   });
 
   it("keeps a subscribed newer snapshot when the initial get resolves stale", async () => {
@@ -1795,6 +1873,17 @@ describe("<WindowsBridgeProvider /> - a covered macOS window's epics", () => {
 });
 
 function resetStores(): void {
+  // Binding to a window keeps the store on that window's record for the life
+  // of the renderer; every test starts from a freshly loaded one.
+  useTracySurfaceStore.persist.setOptions({
+    name: persistKey(STORE_KEYS.botTabs),
+  });
+  useTracySurfaceStore.setState({
+    open: false,
+    hostId: null,
+    botId: null,
+    visitedBotIds: [],
+  });
   setEpicCanvasDesktopProjectionBridge(null);
   setLandingDraftDesktopProjectionBridge(null);
   setActiveDesktopPerWindowProjectionBridge(null);

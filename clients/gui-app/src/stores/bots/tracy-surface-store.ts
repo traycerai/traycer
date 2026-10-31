@@ -27,7 +27,8 @@ import {
  *   forgotten when the bot goes away or the surface closes. Session-only.
  *
  * Persisted in localStorage (except `visitedBotIds`), so a restart restores
- * the surface on its host and its last channel.
+ * the surface on its host and its last channel: one record in the browser,
+ * one per window on the desktop (`bindTracySurfaceToWindow`).
  */
 interface TracySurfaceState {
   readonly open: boolean;
@@ -54,6 +55,14 @@ interface PersistedTracySurface {
 }
 
 const TRACY_SURFACE_PERSIST_KEY = persistKey(STORE_KEYS.botTabs);
+
+const TRACY_SURFACE_WINDOW_KEY_PREFIX = `${TRACY_SURFACE_PERSIST_KEY}:`;
+
+const CLOSED_SURFACE: PersistedTracySurface = {
+  open: false,
+  hostId: null,
+  botId: null,
+};
 
 /**
  * The bot tab records a version-1 payload held, by bot id, with each one's
@@ -261,6 +270,81 @@ export function adoptLegacyActiveBotTab(botId: string): void {
   const hostId = legacyBotTabHosts?.get(botId);
   if (hostId === undefined) return;
   useTracySurfaceStore.setState({ open: true, hostId, botId });
+}
+
+/**
+ * Gives a desktop window its own record, so one window never overwrites or
+ * closes the surface another uses. The store hydrates from the global key
+ * when it loads, before the window is known; this runs as the window's bridge
+ * installs, before its tabs layout is restored, so the layout keeps or drops
+ * the Tracy ref by this window's own `open`.
+ *
+ * A window with a record reads it back. One without (a window opened since,
+ * or every window on the first launch that keeps records per window) takes
+ * the global record if no window has taken it yet - what an earlier version
+ * saved, its version-1 migration included - and removes it. Any other starts
+ * with the surface closed, and the fixed entry opens Tracy afresh there while
+ * "Show Tracy" is on. The browser has no window and keeps the global record.
+ */
+export function bindTracySurfaceToWindow(windowId: string): void {
+  const key = `${TRACY_SURFACE_WINDOW_KEY_PREFIX}${windowId}`;
+  const persistApi = useTracySurfaceStore.persist;
+  if (persistApi.getOptions().name === key) return;
+  const ownRecord = readStoredItem(key) !== null;
+  const globalRecord =
+    !ownRecord && readStoredItem(TRACY_SURFACE_PERSIST_KEY) !== null;
+  persistApi.setOptions({ name: key });
+  if (ownRecord) {
+    void persistApi.rehydrate();
+    return;
+  }
+  const { open, hostId, botId } = globalRecord
+    ? useTracySurfaceStore.getState()
+    : CLOSED_SURFACE;
+  // Written under this window's key, which holds the record from now on.
+  useTracySurfaceStore.setState({ open, hostId, botId });
+  if (globalRecord) removeStoredItem(TRACY_SURFACE_PERSIST_KEY);
+}
+
+/**
+ * Removes the records of desktop windows that are gone. A window closed while
+ * others stayed open is not restored, so its record would never be read
+ * again; the renderer cannot tell that close from a quit, so the records are
+ * swept against `liveWindowIds`, every window the desktop has, the restored
+ * ones included (all are created before any of them loads).
+ */
+export function forgetClosedTracySurfaceWindows(
+  liveWindowIds: ReadonlySet<string>,
+): void {
+  try {
+    const stale = Array.from({ length: localStorage.length }, (_, index) =>
+      localStorage.key(index),
+    ).filter(
+      (key): key is string =>
+        key !== null &&
+        key.startsWith(TRACY_SURFACE_WINDOW_KEY_PREFIX) &&
+        !liveWindowIds.has(key.slice(TRACY_SURFACE_WINDOW_KEY_PREFIX.length)),
+    );
+    for (const key of stale) localStorage.removeItem(key);
+  } catch {
+    // Storage unavailable: the records stay until a later sweep.
+  }
+}
+
+function readStoredItem(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function removeStoredItem(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // Storage unavailable: nothing was written there to remove.
+  }
 }
 
 /** The surface's host while it is open: the host every channel reads through. */
