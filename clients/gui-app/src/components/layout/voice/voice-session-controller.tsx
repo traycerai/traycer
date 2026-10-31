@@ -1076,8 +1076,9 @@ function applySelection(
  * channel's, because the host opens a post's thread with no row of its own
  * and resolves the opening request on the channel's post after the reply
  * exists. A reply is placed by the request the records already name, else by
- * the thread an accepted post opened, else by the one request awaiting an
- * answer at the channel's top level; one the records do not place yet is
+ * the thread an accepted post opened (never by the requests awaiting at the
+ * channel's top level alone: the channel carries the bot's announcements
+ * too); one the records do not place yet is
  * scheduled under no delegation and re-labelled when they do, before it is
  * appended.
  *
@@ -1199,12 +1200,11 @@ function VoiceFocusedReplyFeed(props: {
     // Records that arrived, or an acceptance that came back, after a reply
     // was scheduled may place it now: the item is re-labelled while it still
     // waits to be appended. Only by the EXACT request the records name: the
-    // fallbacks (the thread a post opened, the sole request awaiting at the
-    // channel's top level) describe what was awaited when the row ARRIVED and
-    // ran then; an older retained row must never take a later request's
-    // binding because that request happens to be the only one awaiting now
-    // (a channel announcement answers no request at all). One the records
-    // still do not name stays here.
+    // one fallback (the thread a post opened) describes what was awaited
+    // when the row ARRIVED and ran then; a retained row must never take a
+    // request's binding on the strength of being awaited alone (a channel
+    // announcement answers no request at all). One the records still do not
+    // name stays here.
     const placeLater = (where: ReplyRecords): void => {
       for (const [replyMessageId, itemId] of unplaced) {
         const requestId = requestIdAnsweredIn(where, replyMessageId);

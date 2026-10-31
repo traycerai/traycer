@@ -124,13 +124,13 @@ export interface SayLoop {
    * Where a reply belongs: `placed` with the delegation of the request this
    * session accepted and still awaits an answer to (named by its id when the
    * records name it; else, for a thread that an accepted post OPENED, that
-   * post, whose first reply answers it before the channel's row says so;
-   * else, at the channel's top level of the same bot on the same host, the
-   * one request awaiting an answer there), spending that binding; `placed`
-   * with `null` when the binding belongs to a replaced engine, which knows
-   * no such delegation; `pending` when no binding fits yet (the records do
-   * not tie the reply to a request, or its request's acceptance has not
-   * come back), spending nothing: the caller places it again when they do.
+   * post, whose first reply answers it before the channel's row says so),
+   * spending that binding; `placed` with `null` when the binding belongs to
+   * a replaced engine, which knows no such delegation; `pending` when no
+   * binding fits yet (the records do not tie the reply to a request, or its
+   * request's acceptance has not come back), spending nothing: the caller
+   * places it again when they do. A top-level row is never placed by the
+   * requests awaiting there alone: the channel carries announcements too.
    */
   placementFor(place: ReplyPlace): ReplyPlacement;
   /**
@@ -493,17 +493,12 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
               candidate.botId === place.botId &&
               candidate.hostId === place.hostId,
           ) ?? null;
-      } else {
-        // A bot answering in its channel: unambiguous only while one request
-        // of that bot on that host waits there.
-        const atTopLevel = Array.from(awaiting.values()).filter(
-          (candidate) =>
-            candidate.threadId === null &&
-            candidate.botId === place.botId &&
-            candidate.hostId === place.hostId,
-        );
-        binding = atTopLevel.length === 1 ? atTopLevel[0] : null;
       }
+      // At the channel's top level a row the records do not tie to a request
+      // is not placed, even with one request of the bot awaiting there: the
+      // channel carries the bot's announcements too, which answer nothing,
+      // so one awaiting request makes no association unambiguous. The row is
+      // placed once the records name its request.
       if (binding === null) return { kind: "pending" };
       awaiting.delete(binding.requestId);
       return { kind: "placed", delegationId: delegationOf(binding) };

@@ -1022,6 +1022,66 @@ describe("a channel announcement queued before a later top-level request", () =>
   });
 });
 
+describe("a bot answering in its channel", () => {
+  it("speaks an unrelated announcement that arrives first under nobody, and the answer under the delegation once the records name its request", async () => {
+    const channel = addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    await say("Merge it.", "d1");
+    await act(async () => {
+      fake.send.resolve({
+        messageId: "m1",
+        requestId: "r1",
+        delivery: "written",
+        threadId: null,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const announcement = botRow("ann", "The nightly build finished.");
+    act(() => {
+      channel.setState({ snapshotLoaded: true, messages: [announcement] });
+    });
+    const commentary = fake.engines[0]?.appendCommentary;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(commentary.mock.calls).toEqual([
+      [expect.stringContaining("nightly build finished"), null],
+    ]);
+    act(() =>
+      eventsOf(0).onOutputTranscriptDelta("the nightly build finished"),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+
+    act(() => {
+      channel.setState({
+        snapshotLoaded: true,
+        messages: [
+          announcement,
+          requestRow("u1", "r1", "a2"),
+          botRow("a2", "Merged."),
+        ],
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(commentary).toHaveBeenCalledTimes(2);
+    expect(commentary).toHaveBeenLastCalledWith(
+      expect.stringContaining("Merged."),
+      "d1",
+    );
+    act(() => eventsOf(0).onOutputTranscriptDelta("merged"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(commentary).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("the voice routes", () => {
   it("mint, end, the microphone prompt and the shell flag run as keyed mutations the cache holds, awaited by the attempt", async () => {
     await bringLive();

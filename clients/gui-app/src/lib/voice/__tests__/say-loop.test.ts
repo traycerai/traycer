@@ -854,72 +854,39 @@ describe("placementFor fallbacks", () => {
     await done;
   }
 
-  it("matches a top-level reply by bot and host, never taking another bot's binding", async () => {
+  it("places a top-level row only by the request the records name, keeping the binding while they do not, even with one request waiting there", async () => {
     const h = harness();
     const botA: VoiceFocus = {
       ...FOCUS,
       botId: "A",
       hostId: "host-a",
       threadId: null,
+      anchorMessageId: null,
     };
-    const botB: VoiceFocus = { ...botA, botId: "B" };
     useVoiceSessionStore.getState().dropOpenSpan();
     await acceptTopLevel(h, 0, {
       focus: botA,
       delegationId: "d-a",
       requestId: "r-a",
     });
-    await acceptTopLevel(h, 1, {
-      focus: botB,
-      delegationId: "d-b",
-      requestId: "r-b",
-    });
 
-    const forB: ReplyPlace = {
-      botId: "B",
+    // The channel carries announcements too: an unrequested row is not the
+    // answer because one request happens to be awaited.
+    const unnamed: ReplyPlace = {
+      botId: "A",
       hostId: "host-a",
       threadId: null,
       requestId: null,
     };
-    expect(h.loop.placementFor(forB)).toEqual({
-      kind: "placed",
-      delegationId: "d-b",
-    });
-    expect(h.loop.placementFor(forB)).toEqual({ kind: "pending" });
+    expect(h.loop.placementFor(unnamed)).toEqual({ kind: "pending" });
+    expect(h.loop.awaitedIn(null)).toBe("joined");
     expect(h.loop.isAwaiting("r-a")).toBe(true);
-    expect(
-      h.loop.placementFor({ ...forB, botId: "A", requestId: "r-a" }),
-    ).toEqual({ kind: "placed", delegationId: "d-a" });
-  });
-
-  it("matches nothing when two requests of the same bot wait at the top level", async () => {
-    const h = harness();
-    const botA: VoiceFocus = {
-      ...FOCUS,
-      botId: "A",
-      hostId: "host-a",
-      threadId: null,
-    };
-    useVoiceSessionStore.getState().dropOpenSpan();
-    await acceptTopLevel(h, 0, {
-      focus: botA,
-      delegationId: "d-1",
-      requestId: "r-1",
+    expect(h.loop.placementFor({ ...unnamed, requestId: "r-a" })).toEqual({
+      kind: "placed",
+      delegationId: "d-a",
     });
-    await acceptTopLevel(h, 1, {
-      focus: botA,
-      delegationId: "d-2",
-      requestId: "r-2",
+    expect(h.loop.placementFor({ ...unnamed, requestId: "r-a" })).toEqual({
+      kind: "pending",
     });
-
-    const place: ReplyPlace = {
-      botId: "A",
-      hostId: "host-a",
-      threadId: null,
-      requestId: null,
-    };
-    expect(h.loop.placementFor(place)).toEqual({ kind: "pending" });
-    expect(h.loop.isAwaiting("r-1")).toBe(true);
-    expect(h.loop.isAwaiting("r-2")).toBe(true);
   });
 });
