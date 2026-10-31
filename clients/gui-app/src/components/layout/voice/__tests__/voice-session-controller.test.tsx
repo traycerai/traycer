@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render } from "@testing-library/react";
+import type { BotQuestionSettlement } from "@traycer/protocol/persistence/epic/messages";
 import type { OpenTextBlock } from "@traycer/protocol/persistence/epic/open-harness-records";
 import {
   afterEach,
@@ -3555,5 +3556,81 @@ describe("a bot's tab closed and reopened under a live session", () => {
     expect(
       useVoiceSessionStore.getState().queue.map((item) => item.id),
     ).toEqual([FAILED_ID]);
+  });
+});
+
+describe("a bot's question answered elsewhere while it waits in the queue", () => {
+  it("leaves the queue unsaid: its pending offer is never said", async () => {
+    const asking = (settlement: BotQuestionSettlement | null): ReplyRow => ({
+      ...botRow("q-1", "Ready to release. Ship or hold?"),
+      question: {
+        requestId: "req-q",
+        questions: [
+          {
+            text: "Ship or hold?",
+            options: ["Ship", "Hold"],
+            allowFreeText: false,
+            settlement,
+          },
+        ],
+      },
+    });
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    const thread = addChat("thread-x", {
+      snapshotLoaded: true,
+      messages: [asking(null)],
+    });
+    selectBotTab(BOT_ID);
+    focusOn(CHANNEL_FOCUS);
+    await bringLive();
+    const commentary = fake.engines[0]?.appendCommentary;
+
+    // The voice is busy, so the offer of the question waits its turn.
+    act(() => eventsOf(0).onOutputTranscriptDelta("Working on it."));
+    act(() =>
+      fake.attention.set({
+        answers: [
+          {
+            messageId: "q-1",
+            botId: "bot-2",
+            threadId: "thread-x",
+            chatId: "thread-x",
+            originHostId: "host-a",
+            at: Date.now(),
+            blocking: true,
+          },
+        ],
+        prompts: { approvals: [], questions: ["q-1"] },
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(
+      useVoiceSessionStore.getState().queue.map((item) => item.kind),
+    ).toEqual(["question"]);
+    expect(commentary).not.toHaveBeenCalled();
+
+    // Someone answers it elsewhere.
+    act(() =>
+      thread.setState({
+        snapshotLoaded: true,
+        messages: [
+          asking({
+            answer: "Ship",
+            skipped: false,
+            by: { kind: "bot" },
+            at: Date.now(),
+          }),
+        ],
+      }),
+    );
+    await settle();
+    expect(useVoiceSessionStore.getState().queue).toEqual([]);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(commentary).not.toHaveBeenCalled();
   });
 });

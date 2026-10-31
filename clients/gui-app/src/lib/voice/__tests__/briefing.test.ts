@@ -78,6 +78,7 @@ describe("composeBriefing", () => {
         }),
       ],
       botTitle,
+      settledIds: new Set<string>(),
       maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
     });
 
@@ -97,6 +98,7 @@ describe("composeBriefing", () => {
       prompts: NO_PROMPTS,
       items: [queueItem({ title: "Safari fix landed" })],
       botTitle,
+      settledIds: new Set<string>(),
       maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
     });
 
@@ -114,6 +116,7 @@ describe("composeBriefing", () => {
       prompts: NO_PROMPTS,
       items: [queueItem({ state: "dismissed" })],
       botTitle,
+      settledIds: new Set<string>(),
       maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
     });
 
@@ -139,6 +142,7 @@ describe("composeBriefing", () => {
         }),
       ],
       botTitle,
+      settledIds: new Set<string>(),
       maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
     });
 
@@ -159,6 +163,7 @@ describe("composeBriefing", () => {
       prompts: { approvals: [], questions: ["q-1", "iv-1"] },
       items: [question],
       botTitle,
+      settledIds: new Set<string>(),
       maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
     });
 
@@ -183,6 +188,7 @@ describe("composeBriefing", () => {
       prompts: { approvals: ["ap-1", "ap-2"], questions: [] },
       items: [surface],
       botTitle,
+      settledIds: new Set<string>(),
       maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
     });
 
@@ -206,6 +212,7 @@ describe("composeBriefing", () => {
       prompts: { approvals: ["ap-1"], questions: [] },
       items: replies,
       botTitle,
+      settledIds: new Set<string>(),
       maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
     });
 
@@ -227,6 +234,7 @@ describe("composeBriefing", () => {
         prompts: NO_PROMPTS,
         items: manyItems(count),
         botTitle,
+        settledIds: new Set<string>(),
         maxChars,
       });
 

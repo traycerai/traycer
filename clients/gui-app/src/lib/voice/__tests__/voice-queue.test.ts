@@ -723,6 +723,7 @@ describe("a reply's notification for a row held as an announcement", () => {
       prompts: { approvals: [], questions: [] },
       items: queue.items(),
       botTitle: (botId) => BOT_TITLES[botId] ?? "the bot",
+      settledIds: new Set<string>(),
       maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
     });
     expect(briefing).toContain(
@@ -802,6 +803,105 @@ describe("a reply's notification for a row held as an announcement", () => {
       queue.items().map((item) => [item.id, item.kind, item.state]),
     ).toEqual([["a-1", "reply", "dismissed"]]);
     expect(appended).toEqual([]);
+  });
+});
+
+describe("a prompt someone else answered", () => {
+  const asking = (messageId: string): HydrationRow => ({
+    ...botRow(messageId, "Ready to release. Ship or hold?"),
+    question: {
+      requestId: "req-q",
+      questions: [
+        {
+          text: "Ship or hold?",
+          options: ["Ship", "Hold"],
+          allowFreeText: false,
+          settlement: null,
+        },
+      ],
+    },
+  });
+  const approving = (messageId: string): HydrationRow => ({
+    ...botRow(messageId, "The task needs your approval to deploy."),
+    surface: {
+      kind: "approval",
+      epicId: "epic-1",
+      hostId: "host-a",
+      chatId: "task-chat",
+      approvalId: "ap-1",
+      resolution: null,
+    },
+  });
+
+  it("leaves a question unsaid: its queued offer is never said, and the briefing neither counts nor lines it", () => {
+    const ref = replyRef({ messageId: "q-1", blocking: true });
+    scheduler.noteOutputLevel(true);
+    arrive(ref, asking("q-1"));
+    expect(queue.items().map((item) => item.kind)).toEqual(["question"]);
+
+    queue.promptSettled("q-1");
+    scheduler.noteOutputLevel(false);
+    clock.advance(120_000);
+
+    expect(queue.items()).toEqual([]);
+    expect(appended).toEqual([]);
+    attentionNow = {
+      answers: [ref],
+      prompts: { approvals: [], questions: ["q-1"] },
+    };
+    queue.run({ kind: "brief", delegationId: "d-b" });
+    expect(appended).toEqual([
+      { text: "Nothing needs your attention right now.", delegationId: "d-b" },
+    ]);
+  });
+
+  it("leaves an approval unsaid, and its id is no longer among the approvals waiting", () => {
+    scheduler.noteOutputLevel(true);
+    arrive(replyRef({ messageId: "s-1", blocking: true }), approving("s-1"));
+    expect(queue.items().map((item) => [item.kind, item.surfaceId])).toEqual([
+      ["surface", "ap-1"],
+    ]);
+
+    queue.promptSettled("s-1");
+    scheduler.noteOutputLevel(false);
+    attentionNow = {
+      answers: [],
+      prompts: { approvals: ["ap-1", "ap-2"], questions: [] },
+    };
+    queue.run({ kind: "brief", delegationId: "d-b" });
+
+    expect(queue.items()).toEqual([]);
+    expect(appended).toHaveLength(1);
+    expect(appended[0]?.text).toContain("1 approval is waiting on you.");
+    expect(appended[0]?.text).not.toContain("2 approvals");
+    expect(appended[0]?.text).not.toContain("approval to deploy");
+  });
+
+  it("takes back a Read of a question already with the engine: it is not said again and marks nothing", () => {
+    queue.begin([replyRef({ messageId: "q-1", blocking: true })], hostOf);
+    queue.hydrated("q-1", asking("q-1"), null);
+    queue.run({ kind: "read", itemId: "q-1", delegationId: "d-read" });
+    expect(appended).toHaveLength(1);
+
+    queue.promptSettled("q-1");
+    scheduler.noteOutputTranscript("Release bot asks: ready to release");
+    clock.advance(CONFIRM_WINDOW_MS * 4);
+
+    expect(appended).toHaveLength(1);
+    expect(markRead).not.toHaveBeenCalled();
+    expect(noteHeard).not.toHaveBeenCalled();
+    expect(queue.items()).toEqual([]);
+  });
+
+  it("is not queued again when the notification names it once more", () => {
+    const ref = replyRef({ messageId: "q-1", blocking: true });
+    arrive(ref, asking("q-1"));
+    queue.promptSettled("q-1");
+
+    queue.ingestReplies([ref], hostOf);
+
+    expect(queue.pendingHydrations()).toEqual([]);
+    expect(queue.items()).toEqual([]);
   });
 });
 
