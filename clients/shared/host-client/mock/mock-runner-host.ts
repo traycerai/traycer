@@ -38,8 +38,10 @@ import {
   voiceSessionsMintViaHttp,
   type VoiceAvailabilityFetchResult,
   type VoiceSessionEndFetchResult,
+  type VoiceSessionIndicator,
   type VoiceSessionMintFetchResult,
   type VoiceSessionMintRequest,
+  type VoiceTrayAction,
 } from "../voice-sessions";
 import {
   decideSecretRequestViaHttp,
@@ -737,6 +739,18 @@ export class MockRunnerHost implements IRunnerHost {
   setVoiceSessionLive(live: boolean): Promise<void> {
     this.voiceSessionLive = live;
     return Promise.resolve();
+  }
+
+  setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void> {
+    // No shell item to show it.
+    void indicator;
+    return Promise.resolve();
+  }
+
+  onVoiceTrayAction(handler: (action: VoiceTrayAction) => void): Disposable {
+    // No shell item, so no action ever comes from one.
+    void handler;
+    return { dispose: () => undefined };
   }
 
   createSandbox(

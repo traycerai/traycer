@@ -8,6 +8,7 @@ import { ChordCaptureCore } from "@/components/settings/controls/chord-capture-c
 import {
   ACTION_IDS,
   ACTION_META,
+  isActionAvailable,
   type ActionId,
 } from "@/lib/keybindings/actions";
 import { formatModifierChordForDisplay } from "@/lib/keybindings/chord";
@@ -52,11 +53,14 @@ export function KeybindingsSettingsPanel() {
   // row for a surface this build has not got - the same reason the command
   // palette omits it. `app.tabs.vertical.collapse` likewise, while this
   // window's tabs are at the top and there is no strip to collapse.
+  // An action this app cannot run (Talk, while the voice layer is
+  // unreleased) has no row either.
   const primaryActionIds = ACTION_IDS.filter(
     (id) =>
       !SUB_LEADER_ACTION_SET.has(id) &&
       (homeTabEnabled || id !== "app.home.open") &&
-      (verticalTabs || id !== "app.tabs.vertical.collapse"),
+      (verticalTabs || id !== "app.tabs.vertical.collapse") &&
+      isActionAvailable(id),
   );
 
   // Lifted (rather than owned by `SummonHotkeyRow`) so the "Reset all to

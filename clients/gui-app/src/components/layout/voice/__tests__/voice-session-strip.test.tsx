@@ -146,6 +146,26 @@ describe("VoiceSessionStrip", () => {
     expect(unmute.getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("reads Voice paused for dictation with Resume, which waits for dictation to end and is never automatic", async () => {
+    goLive(makeDriver());
+    act(() => useVoiceSessionStore.getState().acquireDictationHold("composer"));
+    expect(screen.getByRole("status").textContent).toBe(
+      "Voice paused for dictation",
+    );
+    const resume = screen.getByRole("button", { name: "Resume" });
+    expect(resume).toHaveProperty("disabled", true);
+
+    act(() => useVoiceSessionStore.getState().releaseDictationHold("composer"));
+    expect(screen.getByRole("status").textContent).toBe(
+      "Voice paused for dictation",
+    );
+    expect(resume).toHaveProperty("disabled", false);
+
+    await userEvent.click(resume);
+    expect(screen.getByRole("status").textContent).toBe("Listening");
+    expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+  });
+
   it("ends the session through the driver", async () => {
     const driver = goLive(makeDriver());
 

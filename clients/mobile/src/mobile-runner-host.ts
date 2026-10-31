@@ -160,8 +160,10 @@ import {
   voiceSessionsMintViaHttp,
   type VoiceAvailabilityFetchResult,
   type VoiceSessionEndFetchResult,
+  type VoiceSessionIndicator,
   type VoiceSessionMintFetchResult,
   type VoiceSessionMintRequest,
+  type VoiceTrayAction,
 } from "@traycer-clients/shared/host-client/voice-sessions";
 import {
   decideSecretRequestViaHttp,
@@ -798,6 +800,12 @@ export class MobileRunnerHost implements IRunnerHost {
     return Promise.resolve();
   }
 
+  setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void> {
+    // No menu-bar or notification-area item on the phone.
+    void indicator;
+    return Promise.resolve();
+  }
+
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -1084,6 +1092,12 @@ export class MobileRunnerHost implements IRunnerHost {
   onSystemSuspended(handler: () => void): Disposable {
     // The phone ends a voice session on its background edge, which the
     // mobile voice ticket wires; nothing fires this signal here yet.
+    void handler;
+    return disposable();
+  }
+
+  onVoiceTrayAction(handler: (action: VoiceTrayAction) => void): Disposable {
+    // No voice item on the phone, so no action ever comes from one.
     void handler;
     return disposable();
   }
