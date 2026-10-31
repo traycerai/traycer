@@ -7,7 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { useStore } from "zustand";
-import { ChevronRight, X } from "lucide-react";
+import { X } from "lucide-react";
 import type {
   BotNotificationLevel,
   BotRecord,
@@ -18,11 +18,6 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -36,7 +31,6 @@ import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useUsageSummarySupported } from "@/hooks/usage-analytics/use-usage-summary-support";
 import { EpicUsageDialog } from "@/components/epic-canvas/panels/epic-usage-dialog";
-import { useEnvironmentSetMainBotMutation } from "@/hooks/bots/use-environment-set-main-bot-mutation";
 import {
   useBotDeleteMutation,
   useBotUpdateReplyModeMutation,
@@ -69,14 +63,13 @@ const BOT_TITLE_MAX = 500;
  * closes. Grouped as Slack's channel details are:
  * - Details: the bot's name, who manages it and who may message it, how a
  *   personal bot answers posts (T52), and a team's members;
+ * - Model: the harness, model, effort and profile the bot runs on;
  * - Notifications: what the bell raises for this channel;
  * - Bots in this channel: the team's bots;
  * - Slack: the bot's own Slack app, from its manifest to its install, on
  *   traycer-server with the person's own session rather than the tab host;
  * - Usage: what the bot's chats have cost, in the usage graph (decision 118),
  *   where the tab's host can read it;
- * - Advanced, collapsed: the model the bot runs on and whether it is its
- *   environment's main bot;
  * - deleting the bot, behind a confirmation.
  *
  * Every write goes through the tab host's client - the host `bot.open` chose
@@ -87,8 +80,6 @@ const BOT_TITLE_MAX = 500;
  */
 export function BotChannelSettingsPanel(props: {
   readonly bot: BotRecord;
-  /** Whether the bot is its environment's main bot; `null` when not known. */
-  readonly isMain: boolean | null;
   /** Whether the bot is a personal environment's; a team's always answers in threads. */
   readonly personal: boolean;
   /** The bot's channel, whose notification level the panel sets; `null` from a host that names none. */
@@ -97,7 +88,7 @@ export function BotChannelSettingsPanel(props: {
   readonly environmentBots: ReadonlyArray<BotRecord> | null;
   readonly onClose: () => void;
 }): ReactNode {
-  const { bot, isMain, personal, channelId, environmentBots, onClose } = props;
+  const { bot, personal, channelId, environmentBots, onClose } = props;
   const panelRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
   // Opening the panel takes focus into it, and Escape inside it closes it.
@@ -151,6 +142,7 @@ export function BotChannelSettingsPanel(props: {
           {personal ? <BotReplyModeSection bot={bot} /> : null}
           {personal ? null : <BotTeamMembers />}
         </SettingsGroup>
+        <BotRunSettingsForm bot={bot} />
         {channelId === null ? null : (
           <BotNotificationsSection botId={bot.botId} channelId={channelId} />
         )}
@@ -159,7 +151,6 @@ export function BotChannelSettingsPanel(props: {
         )}
         <BotSlackSettings botId={bot.botId} />
         <BotUsageSection botId={bot.botId} />
-        <BotAdvancedSettings bot={bot} isMain={isMain} />
         <BotDeleteSection bot={bot} />
       </div>
     </aside>
@@ -397,36 +388,6 @@ function BotsInChannelRow(props: { readonly bot: BotRecord }): ReactNode {
   );
 }
 
-/**
- * What changes how the bot runs rather than how the channel reads: its model
- * and whether it is its environment's main bot. Collapsed until opened.
- */
-function BotAdvancedSettings(props: {
-  readonly bot: BotRecord;
-  readonly isMain: boolean | null;
-}): ReactNode {
-  const { bot, isMain } = props;
-  return (
-    <Collapsible data-testid="bot-settings-advanced">
-      <CollapsibleTrigger
-        variant="quiet"
-        className="group flex w-full items-center text-left"
-        data-testid="bot-settings-advanced-toggle"
-      >
-        <ChevronRight
-          className="me-1 size-4 transition-transform group-data-[state=open]:rotate-90"
-          aria-hidden="true"
-        />
-        <span className="text-ui-sm font-semibold">Advanced</span>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="flex flex-col gap-6 pt-4">
-        <BotRunSettingsForm bot={bot} />
-        {isMain === null ? null : <BotMainSection bot={bot} isMain={isMain} />}
-      </CollapsibleContent>
-    </Collapsible>
-  );
-}
-
 function BotTitleForm(props: { readonly bot: BotRecord }): ReactNode {
   const { bot } = props;
   const client = useTabHostClient();
@@ -539,12 +500,7 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
   const canApply =
     !unchanged && selection.modelSlug.length > 0 && !update.isPending;
   return (
-    <section
-      className="flex flex-col gap-2"
-      aria-label="Model"
-      data-testid="bot-settings-model"
-    >
-      <span className="text-ui-sm font-medium text-foreground">Model</span>
+    <SettingsGroup title="Model" testId="bot-settings-model">
       <p className="text-ui-xs text-muted-foreground">
         The next turn uses what you apply here.
       </p>
@@ -594,7 +550,7 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
       <BotSettingsRefusal
         message={update.error === null ? null : update.error.message}
       />
-    </section>
+    </SettingsGroup>
   );
 }
 
@@ -693,67 +649,6 @@ function ChoiceOption(props: {
         </p>
       </div>
     </div>
-  );
-}
-
-/**
- * Making the bot its environment's main bot: one click, no confirmation,
- * since another bot is made main the same way. Drawn only where the main bot
- * is known and the tab's host can write it.
- */
-function BotMainSection(props: {
-  readonly bot: BotRecord;
-  readonly isMain: boolean;
-}): ReactNode {
-  const { bot, isMain } = props;
-  const client = useTabHostClient();
-  const hostId = useTabHostId();
-  const supported =
-    useHostMethodSupport(hostId, "environment.setMainBot") === true;
-  const setMain = useEnvironmentSetMainBotMutation(client);
-  if (!supported) return null;
-  return (
-    <section
-      className="flex flex-col gap-2"
-      aria-label="Main bot"
-      data-testid="bot-settings-main"
-    >
-      <span className="text-ui-sm font-medium text-foreground">Main bot</span>
-      <p className="text-ui-xs text-muted-foreground">
-        {isMain
-          ? "This is the main bot: it tidies the shared memory when it runs over its limit. To hand that over, make another bot main."
-          : "The main bot tidies the shared memory when it runs over its limit."}
-      </p>
-      {isMain ? null : (
-        <div>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={setMain.isPending}
-            data-testid="bot-settings-make-main"
-            onClick={() =>
-              setMain.mutate({
-                environmentId: bot.environmentId,
-                botId: bot.botId,
-              })
-            }
-          >
-            Make main
-            {setMain.isPending ? (
-              <AgentSpinningDots
-                className="ml-1"
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : null}
-          </Button>
-        </div>
-      )}
-      <BotSettingsRefusal
-        message={setMain.error === null ? null : setMain.error.message}
-      />
-    </section>
   );
 }
 

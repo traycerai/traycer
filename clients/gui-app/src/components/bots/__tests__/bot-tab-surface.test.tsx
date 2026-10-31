@@ -470,13 +470,11 @@ vi.mock("@/components/bots/bot-threads-page", () => ({
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
   useBotThreadListQuery: () => ({ data: { threads: mocks.state.threads } }),
 }));
-// The panel takes the bot, whether it is main, whether its environment is a
-// person's own, its channel, its environment's bots and how to close, and
-// nothing else: no prop says which host serves the tab, so no control can be
-// gated on it. The stub lists the props it was given.
+// The panel takes the bot, whether its environment is a person's own, its
+// channel, its environment's bots and how to close, and nothing else: no prop
+// says which host serves the tab, so no control can be gated on it. The stub lists the props it was given.
 vi.mock("@/components/bots/bot-settings-panel", () => ({
   BotChannelSettingsPanel: (props: {
-    isMain: boolean | null;
     personal: boolean;
     channelId: string | null;
     onClose: () => void;
@@ -484,7 +482,6 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
     <div
       data-testid="stub-settings"
       data-prop-names={Object.keys(props).join(",")}
-      data-is-main={String(props.isMain)}
       data-personal={String(props.personal)}
       data-channel-id={props.channelId ?? "none"}
     >
@@ -1501,7 +1498,7 @@ describe("<BotTabSurface /> paused", () => {
     expect(page.getAttribute("data-is-this-host")).toBe("false");
   });
 
-  it("keeps the channel settings ungated: the panel is given the bot, whether it is main and whether it is personal, and no editing flag", async () => {
+  it("keeps the channel settings ungated: the panel is given the bot and whether it is personal, and no editing flag", async () => {
     const user = userEvent.setup();
     mocks.state.openResult = answer({
       kind: "paused",
@@ -1512,7 +1509,7 @@ describe("<BotTabSurface /> paused", () => {
     await user.click(screen.getByTestId("bot-channel-settings-open"));
     expect(
       screen.getByTestId("stub-settings").getAttribute("data-prop-names"),
-    ).toBe("bot,isMain,personal,channelId,environmentBots,onClose");
+    ).toBe("bot,personal,channelId,environmentBots,onClose");
   });
 
   it.each<readonly [string, "user" | "organization", string]>([
@@ -1754,25 +1751,6 @@ describe("<BotTabSurface /> main bot", () => {
     if (header === null) throw new Error("expected the channel header");
     expect(within(header).queryByRole("img", { name: "Main bot" })).toBeNull();
   });
-
-  it.each([
-    ["is main", { "env-team": BOT_ID }, "true"],
-    ["is not main", { "env-team": OTHER_BOT_ID }, "false"],
-    ["is not known", null, "null"],
-  ])(
-    "tells the settings panel whether the bot is main: %s",
-    async (_name, mainBotIds, expected) => {
-      const user = userEvent.setup();
-      mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
-      mocks.state.mainBotIds = mainBotIds;
-      render(surface());
-
-      await user.click(screen.getByTestId("bot-channel-settings-open"));
-      expect(
-        screen.getByTestId("stub-settings").getAttribute("data-is-main"),
-      ).toBe(expected);
-    },
-  );
 });
 
 describe("<BotTabSurface /> views", () => {

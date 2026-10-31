@@ -14,8 +14,8 @@ import { invalidateBotLists } from "@/hooks/bots/use-bot-mutations";
  * Makes a bot its environment's main bot (`environment.setMainBot`), through
  * the tab host's client. The main bot is read back from `bot.list`'s
  * `mainBotIds`, which is cloud-backed and the same through every host, so
- * the write invalidates the list on every host scope. No toast: the Settings
- * panel states a refusal inline, under the control.
+ * the write invalidates the list on every host scope. No toast: the channel
+ * sidebar states a refusal inline, under the bot's row.
  */
 export function useEnvironmentSetMainBotMutation(
   client: HostClient<HostRpcRegistry> | null,
