@@ -40,7 +40,7 @@ export function buildRowKeyToIndex(
 }
 
 /**
- * Ticket 10: `role: "user"` covers two visually distinct row shapes -
+ * `role: "user"` covers two visually distinct row shapes -
  * genuinely human-sent turns and A2A agent-sent rows (`agentSenderInfo !==
  * null` - decision #8's fourth anchor-triggering event). Sharing one
  * LegendList item type meant they shared one recycling pool and one running
@@ -122,7 +122,7 @@ export function chatTimelineLocationForMessage(
   };
 }
 
-/** Ticket 10: the list-state slice `chatTimelineNavigationLandedAtLocation`
+/** The list-state slice `chatTimelineNavigationLandedAtLocation`
  *  needs to validate a settled navigation - same content-relative-vs-DOM-
  *  scroll shape as `ChatFreeScrollingMeasurementSource`/
  *  `ChatViewportAnchorListState` (decision #18), but the caller supplies
@@ -137,7 +137,7 @@ export interface ChatTimelineNavigationListState {
 }
 
 /**
- * Ticket 10: whether `location`'s target row is CURRENTLY sitting at its
+ * Whether `location`'s target row is CURRENTLY sitting at its
  * intended `viewOffset` from the viewport top - the validation half of the
  * settle/re-issue pattern (root-cause: rootcause-nav-landing report). An
  * ANIMATED `scrollToIndex` targets ESTIMATED geometry; the installed
@@ -361,13 +361,13 @@ function nearestHydratedMessageId(
  * to the owning rail entry. `null` when the list state cannot be measured
  * (concealed surface, no rows yet).
  *
- * Sole caller is the ticket-5 free-scroll save path (`scheduleActiveViewportUpdate`
+ * Sole caller is the free-scroll save path (`scheduleActiveViewportUpdate`
  * in chat-messages.tsx) - NOT the minimap, which derives its own active-dot
  * highlighting independently. That single-purpose scope is what makes the P4
  * fallback below safe here: an A2A-only transcript (zero human user rows)
  * has no candidate for `selectActiveUserMessageId`'s human-only gate (it
  * returns `null` in that case ONLY - any human row anywhere in `messages`
- * always resolves a candidate), which previously meant the ticket-5 anchor
+ * always resolves a candidate), which previously meant the save anchor
  * never tracked a reading position at all for that transcript shape -
  * the anchor row's own key (already resolved, any role, hydrated or not) is
  * the natural role-agnostic fallback. `selectActiveUserMessageId` itself is

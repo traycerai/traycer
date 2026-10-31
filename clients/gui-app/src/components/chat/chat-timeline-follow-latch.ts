@@ -1263,8 +1263,7 @@ function canReaderGestureMove(
 }
 
 /**
- * Fixup (fix-detached-streaming-yank/callback-synchronous-follow): replaces
- * the rejected render-gated `maintainScrollAtEnd` design entirely.
+ * Replaces the rejected render-gated `maintainScrollAtEnd` design entirely.
  *
  * The installed `@legendapp/list` source shows every one of its own
  * `doMaintainScrollAtEnd` call sites (data change, item-layout, footer-
