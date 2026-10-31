@@ -354,7 +354,10 @@ function botQuestionFacts(
         };
   return {
     content,
+    // While the card is not read yet, its question is not known: another
+    // question's settler is never said for it.
     settledBy: (index) => {
+      if (open !== null && context.loading) return null;
       const by = questions.at(index)?.settlement?.by ?? null;
       if (by === null) return null;
       return by.kind === "bot" ? said.botTitle : context.nameOf(by.userId);

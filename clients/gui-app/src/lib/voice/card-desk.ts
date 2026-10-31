@@ -531,9 +531,10 @@ interface Desk {
   /** A refusal waiting for the records to name who settled the card. */
   awaitingSettler: boolean;
   /**
-   * The newest segment of the latest choice taken, exact or routed: a
-   * routed answer made of words said before it is older than that choice,
-   * and never overwrites it.
+   * The newest segment of the latest choice taken, exact or routed, or of
+   * the latest request that dropped the candidate: a routed answer made of
+   * words said before it is older than that decision, and never overrides
+   * it.
    */
   latestChoiceSeq: number;
   /** Waits for a confirmed item's playback to end; stopped when the card closes. */
@@ -1475,6 +1476,10 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
       if (seqs.length > 0 && Math.max(...seqs) <= held.latestChoiceSeq) {
         return;
       }
+      // The newer request moves past whatever was said before it, a choice
+      // or not: a routed answer to older words, coming back later, chooses
+      // nothing, though there may be no candidate to drop now.
+      noteChoice(held, seqs);
       if (held.offer !== null) {
         close(held);
         return;
