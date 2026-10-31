@@ -79,7 +79,7 @@ const ChatTimelineRowCtx = createContext<ChatTimelineRowSharedState | null>(
   null,
 );
 
-/** decision #5: "isNearEnd (library default 10% threshold)". */
+/** The library's default 10% isNearEnd threshold. */
 const CHAT_TIMELINE_NEAR_END_THRESHOLD = 0.1;
 
 /** The two configurations the timeline alternates between, at module scope so
@@ -218,7 +218,7 @@ export interface ChatTimelineProps {
   /**
    * LegendList's measured header/footer sizes. The free-scrolling
    * save path needs `headerSize` as the top-offset adjustment that
-   * `initialScrollIndex` / `scrollToIndex` re-add on restore (decision #18
+   * `initialScrollIndex` / `scrollToIndex` re-add on restore (the
    * exact-pixel contract) - `positionAtIndex` is content-relative and does
    * not include it.
    */
@@ -650,7 +650,7 @@ function chatTimelineRowSizeHintClassName(
  * mounted instance (a fresh mount naturally starts a fresh cache entry, and
  * multiple simultaneously-mounted tiles never share one - which now includes
  * the retained-but-deselected chats a pane keeps alive, since pane chat
- * retention reversed decision #17). Same shape as
+ * retention changed that). Same shape as
  * `rendered-messages.ts`'s per-context `WeakMap`s.
  *
  * The earlier `useState`-held `Map`

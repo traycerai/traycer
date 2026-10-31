@@ -26,7 +26,7 @@ export function readScopedIds(
  * Seeds a global scope-prefixed open store (tool-open-store.ts /
  * subagent-open-store.ts - one flat `Set<"scope\0segmentId">` shared by
  * every open chat tab) from its durable chat-key snapshot, exactly once per
- * tab (decision #29).
+ * tab.
  *
  * This hook now owns
  * ONLY the restore-on-mount half - the durable COMMIT moved entirely to the

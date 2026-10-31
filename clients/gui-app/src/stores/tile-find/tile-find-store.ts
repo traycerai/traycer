@@ -76,7 +76,7 @@ const adapterSubscriptions = new Map<string, TileFindAdapterSubscription>();
 // directly and never goes through the bar's own `handleNavigate` flush.
 const pendingSearchFlushes = new Map<string, () => boolean>();
 
-// Ticket 15 (decision #29): durable chat-key mirror of a tile's find session
+// Durable chat-key mirror of a tile's find session
 // (query + bar state only), keyed by `(epicId, contentId)` - the same
 // generic identity `resolveActiveOwner` already carries for every tile kind,
 // not chat-specific. Survives the tab-key `uiByTileInstanceId` entry being
@@ -90,7 +90,7 @@ const pendingSearchFlushes = new Map<string, () => boolean>();
 // switch-away remount does not need a durable round-trip at all - the
 // tab-key `uiByTileInstanceId` entry survives it untouched (only a real
 // close wipes it, via this exact function), so continuous mirroring only
-// bought "last-mutation-wins" instead of decision #29's literal
+// bought "last-mutation-wins" instead of the literal
 // "last-CLOSED-wins", with no benefit for the case it wasn't needed for.
 //
 // Ticket 15 review round 4: round 3 also carried `current`/`activeUnitId`
@@ -495,8 +495,8 @@ function flushPendingSearch(tileInstanceId: string): boolean {
 //
 // Ticket 5: the SAME chat tile instance can still fully remount - evicted past
 // its pane's chat retention cap, evicted with its owning top-level surface, or
-// losing and regaining hosted eligibility (no longer on every inner tab switch;
-// decision #17 was reversed by pane chat retention - see
+// losing and regaining hosted eligibility (no longer on every inner tab switch,
+// per pane chat retention - see
 // `stores/epics/canvas/retained-pane-chats.ts`). Across such a remount its
 // adapter unregisters far more than one microtask apart from coming back, so
 // the swap-window check above never catches it. An inner tab switch no longer
@@ -596,7 +596,7 @@ function getUiState(
   );
 }
 
-// Ticket 15 review round 5 (item 1, decision #19 re-amended): restores
+// Restores
 // query + bar state only, everywhere (tab switch AND reopen-after-close) -
 // the replayed search always lands on the adapter's own default match, by
 // design, not a chased occurrence.

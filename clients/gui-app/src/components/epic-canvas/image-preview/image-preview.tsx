@@ -61,9 +61,9 @@ export interface ImagePreviewProps {
   readonly servedFromCache: boolean;
   /** Alt text and the file name copy/report actions would reference. */
   readonly fileName: string;
-  /** Drops this instance's own toolbar - decision #18. Independent of `gesturesEnabled`: `ImageDiffView`'s linked sides pass `compact` but keep gestures on, driven by its own shared toolbar. */
+  /** Drops this instance's own toolbar. Independent of `gesturesEnabled`: `ImageDiffView`'s linked sides pass `compact` but keep gestures on, driven by its own shared toolbar. */
   readonly compact: boolean;
-  /** Pan/pinch/wheel-zoom/double-click-toggle on or off. `false` for the bundle diff variant (decision #18's affordance-free intent) - static fit only, no gesture traps inside a virtualized list. */
+  /** Pan/pinch/wheel-zoom/double-click-toggle on or off. `false` for the bundle diff variant (the affordance-free intent) - static fit only, no gesture traps inside a virtualized list. */
   readonly gesturesEnabled: boolean;
   /**
    * Exposes this instance's imperative transform controls (`setTransform`,

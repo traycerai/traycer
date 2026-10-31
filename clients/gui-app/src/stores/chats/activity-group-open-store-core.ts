@@ -60,7 +60,7 @@ export function createActivityGroupOpenStore(
 // The SAME tile instance still fully remounts - evicted past its
 // pane's chat retention cap, evicted with its owning top-level surface, or
 // losing and regaining hosted eligibility. It no longer remounts on every
-// inner tab switch (decision #17 was reversed by pane chat retention - see
+// inner tab switch (pane chat retention - see
 // `stores/epics/canvas/retained-pane-chats.ts`). A close is NOT one of these:
 // it evicts this entry outright, and a reopen mints a fresh `tileInstanceId`.
 // Retaining the same store instance across a same-instance remount (instead of
@@ -74,7 +74,7 @@ const activityGroupOpenStoreRegistry = new Map<
   StoreApi<ActivityGroupOpenState>
 >();
 
-// Decision #29: durable chat-key mirror - survives the tab-key
+// Durable chat-key mirror - survives the tab-key
 // store being evicted on close, so a reopened chat's expanded activity
 // groups come back. Last-writer-wins across multiple open views of the same
 // chat.

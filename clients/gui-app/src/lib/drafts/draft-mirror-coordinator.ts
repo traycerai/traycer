@@ -199,7 +199,7 @@ function interviewBindingRefKey(bindingKey: string, hostId: string): string {
   return `${bindingKey}\u0000${hostId}`;
 }
 
-/** Placement host that may lazily adopt landing drafts (decision #9). */
+/** Placement host that may lazily adopt landing drafts. */
 let landingAdoptionHostId: string | null = null;
 /**
  * Ordering fence for the cloud-directory absence sweep: every landing
@@ -1380,7 +1380,7 @@ export async function flushDraftMirrorSessions(
 }
 
 /**
- * Decision #9: adopt on the first debounced sync for the landing
+ * Adopt on the first debounced sync for the landing
  * placement host, not on mount. `wanted === null` means every dirty
  * unadopted landing draft (bootstrap / flush-all).
  */

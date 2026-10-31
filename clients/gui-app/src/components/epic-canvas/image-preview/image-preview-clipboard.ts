@@ -1,8 +1,8 @@
 import { copyImageBlobToClipboard } from "@/lib/images/copy-image-to-clipboard";
 
 /**
- * Canvas-converts a rendered `<img>` to PNG for the Clipboard API
- * (decision #16) - SVG copies its rasterized
+ * Canvas-converts a rendered `<img>` to PNG for the Clipboard API -
+ * SVG copies its rasterized
  * on-screen rendering rather than raw markup, same as every other format,
  * since it goes through the same `<img>` -> canvas pipeline. This
  * normalization step stays (it's what makes GIF/WebP/SVG copyable at all -

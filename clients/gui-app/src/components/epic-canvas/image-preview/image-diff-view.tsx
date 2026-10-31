@@ -231,7 +231,7 @@ export interface ImageDiffViewProps {
   readonly newStage: "staged" | "unstaged" | null;
   readonly fileName: string;
   readonly conflicted: boolean;
-  /** Drops the shared toolbar and all gestures for bundle use - static fit only (decision #18). */
+  /** Drops the shared toolbar and all gestures for bundle use - static fit only. */
   readonly compact: boolean;
   /** `null` when there is no single unambiguous file on disk to open for a per-side failure (e.g. a bundle row). */
   readonly onOpenExternally: (() => void) | null;
@@ -239,10 +239,10 @@ export interface ImageDiffViewProps {
 }
 
 /**
- * Two `ImagePreview` instances side by side (decision #9), always two
+ * Two `ImagePreview` instances side by side, always two
  * columns - a missing side renders an Added/Deleted
  * empty state rather than collapsing to one column. Zoom + pan are LINKED
- * (decision #17, rebuilt on `react-zoom-pan-pinch`):
+ * (rebuilt on `react-zoom-pan-pinch`):
  * - The shared toolbar's fit/actual/zoom buttons drive BOTH sides
  *   independently and instantly (`animationTime: 0`, so `onTransform` fires
  *   once synchronously per side, never mid-animation) - each side computes
@@ -260,7 +260,7 @@ export interface ImageDiffViewProps {
  *   double-click) is never mirrored at all: each side recomputes its own
  *   fit/actual-size independently instead.
  * Compact (bundle) variant: static fit only, no toolbar, no gestures -
- * matches decision #18's affordance-free intent.
+ * matches the affordance-free intent.
  */
 export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   const oldTransformRef = useRef<ReactZoomPanPinchRef | null>(null);

@@ -1158,7 +1158,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     // NEITHER the move source NOR the move target, so this row is a clean
     // test of cross-pane geometry-move stability in isolation. (A two-pane
     // version where the target pane already has an active tab conflates
-    // this with decision #17's real, INTENDED remount-on-deactivation
+    // this with the real, INTENDED remount-on-deactivation
     // policy - see row 11's negative control - because dropping a tab onto
     // a pane makes the dropped tab that pane's new active tab, which
     // legitimately unmounts whatever was active there before.)

@@ -582,8 +582,8 @@ function BrowserTabOtherWindowNote(props: {
 }
 
 /**
- * Dormant placeholder for a tile whose OWN host is `unreachable`
- * (decision #9). Never rendered for `busy` - a busy host is still
+ * Dormant placeholder for a tile whose OWN host is `unreachable`.
+ * Never rendered for `busy` - a busy host is still
  * reachable (`useHostReachability`/`isHostReachable`), and the live tile
  * keeps rendering as-is/connecting through that state.
  *
@@ -947,7 +947,7 @@ export function BrowserTabTile(props: BrowserTabTileProps) {
     // directory's faster reachability signal, so a host that just went
     // unreachable could still read `lifecycle: "live"` here for one tick
     // with stale/emptied `items`. Without this, that window could close a
-    // tile decision #9 requires to go dormant instead. `unreachable` alone
+    // tile that must go dormant instead. `unreachable` alone
     // decides it - `busy` stays reachable and must not gate self-close.
     if (reachability.status === "unreachable") return;
     // The tab is genuinely gone, not merely dormant - free its cached frame

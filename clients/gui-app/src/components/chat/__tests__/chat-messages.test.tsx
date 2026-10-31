@@ -473,7 +473,7 @@ function makeA2AOnlyCompletedTranscript(count: number): ChatMessageModel[] {
   });
 }
 
-/** Composer-send optimistic echo: persistentMessageId stays null (decision #8/#25). */
+/** Composer-send optimistic echo: persistentMessageId stays null. */
 function appendOptimisticUserSend(
   messages: ReadonlyArray<ChatMessageModel>,
   id: string,
@@ -4146,7 +4146,7 @@ describe("ChatMessages scroll policy", () => {
         expect(saved.mode).toBe("free-scrolling");
         expect(saved.anchorMessageId).not.toBeNull();
         // Capture folds topOffsetAdjustment (header) into the saved viewOffset
-        // so it matches LegendList's restore math (decision #18 exact pixels).
+        // so it matches LegendList's restore math (exact pixels).
         expect(typeof saved.offset).toBe("number");
         expect(saved.offset).not.toBe(0);
 

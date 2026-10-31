@@ -8,7 +8,7 @@
  * pass). Selected
  * chat bodies render once in the fixed surface plane and never remount on
  * structural canvas operations. A tab switch is no longer a remount either -
- * pane chat retention reversed decision #17 - so the intentional remounts left
+ * pane chat retention changed that - so the intentional remounts left
  * are eviction past a pane's chat retention cap, eviction of the owning
  * top-level surface, and a hosted-eligibility flip. (A close is not a remount
  * of anything: it destroys the instance, and a reopen mints a new one.)
@@ -17,7 +17,7 @@
  * returns selected chats to the inline pane path in one line. The
  * viewport handoff stays installed as the absorber for that one controlled
  * remount, per the design's rollback contract. Any surface-host code change
- * after enablement requires re-recording the live gate (decision #32).
+ * after enablement requires re-recording the live gate.
  *
  * One export, one call site (`top-level-tab-host.tsx`). Do not gate any
  * other surface-host module on this - membership and the environment

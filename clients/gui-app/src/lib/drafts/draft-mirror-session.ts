@@ -271,7 +271,7 @@ export class DraftMirrorSession {
   }
 
   /**
-   * Stash entries are immutable (decision #12): upsert once, never edit.
+   * Stash entries are immutable: upsert once, never edit.
    * A second call for an id already held as a live row is a no-op.
    */
   async publishImmutable(write: DraftWrite): Promise<void> {
@@ -634,7 +634,7 @@ export class DraftMirrorSession {
   ): Promise<void> {
     if (this.isAbandoned()) return;
     const wanted = draftIds === null ? null : new Set(draftIds);
-    // Decision #9: adopt lazily on the first debounced sync, not on mount.
+    // Adopt lazily on the first debounced sync, not on mount.
     await this.sink.adoptUnadoptedLandingDrafts(this.hostId, wanted);
     const writes = await this.sink.collectDirtyWrites(this.hostId);
     for (const entry of writes) {

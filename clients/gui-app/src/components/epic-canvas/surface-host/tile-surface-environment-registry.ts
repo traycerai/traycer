@@ -22,8 +22,8 @@
  *   `subscribeTileSurfaceMembership` and deletes a record (notifying its
  *   subscribers) only when the instance actually leaves membership - close,
  *   eviction past the pane's chat retention cap, or settled top-level MRU
- *   eviction. Deselecting a tab no longer removes anything (it did while
- *   decision #17 stood); it only flips the record out of
+ *   eviction. Deselecting a tab no longer removes anything (it did before
+ *   pane chat retention); it only flips the record out of
  *   `isTileSurfacePresented`. Nothing else deletes a record.
  *
  * `retractTileSurfacePresentation` is the one narrow exception, and it is

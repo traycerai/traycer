@@ -1791,7 +1791,7 @@ export class TabCommandCoordinator {
     pruneRecoveryEpics(epicIds);
     const ids = new Set(epicIds);
     if (ids.size === 0) return;
-    // Ticket 15 (decision #29): drop every durable chat-key entry under
+    // Drop every durable chat-key entry under
     // these epics across all seven per-tab registries - independent of
     // whether any tab for them is currently open (a chat can leave a
     // durable entry behind long after its own tab closed).

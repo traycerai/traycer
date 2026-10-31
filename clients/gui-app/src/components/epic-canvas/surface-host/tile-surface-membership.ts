@@ -12,7 +12,7 @@
  *    membership.
  *
  *    This layer used to admit the SELECTED chat only, which made an inner
- *    pane tab switch a real unmount (decision #17) and left the reader
+ *    pane tab switch a real unmount and left the reader
  *    watching the transcript re-converge on the way back. Retention is
  *    derived through the shared `retainedPaneChatInstanceIds` policy, and -
  *    critically - the WINDOW is picked on tile kind alone, with eligibility

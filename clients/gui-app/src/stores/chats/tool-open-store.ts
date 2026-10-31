@@ -35,7 +35,7 @@ export const useToolOpenStore = create<ToolOpenState>((set) => ({
     }),
 }));
 
-// Decision #29: durable chat-key mirror of each tab's open tool
+// Durable chat-key mirror of each tab's open tool
 // segment ids - survives the tab-key entries being reset on close, so a
 // reopened chat's expanded tool cards come back.
 export const toolOpenDurableCache =

@@ -45,7 +45,7 @@ import {
 type ChatIdentity = Pick<ChatTabPersistenceIdentity, "epicId" | "chatId">;
 
 /**
- * Decision #29: drops the durable chat-key entry from EVERY
+ * Drops the durable chat-key entry from EVERY
  * registry in the per-tab restoration family - the single point of truth
  * for every registry, called from the chat-deletion mutation's
  * `onSuccess`. Unlike a tab close (tab-key only, LRU-bounded), a deleted

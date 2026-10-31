@@ -35,7 +35,7 @@ export const useSubagentOpenStore = create<SubagentOpenState>((set) => ({
     }),
 }));
 
-// Decision #29: durable chat-key mirror of each tab's open
+// Durable chat-key mirror of each tab's open
 // subagent segment ids - survives the tab-key entries being reset on close,
 // so a reopened chat's expanded subagent cards come back.
 export const subagentOpenDurableCache =

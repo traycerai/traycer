@@ -1,5 +1,5 @@
 /**
- * Decision #29: dual-key persistence pins - unit-level coverage
+ * Dual-key persistence pins - unit-level coverage
  * for the scroll cache, the other five registries, eviction, multi-view, and
  * stale-anchor nearest-neighbor. Component-level streaming / composer-resize
  * / restore-first pins live in chat-messages.test.tsx.
@@ -1109,7 +1109,7 @@ describe("ticket 15 review round 4: real close order drives the canvas sweep (F3
     // temporally LAST event, so its promotion must win.
     //
     // A's own `getOrCreate*`/seed calls below legitimately INHERIT B's
-    // just-closed state (restore-first, decision #29 - the whole point of
+    // just-closed state (restore-first - the whole point of
     // this ticket) - a fresh A2A/activity-group/tool/subagent store for the
     // SAME chat starts from B's durable snapshot, not empty. So proving A's
     // LATER close wins isn't "does B's key vanish" (it wouldn't, even under

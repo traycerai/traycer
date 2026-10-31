@@ -11,7 +11,7 @@ type ChatIdentity = Pick<ChatTabPersistenceIdentity, "epicId" | "chatId">;
  * module-scope, bounded LRU keyed by `(epicId, chatId)` so it survives a
  * tab's tileInstanceId being evicted on close. Memory-only, no persistence -
  * a reload falls through to the streaming-aware fresh-open policy, which is
- * the correct degraded behavior (decision #29).
+ * the correct degraded behavior.
  */
 export interface ChatDurableCache<T> {
   readonly get: (identity: ChatIdentity) => T | undefined;

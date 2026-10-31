@@ -257,7 +257,7 @@ export function useMentionItems(params: UseMentionItemsParams): void {
   //
   // It fans out over EVERY host with an open browser surface in this epic, not
   // just the canvas host's coordinator: a tab on another host is still
-  // mentionable, as snapshot-only context (spec decision #10). Only tabs on
+  // mentionable, as snapshot-only context. Only tabs on
   // the chat's OWN host keep the drive token.
   const hostDirectory = useHostDirectory();
   const hostLabelOf = useCallback(
@@ -1094,7 +1094,7 @@ export function browserTabMentionSourcesFrom(
  *
  * The picker used to see exactly ONE coordinator - the canvas host's - and
  * dropped its rows whenever that host was not the chat's. Cross-host mentions
- * (spec decision #10) invert that: every host with an open browser surface in
+ * invert that: every host with an open browser surface in
  * this epic contributes rows, and the ones that are not the chat's host come
  * back marked `contextOnly`. Those attach a snapshot (url, title, screenshot)
  * instead of a `browser-tab:` drive token, because a session is host-local for

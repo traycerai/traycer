@@ -64,7 +64,7 @@ function byMostRecentlyUpdated(left: PrLightItem, right: PrLightItem): number {
 }
 
 /**
- * Orders a group's rows open → merged → closed (decision #2, #11); ties
+ * Orders a group's rows open → merged → closed; ties
  * within a state break by most-recently-updated first.
  */
 export function orderPrItemsWithinGroup(
