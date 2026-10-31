@@ -1,3 +1,4 @@
+import type { BotQuestionSettlement } from "@traycer/protocol/persistence/epic/messages";
 import type { OpenTextBlock } from "@traycer/protocol/persistence/epic/open-harness-records";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createStore, type StoreApi } from "zustand/vanilla";
@@ -42,6 +43,27 @@ function post(messageId: string, timestamp: number): AnnouncementRow {
     messageId,
     timestamp,
     blocks: [textBlock(`Post ${messageId}.`)],
+  };
+}
+
+function questionPost(
+  messageId: string,
+  timestamp: number,
+  settlement: BotQuestionSettlement | null,
+): AnnouncementRow {
+  return {
+    ...post(messageId, timestamp),
+    question: {
+      requestId: "req-q",
+      questions: [
+        {
+          text: "Ship or hold?",
+          options: ["Ship", "Hold"],
+          allowFreeText: false,
+          settlement,
+        },
+      ],
+    },
   };
 }
 
@@ -148,6 +170,35 @@ describe("watchAnnouncements", () => {
     }
 
     expect(found.map((entry) => entry.chatId)).toEqual(["chan-2"]);
+  });
+
+  it("never announces a bot's question, open or once settled", () => {
+    const channel = handle("bot-2", "chan-2", {
+      snapshotLoaded: true,
+      messages: [post("old", 1_000)],
+    });
+    setHandles([channel]);
+    watch();
+
+    channel.store.setState({
+      snapshotLoaded: true,
+      messages: [post("old", 1_000), questionPost("q-1", 2_000, null)],
+    });
+    expect(found).toEqual([]);
+
+    channel.store.setState({
+      snapshotLoaded: true,
+      messages: [
+        post("old", 1_000),
+        questionPost("q-1", 2_000, {
+          answer: "Ship",
+          skipped: false,
+          by: { kind: "bot" },
+          at: 2_500,
+        }),
+      ],
+    });
+    expect(found).toEqual([]);
   });
 
   it("watches a channel store the registry gains later, from its first loaded snapshot", () => {

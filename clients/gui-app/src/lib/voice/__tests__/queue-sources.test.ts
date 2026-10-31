@@ -464,7 +464,7 @@ describe("announcementsOf", () => {
     ]);
   });
 
-  it("leaves out a bot row that asks something, whatever its place, and keeps one whose question is settled", () => {
+  it("leaves out a bot row that asked the person, settled or not, and keeps a plain post", () => {
     const rows: ReadonlyArray<AnnouncementRow> = [
       post("a-question", 2_000, {
         question: { requestId: "q-1", questions: [OPEN_QUESTION] },
@@ -482,11 +482,12 @@ describe("announcementsOf", () => {
       post("a-settled", 4_000, {
         question: { requestId: "q-2", questions: [SETTLED_QUESTION] },
       }),
+      post("a-plain", 5_000, {}),
     ];
 
     expect(
       announcementsOf(rows, 1_000).map((found) => found.messageId),
-    ).toEqual(["a-settled"]);
+    ).toEqual(["a-plain"]);
   });
 });
 

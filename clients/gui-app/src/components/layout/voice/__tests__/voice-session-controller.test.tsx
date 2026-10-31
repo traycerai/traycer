@@ -156,8 +156,31 @@ const fake = vi.hoisted(() => {
     },
   };
   // Each bot's activity as `useBotActivity` answers it: none unless a test
-  // sets it before the bot's tab opens.
-  const activity = { byBot: new Map<string, BotActivity>() };
+  // sets it; `set` and `remove` re-render the readers.
+  const activityByBot = new Map<string, BotActivity>();
+  const activityListeners = new Set<() => void>();
+  const notifyActivity = (): void => {
+    for (const listener of activityListeners) listener();
+  };
+  const activity = {
+    get: (botId: string): BotActivity | null =>
+      activityByBot.get(botId) ?? null,
+    subscribe: (listener: () => void): (() => void) => {
+      activityListeners.add(listener);
+      return () => activityListeners.delete(listener);
+    },
+    set: (botId: string, value: BotActivity): void => {
+      activityByBot.set(botId, value);
+      notifyActivity();
+    },
+    remove: (botId: string): void => {
+      activityByBot.delete(botId);
+      notifyActivity();
+    },
+    clear: (): void => {
+      activityByBot.clear();
+    },
+  };
   function slot<T>(): { value: T | null } {
     return { value: null };
   }
@@ -359,10 +382,16 @@ vi.mock("@/hooks/voice/use-voice-attention", async () => {
       useSyncExternalStore(fake.attention.subscribe, fake.attention.get),
   };
 });
-vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
-  useBotActivity: (botId: string) => fake.activity.byBot.get(botId) ?? null,
-}));
+vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
+    useBotActivity: (botId: string) =>
+      useSyncExternalStore(fake.activity.subscribe, () =>
+        fake.activity.get(botId),
+      ),
+  };
+});
 vi.mock("@/hooks/voice/use-voice-availability-query", () => ({
   useVoiceAvailabilityQuery: () => ({ data: true }),
 }));
@@ -569,7 +598,7 @@ beforeEach(() => {
   fake.handles.clear();
   fake.threadList.set(undefined);
   fake.attention.reset();
-  fake.activity.byBot.clear();
+  fake.activity.clear();
   fake.personalEnvironment.resolved();
   fake.botList.value = fake.mainBotList;
   fake.doorbell.value = new ServingStreamClient();
@@ -2231,7 +2260,7 @@ describe("a bot's question at the focused channel's top level", () => {
 
 describe("an answer a bot stopped on, before Talk", () => {
   it("is named in the mint's input and queued as a failed item, with nothing else waiting", async () => {
-    fake.activity.byBot.set(BOT_ID, {
+    fake.activity.set(BOT_ID, {
       trunk: {
         state: "parked",
         startedAt: null,
@@ -2258,5 +2287,39 @@ describe("an answer a bot stopped on, before Talk", () => {
     expect(
       useVoiceSessionStore.getState().queue.map((item) => [item.id, item.kind]),
     ).toEqual([["stopped:bot-1:req-7", "failed"]]);
+  });
+});
+
+describe("a bot whose stream is gone before Talk", () => {
+  const PARKED: BotActivity = {
+    trunk: {
+      state: "parked",
+      startedAt: null,
+      step: null,
+      requestId: "req-7",
+      reason: null,
+    },
+    threads: {},
+  };
+
+  it("leaves no stopped answer in the opening briefing or the queue", async () => {
+    fake.activity.set(BOT_ID, PARKED);
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    focusOn(CHANNEL_FOCUS);
+    await settle();
+
+    act(() => fake.activity.remove(BOT_ID));
+    await settle();
+    await bringLive();
+
+    const mints = queryClient
+      .getMutationCache()
+      .findAll({ mutationKey: voiceMutationKeys.mint() });
+    expect(mints[0]?.state.variables).toEqual({
+      offerSdp: "offer",
+      input: "Nothing needs your attention right now.",
+    });
+    expect(useVoiceSessionStore.getState().queue).toEqual([]);
   });
 });
