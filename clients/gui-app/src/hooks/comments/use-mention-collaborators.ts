@@ -29,7 +29,7 @@ export function useMentionCollaboratorsForClient(
   // composers (session client). It used to read the app-active host "matching
   // the Sharing panel this cache entry is shared with" - but the composer that
   // posts the comment is Epic-scoped, so during an A→B re-point the picker
-  // offered B's collaborator list for a thread being written to A.
+  // offered B's collaborator list for a thread being written to A (D15).
   // `epic.listCollaborators` is a cloud read, so the picker may only populate
   // itself while this session holds a verdict. Withheld, the suggestion list
   // is empty and the popover says "No matching collaborators" - an honest

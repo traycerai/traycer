@@ -18,7 +18,7 @@ import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-st
 
 /**
  * `messageDelivery`'s deferred-windowed-snapshot supersession, on the exact
- * model `chat-session-store-last-fallback-outcome.test.ts` pins for
+ * model `chat-session-store-last-fallback-outcome.test.ts` (D215) pins for
  * `lastFallbackOutcome`: `onMessageDeliveryChanged` writes the live state
  * directly AND calls `advanceDeferredSnapshotAux`, the same two-write shape
  * `onTurnStateChanged` uses there. A held snapshot's `messageDelivery` must
@@ -26,7 +26,7 @@ import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-st
  * hydrates, and a later re-entry of the SAME deferred frame must not
  * resurrect the snapshot's original value over the superseding one.
  *
- * Own file for the same reason that one is: the shared helpers this
+ * Own file for the same reason D215 is its own file: the shared helpers this
  * boundary needs (`deferredWindowedSnapshot`, `completeTail`) don't thread
  * `messageDelivery`, and widening them would cost every existing call site an
  * argument it does not use.
@@ -339,7 +339,7 @@ describe("chat-session-store messageDelivery: deferred-windowed-snapshot superse
   });
 
   it("drops every local copy of a withdrawn message in the SAME deferred-seat update, before the tail hydrates", () => {
-    // The immediate-seat rule ("the OUTCOME is seated immediately")
+    // D215's own immediate-seat rule ("the OUTCOME is seated immediately")
     // extends to the delivery view: `withoutWithdrawnOpeningCopies` runs in
     // the exact `set()` that seats a held aux's `messageDelivery`, not only
     // once the tail later hydrates. This is the third of the three seating

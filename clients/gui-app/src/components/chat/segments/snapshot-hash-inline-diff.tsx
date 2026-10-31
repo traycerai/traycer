@@ -39,7 +39,7 @@ export function SnapshotHashInlineDiff(props: {
   const documentKind = documentAssetKindOf(props.filePath);
   const query = useSnapshotDiffQuery({
     // Mounted only from artifact rows/cards inside a chat TILE, and the blobs
-    // these hashes address are that tab host's.
+    // these hashes address are that tab host's (D15).
     client: useTabHostClient(),
     beforeHash: props.beforeHash,
     afterHash: props.afterHash,

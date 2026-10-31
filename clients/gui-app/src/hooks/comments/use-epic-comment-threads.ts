@@ -133,7 +133,7 @@ function commentThreadReadPreflight(
  * mount of this query is Epic-scoped - the collab TILE and its hover popover
  * (tab client), and the Epic sidebar (session client). An app-wide read here
  * asked the machine the app happened to be pointed at for another host's
- * threads during an A→B re-point, and keyed the cache under that host.
+ * threads during an A→B re-point, and keyed the cache under that host (D15).
  */
 export function useEpicCommentThreadsForClient(args: {
   readonly client: HostClient<HostRpcRegistry> | null;

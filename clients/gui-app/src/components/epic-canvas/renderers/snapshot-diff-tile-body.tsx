@@ -335,7 +335,7 @@ function SnapshotDiffTileResolved(props: {
 
   const segmentQuery = useSnapshotDiffQuery({
     // The snapshot blobs were written by the host this TILE is bound to - the
-    // same host its `useChatSessionHandle` above is keyed by.
+    // same host its `useChatSessionHandle` above is keyed by (D15).
     client: tabHostClient,
     beforeHash: segmentHashes?.beforeHash ?? null,
     afterHash: segmentHashes?.afterHash ?? null,
@@ -345,7 +345,7 @@ function SnapshotDiffTileResolved(props: {
   const cumulative = useSnapshotResolveCumulativeDiffs({
     payload: node.diff,
     // Same host as the hash query above, and for the same reason: the chat and
-    // its snapshot blobs live on the host this tile is bound to.
+    // its snapshot blobs live on the host this tile is bound to (D15).
     client: tabHostClient,
     epicId: handle.epicId,
     chatId: handle.chatId,

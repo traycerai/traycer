@@ -41,7 +41,7 @@ export function CommentSidebarPanel(props: CommentSidebarPanelProps) {
   const artifactRecord = useEpicArtifact(activeArtifactId);
   // The sidebar is a sibling of the canvas, deliberately outside every
   // `<TabHostProvider>`, so its host is the Epic SESSION's - not the app-wide
-  // one, which re-points under it while this Epic keeps rendering.
+  // one, which re-points under it while this Epic keeps rendering (D15).
   const hostClient = useEpicSessionHostClient();
   // The state lane's comment records, resolved here for the same reason the
   // host client is: `CommentSidebar` reads no ambient context of its own.

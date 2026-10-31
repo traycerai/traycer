@@ -8,7 +8,7 @@ vi.mock("sonner", () => ({
 // that is genuinely app-wide - the dead-tile "open in editor" button, a
 // FOLLOWING surface with no host of its own. Every
 // Epic-scoped caller now uses `useEditorOpenForClient` with its own tab client,
-// which is what `routesToThePassedClient` below pins.
+// which is what `routesToThePassedClient` below pins (D15).
 const fakeClient = { __isFakeClient: true };
 vi.mock("@/lib/host", () => ({
   useHostClient: () => fakeClient,
@@ -110,7 +110,7 @@ describe("useEditorOpen", () => {
   });
 });
 
-// `editor.openPaths` resolves its paths on the host it is SENT to, so a
+// D15. `editor.openPaths` resolves its paths on the host it is SENT to, so a
 // diff tile bound to host A that dispatched on the app-wide client asked
 // whichever machine the app was pointed at to open A's file. The tile's own
 // client is a plain argument now; the app-wide mock above is still installed

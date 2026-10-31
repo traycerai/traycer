@@ -178,7 +178,7 @@ function LiveFileChangeInlineDiff(props: { segment: FileChangeSegmentModel }) {
     // The transcript only ever renders inside a chat TILE (`chat-tile.tsx` is
     // the sole mount of `<ChatMessages>`), and the snapshot blobs this row
     // expands were written by that tab's host - which is also the client the
-    // PUBLISHED arm beside this one reads off `PublishedChatSource`.
+    // PUBLISHED arm beside this one reads off `PublishedChatSource` (D15).
     client: useTabHostClient(),
     beforeHash: props.segment.beforeHash,
     afterHash: props.segment.afterHash,

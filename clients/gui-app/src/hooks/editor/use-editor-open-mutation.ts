@@ -24,7 +24,7 @@ export type EditorOpenMutation = UseMutationResult<
  * tile, a workspace-file tile) must use {@link useEditorOpenForClient} with its
  * own tab client instead: `editor.openPaths` resolves the path on the host it is
  * sent to, so an app-wide read opens the wrong machine's file during an A→B
- * re-point.
+ * re-point (D15).
  */
 export function useEditorOpen(
   intent: "file" | "workspace",

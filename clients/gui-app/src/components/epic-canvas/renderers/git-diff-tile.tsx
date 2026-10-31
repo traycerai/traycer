@@ -289,7 +289,7 @@ function GitDiffTileToolbar(props: GitDiffTileToolbarProps): ReactNode {
     (s) => s.patchDiffViewerPreferences,
   );
   // The toolbar's "open file" targets the path the TILE is diffing, which lives
-  // on the tab's host.
+  // on the tab's host (D15).
   const editorOpen = useEditorOpenForClient(useTabHostClient(), "file");
   const { mutateAsync: refreshWorktreeStatus } = useGitRefreshWorktreeStatus();
   const updateView = useEpicCanvasStore((s) => s.updateGitDiffTileViewInTab);

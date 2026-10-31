@@ -36,7 +36,7 @@ export interface ThreadAnchorHoverPopoverProps {
   /** The TILE's client, handed down by `collab-tile-body.tsx`. It must be the
    *  same one the tile's own threads query used or this cache-only read
    *  (`enabled: false`) lands on a different host's key and never resolves a
-   *  thread. */
+   *  thread (D15). */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly artifactType: MarkdownArtifactKind;
   readonly artifactId: string;

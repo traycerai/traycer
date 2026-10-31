@@ -208,7 +208,7 @@ vi.mock("@/stores/settings/settings-store", () => ({
 }));
 
 // The tile dispatches `editor.openPaths` on its TAB client, not the app-wide
-// one - `editor.openPaths` resolves paths on the host it is sent to. The
+// one - `editor.openPaths` resolves paths on the host it is sent to (D15). The
 // mocked hook ignores the client it is handed; what this repoint pins is that
 // the tile no longer imports the app-wide `useEditorOpen` at all.
 vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({

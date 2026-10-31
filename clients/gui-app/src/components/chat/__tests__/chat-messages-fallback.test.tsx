@@ -2788,7 +2788,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
 
     // Step 5: the held outcome, delivered via a genuinely DEFERRED windowed
     // snapshot (unhydrated tail) - proves the metadata seats BEFORE any row
-    // does (R1), not merely that a full fold can carry it. The
+    // does (D215/R1), not merely that a full fold can carry it. The
     // deferral branch of `applyOrDeferWindowedSnapshot` never touches
     // `transcriptBaselineEpoch` (only the fold does), so it stays exactly
     // where step 4 already observed it.
@@ -2802,7 +2802,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       isTailHydrated(harness.handle.store.getState().transcriptWindow),
     ).toBe(false);
     expect(harness.handle.store.getState().transcriptBaselineEpoch).toBe(epoch);
-    // Metadata seats immediately, BEFORE any row is hydrated (R1) - not
+    // Metadata seats immediately, BEFORE any row is hydrated (D215/R1) - not
     // merely readable after a later fold.
     expect(harness.handle.store.getState().lastFallbackOutcome).toBe(
       heldOutcome,
@@ -3066,7 +3066,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
     expect(liveRegionText()).toBe("");
 
     const outcome = r1EventualOutcome();
-    // The real immediate-seat path: delivered via a genuinely DEFERRED
+    // The real D215 immediate-seat path: delivered via a genuinely DEFERRED
     // windowed snapshot (unhydrated tail, rowCount: 2), never
     // `store.setState`.
     harness

@@ -1862,7 +1862,7 @@ describe("fallbackNoticeAnnouncements", () => {
   });
 });
 
-// Confirmed host outcome metadata reaches the announcer independent of
+// D215: confirmed host outcome metadata reaches the announcer independent of
 // transcript row hydration. `fallbackOutcomeAnnouncement` is the pure adapter
 // for that path; it speaks the same TITLE-only sentence as
 // `fallbackNoticeAnnouncements` (`fallbackNoticeText`), not a parallel
@@ -1987,7 +1987,7 @@ describe("createFallbackAnnouncementObserver", () => {
       residentMessageIds: new Set(),
       traversal: null,
       returnOffer: null,
-      // Host outcome metadata, independent of transcript hydration.
+      // Host outcome metadata (D215), independent of transcript hydration.
       // Defaulted to null here; the dedicated liveOutcome tests below
       // override it explicitly.
       liveOutcome: null,
@@ -2818,7 +2818,7 @@ describe("createFallbackAnnouncementObserver", () => {
     ]);
   });
 
-  // liveOutcome: confirmed host metadata, delivered independent of
+  // D215 liveOutcome: confirmed host metadata, delivered independent of
   // transcript row hydration.
   describe("liveOutcome (D215 confirmed host outcome metadata)", () => {
     it("delivers a liveOutcome even when its underlying row is NOT resident in the transcript - host metadata bypasses the hydration-residency gate that regular notices are subject to", () => {

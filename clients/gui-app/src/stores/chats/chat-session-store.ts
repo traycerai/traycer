@@ -540,7 +540,7 @@ type DeferredWindowedSnapshotAux = Pick<
   | "pendingFallback"
   | "pendingReturn"
   | "lastFailedAttempt"
-  // The outcome is here for the replay rule above AND for a second
+  // The outcome (D215) is here for the replay rule above AND for a second
   // reason the other three do not have: it is the only one of the four with a
   // consumer that must speak it EXACTLY ONCE. A stale replay is not a stale
   // card there, it is a false announcement of a result that was superseded.
@@ -1603,7 +1603,7 @@ export interface ChatSessionState {
   readonly lastFailedAttempt: LastFailedAttempt | undefined;
   /**
    * The last CONFIRMED fallback result for the current incident
-   * (`chat.subscribe@1.10`), or `undefined` when there is none.
+   * (`chat.subscribe@1.10`, D215), or `undefined` when there is none.
    *
    * Same derived-per-frame contract, same assign-straight-across rule and same
    * BY-VALUE read as the three above. What is different is what a reader may
@@ -6941,7 +6941,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     ): void => {
       if (!isTailHydrated(window)) {
         const records = hydratedRecords(window);
-        // The OUTCOME is seated immediately, alone among the four
+        // D215: the OUTCOME is seated immediately, alone among the four
         // fallback DTOs, and the asymmetry is deliberate.
         //
         // The other three are transcript-coupled CARD state: publishing them a
@@ -9660,7 +9660,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           pendingFallback: frame.pendingFallback,
           pendingReturn: frame.pendingReturn,
           lastFailedAttempt: frame.lastFailedAttempt,
-          // The supersession half of that rule. Without this a held snapshot
+          // The supersession half of D215. Without this a held snapshot
           // replays the outcome it was sent with even after this frame cleared
           // it, and the announcer speaks a result that was withdrawn.
           lastFallbackOutcome: frame.lastFallbackOutcome,

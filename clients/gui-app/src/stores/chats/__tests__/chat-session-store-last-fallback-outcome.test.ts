@@ -16,7 +16,7 @@ import { isTailHydrated } from "@/stores/chats/transcript-window";
 import { CHAT_STORE_TEST_ENVIRONMENT } from "@/stores/chats/test-support/chat-store-test-environment";
 
 /**
- * `lastFallbackOutcome` pins.
+ * D215 (`lastFallbackOutcome`) pins.
  *
  * Deliberately its OWN file rather than an extension of
  * `chat-session-store-pending-fallback.test.ts`: that file's helpers
@@ -377,7 +377,7 @@ describe("chat-session-store lastFallbackOutcome D215", () => {
 
       // Falsification: move this seat out of `applyOrDeferWindowedSnapshot`'s
       // deferral branch (seat it only once the fold runs) and THIS assertion
-      // goes red - the whole point of the asymmetry with the other three
+      // goes red - the whole point of D215's asymmetry with the other three
       // fallback DTOs is that `appendFallbackNoticeBlock` publishes a
       // snapshot and guarantees no later `turnStateChanged`, so a held
       // outcome has no second carrier to arrive on.
@@ -469,7 +469,7 @@ describe("chat-session-store lastFallbackOutcome D215", () => {
       });
 
       // NON-VACUOUSNESS CHECK, not incidental: `emitTurnState` above already
-      // wrote OUTCOME_B to the LIVE state directly (the immediate-seat
+      // wrote OUTCOME_B to the LIVE state directly (D215's immediate-seat
       // rule applies there too), so reading OUTCOME_B after the `onRange`
       // below is not by itself proof that this response re-entered the
       // deferral branch at all - a response that instead completed the tail,

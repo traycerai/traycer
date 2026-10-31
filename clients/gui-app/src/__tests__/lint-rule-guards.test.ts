@@ -928,7 +928,7 @@ describe("eslint config gates the read-path import restriction to its allowlist"
 /**
  * PR #1243: the Epic canvas subtree and `src/hooks/epic/**` were carved OUT
  * of the read-path allowlist as "app chrome" - the two-role model the redesign
- * replaced with three. Those surfaces read the Epic SESSION's host, and
+ * replaced with three (D15). Those surfaces read the Epic SESSION's host, and
  * exempting the directories let ~40 app-wide reads accumulate there and
  * surface as one review finding per push, three rounds running. These anchors
  * pin that the subtree now carries `readPath`, that the reasoned exceptions
