@@ -1308,7 +1308,7 @@ describe("AuthService", () => {
     expect(useAuthStore.getState().status).toBe("unverified");
     expect(service.getCurrentSessionSnapshot().token).toBe("stale-token");
     expect(service.getLastError()).toBe(AUTH_ERROR_SESSION_EXPIRED);
-    // Automatic failures never destroy the shared file (tech plan §5).
+    // Automatic failures never destroy the shared file.
     expect(await host.tokenStore.get()).toEqual(
       expectedStored("stale-token", "stale-token-refresh"),
     );
@@ -1421,7 +1421,7 @@ describe("AuthService", () => {
     // were keyed on `signed-out` until this arm started holding.
     expect(service.getLastError()).toBe(AUTH_ERROR_ACCOUNT_UNAVAILABLE);
     // The FILE survives regardless: only an explicit user sign-out destroys
-    // credentials (tech plan §5), and a status code is not corroboration enough
+    // credentials, and a status code is not corroboration enough
     // to delete machine-shared state on the server's behalf.
     expect(await host.tokenStore.get()).toEqual(
       expectedStored("missing-user-token", "missing-user-token-refresh"),

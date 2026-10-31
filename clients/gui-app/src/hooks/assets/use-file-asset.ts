@@ -355,8 +355,8 @@ function sharedSubscriptionKeyFor(
 /**
  * Whether `request` reads live filesystem bytes that can change independently
  * of any git object identity - the workspace file itself, or a git side's
- * "new" position while unstaged (worktree via fs, per the tech plan's
- * side-selection table). Every other git side (staged/HEAD/index reads) is
+ * "new" position while unstaged (worktree via fs).
+ * Every other git side (staged/HEAD/index reads) is
  * immutable for the life of the session (decision #11): it must neither
  * re-fetch on refocus nor lose its cached blob to grace-window revocation.
  */

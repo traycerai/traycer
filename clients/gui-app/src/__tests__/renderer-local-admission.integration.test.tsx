@@ -634,7 +634,7 @@ describe("renderer local admission — cross-seam (real AuthService × real useA
     );
     expect(ledger.validationSuccesses).toBe(0);
     expect(ledger.validationAttempts).toBeGreaterThan(0);
-    // network-error never authorizes a rotate spend (tech plan §5).
+    // network-error never authorizes a rotate spend.
     expect(ledger.refreshAttempts).toBe(0);
     // DISCRIMINATING ASSERTION, at the fetch boundary: the REAL
     // `buildDefaultRemoteFetcher` is installed (no stub — see

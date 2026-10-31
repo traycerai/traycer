@@ -296,8 +296,7 @@ export function useCreateTuiAgentForClient(
       try {
         // Preflight cross-profile fork admission BEFORE anything else -
         // including the placeholder tile and worktree/binding work below -
-        // so a rejection leaves NOTHING created (tech plan governing
-        // client-side ordering). See
+        // so a rejection leaves NOTHING created. See
         // `resolveForkProfilePreflightTarget` for when this actually applies.
         const preflightTarget = resolveForkProfilePreflightTarget(
           input,

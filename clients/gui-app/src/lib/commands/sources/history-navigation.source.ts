@@ -4,7 +4,7 @@
  * A dedicated source (not the generic `actions.source`) so the rows are
  * **filtered out unless history-nav is available** - they never reach the
  * browser/web build. Availability is the single feature signal
- * (`ctx.router.isHistoryNavAvailable()`, tech plan §3.6 / §4.5): the current
+ * (`ctx.router.isHistoryNavAvailable()`): the current
  * router's history carrying the persistent-history controller brand.
  *
  * Reads through `ctx.router` (the `KeybindingRouter` adapter built from the

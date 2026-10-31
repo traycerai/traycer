@@ -75,8 +75,8 @@ const ACTIVATION_DEBT_STATES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * In-app host update / activation-debt banner (Host Update Layer Redesign
- * Tech Plan, D4). Driven entirely by the canonical two-lane
+ * In-app host update / activation-debt banner.
+ * Driven entirely by the canonical two-lane
  * `HostControllerStatus` - never the raw registry probe - so it never shows
  * for a merely-detected update, only once a stage is `updateReady` or the
  * host carries activation debt. A ready update supersedes debt (applying new
@@ -295,7 +295,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
 
   const nowMs = useHostUpdateNowMs();
 
-  // Update-over-debt priority (Tech Plan): a ready update supersedes
+  // Update-over-debt priority: a ready update supersedes
   // activation debt outright, since applying the new bytes activates them.
   const { showUpdate, showDebt, hostDown, offeredVersion, installedVersion } =
     deriveOfferedVersion(status);

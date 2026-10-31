@@ -355,8 +355,8 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     sourceHarnessProfiles,
     providersSettled,
   );
-  // Only continue mode proactively disables unshared rows (tech plan UX
-  // package scopes bulk-admission picker behavior to continue mode); a
+  // Only continue mode proactively disables unshared rows (bulk-admission
+  // picker behavior is scoped to continue mode); a
   // manual cross-profile pick in plain fork mode still gets caught by
   // `use-create-tui-agent.ts`'s own preflight at submit time, surfaced via
   // the rejection alert below - it just isn't pre-disabled in the picker.

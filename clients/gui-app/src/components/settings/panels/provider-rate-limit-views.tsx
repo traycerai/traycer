@@ -937,7 +937,7 @@ function ClaudeExtraUsageRow({
 }): ReactNode {
   // `monthlyLimit`/`usedCredits` give a ratio-based bar without depending on
   // the ambiguous 0-1-vs-0-100 scale of `utilization` (open item on the wire
-  // contract - see the tech plan). `utilization` is only ever shown as raw
+  // contract). `utilization` is only ever shown as raw
   // supplementary text.
   if (extraUsage.monthlyLimit !== null && extraUsage.usedCredits !== null) {
     const usedPercent =

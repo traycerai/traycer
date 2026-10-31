@@ -10,8 +10,8 @@ import type {
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 
 /**
- * Renderer-side handle onto the shell's credentials-file token store (tech plan
- * §3). The single machine-local `~/.traycer/cli/<env>/credentials` file is owned
+ * Renderer-side handle onto the shell's credentials-file token store.
+ * The single machine-local `~/.traycer/cli/<env>/credentials` file is owned
  * by the shell (desktop main's `FileTokenStore`, reached over IPC); this wrapper
  * only serializes the mutating operations and exposes the typed seam.
  *

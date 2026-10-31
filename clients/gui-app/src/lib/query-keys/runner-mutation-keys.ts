@@ -289,8 +289,8 @@ export const runnerQueryKeys = {
     ] as const,
   hostRegistryUpdate: (management: object) =>
     ["runner.host.registryUpdate", management] as const,
-  // Canonical two-lane `HostController` status (Host Update Layer Redesign
-  // Tech Plan). Primed once via `getHostControllerStatus()` on mount, then
+  // Canonical two-lane `HostController` status.
+  // Primed once via `getHostControllerStatus()` on mount, then
   // pushed by `HostControllerStatusListener` - never refetched by TanStack's
   // normal mechanisms, since it is entirely event-sourced.
   hostControllerStatus: (management: object) =>
