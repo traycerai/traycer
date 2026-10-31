@@ -2482,8 +2482,9 @@ export const epicCreateChatUpgradeV13ToV14 = defineUpgradePath<
  * `@1.5` of both creates: the first message carries the composer's
  * browser-annotation sidecar, as a `chat.subscribe` `send` frame does, so a
  * selection sent to a NEW chat arrives with the same card a send would carry.
- * The upgrades parse through the `@1.5` schema, which fills the empty default
- * for a `@1.4` caller; the responses are unchanged.
+ * The upgrades parse through the `@1.5` schema. The sidecar key stays absent
+ * for a `@1.4` caller, which the host reads as no sidecar; the responses are
+ * unchanged.
  */
 export const epicCreateV15 = defineRpcContract({
   method: "epic.create",

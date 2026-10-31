@@ -649,6 +649,9 @@ describe("new-conversation modal: browser-annotation sidecar", () => {
     const message = sentInitialMessage(testState.createRequests[0]);
     expect(message.browserAnnotations).toEqual([record]);
     const atoms = collectImageAtoms(message.content);
+    // Exactly once: the submit plans over a document with the crop appended
+    // and the create appends it again, so a crop sent twice is the regression.
+    expect(atoms.filter((atom) => atom.hash === CROP_HASH)).toHaveLength(1);
     expect(atoms.at(-1)?.hash).toBe(CROP_HASH);
     expect(atoms.at(-1)?.b64content).not.toBeNull();
     expect(readNewConversationAnnotations(EPIC_ID)).toEqual([]);

@@ -331,6 +331,10 @@ async function confirmCreateAttachmentHashes(input: {
  */
 const NO_ANNOTATIONS: readonly never[] = [];
 
+/** A staged sandbox's create carries no sidecar, so a capture cannot ride it. */
+const STAGED_SANDBOX_CAPTURE_UNAVAILABLE =
+  "A chat waiting for a sandbox can't start with a capture. Remove the capture to send.";
+
 /** `epic.createChat@1.5`: the first message carries the annotation sidecar. */
 function hostCreatesChatWithAnnotations(hostId: string): boolean {
   const version = readNegotiatedMethodVersion(hostId, "epic.createChat");
@@ -1985,13 +1989,18 @@ export function NewConversationModalBody(props: {
     }
     const editor = editorRef.current;
     if (editor === null) return;
-    // Planned over the document the create will carry: with the sidecar's
-    // crops appended, a node holds bytes beside its hash, which is the case
-    // the by-hash upload below declines, so a create with cards stays on the
-    // inline path and the host never probes a crop's hash in its staging tier.
+    const editorContent = editor.getJSON();
+    const browserAnnotations = readNewConversationAnnotations(epicId);
+    // PLANNED over the document the create will carry, never SENT:
+    // `submitPreparedDraft` appends the sidecar's crops itself, to whichever
+    // document reaches it, so handing it this one would carry every crop
+    // twice. With the crops appended a node holds bytes beside its hash,
+    // which is the case the by-hash upload below declines, so a create with
+    // cards stays on the inline path and the host never probes a crop's hash
+    // in its staging tier.
     const captured = appendImageAttachmentAtoms(
-      editor.getJSON(),
-      sessionAnnotationImageAtoms(readNewConversationAnnotations(epicId)) ?? [],
+      editorContent,
+      sessionAnnotationImageAtoms(browserAnnotations) ?? [],
     );
     // A staged sandbox takes the send (sandboxes redesign Flow 1): the
     // message waits in this task, behind the setup line, until the agent the
@@ -2000,7 +2009,19 @@ export function NewConversationModalBody(props: {
     const stagedKey = stagingSurfaceKey(sandboxStaging);
     const staged = stagedKey === null ? null : readStagedSandbox(stagedKey);
     if (stagedKey !== null && staged !== null && staged.phase !== "handoff") {
-      void submitStagedSandbox(stagedKey, staged, captured);
+      // The staged create carries the message alone, with no sidecar, and the
+      // sandbox's host is not up to ask: a capture would arrive as a bare
+      // image without its card, so it is refused before anything is handed
+      // over, keeping the draft and its cards.
+      if (browserAnnotations.length > 0) {
+        raiseHostNotice({
+          kind: "refused",
+          message: STAGED_SANDBOX_CAPTURE_UNAVAILABLE,
+          action: null,
+        });
+        return;
+      }
+      void submitStagedSandbox(stagedKey, staged, editorContent);
       return;
     }
 
@@ -2055,7 +2076,7 @@ export function NewConversationModalBody(props: {
       return draftImageInliningNeeded(live.getJSON(), liveHostHeld());
     };
     if (pending.length === 0) {
-      submitPreparedDraft(captured, false);
+      submitPreparedDraft(editorContent, false);
       return;
     }
     // One preparation at a time. A second Enter during resolution would
