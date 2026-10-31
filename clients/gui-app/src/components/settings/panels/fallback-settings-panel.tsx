@@ -530,7 +530,7 @@ function FallbackPolicyEditor(props: {
   );
 
   /**
-   * The Test a model panel (spec §Wireframe 4): whether it is open, and the
+   * The Test a model panel: whether it is open, and the
    * header button the keyboard goes back to when Escape or ✕ closes it - the
    * panel's own controls are about to unmount, so the browser would otherwise
    * drop focus on the body.
@@ -630,7 +630,7 @@ function FallbackPolicyEditor(props: {
 
   /**
    * The one write path. Every control reaches the host through this and nothing
-   * else, which is what makes the ticket's three save outcomes a property of the
+   * else, which is what makes the three save outcomes a property of the
    * panel rather than of whichever control happened to be edited:
    *
    *  - invalid draft: kept on screen with its error, and NOTHING is sent;

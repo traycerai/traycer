@@ -200,7 +200,7 @@ describe("partitionOfficePopulation", () => {
     });
   });
 
-  // The recording's shape, at the counts the ticket pins: the team count is
+  // The recording's shape, at the pinned counts: the team count is
   // `min(30, floor((n-1)/7))`, so it only reaches the cap of 30 once n is well
   // past it - both 309 and 1000 are past that point and land on 30. Hot and
   // archived are pinned too, straight from the fixture's own stated rates
@@ -1313,7 +1313,7 @@ describe("partitionOfficePopulation", () => {
   /**
    * EVERY COMBINATION OF WHO RETURNS, WHAT SURVIVED, AND WHERE.
    *
-   * One row per line of the ticket's matrix; N5, N7, N9 and N10 are rows of
+   * One row per line of the matrix; N5, N7, N9 and N10 are rows of
    * it too, restated here alongside the rest so the whole class is closed in
    * one place. Each row says whether it fails on `e89c7e1ea` / `4bbfcbb9b`
    * (the trees before waiting-team continuity was resolved before HQ) or is

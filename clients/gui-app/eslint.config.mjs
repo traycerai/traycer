@@ -1228,7 +1228,7 @@ const restyleExemptions = [
     // A SOLID status pip: `rounded-full bg-info text-white`, the update badge
     // in the header. Button's four status variants are the quiet shape (the
     // role's foreground on no fill); a solid one would be a variant per role
-    // used once each, which is the trade the ticket says not to make.
+    // used once each, which is the trade not to make.
     files: ["src/components/layout/header/app-update-button.tsx"],
     contracts: [{ pattern: "^Button$", allow: ["color"] }],
   },
@@ -1277,7 +1277,7 @@ const restyleExemptions = [
   {
     // Two `warning-ghost` buttons side by side, one of which is the confirm;
     // the border and fill are the only thing telling them apart. A bordered
-    // status variant for one pair is the trade the ticket says not to make.
+    // status variant for one pair is the trade not to make.
     files: ["src/components/home/worktree/worktree-scripts-dialog.tsx"],
     contracts: [{ pattern: "^Button$", allow: ["color"] }],
   },
@@ -1288,7 +1288,7 @@ const restyleExemptions = [
     // it because it happens to hold one control. The honest fix is to wrap it
     // in that island div, which moves the hover fill from the island to an
     // inset rect - a restructure with a visible result, so it is its own
-    // change rather than this ticket's.
+    // change rather than this one.
     files: ["src/components/layout/bridges/desktop-zoom-controller.tsx"],
     contracts: [{ pattern: "^Button$", allow: ["color", "spacing"] }],
   },
@@ -1368,7 +1368,7 @@ const restyleExemptions = [
     // The worktree list's badges say what a row IS about to become - swept,
     // pending, provisional - and a DASHED border is how this panel has said
     // "not yet real" since it shipped. A dashed status variant per role is the
-    // trade the ticket says not to make.
+    // trade not to make.
     files: ["src/components/settings/panels/worktrees-settings-panel.tsx"],
     contracts: [{ pattern: "^Badge$", allow: ["color", "shape"] }],
   },
@@ -1465,7 +1465,7 @@ const restyleExemptions = [
     // dialog mutes a row it is showing back rather than asking for. Both are
     // the STATE of that one field; a `read-only:` rule in `input.tsx` would
     // restyle every read-only input in the app, which is a design change and
-    // not this ticket's.
+    // not this change's.
     files: [
       "src/components/settings/controls/nullable-font-size-input.tsx",
       "src/components/settings/panels/provider-custom-model-provider-dialog.tsx",
@@ -1789,7 +1789,7 @@ const accountOperationAppWideReadExemptions = [
 ];
 
 // The dead-tile "open in editor" opener is a FOLLOWING surface with no picker
-// of its own (selection model §2), local-only by its own gate.
+// of its own, local-only by its own gate.
 const followingSurfaceAppWideReadExemptions = [
   "src/components/worktree/open-in-editor-button.tsx",
 ];
@@ -2333,7 +2333,7 @@ export default tseslint.config(
   {
     // shadcn/ui generated primitives follow library conventions that
     // intentionally diverge from app-code rules. `src/components/ui/**` is
-    // ALSO the `overlayPortal` allowance named in the ticket: it is the one
+    // ALSO the `overlayPortal` allowance: it is the one
     // place allowed to import the raw portal primitives, since it is the
     // wrapper layer that registers them. Its natural partition (boundary +
     // posthog + readPath + kernel - it is not in `hostSelectionReadAllowlist`)
@@ -2403,7 +2403,7 @@ export default tseslint.config(
     },
   },
   {
-    // Plan §2/§3 puts source activation inside this reservation-first command.
+    // Source activation runs inside this reservation-first command.
     // The coordinator may call the two legacy source selectors while its
     // ledger is installed; raw registry.tabActivate remains banned here.
     files: ["src/stores/tabs/tab-command-coordinator.ts"],
@@ -2581,7 +2581,7 @@ export default tseslint.config(
     },
   },
   {
-    // These hooks build a remote host transport (Architecture §4 / S1's
+    // These hooks build a remote host transport (S1's
     // shared `(hostId, userId)` session cache) inside a `useEffect`,
     // deliberately NOT a `useMemo`: only an effect's cleanup is guaranteed to
     // pair with exactly the committed acquire (a `useMemo` factory can run

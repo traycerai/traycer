@@ -86,7 +86,7 @@ function sandboxAgentPreparingGate(harnessId: GuiHarnessId): SandboxAgentGate {
 
 /**
  * "Can the agent picked run on this sandbox?" for a composer whose host is a
- * sandbox (sandboxes redesign Flow 1). A sandbox's toolbar keeps the person's
+ * sandbox. A sandbox's toolbar keeps the person's
  * pick whatever the host reports (`keepsUnavailablePick`), so a pick that
  * cannot run there is refused here, never swapped. Missing launch proof and
  * pending probes hold Send until the destination's own lists prove readiness.

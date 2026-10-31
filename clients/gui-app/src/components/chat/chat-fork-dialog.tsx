@@ -1191,7 +1191,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   //
   // `ChatForkDialogBody` stays mounted for the life of the chat tile and the
   // mutation key is constant, so `error` and `variables` outlive every
-  // transition this ticket made variable: retargeting to another host, and
+  // transition that is now variable: retargeting to another host, and
   // reopening the dialog on a different assistant message. Scoping by host
   // alone fixed the first and left the second — turn M1's refusal rendering as
   // "M2 is still syncing" before M2 had been attempted at all. So the notice

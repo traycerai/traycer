@@ -57,7 +57,7 @@ import type { OpenEpicState } from "@/stores/epics/open-epic/store";
  * live session through the module-scoped session registry, not just the active
  * route, so a background tab whose epic is revoked/deleted closes live too.
  *
- * Behavior (see the revoke/delete decision log):
+ * Behavior:
  *  - Active tab → `closeTabsForEpics` + redirect to the landing page + toast.
  *  - Background tab → silent close + toast, no navigation.
  *  - A role downgrade (editor/owner → viewer) is NOT a loss of access: the

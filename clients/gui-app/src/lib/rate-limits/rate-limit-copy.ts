@@ -4,7 +4,7 @@
  * There are two of them and they must not drift: the composer's own advisory
  * banner (`chat/composer/profile-rate-limit-switch-banner.tsx`) and the
  * fallback return banner, which ABSORBS that advisory's sentence when it takes
- * the composer's one-at-a-time slot (MF09, UX §2). A user who sees the absorbed
+ * the composer's one-at-a-time slot (MF09). A user who sees the absorbed
  * clause in one message and the full advisory in the next must be reading one
  * finding worded one way, not two findings that happen to be about the same
  * account.

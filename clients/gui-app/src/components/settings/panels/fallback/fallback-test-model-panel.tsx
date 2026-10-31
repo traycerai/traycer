@@ -215,7 +215,7 @@ const TERMINAL_ACCOUNT_VALUE = "__terminal-account__";
 const NO_ACCOUNTS: readonly TestAccountOption[] = [];
 
 /**
- * A dry run of routing for one hypothetical blocked chat (spec §Wireframe 4).
+ * A dry run of routing for one hypothetical blocked chat.
  *
  * The pickers build the run tuple the walk needs - provider, model, account,
  * permission mode, failure kind; agent mode and fast mode are carried from

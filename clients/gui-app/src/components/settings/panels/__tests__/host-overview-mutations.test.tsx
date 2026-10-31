@@ -761,7 +761,7 @@ describe("<HostSettingsPanel /> Overview restart outcomes — Force restart", ()
       expect(screen.queryByTestId("host-busy-force-defer-dialog")).toBeNull();
     });
     // Wording unified across every restart surface (`host-restart-toast.ts`,
-    // already-landed audit F15-F17/F19/F20/F25, unrelated to this ticket) -
+    // already-landed audit F15-F17/F19/F20/F25, unrelated to this change) -
     // the host name doesn't earn its place here since the surface the click
     // came from already names it.
     expect(toast.success).toHaveBeenCalledWith("Host restart requested");

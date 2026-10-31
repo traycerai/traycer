@@ -11,7 +11,7 @@ import {
   type ResolvedReadingDensity,
 } from "@/lib/layout/reading-density";
 
-// The spec's density table, one row per placement and one column per choice.
+// The density table, one row per placement and one column per choice.
 const TABLE: ReadonlyArray<
   readonly [
     ReadingPlacement,

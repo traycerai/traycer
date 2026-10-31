@@ -761,7 +761,7 @@ function defaultOrderIds(group: OrderGroupId): ReadonlyArray<string> {
   return orderIds(DEFAULT_ARRANGEMENT, group);
 }
 
-// ── Analytics (L-46, L-54, L-55, tech-plan section 7) ───────────────────────
+// ── Analytics (L-46, L-54, L-55) ────────────────────────────────────────────
 //
 // `layout_snapshot` and `layout_editor_session`'s change summary are built
 // here rather than assembled ad hoc at the firing site, for the same reason
@@ -835,7 +835,7 @@ function settingPropertyValue(
 }
 
 /**
- * `layout_snapshot`'s whole payload (L-46, L-54, L-55, tech-plan section 7):
+ * `layout_snapshot`'s whole payload (L-46, L-54, L-55):
  * the ~40 per-setting properties, ALWAYS present so `STRICT_EVENTS` never
  * drops the event for a missing declared key, plus the base preset, how many
  * settings differ from it, three arrangement enums and five reorder

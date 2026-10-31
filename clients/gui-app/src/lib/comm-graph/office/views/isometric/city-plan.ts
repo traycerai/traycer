@@ -1443,7 +1443,7 @@ function buildDistrict(
         ownerAgentId: ownerAgent.id,
         hostId: block.hostId,
         // A plate names its lead. `agentIds` belongs to the BOARDS that
-        // summarise a block's statuses, which this ticket does not hang.
+        // summarise a block's statuses, which this change does not hang.
         agentIds: [],
         civicRoomId: null,
       });

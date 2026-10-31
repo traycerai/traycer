@@ -72,7 +72,7 @@ export function buildDefaultRemoteFetcher(
         // the moment a verdict lands. Do NOT "simplify" this to `signed-out` for
         // the unverified case: that would wipe a user's remote host list because
         // their laptop woke up on a dead network, which is the exact tear-down
-        // this ticket exists to stop.
+        // this guard exists to stop.
         return era.identity === null
           ? { kind: "signed-out" }
           : { kind: "failed" };
@@ -104,7 +104,7 @@ export interface AuthBoundHostDirectoryOptions {
  * `AuthService`.
  *
  * A named factory rather than an object literal inside the provider's effect,
- * because the three auth-derived arguments below ARE the fix this ticket
+ * because the three auth-derived arguments below ARE the fix this change
  * closes, and they were previously reachable only by mounting React. Every
  * round of this bug was signed off against tests that re-typed these
  * arguments — a plausible accessor, a hand-driven counter — and passed while

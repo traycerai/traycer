@@ -2,7 +2,7 @@
 // resolves this machine's host id, reads the LIVE `host.status` leg over a
 // real client, reads the DURABLE-RECORD leg off `useRunnerHostControllerStatusQuery()`
 // via `recordObservationFromLocalAttempt`, and combines the two through
-// `preferLiveOverRecord` into one `FleetUpdateView` (Ticket 07 §5.2.7 — the
+// `preferLiveOverRecord` into one `FleetUpdateView` (Ticket 07 — the
 // host-down window).
 //
 // This is a PRODUCTION-WIRING witness, not a pure-module test: it drives the

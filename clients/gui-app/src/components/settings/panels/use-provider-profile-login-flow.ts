@@ -120,8 +120,8 @@ export type ProviderProfileLoginFlowState =
   | { readonly kind: "cancelled" };
 
 /**
- * Bounded auto-restart on a rejected/expired code-paste attempt (code-paste
- * decision log's "Bad-code recovery" row): 2 fresh-login retries per flow,
+ * Bounded auto-restart on a rejected/expired code-paste attempt:
+ * 2 fresh-login retries per flow,
  * then land on `failed`. `codeRejected` comes from `awaitLogin`'s own flag;
  * `sessionExpired` comes from the two-sided join in `settleAttempt` between
  * `awaitLogin` not authenticating and `submitLoginCode` reporting
@@ -141,7 +141,7 @@ const CODE_PASTE_RESTART_LIMIT_MESSAGES: Record<CodePasteRestartCause, string> =
   };
 /** Keeps `providers.touchLogin` calls well under the host's 3-minute
  *  rolling kill timer while still bounding call frequency during sustained
- *  typing (code-paste decision log's "Timeouts" row). */
+ *  typing. */
 const CODE_PASTE_TOUCH_THROTTLE_MS = 45_000;
 const CODE_PASTE_KEEPALIVE_INTERVAL_MS = 60_000;
 
@@ -408,12 +408,12 @@ export interface ProviderProfileLoginFlow {
  * reauth gate) reacts to the re-probed auth status on its own, matching
  * the ambient flow's pre-code-paste `onSettled` behavior.
  *
- * Also owns the code-paste sub-flow within `waiting` (code-paste decision
- * log): submitting a pasted code, a throttled keepalive, and bounded
+ * Also owns the code-paste sub-flow within `waiting`:
+ * submitting a pasted code, a throttled keepalive, and bounded
  * auto-restart when the host reports the submitted code was rejected or the
  * login child already died. This never introduces a new top-level state -
- * the paste field is always visible within `waiting` per that decision
- * log's "Paste field visibility" row. `settleAttempt` is the two-sided join
+ * the paste field is always visible within `waiting`.
+ * `settleAttempt` is the two-sided join
  * that decides what a `waiting` attempt resolves to once `awaitLogin` and
  * `submitLoginCode` have both had a chance to weigh in - see its own doc
  * comment for the exact rules (fixup review findings 1 and 2).

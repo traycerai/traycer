@@ -1,5 +1,5 @@
 /**
- * Adversarial navigation verification (frozen provenance-design §9).
+ * Adversarial navigation verification.
  *
  * Net-new race/ledger tests only — no production edits. Drives the real
  * controller, coordinator, and stores; fakes only the navigate promise /
