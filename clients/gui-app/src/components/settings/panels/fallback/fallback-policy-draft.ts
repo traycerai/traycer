@@ -1820,7 +1820,7 @@ function adoptPolicyIntoView(
 /**
  * Whether a settled request actually JUDGED what the controls are showing.
  *
- * TWO conditions, and the second was missing until it was exposed. The request
+ * TWO conditions, and the second was missing until D353 exposed it. The request
  * must be about the draft on screen - `pending.revision === state.revision` -
  * AND it must have CARRIED that draft. A `reset` satisfies the first for free:
  * it sends no draft, so it moves no revision, so its pending revision is
@@ -1832,7 +1832,7 @@ function adoptPolicyIntoView(
  * call sites in `applySaveFailed`, all of them things the user can see:
  *
  *  - the VALIDATION ERROR, cleared only by a request that judged the draft it
- *    belongs to. A reset with an invalid edit on screen erased that
+ *    belongs to (D353). A reset with an invalid edit on screen erased that
  *    edit's error while leaving the invalid value in the field;
  *  - the refusal MARKER, which decides whether the display is described as a
  *    value the host turned down. A refused reset marked an unsent draft it

@@ -32,7 +32,7 @@ export interface UsageCostFigureProps {
 
 /**
  * The one place every honesty element for a cost total is composed - at
- * t3code's density (user ruling 2026-08-10): the headline carries
+ * t3code's density (user ruling 2026-08-10, fixup-01): the headline carries
  * its own asterisk, a five-word footnote sits below it ("* if billed at
  * full API rate"), and a "· N turns not counted" suffix is the ONE thing
  * allowed to claim extra standing pixels, only while unpriced turns exist.

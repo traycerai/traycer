@@ -72,8 +72,8 @@ type DraftClient = HostRequester<HostRpcRegistry> | null;
 /**
  * `deleted: false` means nothing was removed anywhere - the caller shows no
  * toast rather than claiming a delete that did not happen. `undo` is null for
- * a row this host does not own: a retract has no local snapshot to restore
- *. Undo returns whether it restored the local buffer.
+ * a row this host does not own: a retract has no local snapshot to restore.
+ * Undo returns whether it restored the local buffer.
  */
 export type DraftRowDeleteOutcome =
   | { readonly deleted: false }

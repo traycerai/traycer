@@ -3691,7 +3691,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
       "whether the default tiers were restored",
     );
     expect(notice.textContent).not.toContain("whether model routing was reset");
-    // Re-specified. This asserted
+    // Re-specified under D353. This asserted
     // `toContain("hasn't been sent")`, which was the whole `uncommitted` arm at
     // the time. The matrix splits that arm: this display is `loaded-unchanged`
     // - untouched values straight from the load - and "a newer edit that hasn't

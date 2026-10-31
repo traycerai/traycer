@@ -6063,8 +6063,8 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * pairs overlap and the fourth (rightmost) is the one left with nowhere
      * to go.
      *
-     * A seated tag is fitted to its own seat, and requirement 4 there is
-     * that two neighbours' tags then never overlap BY CONSTRUCTION - which
+     * A seated tag is fitted to its own seat, so
+     * two neighbours' tags then never overlap BY CONSTRUCTION - which
      * retires a one-tile-pitch collision as a real scenario: a seat that
      * narrow would have fitted its neighbour's tag down to initials long
      * before the pitch mattered. So each seat here is given `width: 4` -

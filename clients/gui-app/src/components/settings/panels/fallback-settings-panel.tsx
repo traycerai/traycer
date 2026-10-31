@@ -2114,7 +2114,7 @@ function displayDispatchState(input: {
     input.revision > input.lastDispatchedRevision;
   if (!neverDispatched) return "sent-unknown";
   // Never dispatched splits in two, because "no draft was sent" does not make
-  // the display an EDIT. A panel that has only ever loaded a policy has
+  // the display an EDIT (D353). A panel that has only ever loaded a policy has
   // dispatched nothing and been edited by nobody, and calling that "a newer
   // edit that hasn't been sent" is false about both halves of the sentence.
   //
@@ -2124,7 +2124,7 @@ function displayDispatchState(input: {
   return input.matchesPersisted ? "loaded-unchanged" : "uncommitted";
 }
 
-/** The two independent questions a notice answers, resolved once. */
+/** The two independent questions a notice answers, resolved once (D353). */
 interface FallbackSaveNoticeStatus {
   /**
    * A reset was confirmed, its read failed, and nothing has confirmed a
@@ -2147,7 +2147,7 @@ interface FallbackSaveNoticeStatus {
   readonly unknownCarries: FallbackSaveCarries;
   /**
    * The operation whose unanswered outcome has taken away display authority,
-   * or `null` while it is intact. Only the host-claiming sentences
+   * or `null` while it is intact (D353). Only the host-claiming sentences
    * read it; the matrix in SETTINGS.md says which those are.
    */
   readonly authorityInvalidated: FallbackSaveCarries | null;
@@ -2180,7 +2180,7 @@ function saveNoticeStatus(
     // fallback here is unreachable; it is `"draft"` because that is the shape
     // every other outcome's sentence already assumes.
     unknownCarries: state.unknownSave?.carries ?? "draft",
-    // The authority rule, stated once, now read from the OBLIGATION
+    // The authority rule, stated once (D353), now read from the OBLIGATION
     // rather than from the notice (N2). An operation that does not carry the
     // display and has no answer may already have replaced the host's row, so
     // nothing on screen may be called what the host holds until something
@@ -2352,7 +2352,7 @@ function unknownRequestAccount(carries: FallbackSaveCarries): string {
 }
 
 /**
- * The account of the DISPLAY, from the matrix's first axis (SETTINGS.md).
+ * The account of the DISPLAY, from the matrix's first axis (D353, SETTINGS.md).
  *
  * `authorityInvalidated` is the second column of that axis: the right to say
  * what the HOST holds, which an unanswered `reset` or `restore` takes away. Only
@@ -2372,7 +2372,7 @@ function displayAccount(status: {
       // reply was lost may already have replaced the row, and nothing has
       // re-read it - so the confirmation is a fact about the PAST, and the
       // sentence keeps it rather than collapsing to "we don't know", which
-      // would throw away a confirmation that really did happen.
+      // would throw away a confirmation that really did happen (D353).
       if (status.authorityInvalidated !== null) {
         // NO ORDER, in either direction. "before the reset" said the
         // confirmation came first; "since then a reset was sent" said the
@@ -2412,7 +2412,7 @@ function displayAccount(status: {
     case "loaded-unchanged":
       // No host claim at all, which is why this arm has no authority branch:
       // "what was loaded" is a fact about this page, and an unanswered reset
-      // cannot make it false.
+      // cannot make it false (D353).
       return "This page still shows the settings it loaded.";
     case "uncommitted":
       return "You have changes that haven't been sent.";

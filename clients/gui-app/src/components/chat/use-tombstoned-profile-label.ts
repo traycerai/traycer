@@ -65,8 +65,8 @@ export const TombstonedProfileContext =
 
 /**
  * A user message's session anchor snapshots which profile (subscription)
- * owned it at mint time (`profileId` + `labelSnapshot`, never email, so no
- * PII lands in synced artifacts). This resolves
+ * owned it at mint time (`profileId` + `labelSnapshot`, never the
+ * account-email field). This resolves
  * whether that profile is STILL active on the provider today, so history can
  * render "ran on <label> (removed)" for a since-tombstoned/removed profile
  * without ever mutating the anchor itself - and, for an anchor carried here
