@@ -261,13 +261,7 @@ async function callWithSignal(
       signal,
     );
   } catch (error: unknown) {
-    return {
-      kind: "network-error",
-      detail:
-        error instanceof Error
-          ? `the request never completed (${error.name})`
-          : "the request never completed",
-    };
+    return neverCompleted(error);
   }
   let body: unknown = null;
   try {
@@ -275,10 +269,23 @@ async function callWithSignal(
     // rather than throwing before the status is classified.
     const text = await untilAborted(response.text(), signal);
     body = text.length === 0 ? null : JSON.parse(text);
-  } catch {
+  } catch (error: unknown) {
+    // A body that never arrived before the deadline is not an empty answer:
+    // the request did not complete, whatever its status said.
+    if (signal.aborted) return neverCompleted(error);
     body = null;
   }
   return { kind: "response", status: response.status, body };
+}
+
+function neverCompleted(error: unknown): RawCall {
+  return {
+    kind: "network-error",
+    detail:
+      error instanceof Error
+        ? `the request never completed (${error.name})`
+        : "the request never completed",
+  };
 }
 
 /** Classifies a non-2xx answer. */

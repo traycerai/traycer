@@ -613,17 +613,12 @@ describe("sandbox control calls on a fetch that ignores its signal", () => {
     expect(late.text).not.toHaveBeenCalled();
   });
 
-  // A body read that fails leaves `body = null` and the status alone decides
-  // the answer, so a stalled 200 reads as an empty success rather than as the
-  // network error a stalled fetch is.
+  // A body that never arrives is the request not completing, whatever the
+  // status said: every call answers the network error a stalled fetch does.
   it.each([
     {
       name: "listSandboxesViaHttp",
       call: () => listSandboxesViaHttp(BASE, BEARER, null),
-      expected: {
-        kind: "network-error",
-        detail: "the sandbox list did not match the contract",
-      },
     },
     {
       name: "runSandboxVerbViaHttp",
@@ -637,16 +632,14 @@ describe("sandbox control calls on a fetch that ignores its signal", () => {
           null,
           LIST_TIMEOUT_MS,
         ),
-      expected: { kind: "ok", settled: true, state: null },
     },
     {
       name: "keepSandboxViaHttp",
       call: () => keepSandboxViaHttp(BASE, BEARER, null, "sbx_1"),
-      expected: { kind: "ok", settled: true },
     },
   ])(
-    "$name: a 200 whose body never arrives settles at the deadline by its status",
-    async ({ call, expected }) => {
+    "$name: a 200 whose body never arrives settles at the deadline as a network error",
+    async ({ call }) => {
       const stalled = stalledBodyResponse();
       vi.stubGlobal(
         "fetch",
@@ -665,7 +658,10 @@ describe("sandbox control calls on a fetch that ignores its signal", () => {
 
       await vi.advanceTimersByTimeAsync(1);
       expect(settled).toBe(true);
-      expect(await pending).toEqual(expected);
+      expect(await pending).toEqual({
+        kind: "network-error",
+        detail: "the request never completed (TimeoutError)",
+      });
     },
   );
 });
