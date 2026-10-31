@@ -125,6 +125,20 @@ export const OUTPUT_HANGOVER_MS = 700;
  */
 export const OUTPUT_HANGOVER_WITHOUT_LEVEL_MS = 4_000;
 /**
+ * How long an appended item is taken to be playing when no trusted detector
+ * can say: a lead for the model to begin, then a budget per word. The probe
+ * (P5) heard 33 words in about nine seconds; this allows eleven. Until it
+ * has run, nothing else is appended: an append during that audio is the one
+ * the probe says is never spoken.
+ */
+export const SPEECH_LEAD_MS = 1_000;
+export const SPEECH_MS_PER_WORD = 300;
+
+/** The time the voice is held to need for `text`, without a detector. */
+export function estimateSpeechMs(text: string): number {
+  return SPEECH_LEAD_MS + wordsOf(text).length * SPEECH_MS_PER_WORD;
+}
+/**
  * The model's automatic acknowledgement starts about half a second after a
  * delegation and is a few words long. One that never comes (a request the
  * model answered itself) must not hold the queue forever.
@@ -149,6 +163,9 @@ interface InFlight {
   readonly queued: QueuedItem;
   transcript: string;
   timer: unknown;
+  /** Until when the item's own audio is taken to be playing, lacking a detector. */
+  readonly playingUntil: number;
+  holdTimer: unknown;
 }
 
 export function createSpeechScheduler(
@@ -174,7 +191,10 @@ export function createSpeechScheduler(
 
   const outputPlaying = (): boolean =>
     outputLevelPlaying ||
-    (outputTranscriptUntil !== null && outputTranscriptUntil > deps.now());
+    (outputTranscriptUntil !== null && outputTranscriptUntil > deps.now()) ||
+    (!levelDetection &&
+      inFlight !== null &&
+      inFlight.playingUntil > deps.now());
 
   const activity = (): SpeechActivity => ({
     inputActiveUntil:
@@ -227,11 +247,11 @@ export function createSpeechScheduler(
     if (current === null) return;
     inFlight = null;
     if (current.timer !== null) deps.clearTimer(current.timer);
+    if (current.holdTimer !== null) deps.clearTimer(current.holdTimer);
     if (delivered) {
       current.queued.item.onDelivered?.();
       return;
     }
-    current.queued.attempts += 1;
     if (current.queued.attempts < MAX_DELIVERY_ATTEMPTS) {
       queue.unshift(current.queued);
     }
@@ -244,15 +264,28 @@ export function createSpeechScheduler(
     for (const chunk of chunkText(next.item.text, CHUNK_MAX_CHARS)) {
       deps.append(chunk, next.item.delegationId);
     }
+    // Every append spends one of the item's attempts, whatever becomes of it.
+    next.attempts += 1;
+    const holdMs = estimateSpeechMs(next.item.text);
     inFlight = {
       queued: next,
       transcript: "",
-      timer: deps.setTimer(() => {
+      timer: deps.setTimer(
+        () => {
+          if (inFlight?.queued !== next) return;
+          inFlight.timer = null;
+          settleInFlight(false);
+          onFactsChanged();
+        },
+        Math.max(CONFIRM_WINDOW_MS, holdMs),
+      ),
+      playingUntil: deps.now() + holdMs,
+      // The hold ending is a fact change: the next item may go.
+      holdTimer: deps.setTimer(() => {
         if (inFlight?.queued !== next) return;
-        inFlight.timer = null;
-        settleInFlight(false);
+        inFlight.holdTimer = null;
         onFactsChanged();
-      }, CONFIRM_WINDOW_MS),
+      }, holdMs),
     };
   };
 
@@ -367,7 +400,12 @@ export function createSpeechScheduler(
   function retireFacts(): QueuedItem[] {
     if (inFlight !== null) {
       if (inFlight.timer !== null) deps.clearTimer(inFlight.timer);
-      queue.unshift(inFlight.queued);
+      if (inFlight.holdTimer !== null) deps.clearTimer(inFlight.holdTimer);
+      // Its append was spent on the engine that is going; the item keeps
+      // what is left of its budget, and none when none is left.
+      if (inFlight.queued.attempts < MAX_DELIVERY_ATTEMPTS) {
+        queue.unshift(inFlight.queued);
+      }
       inFlight = null;
     }
     for (const timer of [inputTimer, outputTimer, ackTimer]) {

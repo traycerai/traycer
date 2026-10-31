@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { OpenTextBlock } from "@traycer/protocol/persistence/epic/open-harness-records";
 import {
   baselineReplyWatch,
+  baselineReplyWatchExcept,
   createReplyWatchMemory,
+  requestIdAnsweredIn,
   replySpeechText,
   requestIdAnsweredBy,
   takeNewBotReplies,
@@ -99,6 +101,58 @@ describe("requestIdAnsweredBy", () => {
 
     expect(requestIdAnsweredBy(rows, "a2")).toBe("r-2");
     expect(requestIdAnsweredBy(rows, "unknown")).toBeNull();
+  });
+});
+
+describe("requestIdAnsweredIn", () => {
+  it("finds the opening request on the channel when the thread holds only the reply", () => {
+    const reply = botRow("a1", 3, [textBlock("Merged.")]);
+    const records = {
+      threadRows: [reply],
+      channelRows: [
+        userRow("u1", 1, { requestId: "r-1", resolvedByMessageId: "a1" }),
+      ],
+    };
+
+    expect(requestIdAnsweredIn(records, "a1")).toBe("r-1");
+    expect(requestIdAnsweredIn(records, "unknown")).toBeNull();
+  });
+
+  it("prefers the thread's own row over the channel's", () => {
+    const records = {
+      threadRows: [
+        userRow("u2", 2, { requestId: "r-thread", resolvedByMessageId: "a1" }),
+      ],
+      channelRows: [
+        userRow("u1", 1, { requestId: "r-channel", resolvedByMessageId: "a1" }),
+      ],
+    };
+
+    expect(requestIdAnsweredIn(records, "a1")).toBe("r-thread");
+  });
+});
+
+describe("baselineReplyWatchExcept", () => {
+  it("returns the awaited answer to speak and baselines the rest as history", () => {
+    const memory = createReplyWatchMemory();
+    const awaited = botRow("a2", 50, [textBlock("Merged.")]);
+    const rows: ReadonlyArray<ReplyRow> = [
+      botRow("old", 10, [textBlock("history")]),
+      userRow("u1", 20, null),
+      awaited,
+    ];
+
+    const spoken = baselineReplyWatchExcept(
+      memory,
+      rows,
+      (row) => row.messageId === "a2",
+    );
+
+    expect(spoken).toEqual([{ messageId: "a2", text: "Merged." }]);
+    expect(memory.baselined).toBe(true);
+    expect(memory.since).toBe(20);
+    expect([...memory.seen].sort()).toEqual(["a2", "old", "u1"]);
+    expect(takeNewBotReplies(rows, memory)).toEqual([]);
   });
 });
 

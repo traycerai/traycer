@@ -38,16 +38,22 @@ import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { watchAudioLevel, type AudioLevelWatch } from "@/lib/voice/audio-level";
 import { VoiceEngineError, type VoiceEngine } from "@/lib/voice/engine";
 import {
-  baselineReplyWatch,
+  baselineReplyWatchExcept,
   createReplyWatchMemory,
   replySpeechText,
-  requestIdAnsweredBy,
+  requestIdAnsweredIn,
   takeNewBotReplies,
+  type FocusedReply,
+  type ReplyRecords,
   type ReplyRow,
   type ReplyWatchMemory,
 } from "@/lib/voice/focused-replies";
 import { createBrowserGptLiveEngine } from "@/lib/voice/gpt-live-engine";
-import { createSayLoop, type SayLoop } from "@/lib/voice/say-loop";
+import {
+  createSayLoop,
+  type ReplyPlace,
+  type SayLoop,
+} from "@/lib/voice/say-loop";
 import {
   confirmationWords,
   createSpeechScheduler,
@@ -85,8 +91,8 @@ import {
  * close, the end route) finishes on its own afterwards.
  */
 interface Attempt {
-  /** The store's session token the attempt was made under. */
-  readonly token: number;
+  /** The store's engine generation this attempt is. */
+  readonly generation: number;
   readonly engine: VoiceEngine;
   /** The server's id, owned the moment the mint answers. */
   sessionId: string | null;
@@ -248,7 +254,7 @@ export function VoiceSessionController(): ReactNode {
       send: (target, text) => sendRef.current(target, text),
       notify: (text, delegationId) =>
         ensureSpeech().enqueue({
-          id: `notify:${delegationId}:${Date.now()}`,
+          id: `notify:${delegationId ?? "none"}:${Date.now()}`,
           priority: "focused",
           text,
           delegationId,
@@ -431,7 +437,7 @@ export function VoiceSessionController(): ReactNode {
       const micTrack = stream?.getAudioTracks()[0] ?? null;
       if (micTrack === null) return false;
       const attempt: Attempt = {
-        token: useVoiceSessionStore.getState().sessionToken,
+        generation: useVoiceSessionStore.getState().engineGeneration,
         engine: createBrowserGptLiveEngine(),
         sessionId: null,
         expiresAt: 0,
@@ -504,11 +510,18 @@ export function VoiceSessionController(): ReactNode {
               });
               if (owns()) endRef.current("playback");
             });
-            const watch = watchAudioLevel(remote, (speaking) => {
-              if (owns()) speechRef.current?.noteOutputLevel(speaking);
-            });
-            levelWatchRef.current = watch;
-            ensureSpeech().setLevelDetection(watch.available);
+            // The detector's word counts only while it is healthy: a
+            // context that stays suspended or an analyser reading silence
+            // from a sounding stream leaves the conservative hold in force.
+            levelWatchRef.current = watchAudioLevel(
+              remote,
+              (speaking) => {
+                if (owns()) speechRef.current?.noteOutputLevel(speaking);
+              },
+              (healthy) => {
+                if (owns()) speechRef.current?.setLevelDetection(healthy);
+              },
+            );
           },
           events: {
             onInputTranscriptDelta: (text) => {
@@ -628,15 +641,17 @@ export function VoiceSessionController(): ReactNode {
         return;
       }
       ensureSpeech().handoff();
-      store.sessionConnecting();
-      const token = useVoiceSessionStore.getState().sessionToken;
+      // A new engine generation under the SAME user session: an action
+      // whose send is still out completes as this session's work.
+      store.engineReplacing();
+      const generation = useVoiceSessionStore.getState().engineGeneration;
       await settleAttempt(old);
       // The person ended, or another replacement began, while the old one
       // closed: nothing to open.
       const now = useVoiceSessionStore.getState();
       if (
         now.phase !== "connecting" ||
-        now.sessionToken !== token ||
+        now.engineGeneration !== generation ||
         micStreamRef.current === null
       ) {
         return;
@@ -679,7 +694,8 @@ export function VoiceSessionController(): ReactNode {
     const store = useVoiceSessionStore.getState();
     if (store.phase !== "idle" || store.availability !== "live") return;
     store.sessionConnecting();
-    const token = useVoiceSessionStore.getState().sessionToken;
+    const { sessionToken: token, engineGeneration: generation } =
+      useVoiceSessionStore.getState();
     // The session starts focused on the channel or thread the person has
     // open, or on personal Tracy when none is (V6); Tracy's tab opens then.
     const selected = readSelection();
@@ -699,7 +715,11 @@ export function VoiceSessionController(): ReactNode {
     }
     const stillStarting = (): boolean => {
       const now = useVoiceSessionStore.getState();
-      return now.phase === "connecting" && now.sessionToken === token;
+      return (
+        now.phase === "connecting" &&
+        now.sessionToken === token &&
+        now.engineGeneration === generation
+      );
     };
     let access: MicrophoneAccessStatus;
     try {
@@ -760,24 +780,22 @@ export function VoiceSessionController(): ReactNode {
     };
   }, [end, setMuted, start]);
 
-  // Lock and sleep end the session. A page going away releases the
-  // microphone synchronously and asks the vendor to close; the server
-  // finalizes the rest from its sideband.
+  // Lock, sleep and the page going away all end the session through the
+  // one latch: the store's tokens move first, so a microphone prompt still
+  // open resolves into nothing, local capture and playback stop
+  // synchronously, and the vendor accounting is best effort from a document
+  // that may not outlive it. The shell's own close keeps a voice window
+  // alive, so this is the lock, the quit and a reload, not an ordinary
+  // close; the server finalizes the rest from its sideband.
   useEffect(() => {
     const subscription = runnerHost.onSystemSuspended(() => end("locked"));
-    const onPageHide = (): void => {
-      const attempt = attemptRef.current;
-      attemptRef.current = null;
-      if (attempt !== null) attempt.cancelled = true;
-      releaseAudio();
-      if (attempt !== null) void attempt.engine.close();
-    };
+    const onPageHide = (): void => end("ended");
     window.addEventListener("pagehide", onPageHide);
     return () => {
       subscription.dispose();
       window.removeEventListener("pagehide", onPageHide);
     };
-  }, [end, releaseAudio, runnerHost]);
+  }, [end, runnerHost]);
 
   // Unmount ends everything; the microphone never outlives the controller.
   // Through a ref, so a new `end` identity never ends a live session by
@@ -801,14 +819,20 @@ export function VoiceSessionController(): ReactNode {
         <VoiceFocusedReplyFeed
           key={`${focus.botId}:${focus.threadId ?? channelId}`}
           focus={focus}
-          chatId={focus.threadId ?? channelId}
+          channelId={channelId}
           client={focusClient}
           speaksAsThisBot={focus.botId === fixedBotId}
           botTitle={botTitle(focus.botId)}
           scheduler={speech}
           memory={watchMemoryFor(focus.threadId ?? channelId)}
-          delegationFor={(requestId) =>
-            sayLoopRef.current?.delegationFor(requestId) ?? null
+          delegationForReply={(place) =>
+            sayLoopRef.current?.delegationForReply(place) ?? null
+          }
+          awaitedIn={(threadId) =>
+            sayLoopRef.current?.awaitedIn(threadId) ?? "none"
+          }
+          isAwaiting={(requestId) =>
+            sayLoopRef.current?.isAwaiting(requestId) ?? false
           }
         />
       ) : null}
@@ -942,38 +966,58 @@ function applySelection(
  * The hear loop's focused source: a new row of the bot on the focused
  * thread's (or channel's) chat store becomes the focused item, appended
  * under the delegation of the request it answers (none for a request of a
- * replaced session) when the scheduler finds a clear moment, and the thread
+ * replaced engine) when the scheduler finds a clear moment, and the thread
  * is marked read once the voice is confirmed to have said it, with the
  * entity-level call looking makes.
  *
+ * Two records are read: the focused chat's rows, and the channel's, because
+ * the host opens a post's thread with no row of its own and resolves the
+ * opening request on the channel's post after the reply exists. A reply is
+ * placed by the request the records already name, else by the thread an
+ * accepted post opened, else by the one request awaiting an answer at the
+ * channel's top level.
+ *
  * Hydration is not arrival: the baseline is the first loaded snapshot, so a
- * cold store's history is never spoken, and `seen` outlives this component
- * (the controller keeps it per chat for the user session), so a remount
- * across a replacement speaks what landed in the gap and nothing older.
+ * cold store's history is never spoken, EXCEPT the answers this session is
+ * waiting for, which count as arrivals wherever they turn up. The memory
+ * outlives this component (the controller keeps it per chat for the user
+ * session), so a remount across a replacement speaks what landed in the gap
+ * and nothing older.
  */
 function VoiceFocusedReplyFeed(props: {
   readonly focus: VoiceFocus;
-  readonly chatId: string;
+  readonly channelId: string;
   readonly client: HostClient<HostRpcRegistry> | null;
   readonly speaksAsThisBot: boolean;
   readonly botTitle: string;
   readonly scheduler: SpeechScheduler;
   readonly memory: ReplyWatchMemory;
-  readonly delegationFor: (requestId: string) => string | null;
+  readonly delegationForReply: (place: ReplyPlace) => string | null;
+  readonly awaitedIn: (threadId: string | null) => "opened" | "joined" | "none";
+  readonly isAwaiting: (requestId: string) => boolean;
 }): null {
   const {
     focus,
-    chatId,
+    channelId,
     client,
     speaksAsThisBot,
     botTitle,
     scheduler,
     memory,
-    delegationFor,
+    delegationForReply,
+    awaitedIn,
+    isAwaiting,
   } = props;
+  const chatId = focus.threadId ?? channelId;
   const handle = useChatSessionHandleForContainer(
     focus.botId,
     chatId,
+    focus.hostId,
+    true,
+  );
+  const channelHandle = useChatSessionHandleForContainer(
+    focus.botId,
+    channelId,
     focus.hostId,
     true,
   );
@@ -982,50 +1026,77 @@ function VoiceFocusedReplyFeed(props: {
   useEffect(() => {
     markReadRef.current = markRead;
   }, [markRead]);
-  const delegationForRef = useRef(delegationFor);
+  const placeRef = useRef({ delegationForReply, awaitedIn, isAwaiting });
   useEffect(() => {
-    delegationForRef.current = delegationFor;
-  }, [delegationFor]);
+    placeRef.current = { delegationForReply, awaitedIn, isAwaiting };
+  }, [awaitedIn, delegationForReply, isAwaiting]);
 
   useEffect(() => {
-    if (handle === null) return;
+    if (handle === null || channelHandle === null) return;
+    const threadId = focus.threadId;
+    const records = (state: ReplyWatchState): ReplyRecords => ({
+      threadRows: threadId === null ? [] : state.messages,
+      channelRows:
+        threadId === null
+          ? state.messages
+          : channelHandle.store.getState().messages,
+    });
+    const speak = (reply: FocusedReply, where: ReplyRecords): void => {
+      const text = replySpeechText({
+        botTitle,
+        speaksAsThisBot,
+        content: reply.text,
+      });
+      scheduler.enqueue({
+        id: `reply:${reply.messageId}`,
+        priority: "focused",
+        text,
+        delegationId: placeRef.current.delegationForReply({
+          threadId,
+          requestId: requestIdAnsweredIn(where, reply.messageId),
+        }),
+        confirmWords: confirmationWords({
+          botTitle,
+          threadTitle: null,
+          text: reply.text,
+        }),
+        onDelivered: () => markReadRef.current({ epicId: focus.botId, chatId }),
+      });
+    };
     // A watch that already has a baseline carries on; a fresh one takes the
-    // first loaded snapshot as history.
+    // first loaded snapshot as history, less the answers awaited here.
     const watch = (state: ReplyWatchState): void => {
       if (!state.snapshotLoaded) return;
+      const where = records(state);
       if (!memory.baselined) {
-        baselineReplyWatch(memory, state.messages);
+        // In a thread an accepted post opened, every bot row is its answer;
+        // elsewhere only a row the records tie to an awaited request is.
+        const awaitedHere = placeRef.current.awaitedIn(threadId);
+        const awaited = baselineReplyWatchExcept(
+          memory,
+          state.messages,
+          (row) => {
+            if (awaitedHere === "none") return false;
+            if (awaitedHere === "opened") return true;
+            const requestId = requestIdAnsweredIn(where, row.messageId);
+            return requestId !== null && placeRef.current.isAwaiting(requestId);
+          },
+        );
+        for (const reply of awaited) speak(reply, where);
         return;
       }
       for (const reply of takeNewBotReplies(state.messages, memory)) {
-        const text = replySpeechText({
-          botTitle,
-          speaksAsThisBot,
-          content: reply.text,
-        });
-        const requestId = requestIdAnsweredBy(state.messages, reply.messageId);
-        scheduler.enqueue({
-          id: `reply:${reply.messageId}`,
-          priority: "focused",
-          text,
-          delegationId:
-            requestId === null ? null : delegationForRef.current(requestId),
-          confirmWords: confirmationWords({
-            botTitle,
-            threadTitle: null,
-            text: reply.text,
-          }),
-          onDelivered: () =>
-            markReadRef.current({ epicId: focus.botId, chatId }),
-        });
+        speak(reply, where);
       }
     };
     watch(handle.store.getState());
     return handle.store.subscribe(watch);
   }, [
     botTitle,
+    channelHandle,
     chatId,
     focus.botId,
+    focus.threadId,
     handle,
     memory,
     scheduler,

@@ -4,7 +4,7 @@ import {
   useVoiceSessionStore,
   type VoiceFocus,
 } from "@/stores/voice/voice-session-store";
-import { requestIdAnsweredBy, type ReplyRow } from "../focused-replies";
+import { requestIdAnsweredIn, type ReplyRow } from "../focused-replies";
 import { MOVED_ASK_TEXT, createSayLoop, type SayLoop } from "../say-loop";
 
 const FOCUS: VoiceFocus = {
@@ -20,6 +20,7 @@ const initial = useVoiceSessionStore.getState();
 interface Harness {
   readonly sends: Array<{ focus: VoiceFocus; text: string }>;
   readonly notices: string[];
+  readonly noticeDelegations: Array<string | null>;
   readonly asks: string[];
   readonly opened: BotConversationSendResponse[];
   readonly loop: SayLoop;
@@ -43,6 +44,7 @@ function response(
 function harness(): Harness {
   const sends: Harness["sends"] = [];
   const notices: string[] = [];
+  const noticeDelegations: Array<string | null> = [];
   const asks: string[] = [];
   const opened: BotConversationSendResponse[] = [];
   const settles: Array<{
@@ -57,7 +59,10 @@ function harness(): Harness {
         settles.push({ resolve, reject });
       });
     },
-    notify: (text) => notices.push(text),
+    notify: (text, delegationId) => {
+      notices.push(text);
+      noticeDelegations.push(delegationId);
+    },
     ask: (text) => asks.push(text),
     openThread: (_focus, answer) => opened.push(answer),
     botTitle: () => "Tracy",
@@ -65,6 +70,7 @@ function harness(): Harness {
   return {
     sends,
     notices,
+    noticeDelegations,
     asks,
     opened,
     loop,
@@ -172,7 +178,7 @@ describe("two delegations before any acceptance", () => {
     await first;
     expect(
       useVoiceSessionStore.getState().segments.map((s) => s.reservedBy),
-    ).toEqual([`1:d-2`]);
+    ).toEqual([`1:1:d-2`]);
 
     h.resolve(response({ requestId: "r-b", threadId: null }), 1);
     await second;
@@ -195,7 +201,7 @@ describe("two delegations before any acceptance", () => {
 
     const segments = useVoiceSessionStore.getState().segments;
     expect(segments.map((s) => s.text)).toEqual([" Then check build B."]);
-    expect(segments[0]?.reservedBy).toBe("1:d-2");
+    expect(segments[0]?.reservedBy).toBe("1:1:d-2");
   });
 });
 
@@ -253,7 +259,7 @@ describe("a selection change mid-utterance", () => {
     await second;
   });
 
-  it("drops open words after a send began, asks once, and the next delegation posts only its own", async () => {
+  it("drops open words after a send began, asks once, consumes the next boundary and posts only the one after", async () => {
     const h = harness();
     const first = h.loop.onDelegationCreated("d-1");
     useVoiceSessionStore.getState().appendInputSegment("Delete the branch.", 3);
@@ -262,8 +268,13 @@ describe("a selection change mid-utterance", () => {
 
     expect(h.asks).toEqual([MOVED_ASK_TEXT]);
 
+    await h.loop.onDelegationCreated("d-2");
+    expect(h.sends.map((send) => send.text)).toEqual([
+      "please check the build",
+    ]);
+
     useVoiceSessionStore.getState().appendInputSegment("Fresh words.", 4);
-    const second = h.loop.onDelegationCreated("d-2");
+    const third = h.loop.onDelegationCreated("d-3");
     expect(h.sends.map((send) => send.text)).toEqual([
       "please check the build",
       "Fresh words.",
@@ -274,7 +285,7 @@ describe("a selection change mid-utterance", () => {
     expect(h.opened).toEqual([]);
     expect(h.notices.join(" ")).toContain("before the person moved on");
     h.resolve(response({ requestId: "r-2", threadId: null }), 1);
-    await second;
+    await third;
   });
 });
 
@@ -295,7 +306,9 @@ describe("a session that ended or was replaced during a send", () => {
     expect(state.phase).toBe("idle");
     expect(h.opened).toEqual([]);
     expect(h.notices).toEqual([]);
-    expect(h.loop.delegationFor("r-1")).toBeNull();
+    expect(
+      h.loop.delegationForReply({ threadId: null, requestId: "r-1" }),
+    ).toBeNull();
   });
 
   it("spends only its own reserved words when the session was replaced, leaving newer open words", async () => {
@@ -315,11 +328,13 @@ describe("a session that ended or was replaced during a send", () => {
     expect(state.segments).toHaveLength(1);
     expect(h.opened).toEqual([]);
     expect(h.notices).toEqual([]);
-    expect(h.loop.delegationFor("r-1")).toBeNull();
+    expect(
+      h.loop.delegationForReply({ threadId: null, requestId: "r-1" }),
+    ).toBeNull();
   });
 });
 
-describe("delegationFor", () => {
+describe("delegationForReply", () => {
   it("returns the bound delegation once, then null", async () => {
     const h = harness();
     useVoiceSessionStore.getState().sessionConnecting();
@@ -341,9 +356,137 @@ describe("delegationFor", () => {
         },
       },
     ];
-    const requestId = requestIdAnsweredBy(rows, "a-7");
+    const requestId = requestIdAnsweredIn(
+      { threadRows: [], channelRows: rows },
+      "a-7",
+    );
     expect(requestId).toBe("r-7");
-    expect(h.loop.delegationFor("r-7")).toBe("d-7");
-    expect(h.loop.delegationFor("r-7")).toBeNull();
+    expect(h.loop.delegationForReply({ threadId: null, requestId })).toBe(
+      "d-7",
+    );
+    expect(h.loop.delegationForReply({ threadId: null, requestId })).toBeNull();
+  });
+
+  it("finds the delegation by the thread an accepted post opened, once, before the records name the request", async () => {
+    const h = harness();
+    useVoiceSessionStore.getState().setFocus({ ...FOCUS, threadId: null });
+    const done = h.loop.onDelegationCreated("d-1");
+    h.resolve(response({ threadId: "t1" }), 0);
+    await done;
+
+    expect(h.loop.awaitedIn("t1")).toBe("opened");
+    expect(h.loop.delegationForReply({ threadId: "t1", requestId: null })).toBe(
+      "d-1",
+    );
+    expect(
+      h.loop.delegationForReply({ threadId: "t1", requestId: null }),
+    ).toBeNull();
+    expect(h.loop.awaitedIn("t1")).toBe("none");
+  });
+
+  it("calls a post into an existing thread joined, not opened", async () => {
+    const h = harness();
+    const done = h.loop.onDelegationCreated("d-1");
+    h.resolve(response({ threadId: FOCUS.threadId }), 0);
+    await done;
+
+    expect(h.loop.awaitedIn("thread-0")).toBe("joined");
+    expect(h.loop.isAwaiting("r-1")).toBe(true);
+  });
+});
+
+describe("the interrupted utterance's continuation", () => {
+  it("is consumed with its boundary, and only the words after it post", async () => {
+    const h = harness();
+    useVoiceSessionStore.getState().dropOpenSpan();
+    const store = useVoiceSessionStore.getState();
+    store.appendInputSegment("Delete ", 1);
+    store.selectionChanged(OTHER_FOCUS);
+    h.loop.onSelectionChanged();
+    expect(h.asks).toEqual([MOVED_ASK_TEXT]);
+    store.appendInputSegment("the branch.", 2);
+
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(h.sends).toEqual([]);
+    expect(h.asks).toHaveLength(1);
+    expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+
+    store.appendInputSegment("Check the build.", 3);
+    const second = h.loop.onDelegationCreated("d-2");
+    expect(h.sends.map((send) => send.text)).toEqual(["Check the build."]);
+    h.resolve(response({ threadId: null }), 0);
+    await second;
+  });
+});
+
+describe("a delegation boundary handled once", () => {
+  it("does nothing when the same id arrives while its send is pending, and the acceptance consumes exactly its words", async () => {
+    const h = harness();
+    const store = useVoiceSessionStore.getState();
+    const first = h.loop.onDelegationCreated("d-1");
+    store.appendInputSegment(" and newer words", 3);
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(h.sends).toHaveLength(1);
+    expect(
+      useVoiceSessionStore.getState().segments.map((s) => s.reservedBy),
+    ).toEqual(["0:0:d-1", "0:0:d-1", null]);
+
+    h.resolve(response({ threadId: null }), 0);
+    await first;
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.segments.map((s) => s.text)).toEqual([" and newer words"]);
+    expect(state.segments[0]?.reservedBy).toBeNull();
+  });
+
+  it("reserves nothing with no focus, and a later delegation with a focus posts the words", async () => {
+    const h = harness();
+    const store = useVoiceSessionStore.getState();
+    store.setFocus(null);
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(h.sends).toEqual([]);
+    expect(
+      useVoiceSessionStore.getState().segments.map((s) => s.reservedBy),
+    ).toEqual([null, null]);
+    expect(useVoiceSessionStore.getState().pendingDelegationId).toBeNull();
+
+    store.setFocus(FOCUS);
+    const second = h.loop.onDelegationCreated("d-2");
+    expect(h.sends.map((send) => send.text)).toEqual([
+      "please check the build",
+    ]);
+    h.resolve(response({ threadId: null }), 0);
+    await second;
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+});
+
+describe("an engine replacement during a send", () => {
+  it("completes the acceptance as pending work: clears the delegation, opens the thread, notifies under none, and binds no delegation to the reply", async () => {
+    const h = harness();
+    useVoiceSessionStore.getState().sessionConnecting();
+    useVoiceSessionStore.getState().setFocus({ ...FOCUS, threadId: null });
+    useVoiceSessionStore.getState().appendInputSegment("merge it", 1);
+    const done = h.loop.onDelegationCreated("d-1");
+    expect(useVoiceSessionStore.getState().pendingDelegationId).toBe("d-1");
+    useVoiceSessionStore.getState().engineReplacing();
+    useVoiceSessionStore.getState().appendInputSegment("later words", 2);
+
+    h.resolve(response({ delivery: "queued", threadId: "t1" }), 0);
+    await done;
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.pendingDelegationId).toBeNull();
+    expect(state.focus?.threadId).toBe("t1");
+    expect(h.opened).toHaveLength(1);
+    expect(h.noticeDelegations).toEqual([null]);
+    expect(state.openSpan()).toBe("later words");
+    expect(
+      h.loop.delegationForReply({ threadId: "t1", requestId: "r-1" }),
+    ).toBeNull();
   });
 });

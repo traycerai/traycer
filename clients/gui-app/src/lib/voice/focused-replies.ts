@@ -57,9 +57,13 @@ export function baselineReplyWatch(
 }
 
 /**
- * The request a bot row answers: the member row whose request resolved to
- * it names its id. `null` for a row that answers no request the chat shows
- * (an announcement, a row whose post is outside the loaded window).
+ * The request a bot row answers, as the records say: the member row whose
+ * request resolved to it names its id. For a thread's first reply that row
+ * is the post on the CHANNEL (the host opens a post's thread with no row of
+ * its own and resolves the opening request on the channel, after the reply
+ * exists); for a follow-up it is a row of the thread. `null` when no loaded
+ * row says so yet: the reply may have arrived before the channel's
+ * resolution, or it answers no request.
  */
 export function requestIdAnsweredBy(
   rows: ReadonlyArray<ReplyRow>,
@@ -76,6 +80,49 @@ export function requestIdAnsweredBy(
     }
   }
   return null;
+}
+
+/** The records of a focused thread and of the channel it hangs off; the channel alone at the top level. */
+export interface ReplyRecords {
+  readonly threadRows: ReadonlyArray<ReplyRow>;
+  readonly channelRows: ReadonlyArray<ReplyRow>;
+}
+
+/** {@link requestIdAnsweredBy} over the thread's rows, then the channel's. */
+export function requestIdAnsweredIn(
+  records: ReplyRecords,
+  replyMessageId: string,
+): string | null {
+  return (
+    requestIdAnsweredBy(records.threadRows, replyMessageId) ??
+    requestIdAnsweredBy(records.channelRows, replyMessageId)
+  );
+}
+
+/**
+ * Takes the loaded snapshot as history, except the rows that answer what
+ * this session is waiting for: a post accepted moments ago whose thread's
+ * first snapshot already holds the bot's answer is an arrival, not history.
+ * Those rows are returned, to be spoken; everything else is seen, and the
+ * newest of it bounds what later hydration may add.
+ */
+export function baselineReplyWatchExcept(
+  memory: ReplyWatchMemory,
+  rows: ReadonlyArray<ReplyRow>,
+  isAwaited: (row: ReplyRow) => boolean,
+): ReadonlyArray<FocusedReply> {
+  const awaited: FocusedReply[] = [];
+  for (const row of rows) {
+    memory.seen.add(row.messageId);
+    if (row.role === "assistant" && isAwaited(row)) {
+      const text = replyTextOf(row);
+      if (text.length > 0) awaited.push({ messageId: row.messageId, text });
+      continue;
+    }
+    if (row.timestamp > memory.since) memory.since = row.timestamp;
+  }
+  memory.baselined = true;
+  return awaited;
 }
 
 /**

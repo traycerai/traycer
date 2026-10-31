@@ -8,6 +8,7 @@ import {
   OUTPUT_HANGOVER_MS,
   OUTPUT_HANGOVER_WITHOUT_LEVEL_MS,
   chunkText,
+  estimateSpeechMs,
   confirmationWords,
   createSpeechScheduler,
   type SpeechItem,
@@ -233,6 +234,38 @@ describe("handoff", () => {
 
     scheduler.setReady(true);
     expect(appended).toEqual([{ text: "reply a", delegationId: null }]);
+  });
+});
+
+describe("a handoff spends delivery attempts", () => {
+  it("appends one item at most MAX_DELIVERY_ATTEMPTS times across repeated replacements, then drops it", () => {
+    scheduler.enqueue(item("a", {}));
+    for (let cycle = 0; cycle < 5; cycle++) {
+      scheduler.handoff();
+      scheduler.setReady(true);
+    }
+
+    expect(appended).toHaveLength(MAX_DELIVERY_ATTEMPTS);
+    expect(scheduler.pendingCount()).toBe(0);
+  });
+});
+
+describe("without a trusted level detector", () => {
+  it("holds the next item for the estimated duration of the one in flight", () => {
+    scheduler.setLevelDetection(false);
+    const longText = "word ".repeat(33).trim();
+    scheduler.enqueue(item("a", { priority: "briefing", text: longText }));
+    scheduler.enqueue(item("b", {}));
+    expect(appended).toHaveLength(1);
+
+    clock.advance(4_000);
+    expect(appended).toHaveLength(1);
+
+    clock.advance(estimateSpeechMs(longText) - 4_001);
+    expect(appended).toHaveLength(1);
+
+    clock.advance(1);
+    expect(appended.map((entry) => entry.text)).toEqual([longText, "reply b"]);
   });
 });
 

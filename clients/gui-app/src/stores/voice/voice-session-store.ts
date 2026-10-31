@@ -129,11 +129,19 @@ export interface VoiceSessionState {
   readonly availability: VoiceAvailability;
   readonly session: VoiceSessionRecord | null;
   /**
-   * Bumped whenever a session attempt begins or ends. An action or a reply
-   * binding carries the token it was made under and is inert once the token
-   * has moved: a late acceptance from an ended session recreates nothing.
+   * The user session's lifetime: bumped when Talk starts a session and when
+   * it ends, never by an engine replacement. An action carries the token it
+   * was made under and is inert once the token has moved: a late acceptance
+   * from an ended session recreates nothing, while one that crosses a
+   * replacement completes as the work it is.
    */
   readonly sessionToken: number;
+  /**
+   * The engine's generation within the user session: bumped by every attempt
+   * (the first and each replacement). A delegation id belongs to one
+   * generation; a reply bound to an earlier one is appended under none.
+   */
+  readonly engineGeneration: number;
   readonly focus: VoiceFocus | null;
   /** Every segment not yet consumed, oldest first: open ones and reserved ones. */
   readonly segments: ReadonlyArray<TranscriptSegment>;
@@ -157,8 +165,10 @@ export interface VoiceSessionState {
   readonly driver: VoiceSessionDriver | null;
 
   readonly setAvailability: (availability: VoiceAvailability) => void;
-  /** A session attempt begins (first, or a replacement): a new token. */
+  /** A new user session begins: a new token and a new engine generation. */
   readonly sessionConnecting: () => void;
+  /** The engine is being replaced under the same user session: a new generation only. */
+  readonly engineReplacing: () => void;
   readonly sessionLive: (session: VoiceSessionRecord) => void;
   readonly sessionEnding: () => void;
   /**
@@ -183,10 +193,10 @@ export interface VoiceSessionState {
    * on, and no later action sees them. `null` with nothing open.
    */
   readonly reserveOpenSpan: (actionId: string) => SpanReservation | null;
-  /** The action's segments are posted (or deliberately dropped): gone. */
-  readonly consumeReservation: (actionId: string) => void;
-  /** The action's segments return to the open utterance, in order. */
-  readonly releaseReservation: (actionId: string) => void;
+  /** Exactly these segments are posted (or deliberately dropped): gone. */
+  readonly consumeReservation: (seqs: ReadonlyArray<number>) => void;
+  /** Exactly these segments return to the open utterance, in order. */
+  readonly releaseReservation: (seqs: ReadonlyArray<number>) => void;
   /** Lets the open utterance go, returning what it said; `null` with nothing open. */
   readonly dropOpenSpan: () => string | null;
   readonly setPendingDelegation: (delegationId: string | null) => void;
@@ -219,6 +229,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   availability: "unknown",
   session: null,
   sessionToken: 0,
+  engineGeneration: 0,
   focus: null,
   segments: NO_SEGMENTS,
   pendingDelegationId: null,
@@ -240,6 +251,13 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
       endReason: null,
       session: null,
       sessionToken: get().sessionToken + 1,
+      engineGeneration: get().engineGeneration + 1,
+    }),
+  engineReplacing: () =>
+    set({
+      phase: "connecting",
+      session: null,
+      engineGeneration: get().engineGeneration + 1,
     }),
   sessionLive: (session) =>
     set({ phase: "live", session, availability: "live", endReason: null }),
@@ -296,21 +314,17 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
       seqs: open.map((segment) => segment.seq),
     };
   },
-  consumeReservation: (actionId) => {
-    const kept = get().segments.filter(
-      (segment) => segment.reservedBy !== actionId,
-    );
+  consumeReservation: (seqs) => {
+    const gone = new Set(seqs);
+    const kept = get().segments.filter((segment) => !gone.has(segment.seq));
     if (kept.length !== get().segments.length) set({ segments: kept });
   },
-  releaseReservation: (actionId) => {
-    if (!get().segments.some((segment) => segment.reservedBy === actionId)) {
-      return;
-    }
+  releaseReservation: (seqs) => {
+    const freed = new Set(seqs);
+    if (!get().segments.some((segment) => freed.has(segment.seq))) return;
     set({
       segments: get().segments.map((segment) =>
-        segment.reservedBy === actionId
-          ? { ...segment, reservedBy: null }
-          : segment,
+        freed.has(segment.seq) ? { ...segment, reservedBy: null } : segment,
       ),
     });
   },

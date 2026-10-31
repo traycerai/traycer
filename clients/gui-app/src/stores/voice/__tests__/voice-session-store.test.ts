@@ -76,12 +76,12 @@ describe("reservations", () => {
     expect(b?.text).toBe("Then check build B.");
     expect(useVoiceSessionStore.getState().reserveOpenSpan("c")).toBeNull();
 
-    useVoiceSessionStore.getState().consumeReservation("a");
+    useVoiceSessionStore.getState().consumeReservation(a?.seqs ?? []);
     expect(
       useVoiceSessionStore.getState().segments.map((s) => s.reservedBy),
     ).toEqual(["b"]);
 
-    useVoiceSessionStore.getState().releaseReservation("b");
+    useVoiceSessionStore.getState().releaseReservation(b?.seqs ?? []);
     expect(useVoiceSessionStore.getState().openSpan()).toBe(
       "Then check build B.",
     );
