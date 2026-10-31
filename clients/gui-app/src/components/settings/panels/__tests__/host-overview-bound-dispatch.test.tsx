@@ -1861,7 +1861,7 @@ describe("HostOverviewPanel — the bound control takes the page's gates (ticket
 /**
  * WHAT DEFER PROMISES, by park (ticket 08, coordinator item 2).
  *
- * Round 11 rewrote the staged-wait force's Defer because a stage on disk has
+ * The staged-wait force's Defer was rewritten because a stage on disk has
  * nobody scheduled to install it. The rule it established is about EVIDENCE,
  * not phrasing, so the three dialogs land differently and nothing pinned that:
  * the `waiting-for-work` park is resumed by the reconciler and keeps the
@@ -1978,7 +1978,7 @@ describe("HostOverviewPanel — the Defer promise follows the continuation (tick
 });
 
 /**
- * H1 (cold review C, round 3): the region-retire close must not SPEND the
+ * H1: the region-retire close must not SPEND the
  * one-shot auto-open.
  *
  * The close rule and the auto-open resolve the same question forty lines
@@ -2013,7 +2013,7 @@ describe("HostOverviewPanel — a RECOVERABLE region retirement does not spend t
         terminal: false,
       });
 
-    // The RECOVERABLE retirement, through the path the review names: one
+    // The RECOVERABLE retirement, through the named path: one
     // `cli-unavailable` check answer retires the region (`check.sticky`), and
     // the next `ok` answer un-retires it. Nothing else about the fixture
     // changes across the transition.
@@ -2213,7 +2213,7 @@ describe("HostOverviewPanel — a manual activate open during the held gate spen
 });
 
 /**
- * CodeRabbit #1773 round 2: an update dispatch's `onError` released the
+ * An update dispatch's `onError` released the
  * page-wide accepted latch for EVERY error, transport drops included.
  *
  * A `HostTransportFailureError` is not a refusal — it is the answer going
