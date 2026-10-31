@@ -11,16 +11,9 @@ import type { ArtboardEdit } from "@traycer/protocol/host/epic/artboard-edit";
 import { CanvasClipboardMenuItems } from "./canvas-clipboard-controls";
 import type { CanvasFrameRegistry } from "./canvas-frame-registry";
 import type { CanvasBoardDocument } from "./canvas-board-document";
-import {
-  isCanvasBoardRoot,
-  useCanvasSelectionStore,
-  type CanvasSelection,
-} from "./canvas-selection-store";
-import {
-  canvasSelectionIsCurrent,
-  useCanvasEditAction,
-} from "./use-canvas-edit-action";
-import { frameLocator } from "./canvas-structure-identity";
+import type { CanvasSelection } from "./canvas-selection-store";
+import { useCanvasEditAction } from "./use-canvas-edit-action";
+import { selectCanvasParentElement } from "./canvas-select-parent";
 
 export function CanvasElementMenu({
   disabled,
@@ -74,6 +67,12 @@ export function CanvasElementMenu({
   );
 }
 
+/**
+ * The element menu with the clipboard, duplicate, delete and select-parent
+ * items. No surface mounts it right now: the selection bar dropped it until
+ * these edits are reliable enough to show again. Shift+Enter still selects
+ * the parent through `selectCanvasParentElement`.
+ */
 export function CanvasSelectionMenu(props: {
   readonly selection: CanvasSelection;
   readonly registry: CanvasFrameRegistry;
@@ -81,32 +80,11 @@ export function CanvasSelectionMenu(props: {
 }) {
   const action = useCanvasEditAction(props.selection.artifactId);
   const selectParent = async (): Promise<void> => {
-    const bridge = props.registry.get(props.selection.boardPath).bridge;
-    if (bridge === null) return;
-    const generation = useCanvasSelectionStore.getState().generation;
-    try {
-      const element = await bridge.literalAncestor(
-        frameLocator(props.selection.element) ?? {
-          selector: props.selection.element.selector,
-        },
-      );
-      if (
-        props.registry.get(props.selection.boardPath).bridge !== bridge ||
-        useCanvasSelectionStore.getState().generation !== generation ||
-        !canvasSelectionIsCurrent(props.selection)
-      )
-        return;
-      if (element === null || isCanvasBoardRoot(element))
-        useCanvasSelectionStore.getState().clear();
-      else
-        useCanvasSelectionStore.getState().select({
-          ...props.selection,
-          element,
-          textRange: null,
-        });
-    } catch {
-      action.setMessage("The page changed. Select the element again.");
-    }
+    const moved = await selectCanvasParentElement(
+      props.selection,
+      props.registry,
+    );
+    if (!moved) action.setMessage("The page changed. Select the element again.");
   };
   return (
     <div className="flex flex-col gap-1">

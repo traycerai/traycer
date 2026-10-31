@@ -1,32 +1,28 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { useStore } from "zustand";
 import type { CanvasAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { MessageSquareShare } from "lucide-react";
 import { ToolbarActionButton } from "@/editor-core/toolbar/toolbar-action-button";
 import { ChatTargetMenu } from "@/components/epic-canvas/renderers/chat-target-menu/chat-target-menu";
-import { resolveQuoteChatTargets } from "@/components/epic-canvas/renderers/chat-target-menu/quote-chat-targets";
 import { useRevealChatInTab } from "@/components/epic-canvas/renderers/use-reveal-chat-in-tab";
-import { useSidebarChatOrder } from "@/components/epic-canvas/sidebar/epic-sidebar-selection";
 import { useArtifactObjectTextQuery } from "@/hooks/files/use-artifact-object-text-query";
-import { useOpenEpicHandle } from "@/providers/use-open-epic-handle";
-import { useLastFocusedChatStore } from "@/stores/chat/last-focused-chat-store";
-import { useOpenTileContentIds } from "@/stores/epics/canvas/store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { canvasMutationKeys } from "@/lib/query-keys/canvas-mutation-keys";
 import type { CanvasBox } from "@/lib/sandbox/canvas-bridge";
 import {
-  attachCanvasAnnotation,
-  canvasAnnotationElement,
-  canvasWindowCaptureBridge,
-} from "./canvas-annotation-attach";
+  canvasSelectionAnnotationRecord,
+  captureAndAttachCanvasAnnotation,
+} from "./canvas-annotation-send";
 import type { CanvasSelection } from "./canvas-selection-store";
+import { useCanvasAnnotationChatTargets } from "./use-canvas-annotation-chat-targets";
 
 export interface CanvasAnnotationScope {
   readonly epicId: string;
   readonly artifactId: string;
   readonly artifactTitle: string;
+  /** What the artifact is; comments and quotes are keyed by it. */
+  readonly artifactType: "canvas" | "html";
   readonly hostId: string;
   readonly viewTabId: string;
 }
@@ -40,37 +36,16 @@ export function CanvasSelectionAction(props: {
     epicId: props.scope.epicId,
     sha256: props.selection.servedSha256,
   });
-  const record = (): CanvasAnnotationRecord => {
-    if (!props.selection.element.generated && source.data?.kind !== "text")
-      throw new Error("The artboard source is still loading. Try again.");
-    return {
-      kind: "browser-annotation",
-      annotationId: crypto.randomUUID(),
-      source: {
-        kind: "canvas",
-        artifactId: props.scope.artifactId,
-        artifactTitle: props.scope.artifactTitle,
-        boardPath: props.selection.boardPath,
-        canvasPage: props.selection.page,
-      },
-      capturedAt: Date.now(),
-      comment: "",
-      counts: { elements: 1, regions: 0, strokes: 0 },
-      elements: [
-        canvasAnnotationElement(
-          props.selection,
-          source.data?.kind === "text" ? source.data.text : null,
-        ),
-      ],
-      imageFileName: null,
-      imageHash: null,
-      droppedElementCount: 0,
-    };
-  };
   return (
     <CanvasAnnotationAction
       scope={props.scope}
-      record={record}
+      record={() =>
+        canvasSelectionAnnotationRecord(
+          props.scope,
+          props.selection,
+          source.data,
+        )
+      }
       captureRect={props.captureRect}
     />
   );
@@ -81,24 +56,7 @@ export function CanvasAnnotationAction(props: {
   readonly record: () => CanvasAnnotationRecord;
   readonly captureRect: () => CanvasBox | null;
 }) {
-  const handle = useOpenEpicHandle();
-  const chats = useStore(handle.store, (state) => state.chats);
-  const orderedChatIds = useSidebarChatOrder(props.scope.epicId);
-  const openChatIds = useOpenTileContentIds(props.scope.viewTabId);
-  const lastFocusedChatId = useLastFocusedChatStore(
-    (state) => state.chatIdByEpicId[props.scope.epicId] ?? null,
-  );
-  const targets = useMemo(
-    () =>
-      resolveQuoteChatTargets({
-        orderedChatIds,
-        chats,
-        openChatIds,
-        lastFocusedChatId,
-        sourceHostId: props.scope.hostId,
-      }).filter((target) => !target.isOnOtherHost),
-    [orderedChatIds, chats, openChatIds, lastFocusedChatId, props.scope.hostId],
-  );
+  const targets = useCanvasAnnotationChatTargets(props.scope);
   const [menuOpen, setMenuOpen] = useState(false);
   const [attached, setAttached] = useState<{
     chatId: string;
@@ -110,20 +68,10 @@ export function CanvasAnnotationAction(props: {
     mutationFn: async (chatId: string) => {
       // Capture immediately on the explicit action, before revealing another tile.
       const annotation = props.record();
-      const rect = props.captureRect();
-      const bridge = canvasWindowCaptureBridge();
-      const crop =
-        rect !== null && bridge !== null
-          ? await bridge.captureRegion(rect)
-          : null;
-      if (rect !== null && bridge !== null && crop === null)
-        throw new Error(
-          "The selected region could not be captured. Try again.",
-        );
-      const record = await attachCanvasAnnotation({
+      const record = await captureAndAttachCanvasAnnotation({
         chatId,
         record: annotation,
-        crop: crop === null ? null : new Uint8Array(crop),
+        captureRect: props.captureRect(),
       });
       return { chatId, record };
     },
