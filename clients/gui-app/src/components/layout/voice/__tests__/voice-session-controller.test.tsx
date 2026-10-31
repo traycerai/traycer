@@ -2430,4 +2430,34 @@ describe("a confirmation dropped before its question was said", () => {
       expect.objectContaining({ botId: BOT_ID, text: "Check the build." }),
     );
   });
+
+  it("a question that was appended but not confirmed is not appended again once a new request drops its confirmation", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    await bringLive();
+    const routes = [
+      (body: string) => fake.routeToBotUnsure("bot-2", body),
+      (body: string) => fake.routeToFocus(body),
+    ];
+    fake.routeAnswer = (body) => (routes.shift() ?? fake.routeToFocus)(body);
+    const questions = (): number =>
+      (fake.engines[0]?.appendCommentary.mock.calls ?? []).filter(([text]) =>
+        text.startsWith("Did you mean"),
+      ).length;
+
+    await say("Tell the release bot hello.", "d1");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+    // The question was appended once, and its output never confirmed.
+    expect(questions()).toBe(1);
+
+    await say("Check the build.", "d2");
+    expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    expect(questions()).toBe(1);
+  });
 });

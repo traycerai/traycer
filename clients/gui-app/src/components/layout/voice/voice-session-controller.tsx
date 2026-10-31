@@ -460,7 +460,9 @@ export function VoiceSessionController(): ReactNode {
           onDelivered: outcome.onDelivered,
           onGivenUp: outcome.onGivenUp,
         });
-        return () => speech.remove(id);
+        // Taken back whatever its stage: a question already appended is never
+        // retried once its confirmation is gone.
+        return () => speech.withdraw(id);
       },
       openThread: (target, response, text) => {
         if (response.threadId === null) return;
