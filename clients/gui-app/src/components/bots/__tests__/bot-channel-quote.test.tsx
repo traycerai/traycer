@@ -14,16 +14,30 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
 import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotActivity } from "@traycer/protocol/host/bot/schemas";
 import {
   BOT_ID,
   CHANNEL_ID,
   HOST_ID,
+  POST_FIRST_LINE,
   POST_ID,
+  POST_REQUEST,
+  POST_SECOND_LINE,
+  REPLY_ID,
   THREAD_OPEN,
+  botReply,
   buildScene,
   hostClientLocating,
+  memberPost,
   postThread,
+  type Scene,
 } from "@/components/bots/__tests__/bot-turn-test-support";
+import {
+  negotiateBotSend,
+  resetBotFailedRequestSupport,
+  signInViewer,
+  VIEWER_USER_ID,
+} from "@/components/bots/__tests__/bot-failed-request-test-support";
 import { MountedChannel } from "@/components/bots/__tests__/bot-turn-channel-harness";
 import { BotSessionView } from "@/components/bots/bot-session-view";
 import {
@@ -43,6 +57,7 @@ const mocks = vi.hoisted(() => ({
   client: null as HostRequester<HostRpcRegistry> | null,
   sessions: {} as Record<string, ChatSessionStoreHandle>,
   threads: [] as BotThreadSummary[],
+  activity: null as BotActivity | null,
 }));
 
 vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
@@ -102,7 +117,7 @@ vi.mock("@/providers/use-resolved-theme", () => ({
 }));
 vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
-  useBotActivity: () => null,
+  useBotActivity: () => mocks.activity,
 }));
 
 /** Text the channel's transcript draws, from the bot's reply. */
@@ -137,6 +152,8 @@ function flushFrame(): Promise<void> {
   });
 }
 
+let scene: Scene;
+
 beforeEach(() => {
   installLegendListViewportMetrics();
   // jsdom has no layout: give every range a paintable rect, or the popover's
@@ -149,10 +166,13 @@ beforeEach(() => {
   );
   useSettingsStore.setState({ quoteReplyEnabled: true });
   useBotOpenThreadStore.setState({ byBotId: {} });
-  const scene = buildScene();
+  scene = buildScene();
   mocks.sessions = scene.sessions;
   mocks.threads = [postThread()];
   mocks.client = hostClientLocating(() => ({ turns: [] }), []);
+  mocks.activity = null;
+  negotiateBotSend(HOST_ID, { major: 1, minor: 1 });
+  signInViewer(VIEWER_USER_ID);
 });
 
 afterEach(() => {
@@ -165,6 +185,8 @@ afterEach(() => {
   mocks.sessions = {};
   mocks.threads = [];
   mocks.client = null;
+  mocks.activity = null;
+  resetBotFailedRequestSupport();
 });
 
 /** Selects the whole of `text`'s element inside `scope`, and releases the mouse. */
@@ -260,6 +282,61 @@ describe("select-to-quote in a bot's channel with no thread open", () => {
     const box = channelBox();
     expect(box.value).toBe(`> ${CHANNEL_TEXT}\n\n`);
     expect(document.activeElement).toBe(box);
+    expectSelectionCleared();
+  });
+});
+
+describe("select-to-quote in a bot's channel while its box edits a failed message", () => {
+  it("adds the quote after the failed message's text, keeps the edit and focuses the box", async () => {
+    const user = userEvent.setup();
+    // The viewer's post went unanswered: the trunk failed on its request.
+    scene.channel.setState({
+      messages: [
+        memberPost({
+          messageId: POST_ID,
+          requestId: POST_REQUEST,
+          lines: [POST_FIRST_LINE, POST_SECOND_LINE],
+          timestamp: 1_000,
+          resolvedBy: null,
+        }),
+        botReply({ messageId: REPLY_ID, text: CHANNEL_TEXT, timestamp: 2_000 }),
+      ],
+    });
+    mocks.activity = {
+      trunk: {
+        state: "failed",
+        startedAt: 100_000,
+        step: null,
+        requestId: POST_REQUEST,
+        reason: {
+          code: null,
+          summary: "The provider returned an error",
+          harnessId: "claude",
+          action: "none",
+        },
+      },
+      threads: {},
+    };
+    await mountChannel();
+    await user.click(
+      within(screen.getByTestId("bot-member-row")).getByTestId(
+        "bot-message-edit",
+      ),
+    );
+    const failedText = channelBox().value;
+    expect(failedText).toContain(POST_FIRST_LINE);
+    expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
+
+    await selectText(channelSection(), CHANNEL_TEXT);
+    const button = quoteButton();
+    if (button === null) throw new Error("no Quote button");
+    await user.click(button);
+
+    const box = channelBox();
+    expect(box.value).toBe(`${failedText}\n\n> ${CHANNEL_TEXT}\n\n`);
+    expect(screen.getByTestId("bot-channel-composer-editing")).toBeTruthy();
+    expect(document.activeElement).toBe(box);
+    expect(box.selectionStart).toBe(box.value.length);
     expectSelectionCleared();
   });
 });

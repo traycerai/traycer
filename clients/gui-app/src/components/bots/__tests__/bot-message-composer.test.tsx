@@ -104,6 +104,7 @@ function composer(edit: BotComposerEdit | null): ReactNode {
       onEditEnd={onEditEnd}
       seed={null}
       keptDraft={null}
+      quote={null}
       onSent={onSent}
     />
   );

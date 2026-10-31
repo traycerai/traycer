@@ -3,8 +3,11 @@ import {
   useId,
   useRef,
   useState,
+  type Dispatch,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
+  type SetStateAction,
 } from "react";
 import { SendHorizontal } from "lucide-react";
 import type {
@@ -22,6 +25,10 @@ import {
   BotSendFailedNotice,
 } from "@/components/bots/bot-channel-notices";
 import { useBotMentionCompletion } from "@/components/bots/bot-mention-completion";
+import {
+  appendQuoteMarkdown,
+  type QuoteTextSnapshot,
+} from "@/components/chat/quote/append-quote-to-draft";
 
 const MESSAGE_MAX = 100_000;
 
@@ -51,6 +58,10 @@ const MESSAGE_MAX = 100_000;
  *
  * A send that lands clears the box only while the box still holds the
  * draft it sent: an edit or a seed loaded since is a newer draft, and stays.
+ *
+ * A quote of a selection in the conversation (`quote`) is added after what
+ * the box shows, as markdown quote lines - an edit in progress included,
+ * which stays an edit - and the box takes the focus with the caret after it.
  *
  * `@` completes a member of the team's environment (decision 137); the box
  * shows their name and the send writes their token, so the bot's host knows
@@ -86,6 +97,8 @@ export function BotMessageComposer(props: {
   readonly seed: BotComposerSeed | null;
   /** Where the box's draft is kept outside it, while it is not editing a failed message; `null` where none is. */
   readonly keptDraft: BotKeptDraft | null;
+  /** A quote to add to what the box shows; `null` for none. */
+  readonly quote: BotComposerQuote | null;
   /**
    * The host accepted `text`, what the box held, and the box was cleared.
    * Answers whether the owner says the send's delivery itself, where the
@@ -110,6 +123,7 @@ export function BotMessageComposer(props: {
     onEditEnd,
     seed,
     keptDraft,
+    quote,
     onSent,
   } = props;
   const client = useTabHostClient();
@@ -150,6 +164,7 @@ export function BotMessageComposer(props: {
       setText("");
     }
   }
+  useBoxQuote(quote, setText, inputRef);
   // The draft the box holds now, for a send that lands after the person
   // moved on to another; and whether the box is still there to say anything.
   const generationRef = useRef(generation);
@@ -388,6 +403,31 @@ export function BotMessageComposerUnavailable(props: {
   );
 }
 
+/**
+ * Adds each quote once, by its id, to what the box shows then, and moves the
+ * focus into the box with the caret after it.
+ */
+function useBoxQuote(
+  quote: BotComposerQuote | null,
+  setText: Dispatch<SetStateAction<string>>,
+  inputRef: RefObject<HTMLTextAreaElement | null>,
+): void {
+  const [takenQuoteId, setTakenQuoteId] = useState<number | null>(null);
+  if (quote !== null && quote.id !== takenQuoteId) {
+    setTakenQuoteId(quote.id);
+    setText((current) => appendQuoteMarkdown(current, quote.snapshot));
+  }
+  useEffect(() => {
+    if (quote === null || quote.id !== takenQuoteId) return;
+    const input = inputRef.current;
+    if (input !== null) {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+    quote.taken();
+  }, [inputRef, quote, takenQuoteId]);
+}
+
 function ComposerStatus(props: {
   readonly failed: boolean;
   readonly queued: boolean;
@@ -415,6 +455,15 @@ export type BotKeptDraft = {
   readonly revision: () => number | null;
   /** The draft at `revision` was sent: spent, unless a newer draft took its place. */
   readonly spend: (revision: number) => void;
+};
+
+/** A quote of a selection, for the box to add to what it shows. */
+export type BotComposerQuote = {
+  /** Which quote it is: the box adds each id once. */
+  readonly id: number;
+  readonly snapshot: QuoteTextSnapshot;
+  /** The box added it: the owner stops offering it. */
+  readonly taken: () => void;
 };
 
 /** A failed message loaded into the box to be edited and sent again. */

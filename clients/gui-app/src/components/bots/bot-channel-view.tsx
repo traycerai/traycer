@@ -53,10 +53,8 @@ import {
 import {
   BotMessageComposer,
   type BotComposerEdit,
-  type BotComposerSeed,
-  type BotKeptDraft,
+  type BotComposerQuote,
 } from "@/components/bots/bot-message-composer";
-import { appendQuoteMarkdown } from "@/components/chat/quote/append-quote-to-draft";
 import { clearBrowserSelection } from "@/components/chat/quote/quote-snapshot-into-draft";
 import {
   QuoteSinkContext,
@@ -622,39 +620,28 @@ export function BotChannelView(props: {
       : (threadsByPost.get(openThreadPostId) ?? null);
   // A quote, from the channel or the thread beside it, goes into the box
   // that is open: the thread's while a thread is open, else the channel's.
-  // It is added after what the box holds, as a new message: an edit of a
-  // failed message the box held ends, as a Discuss draft ends it.
-  const [channelSeed, setChannelSeed] = useState<BotComposerSeed | null>(null);
-  // What the channel's box holds, for a quote to add to.
-  const channelBoxText = useRef("");
-  const channelKeptDraft = useMemo<BotKeptDraft>(
-    () => ({
-      keep: (text) => {
-        channelBoxText.current = text;
-      },
-      revision: () => null,
-      spend: () => undefined,
-    }),
-    [],
-  );
+  // The box adds it after what it shows and hands it back once it has; a
+  // thread's box not drawn yet takes it once it is.
+  const quoteCount = useRef(0);
+  const [pendingQuote, setPendingQuote] = useState<PendingQuote | null>(null);
   const quoteIntoOpenBox = useCallback<QuoteSink>(
     (_chatId, snapshot) => {
-      if (railThreadPostId !== null) {
-        const kept =
-          useBotDraftsStore.getState().threadBoxes[botId]?.[railThreadPostId];
-        seedThreadBox(
-          botId,
-          railThreadPostId,
-          appendQuoteMarkdown(kept?.text ?? "", snapshot),
-        );
-      } else {
-        setEdit(null);
-        const text = appendQuoteMarkdown(channelBoxText.current, snapshot);
-        setChannelSeed((current) => ({ id: (current?.id ?? 0) + 1, text }));
-      }
+      quoteCount.current += 1;
+      const id = quoteCount.current;
+      setPendingQuote({
+        postId: railThreadPostId,
+        quote: {
+          id,
+          snapshot,
+          taken: () =>
+            setPendingQuote((current) =>
+              current?.quote.id === id ? null : current,
+            ),
+        },
+      });
       clearBrowserSelection();
     },
-    [botId, railThreadPostId, seedThreadBox],
+    [railThreadPostId],
   );
   const threadLanding = useThreadPanelLanding(
     props.landOn,
@@ -821,8 +808,9 @@ export function BotChannelView(props: {
                 failure={sendFailure}
                 edit={edit}
                 onEditEnd={endEdit}
-                seed={channelSeed}
-                keptDraft={channelKeptDraft}
+                seed={null}
+                keptDraft={null}
+                quote={quoteForBox(pendingQuote, null)}
                 onSent={openPostedThread}
               />
             </section>
@@ -874,6 +862,7 @@ export function BotChannelView(props: {
                   onEditPost={editPostFromThread}
                   onOpenTurn={onOpenTurn}
                   onOpenSession={onOpenSession}
+                  quote={quoteForBox(pendingQuote, postId)}
                 />
               )}
             />
@@ -1372,4 +1361,19 @@ function useAdvanceWhilePresented(args: {
       }
     });
   }, [advance, botId, conversationId, targetMessageId, targetSeq]);
+}
+
+/** A quote waiting for the box it goes into. */
+type PendingQuote = {
+  /** The thread whose box takes it; `null` for the channel's. */
+  readonly postId: string | null;
+  readonly quote: BotComposerQuote;
+};
+
+/** The quote for the box of the thread `postId` (`null`: the channel's), if it is that box's. */
+function quoteForBox(
+  pending: PendingQuote | null,
+  postId: string | null,
+): BotComposerQuote | null {
+  return pending !== null && pending.postId === postId ? pending.quote : null;
 }
