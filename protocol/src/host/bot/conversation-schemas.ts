@@ -216,11 +216,12 @@ const ANCHOR_EXCERPT_WORDS = 10;
  * a space follows, or of `。`, `！`, `？`, which end one on their own; either
  * with the closing quotes, brackets and Markdown markers after it.
  */
-const SENTENCE_END = /([.!?…]+|[。！？]+)(["'”’)\]}*_`」』）]*)/gu;
+const SENTENCE_END =
+  /([.!?\u2026]+|[\u3002\uFF01\uFF1F]+)(["'\u201D\u2019)\]}*_`\u300D\u300F\uFF09]*)/gu;
 
 /** Punctuation an excerpt does not end on, before any closers that follow it. */
 const TRAILING_PUNCTUATION =
-  /[\s.!?,;:…。！？、，；：]+(["'”’)\]}*_`」』）]*)$/u;
+  /[\s.!?,;:\u2026\u3002\uFF01\uFF1F\u3001\uFF0C\uFF1B\uFF1A]+(["'\u201D\u2019)\]}*_`\u300D\u300F\uFF09]*)$/u;
 
 /** Words a `.` ends without ending the sentence, before a lowercase word. */
 const ABBREVIATIONS = new Set([
@@ -240,7 +241,7 @@ const ABBREVIATIONS = new Set([
  */
 function isAbbreviation(before: string): boolean {
   const word = (/(\S+)$/u.exec(before)?.[1] ?? "").replace(
-    /^["'“‘(\[{*_`]+/u,
+    /^["'\u201C\u2018(\[{*_`]+/u,
     "",
   );
   return (
@@ -257,7 +258,7 @@ function firstSentenceOf(text: string): string {
   for (const match of text.matchAll(SENTENCE_END)) {
     const end = match.index + match[0].length;
     const terminator = match[1] ?? "";
-    if (/[。！？]/u.test(terminator)) return text.slice(0, end);
+    if (/[\u3002\uFF01\uFF1F]/u.test(terminator)) return text.slice(0, end);
     const rest = text.slice(end);
     if (!rest.startsWith(" ")) {
       if (rest.length === 0) return text;
@@ -266,7 +267,7 @@ function firstSentenceOf(text: string): string {
     // An ellipsis, or a `.` after an abbreviation, before a lowercase word
     // is a pause, not an end.
     const pause =
-      /^(?:\.{2,}|…+)$/u.test(terminator) ||
+      /^(?:\.{2,}|\u2026+)$/u.test(terminator) ||
       (terminator === "." && isAbbreviation(text.slice(0, match.index)));
     if (pause && match[2] === "" && /^ \p{Ll}/u.test(rest)) continue;
     return text.slice(0, end);

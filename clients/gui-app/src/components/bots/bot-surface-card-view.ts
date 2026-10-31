@@ -8,6 +8,7 @@ import type {
   BotSurfaceActionState,
 } from "@traycer/protocol/host/bot/schemas";
 import type { BotSurfaceAction } from "@traycer/protocol/host/bot/surface-schemas";
+import type { RuntimeInterviewAnswer } from "@traycer/protocol/host/agent/gui/agent-runtime";
 import type { BotSurfaceActionEntry } from "@/stores/bots/bot-surface-actions-store";
 import { firstLineOf } from "@/lib/bots/bot-trunk-model";
 
@@ -340,4 +341,60 @@ export function botSurfaceCardView(
     actions: inline,
     actionsBusy: false,
   };
+}
+
+/**
+ * The answers as the task's own question card sends them: each question's
+ * id and text, the value given, and which option it was or the words typed.
+ * Every question skipped (or not given) is the Skip of the whole surface.
+ * The surface card and the voice both send through this.
+ */
+export function surfaceAnswerOf(
+  questions: ReadonlyArray<{
+    readonly questionId: string | null;
+    readonly text: string;
+    readonly options: ReadonlyArray<string>;
+  }>,
+  given: ReadonlyArray<{
+    readonly text: string;
+    readonly skipped: boolean;
+  } | null>,
+): BotSurfaceAction {
+  if (given.every((sent) => sent?.skipped !== false)) {
+    return { kind: "skip", draftAnswers: [] };
+  }
+  const answers = questions.map((question, index): RuntimeInterviewAnswer => {
+    const sent = given[index] ?? null;
+    if (sent === null || sent.skipped) {
+      return {
+        questionId: question.questionId,
+        question: question.text,
+        values: [],
+        notes: null,
+        selection: null,
+      };
+    }
+    const optionIndex = question.options.indexOf(sent.text);
+    return {
+      questionId: question.questionId,
+      question: question.text,
+      values: [sent.text],
+      notes: null,
+      selection:
+        optionIndex >= 0
+          ? {
+              questionIndex: index,
+              optionIndices: [optionIndex],
+              optionLabels: [sent.text],
+              customText: null,
+            }
+          : {
+              questionIndex: index,
+              optionIndices: [],
+              optionLabels: [],
+              customText: sent.text,
+            },
+    };
+  });
+  return { kind: "answer", answers };
 }

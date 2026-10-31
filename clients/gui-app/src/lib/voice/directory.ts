@@ -1,4 +1,7 @@
-import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import type {
+  BotConversationRecord,
+  BotThreadSummary,
+} from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import type {
@@ -422,4 +425,24 @@ export function tupleHolds(
     focus.botId === tuple.botId &&
     focus.threadId === tuple.threadId
   );
+}
+
+/**
+ * The channel conversation among a bot's conversations: the one the bot
+ * record names, else the earliest. Mirrors the channel view's own rule.
+ */
+export function channelConversation(
+  rows: ReadonlyArray<BotConversationRecord>,
+  appConversationChatId: string | null,
+): BotConversationRecord | null {
+  if (appConversationChatId !== null) {
+    return (
+      rows.find((row) => row.conversationId === appConversationChatId) ?? null
+    );
+  }
+  let first: BotConversationRecord | null = null;
+  for (const row of rows) {
+    if (first === null || row.createdAt < first.createdAt) first = row;
+  }
+  return first;
 }
