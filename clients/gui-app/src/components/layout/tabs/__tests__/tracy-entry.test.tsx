@@ -1195,7 +1195,7 @@ describe("the fixed Tracy entry - vertical strip", () => {
       openEpicTabs(["Alpha"]);
       mountSideStrip("/epics/e-alpha/e-alpha");
 
-      const entry = await screen.findByTestId("tab-tracy");
+      const entry = await screen.findByRole("tab", { name: "Tracy" });
       const talk = screen.getByRole("button", { name: "Talk" });
       expect(screen.getByTestId("side-strip-top-block").contains(talk)).toBe(
         true,
@@ -1216,6 +1216,53 @@ describe("the fixed Tracy entry - vertical strip", () => {
     } finally {
       useVoiceSessionStore.setState(initialVoice, true);
     }
+  });
+});
+
+describe("Talk without the fixed Tracy entry", () => {
+  const initialVoice = useVoiceSessionStore.getInitialState();
+
+  beforeEach(() => {
+    // Show Tracy off: no fixed entry, the bot stays reachable as a tab.
+    useSettingsStore.setState({ showTracy: false });
+    useVoiceSessionStore.setState({
+      availability: "live",
+      driver: {
+        start: () => undefined,
+        end: () => undefined,
+        setMuted: () => undefined,
+      },
+    });
+  });
+
+  afterEach(() => {
+    useVoiceSessionStore.setState(initialVoice, true);
+  });
+
+  it("is drawn on the header strip", async () => {
+    openEpicTabs(["Alpha"]);
+    mountTopStrip("/epics/e-alpha/e-alpha");
+
+    const talk = await screen.findByRole("button", { name: "Talk" });
+    expect(talk.textContent).toBe("Talk");
+    expect(screen.queryByRole("tab", { name: "Tracy" })).toBeNull();
+  });
+
+  it("is drawn in the vertical strip's top block, expanded and collapsed", async () => {
+    openEpicTabs(["Alpha"]);
+    mountSideStrip("/epics/e-alpha/e-alpha");
+
+    const talk = await screen.findByRole("button", { name: "Talk" });
+    expect(screen.getByTestId("side-strip-top-block").contains(talk)).toBe(
+      true,
+    );
+    expect(screen.queryByRole("tab", { name: "Tracy" })).toBeNull();
+
+    act(() => {
+      useSideTabStripStore.setState({ collapsed: true });
+    });
+    const tile = await screen.findByRole("button", { name: "Talk" });
+    expect(tile.textContent).toBe("");
   });
 });
 

@@ -16,6 +16,7 @@ import type { EdgeSide } from "@/lib/layout/layout-arrangement";
 import { cn } from "@/lib/utils";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { TalkControl } from "@/components/layout/voice/talk-control";
+import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 import { SideHomeRow } from "./side-home-row";
 import { SideTracyRow } from "./side-tracy-row";
 import type { TracyStripEntry } from "../tab-strip-controller";
@@ -81,7 +82,13 @@ export function SideStripTopBlock(props: SideStripTopBlockProps): ReactNode {
   const newTask = (
     <SideStripNewTask variant={props.variant} onNewTab={props.onNewTab} />
   );
-  const home = sideFixedRows(props);
+  // Whether Talk draws (its own gate: voice offered, the session's owner
+  // mounted), read here because the rail's layout around the fixed rows
+  // depends on whether anything is drawn there.
+  const talkDrawn = useVoiceSessionStore(
+    (state) => state.availability === "live" && state.driver !== null,
+  );
+  const home = sideFixedRows(props, talkDrawn);
   return (
     <div
       data-testid="side-strip-top-block"
@@ -153,12 +160,17 @@ export function SideStripTopBlock(props: SideStripTopBlockProps): ReactNode {
 }
 
 /**
- * Home and the fixed Tracy entry after it, or `null` with neither drawn.
- * Talk goes with the Tracy entry here as in the header strip (V6): under
- * the row when expanded, the glyph alone as a rail tile when collapsed.
+ * The fixed rows: Home, the Tracy entry, and Talk, or `null` with none
+ * drawn. Talk goes with the fixed rows here as in the header strip (V6),
+ * under them when expanded, the glyph alone as a rail tile when collapsed;
+ * it does not hang off the Tracy entry, which "Show Tracy" can take away
+ * while the bot stays reachable as a tab.
  */
-function sideFixedRows(props: SideStripTopBlockProps): ReactNode {
-  if (!props.homeTabDrawn && props.tracy === null) return null;
+function sideFixedRows(
+  props: SideStripTopBlockProps,
+  talkDrawn: boolean,
+): ReactNode {
+  if (!props.homeTabDrawn && props.tracy === null && !talkDrawn) return null;
   const collapsed = props.variant === "collapsed";
   return (
     <>
@@ -170,16 +182,14 @@ function sideFixedRows(props: SideStripTopBlockProps): ReactNode {
         />
       ) : null}
       {props.tracy === null ? null : (
-        <>
-          <SideTracyRow variant={props.variant} entry={props.tracy} />
-          {collapsed ? (
-            <TalkControl compact />
-          ) : (
-            <div className="flex">
-              <TalkControl compact={false} />
-            </div>
-          )}
-        </>
+        <SideTracyRow variant={props.variant} entry={props.tracy} />
+      )}
+      {collapsed ? (
+        <TalkControl compact />
+      ) : (
+        <div className="flex">
+          <TalkControl compact={false} />
+        </div>
       )}
     </>
   );

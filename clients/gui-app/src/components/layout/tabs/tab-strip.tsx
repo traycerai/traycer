@@ -216,13 +216,13 @@ function TabStripBody() {
           />
         ) : null}
         {controller.tracy === null ? null : (
-          <>
-            <TracyStripSlot entry={controller.tracy} />
-            {/* Beside the Tracy entry, never in the composer (V6): the voice
-                belongs to the whole bot surface, not to one draft. */}
-            <TalkControl compact={false} />
-          </>
+          <TracyStripSlot entry={controller.tracy} />
         )}
+        {/* With the fixed entries, never in the composer (V6): the voice
+            belongs to the whole bot surface, not to one draft, and not to the
+            Tracy entry either, which "Show Tracy" can take away while the bot
+            stays a tab. */}
+        <TalkControl compact={false} />
         <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
           {hasOverflow ? (
             <HiddenTabsMenu
