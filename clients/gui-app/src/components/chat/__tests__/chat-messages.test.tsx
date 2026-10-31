@@ -7674,15 +7674,19 @@ describe("ChatMessages scroll policy", () => {
       // duplicate `footer-inset`, not add real pane-resize coverage.
       // LegendList observes a genuine container resize only via a
       // ResizeObserver callback on the real scroll node (`useOnLayoutSync`
-      // in the installed `@legendapp/list@3.2.0`), which this harness's
+      // in the installed `@legendapp/list@3.3.4`), which this harness's
       // global `MockResizeObserver` never fires - faithfully triggering it
       // would require inventing a controllable-ResizeObserver shim reaching
       // into the library's own lazily-cached global observer singleton,
-      // exactly the fragile, easily-stale pattern removed from this file in
-      // the prior fixup round. The static contract this matrix cannot
-      // replace - `maintainScrollAtEnd.on.layout === true` - is already
-      // pinned directly in `chat-timeline.test.tsx` ("pins
-      // maintainScrollAtEndThreshold=0 and static end/MVCP maintenance").
+      // exactly the fragile, easily-stale pattern this file removed
+      // earlier. The static contract this matrix cannot replace is the
+      // opposite of a pin: `ChatTimeline` never passes `maintainScrollAtEnd`
+      // at all, which makes every one of the library's own maintain call
+      // sites unreachable, and a resize is followed by the latch's own
+      // ResizeObserver instead. That contract is pinned directly in
+      // `chat-timeline.test.tsx` ("pins maintainScrollAtEndThreshold=0,
+      // MVCP maintenance, and the library's own maintainScrollAtEnd
+      // permanently disabled").
       // Real pane-resize behavior needs the explicit live-browser gate, not
       // a simulated jsdom layout event.
       type MutationCase = {
