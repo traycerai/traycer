@@ -99,19 +99,29 @@ export async function attachCanvasAnnotation(input: {
   readonly record: CanvasAnnotationRecord;
   readonly crop: ImageBytes | null;
 }): Promise<CanvasAnnotationRecord> {
-  let record = input.record;
-  if (input.crop !== null) {
-    const prepared = await prepareComposerImageBytesOrRefuse(
-      createComposerImagePreparationSession(),
-      input.crop,
-      `canvas-selection-${record.annotationId}.png`,
-      "image/png",
-    );
-    if (prepared.kind === "refused")
-      throw new Error("The selected region could not be attached.");
-    const imageHash = await putImage(prepared.image.bytes);
-    record = { ...record, imageHash, imageFileName: prepared.image.fileName };
-  }
+  const record = await prepareCanvasAnnotationCrop(input.record, input.crop);
   useComposerDraftStore.getState().addBrowserAnnotation(input.chatId, record);
   return record;
+}
+
+/**
+ * Puts the crop into this window's image store and points the record at it.
+ * The record is then ready for any composer: an existing chat's sidecar, or
+ * the new-conversation modal's.
+ */
+export async function prepareCanvasAnnotationCrop(
+  record: CanvasAnnotationRecord,
+  crop: ImageBytes | null,
+): Promise<CanvasAnnotationRecord> {
+  if (crop === null) return record;
+  const prepared = await prepareComposerImageBytesOrRefuse(
+    createComposerImagePreparationSession(),
+    crop,
+    `canvas-selection-${record.annotationId}.png`,
+    "image/png",
+  );
+  if (prepared.kind === "refused")
+    throw new Error("The selected region could not be attached.");
+  const imageHash = await putImage(prepared.image.bytes);
+  return { ...record, imageHash, imageFileName: prepared.image.fileName };
 }

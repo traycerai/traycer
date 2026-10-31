@@ -147,6 +147,19 @@ import {
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import { sessionObjectUrl } from "@/lib/composer/landing-image-store";
+import { appendImageAttachmentAtoms } from "@/lib/composer/image-atoms";
+import {
+  sessionAnnotationImageAtoms,
+  type AnnotationImageAtom,
+} from "@/lib/composer/annotation-image-atoms";
+import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
+import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
+import { BrowserAnnotationCard } from "@/components/chat/composer/browser-annotation-card";
+import { useLandingImageFetcher } from "@/hooks/composer/use-landing-image-fetcher";
+import {
+  readNewConversationAnnotations,
+  useNewConversationAnnotationStore,
+} from "@/stores/epics/new-conversation-annotation-store";
 import { currentDraftBlobOwnerId } from "@/lib/drafts/draft-blob-transport";
 import {
   confirmAttachmentsByHash,
@@ -316,6 +329,71 @@ async function confirmCreateAttachmentHashes(input: {
  * `NewConversationModalBody`) means only the attachment strip re-renders while
  * typing - the toolbar / workspace controls / editor wrapper stay put.
  */
+const NO_ANNOTATIONS: readonly never[] = [];
+
+/** `epic.createChat@1.5`: the first message carries the annotation sidecar. */
+function hostCreatesChatWithAnnotations(hostId: string): boolean {
+  const version = readNegotiatedMethodVersion(hostId, "epic.createChat");
+  return (
+    version !== null &&
+    version !== false &&
+    version.major === 1 &&
+    version.minor >= 5
+  );
+}
+
+/**
+ * The browser-annotation sidecar a create carries, or why it cannot. The
+ * records need `epic.createChat@1.5` on the host the chat is created on -
+ * below it they would be stripped on the wire and the message would arrive
+ * without its cards - and each crop must still be in this window's image
+ * store, since it rides as an inline image atom the record's hash names.
+ */
+function annotationSidecarForCreate(
+  epicId: string,
+  hostId: string,
+):
+  | {
+      readonly kind: "ready";
+      readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+      readonly atoms: ReadonlyArray<AnnotationImageAtom>;
+    }
+  | { readonly kind: "refused"; readonly message: string } {
+  const browserAnnotations = readNewConversationAnnotations(epicId);
+  if (
+    browserAnnotations.length > 0 &&
+    !hostCreatesChatWithAnnotations(hostId)
+  )
+    return {
+      kind: "refused",
+      message: "Update the host to start a chat with this capture.",
+    };
+  const atoms = sessionAnnotationImageAtoms(browserAnnotations);
+  if (atoms === null)
+    return {
+      kind: "refused",
+      message:
+        "The capture's image is missing. Send it from the artifact again.",
+    };
+  return { kind: "ready", browserAnnotations, atoms };
+}
+
+/** A card alone is a message, as it is in a chat composer. */
+function useHasSubmittableContent(
+  epicId: string,
+  seed: NewConversationModalSeed,
+): boolean {
+  const hasText = useNewConversationModalStore((state) =>
+    contentIsSubmittable(
+      state.draftPatchesByEpicId[epicId]?.content ?? seed.content,
+    ),
+  );
+  const hasCards = useNewConversationAnnotationStore(
+    (state) => (state.byEpicId[epicId]?.length ?? 0) > 0,
+  );
+  return hasText || hasCards;
+}
+
 function NewConversationModalAttachmentStrip(props: {
   readonly epicId: string;
   readonly hostId: string | null;
@@ -335,6 +413,11 @@ function NewConversationModalAttachmentStrip(props: {
     useEpicImageFetcher(),
     props.hostId,
   );
+  // The cards a selection sent to "New chat" brought along, beside the images.
+  const annotations = useNewConversationAnnotationStore(
+    (state) => state.byEpicId[props.epicId] ?? NO_ANNOTATIONS,
+  );
+  const annotationImageFetcher = useLandingImageFetcher();
   return (
     <>
       <VisibleDraftImagePrefetch content={content} active />
@@ -342,6 +425,26 @@ function NewConversationModalAttachmentStrip(props: {
         content={content}
         onRemoveImage={props.onRemoveImage}
         fetcher={fetcher}
+        leadingAttachments={
+          annotations.length > 0 ? (
+            <div data-testid="browser-annotation-cards" className="contents">
+              {annotations.map((record) => (
+                <BrowserAnnotationCard
+                  key={record.annotationId}
+                  record={record}
+                  targetControl={undefined}
+                  onRemove={(annotationId) =>
+                    useNewConversationAnnotationStore
+                      .getState()
+                      .remove(props.epicId, annotationId)
+                  }
+                  imageFetcher={annotationImageFetcher}
+                  sessionObjectUrl={sessionObjectUrl}
+                />
+              ))}
+            </div>
+          ) : undefined
+        }
         // This composer is hash-first now, so a just-pasted chip has no epic
         // attachment to fetch - its bytes are in this window's composer store,
         // and the session object-URL is what paints it without a placeholder
@@ -932,11 +1035,7 @@ export function NewConversationModalBody(props: {
     composerMode: draftComposerMode,
     workspace: draftWorkspace,
   } = useNewConversationDraftFields(epicId, seed);
-  const hasSubmittableContent = useNewConversationModalStore((state) =>
-    contentIsSubmittable(
-      state.draftPatchesByEpicId[epicId]?.content ?? seed.content,
-    ),
-  );
+  const hasSubmittableContent = useHasSubmittableContent(epicId, seed);
   const [initialContent] = useState<JsonContent>(
     () =>
       useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
@@ -1392,6 +1491,7 @@ export function NewConversationModalBody(props: {
   const cleanupAfterSubmit = useCallback((): void => {
     if (mirrorLineShown) markMirrorLineSeen();
     clearDraft(epicId);
+    useNewConversationAnnotationStore.getState().clear(epicId);
     clearStagedIntent(stagingKey);
     editorRef.current?.clear();
     onSubmitted();
@@ -1478,9 +1578,17 @@ export function NewConversationModalBody(props: {
       // derive from the SAME captured submitTarget, and the verdict REFUSES
       // rather than migrates when its frozen client no longer addresses it.
       const activeHostId = placementVerdict.hostId;
+      // Before any write, like the placement check above: a refusal leaves the
+      // draft and its cards exactly as the user left them.
+      const sidecar = annotationSidecarForCreate(epicId, activeHostId);
+      if (sidecar.kind === "refused") {
+        raiseHostNotice({ kind: "refused", message: sidecar.message, action: null });
+        return;
+      }
+      const { browserAnnotations } = sidecar;
       recordPlacement(activeHostId);
       const content = buildSubmittedChatJSONContent(
-        liveContent,
+        appendImageAttachmentAtoms(liveContent, sidecar.atoms),
         pickerStore.getState().knownSlashCommands,
       );
       const chatId = uuidv4();
@@ -1545,6 +1653,7 @@ export function NewConversationModalBody(props: {
               ...(attachmentsByHash
                 ? { attachmentsByHash: true as const }
                 : {}),
+              ...(browserAnnotations.length > 0 ? { browserAnnotations } : {}),
             };
       if (initialMessage !== null) {
         useEpicCanvasStore.getState().markChatTitlePending(chatId, "");
@@ -1873,7 +1982,15 @@ export function NewConversationModalBody(props: {
     }
     const editor = editorRef.current;
     if (editor === null) return;
-    const captured = editor.getJSON();
+    // Planned over the document the create will carry: with the sidecar's
+    // crops appended, a node holds bytes beside its hash, which is the case
+    // the by-hash upload below declines, so a create with cards stays on the
+    // inline path and the host never probes a crop's hash in its staging tier.
+    const captured = appendImageAttachmentAtoms(
+      editor.getJSON(),
+      sessionAnnotationImageAtoms(readNewConversationAnnotations(epicId)) ??
+        [],
+    );
     // A staged sandbox takes the send (sandboxes redesign Flow 1): the
     // message waits in this task, behind the setup line, until the agent the
     // person picked is ready on the sandbox, and the modal closes at once. It

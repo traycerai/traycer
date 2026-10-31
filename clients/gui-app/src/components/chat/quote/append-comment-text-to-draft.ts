@@ -4,6 +4,10 @@ import {
   readComposerDraftSnapshot,
   useComposerDraftStore,
 } from "@/stores/composer/composer-draft-store";
+import {
+  createEmptyNewConversationContent,
+  useNewConversationModalStore,
+} from "@/stores/epics/new-conversation-modal-store";
 
 import { appendBlocks } from "./append-quote-to-draft";
 
@@ -66,11 +70,39 @@ export function appendCommentTextToDraft(
   const paragraphs = commentDraftParagraphs(commentDraft);
   if (paragraphs.length === 0) return;
   const draft = readComposerDraftSnapshot(chatId);
-  const existing = (draft.content.content ?? []).filter(
+  useComposerDraftStore
+    .getState()
+    .replaceDraft(chatId, appendBelow(draft.content, paragraphs), null);
+}
+
+/**
+ * The same append, into the new-conversation modal's per-epic draft: the
+ * text half of a draft sent to a chat that does not exist yet. Written before
+ * the modal opens, since its composer seeds itself from this store on mount.
+ */
+export function appendCommentTextToNewConversationDraft(
+  epicId: string,
+  commentDraft: JsonContent,
+): void {
+  const paragraphs = commentDraftParagraphs(commentDraft);
+  if (paragraphs.length === 0) return;
+  const store = useNewConversationModalStore.getState();
+  const current =
+    store.draftPatchesByEpicId[epicId]?.content ??
+    createEmptyNewConversationContent();
+  store.setContent(epicId, appendBelow(current, paragraphs));
+  store.clearSelection(epicId);
+}
+
+/** Below anything already typed, with a blank line between. */
+function appendBelow(
+  content: JsonContent,
+  paragraphs: ReadonlyArray<JsonContent>,
+): JsonContent {
+  const existing = (content.content ?? []).filter(
     (block) => !(block.type === "paragraph" && (block.content ?? []).length === 0),
   );
   const separator: ReadonlyArray<JsonContent> =
     existing.length === 0 ? [] : [{ type: "paragraph" }];
-  const next = appendBlocks(draft.content, [...separator, ...paragraphs]);
-  useComposerDraftStore.getState().replaceDraft(chatId, next, null);
+  return appendBlocks(content, [...separator, ...paragraphs]);
 }

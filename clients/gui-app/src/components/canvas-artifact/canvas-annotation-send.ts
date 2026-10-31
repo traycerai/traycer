@@ -48,26 +48,34 @@ export function canvasSelectionAnnotationRecord(
 }
 
 /**
- * Captures the selected region through the window bridge and attaches the
- * record to a chat's composer draft. The capture happens here, on the explicit
- * send, before anything else moves on screen: the selection bar and the
- * comment draft box both route through this one path so their cards match.
+ * The crop of the selected region, cut from the app window as composited, or
+ * `null` where there is nothing to capture (no region, or no window bridge).
+ */
+export async function captureCanvasAnnotationCrop(
+  captureRect: CanvasBox | null,
+): Promise<Uint8Array | null> {
+  const bridge = canvasWindowCaptureBridge();
+  if (captureRect === null || bridge === null) return null;
+  const crop = await bridge.captureRegion(captureRect);
+  if (crop === null)
+    throw new Error("The selected region could not be captured. Try again.");
+  return new Uint8Array(crop);
+}
+
+/**
+ * Captures the selected region and attaches the record to a chat's composer
+ * draft. The capture happens here, on the explicit send, before anything else
+ * moves on screen: the selection bar and the comment draft box both route
+ * through this one path so their cards match.
  */
 export async function captureAndAttachCanvasAnnotation(input: {
   readonly chatId: string;
   readonly record: CanvasAnnotationRecord;
   readonly captureRect: CanvasBox | null;
 }): Promise<CanvasAnnotationRecord> {
-  const bridge = canvasWindowCaptureBridge();
-  const crop =
-    input.captureRect !== null && bridge !== null
-      ? await bridge.captureRegion(input.captureRect)
-      : null;
-  if (input.captureRect !== null && bridge !== null && crop === null)
-    throw new Error("The selected region could not be captured. Try again.");
   return attachCanvasAnnotation({
     chatId: input.chatId,
     record: input.record,
-    crop: crop === null ? null : new Uint8Array(crop),
+    crop: await captureCanvasAnnotationCrop(input.captureRect),
   });
 }
