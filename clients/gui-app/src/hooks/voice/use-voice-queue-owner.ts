@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { v4 as uuidv4 } from "uuid";
 import type {
   BotListResponse,
   BotRecord,
 } from "@traycer/protocol/host/bot/schemas";
+import type { BotSurfaceReference } from "@traycer/protocol/persistence/epic/messages";
 import {
   useVoiceAttention,
   type VoiceAttention,
@@ -15,13 +17,23 @@ import {
   composeBriefing,
   VOICE_SESSION_INPUT_MAX_CHARS,
 } from "@/lib/voice/briefing";
+import {
+  createCardDesk,
+  type CardDesk,
+  type CardTarget,
+} from "@/lib/voice/card-desk";
 import type { ReplyRef, StoppedAnswer } from "@/lib/voice/queue-sources";
+import type { QueueVerb, QueueVerbOutcome } from "@/lib/voice/queue-verbs";
 import { confirmationWords, type SpeechScheduler } from "@/lib/voice/scheduler";
 import { createVoiceQueue, type VoiceQueue } from "@/lib/voice/voice-queue";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
-import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
+import {
+  useVoiceSessionStore,
+  waitingItems,
+  type QueueItem,
+} from "@/stores/voice/voice-session-store";
 
 /** The marking call for one host, as the read markers register it. */
 export type VoiceReadMark = (entity: {
@@ -64,6 +76,25 @@ export const VOICE_SWITCH_SETTLE_MS = 10_000;
 const NO_BOTS: ReadonlyArray<BotRecord> = [];
 const NO_STATUS_REQUESTS: ReadonlyArray<VoiceStatusRequest> = [];
 
+/**
+ * An `open` of a page or an artifact a bot's post points at (VT5): opened
+ * where it lives, through the routing a tapped notification takes, and said.
+ */
+export interface VoiceSurfaceOpen {
+  readonly seq: number;
+  readonly item: QueueItem;
+  readonly surface: Extract<
+    BotSurfaceReference,
+    { readonly kind: "browser" | "artifact" }
+  >;
+  readonly botTitle: string;
+  readonly delegationId: string | null;
+  readonly sessionToken: number;
+  readonly engineGeneration: number;
+}
+
+const NO_SURFACE_OPENS: ReadonlyArray<VoiceSurfaceOpen> = [];
+
 /** A `status` accepted, and its prose once composed; appended in the order asked. */
 interface StatusSlot {
   readonly request: VoiceStatusRequest;
@@ -85,6 +116,12 @@ export interface VoiceQueueOwner {
     request: VoiceStatusRequest,
     text: string,
   ) => void;
+  /** The active card's desk; `null` until the first session starts. */
+  readonly cardDesk: CardDesk | null;
+  /** Pages and artifacts asked open, each opened once by its own opener. */
+  readonly surfaceOpens: ReadonlyArray<VoiceSurfaceOpen>;
+  /** An opener did its open: it leaves. */
+  readonly onSurfaceOpened: (seq: number) => void;
   /**
    * A session starts: what the attention tier holds now is queued without
    * an offer, and the briefing of it is returned for the mint's `input`.
@@ -266,11 +303,56 @@ export function useVoiceQueueOwner(input: {
       noteHeard,
       isFocused,
       attention: () => attentionRef.current,
+      // A yes said after an interjection answers it, not a card's candidate.
+      onOfferHeard: () =>
+        useVoiceSessionStore.getState().cardDriver?.invalidate("interjection"),
     });
     queueRef.current = created;
     setQueue(created);
     return created;
   }, [ensureSpeech, isFocused, noteHeard]);
+
+  // The active card (VT5): built over the same scheduler, reading the
+  // queue's prompts by id.
+  const deskRef = useRef<CardDesk | null>(null);
+  const [cardDesk, setCardDesk] = useState<CardDesk | null>(null);
+  const ensureDesk = useCallback((): CardDesk => {
+    const existing = deskRef.current;
+    if (existing !== null) return existing;
+    const created = createCardDesk({
+      store: useVoiceSessionStore,
+      speech: {
+        enqueue: (item) => ensureSpeech().enqueue(item),
+        withdraw: (itemId) => ensureSpeech().withdraw(itemId),
+        activity: () => ensureSpeech().activity(),
+        subscribe: (listener) => ensureSpeech().subscribe(listener),
+      },
+      schedule: (fn, ms) => {
+        const handle = window.setTimeout(fn, ms);
+        return () => window.clearTimeout(handle);
+      },
+      target: (itemId) => cardTargetOf(ensureQueue(), itemId),
+      newActionId: () => uuidv4(),
+    });
+    deskRef.current = created;
+    setCardDesk(created);
+    return created;
+  }, [ensureQueue, ensureSpeech]);
+  useEffect(() => {
+    useVoiceSessionStore.getState().setCardDriver(ensureDesk());
+    return () => {
+      useVoiceSessionStore.getState().setCardDriver(null);
+    };
+  }, [ensureDesk]);
+
+  const [surfaceOpens, setSurfaceOpens] =
+    useState<ReadonlyArray<VoiceSurfaceOpen>>(NO_SURFACE_OPENS);
+  const surfaceOpenSeqRef = useRef(0);
+  const onSurfaceOpened = useCallback((seq: number) => {
+    setSurfaceOpens((current) =>
+      current.filter((request) => request.seq !== seq),
+    );
+  }, []);
 
   // `status`: one bot's readings gathered by a reader mounted for each ask,
   // composed once, and appended under the request it answers. Every
@@ -327,13 +409,102 @@ export function useVoiceQueueOwner(input: {
     [appendStatus],
   );
 
+  // The card takes the item's saying before it opens: an offer of it still
+  // queued, or a Read of it, is never said over or after the card.
+  const openCard = useCallback(
+    (
+      queue: VoiceQueue,
+      itemId: string,
+      delegationId: string | null,
+    ): QueueVerbOutcome => {
+      queue.claimForCard(itemId);
+      return ensureDesk().open(itemId, delegationId);
+    },
+    [ensureDesk],
+  );
+
+  // A card is read back as the active card, by voice or by button, so the
+  // person's answer has something to bind to; any other item as VT4 reads it.
+  const readItem = useCallback(
+    (
+      queue: VoiceQueue,
+      verb: Extract<QueueVerb, { readonly kind: "read" }>,
+    ): QueueVerbOutcome => {
+      const itemId = verb.itemId ?? newestWaiting(queue);
+      if (itemId !== null && cardTargetOf(queue, itemId) !== null) {
+        return openCard(queue, itemId, verb.delegationId);
+      }
+      return queue.run(verb);
+    },
+    [openCard],
+  );
+  // `open`: a card is read back; a page or an artifact a bot's post points
+  // at is opened by its own opener, which says where; anything else is
+  // switched to.
+  const openItem = useCallback(
+    (
+      queue: VoiceQueue,
+      verb: Extract<QueueVerb, { readonly kind: "open" }>,
+    ): QueueVerbOutcome => {
+      if (cardTargetOf(queue, verb.itemId) !== null) {
+        return openCard(queue, verb.itemId, verb.delegationId);
+      }
+      const item = queue
+        .items()
+        .find((candidate) => candidate.id === verb.itemId);
+      const surface = queue.surfaceOf(verb.itemId);
+      if (
+        item === undefined ||
+        surface === null ||
+        (surface.kind !== "browser" && surface.kind !== "artifact")
+      ) {
+        return queue.run({
+          kind: "switch",
+          target: { kind: "item", itemId: verb.itemId },
+        });
+      }
+      const now = useVoiceSessionStore.getState();
+      surfaceOpenSeqRef.current += 1;
+      const request: VoiceSurfaceOpen = {
+        seq: surfaceOpenSeqRef.current,
+        item,
+        surface,
+        botTitle: botTitleRef.current(item.botId),
+        delegationId: verb.delegationId,
+        sessionToken: now.sessionToken,
+        engineGeneration: now.engineGeneration,
+      };
+      setSurfaceOpens((current) => [...current, request]);
+      return "navigated";
+    },
+    [openCard],
+  );
+
+  // `later`: the item is set aside in the queue, and a card of it still
+  // waiting for the person's answer stops listening.
+  const setAside = useCallback(
+    (queue: VoiceQueue, named: string | null): QueueVerbOutcome => {
+      const itemId = named ?? newestWaiting(queue);
+      const outcome = queue.run({ kind: "later", itemId });
+      if (outcome === "dismissed" && itemId !== null) {
+        ensureDesk().dismiss(itemId);
+      }
+      return outcome;
+    },
+    [ensureDesk],
+  );
+
   // The queue's executor: `runVoiceQueueVerb` reaches it, for the router's
   // spoken verbs and the Waiting control's buttons alike.
   useEffect(() => {
     useVoiceSessionStore.getState().setQueueDriver({
       noteSwitched: (itemId) => ensureQueue().noteSwitched(itemId),
       run: (verb) => {
-        if (verb.kind !== "status") return ensureQueue().run(verb);
+        const queue = ensureQueue();
+        if (verb.kind === "read") return readItem(queue, verb);
+        if (verb.kind === "open") return openItem(queue, verb);
+        if (verb.kind === "later") return setAside(queue, verb.itemId);
+        if (verb.kind !== "status") return queue.run(verb);
         const now = useVoiceSessionStore.getState();
         const botId = verb.botId ?? now.focus?.botId ?? null;
         if (botId === null) return "nothing";
@@ -360,7 +531,7 @@ export function useVoiceQueueOwner(input: {
     return () => {
       useVoiceSessionStore.getState().setQueueDriver(null);
     };
-  }, [appHostId, ensureQueue]);
+  }, [appHostId, ensureQueue, openItem, readItem, setAside]);
 
   const stoppedRef = useRef(new Map<string, StoppedFacts>());
   const noteStopped = useCallback((facts: StoppedFacts) => {
@@ -406,6 +577,8 @@ export function useVoiceQueueOwner(input: {
   }, [ensureQueue]);
 
   const resetQueue = useCallback(() => {
+    deskRef.current?.reset();
+    setSurfaceOpens(NO_SURFACE_OPENS);
     queueRef.current?.reset();
     setStatusRequests(NO_STATUS_REQUESTS);
     statusOrderRef.current = [];
@@ -434,6 +607,9 @@ export function useVoiceQueueOwner(input: {
     voiceSwitch,
     statusRequests,
     onStatusComposed,
+    cardDesk,
+    surfaceOpens,
+    onSurfaceOpened,
     beginQueue,
     resetQueue,
     noteChannel,
@@ -444,4 +620,34 @@ export function useVoiceQueueOwner(input: {
     forgetStopped,
     dropStopped,
   };
+}
+
+/** The newest waiting item of the queue; `null` with none. */
+function newestWaiting(queue: VoiceQueue): string | null {
+  return waitingItems(queue.items()).at(0)?.id ?? null;
+}
+
+/**
+ * The card a queued item is, by the API that settles it: a bot's own
+ * question, or a task agent's question or approval its post surfaced.
+ * `null` for any other item, or one that no longer waits.
+ */
+function cardTargetOf(queue: VoiceQueue, itemId: string): CardTarget | null {
+  const item = queue.items().find((candidate) => candidate.id === itemId);
+  if (item === undefined || item.messageId === null) return null;
+  if (item.state !== "queued" && item.state !== "offered") return null;
+  const ids = {
+    itemId: item.id,
+    botId: item.botId,
+    hostId: item.hostId,
+    threadId: item.threadId,
+    chatId: item.chatId,
+    messageId: item.messageId,
+  };
+  if (item.kind === "question") return { family: "bot-question", ids };
+  if (item.kind !== "surface") return null;
+  const surface = queue.surfaceOf(itemId);
+  if (surface?.kind === "approval") return { family: "approval", ids };
+  if (surface?.kind === "question") return { family: "agent-question", ids };
+  return null;
 }

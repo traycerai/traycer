@@ -1,7 +1,7 @@
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 
 /**
- * The five spoken verbs the queue answers (Tracy Bots voice, VT4), the same
+ * The six spoken verbs the queue answers (Tracy Bots voice, VT4), the same
  * for the router and the strip's Waiting control. `itemId` `null`: the
  * newest waiting item. `status` with `botId` `null`: the focused bot.
  * `switch` takes a bot instead of an item for "open it" after a status.
@@ -20,6 +20,16 @@ export type QueueVerb =
         | { readonly kind: "bot"; readonly botId: string };
     }
   | { readonly kind: "later"; readonly itemId: string | null }
+  | {
+      /**
+       * A card is read back and made the active one (VT5); a page or an
+       * artifact a bot's post points at is opened where it lives; any other
+       * item is switched to.
+       */
+      readonly kind: "open";
+      readonly itemId: string;
+      readonly delegationId: string | null;
+    }
   | { readonly kind: "brief"; readonly delegationId: string | null }
   | {
       readonly kind: "status";
@@ -41,10 +51,10 @@ export type QueueVerbOutcome =
   | "not-live";
 
 /**
- * The one executor for `read`, `switch`, `later`, `brief` and `status`: the
- * router calls it for a spoken verb and the Waiting control's buttons call
- * it for a click, so a button and a spoken verb run the same code (the
- * system page's invariant). It reaches the queue the controller owns; with
+ * The one executor for `read`, `switch`, `later`, `brief`, `status` and
+ * `open`: the router calls it for a spoken verb and the Waiting control's
+ * buttons call it for a click, so a button and a spoken verb run the same
+ * code (the system page's invariant). It reaches the queue the controller owns; with
  * no live session nothing runs.
  */
 export function runVoiceQueueVerb(verb: QueueVerb): QueueVerbOutcome {

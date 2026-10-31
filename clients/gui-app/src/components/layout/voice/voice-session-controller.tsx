@@ -9,7 +9,6 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import type {
-  BotConversationRecord,
   BotConversationSendResponse,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
@@ -51,7 +50,12 @@ import { activateTabIntent, navigateToTabIntent } from "@/lib/tab-navigation";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { mainBotOf } from "@/lib/bots/bot-main";
 import { watchAudioLevel, type AudioLevelWatch } from "@/lib/voice/audio-level";
-import { tupleHolds, type BoundTarget } from "@/lib/voice/directory";
+import {
+  channelConversation,
+  tupleHolds,
+  type BoundTarget,
+  type VoiceDirectory,
+} from "@/lib/voice/directory";
 import { VoiceEngineError, type VoiceEngine } from "@/lib/voice/engine";
 import {
   baselineReplyWatchExcept,
@@ -98,6 +102,7 @@ import {
   VoiceQueueSources,
   VoiceStoppedSources,
 } from "@/components/layout/voice/voice-queue-feed";
+import { VoiceCards } from "@/components/layout/voice/voice-card-watch";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   useBotOpenThreadStore,
@@ -436,6 +441,7 @@ export function VoiceSessionController(): ReactNode {
           {
             segments: request.segments,
             askedQuestion: request.askedQuestion,
+            card: request.card,
           },
           Date.now(),
         ),
@@ -459,6 +465,12 @@ export function VoiceSessionController(): ReactNode {
       return resolveRoute(result, snapshot, request.segments.length);
     };
   }, [directory, routeAsync]);
+
+  const placeOf = useCallback(
+    (botId: string, threadId: string | null): string =>
+      placeIn(directory.current(), botId, threadId),
+    [directory],
+  );
 
   // One say loop per user session: its request bindings and in-flight actions
   // carry the store's session token, so a late acceptance from an ended or
@@ -1314,11 +1326,22 @@ export function VoiceSessionController(): ReactNode {
         <VoiceSelectionSync
           voiceNavigationRef={voiceNavigationRef}
           onManualChange={() => sayLoop().onSelectionChanged()}
+          onCardMove={offerCardAgainOnMove}
           onResolved={() => void sayLoopRef.current?.onFocusResolved()}
           voiceSwitch={voiceQueue.voiceSwitch}
         />
       ) : null}
-      {running ? <VoiceQueueSources owner={voiceQueue} /> : null}
+      {running ? (
+        <>
+          <VoiceQueueSources owner={voiceQueue} />
+          <VoiceCards
+            owner={voiceQueue}
+            speech={speech}
+            botTitle={botTitle}
+            placeOf={placeOf}
+          />
+        </>
+      ) : null}
       <VoiceStoppedSources owner={voiceQueue} />
       {running && focus !== null && channelId !== null && speech !== null ? (
         <VoiceFocusedReplyFeed
@@ -1356,6 +1379,24 @@ export function VoiceSessionController(): ReactNode {
       ) : null}
     </>
   );
+}
+
+/**
+ * Where a card is, as the voice says it: the thread by the title the
+ * directory knows it by, or the bot's channel.
+ */
+function placeIn(
+  directory: VoiceDirectory,
+  botId: string,
+  threadId: string | null,
+): string {
+  if (threadId === null) return "in its channel";
+  const excerpt =
+    directory.threads.find(
+      (candidate) =>
+        candidate.botId === botId && candidate.threadId === threadId,
+    )?.anchorExcerpt ?? null;
+  return excerpt === null ? "in a thread" : `in the thread about "${excerpt}"`;
 }
 
 /**
@@ -1405,26 +1446,6 @@ function conversationIdOf(
   channel: { readonly conversationId: string } | null,
 ): string | null {
   return channel === null ? null : channel.conversationId;
-}
-
-/**
- * The channel conversation among a bot's conversations: the one the bot
- * record names, else the earliest. Mirrors the channel view's own rule.
- */
-function channelConversation(
-  rows: ReadonlyArray<BotConversationRecord>,
-  appConversationChatId: string | null,
-): BotConversationRecord | null {
-  if (appConversationChatId !== null) {
-    return (
-      rows.find((row) => row.conversationId === appConversationChatId) ?? null
-    );
-  }
-  let first: BotConversationRecord | null = null;
-  for (const row of rows) {
-    if (first === null || row.createdAt < first.createdAt) first = row;
-  }
-  return first;
 }
 
 /**
@@ -1561,11 +1582,22 @@ function VoiceSelectionSync(props: {
   /** The voice's own navigation to another bot, while its tab has not come up. */
   readonly voiceNavigationRef: { current: VoiceNavigation | null };
   readonly onManualChange: () => void;
+  /**
+   * The person moved by hand, whatever they had said: the active card's
+   * candidate is offered again, so a yes never binds to a card they left.
+   */
+  readonly onCardMove: () => void;
   /** The thread list resolved the anchor the focus already names. */
   readonly onResolved: () => void;
   readonly voiceSwitch: { current: VoiceSwitch | null };
 }): null {
-  const { voiceNavigationRef, onManualChange, onResolved, voiceSwitch } = props;
+  const {
+    voiceNavigationRef,
+    onManualChange,
+    onCardMove,
+    onResolved,
+    voiceSwitch,
+  } = props;
   const focusedRef = useTabsStore(selectHostFocusedRef);
   const activeBotId = focusedRef?.kind === "bot" ? focusedRef.id : null;
   const tab = useBotTabsStore((state) =>
@@ -1610,17 +1642,18 @@ function VoiceSelectionSync(props: {
           voiceNavigationRef.current = navigation;
           return;
         }
-        applyMoveDuringNavigation(selection, onManualChange);
+        applyMoveDuringNavigation(selection, { onManualChange, onCardMove });
         return;
       }
     }
     // A switch the queue made (`switch` from Waiting or the router) keeps
     // the selections its own landing causes.
     if (followsVoiceSwitch(selection, voiceSwitch, listed)) return;
-    applySelection(selection, onManualChange, onResolved);
+    applySelection(selection, { onManualChange, onCardMove }, onResolved);
   }, [
     activeBotId,
     listed,
+    onCardMove,
     onManualChange,
     onResolved,
     tab,
@@ -1738,7 +1771,7 @@ function focusOf(
  */
 function applyMoveDuringNavigation(
   selection: VoiceFocus,
-  onManualChange: () => void,
+  moved: ManualMove,
 ): void {
   const store = useVoiceSessionStore.getState();
   const current = store.focus;
@@ -1750,7 +1783,8 @@ function applyMoveDuringNavigation(
   const wasOpen = isUtteranceOpen(store);
   if (returned) store.selectionReturned();
   else store.selectionChanged(selection);
-  if (wasOpen) onManualChange();
+  if (wasOpen) moved.onManualChange();
+  moved.onCardMove();
 }
 
 /**
@@ -1764,7 +1798,7 @@ function applyMoveDuringNavigation(
  */
 function applySelection(
   selection: VoiceFocus,
-  onManualChange: () => void,
+  moved: ManualMove,
   onResolved: () => void,
 ): void {
   const store = useVoiceSessionStore.getState();
@@ -1785,7 +1819,23 @@ function applySelection(
   }
   const wasOpen = isUtteranceOpen(store);
   store.selectionChanged(selection);
-  if (wasOpen) onManualChange();
+  if (wasOpen) moved.onManualChange();
+  moved.onCardMove();
+}
+
+/**
+ * What a manual move tells: the say loop, only while words are open (it
+ * interrupts them), and the active card always (its candidate is offered
+ * again).
+ */
+interface ManualMove {
+  readonly onManualChange: () => void;
+  readonly onCardMove: () => void;
+}
+
+/** The active card's side of a manual move: a yes never binds to a card the person left. */
+function offerCardAgainOnMove(): void {
+  useVoiceSessionStore.getState().cardDriver?.invalidate("focus");
 }
 
 /**
