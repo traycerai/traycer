@@ -186,6 +186,13 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
     entry.offerId = null;
   };
 
+  /** A read asked and not yet confirmed said is taken back: it is never said, and marks nothing. */
+  const withdrawRead = (entry: Entry): void => {
+    if (entry.readId === null) return;
+    deps.scheduler.withdraw(entry.readId);
+    entry.readId = null;
+  };
+
   const offer = (entry: Entry): void => {
     const item = entry.item;
     const botTitle = deps.botTitle(item.botId);
@@ -257,7 +264,9 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
         text: entry.content ?? text,
       }),
       onDelivered: () => {
-        if (entry.readId === id) entry.readId = null;
+        // A read taken back (`later`) is no longer this item's to settle.
+        if (entry.readId !== id) return;
+        entry.readId = null;
         setState(entry, "heard");
         // A confirmed hearing of a reply marks its one chat read, as looking
         // does; a stopped answer has nothing of its own to mark.
@@ -458,7 +467,10 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
         case "later": {
           const entry = target(verb.itemId);
           if (entry === null) return "nothing";
+          // Set aside means not said at all: its offer and a read asked
+          // earlier and still waiting are both taken back.
           withdrawOffer(entry);
+          withdrawRead(entry);
           setState(entry, "dismissed");
           return "dismissed";
         }
@@ -491,7 +503,10 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       return Array.from(entries.values(), (entry) => entry.item);
     },
     reset() {
-      for (const entry of entries.values()) withdrawOffer(entry);
+      for (const entry of entries.values()) {
+        withdrawOffer(entry);
+        withdrawRead(entry);
+      }
       entries.clear();
       pending.clear();
       settled.clear();
