@@ -48,6 +48,7 @@ import {
 import { tooltipTextFor } from "@/components/ui/__tests__/tooltip-probe";
 import { NotificationConsumptionContext } from "@/components/notifications/notification-consumption-context";
 import { useEpicDndStore } from "@/components/epic-canvas/dnd/dnd-store";
+import { markRenameInFlight } from "@/stores/epics/open-epic/rename-in-flight";
 
 interface CapturedDraggableInput {
   readonly id: string;
@@ -416,6 +417,32 @@ describe("<TabStrip />", () => {
       useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]
         ?.tilesByInstanceId[CHAT_TAB.instanceId]?.name,
     ).toBe("Side - what is design language");
+  });
+
+  it("holds the snapshot write while a rename of the tile is in flight, and writes once it settles", () => {
+    const openedUntitled: EpicNodeRef = { ...CHAT_TAB, name: "Untitled agent" };
+    // The optimistic overlay: the strip resolves the requested title before
+    // the host has answered.
+    liveTitlesById.set(CHAT_TAB.id, "Requested title");
+    const release = markRenameInFlight("epic-1", CHAT_TAB.id);
+    renderTabStripForTab(
+      openedUntitled,
+      {
+        onClose: () => undefined,
+        onPromotePreview: () => undefined,
+        onOpenBlankTab: () => undefined,
+        onSplit: undefined,
+      },
+      [],
+    );
+    const snapshotName = () =>
+      useEpicCanvasStore.getState().canvasByTabId[VIEW_TAB_ID]
+        ?.tilesByInstanceId[CHAT_TAB.instanceId]?.name;
+    expect(snapshotName()).toBe("Untitled agent");
+
+    act(() => release());
+
+    expect(snapshotName()).toBe("Requested title");
   });
 
   it("leaves a terminal tile's name snapshot to the terminal rename path", () => {

@@ -85,6 +85,7 @@ import {
   useIsActivePane,
   useTabActivation,
 } from "@/stores/epics/canvas/store";
+import { useRenameInFlight } from "@/stores/epics/open-epic/rename-in-flight";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
@@ -612,7 +613,7 @@ function useTabRenameControl(args: {
     epicId,
     terminalHostClient,
   );
-  useRecordTitleWriteThrough(tab, viewTabId, fallbackDisplayTitle);
+  useRecordTitleWriteThrough(tab, epicId, viewTabId, fallbackDisplayTitle);
   const displayTitle =
     browserPresentation?.title ??
     (terminalControl?.mode === "capable" || terminalControl?.mode === "unknown"
@@ -654,15 +655,24 @@ function useTabRenameControl(args: {
  * a different non-empty title - the hook falls back to the snapshot itself,
  * so an unresolved title never writes. Terminal tiles are out: their snapshot
  * carries a title source the terminal rename path owns.
+ *
+ * Held while a rename of this node is in flight (`useRenameInFlight`): the
+ * live title is then the OPTIMISTIC overlay, and a snapshot has no rollback
+ * path, so writing it would let a title the host refused resurface from a
+ * cold render. The store clears the mark only once the outcome is in the
+ * projection, so the first write after it reads the settled title.
  */
 function useRecordTitleWriteThrough(
   tab: EpicCanvasTileRef,
+  epicId: string,
   viewTabId: string,
   liveTitle: string,
 ): void {
   const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
+  const renameInFlight = useRenameInFlight(epicId, tab.id);
   const trimmed = liveTitle.trim();
   const nextName =
+    !renameInFlight &&
     isEpicNodeTileRef(tab) &&
     isRecordBackedEpicNodeKind(tab.type) &&
     trimmed.length > 0 &&
