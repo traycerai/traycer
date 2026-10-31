@@ -100,7 +100,6 @@ function rig(): Rig {
         <TeamSetupChannel
           setup={{
             environmentId: "env-team",
-            teamName: "Acme",
             botId: MAIN_BOT_ID,
             title: "Tracy",
           }}

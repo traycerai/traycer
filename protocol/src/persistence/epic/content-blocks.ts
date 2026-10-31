@@ -499,6 +499,14 @@ export const agentMessageReceiptSchema = lazySchema(() =>
 );
 export type AgentMessageReceipt = z.infer<typeof agentMessageReceiptSchema>;
 
+export const botSendSlackPostSchema = lazySchema(() =>
+  z.object({
+    channelId: z.string(),
+    threadTs: z.string().nullable(),
+  }),
+);
+export type BotSendSlackPost = z.infer<typeof botSendSlackPostSchema>;
+
 // The channel post a bot's `traycer_reply`, `traycer_ask` or
 // `traycer_announce` call wrote (Tracy Bots T94): the conversation it went to
 // (the bot's channel or the session's thread), the post's message id, and for
@@ -514,14 +522,6 @@ export type AgentMessageReceipt = z.infer<typeof agentMessageReceiptSchema>;
 // relay's item id, and `conversationId` the session's thread or, for an
 // announcement, the Slack channel. Null for every Traycer post and for every
 // receipt persisted before this member.
-export const botSendSlackPostSchema = lazySchema(() =>
-  z.object({
-    channelId: z.string(),
-    threadTs: z.string().nullable(),
-  }),
-);
-export type BotSendSlackPost = z.infer<typeof botSendSlackPostSchema>;
-
 export const botSendReceiptSchema = lazySchema(() =>
   z.object({
     conversationId: z.string(),

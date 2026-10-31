@@ -590,7 +590,6 @@ describe("hostStatusUpgradeV19ToV110", () => {
     const parsed = hostStatusV19.responseSchema.parse(V19_RESPONSE);
     const upgraded = hostStatusUpgradeV19ToV110.upgradeResponse(parsed);
     expect(upgraded.updatesExternallyManaged).toBeNull();
-    expect(upgraded.updatesExternallyManaged).not.toBe(false);
     expect(() => hostStatusV110.responseSchema.parse(upgraded)).not.toThrow();
   });
 

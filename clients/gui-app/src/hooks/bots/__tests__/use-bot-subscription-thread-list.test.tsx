@@ -38,7 +38,7 @@ const HOST_ID = mockLocalHostEntry.hostId;
 function snapshot(
   conversationsRevision: number | null,
   openRequestCount: number,
-): BotSubscribeServerFrame {
+): Extract<BotSubscribeServerFrame, { kind: "snapshot" }> {
   return {
     kind: "snapshot",
     bot: {
@@ -76,9 +76,8 @@ function claimed(
   conversationsRevision: number | null,
   hostId: string,
   epoch: number,
-): BotSubscribeServerFrame {
+): Extract<BotSubscribeServerFrame, { kind: "snapshot" }> {
   const frame = snapshot(conversationsRevision, 0);
-  if (frame.kind !== "snapshot") throw new Error("expected a snapshot");
   return {
     ...frame,
     bot: { ...frame.bot, boundHostId: hostId, hostEpoch: epoch },

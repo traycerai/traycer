@@ -229,10 +229,7 @@ function assistantTurn(input: {
   };
 }
 
-/**
- * A turn of a session chat that read one file, and what it cost: the record
- * the turn's rail draws its activity group, model and cost from.
- */
+/** A turn of a session chat that read one file, with its cost. */
 export function sessionTurn(input: {
   readonly messageId: string;
   readonly turnId: string;
