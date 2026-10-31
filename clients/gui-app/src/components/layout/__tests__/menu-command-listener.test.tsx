@@ -1108,7 +1108,7 @@ describe("<MenuCommandListener />", () => {
     const navigation = latestNavigation();
     expect(navigation.to).toBe("/epics/$epicId/$tabId");
     expect(navigation.params).toEqual({ epicId: "e-a", tabId });
-    // T10: closing the draft now routes through
+    // Closing the draft now routes through
     // `tabCommandCoordinator.closeRefAfterConfirmed`, which synchronously
     // promotes the epic tab to `activeItemId` as part of the close itself
     // (survivor-at-group-position). By the time the navigation controller
