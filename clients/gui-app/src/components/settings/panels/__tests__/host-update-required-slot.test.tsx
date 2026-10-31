@@ -36,8 +36,8 @@ import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-st
  *
  * The store is seeded through the real chain (`applyKernelSnapshot` + `reset`)
  * rather than by mocking `useHostLease`: mutating what a hook EMITS cannot
- * reach a suite that fakes the hook's output, which is exactly how sealed probe
- * P2 measured a coverage separation instead of a defect.
+ * reach a suite that fakes the hook's output, which is exactly how an earlier
+ * probe measured a coverage separation instead of a defect.
  */
 
 const INCOMPATIBLE: HostLeaseSnapshot = {
@@ -128,7 +128,7 @@ describe("<HostUpdateRequiredSlot />", () => {
 
   /**
    * The lease is looked up BY ID. Seeded with another host's incompatibility,
-   * this row has no verdict of its own and must not borrow one — the P12 shape,
+   * this row has no verdict of its own and must not borrow one,
    * at the surface that would show a button because of it.
    */
   it("does not borrow another host's incompatibility", () => {

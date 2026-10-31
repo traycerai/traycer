@@ -453,7 +453,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
     icon: Cloud,
     group: ENVIRONMENT_PAGES_GROUP,
   },
-  // A team's members (P2's page). Offered only while a team is picked
+  // A team's members. Offered only while a team is picked
   // (`environmentSectionShown`).
   {
     id: "members",

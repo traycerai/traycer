@@ -77,7 +77,7 @@ export const SECRET_SCOPE_LINE =
 
 /**
  * On every secret and key Add and Replace: where the value is stored and
- * who can read it. Personal's sentence; a team's is P1's.
+ * who can read it. Personal's sentence; a team has its own.
  */
 export const SECRET_CUSTODY_SENTENCE =
   "Stored encrypted in Traycer's cloud. Computers running Personal receive the value, readable by their tools and agents; sandboxes use it without seeing it.";

@@ -72,7 +72,7 @@ describe("deriveHostHealth — absence of evidence is not death", () => {
    * nothing for the attach flag to gate, so the test passes identically
    * whether `authorityAttached` is consulted or ignored entirely. It would be
    * an assertion about an input the code never reaches, which is the same
-   * vacuity that let sealed probe P12 survive. A ready lease that must NOT be
+   * vacuity that let an earlier probe survive. A ready lease that must NOT be
    * believed is what makes the flag load-bearing.
    */
   it("ignores even a READY lease until the authority has attached", () => {

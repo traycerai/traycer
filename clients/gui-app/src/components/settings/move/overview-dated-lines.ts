@@ -1,8 +1,8 @@
 import { onSettingsDate } from "@/lib/settings/settings-date";
 
 /**
- * Overview settings-card lines P5 owns. E4 draws `Moved to Personal on …`
- * and P3 draws the `Details` verb; this file is the dated copy only.
+ * Overview settings-card lines. E4 draws `Moved to Personal on …`
+ * and the `Details` verb is elsewhere; this file is the dated copy only.
  */
 
 export const RETURNED_FROM_TEAM_LINE =
@@ -19,7 +19,7 @@ export function stoppedSharingLine(at: number): string {
 }
 
 /**
- * The dated lines P5 draws on Overview, in this order. Empty when none of
+ * The dated lines drawn on Overview, in this order. Empty when none of
  * the three facts are present. `Details` is a verb on the earlier-version
  * line, not a line of its own.
  */

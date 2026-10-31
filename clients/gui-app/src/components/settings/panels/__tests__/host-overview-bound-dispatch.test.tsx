@@ -1584,7 +1584,7 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
         clauseOnSuffix: true,
       },
       {
-        // P1 window A's answer at the binding site: the attempt is present and
+        // Window A's answer at the binding site: the attempt is present and
         // is the one named, but its POSITION moved. Its own sentence, because
         // the only correct response differs — look again, rather than retry.
         base: "refused-attempt-moved",

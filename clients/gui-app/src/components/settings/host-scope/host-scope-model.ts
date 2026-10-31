@@ -131,7 +131,7 @@ export interface BuildHostScopeOptionsInput {
    * Every lease the selection authority has published, as the store holds
    * them. Looked up PER HOST below rather than taken as an already-resolved
    * value, because the lookup is the part that has been got wrong before:
-   * sealed probe P12 degraded `useHostLease`'s `find(hostId)` to `leases[0]`
+   * an earlier probe degraded `useHostLease`'s `find(hostId)` to `leases[0]`
    * and survived, since every suite seeded exactly one lease and a wrong-host
    * answer was indistinguishable from a right one. Anything asserting against
    * this field owes a two-host arrangement.

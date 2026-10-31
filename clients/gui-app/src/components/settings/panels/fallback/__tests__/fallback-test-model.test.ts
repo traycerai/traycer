@@ -284,7 +284,7 @@ describe("testNextSteps", () => {
     });
   });
 
-  // P2 - "another error" is answered only when every failure it stands for
+  // "another error" is answered only when every failure it stands for
   // (provider_unavailable, billing, model_unavailable, auth) agrees.
   //
   // Falsification: replace `OTHER_ERROR_REASONS.map(...)` with

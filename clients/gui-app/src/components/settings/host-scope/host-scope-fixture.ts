@@ -7,7 +7,7 @@ import type { HostOptions } from "@/components/settings/host-scope/use-host-opti
  * A lease for one host, for suites that drive `buildHostScopeOptions` directly.
  *
  * TAKES THE HOST ID AS ITS FIRST ARGUMENT, deliberately and unavoidably. The
- * builder looks each row's lease up BY ID, and sealed probe P12 showed what a
+ * builder looks each row's lease up BY ID, and an earlier probe showed what a
  * fixture that hides that costs: degrading `useHostLease`'s `find(hostId)` to
  * `leases[0]` SURVIVED its probe, because every suite seeded exactly one lease
  * and a wrong-host answer was indistinguishable from a right one. A helper

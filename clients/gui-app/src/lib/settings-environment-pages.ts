@@ -3,7 +3,7 @@ import type { SettingsSectionId } from "@/lib/settings-sections";
 /**
  * The pages of Settings ▸ Environment, addressed by the configuration they
  * show and the page within it. One table for every configuration: Personal,
- * a team (P1) and a Local row show the same pages, and a configuration that
+ * a team and a Local row show the same pages, and a configuration that
  * does not offer a page hides its row rather than forking a panel.
  */
 export type EnvironmentPageId =
@@ -58,7 +58,7 @@ export function environmentPickValue(pick: EnvironmentPick): string {
 /**
  * The table every Environment row is drawn from: each page's Settings
  * section. The sandboxes plan mounts its page in the `sandboxes` section's
- * slot (`components/settings/environment/sandboxes-page-slot`); P2's page is
+ * slot (`components/settings/environment/sandboxes-page-slot`); Members is
  * the `members` section's.
  */
 const PAGE_SECTIONS: Readonly<Record<EnvironmentPageId, SettingsSectionId>> = {
