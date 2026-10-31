@@ -519,7 +519,7 @@ function useCollapsed(element: HTMLElement | null): boolean {
 }
 
 /**
- * The origin's row: no thread to open, no jump, no options to pick, and a
+ * The origin's row: no thread to open, no options to pick, and a
  * question's card that says how each question was settled and is answered
  * in the channel.
  */
@@ -531,8 +531,6 @@ function originPresentation(
 ): ChatBotPresentation {
   return {
     botTitle,
-    scrollToMessage: null,
-    replyFollowsPost: null,
     threadLine: null,
     openThread: null,
     openAnnouncementThread: null,

@@ -49,6 +49,11 @@ import {
   type SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
 import {
+  slackAppBotRequestSchema,
+  slackAppRegisterRequestSchema,
+  type SlackAppRegisterRequest,
+} from "@traycer/protocol/host/slack-app";
+import {
   SECRET_REQUEST_DECISIONS,
   type SecretRequestDecision,
 } from "@traycer/protocol/host/sandbox-secrets";
@@ -679,6 +684,33 @@ export function parseSandboxAutomationOpenTarget(
       return v;
     }),
   };
+}
+
+/**
+ * The renderer-supplied Slack app registration, against the protocol's own
+ * bounds. The error names the field and the rule, never the value: two of
+ * the fields are the app's secrets.
+ */
+export function parseSlackAppRegisterRequest(
+  value: unknown,
+): SlackAppRegisterRequest {
+  const checked = slackAppRegisterRequestSchema.safeParse(value);
+  if (!checked.success) {
+    const issue = checked.error.issues[0];
+    throw new Error(
+      `registerSlackApp.request.${issue.path.join(".")}: ${issue.message}`,
+    );
+  }
+  return checked.data;
+}
+
+/** The bot a Slack app call names, against the protocol's bounds. */
+export function parseSlackAppBotId(value: unknown, name: string): string {
+  const checked = slackAppBotRequestSchema.safeParse({ botId: value });
+  if (!checked.success) {
+    throw new Error(`${name}: ${checked.error.issues[0].message}`);
+  }
+  return checked.data.botId;
 }
 
 /** `null` stays `null` (the server's default); anything else must parse. */

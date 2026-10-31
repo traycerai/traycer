@@ -56,6 +56,11 @@ import {
   useBotIdentity,
   type BotIdentity,
 } from "@/components/bots/bot-identity-context";
+import {
+  BotSettingsRefusal,
+  SettingsGroup,
+} from "@/components/bots/bot-settings-group";
+import { BotSlackSettings } from "@/components/bots/bot-slack-settings";
 
 const BOT_TITLE_MAX = 500;
 
@@ -67,6 +72,8 @@ const BOT_TITLE_MAX = 500;
  *   personal bot answers posts (T52), and a team's members;
  * - Notifications: what the bell raises for this channel;
  * - Bots in this channel: the team's bots;
+ * - Slack: the bot's own Slack app, from its manifest to its install, on
+ *   traycer-server with the person's own session rather than the tab host;
  * - Usage: what the bot's chats have cost, in the usage graph (decision 118),
  *   where the tab's host can read it;
  * - Advanced, collapsed: the model the bot runs on and whether it is its
@@ -151,31 +158,12 @@ export function BotChannelSettingsPanel(props: {
         {personal || environmentBots === null ? null : (
           <BotsInChannel bots={environmentBots} />
         )}
+        <BotSlackSettings botId={bot.botId} />
         <BotUsageSection botId={bot.botId} />
         <BotAdvancedSettings bot={bot} isMain={isMain} />
         <BotDeleteSection bot={bot} />
       </div>
     </aside>
-  );
-}
-
-/** One of the panel's groups, under its heading. */
-function SettingsGroup(props: {
-  readonly title: string;
-  readonly testId: string;
-  readonly children: ReactNode;
-}): ReactNode {
-  return (
-    <section
-      aria-label={props.title}
-      data-testid={props.testId}
-      className="flex flex-col gap-4"
-    >
-      <h3 className="text-ui-sm font-semibold text-foreground">
-        {props.title}
-      </h3>
-      {props.children}
-    </section>
   );
 }
 
@@ -437,22 +425,6 @@ function BotAdvancedSettings(props: {
         {isMain === null ? null : <BotMainSection bot={bot} isMain={isMain} />}
       </CollapsibleContent>
     </Collapsible>
-  );
-}
-
-/** A write's refusal, under the control that made it. */
-function BotSettingsRefusal(props: {
-  readonly message: string | null;
-}): ReactNode {
-  if (props.message === null) return null;
-  return (
-    <p
-      role="alert"
-      className="text-ui-xs text-destructive"
-      data-testid="bot-settings-refusal"
-    >
-      {props.message}
-    </p>
   );
 }
 
