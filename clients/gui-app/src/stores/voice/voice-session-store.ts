@@ -270,6 +270,12 @@ export interface VoiceSessionState {
   readonly setFocus: (focus: VoiceFocus | null) => void;
   /** The person selected something else: the focus follows, the generation moves. */
   readonly selectionChanged: (focus: VoiceFocus | null) => void;
+  /**
+   * The person moved back to where the focus already is (while a voice
+   * navigation was out, the focus still names where the voice left): the
+   * focus stays, the generation moves.
+   */
+  readonly selectionReturned: () => void;
   readonly appendInputSegment: (text: string, at: number) => void;
   /** The open utterance: every unreserved segment, as said. */
   readonly openSpan: () => string;
@@ -390,6 +396,8 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
     if (sameFocus(get().focus, focus)) return;
     set({ focus, selectionGeneration: get().selectionGeneration + 1 });
   },
+  selectionReturned: () =>
+    set({ selectionGeneration: get().selectionGeneration + 1 }),
   appendInputSegment: (text, at) => {
     if (text.length === 0) return;
     const seq = nextSegmentSeq;

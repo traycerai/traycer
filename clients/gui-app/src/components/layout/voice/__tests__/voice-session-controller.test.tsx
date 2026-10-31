@@ -2337,3 +2337,59 @@ describe("two overlapping voice navigations", () => {
     ).toEqual([]);
   });
 });
+
+describe("a held voice move within the active bot", () => {
+  it("the person closing the rail the voice just opened, back to the departing anchor, is a move", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    fake.botThreads.set(BOT_ID, [
+      {
+        threadId: "t-safari",
+        conversationId: CHANNEL_ID,
+        sessionChatId: "session-safari",
+        anchor: {
+          messageId: "q-safari",
+          requestId: "r-safari",
+          senderUserId: "user-1",
+          sentAt: 1_000,
+          resolvedAt: null,
+        },
+        replyCount: 2,
+        lastReplyAt: 2_000,
+        openRequestCount: 0,
+        costUsd: null,
+      },
+    ]);
+    selectBotTab(BOT_ID);
+    await bringLive();
+    let land: () => void = () => undefined;
+    fake.navigateOutcome = () =>
+      new Promise<void>((resolve) => {
+        land = resolve;
+      });
+    fake.routeAnswer = (body) => fake.routeToThread(BOT_ID, "t-safari", body);
+    const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+    await say("Is the Safari fix in tonight's train?", "d1");
+    expect(useBotOpenThreadStore.getState().byBotId[BOT_ID]).toMatchObject({
+      anchorMessageId: "q-safari",
+    });
+
+    // The person closes the rail the voice opened: back to the channel the
+    // voice departed from, while the navigation is still out.
+    act(() => useBotOpenThreadStore.getState().setRail(BOT_ID, null));
+    await settle();
+    // The move is noticed while the navigation is still out.
+    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
+      generation + 1,
+    );
+    await act(async () => {
+      land();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
+      generation + 1,
+    );
+    expect(fake.sendMock).not.toHaveBeenCalled();
+  });
+});

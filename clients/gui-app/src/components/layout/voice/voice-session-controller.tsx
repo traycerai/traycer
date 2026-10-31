@@ -121,6 +121,8 @@ interface VoiceNavigation {
    * Written once, when the navigation settles.
    */
   outcome: "pending" | "landed" | "failed";
+  /** The selection sync has seen the target showing; the departing view is left. */
+  arrived: boolean;
   /**
    * What that tab's rail held then (the anchor of its open thread, `null`
    * for the channel): only that selection, still showing, is the voice's own.
@@ -488,11 +490,15 @@ export function VoiceSessionController(): ReactNode {
               : target.focus.anchorMessageId,
           fromAnchorMessageId: railAnchorOf(fromBotId),
           outcome: "pending",
+          arrived: false,
         };
         voiceNavigationRef.current = navigation;
         voiceNavigationSerialRef.current += 1;
         const serial = voiceNavigationSerialRef.current;
-        return openTarget(target, navigateRef.current).then((settled) => {
+        // Decided the moment the navigation settles, before the tab
+        // navigation puts a previous tab back for a failed one, so the
+        // selection sync never reads that restore as the person's move.
+        return openTarget(target, navigateRef.current, (settled) => {
           // A navigation a later one superseded can still settle as landed
           // (the tab navigation drops it without rejecting): it counts only
           // while it is the latest voice navigation and the tab shows what
@@ -1330,13 +1336,15 @@ function openMainBot(
 /**
  * Opens a routed destination as the person would: the bot's tab (on the
  * host it is bound to, or the target's), its rail on the thread named or
- * on the channel, and the tab brought to the front. Resolves with whether
- * the tab's navigation landed: `false` when it was refused, or when the
- * route navigation failed and the previous tab was put back.
+ * on the channel, and the tab brought to the front. Resolves with what
+ * `decide` makes of the navigation's outcome, called as it settles: `false`
+ * for a refusal, or a route navigation that failed (the tab navigation
+ * puts the previous tab back right after).
  */
 function openTarget(
   target: BoundTarget,
   navigate: UseNavigateResult<string>,
+  decide: (settled: boolean) => boolean,
 ): Promise<boolean> {
   const { botId, hostId, threadId } = target.tuple;
   const anchorMessageId = target.focus.anchorMessageId;
@@ -1360,7 +1368,7 @@ function openTarget(
     const settle = (landed: boolean): void => {
       if (settled) return;
       settled = true;
-      resolve(landed);
+      resolve(decide(landed));
     };
     // The tab navigation reports a refusal, but not a route navigation
     // that fails after it accepted (it puts the previous tab back): the
@@ -1429,29 +1437,40 @@ function VoiceSelectionSync(props: {
 
   useEffect(() => {
     if (activeBotId === null || tab === null) return;
+    const selection = focusOf(activeBotId, tab.hostId, thread, listed);
     const navigation = voiceNavigationRef.current;
     if (navigation !== null) {
-      // While the voice's navigation is out, the tab it is opening showing
-      // the rail it opens, or the tab it is leaving still showing what it
-      // showed when the voice moved, is not a move: the focus is written
-      // when the navigation settles. Anything else is the person's.
-      const anchor = thread?.anchorMessageId ?? null;
-      if (
-        navigation.outcome === "pending" &&
-        ((activeBotId === navigation.toBotId &&
-          anchor === navigation.toAnchorMessageId) ||
-          (activeBotId === navigation.fromBotId &&
-            anchor === navigation.fromAnchorMessageId))
-      ) {
+      voiceNavigationRef.current = null;
+      if (navigation.outcome === "pending") {
+        // While the voice's navigation is out, the tab it is opening showing
+        // the rail it opens, or the tab it is leaving still showing what it
+        // showed when the voice moved and not yet left, is not a move: the
+        // focus is written when the navigation settles. Anything else is
+        // the person's, a return to the departing view after the target
+        // showed included, and it is a move even when it lands back on the
+        // focus as it stands.
+        const anchor = thread?.anchorMessageId ?? null;
+        if (
+          activeBotId === navigation.toBotId &&
+          anchor === navigation.toAnchorMessageId
+        ) {
+          navigation.arrived = true;
+          voiceNavigationRef.current = navigation;
+          return;
+        }
+        if (
+          !navigation.arrived &&
+          activeBotId === navigation.fromBotId &&
+          anchor === navigation.fromAnchorMessageId
+        ) {
+          voiceNavigationRef.current = navigation;
+          return;
+        }
+        applyMoveDuringNavigation(selection, onManualChange);
         return;
       }
-      voiceNavigationRef.current = null;
     }
-    applySelection(
-      focusOf(activeBotId, tab.hostId, thread, listed),
-      onManualChange,
-      onResolved,
-    );
+    applySelection(selection, onManualChange, onResolved);
   }, [
     activeBotId,
     listed,
@@ -1501,6 +1520,29 @@ function focusOf(
     ...anchored,
     anchorThread: thread.announcement ? "unopened" : "resolving",
   };
+}
+
+/**
+ * The person's own move while a voice navigation is out. The focus still
+ * names where the voice departed from, so a return there would read as no
+ * change: it is a move all the same (the generation moves, and an open
+ * utterance is interrupted). Anything else is applied as usual.
+ */
+function applyMoveDuringNavigation(
+  selection: VoiceFocus,
+  onManualChange: () => void,
+): void {
+  const store = useVoiceSessionStore.getState();
+  const current = store.focus;
+  const returned =
+    current !== null &&
+    current.botId === selection.botId &&
+    current.hostId === selection.hostId &&
+    current.anchorMessageId === selection.anchorMessageId;
+  const wasOpen = isUtteranceOpen(store);
+  if (returned) store.selectionReturned();
+  else store.selectionChanged(selection);
+  if (wasOpen) onManualChange();
 }
 
 /**
