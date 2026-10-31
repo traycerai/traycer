@@ -36,7 +36,10 @@ export interface BotMentionCompletion {
   readonly onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => boolean;
   /** The caret moved: what follows it decides the list. */
   readonly onCaret: (caret: number) => void;
-  /** The person changed what the box holds; `input` is the box after it. */
+  /**
+   * The person edited the box, whether or not what it holds changed;
+   * `input` is the box after it.
+   */
   readonly onInput: (input: HTMLTextAreaElement) => void;
   /** The text as sent: each completed name as its member's token. */
   readonly toWire: (text: string) => string;

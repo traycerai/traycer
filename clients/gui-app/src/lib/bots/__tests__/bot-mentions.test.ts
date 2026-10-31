@@ -278,6 +278,33 @@ describe("moving picks with the text", () => {
       ).toEqual(PICKED);
     });
 
+    it("drops a pick a paste of the same text replaced, since a selected range was replaced", () => {
+      expect(
+        shiftMentionPicks("@Ann Lee ok", "@Ann Lee ok", PICKED, {
+          inputType: "insertFromPaste",
+          before: at(0, 11),
+          after: at(11, 11),
+        }),
+      ).toEqual([]);
+    });
+
+    it("keeps the picks where the text reads as before and no range was replaced", () => {
+      expect(
+        shiftMentionPicks("@Ann Lee ok", "@Ann Lee ok", PICKED, {
+          inputType: "insertFromPaste",
+          before: at(11, 11),
+          after: at(11, 11),
+        }),
+      ).toEqual(PICKED);
+      expect(
+        shiftMentionPicks("@Ann Lee ok", "@Ann Lee ok", PICKED, {
+          inputType: "historyUndo",
+          before: at(0, 11),
+          after: at(0, 11),
+        }),
+      ).toEqual(PICKED);
+    });
+
     it("counts every span the texts allow as changed when an undo's selection does not hold, so no pick is kept on a guess", () => {
       expect(
         shiftMentionPicks(FIRST_ONLY, BOTH, PICKED, {

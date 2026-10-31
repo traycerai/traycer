@@ -659,6 +659,23 @@ describe("<BotMessageComposer /> @ mentions", () => {
       expect(await sentText(user)).toBe("@Ann Lee OK");
     });
 
+    it("drops a picked shared name that a paste of the identical text replaced", async () => {
+      const user = userEvent.setup();
+      mountEdit("<@u-ann> ok");
+      await user.click(box());
+      act(() => box().setSelectionRange(0, 11));
+      const received: string[] = [];
+      for (const type of ["beforeinput", "input"]) {
+        box().addEventListener(type, (event) => received.push(event.type));
+      }
+
+      await user.paste("@Ann Lee ok");
+
+      expect(received).toEqual(["beforeinput", "input"]);
+      expect(box().value).toBe("@Ann Lee ok");
+      expect(await sentText(user)).toBe("@Ann Lee ok");
+    });
+
     it("keeps a mention's member when the typing after it is undone, with the caret at its end", async () => {
       const user = userEvent.setup();
       mountIn(SHARED);

@@ -201,7 +201,15 @@ export function shiftMentionPicks(
   picks: ReadonlyArray<BotMentionPick>,
   edit: BotMentionEdit | null,
 ): ReadonlyArray<BotMentionPick> {
-  if (previous === next || picks.length === 0) return picks;
+  if (picks.length === 0) return picks;
+  // A selected range a typed edit replaced is gone even where the new text
+  // reads the same; any other edit that leaves the text as it was moved
+  // nothing.
+  const replacesRange =
+    edit !== null &&
+    editsAtSelection(edit.inputType) &&
+    edit.before.start < edit.before.end;
+  if (previous === next && !replacesRange) return picks;
   const delta = next.length - previous.length;
   let span: EditedSpan;
   if (edit === null) {

@@ -285,9 +285,12 @@ export function BotMessageComposer(props: {
           onSelect={(event) =>
             mentions.onCaret(event.currentTarget.selectionStart)
           }
+          // Every edit, as `input` reports it: one that leaves the text as
+          // it was (a paste of the same text over it) reaches no `onChange`,
+          // and still replaced the picks it covered.
+          onInput={(event) => mentions.onInput(event.currentTarget)}
           onChange={(event) => {
             setText(event.target.value);
-            mentions.onInput(event.target);
             if (lastDelivery !== null) setLastDelivery(null);
             failure.clear();
           }}
