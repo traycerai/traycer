@@ -40,7 +40,7 @@ import {
 } from "./side-strip-tokens";
 
 /**
- * What trails in the header, in the strip (S-03, D6): the update row while an
+ * What trails in the header, in the strip (S-03): the update row while an
  * update is pending, the header-hosted readings (left cluster, then right),
  * and the account row that opens the user menu. Notifications and All tasks moved to
  * the top block. Only one of the header and the strip is ever mounted, so each

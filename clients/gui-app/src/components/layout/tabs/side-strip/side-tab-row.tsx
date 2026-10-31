@@ -135,7 +135,7 @@ export interface SideTabRowProps {
   /** The tab's tile: the collapsed row's content. */
   readonly tile: SideTabTile;
   /**
-   * The one state that needs the user (D5): the collapsed tile's badge, the
+   * The one state that needs the user: the collapsed tile's badge, the
    * meter's attention pip, and what starts the entry pulse.
    */
   readonly badge: RailBadgeKind | null;
@@ -197,7 +197,7 @@ const JOIN_ON_REVEAL_CLASS =
 /**
  * The row's per-tab accent colour: the tab's own colour, ignored while the
  * title is still generating (the tile stays neutral then, S-17) and never a
- * stand-in for the auto-tint hash (D11) - that no longer reaches this row at
+ * stand-in for the auto-tint hash - that no longer reaches this row at
  * all. `null` means no colour: `SideTabAccent` renders it transparent.
  */
 function tabAccentOf(tint: string | null, tile: SideTabTile): string | null {
@@ -448,7 +448,7 @@ function SideSessionMark(props: {
  * The per-tab colour accent (owner ruling, fix/layout-regression-and-improvements):
  * always mounted so toggling a tab's colour never shifts the row. `color` is
  * `null` for a colourless tab, rendered transparent rather than a
- * hash-derived stand-in (D11's `tabAutoTint` no longer feeds this mark).
+ * hash-derived stand-in (`tabAutoTint` no longer feeds this mark).
  * Skipped on the session tab, which already carries its own edge mark
  * (`SideSessionMark`, L-163).
  */

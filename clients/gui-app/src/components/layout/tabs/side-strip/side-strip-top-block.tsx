@@ -55,7 +55,7 @@ export interface SideStripTopBlockProps {
 
 /**
  * What leads in the header, in the strip (S-03). Expanded: history back and
- * forward beside the collapse toggle, the Notifications and All tasks nav rows (D6),
+ * forward beside the collapse toggle, the Notifications and All tasks nav rows,
  * Home, New Task as the primary last row (F7), then the "Tasks" label over the
  * rows (the Activity view's section headers replace it). On macOS with the
  * strip at the left the first row is the title bar: a drag row that reserves
