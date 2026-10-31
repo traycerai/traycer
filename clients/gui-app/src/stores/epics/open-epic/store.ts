@@ -385,7 +385,6 @@ export interface OpenEpicState {
    * older host's doc projection is its authoritative record table.
    */
   readonly chatRecordListAuthoritative: boolean;
-  /** Projected ingest counters - see `EpicRecordsProjection`. */
   /** Projected adapter arm - see `EpicControlProjection`. */
   readonly installedArm: EpicAdapterArm | null;
   /**
@@ -395,6 +394,7 @@ export interface OpenEpicState {
    * inherited because this interface names its projected fields explicitly.
    */
   readonly heldAttachmentHashes: readonly string[];
+  /** Projected ingest counters - see `EpicRecordsProjection`. */
   readonly chatIngestSeq: number;
   readonly tuiAgentIngestSeq: number;
   /**
