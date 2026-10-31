@@ -1148,7 +1148,7 @@ describe("FallbackSettingsPanel - R8 a confirmed reset whose read fails is not s
     // notice, and a page showing settings the host no longer has as though
     // they had just been read. This `findByTestId` is what goes red.
     const banner = await screen.findByTestId("fallback-reset-unrefreshed");
-    // Re-specified under D330. This asserted `toContain("out of
+    // Re-specified under D330 (sixth pass). This asserted `toContain("out of
     // date")` when written: an inequality claim - a reset of an ALREADY-DEFAULT
     // policy leaves the host holding exactly what is on screen, so "out of
     // date" is a fact about the host that the failed read is precisely what
@@ -3211,7 +3211,7 @@ describe("FallbackSettingsPanel - sixth pass: no sentence asserts host knowledge
     // Same falsification as above, and this is the arm where the old wording
     // was furthest from the truth: the host has stored exactly what is on
     // screen, and the page said it had never been sent.
-    // Re-specified under D347. This asserted
+    // Re-specified under D347 (eighth pass). This asserted
     // `toContain("has been saved")`, quoting "A change you made since has been
     // saved." - a HISTORY claim the state cannot support, since a read-back can
     // adopt a policy nobody authored. The sentence now describes the display's
@@ -3351,7 +3351,7 @@ describe('FallbackSettingsPanel - seventh pass: "hasn\'t been sent" is claimed o
     // confirmation at this revision, falls to the final arm, and tells the user
     // the values a read-back just confirmed have never been sent.
     expect(notice.textContent).not.toContain(NEVER_SENT);
-    // Re-specified under D347. This asserted
+    // Re-specified under D347 (eighth pass). This asserted
     // `toContain("has been saved")`, quoting "A change you made since has been
     // saved." - a HISTORY claim the state cannot support, since a read-back can
     // adopt a policy nobody authored. The sentence now describes the display's
@@ -3414,7 +3414,7 @@ describe('FallbackSettingsPanel - seventh pass: "hasn\'t been sent" is claimed o
     // confirmed them.
     expect(notice.textContent).not.toContain(NEVER_SENT);
     expect(notice.textContent).not.toContain(SENT_UNKNOWN);
-    // Re-specified under D347. This asserted
+    // Re-specified under D347 (eighth pass). This asserted
     // `toContain("has been saved")`, quoting "A change you made since has been
     // saved." - a HISTORY claim the state cannot support, since a read-back can
     // adopt a policy nobody authored. The sentence now describes the display's
@@ -3691,7 +3691,7 @@ describe("FallbackSettingsPanel - eighth pass: a sentence describes the thing it
       "whether the default tiers were restored",
     );
     expect(notice.textContent).not.toContain("whether model routing was reset");
-    // Re-specified under D353. This asserted
+    // Re-specified under D353 (ninth pass). This asserted
     // `toContain("hasn't been sent")`, which was the whole `uncommitted` arm at
     // the time. The matrix splits that arm: this display is `loaded-unchanged`
     // - untouched values straight from the load - and "a newer edit that hasn't
