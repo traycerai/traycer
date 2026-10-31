@@ -29,21 +29,6 @@ import type {
 import type { EpicReplicaProjectionCounts } from "@/stores/replica-memory/epic-replica-budget";
 
 /**
- * What the accounting books need to ask the runtime, in the runtime's terms.
- *
- * **This is the direction that makes 4e hard.** The outbound members below are
- * all `void` and push cleanly across a thread; these four are called
- * SYNCHRONOUSLY by the accountant during a reconcile, and after the flip the
- * accountant is on main while the tier is in the worker — so a synchronous
- * main→worker call is exactly what cannot exist.
- *
- * Three of the four are pure reads and are answerable from a main-side cache
- * the worker refreshes on every settle push. {@link demoteColdestUnpinned} is
- * not: it performs the eviction, and its return decrements a running total.
- * At the flip it becomes a request — the proxy answers `reclaimedBytes: 0`,
- * dispatches, and the worker's settles reconcile on arrival.
- */
-/**
  * An {@link EvictionOutcome} that can also say "accepted, not yet performed".
  *
  * `reclaimedBytes: 0` is ambiguous across the worker boundary: it is what a
@@ -73,6 +58,21 @@ export interface HotDocEvictionOutcome extends EvictionOutcome {
   readonly deferredBytes: number;
 }
 
+/**
+ * What the accounting books need to ask the runtime, in the runtime's terms.
+ *
+ * **This is the direction that makes 4e hard.** The outbound members below are
+ * all `void` and push cleanly across a thread; these four are called
+ * SYNCHRONOUSLY by the accountant during a reconcile, and after the flip the
+ * accountant is on main while the tier is in the worker — so a synchronous
+ * main→worker call is exactly what cannot exist.
+ *
+ * Three of the four are pure reads and are answerable from a main-side cache
+ * the worker refreshes on every settle push. {@link demoteColdestUnpinned} is
+ * not: it performs the eviction, and its return decrements a running total.
+ * At the flip it becomes a request — the proxy answers `reclaimedBytes: 0`,
+ * dispatches, and the worker's settles reconcile on arrival.
+ */
 export interface EpicRuntimeAccountingSource {
   /** Rooms currently resident as live `Y.Doc`s. */
   materializedRoomIds(): readonly string[];
