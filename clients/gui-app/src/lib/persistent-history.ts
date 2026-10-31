@@ -356,18 +356,6 @@ function normalizeRoute(route: string | null): string {
 }
 
 /**
- * Bounds the in-memory stack to `MAX_ENTRIES` IN PLACE, keeping a contiguous
- * window that always contains the current entry, and re-stamps `__TSR_index` to
- * match the new array positions. Returns the remapped index.
- *
- * This is the single place the stack is bounded. Capping at the point of growth
- * (every `push`, where the cursor is always the tail) means the front-drop never
- * removes the current entry. The window is anchored on `index` rather than on
- * the tail, so seeding a legacy/oversized persisted stack while the cursor sits
- * deep in the back history still retains the current entry instead of dropping
- * it and restoring the wrong route on next launch.
- */
-/**
  * Re-stamp every entry's `__TSR_index` to its array position, so the stack stays
  * contiguous after any structural mutation (push, cap, replace-collapse, prune).
  * Keeps `getLocation`'s `state.__TSR_index` aligned with the cursor for the next
@@ -381,6 +369,18 @@ function restampIndices(states: LocationState[]): void {
   states.splice(0, states.length, ...restamped);
 }
 
+/**
+ * Bounds the in-memory stack to `MAX_ENTRIES` IN PLACE, keeping a contiguous
+ * window that always contains the current entry, and re-stamps `__TSR_index` to
+ * match the new array positions. Returns the remapped index.
+ *
+ * This is the single place the stack is bounded. Capping at the point of growth
+ * (every `push`, where the cursor is always the tail) means the front-drop never
+ * removes the current entry. The window is anchored on `index` rather than on
+ * the tail, so seeding a legacy/oversized persisted stack while the cursor sits
+ * deep in the back history still retains the current entry instead of dropping
+ * it and restoring the wrong route on next launch.
+ */
 function capStackInPlace(
   entries: string[],
   states: LocationState[],

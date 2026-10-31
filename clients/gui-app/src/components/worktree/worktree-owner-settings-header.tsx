@@ -407,8 +407,9 @@ function OwnerSettingsHarnessMark(props: {
   );
 }
 
-/** Terminal-agent mode in the same icon + label grammar as chat permission. */
 /**
+ * Terminal-agent mode in the same icon + label grammar as chat permission.
+ *
  * Permission mode with the icon the rest of the app already uses for it -
  * `Eye` / `FilePen` / `ShieldCheck` / `ShieldOff`, resolved through
  * the shared `findPermissionOption` table rather than chosen here.

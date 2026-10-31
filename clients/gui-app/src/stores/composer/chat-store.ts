@@ -396,13 +396,6 @@ export interface PlanSegmentModel {
 }
 
 /**
- * A semantic artifact create / update / delete card. The card resolves the live
- * title / ticket status / deletion tombstone reactively from the open-epic
- * projection by `artifactId`; `title` is only a fallback for the short delete
- * window before the tombstone projection arrives. `kind` is the segment
- * discriminant, so the artifact's own kind is named `artifactKind`.
- */
-/**
  * The merged file change behind an artifact card (first-before → last-after
  * across any coalesced edits), carried on the `artifact_operation` block itself
  * so it's available the moment the edit completes - no wait for turn-end
@@ -414,6 +407,13 @@ export interface ArtifactSegmentChange {
   afterHash: string | null;
 }
 
+/**
+ * A semantic artifact create / update / delete card. The card resolves the live
+ * title / ticket status / deletion tombstone reactively from the open-epic
+ * projection by `artifactId`; `title` is a fallback when no projection
+ * title is available. `kind` is the segment
+ * discriminant, so the artifact's own kind is named `artifactKind`.
+ */
 export interface ArtifactOperationSegment {
   id: string;
   kind: "artifact_operation";

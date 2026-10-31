@@ -3496,6 +3496,7 @@ describe("CommGraphOfficeCanvas", () => {
  * `createImageData` get real-shaped answers because callers read their
  * return value; everything else is a recorder.
  */
+
 /**
  * `measureText`, modelled on the face the caller actually set.
  *
@@ -5849,6 +5850,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * since F4 each part is separately hit-testable - so this is the scene where
      * "one region, one label" and "one agent, one label" differ by thirty.
      */
+
     /**
      * One agent is given a name no other agent shares a substring with, so the
      * query matches exactly one. The fixture's own names run "Agent 1",

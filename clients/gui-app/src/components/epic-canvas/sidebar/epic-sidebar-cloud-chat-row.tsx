@@ -444,13 +444,6 @@ function CloudRowIdleTime(props: { readonly publishedAt: number }): ReactNode {
   );
 }
 
-/**
- * What a locked row says about its owner.
- *
- * A row is locked exactly when its owning host is unreachable, so there is one
- * thing to say and one wording for it. The longer explanation lives on the
- * surface the row opens; a tooltip states the fact.
- */
 /** The row's accessible name: its title, then each state its glyphs show. */
 function cloudRowAriaLabel(
   title: string,
@@ -463,6 +456,12 @@ function cloudRowAriaLabel(
   return `${title}${lock}${reach}`;
 }
 
+/**
+ * What a locked row says about its owner.
+ *
+ * The longer explanation lives on the surface the row opens; a tooltip states
+ * the fact.
+ */
 function lockedRowCopy(
   ownerLabel: string,
   sandboxLine: string | null,

@@ -586,7 +586,6 @@ export function seedHeaderTabs(
   };
 }
 
-/** Restore the pre-seed header. Separate from the canvas teardown. */
 /**
  * Mint a DRAFT header tab, for E7.1's detach epic-vs-draft row.
  *
@@ -703,6 +702,7 @@ export function measureHeaderTabs(): HeaderMeasurement {
   };
 }
 
+/** Restore the pre-seed header. Separate from the canvas teardown. */
 export function teardownHeaderTabs(): boolean {
   const order = preSeedOpenTabOrder;
   if (order === null) return false;

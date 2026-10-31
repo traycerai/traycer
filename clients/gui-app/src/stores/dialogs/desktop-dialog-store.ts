@@ -43,15 +43,6 @@ export interface DesktopDialogState {
   readonly reportIssueDraftContext: ReportIssueDraftContext | null;
   readonly reportIssueDraftId: number;
   /**
-   * G2: the most recent CONFIRMED (delivered) report id for the draft
-   * currently showing its confirmation screen - cleared on any intentional
-   * close (`close`/`closeReportIssueDraft`), so it only survives to be read
-   * by `ReportIssueDialogHost` when a new report trigger fires WHILE that
-   * confirmation is still on screen (never after the user already dismissed
-   * it). A replacement then toasts this id before the draft below is
-   * overwritten, since the confirmation holds the only copy of it.
-   */
-  /**
    * The epics whose work cannot survive an update restart, captured when the
    * confirmation opens. Held here rather than re-derived by the dialog so the
    * rows the user is shown are the ones the decision was taken against - a
@@ -61,6 +52,15 @@ export interface DesktopDialogState {
   readonly updateUnsyncedEpics: ReadonlyArray<UnsyncedEditsEntry>;
   /** See {@link UpdateUnsyncedConfirmation.otherWindowsUnknown}. */
   readonly updateUnsyncedOtherWindowsUnknown: boolean;
+  /**
+   * G2: the most recent CONFIRMED (delivered) report id for the draft
+   * currently showing its confirmation screen - cleared on any intentional
+   * close (`close`/`closeReportIssueDraft`), so it only survives to be read
+   * by `ReportIssueDialogHost` when a new report trigger fires WHILE that
+   * confirmation is still on screen (never after the user already dismissed
+   * it). A replacement then toasts this id before the draft below is
+   * overwritten, since the confirmation holds the only copy of it.
+   */
   readonly lastConfirmedReport: {
     readonly draftId: number;
     readonly reportId: string;

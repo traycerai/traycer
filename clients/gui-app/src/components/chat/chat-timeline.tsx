@@ -164,7 +164,6 @@ export interface ChatTimelineProps {
   /** Test-observability only: echoes the controller's current follow-vs-free
    *  scroll state. Not read by any production code. */
   readonly "data-scroll-mode"?: string;
-  /** Top-fade chrome; the scroll-policy ticket decides when it's on. */
   /**
    * Whether the initial mount parks at the tail: `true` for a fresh,
    * never-scrolled-in chat with no saved reading position. The controller
@@ -614,10 +613,6 @@ function chatTimelineKeyExtractor(item: TranscriptListRow): string {
   return item.key;
 }
 
-/** The assistant estimate (14rem) is tuned for
- *  multi-paragraph turns; a synthesized `role: "system"` row (the fork
- *  marker, the collapsed setup card) is a single hairline-ruled line, so
- *  reusing that estimate overshoots badly for the pre-measurement paint. */
 /**
  * The space under one row.
  *
@@ -635,6 +630,10 @@ function chatTimelineRowBottomPaddingClassName(
   return compact ? "pb-0.5" : "pb-6";
 }
 
+/** The assistant estimate (14rem) is tuned for
+ *  multi-paragraph turns; a synthesized `role: "system"` row (the fork
+ *  marker, the collapsed setup card) is a single hairline-ruled line, so
+ *  reusing that estimate overshoots badly for the pre-measurement paint. */
 function chatTimelineRowSizeHintClassName(
   role: ChatMessageModel["role"],
 ): string {

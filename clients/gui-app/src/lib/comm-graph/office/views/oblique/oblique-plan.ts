@@ -945,7 +945,6 @@ const PLAZA_BAY_DOOR_ROW = 3;
 const BED_WIDTH_TILES = 2;
 /** Beds on the bay's first and third rows, so each row has a clear one under it. */
 const PLAZA_BED_ROWS: ReadonlyArray<number> = [0, 2];
-/** Where the chair run starts: one clear tile past the pingpong's right spot. */
 /** The plaza's aisle row, which is also its street. */
 const PLAZA_ROAD_ROW = 4;
 

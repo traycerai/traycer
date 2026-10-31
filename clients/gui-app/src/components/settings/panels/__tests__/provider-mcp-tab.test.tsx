@@ -390,6 +390,7 @@ function renderTab(
  * not a chip pair beside a separate folder select - so a test drives it by
  * naming the destination it wants, exactly as a user does.
  */
+
 /**
  * Matched by PREFIX, not exact string: the trigger's accessible name carries
  * the current destination after the static label ("MCP config location:
