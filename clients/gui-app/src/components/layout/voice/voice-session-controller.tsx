@@ -88,6 +88,7 @@ import {
   useBotRail,
   type BotOpenThread,
 } from "@/stores/bots/bot-open-thread-store";
+import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
 import { useTabsStore } from "@/stores/tabs/store";
@@ -1109,11 +1110,13 @@ function VoiceSelectionSync(props: {
 
 /**
  * Whether a selection is the landing of a switch the voice made, not the
- * person's move. While it is pending, a selection of that bot is the voice's
- * own: the one it lands on is written to the focus and ends the switch; the
- * ones it passes through (the channel before the thread opens, an earlier
- * rail) leave the focus where the switch put it. A selection of another bot,
- * or one after the wait, ends the switch and is the person's.
+ * person's move. The one it lands on is written to the focus and ends the
+ * switch. The ones it passes through leave the focus where the switch put
+ * it: any of that bot's while its tab has not spent the landing yet (the
+ * channel before the thread opens, an earlier rail), and, after, the landed
+ * rail's anchor while the thread list resolves it. Anything else (another
+ * bot, another thread once the tab has landed, a selection after the wait)
+ * ends the switch and is the person's.
  */
 function followsVoiceSwitch(
   selection: VoiceFocus,
@@ -1135,8 +1138,17 @@ function followsVoiceSwitch(
   if (landed) {
     voiceSwitch.current = null;
     useVoiceSessionStore.getState().setFocus(selection);
+    return true;
   }
-  return true;
+  const landing = Object.hasOwn(
+    useBotTabLandingStore.getState().byBotId,
+    pending.botId,
+  );
+  const resolving =
+    pending.threadId !== null && selection.anchorThread === "resolving";
+  if (landing || resolving) return true;
+  voiceSwitch.current = null;
+  return false;
 }
 
 /**
