@@ -79,12 +79,18 @@ function makeDriver(): FakeDriver {
   };
 }
 
-/** A session that has gone live on the channel, drawn in the current layout. */
-function goLive(driver: FakeDriver): FakeDriver {
+/** A session that has gone live on the channel, not yet drawn. */
+function markLive(driver: FakeDriver): FakeDriver {
   act(() => {
     useVoiceSessionStore.getState().sessionConnecting();
     useVoiceSessionStore.setState({ phase: "live", focus: FOCUS, driver });
   });
+  return driver;
+}
+
+/** A session that has gone live on the channel, drawn in the current layout. */
+function goLive(driver: FakeDriver): FakeDriver {
+  markLive(driver);
   render(<VoiceSessionChrome />);
   return driver;
 }
@@ -258,6 +264,81 @@ describe("the phone voice view", () => {
     );
 
     expect(runnerHost.openMicrophoneSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets go of a held talk button when Escape puts the view down, with no release sent", async () => {
+    goLive(makeDriver());
+    await userEvent.click(screen.getByRole("button", { name: "Push to talk" }));
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Hold to talk" }),
+      {
+        pointerId: 1,
+      },
+    );
+    expect(useVoiceSessionStore.getState().talkHeld).toBe(true);
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("voice-phone-view")).toBeNull(),
+    );
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      phoneViewOpen: false,
+      talkHeld: false,
+      phase: "live",
+    });
+  });
+
+  it("lets go of a held talk button when the view unmounts under the finger", async () => {
+    goLive(makeDriver());
+    await userEvent.click(screen.getByRole("button", { name: "Push to talk" }));
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Hold to talk" }),
+      {
+        pointerId: 1,
+      },
+    );
+    expect(useVoiceSessionStore.getState().talkHeld).toBe(true);
+
+    cleanup();
+
+    expect(useVoiceSessionStore.getState().talkHeld).toBe(false);
+  });
+
+  it("leaves push-to-talk with the microphone closed when the layout widens to the desktop one", async () => {
+    markLive(makeDriver());
+    const { rerender } = render(<VoiceSessionChrome />);
+    await userEvent.click(screen.getByRole("button", { name: "Push to talk" }));
+    expect(screen.queryByTestId("voice-strip-mute")).toBeNull();
+
+    setPhoneLayoutOnly(false);
+    rerender(<VoiceSessionChrome />);
+
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      pushToTalk: false,
+      talkHeld: false,
+      muted: true,
+    });
+    expect(screen.getByTestId("voice-strip-mute").textContent).toContain(
+      "Unmute",
+    );
+    expect(screen.queryByTestId("voice-phone-view")).toBeNull();
+  });
+
+  it("never mutes an open-microphone session when the layout widens", () => {
+    markLive(makeDriver());
+    const { rerender } = render(<VoiceSessionChrome />);
+
+    setPhoneLayoutOnly(false);
+    rerender(<VoiceSessionChrome />);
+
+    expect(useVoiceSessionStore.getState().muted).toBe(false);
+    expect(screen.getByTestId("voice-strip-mute").textContent).toContain(
+      "Mute",
+    );
+    expect(screen.getByTestId("voice-strip-mute").textContent).not.toContain(
+      "Unmute",
+    );
   });
 
   it("is the strip, not the phone view, on the desktop layout", () => {

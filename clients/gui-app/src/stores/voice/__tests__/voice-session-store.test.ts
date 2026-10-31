@@ -117,6 +117,29 @@ describe("the phone's talk mode and view", () => {
   });
 });
 
+describe("the phone view and a held talk button", () => {
+  it("putting the view down lets go of the hold but nothing else, and bringing it back holds nothing", () => {
+    const store = useVoiceSessionStore.getState();
+    store.sessionConnecting();
+    store.setPushToTalk(true);
+    store.setTalkHeld(true);
+
+    store.setPhoneViewOpen(false);
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      phoneViewOpen: false,
+      talkHeld: false,
+      pushToTalk: true,
+    });
+
+    store.setTalkHeld(true);
+    store.setPhoneViewOpen(true);
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      phoneViewOpen: true,
+      talkHeld: true,
+    });
+  });
+});
+
 describe("the dictation pause", () => {
   it("is held per owner: it outlives the session, and ends only when every owner has released its own hold", () => {
     const store = useVoiceSessionStore.getState();

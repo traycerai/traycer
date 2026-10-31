@@ -1113,6 +1113,17 @@ describe("push-to-talk", () => {
     expect(fake.track.enabled).toBe(true);
   });
 
+  it("stops capturing when the phone view closes under a held button", async () => {
+    await bringLive();
+    act(() => useVoiceSessionStore.getState().setPushToTalk(true));
+    act(() => useVoiceSessionStore.getState().setTalkHeld(true));
+    expect(fake.track.enabled).toBe(true);
+
+    act(() => useVoiceSessionStore.getState().setPhoneViewOpen(false));
+
+    expect(fake.track.enabled).toBe(false);
+  });
+
   it("keeps the microphone shut while held if dictation has paused the voice", async () => {
     await bringLive();
     act(() => useVoiceSessionStore.getState().setPushToTalk(true));
