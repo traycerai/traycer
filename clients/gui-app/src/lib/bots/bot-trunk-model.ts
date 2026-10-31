@@ -10,7 +10,10 @@ import {
   type BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotTaskEntry } from "@traycer/protocol/host/bot/schemas";
-import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
+import {
+  conversationRequestMessageId,
+  type BotAnnouncementKind,
+} from "@traycer/protocol/persistence/epic/messages";
 
 const MINUTE_S = 60;
 const HOUR_S = 3600;
@@ -58,17 +61,6 @@ export function sortTasksForDisplay(
 
 function stateRank(task: BotTaskEntry): number {
   return task.state === "tracking" ? 0 : 1;
-}
-
-/**
- * The tasks a thread's session set up, by the thread id its entries name
- * (Tracy Bots T82); none from a host that does not say.
- */
-export function tasksOfThread(
-  tasks: ReadonlyArray<BotTaskEntry>,
-  threadId: string,
-): ReadonlyArray<BotTaskEntry> {
-  return tasks.filter((task) => task.createdByChatId === threadId);
 }
 
 /**
@@ -142,19 +134,33 @@ export function threadOpenOf(row: OpenMessage): {
       anchorKind: null,
     };
   }
-  const kind = row.announcement?.kind ?? null;
-  // A row that asks roots its own thread as a question announcement does.
+  return {
+    announcement: true,
+    anchorKind: botRowThreadAnchorKind({
+      announcementKind: row.announcement?.kind ?? null,
+      asksQuestion: row.question !== undefined,
+      repliesToPost: row.repliesTo !== undefined,
+    }),
+  };
+}
+
+/** The host capability a bot row needs to root a thread; questions need none. */
+export function botRowThreadAnchorKind(input: {
+  readonly announcementKind: BotAnnouncementKind | null;
+  readonly asksQuestion: boolean;
+  readonly repliesToPost: boolean;
+}): string | null {
+  const { announcementKind, asksQuestion, repliesToPost } = input;
   if (
-    kind === "question" ||
-    kind === "proposal" ||
-    row.question !== undefined
+    announcementKind === "question" ||
+    announcementKind === "proposal" ||
+    asksQuestion
   ) {
-    return { announcement: true, anchorKind: null };
+    return null;
   }
-  if (kind === null && row.repliesTo !== undefined) {
-    return { announcement: true, anchorKind: BOT_THREAD_ANCHOR_ANSWER };
-  }
-  return { announcement: true, anchorKind: BOT_THREAD_ANCHOR_MESSAGE };
+  return announcementKind === null && repliesToPost
+    ? BOT_THREAD_ANCHOR_ANSWER
+    : BOT_THREAD_ANCHOR_MESSAGE;
 }
 
 /** A post's first line, as a task row names the request it came from. */

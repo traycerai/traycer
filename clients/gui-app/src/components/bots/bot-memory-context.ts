@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react";
+import { createContext } from "react";
 
 /**
  * Where a bot surface reads what its bot knows (Tracy Bots T87): the host
@@ -14,7 +14,3 @@ export interface BotMemoryAccess {
 }
 
 export const BotMemoryContext = createContext<BotMemoryAccess | null>(null);
-
-export function useBotMemoryAccess(): BotMemoryAccess | null {
-  return useContext(BotMemoryContext);
-}

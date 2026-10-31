@@ -53,7 +53,6 @@ import type {
   ChatBotQuestions,
   ChatBotTurnReceipt,
 } from "@/components/chat/chat-bot-presentation-context";
-import { tasksOfThread } from "@/lib/bots/bot-trunk-model";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { threadOriginRow } from "@/lib/bots/reply-row";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -446,7 +445,10 @@ function ThreadTasks(props: {
   readonly tasks: ReadonlyArray<BotTaskEntry>;
 }): ReactNode {
   const { botId, hostId, threadId, thread, tasks } = props;
-  const own = useMemo(() => tasksOfThread(tasks, threadId), [tasks, threadId]);
+  const own = useMemo(
+    () => tasks.filter((task) => task.createdByChatId === threadId),
+    [tasks, threadId],
+  );
   const threads = useMemo(() => (thread === null ? [] : [thread]), [thread]);
   const place = useMemo(
     () => ({ kind: "thread" as const, threadId }),

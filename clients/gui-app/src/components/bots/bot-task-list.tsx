@@ -17,7 +17,6 @@ import {
   threadOpenOf,
   type BotTaskRequestPost,
 } from "@/lib/bots/bot-trunk-model";
-import { taskKindOf } from "@/lib/bots/bot-activity-model";
 import { formatAbsoluteDateTime } from "@/lib/relative-time";
 import { postTextOf } from "@/lib/bots/reply-row";
 import { openEpicFromListIntent } from "@/lib/tab-navigation/intents";
@@ -281,7 +280,9 @@ function BotPageTaskFacts(props: { readonly task: BotTaskEntry }): ReactNode {
   const reported = task.checkins?.find((record) => record.kind === "received");
   return (
     <>
-      <span data-testid="bot-task-kind">{taskKindOf(task)}</span>
+      <span data-testid="bot-task-kind">
+        {task.cadence.kind === "every" ? "Automation" : "One-off task"}
+      </span>
       {task.state === "tracking" && task.nextAt !== null ? (
         <span data-testid="bot-task-next" className="tabular-nums">
           next {formatAbsoluteDateTime(task.nextAt)}

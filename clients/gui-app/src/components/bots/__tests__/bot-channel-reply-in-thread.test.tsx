@@ -325,7 +325,7 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
     sent: null,
   } as const;
 
-  const NOTICE_THREAD: BotThreadSummary = {
+  const NOTICE_THREAD = {
     threadId: "thread-notice",
     conversationId: CHANNEL_ID,
     sessionChatId: "session-notice",
@@ -340,7 +340,7 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
     lastReplyAt: 5_000,
     openRequestCount: 1,
     costUsd: null,
-  };
+  } satisfies BotThreadSummary;
 
   async function sendEnabledAfterTyping(): Promise<boolean> {
     const user = userEvent.setup();
@@ -390,10 +390,7 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
       {
         ...NOTICE_THREAD,
         threadId: "thread-question",
-        anchor:
-          NOTICE_THREAD.anchor === null
-            ? null
-            : { ...NOTICE_THREAD.anchor, messageId: "question-1" },
+        anchor: { ...NOTICE_THREAD.anchor, messageId: "question-1" },
       },
     ];
     mocks.threadAnchors = anchorsNaming([]);
@@ -427,10 +424,7 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
       mocks.threads = [
         {
           ...NOTICE_THREAD,
-          anchor:
-            NOTICE_THREAD.anchor === null
-              ? null
-              : { ...NOTICE_THREAD.anchor, messageId: "notice-cold" },
+          anchor: { ...NOTICE_THREAD.anchor, messageId: "notice-cold" },
         },
       ];
       mocks.threadAnchors = { hostId: BOUND_HOST_ID, epoch, kinds: [...kinds] };

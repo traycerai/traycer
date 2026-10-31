@@ -144,13 +144,6 @@ export type BotChannelLanding = BotTranscriptLanding & {
   readonly threadId: string | null;
 };
 
-/** The landing the channel's own transcript takes: one on a message of the channel. */
-function channelLandingOf(
-  landOn: BotChannelLanding | null,
-): BotTranscriptLanding | null {
-  return landOn !== null && landOn.threadId === null ? landOn : null;
-}
-
 /**
  * The listed thread whose panel is drawn: none while the channel's own read
  * failed, loads, or found no channel, which draw no panel, or while no
@@ -485,7 +478,9 @@ export function BotChannelView(props: {
   // channel opens where the tab asked it to: it mounts afresh each time a
   // session shown in its place closes.
   const [landing, setLanding] = useState<BotTranscriptLanding | null>(() =>
-    channelLandingOf(props.landOn),
+    props.landOn !== null && props.landOn.threadId === null
+      ? props.landOn
+      : null,
   );
   const memoryNavigation = useMemo(
     (): BotMemoryNavigation => ({

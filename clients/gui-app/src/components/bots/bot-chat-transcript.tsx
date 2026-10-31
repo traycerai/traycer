@@ -324,11 +324,6 @@ export function BotChatTranscript(props: {
 
 type ChannelIntro = Extract<BotTranscriptSurface, { kind: "channel" }>["intro"];
 
-/** The setup history a channel surface keeps at its top; `null` elsewhere. */
-function channelHistoryOf(surface: BotTranscriptSurface | null): ReactNode {
-  return surface?.kind === "channel" ? surface.history : null;
-}
-
 /** An empty channel's first screen: its setup history, or else its intro. */
 function BotChannelOpening(props: {
   readonly history: ReactNode;
@@ -565,7 +560,7 @@ function BotChatTranscriptBody(props: {
   const transcriptWindow = isWindowedTranscript(state)
     ? state.transcriptWindow
     : null;
-  const channelHistory = channelHistoryOf(surface);
+  const channelHistory = surface?.kind === "channel" ? surface.history : null;
   const intro = channelIntro(
     surface,
     state.snapshotLoaded,
