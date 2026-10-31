@@ -312,7 +312,9 @@ export function useVoiceQueueOwner(input: {
         current.filter((candidate) => candidate.seq !== request.seq),
       );
       const order = statusOrderRef.current;
-      const slot = order.find((candidate) => candidate.request.seq === request.seq);
+      const slot = order.find(
+        (candidate) => candidate.request.seq === request.seq,
+      );
       if (slot === undefined) return;
       slot.text = text;
       for (;;) {
