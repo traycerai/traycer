@@ -10,14 +10,17 @@ export const TALK_CONTROL_LABEL = "Talk";
  * The "Talk" control beside the fixed Tracy entry in the tab strip (V6):
  * starts a voice session over the bot surface, and ends it while one is
  * live. Never in the composer, whose microphone stays "Dictate". Hidden
- * while the server answers the dormant mint (voice is off for this
- * deployment) and before the controller that owns the session is mounted.
+ * until the server says this deployment offers voice (and again when a mint
+ * answers dormant), and before the controller that owns the session is
+ * mounted.
  */
 export function TalkControl(): ReactNode {
   const availability = useVoiceSessionStore((state) => state.availability);
   const phase = useVoiceSessionStore((state) => state.phase);
   const driver = useVoiceSessionStore((state) => state.driver);
-  if (availability === "dormant" || driver === null) return null;
+  // Drawn only once the server has said it offers voice: before that answer
+  // a Talk would open the microphone to learn there is nothing to talk to.
+  if (availability !== "live" || driver === null) return null;
   const live = phase !== "idle";
   return (
     <TooltipWrapper

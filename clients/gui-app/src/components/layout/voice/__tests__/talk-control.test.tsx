@@ -33,21 +33,26 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("TalkControl", () => {
-  it("renders nothing while voice is dormant or no driver is mounted", () => {
+  it("renders nothing while voice is unknown or dormant, or no driver is mounted", () => {
     useVoiceSessionStore.setState({ driver: makeDriver() });
     useVoiceSessionStore.getState().setAvailability("dormant");
     renderControl();
     expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
 
     cleanup();
-    useVoiceSessionStore.setState({ driver: null, availability: "unknown" });
+    useVoiceSessionStore.getState().setAvailability("unknown");
+    renderControl();
+    expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
+
+    cleanup();
+    useVoiceSessionStore.setState({ driver: null, availability: "live" });
     renderControl();
     expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
   });
 
   it("starts a session when idle", async () => {
     const driver = makeDriver();
-    useVoiceSessionStore.setState({ driver });
+    useVoiceSessionStore.setState({ driver, availability: "live" });
     renderControl();
 
     await userEvent.click(screen.getByRole("button", { name: "Talk" }));
@@ -58,7 +63,11 @@ describe("TalkControl", () => {
 
   it("is pressed while live and ends the session", async () => {
     const driver = makeDriver();
-    useVoiceSessionStore.setState({ driver, phase: "live" });
+    useVoiceSessionStore.setState({
+      driver,
+      phase: "live",
+      availability: "live",
+    });
     renderControl();
     const button = screen.getByRole("button", { name: "Talk" });
 
@@ -73,6 +82,7 @@ describe("TalkControl", () => {
     useVoiceSessionStore.setState({
       driver: makeDriver(),
       phase: "connecting",
+      availability: "live",
     });
     renderControl();
 

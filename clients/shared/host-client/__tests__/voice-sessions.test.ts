@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import {
+  voiceSessionsAvailabilityViaHttp,
   voiceSessionsEndViaHttp,
   voiceSessionsMintViaHttp,
 } from "../voice-sessions";
@@ -148,5 +149,59 @@ describe("voiceSessionsEndViaHttp", () => {
 
     expect(result.kind).toBe("network-error");
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("voiceSessionsAvailabilityViaHttp", () => {
+  it("GETs the availability route with no body and the proxy token", async () => {
+    const fetchMock = stubFetch(async () =>
+      jsonResponse(200, { available: true }),
+    );
+
+    const result = await voiceSessionsAvailabilityViaHttp(
+      BASE,
+      BEARER,
+      "iap-token",
+    );
+
+    expect(result).toEqual({ kind: "ok", available: true });
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).toBe(`${BASE}/api/voice/availability`);
+    expect(init?.method).toBe("GET");
+    expect(init?.body ?? null).toBeNull();
+    const headers = new Headers(init?.headers);
+    expect(headers.get("authorization")).toBe(`Bearer ${BEARER}`);
+    expect(headers.get("accept")).toBe("application/json");
+    expect(headers.get("proxy-authorization")).toBe("Bearer iap-token");
+    expect(headers.has("content-type")).toBe(false);
+  });
+
+  it("reads available false as ok", async () => {
+    stubFetch(async () => jsonResponse(200, { available: false }));
+
+    expect(await voiceSessionsAvailabilityViaHttp(BASE, BEARER, null)).toEqual({
+      kind: "ok",
+      available: false,
+    });
+  });
+
+  it("maps 403 to unauthorized", async () => {
+    stubFetch(async () => jsonResponse(403, {}));
+
+    expect(await voiceSessionsAvailabilityViaHttp(BASE, BEARER, null)).toEqual({
+      kind: "unauthorized",
+    });
+  });
+
+  it("collapses a 500 and a body without available into network-error", async () => {
+    stubFetch(async () => jsonResponse(500, {}));
+    expect(
+      (await voiceSessionsAvailabilityViaHttp(BASE, BEARER, null)).kind,
+    ).toBe("network-error");
+
+    stubFetch(async () => jsonResponse(200, { other: true }));
+    expect(
+      (await voiceSessionsAvailabilityViaHttp(BASE, BEARER, null)).kind,
+    ).toBe("network-error");
   });
 });

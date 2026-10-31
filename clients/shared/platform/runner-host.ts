@@ -40,6 +40,7 @@ import type {
   SandboxVerbFetchResult,
 } from "../host-client/sandbox-control";
 import type {
+  VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
   VoiceSessionMintFetchResult,
   VoiceSessionMintRequest,
@@ -415,6 +416,9 @@ export interface IRunnerHost {
    * shared helpers in `host-client/voice-sessions.ts` elsewhere). Never
    * throw: failures collapse into the discriminated results.
    */
+  getVoiceAvailability(
+    bearerToken: string,
+  ): Promise<VoiceAvailabilityFetchResult>;
   mintVoiceSession(
     bearerToken: string,
     request: VoiceSessionMintRequest,

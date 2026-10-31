@@ -21,8 +21,10 @@ import {
   type TraycerModelsFetchResult,
 } from "../sandbox-control";
 import {
+  voiceSessionsAvailabilityViaHttp,
   voiceSessionsEndViaHttp,
   voiceSessionsMintViaHttp,
+  type VoiceAvailabilityFetchResult,
   type VoiceSessionEndFetchResult,
   type VoiceSessionMintFetchResult,
   type VoiceSessionMintRequest,
@@ -668,6 +670,16 @@ export class MockRunnerHost implements IRunnerHost {
 
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult> {
     return fetchTraycerModelsViaHttp(this.serverBaseUrl, bearerToken, null);
+  }
+
+  getVoiceAvailability(
+    bearerToken: string,
+  ): Promise<VoiceAvailabilityFetchResult> {
+    return voiceSessionsAvailabilityViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+    );
   }
 
   mintVoiceSession(

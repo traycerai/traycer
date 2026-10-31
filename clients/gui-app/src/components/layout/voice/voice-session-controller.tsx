@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import type {
   BotConversationRecord,
@@ -23,6 +24,8 @@ import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
+import { useVoiceAvailabilityQuery } from "@/hooks/voice/use-voice-availability-query";
+import { voiceQueryKeys } from "@/lib/query-keys";
 import {
   useAuthService,
   useHostClient,
@@ -85,7 +88,18 @@ import {
 export function VoiceSessionController(): ReactNode {
   const runnerHost = useRunnerHost();
   const auth = useAuthService();
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
+  // Whether this deployment offers voice, read once per window before Talk
+  // is drawn; a dormant mint invalidates it, so the answer is read again.
+  const availability = useVoiceAvailabilityQuery(true);
+  const available = availability.data;
+  useEffect(() => {
+    if (available === undefined) return;
+    useVoiceSessionStore
+      .getState()
+      .setAvailability(available ? "live" : "dormant");
+  }, [available]);
   const appHostId = useEffectiveHostId();
   const appClient = useHostClient();
   const botsSupported = useHostMethodSupport(appHostId, "bot.list") === true;
@@ -338,7 +352,12 @@ export function VoiceSessionController(): ReactNode {
                 minted.expiresAt = result.session.expiresAt;
                 return result.session.answerSdp;
               case "dormant":
+                // The fallback when the availability read was wrong or
+                // stale: hide Talk now, and read the answer again.
                 store.setAvailability("dormant");
+                void queryClient.invalidateQueries({
+                  queryKey: voiceQueryKeys.availabilityAll(),
+                });
                 minted.failure = "unavailable";
                 break;
               case "credits-exhausted":
@@ -446,7 +465,7 @@ export function VoiceSessionController(): ReactNode {
       );
       return true;
     },
-    [auth, clearTimers, finishSession, sayLoop, ensureSpeech],
+    [auth, clearTimers, finishSession, queryClient, sayLoop, ensureSpeech],
   );
 
   /**

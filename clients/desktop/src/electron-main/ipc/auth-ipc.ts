@@ -29,6 +29,7 @@ import {
   runSandboxVerbViaHttp,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
+  voiceSessionsAvailabilityViaHttp,
   voiceSessionsEndViaHttp,
   voiceSessionsMintViaHttp,
   type VoiceSessionMintRequest,
@@ -174,6 +175,18 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
     async (_event, bearerToken: unknown) => {
       assertString(bearerToken, "getSandboxCatalogue.bearerToken");
       return fetchSandboxCatalogueViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.getVoiceAvailability,
+    async (_event, bearerToken: unknown) => {
+      assertString(bearerToken, "getVoiceAvailability.bearerToken");
+      return voiceSessionsAvailabilityViaHttp(
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),

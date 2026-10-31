@@ -22,6 +22,7 @@ import { composeRequestAbort } from "../auth/request-abort";
  */
 const VOICE_MINT_FETCH_TIMEOUT_MS = 20_000;
 const VOICE_END_FETCH_TIMEOUT_MS = 10_000;
+const VOICE_AVAILABILITY_FETCH_TIMEOUT_MS = 10_000;
 
 const VOICE_CREDITS_EXHAUSTED = "VOICE_CREDITS_EXHAUSTED";
 const VOICE_UNAVAILABLE = "VOICE_UNAVAILABLE";
@@ -55,6 +56,20 @@ const voiceSessionMintedSchema = z.object({
 const voiceSessionEndedSchema = z.object({
   closedAt: z.number(),
 });
+
+const voiceAvailabilitySchema = z.object({
+  available: z.boolean(),
+});
+
+/**
+ * The outcome of the availability read. `available: false` is the dormant
+ * deployment (no voice key), answered without opening a microphone or a
+ * session; Talk hides on it.
+ */
+export type VoiceAvailabilityFetchResult =
+  | { readonly kind: "ok"; readonly available: boolean }
+  | { readonly kind: "unauthorized" }
+  | { readonly kind: "network-error"; readonly detail: string };
 
 const errorBodySchema = z.object({ error: z.string() });
 
@@ -102,21 +117,26 @@ type RawResult =
   | RawResponse
   | { readonly kind: "network-error"; readonly detail: string };
 
-function voiceSessionsUrl(serverBaseUrl: string, path: string): string {
+function voiceUrl(serverBaseUrl: string, path: string): string {
   return new URL(
-    `api/voice/sessions${path}`,
+    `api/voice${path}`,
     serverBaseUrl.endsWith("/") ? serverBaseUrl : `${serverBaseUrl}/`,
   ).toString();
+}
+
+function voiceSessionsUrl(serverBaseUrl: string, path: string): string {
+  return voiceUrl(serverBaseUrl, `/sessions${path}`);
 }
 
 /**
  * One request under one timeout, its body read before the abort is cleared so
  * a server that sends headers and then stalls still times out. The IAP proxy
- * token rides beside the bearer where a staging build has one.
+ * token rides beside the bearer where a staging build has one. A `null` body
+ * is a GET.
  */
 async function call(
   url: string,
-  body: string,
+  body: string | null,
   timeoutMs: number,
   bearerToken: string,
   proxyToken: string | null,
@@ -124,11 +144,11 @@ async function call(
   const abort = composeRequestAbort(null, timeoutMs);
   try {
     const response = await fetch(url, {
-      method: "POST",
+      method: body === null ? "GET" : "POST",
       headers: {
         Authorization: `Bearer ${bearerToken}`,
         Accept: "application/json",
-        "Content-Type": "application/json",
+        ...(body === null ? {} : { "Content-Type": "application/json" }),
         ...(proxyToken === null
           ? {}
           : { "Proxy-Authorization": `Bearer ${proxyToken}` }),
@@ -225,6 +245,41 @@ export async function voiceSessionsMintViaHttp(
     };
   }
   return { kind: "ok", session: parsed.data };
+}
+
+/**
+ * `GET /api/voice/availability`: whether this deployment offers voice at all
+ * (a voice key is set), read once per window before Talk is drawn, so a
+ * person on a server without voice never opens a microphone to learn so.
+ */
+export async function voiceSessionsAvailabilityViaHttp(
+  serverBaseUrl: string,
+  bearerToken: string,
+  proxyToken: string | null,
+): Promise<VoiceAvailabilityFetchResult> {
+  const raw = await call(
+    voiceUrl(serverBaseUrl, "/availability"),
+    null,
+    VOICE_AVAILABILITY_FETCH_TIMEOUT_MS,
+    bearerToken,
+    proxyToken,
+  );
+  if (!isRawResponse(raw)) return raw;
+  if (raw.status === 401 || raw.status === 403) return { kind: "unauthorized" };
+  if (raw.status < 200 || raw.status >= 300) {
+    return {
+      kind: "network-error",
+      detail: `the voice availability route answered HTTP ${raw.status}`,
+    };
+  }
+  const parsed = voiceAvailabilitySchema.safeParse(raw.body);
+  if (!parsed.success) {
+    return {
+      kind: "network-error",
+      detail: "the voice availability answer did not match the contract",
+    };
+  }
+  return { kind: "ok", available: parsed.data.available };
 }
 
 /** Whether `id` is one plain path segment, so no URL is built from anything else. */

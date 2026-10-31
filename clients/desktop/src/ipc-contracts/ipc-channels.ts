@@ -78,6 +78,7 @@ export const RunnerHostInvoke = {
   getTraycerModels: "runnerHost:traycer:models",
   // The voice session routes (traycer-server `/api/voice/sessions`): the SDP
   // exchange that opens a session, and its end. Same CORS reason as above.
+  getVoiceAvailability: "runnerHost:voice:availability",
   mintVoiceSession: "runnerHost:voice:sessions:mint",
   endVoiceSession: "runnerHost:voice:sessions:end",
   createSandbox: "runnerHost:sandboxes:create",

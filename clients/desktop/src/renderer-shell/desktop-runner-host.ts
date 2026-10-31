@@ -154,6 +154,7 @@ import type {
   SandboxVerbFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
+  VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
   VoiceSessionMintFetchResult,
   VoiceSessionMintRequest,
@@ -243,6 +244,9 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult>;
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
+  getVoiceAvailability(
+    bearerToken: string,
+  ): Promise<VoiceAvailabilityFetchResult>;
   mintVoiceSession(
     bearerToken: string,
     request: VoiceSessionMintRequest,
@@ -1248,6 +1252,12 @@ export class DesktopRunnerHost implements IRunnerHost {
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult> {
     return this.bridge.getSandboxCatalogue(bearerToken);
+  }
+
+  getVoiceAvailability(
+    bearerToken: string,
+  ): Promise<VoiceAvailabilityFetchResult> {
+    return this.bridge.getVoiceAvailability(bearerToken);
   }
 
   mintVoiceSession(

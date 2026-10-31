@@ -51,6 +51,7 @@ import type {
   TraycerModelsFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
+  VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
   VoiceSessionMintFetchResult,
   VoiceSessionMintRequest,
@@ -3193,11 +3194,23 @@ export class AuthService {
   }
 
   /**
-   * The voice session routes, with the cloud bearer: the SDP exchange that
-   * opens a session on the person's own account, and its end. A shell that
-   * cannot reach traycer-server at all (`sandboxControlUnavailableReason`)
-   * reads as the dormant answer, so Talk hides there too.
+   * The voice routes, with the cloud bearer: whether this deployment offers
+   * voice, the SDP exchange that opens a session on the person's own
+   * account, and its end. A shell that cannot reach traycer-server at all
+   * (`sandboxControlUnavailableReason`) reads as not available and as the
+   * dormant mint, so Talk hides there too.
    */
+  async getVoiceAvailability(): Promise<VoiceAvailabilityFetchResult> {
+    if (this.sandboxControlUnavailableReason() !== null) {
+      return { kind: "ok", available: false };
+    }
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getVoiceAvailability(bearer);
+  }
+
   async mintVoiceSession(
     request: VoiceSessionMintRequest,
   ): Promise<VoiceSessionMintFetchResult> {

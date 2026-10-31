@@ -36,6 +36,7 @@ import type {
   SecretRequestDecision,
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
+  VoiceAvailabilityFetchResult,
   VoiceSessionEndFetchResult,
   VoiceSessionMintFetchResult,
   VoiceSessionMintRequest,
@@ -135,6 +136,9 @@ export interface AuthBridgeSurface {
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult>;
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
+  getVoiceAvailability(
+    bearerToken: string,
+  ): Promise<VoiceAvailabilityFetchResult>;
   mintVoiceSession(
     bearerToken: string,
     request: VoiceSessionMintRequest,
@@ -293,6 +297,12 @@ export function buildAuthBridge(): AuthBridgeSurface {
         RunnerHostInvoke.getSandboxCatalogue,
         bearerToken,
       ) as Promise<SandboxCatalogueFetchResult>,
+
+    getVoiceAvailability: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getVoiceAvailability,
+        bearerToken,
+      ) as Promise<VoiceAvailabilityFetchResult>,
 
     mintVoiceSession: (bearerToken, request) =>
       ipcRenderer.invoke(
