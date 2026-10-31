@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactElement } from "react";
+import type { CSSProperties, ReactElement, ReactNode } from "react";
 import {
   Avatar,
   AvatarFallback,
@@ -13,40 +13,71 @@ import {
   resolveProfileAccentColor,
 } from "@/lib/providers/profile-accent-color";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
+import {
+  type CreatureMarkSize,
+  creatureMark,
+  drawCreatureMark,
+} from "@/lib/bots/creature-mark";
 
 type IdentityAvatarSize = "xs" | "sm" | "default" | "lg";
 
+const CREATURE_SIZE: Readonly<Record<IdentityAvatarSize, CreatureMarkSize>> = {
+  xs: 16,
+  sm: 24,
+  default: 32,
+  lg: 40,
+};
+
 /**
  * Who a picture is of, in a bot's channel and everywhere a bot appears
- * (Tracy Bots, T62): a person is a circle, a bot a squircle. Without a
- * picture it shows the initials on a colour hashed from who it is (a person
- * on the profile badges' palette, a bot on its two tones of those hues), so
- * two members with no picture still tell apart at a glance; the smallest size
- * has room for one letter.
+ * (Tracy Bots, T62): a person is a circle, a bot a squircle. A bot is its
+ * creature mark (T111) on a swatch, both from its id alone, so a rename
+ * changes neither. A person without a picture shows their initials on a
+ * colour hashed from who they are; the smallest size has room for one
+ * letter. The picture is decoration beside the name, which every surface
+ * shows or labels its control with.
  */
-function IdentityAvatar(props: {
-  readonly kind: "bot" | "person";
-  readonly name: string;
-  /** What the colour is hashed from: the bot's or the member's id. */
-  readonly seed: string;
-  readonly avatarUrl: string | null;
-  readonly size: IdentityAvatarSize;
-  readonly testId: string;
-}): ReactElement {
-  const { kind, name, seed, avatarUrl, size, testId } = props;
-  const initials = computeInitials(name, "");
-  const swatch: BotSwatch =
-    kind === "bot"
-      ? resolveBotSwatch(seed)
-      : { color: resolveProfileAccentColor(seed, null), ink: "dark" };
+function IdentityAvatar(
+  props: (
+    | { readonly kind: "bot"; readonly botId: string }
+    | {
+        readonly kind: "person";
+        readonly name: string;
+        /** What the colour is hashed from: the member's id. */
+        readonly seed: string;
+        readonly avatarUrl: string | null;
+      }
+  ) & {
+    readonly size: IdentityAvatarSize;
+    readonly testId: string;
+  },
+): ReactElement {
+  const { size, testId } = props;
+  let swatch: BotSwatch;
+  let picture: ReactNode;
+  if (props.kind === "bot") {
+    swatch = resolveBotSwatch(props.botId);
+    picture = (
+      <CreatureMarkSvg botId={props.botId} size={CREATURE_SIZE[size]} />
+    );
+  } else {
+    swatch = {
+      color: resolveProfileAccentColor(props.seed, null),
+      ink: "dark",
+    };
+    const initials = computeInitials(props.name, "");
+    picture = size === "xs" ? initials.slice(0, 1) : initials;
+  }
   return (
     <Avatar
-      shape={kind === "bot" ? "squircle" : "circle"}
+      shape={props.kind === "bot" ? "squircle" : "circle"}
       size={size}
       data-testid={testId}
-      data-identity={kind}
+      data-identity={props.kind}
     >
-      {avatarUrl === null ? null : <AvatarImage src={avatarUrl} alt="" />}
+      {props.kind === "person" && props.avatarUrl !== null ? (
+        <AvatarImage src={props.avatarUrl} alt="" />
+      ) : null}
       <AvatarFallback
         style={
           {
@@ -59,15 +90,39 @@ function IdentityAvatar(props: {
             : "bg-[var(--swatch)] font-semibold text-neutral-950"
         }
       >
-        {size === "xs" ? initials.slice(0, 1) : initials}
+        {picture}
       </AvatarFallback>
     </Avatar>
   );
 }
 
 /**
- * The bot's picture: the surface's bot (`BotIdentityContext`) by its id and
- * current title, or a plain bot outside one.
+ * The creature in the swatch's ink (the fallback's text colour); its eyes are
+ * holes, so the swatch shows through them. Drawn in whole pixels of the
+ * avatar's own size, and scaled with it only where the root font is not 16px.
+ */
+function CreatureMarkSvg(props: {
+  readonly botId: string;
+  readonly size: CreatureMarkSize;
+}): ReactElement {
+  const drawing = drawCreatureMark(creatureMark(props.botId), props.size);
+  return (
+    <svg
+      viewBox={drawing.viewBox}
+      aria-hidden="true"
+      focusable="false"
+      shapeRendering="crispEdges"
+      className="size-full"
+      data-slot="bot-creature"
+    >
+      <path d={drawing.path} fill="currentColor" fillRule="evenodd" />
+    </svg>
+  );
+}
+
+/**
+ * The bot's picture: the surface's bot (`BotIdentityContext`) by its id, or
+ * a plain bot outside one.
  */
 export function BotAvatar(props: {
   readonly size: IdentityAvatarSize;
@@ -76,9 +131,7 @@ export function BotAvatar(props: {
   return (
     <IdentityAvatar
       kind="bot"
-      name={identity?.title ?? "Bot"}
-      seed={identity?.botId ?? "bot"}
-      avatarUrl={null}
+      botId={identity?.botId ?? "bot"}
       size={props.size}
       testId="bot-avatar"
     />
@@ -91,15 +144,12 @@ export function BotAvatar(props: {
  */
 export function NamedBotAvatar(props: {
   readonly botId: string;
-  readonly title: string;
   readonly size: IdentityAvatarSize;
 }): ReactElement {
   return (
     <IdentityAvatar
       kind="bot"
-      name={props.title}
-      seed={props.botId}
-      avatarUrl={null}
+      botId={props.botId}
       size={props.size}
       testId="bot-avatar"
     />
