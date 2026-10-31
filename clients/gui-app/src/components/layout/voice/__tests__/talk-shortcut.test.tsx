@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPlatformMock } from "@/__tests__/create-platform-mock";
 import { useDictationHotkey } from "@/hooks/composer/use-dictation-hotkey";
 import { actionsSource } from "@/lib/commands/sources/actions.source";
+import type { CommandContext } from "@/lib/commands/types";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { routeTree } from "@/routeTree.gen";
@@ -158,12 +159,38 @@ describe("the Talk shortcut", () => {
   });
 });
 
+/** The palette's context: nothing open, at the root. */
+function paletteContext(): CommandContext {
+  return {
+    pathname: "/",
+    router: {
+      getPathname: () => "/",
+      navigateHome: () => undefined,
+      navigateSettings: () => undefined,
+      navigateToEpic: () => undefined,
+      navigateToEpicTab: () => undefined,
+      navigateToEpicList: () => undefined,
+      navigateSettingsSection: () => undefined,
+      navigateToTabIntent: () => undefined,
+      goBack: () => undefined,
+      goForward: () => undefined,
+      isHistoryNavAvailable: () => false,
+      canGoBack: () => false,
+      canGoForward: () => false,
+    },
+    activeTabId: null,
+    activeEpicId: null,
+    focusedComposerKind: null,
+    targetGroupId: null,
+  };
+}
+
 describe("Talk in the command palette", () => {
   it("is offered only while this window can talk", () => {
     const talkRow = (): boolean =>
-      renderHook(() => actionsSource.useItems()).result.current.some(
-        (item) => item.actionId === "voice.talk.toggle",
-      );
+      renderHook(() =>
+        actionsSource.useItems(paletteContext()),
+      ).result.current.some((item) => item.actionId === "voice.talk.toggle");
     expect(talkRow()).toBe(true);
     useVoiceSessionStore.setState({ availability: "dormant" });
     expect(talkRow()).toBe(false);
