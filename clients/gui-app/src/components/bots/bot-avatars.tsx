@@ -144,7 +144,6 @@ export function BotAvatar(props: {
  */
 export function NamedBotAvatar(props: {
   readonly botId: string;
-  readonly title: string;
   readonly size: IdentityAvatarSize;
 }): ReactElement {
   return (

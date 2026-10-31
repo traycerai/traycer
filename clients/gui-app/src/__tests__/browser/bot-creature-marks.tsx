@@ -65,7 +65,7 @@ const theme =
     : "light";
 if (theme === "dark") document.documentElement.classList.add("dark");
 
-function Sheet(props: { readonly grayscale: boolean }): ReactElement {
+export function Sheet(props: { readonly grayscale: boolean }): ReactElement {
   const name = props.grayscale ? "grayscale" : "colour";
   return (
     <section
@@ -84,12 +84,7 @@ function Sheet(props: { readonly grayscale: boolean }): ReactElement {
             className="flex w-72 items-start gap-2"
           >
             {SIZES.map((size) => (
-              <NamedBotAvatar
-                key={size}
-                botId={bot.botId}
-                title={bot.title}
-                size={size}
-              />
+              <NamedBotAvatar key={size} botId={bot.botId} size={size} />
             ))}
             <span className="truncate text-ui-xs">{bot.title}</span>
           </div>
@@ -113,7 +108,7 @@ function Sheet(props: { readonly grayscale: boolean }): ReactElement {
   );
 }
 
-function ContactSheet(): ReactElement {
+export function ContactSheet(): ReactElement {
   return (
     <main className="flex min-h-screen flex-col bg-background text-foreground">
       <Sheet grayscale={false} />

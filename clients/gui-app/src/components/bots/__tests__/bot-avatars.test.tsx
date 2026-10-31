@@ -63,18 +63,11 @@ function drawn(): DrawnAvatar[] {
   });
 }
 
-function sideBySide(
-  bots: ReadonlyArray<{ readonly botId: string; readonly title: string }>,
-): DrawnAvatar[] {
+function sideBySide(botIds: readonly string[]): DrawnAvatar[] {
   render(
     <>
-      {bots.map((bot) => (
-        <NamedBotAvatar
-          key={bot.botId}
-          botId={bot.botId}
-          title={bot.title}
-          size="sm"
-        />
+      {botIds.map((botId) => (
+        <NamedBotAvatar key={botId} botId={botId} size="sm" />
       ))}
     </>,
   );
@@ -82,11 +75,12 @@ function sideBySide(
 }
 
 function InBotContext(props: {
+  readonly title: string;
   readonly children: ReactElement;
 }): ReactElement {
   return (
     <BotIdentityContext.Provider
-      value={{ botId: TEAM_S_MAIN_BOT_ID, title: "Team Tracy", owner: null }}
+      value={{ botId: TEAM_S_MAIN_BOT_ID, title: props.title, owner: null }}
     >
       {props.children}
     </BotIdentityContext.Provider>
@@ -101,22 +95,17 @@ describe("a bot's picture", () => {
   it.each([
     [
       "a named bot",
-      <NamedBotAvatar
-        key="named"
-        botId={TEAM_S_MAIN_BOT_ID}
-        title="Team Tracy"
-        size="sm"
-      />,
+      <NamedBotAvatar key="named" botId={TEAM_S_MAIN_BOT_ID} size="sm" />,
     ],
     [
       "the surface's bot",
-      <InBotContext key="surface">
+      <InBotContext key="surface" title="Team Tracy">
         <BotAvatar size="sm" />
       </InBotContext>,
     ],
     [
       "a stack's bot entry",
-      <InBotContext key="stack">
+      <InBotContext key="stack" title="Team Tracy">
         <AvatarStack
           identities={[{ kind: "bot" }]}
           max={3}
@@ -177,8 +166,8 @@ describe("a bot's picture", () => {
 
   it("draws the personal main bot and a team's main bot with different creatures and swatches", () => {
     const [personal, team] = sideBySide([
-      { botId: PERSONAL_MAIN_BOT_ID, title: "Tracy" },
-      { botId: TEAM_A_MAIN_BOT_ID, title: "Team Tracy" },
+      PERSONAL_MAIN_BOT_ID,
+      TEAM_A_MAIN_BOT_ID,
     ]);
 
     expect(personal.path).not.toBe(team.path);
@@ -186,10 +175,7 @@ describe("a bot's picture", () => {
   });
 
   it("draws two bots of one name in different environments on different swatches with different creatures", () => {
-    const [teamA, teamS] = sideBySide([
-      { botId: TEAM_A_MAIN_BOT_ID, title: "Team Tracy" },
-      { botId: TEAM_S_MAIN_BOT_ID, title: "Team Tracy" },
-    ]);
+    const [teamA, teamS] = sideBySide([TEAM_A_MAIN_BOT_ID, TEAM_S_MAIN_BOT_ID]);
 
     // One hue in its two tones: the light swatch takes dark ink, the deep one
     // white.
@@ -201,12 +187,8 @@ describe("a bot's picture", () => {
   it("draws one bot the same in a sidebar row as on its own surface's header and message rows", () => {
     render(
       <>
-        <NamedBotAvatar
-          botId={TEAM_S_MAIN_BOT_ID}
-          title="Team Tracy"
-          size="sm"
-        />
-        <InBotContext>
+        <NamedBotAvatar botId={TEAM_S_MAIN_BOT_ID} size="sm" />
+        <InBotContext title="Team Tracy">
           <BotAvatar size="sm" />
         </InBotContext>
       </>,
@@ -217,11 +199,21 @@ describe("a bot's picture", () => {
   });
 
   it("keeps a bot's creature, swatch and ink through a rename", () => {
-    const [before] = sideBySide([
-      { botId: TEAM_A_MAIN_BOT_ID, title: "Team Tracy" },
-    ]);
+    // The surface's identity is the one place a bot's title reaches its
+    // picture.
+    render(
+      <InBotContext title="Team Tracy">
+        <BotAvatar size="sm" />
+      </InBotContext>,
+    );
+    const [before] = drawn();
     cleanup();
-    const [after] = sideBySide([{ botId: TEAM_A_MAIN_BOT_ID, title: "Ops" }]);
+    render(
+      <InBotContext title="Ops">
+        <BotAvatar size="sm" />
+      </InBotContext>,
+    );
+    const [after] = drawn();
 
     expect(after).toEqual(before);
   });
