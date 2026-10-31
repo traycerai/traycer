@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  bindChannel,
   bindTarget,
   type BoundTarget,
   type NamedTarget,
@@ -319,6 +320,14 @@ export type RoutedDecision =
       readonly kind: "deferred";
       readonly verb: DeferredVerb;
       readonly target: BoundTarget | null;
+      /** The queue item the route names, checked against the directory; `null` for none. */
+      readonly itemId: string | null;
+      /**
+       * Whether the route itself named a thread. The bound target inherits
+       * the focused thread for a bot-only route, which says nothing about
+       * which of the bot's threads the person means.
+       */
+      readonly threadNamed: boolean;
       readonly span: SpanPick;
     }
   | { readonly kind: "refused"; readonly reason: RouteRefusal };
@@ -383,11 +392,16 @@ function resolveSwitch(
   if (itemId === null || item === undefined) {
     return { kind: "refused", reason: "unknown-target" };
   }
-  const target = bindTarget(directory, {
-    environmentId: null,
-    botId: item.botId,
-    threadId: item.threadId,
-  });
+  // An item's place is explicit: one with no thread lives in the bot's
+  // channel, which a focused thread of the bot is not.
+  const target =
+    item.threadId === null
+      ? bindChannel(directory, item.botId)
+      : bindTarget(directory, {
+          environmentId: null,
+          botId: item.botId,
+          threadId: item.threadId,
+        });
   if (target === null) return { kind: "refused", reason: "unknown-target" };
   return { kind: "switch", target, itemId };
 }
@@ -398,13 +412,42 @@ function resolveDeferred(
   directory: VoiceDirectory,
   span: SpanPick,
 ): RoutedDecision {
+  const itemId = result.target.itemId;
   const named = namedOf(result);
+  // The item and the bot (and thread) the route names are one destination:
+  // an item of another bot than the one named is not this route's.
+  if (itemId !== null) {
+    const item = directory.queue.find(
+      (candidate) => candidate.itemId === itemId,
+    );
+    if (
+      item === undefined ||
+      (named.botId !== null && item.botId !== named.botId) ||
+      (named.threadId !== null && item.threadId !== named.threadId)
+    ) {
+      return { kind: "refused", reason: "unknown-target" };
+    }
+  }
   if (named.botId === null && named.threadId === null) {
-    return { kind: "deferred", verb, target: null, span };
+    return {
+      kind: "deferred",
+      verb,
+      target: null,
+      itemId,
+      threadNamed: false,
+      span,
+    };
   }
   const target = bindTarget(directory, named);
   if (target === null) return { kind: "refused", reason: "unknown-target" };
-  return { kind: "deferred", verb, target, span };
+  return {
+    kind: "deferred",
+    verb,
+    target,
+    itemId,
+    threadNamed: named.threadId !== null,
+    span,
+  };
 }
 
 /**
