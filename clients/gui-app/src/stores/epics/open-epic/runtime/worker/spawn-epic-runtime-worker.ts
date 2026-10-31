@@ -199,7 +199,6 @@ export interface SpawnEpicRuntimeWorkerOptions<TProjection> {
    * socket per (hostId, userId).
    */
   readonly streams: IStreamClient<HostStreamRpcRegistry>;
-  /** Identifies this renderer window in the worker's log lines. */
   /**
    * What to do with published projection slices.
    *
@@ -212,14 +211,6 @@ export interface SpawnEpicRuntimeWorkerOptions<TProjection> {
    */
   readonly projection: RuntimeProjectionHandlers<TProjection>;
   /**
-   * The process-backed books this worker's runtime reports into.
-   *
-   * Built by the CALLER on main, exactly as the in-process store builds it, so
-   * both arms draw their runtime token from the one process-wide sequence.
-   * Nothing about it crosses the bridge - the worker pushes byte facts in the
-   * runtime's own vocabulary and this side names the holders.
-   */
-  /**
    * A collaborator's edit and a remote presence frame, both for the live doc
    * main holds. See {@link EpicRuntimeBodyReturnTarget} for who provides it.
    *
@@ -228,6 +219,14 @@ export interface SpawnEpicRuntimeWorkerOptions<TProjection> {
    * no answer a fire-and-forget sender could act on.
    */
   readonly body: EpicRuntimeBodyReturnTarget;
+  /**
+   * The process-backed books this worker's runtime reports into.
+   *
+   * Built by the CALLER on main, exactly as the in-process store builds it, so
+   * both arms draw their runtime token from the one process-wide sequence.
+   * Nothing about it crosses the bridge - the worker pushes byte facts in the
+   * runtime's own vocabulary and this side names the holders.
+   */
   readonly accounting: EpicRuntimeAccountingPort;
   /** The epic this worker serves for its whole life. */
   readonly epicId: string;
@@ -239,6 +238,7 @@ export interface SpawnEpicRuntimeWorkerOptions<TProjection> {
    * its absence caused.
    */
   readonly hostId: string;
+  /** Identifies this renderer window in the worker's log lines. */
   readonly windowLabel: string;
 }
 
@@ -261,15 +261,6 @@ export interface EpicRuntimeWorkerHandle {
    * skipped by accident.
    */
   readonly ready: Promise<void>;
-  /**
-   * Ends the TRANSPORT while the worker lives on - path 2 (`detachTransport`),
-   * where a retained-dirty buffer must stop dialling a host this window has
-   * left but keeps its replica. Every real session is reported closed to the
-   * worker first. Idempotent.
-   *
-   * Must run BEFORE `closeSessionTransport()` at the call site: closing the
-   * transport first kills the sessions before they can be reported.
-   */
   /**
    * Send one fire-and-forget command to the relocated runtime.
    *
@@ -303,6 +294,15 @@ export interface EpicRuntimeWorkerHandle {
    * profile hydrates after the session is constructed).
    */
   currentUser(userId: string | null): void;
+  /**
+   * Ends the TRANSPORT while the worker lives on - path 2 (`detachTransport`),
+   * where a retained-dirty buffer must stop dialling a host this window has
+   * left but keeps its replica. Every real session is reported closed to the
+   * worker first. Idempotent.
+   *
+   * Must run BEFORE `closeSessionTransport()` at the call site: closing the
+   * transport first kills the sessions before they can be reported.
+   */
   detach(): void;
   /**
    * Idempotent. Detaches (so the worker observes every close), then asks the
@@ -383,15 +383,6 @@ export function spawnEpicRuntimeWorker<TProjection>(
   });
 
   /**
-   * The ONE way a dead runtime is surfaced, reached from both entries: the
-   * worker's own `fatal` bridge event, and a fault the worker reports as a DOM
-   * event because no code of ours is running to send one.
-   *
-   * Shared rather than duplicated because the three steps are not
-   * independent, and a second copy would drift on whichever one a later
-   * reader thought was the incidental part.
-   */
-  /**
    * Whether construction has reached the point where `disposeHandle` can run.
    *
    * A fatal can arrive DURING construction, and `disposeHandle` reads bindings
@@ -421,6 +412,15 @@ export function spawnEpicRuntimeWorker<TProjection>(
    */
   const fatalTeardown = { constructionComplete: false, deferred: false };
 
+  /**
+   * The ONE way a dead runtime is surfaced, reached from both entries: the
+   * worker's own `fatal` bridge event, and a fault the worker reports as a DOM
+   * event because no code of ours is running to send one.
+   *
+   * Shared rather than duplicated because the three steps are not
+   * independent, and a second copy would drift on whichever one a later
+   * reader thought was the incidental part.
+   */
   const surfaceFatal = (message: string, stack: string | null): void => {
     // The runtime behind the bridge is gone, so its books must not stay
     // attached to the process planes. Without this the accountant keeps a
