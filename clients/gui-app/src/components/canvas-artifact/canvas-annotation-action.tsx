@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useStore } from "zustand";
 import type { CanvasAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
@@ -20,8 +20,17 @@ import {
   attachCanvasAnnotation,
   canvasAnnotationElement,
   canvasWindowCaptureBridge,
+  captureCanvasRegionWithoutChrome,
 } from "./canvas-annotation-attach";
 import type { CanvasSelection } from "./canvas-selection-store";
+
+/**
+ * How long a capture waits for the picker to leave the screen before taking
+ * the picture anyway. The menu's exit animation is a tenth of that; the bound
+ * only exists for a menu whose content was never presented (a pane that lost
+ * focus mid-pick), which has no exit to report.
+ */
+const MENU_CLOSE_WAIT_MS = 500;
 
 export interface CanvasAnnotationScope {
   readonly epicId: string;
@@ -100,6 +109,31 @@ export function CanvasAnnotationAction(props: {
     [orderedChatIds, chats, openChatIds, lastFocusedChatId, props.scope.hostId],
   );
   const [menuOpen, setMenuOpen] = useState(false);
+  // Whether the picker is still on screen, and who is waiting for it to go.
+  // `menuOpen` flips false the moment a chat is picked, but the menu keeps
+  // painting through its exit animation; the capture below must not run until
+  // that has ended, or the fading menu is cut into the crop with the element.
+  const menuPresent = useRef(false);
+  const menuGone = useRef<(() => void) | null>(null);
+  const openMenu = (open: boolean): void => {
+    if (open) menuPresent.current = true;
+    setMenuOpen(open);
+  };
+  const menuClosed = (): void => {
+    menuPresent.current = false;
+    menuGone.current?.();
+    menuGone.current = null;
+  };
+  const awaitMenuGone = (): Promise<void> => {
+    if (!menuPresent.current) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(resolve, MENU_CLOSE_WAIT_MS);
+      menuGone.current = () => {
+        window.clearTimeout(timer);
+        resolve();
+      };
+    });
+  };
   const [attached, setAttached] = useState<{
     chatId: string;
     record: CanvasAnnotationRecord;
@@ -108,14 +142,17 @@ export function CanvasAnnotationAction(props: {
   const mutation = useMutation({
     mutationKey: canvasMutationKeys.attach(props.scope.artifactId),
     mutationFn: async (chatId: string) => {
-      // Capture immediately on the explicit action, before revealing another tile.
+      // Capture on the explicit action, before revealing another tile, but
+      // only once the picker has left the screen and with the selection chrome
+      // hidden: the crop is cut from the app window as composited.
       const annotation = props.record();
       const rect = props.captureRect();
       const bridge = canvasWindowCaptureBridge();
-      const crop =
-        rect !== null && bridge !== null
-          ? await bridge.captureRegion(rect)
-          : null;
+      let crop: ArrayBuffer | null = null;
+      if (rect !== null && bridge !== null) {
+        await awaitMenuGone();
+        crop = await captureCanvasRegionWithoutChrome(bridge, rect);
+      }
       if (rect !== null && bridge !== null && crop === null)
         throw new Error(
           "The selected region could not be captured. Try again.",
@@ -162,7 +199,8 @@ export function CanvasAnnotationAction(props: {
           onSelectChat={selectTarget}
           onSelectNewChat={null}
           open={menuOpen}
-          onOpenChange={setMenuOpen}
+          onOpenChange={openMenu}
+          onClosed={menuClosed}
           trigger={
             <ToolbarActionButton
               label="Send to chat"

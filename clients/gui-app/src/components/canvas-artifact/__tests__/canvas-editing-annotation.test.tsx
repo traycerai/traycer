@@ -21,6 +21,7 @@ import { createStore } from "zustand/vanilla";
 import type { CanvasAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
 import type { QuoteChatTarget } from "@/components/epic-canvas/renderers/chat-target-menu/quote-chat-targets";
 import type { ArtifactReadSpan } from "@/lib/sandbox/artifact-serving";
+import type { CanvasBox } from "@/lib/sandbox/canvas-bridge";
 import { CanvasEditingOverlay } from "../canvas-editing-overlay";
 import {
   useCanvasSelectionStore,
@@ -60,11 +61,18 @@ interface Outside {
   >;
   readonly reveal: Mock<(chatId: string) => void>;
   readonly source: { current: { kind: "text"; text: string } | null };
+  /** The desktop's window screenshot bridge, or `null` where there is none (web). */
+  readonly capture: {
+    current: {
+      captureRegion: Mock<(rect: CanvasBox) => Promise<ArrayBuffer | null>>;
+    } | null;
+  };
 }
 const outside = vi.hoisted((): Outside => ({
   attach: vi.fn(),
   reveal: vi.fn(),
   source: { current: null },
+  capture: { current: null },
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
@@ -99,50 +107,68 @@ vi.mock(
 );
 vi.mock(
   "@/components/epic-canvas/renderers/chat-target-menu/chat-target-menu",
-  () => ({
+  async () => {
+    const { useEffect, useRef } = await import("react");
     // The roster is Radix's; what matters here is that it lists the chats only
-    // once the trigger has opened it.
-    ChatTargetMenu: (props: {
+    // once the trigger has opened it, and that it reports the menu gone the
+    // way Radix does: from the unmount that follows a close, not from the
+    // close itself.
+    function ChatTargetMenu(props: {
       readonly trigger: ReactNode;
       readonly targets: readonly QuoteChatTarget[];
       readonly open: boolean;
       readonly onOpenChange: (open: boolean) => void;
+      readonly onClosed: (() => void) | null;
       readonly onSelectChat: (chatId: string) => void;
-    }) => (
-      <div>
-        <div
-          role="presentation"
-          onClick={() => props.onOpenChange(!props.open)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") props.onOpenChange(!props.open);
-          }}
-        >
-          {props.trigger}
-        </div>
-        {props.open ? (
-          <div role="menu">
-            {props.targets.map((target) => (
-              <button
-                key={target.chatId}
-                type="button"
-                role="menuitem"
-                onClick={() => props.onSelectChat(target.chatId)}
-              >
-                {target.title}
-              </button>
-            ))}
+    }) {
+      const wasOpen = useRef(false);
+      const { open, onClosed } = props;
+      useEffect(() => {
+        if (wasOpen.current && !open && onClosed !== null) onClosed();
+        wasOpen.current = open;
+      }, [open, onClosed]);
+      return (
+        <div>
+          <div
+            role="presentation"
+            onClick={() => props.onOpenChange(!props.open)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") props.onOpenChange(!props.open);
+            }}
+          >
+            {props.trigger}
           </div>
-        ) : null}
-      </div>
-    ),
-  }),
+          {props.open ? (
+            <div role="menu">
+              {props.targets.map((target) => (
+                <button
+                  key={target.chatId}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    // Radix closes the menu on a pick before the item's own
+                    // handler runs; the real roster does the same.
+                    props.onOpenChange(false);
+                    props.onSelectChat(target.chatId);
+                  }}
+                >
+                  {target.title}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+    return { ChatTargetMenu };
+  },
 );
 vi.mock("@/hooks/files/use-artifact-object-text-query", () => ({
   useArtifactObjectTextQuery: () => ({ data: outside.source.current }),
 }));
 vi.mock("../canvas-annotation-attach", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../canvas-annotation-attach")>()),
-  canvasWindowCaptureBridge: () => null,
+  canvasWindowCaptureBridge: () => outside.capture.current,
   attachCanvasAnnotation: outside.attach,
 }));
 
@@ -196,6 +222,8 @@ function mountOverlay() {
   stage.append(frame);
   Object.defineProperty(frame, "clientWidth", { value: 640 });
   Object.defineProperty(frame, "clientHeight", { value: 360 });
+  // jsdom lays nothing out; the capture rect is the frame's box on screen.
+  frame.getBoundingClientRect = () => new DOMRect(0, 0, 640, 360);
   registry.update(BOARD_PATH, {
     frame,
     source: {
@@ -249,6 +277,7 @@ beforeEach(() => {
     .mockImplementation((input) => Promise.resolve(input.record));
   outside.reveal.mockReset();
   outside.source.current = { kind: "text", text: HTML };
+  outside.capture.current = null;
   useCanvasSelectionStore.getState().clear();
 });
 
@@ -395,6 +424,55 @@ describe("attaching a selected range to a chat", () => {
     await addToChat();
     expect(outside.reveal).toHaveBeenCalledWith("chat-1");
     expect(screen.queryByRole("menuitem", { name: "Chat one" })).toBeNull();
+  });
+
+  it("screenshots the window only once the picker is gone and the selection chrome is hidden", async () => {
+    // What the window looked like at the instant it was photographed. The
+    // crop is cut from the app window as composited, so a picker still
+    // fading out or the outline around the element would be in the picture.
+    const seen = {
+      menu: true,
+      outline: true,
+      actionBarVisible: true,
+    };
+    const png = new Uint8Array([137, 80, 78, 71]);
+    outside.capture.current = {
+      captureRegion: vi.fn(() => {
+        seen.menu = screen.queryByRole("menu") !== null;
+        seen.outline =
+          document.querySelector("[data-canvas-selection-outline]") !== null;
+        seen.actionBarVisible =
+          document
+            .querySelector("[data-canvas-selection-action]")
+            ?.classList.contains("invisible") === false;
+        return Promise.resolve(png.buffer.slice(0));
+      }),
+    };
+    mountOverlay();
+    select(LITERAL);
+    await screen.findByRole("button", { name: "Send to chat" });
+    expect(
+      document.querySelector("[data-canvas-selection-outline]"),
+    ).not.toBeNull();
+    await addToChat();
+
+    expect(outside.capture.current.captureRegion).toHaveBeenCalledOnce();
+    expect(seen).toEqual({
+      menu: false,
+      outline: false,
+      actionBarVisible: false,
+    });
+    expect(outside.attach.mock.calls[0][0].crop).toEqual(png);
+    // The chrome is back once the picture is taken: the selection is still
+    // the user's, and the action bar is where the next send starts.
+    expect(
+      document.querySelector("[data-canvas-selection-outline]"),
+    ).not.toBeNull();
+    expect(
+      document
+        .querySelector("[data-canvas-selection-action]")
+        ?.classList.contains("invisible"),
+    ).toBe(false);
   });
 
   it("waits for the source of a range in source text rather than attaching a guess", async () => {

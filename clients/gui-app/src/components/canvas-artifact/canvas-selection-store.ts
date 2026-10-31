@@ -43,6 +43,14 @@ interface CanvasSelectionState {
     readonly artifactId: string;
     readonly boardPath: string;
   } | null;
+  /**
+   * A window screenshot of the selection is being taken. The crop is cut from
+   * the app window itself, so everything the overlay paints over the board
+   * (outline, handles, action bar, structure handles) would end up in it;
+   * while this is set, the overlay paints none of it.
+   */
+  readonly capturing: boolean;
+  readonly setCapturing: (capturing: boolean) => void;
   readonly beginPick: (
     owner: symbol,
     artifactId: string,
@@ -90,6 +98,8 @@ export const useCanvasSelectionStore = create<CanvasSelectionState>(
     selectionOwner: null,
     generation: 0,
     pendingPick: null,
+    capturing: false,
+    setCapturing: (capturing) => set({ capturing }),
     beginPick: (owner, artifactId, boardPath) => {
       const generation = get().generation + 1;
       set({
