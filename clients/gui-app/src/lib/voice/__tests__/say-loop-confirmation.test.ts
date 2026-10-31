@@ -104,6 +104,7 @@ function route(
     uncertain: false,
     question: null,
     control: null,
+    choice: null,
   };
 }
 

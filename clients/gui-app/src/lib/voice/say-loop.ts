@@ -10,6 +10,8 @@ import type {
 } from "@/lib/voice/router";
 import {
   joinSegments,
+  type CardKey,
+  type RouterCard,
   type TranscriptSegment,
   type VoiceFocus,
   type VoiceSessionState,
@@ -140,6 +142,8 @@ export interface RouteRequest {
   readonly segments: ReadonlyArray<string>;
   /** The question the voice asked about these words, when it just asked one. */
   readonly askedQuestion: string | null;
+  /** The card the voice read and waits on an answer to, when one waits. */
+  readonly card: RouterCard | null;
 }
 
 export interface AskOutcome {
@@ -259,6 +263,11 @@ interface RoutingEntry {
   readonly selectionGeneration: number;
   readonly sessionToken: number;
   readonly engineGeneration: number;
+  /**
+   * The card the router was shown, when one waited: a routed answer, or a
+   * drop of the candidate, acts on that card's opening and question only.
+   */
+  readonly card: CardKey | null;
 }
 
 /** A routed post held for the person's yes. */
@@ -320,6 +329,8 @@ const REFUSAL_TEXT: Record<LoopRefusal, string> = {
 };
 
 const DECLINED_TEXT = "Okay, I did not post it.";
+const NO_CARD_TEXT =
+  "Nothing was sent: no question or approval is waiting for an answer. The person can open one first.";
 const UNANSWERED_TEXT =
   "Nothing was posted: no yes came for it. The person can say it again.";
 
@@ -553,6 +564,9 @@ export function confirmationAnswer(
   }
   return AFFIRMATIVE_FORMS.has(core.join(" ")) ? "yes" : "not-an-answer";
 }
+
+/** What held a boundary before routing; see `heldBoundary`. */
+type BoundaryHold = "handled" | "route" | "none";
 
 export function createSayLoop(deps: SayLoopDeps): SayLoop {
   const { store } = deps;
@@ -899,6 +913,9 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         settleDelegation(entry.delegationId);
         deps.control(decision.verb);
         return;
+      case "answer":
+        answerRouted(entry, decision);
+        return;
       case "deferred": {
         store.getState().consumeReservation(entry.seqs);
         settleDelegation(entry.delegationId);
@@ -1000,6 +1017,46 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         return;
       }
     }
+  }
+
+  /** The router's answer to the card: consumed by it and never posted. */
+  function answerRouted(
+    entry: RoutingEntry,
+    decision: Extract<RoutedDecision, { readonly kind: "answer" }>,
+  ): void {
+    store.getState().consumeReservation(entry.seqs);
+    settleDelegation(entry.delegationId);
+    const span = entry.segments.slice(decision.span.from, decision.span.to + 1);
+    const driver = store.getState().cardDriver;
+    const taken =
+      driver !== null &&
+      entry.card !== null &&
+      driver.answerRouted(
+        {
+          choice: decision.choice,
+          text: joinSegments(span),
+          key: entry.card,
+          seqs: span.map((segment) => segment.seq),
+        },
+        delegationOf(entry),
+      );
+    if (!taken) deps.notify(NO_CARD_TEXT, delegationOf(entry));
+  }
+
+  /** The card the router is shown: the one that waited at this boundary, if any. */
+  function routerCardFor(cardWaited: "route" | "none"): RouterCard | null {
+    if (cardWaited === "none") return null;
+    return store.getState().cardDriver?.routerCard() ?? null;
+  }
+
+  /**
+   * Words the router took for something else than the card's answer are a
+   * new request: a yes said later must not send the card's candidate.
+   */
+  function afterCardRoute(entry: RoutingEntry, decision: RoutedDecision): void {
+    if (entry.card === null) return;
+    if (decision.kind === "answer" || decision.kind === "fragment") return;
+    store.getState().cardDriver?.dropCandidate(entry.card, entry.seqs);
   }
 
   /** The held post goes, with its words; nothing is said. */
@@ -1121,6 +1178,52 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   }
 
   /**
+   * What holds a boundary before it is routed, in order: an interruption
+   * (its words join the held ones), a post waiting for its yes, and the
+   * active card waiting for an answer. `"handled"` when one of them took the
+   * words; otherwise whether a card waits (`"route"`: the router sees it). A
+   * promise only while a post waits for its yes, whose answer is awaited.
+   */
+  function heldBoundary(
+    boundary: string,
+    delegationId: string,
+  ): BoundaryHold | Promise<BoundaryHold> {
+    const state = store.getState();
+    if (state.pendingAction?.kind === "interrupted") {
+      holdInterruptedBoundary();
+      return "handled";
+    }
+    if (state.pendingAction?.kind === "confirming" || confirming !== null) {
+      return answerConfirmation(boundary).then((answered) =>
+        answered === "handled" ? "handled" : answerCard(boundary, delegationId),
+      );
+    }
+    return answerCard(boundary, delegationId);
+  }
+
+  /**
+   * A boundary while the active card waits for the person's words: words that
+   * answer it exactly (a choice, a yes, a no) are consumed by it and never
+   * posted. `"route"` when the card waits but the words are not its answer
+   * (the router then sees the card), `"none"` when no card waits.
+   */
+  function answerCard(boundary: string, delegationId: string): BoundaryHold {
+    const state = store.getState();
+    const driver = state.cardDriver;
+    if (driver === null || !driver.awaitsAnswer()) return "none";
+    const words = state.reserveOpenSpan(`card:${boundary}`);
+    // A boundary with no words answers nothing yet.
+    if (words === null) return "handled";
+    const verdict = driver.answer(words, delegationId);
+    if (verdict === "handled") {
+      store.getState().consumeReservation(words.seqs);
+      return "handled";
+    }
+    store.getState().releaseReservation(words.seqs);
+    return "route";
+  }
+
+  /**
    * A boundary while an interruption is pending. Unheard ask: the words are
    * held with the interrupted ones. Heard, or given up with an utterance
    * under way: this boundary closes the interruption; the next is a fresh
@@ -1146,16 +1249,11 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       const boundary = `${state.engineGeneration}:${delegationId}`;
       if (handledBoundaries.has(boundary)) return;
       handledBoundaries.add(boundary);
-      if (state.pendingAction?.kind === "interrupted") {
-        holdInterruptedBoundary();
-        return;
-      }
-      if (
-        (state.pendingAction?.kind === "confirming" || confirming !== null) &&
-        (await answerConfirmation(boundary)) === "handled"
-      ) {
-        return;
-      }
+      // Awaited only while a post waits for its yes: on every other path the
+      // words are reserved in the same tick the boundary arrived in.
+      const held = heldBoundary(boundary, delegationId);
+      const cardWaited = typeof held === "string" ? held : await held;
+      if (cardWaited === "handled") return;
       const now = store.getState();
       // No destination yet: the words stay open for the request that has one.
       if (now.focus === null) return;
@@ -1163,6 +1261,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       const reservation = now.reserveOpenSpan(actionId);
       if (reservation === null) return;
       now.setPendingDelegation(delegationId);
+      const routerCard = routerCardFor(cardWaited);
       const entry: RoutingEntry = {
         actionId,
         delegationId,
@@ -1173,6 +1272,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         selectionGeneration: now.selectionGeneration,
         sessionToken: now.sessionToken,
         engineGeneration: now.engineGeneration,
+        card: routerCard?.key ?? null,
       };
       const asked =
         askedQuestion !== null &&
@@ -1186,6 +1286,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         decision = await deps.decide({
           segments: entry.segments.map((segment) => segment.text),
           askedQuestion: asked,
+          card: routerCard,
         });
       } catch {
         decision = { kind: "refused", reason: "unavailable" };
@@ -1194,6 +1295,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       // stale, and navigates and posts nothing. An ended session forgot them.
       if (!routing.delete(actionId)) return;
       if (store.getState().sessionToken !== entry.sessionToken) return;
+      afterCardRoute(entry, decision);
       await execute(entry, decision);
     },
 

@@ -9,8 +9,10 @@ import { z } from "zod";
 import {
   useVoiceSessionStore,
   type QueueItem,
+  type RouterCard,
   type VoiceFocus,
 } from "@/stores/voice/voice-session-store";
+import { NOTHING_TO_OPEN_NOTICE } from "../deferred-verbs";
 import {
   composeVoiceDirectory,
   tupleHolds,
@@ -251,6 +253,7 @@ function routerResult(
     uncertain: false,
     question: null,
     control: null,
+    choice: null,
   };
 }
 
@@ -576,8 +579,8 @@ describe("small talk", () => {
   );
 });
 
-describe("a verb a later ticket builds", () => {
-  it("is refused with a spoken not-yet, posts nothing, and spends the words", async () => {
+describe("a routed open with nothing waiting", () => {
+  it("says there is nothing to open, posts nothing, and spends the words", async () => {
     const h = harness(DIRECTORY);
     const chunks = words("Open the nightly report.");
     speak(chunks);
@@ -586,8 +589,7 @@ describe("a verb a later ticket builds", () => {
     await h.loop.onDelegationCreated("d-1");
 
     expect(h.sends).toEqual([]);
-    expect(h.notices).toHaveLength(1);
-    expect(h.notices[0]).toContain("Not yet");
+    expect(h.notices).toEqual([NOTHING_TO_OPEN_NOTICE]);
     expect(useVoiceSessionStore.getState().segments).toEqual([]);
   });
 });
@@ -1059,7 +1061,7 @@ describe("the request body", () => {
   it("names the model once, asks for no reasoning, stores nothing and demands the strict schema", () => {
     const raw = routerRequestBody(
       DIRECTORY,
-      { segments: ["Tell Tracy hello"], askedQuestion: null },
+      { segments: ["Tell Tracy hello"], askedQuestion: null, card: null },
       NOW,
     );
     const body = bodySchema.parse(JSON.parse(raw));
@@ -1086,7 +1088,7 @@ describe("the request body", () => {
     );
     const raw = routerRequestBody(
       hostile,
-      { segments: ["Tell Tracy hello"], askedQuestion: null },
+      { segments: ["Tell Tracy hello"], askedQuestion: null, card: null },
       NOW,
     );
     const block = bodySchema.parse(JSON.parse(raw)).input.at(0)?.content.at(0);
@@ -1104,5 +1106,68 @@ describe("the request body", () => {
     expect(threadLineSchema.parse(JSON.parse(excerptLine ?? "")).excerpt).toBe(
       INJECTION,
     );
+  });
+});
+
+describe("the card the voice read", () => {
+  const CARD: RouterCard = {
+    key: { opening: 1, questionIndex: 0 },
+    question: "Which environment?",
+    choices: ["Staging", "Production", "Skip"],
+    takesText: true,
+  };
+
+  it("is shown to the model as a numbered block ahead of the utterance, and omitted when none waits", () => {
+    const inputText = (card: RouterCard | null): string => {
+      const raw = routerRequestBody(
+        DIRECTORY,
+        { segments: ["the second one"], askedQuestion: null, card },
+        NOW,
+      );
+      const body = z
+        .object({
+          input: z.array(
+            z.object({
+              content: z.array(z.object({ text: z.string() })),
+            }),
+          ),
+        })
+        .parse(JSON.parse(raw));
+      return body.input
+        .flatMap((message) => message.content.map((part) => part.text))
+        .join("\n");
+    };
+
+    expect(inputText(CARD)).toContain(
+      [
+        "<card>",
+        '{"question":"Which environment?","takesOwnWords":true}',
+        '{"choice":0,"label":"Staging"}',
+        '{"choice":1,"label":"Production"}',
+        '{"choice":2,"label":"Skip"}',
+        "</card>",
+        "<utterance>",
+      ].join("\n"),
+    );
+    expect(inputText(null)).not.toContain("<card>");
+  });
+
+  it("resolves an answer to its choice number and the span of the words", () => {
+    expect(
+      resolveRoute(
+        { ...routerResult("answer", NOWHERE, 1, 2), choice: 1 },
+        DIRECTORY,
+        4,
+      ),
+    ).toEqual({ kind: "answer", choice: 1, span: { from: 1, to: 2 } });
+    expect(
+      resolveRoute(routerResult("answer", NOWHERE, 0, 3), DIRECTORY, 4),
+    ).toEqual({ kind: "answer", choice: null, span: { from: 0, to: 3 } });
+  });
+
+  it("refuses an answer whose span lies outside the words", () => {
+    expect(
+      resolveRoute(routerResult("answer", NOWHERE, 0, 9), DIRECTORY, 4),
+    ).toEqual({ kind: "refused", reason: "invalid-span" });
   });
 });

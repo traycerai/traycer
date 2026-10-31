@@ -34,6 +34,7 @@ import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useTabsStore } from "@/stores/tabs/store";
 import {
   useVoiceSessionStore,
+  type VoiceCardDriver,
   type VoiceFocus,
 } from "@/stores/voice/voice-session-store";
 import { VoiceSessionController } from "../voice-session-controller";
@@ -328,6 +329,7 @@ const fake = vi.hoisted(() => {
                 uncertain,
                 question: null,
                 control: null,
+                choice: null,
               }),
             },
           ],
@@ -1283,6 +1285,36 @@ describe("an interruption whose ask is never delivered", () => {
     expect(fake.sendMock).toHaveBeenCalledWith(
       expect.objectContaining({ botId: "bot-2", text: "Run the new build." }),
     );
+  });
+});
+
+describe("a manual move with a card open", () => {
+  it("offers the card's candidate again though no words were open, and interrupts nothing", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    const invalidate = vi.fn<VoiceCardDriver["invalidate"]>();
+    useVoiceSessionStore.getState().setCardDriver({
+      open: () => "appended",
+      awaitsAnswer: () => true,
+      answer: () => "route",
+      answerRouted: () => true,
+      routerCard: () => null,
+      dropCandidate: () => undefined,
+      invalidate,
+    });
+    expect(useVoiceSessionStore.getState().openSpan()).toBe("");
+
+    selectBotTab("bot-2");
+
+    expect(useVoiceSessionStore.getState().focus?.botId).toBe("bot-2");
+    expect(invalidate).toHaveBeenCalledExactlyOnceWith("focus");
+    expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
+    expect(
+      (fake.engines[0]?.appendCommentary.mock.calls ?? []).filter(
+        ([text]) => text === MOVED_ASK_TEXT,
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -3345,6 +3377,7 @@ describe("a rail put back against a newer navigation", () => {
                 uncertain: false,
                 question: null,
                 control: null,
+                choice: null,
               }),
             },
           ],

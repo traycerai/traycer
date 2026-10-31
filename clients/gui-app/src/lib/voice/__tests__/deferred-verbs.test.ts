@@ -10,7 +10,9 @@ import {
   executeDeferredVerb,
   NO_BOT_NOTICE,
   NOT_LIVE_NOTICE,
+  NOTHING_TO_OPEN_NOTICE,
   NOTHING_WAITING_NOTICE,
+  type VerbOutcome,
 } from "../deferred-verbs";
 
 const initial = useVoiceSessionStore.getState();
@@ -255,20 +257,117 @@ describe("executeDeferredVerb", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("refuses open with a spoken not-yet, whatever is live", () => {
-    goLive([queueItem({})]);
+  describe("open", () => {
+    function open(
+      target: BoundTarget | null,
+      itemId: string | null,
+      threadNamed: boolean,
+    ): VerbOutcome {
+      return executeDeferredVerb({
+        verb: "open",
+        target,
+        itemId,
+        threadNamed,
+        delegationId: "d-1",
+      });
+    }
 
-    const outcome = executeDeferredVerb({
-      verb: "open",
-      target: null,
-      itemId: "i-1",
-      threadNamed: false,
-      delegationId: "d-1",
+    it("opens the item the route names, under the request's delegation", () => {
+      goLive([queueItem({ id: "q-1", kind: "question" })]);
+
+      expect(open(null, "q-1", false)).toEqual({ kind: "executed" });
+      expect(run.mock.calls).toEqual([
+        [{ kind: "open", itemId: "q-1", delegationId: "d-1" }],
+      ]);
     });
 
-    expect(outcome.kind).toBe("refused");
-    expect(outcome.kind === "refused" ? outcome.say : "").toContain("Not yet");
-    expect(run).not.toHaveBeenCalled();
+    it("opens the newest waiting card over a newer reply when the route names nothing", () => {
+      goLive([
+        queueItem({ id: "reply-new", kind: "reply", at: 9_000 }),
+        queueItem({ id: "card-old", kind: "surface", at: 2_000 }),
+        queueItem({ id: "card-older", kind: "question", at: 1_000 }),
+        queueItem({
+          id: "card-heard",
+          kind: "question",
+          at: 8_000,
+          state: "heard",
+        }),
+      ]);
+
+      open(null, null, false);
+
+      expect(run.mock.calls).toEqual([
+        [{ kind: "open", itemId: "card-old", delegationId: "d-1" }],
+      ]);
+    });
+
+    it.each([
+      ["searches all of the bot's threads for its card", false, "card-in-b"],
+      ["keeps to the thread the route named", true, "card-in-a"],
+    ])("a named bot's open that %s", (_name, threadNamed, expected) => {
+      goLive([
+        queueItem({
+          id: "other-bot",
+          kind: "question",
+          botId: "bot-3",
+          at: 9_000,
+        }),
+        queueItem({
+          id: "card-in-b",
+          kind: "question",
+          threadId: "thread-b",
+          at: 5_000,
+        }),
+        queueItem({
+          id: "card-in-a",
+          kind: "surface",
+          threadId: "thread-a",
+          at: 3_000,
+        }),
+      ]);
+
+      open(boundTo("bot-2", "thread-a"), null, threadNamed);
+
+      expect(run.mock.calls).toEqual([
+        [{ kind: "open", itemId: expected, delegationId: "d-1" }],
+      ]);
+    });
+
+    it("falls back to the newest waiting item of the bot when it has no card", () => {
+      goLive([
+        queueItem({ id: "reply-old", kind: "reply", at: 1_000 }),
+        queueItem({ id: "reply-new", kind: "reply", at: 4_000 }),
+        queueItem({
+          id: "other-card",
+          kind: "question",
+          botId: "bot-3",
+          at: 9_000,
+        }),
+      ]);
+
+      open(boundTo("bot-2", null), null, false);
+
+      expect(run.mock.calls).toEqual([
+        [{ kind: "open", itemId: "reply-new", delegationId: "d-1" }],
+      ]);
+    });
+
+    it.each([
+      ["the queue is empty", [], null],
+      [
+        "the named item was heard since the route was made",
+        [queueItem({ id: "q-1", kind: "question", state: "heard" })],
+        "q-1",
+      ],
+    ])("says there is nothing to open when %s", (_name, queue, itemId) => {
+      goLive(queue);
+
+      expect(open(null, itemId, false)).toEqual({
+        kind: "refused",
+        say: NOTHING_TO_OPEN_NOTICE,
+      });
+      expect(run).not.toHaveBeenCalled();
+    });
   });
 
   it("does not read another bot's item when the named bot has none waiting", () => {

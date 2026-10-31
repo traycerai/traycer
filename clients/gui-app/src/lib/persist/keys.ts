@@ -497,6 +497,14 @@ export const PERSIST_STORES = [
     leaf: "bot-pane-widths",
     kind: "static",
   },
+  // The channel column's arrangement, one per device: the sections' order,
+  // each section's channels' order, the collapsed sections
+  // (`bot-column-layout-store.ts`).
+  {
+    camelName: "botColumnLayout",
+    leaf: "bot-column-layout",
+    kind: "static",
+  },
 
   // ── Non-zustand keys ─────────────────────────────────────────────────────
   // `last-route:<windowId>` — per-window router history (persistent-history.ts).
