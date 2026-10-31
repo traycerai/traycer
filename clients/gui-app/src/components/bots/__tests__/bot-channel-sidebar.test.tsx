@@ -94,6 +94,8 @@ const mocks = vi.hoisted(() => {
     state: {
       environments: [] as EnvironmentDescriptor[],
       bots: [] as BotRecord[],
+      /** `bot.list` has not answered: no data, as while it loads or fails. */
+      botListPending: false,
       mainBotIds: null as Record<string, string> | null,
       connectable: { hostIds: [] as string[], resolved: true },
       epics,
@@ -239,7 +241,9 @@ vi.mock("@/hooks/host/use-host-query", async (importOriginal) => ({
 }));
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
   useBotListQuery: () => ({
-    data: { bots: mocks.state.bots, mainBotIds: mocks.state.mainBotIds },
+    data: mocks.state.botListPending
+      ? undefined
+      : { bots: mocks.state.bots, mainBotIds: mocks.state.mainBotIds },
   }),
 }));
 vi.mock("@/hooks/bots/use-environment-set-main-bot-mutation", () => ({
@@ -421,6 +425,7 @@ beforeEach(() => {
   }
   mocks.readRequests.length = 0;
   useBotTabsStore.setState({ tabs: {} });
+  mocks.state.botListPending = false;
   localStorage.clear();
   useBotColumnLayoutStore.setState({
     sectionOrder: [],
@@ -1523,5 +1528,44 @@ describe("<BotChannelSidebar /> putting a section away", () => {
       "bot-release",
       "bot-triage",
     ]);
+  });
+
+  it("keeps the whole arrangement when a section is collapsed before the bot list answers", async () => {
+    const user = userEvent.setup();
+    const arranged = {
+      sectionOrder: ["env-team", "env-me", "env-empty"],
+      channelOrder: { "env-team": ["bot-triage", "bot-release"] },
+      collapsed: [],
+    };
+    useBotColumnLayoutStore.setState(arranged);
+    mocks.state.botListPending = true;
+    mount("bot-release");
+
+    await user.click(screen.getByRole("button", { name: "Collapse Acme" }));
+
+    const state = useBotColumnLayoutStore.getState();
+    expect(state.collapsed).toEqual(["env-team"]);
+    expect(state.sectionOrder).toEqual(arranged.sectionOrder);
+    expect(state.channelOrder).toEqual(arranged.channelOrder);
+  });
+
+  it("drops the ids the answered lists no longer carry when a section is collapsed", async () => {
+    const user = userEvent.setup();
+    useBotColumnLayoutStore.setState({
+      sectionOrder: ["env-gone", "env-team"],
+      channelOrder: {
+        "env-team": ["bot-gone", "bot-triage"],
+        "env-gone": ["bot-x"],
+      },
+      collapsed: [],
+    });
+    mount("bot-release");
+
+    await user.click(screen.getByRole("button", { name: "Collapse Acme" }));
+
+    const state = useBotColumnLayoutStore.getState();
+    expect(state.collapsed).toEqual(["env-team"]);
+    expect(state.sectionOrder).toEqual(["env-team"]);
+    expect(state.channelOrder).toEqual({ "env-team": ["bot-triage"] });
   });
 });

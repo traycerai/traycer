@@ -130,6 +130,10 @@ export function BotChannelSidebar(props: {
       [botList, environmentList, mainBotIds],
     ),
   );
+  // What the arrangement's writes prune against: only a model both lists
+  // answered for, never one missing bots that have not loaded yet.
+  const answeredModel =
+    environments.data === undefined || bots.data === undefined ? null : model;
   const setSectionOrder = useBotColumnLayoutStore(
     (state) => state.setSectionOrder,
   );
@@ -188,7 +192,7 @@ export function BotChannelSidebar(props: {
       )}
       <SortableColumnList
         ids={model.groups.map((group) => group.environmentId)}
-        onReorder={(order) => setSectionOrder(order, model)}
+        onReorder={(order) => setSectionOrder(order, answeredModel)}
         renderLifted={(environmentId) => (
           <SectionLiftedHeader
             label={
@@ -202,7 +206,7 @@ export function BotChannelSidebar(props: {
         {model.groups.map((group) => (
           <SidebarSection
             key={group.environmentId}
-            model={model}
+            answeredModel={answeredModel}
             group={group}
             activeBotId={currentBotId}
             unreadByBotId={unreadByBotId}
@@ -289,8 +293,9 @@ function ThreadsRow(props: {
  * as Slack does, and its header keeps its own controls.
  */
 function SidebarSection(props: {
-  /** The arranged model, whose ids every write of the arrangement keeps. */
-  readonly model: HomeBotsModel;
+  /** The arranged model once both lists answered, whose ids every write of
+   * the arrangement keeps; `null` before, when a write keeps every id. */
+  readonly answeredModel: HomeBotsModel | null;
   readonly group: HomeBotsGroup;
   /** The current channel's bot; `null` while Threads shows in its place. */
   readonly activeBotId: string | null;
@@ -305,7 +310,7 @@ function SidebarSection(props: {
   readonly onNewBot: (target: NewBotTarget) => void;
 }): ReactNode {
   const {
-    model,
+    answeredModel,
     group,
     activeBotId,
     unreadByBotId,
@@ -332,7 +337,7 @@ function SidebarSection(props: {
     (state) => state.setChannelOrder,
   );
   const toggleCollapsed = (): void =>
-    setCollapsed(group.environmentId, !collapsed, model);
+    setCollapsed(group.environmentId, !collapsed, answeredModel);
   const newBot = (event: MouseEvent<HTMLButtonElement>): void =>
     props.onNewBot({
       environmentId: group.environmentId,
@@ -439,7 +444,7 @@ function SidebarSection(props: {
         <SortableColumnList
           ids={group.bots.map((bot) => bot.botId)}
           onReorder={(order) =>
-            setChannelOrder(group.environmentId, order, model)
+            setChannelOrder(group.environmentId, order, answeredModel)
           }
           renderLifted={(botId) => {
             const bot = group.bots.find((entry) => entry.botId === botId);

@@ -16,7 +16,9 @@ import type { HomeBotsModel } from "@/lib/home-bots/bots-model";
  *
  * Every write takes the model the person arranged and keeps only the ids it
  * carries, so an environment the person left or a bot that was archived is
- * dropped the next time anything is moved or collapsed.
+ * dropped the next time anything is moved or collapsed. A model built before
+ * both lists answered is passed as `null`: it lacks ids for want of an
+ * answer, so the write keeps every id rather than drop the arrangement.
  */
 export interface BotColumnLayoutState {
   /** Environment ids. */
@@ -28,18 +30,18 @@ export interface BotColumnLayoutState {
   /** The full order of the sections, as the column shows it after a drop. */
   readonly setSectionOrder: (
     order: ReadonlyArray<string>,
-    model: HomeBotsModel,
+    model: HomeBotsModel | null,
   ) => void;
   /** The full order of one section's channels, as it shows after a drop. */
   readonly setChannelOrder: (
     environmentId: string,
     order: ReadonlyArray<string>,
-    model: HomeBotsModel,
+    model: HomeBotsModel | null,
   ) => void;
   readonly setCollapsed: (
     environmentId: string,
     collapsed: boolean,
-    model: HomeBotsModel,
+    model: HomeBotsModel | null,
   ) => void;
 }
 
@@ -56,11 +58,15 @@ const EMPTY_LAYOUT: BotColumnLayout = {
   collapsed: [],
 };
 
-/** The layout with every id the model does not carry dropped. */
+/**
+ * The layout with every id the model does not carry dropped; as it is with no
+ * model to read.
+ */
 function pruneLayout(
   layout: BotColumnLayout,
-  model: HomeBotsModel,
+  model: HomeBotsModel | null,
 ): BotColumnLayout {
+  if (model === null) return layout;
   const botIdsByEnvironment = new Map(
     model.groups.map((group) => [
       group.environmentId,
