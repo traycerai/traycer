@@ -1120,6 +1120,44 @@ describe("dictation while a session is live", () => {
   });
 });
 
+describe("a Talk ended and started again while dictation records", () => {
+  it("starts with capture paused and drops its words until dictation ends", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    await bringLive();
+    act(() => useVoiceSessionStore.getState().setPausedForDictation(true));
+    expect(fake.track.enabled).toBe(false);
+
+    act(() => useVoiceSessionStore.getState().driver?.end());
+    await settle();
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+    expect(useVoiceSessionStore.getState().pausedForDictation).toBe(true);
+
+    // Talk again: the permission and the microphone answer as before.
+    await startTalk();
+    await settle();
+    await startEngine(1);
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+    focusOn(CHANNEL_FOCUS);
+    expect(fake.track.enabled).toBe(false);
+    await act(async () => {
+      eventsOf(1).onInputTranscriptDelta("Dear team,");
+      eventsOf(1).onDelegationCreated("d1");
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(fake.sendMock).not.toHaveBeenCalled();
+    expect(useVoiceSessionStore.getState().openSpan()).toBe("");
+
+    act(() => useVoiceSessionStore.getState().setPausedForDictation(false));
+    expect(fake.track.enabled).toBe(true);
+    await act(async () => {
+      eventsOf(1).onInputTranscriptDelta("Merge it.");
+      eventsOf(1).onDelegationCreated("d2");
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("the voice routes", () => {
   it("mint, end, the microphone prompt and the shell flag run as keyed mutations the cache holds, awaited by the attempt", async () => {
     await bringLive();

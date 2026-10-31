@@ -65,6 +65,22 @@ describe("sessionEnded", () => {
   });
 });
 
+describe("the dictation pause", () => {
+  it("outlives the session: no session transition writes it, only dictation clears it", () => {
+    const store = useVoiceSessionStore.getState();
+    store.setPausedForDictation(true);
+    store.sessionConnecting();
+    store.engineReplacing();
+    store.sessionEnded("ended");
+    expect(useVoiceSessionStore.getState().pausedForDictation).toBe(true);
+
+    store.sessionConnecting();
+    expect(useVoiceSessionStore.getState().pausedForDictation).toBe(true);
+    store.setPausedForDictation(false);
+    expect(useVoiceSessionStore.getState().pausedForDictation).toBe(false);
+  });
+});
+
 describe("reservations", () => {
   it("reserves every open segment, consumes only its own and releases in order", () => {
     const store = useVoiceSessionStore.getState();

@@ -179,6 +179,12 @@ export interface VoiceSessionState {
   readonly activeCard: null;
   readonly captions: boolean;
   readonly captionLines: ReadonlyArray<CaptionLine>;
+  /**
+   * Dictation holds the microphone (set by the dictation hook while it does):
+   * a live session's capture pauses. Dictation's state, not the session's:
+   * no session transition writes it, so a Talk ended and started again while
+   * dictation records starts paused.
+   */
   readonly pausedForDictation: boolean;
   readonly muted: boolean;
   readonly driver: VoiceSessionDriver | null;
@@ -294,7 +300,6 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
       queue: NO_QUEUE,
       pendingAction: null,
       captionLines: NO_CAPTIONS,
-      pausedForDictation: false,
       muted: false,
     }),
   clearEndReason: () => {
