@@ -47,6 +47,7 @@ import type {
   VoiceSessionMintRequest,
   VoiceTrayAction,
 } from "../host-client/voice-sessions";
+import type { VoiceRouteFetchResult } from "../host-client/voice-router";
 import type {
   SlackAppInstallUrlResult,
   SlackAppManifestResult,
@@ -436,6 +437,17 @@ export interface IRunnerHost {
     bearerToken: string,
     voiceSessionId: string,
   ): Promise<VoiceSessionEndFetchResult>;
+  /**
+   * The voice router's one model call (traycer-server's inference
+   * passthrough, `host-client/voice-router.ts`) with the user bearer, billed
+   * to the person's own account. `requestBody` is the JSON the app built; the
+   * answer comes back opaque for the app's structured-output parser. Same
+   * placement as the voice session routes above. Never throws.
+   */
+  routeVoiceUtterance(
+    bearerToken: string,
+    requestBody: string,
+  ): Promise<VoiceRouteFetchResult>;
   /**
    * Tells the shell whether this window holds a live voice session. A
    * desktop window whose voice is live is hidden rather than destroyed when

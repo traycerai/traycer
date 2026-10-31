@@ -4,7 +4,10 @@ import { useHostBinding } from "@/lib/host";
 import { resolveAppWideHostClient } from "@/lib/host/binding-host-client";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { readEffectiveHostIdSnapshot } from "@/stores/host/selection-authority-store";
+import { toast } from "sonner";
+import { NO_DEVICE_AVAILABLE } from "@/lib/composer/landing-placement";
 import {
+  isBotChatWithoutDevice,
   routeNotificationForHost,
   type NotificationNavigate,
   type NotificationPayload,
@@ -140,6 +143,14 @@ export function useNotificationActivationWithNavigate(
       // would already be stale before routing even starts).
       const beforeRouteHostId =
         client === null ? null : readEffectiveHostIdSnapshot();
+      // A bot's chat opens only as the bot's tab, which needs a device. With
+      // none, routing would open nothing: say so, and leave the row unread so
+      // it can be opened once a device is up.
+      if (isBotChatWithoutDevice(input.payload, beforeRouteHostId)) {
+        toast.error(NO_DEVICE_AVAILABLE);
+        input.onResult?.("failure");
+        return;
+      }
       // ORIGIN-REQUIRED routes may not fall back to the hostless intent.
       //
       // `ensureOriginHostSelected` used to carry two rules at once: it SELECTED

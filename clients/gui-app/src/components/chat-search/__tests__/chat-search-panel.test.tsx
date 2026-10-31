@@ -528,7 +528,9 @@ describe("ChatSearchPanel: an expanded message hit", () => {
         chatId: "c1",
         messageId: "m0",
       },
-      expect.anything(),
+      // The host that answered the search is the one the result opens on: a
+      // bot's tab binds to it (bot-chat-open-fallback.test.ts).
+      expect.objectContaining({ effectiveHostId: "host-1" }),
     );
     expect(onClose).toHaveBeenCalledTimes(1);
   });
