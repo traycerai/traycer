@@ -119,7 +119,12 @@ export class VoiceTrayItems {
   private async build(windowId: string, state: PendingItem): Promise<void> {
     const current = (): boolean =>
       !this.disposed && this.items.get(windowId) === state;
-    const visible = await this.deps.trayVisible().catch(() => false);
+    let visible: boolean;
+    try {
+      visible = await this.deps.trayVisible();
+    } catch {
+      visible = false;
+    }
     if (!current()) return;
     if (!visible) {
       log.info("[voice-tray] no tray to show the voice item in");
@@ -159,7 +164,7 @@ export class VoiceTrayItems {
 }
 
 /** The one line the item says about the session. */
-export function voiceTrayStateLabel(indicator: VoiceSessionIndicator): string {
+function voiceTrayStateLabel(indicator: VoiceSessionIndicator): string {
   if (indicator.pausedForDictation) return "Paused for dictation";
   return indicator.muted ? "Muted" : "Listening";
 }

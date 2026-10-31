@@ -976,13 +976,6 @@ export function VoiceSessionController(): ReactNode {
     };
   }, [end, setMuted, start]);
 
-  // Lock, sleep and the page going away all end the session through the
-  // one latch: the store's tokens move first, so a microphone prompt still
-  // open resolves into nothing, local capture and playback stop
-  // synchronously, and the vendor accounting is best effort from a document
-  // that may not outlive it. The shell's own close keeps a voice window
-  // alive, so this is the lock, the quit and a reload, not an ordinary
-  // close; the server finalizes the rest from its sideband.
   // The shell's voice item, shown while this window is away: its Mute or
   // Unmute and its End act on this window's session as the strip's do.
   useEffect(() => {
@@ -998,6 +991,13 @@ export function VoiceSessionController(): ReactNode {
     return () => subscription.dispose();
   }, [end, runnerHost, setMuted]);
 
+  // Lock, sleep and the page going away all end the session through the
+  // one latch: the store's tokens move first, so a microphone prompt still
+  // open resolves into nothing, local capture and playback stop
+  // synchronously, and the vendor accounting is best effort from a document
+  // that may not outlive it. The shell's own close keeps a voice window
+  // alive, so this is the lock, the quit and a reload, not an ordinary
+  // close; the server finalizes the rest from its sideband.
   useEffect(() => {
     const subscription = runnerHost.onSystemSuspended(() => end("locked"));
     const onPageHide = (): void => end("ended");
