@@ -32,7 +32,7 @@ import type { RegionId } from "@/lib/layout/region-id";
  * Re-deriving is also what makes a RETIRED region cost nothing: the table
  * below names this build's regions, so a key it has never heard of - an
  * `agent` override written before L-136 deleted that region - is simply not
- * read. No migration, no discard pass, no version (P5).
+ * read. No migration, no discard pass, no version.
  *
  * **It does not minimize against the base preset, deliberately** (L-133). The
  * delta is what the USER PICKED, not what happens to differ from whichever

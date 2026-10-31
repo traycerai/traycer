@@ -768,7 +768,7 @@ describe("resolvePersistedArrangement", () => {
     expect(arrangement.usageHost).toBe("header");
     expect(arrangement.usageSide).toBe("right");
     expect(arrangement.minimapSide).toBe("left");
-    // The feature is unreleased, so there is no migration (P5): a value this
+    // The feature is unreleased, so there is no migration: a value this
     // build cannot read is the DEFAULT for that field alone, and the three
     // fields beside it keep what they were given.
     expect(arrangement.resourceHost).toBe(DEFAULT_ARRANGEMENT.resourceHost);
@@ -844,7 +844,7 @@ describe("resolvePersistedArrangement", () => {
   /**
    * The direction L-142 opened: a dock order written before Todo was a member
    * has three entries and this build has four. No migration exists and none
-   * is wanted (P5) - `mergeOrder` against `DEFAULT_DOCK_ORDER` is the whole of
+   * is wanted - `mergeOrder` against `DEFAULT_DOCK_ORDER` is the whole of
    * it.
    *
    * Todo leads, because that is where `ChatLowerDock` already draws it and a

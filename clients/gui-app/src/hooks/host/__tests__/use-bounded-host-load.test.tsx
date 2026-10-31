@@ -179,7 +179,7 @@ describe("useBoundedHostLoad", () => {
   });
 
   /**
-   * Added after sealed probe P12 (`useHostLease`'s `find(hostId)` swapped for
+   * Added after an earlier probe (`useHostLease`'s `find(hostId)` swapped for
    * `leases[0]`) SURVIVED: every other test here seeds exactly ONE lease, so
    * the wrong-host lookup and the right one are indistinguishable. A window
    * with two hosts is the only shape that can tell them apart, and this hook

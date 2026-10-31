@@ -266,7 +266,7 @@ describe("useHostReachability — composed against real hostListItemToDirectoryE
   });
 
   it("PAIRED (b): fuse-window offline, dial not succeeded (no session) - the dead surface still fires", async () => {
-    // Before the P1 correction the fuse window rewrote this `offline` to
+    // Before the correction the fuse window rewrote this `offline` to
     // `indeterminate` from recency alone, suppressing the dead surface, the
     // Clone offer, and the terminal-closed behavior for up to four hours on a
     // genuinely dead host.

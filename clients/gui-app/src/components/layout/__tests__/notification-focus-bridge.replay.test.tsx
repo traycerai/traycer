@@ -1,5 +1,5 @@
 /**
- * Unmocked integration coverage for the P0-2 native-click replay guard.
+ * Unmocked integration coverage for the native-click replay guard.
  *
  * The focused `notification-focus-bridge.test.tsx` mocks
  * `useNotificationActivation` entirely, which is exactly what hid the

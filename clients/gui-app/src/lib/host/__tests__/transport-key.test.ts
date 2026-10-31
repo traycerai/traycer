@@ -151,7 +151,7 @@ describe("the transport's refusal gate", () => {
   });
 
   it("keeps the key UNCHANGED across a dialable → indeterminate flip", () => {
-    // The anti-churn property, and the one without which the P0 survives the
+    // The anti-churn property, without which the defect survives the
     // rest of this suite: every caller memoizes its client on this key, so a
     // key that merely CHANGES tears the socket down just as surely as a key
     // that goes null. The verdict is a gate, not an identity — the host's

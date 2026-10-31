@@ -14223,7 +14223,7 @@ describe("OfficeScene Finding 25 - the settle latch re-arms for a new history so
     // this time with its lead awake. RED before the fix: the latch is
     // already up from phase 2, so `settling` never fires and this sync
     // costs the planner nothing - team-0 stays stranded in the provisional
-    // cubbies phase 3 forced, for the life of the mount (the 8c P2, now
+    // cubbies phase 3 forced, for the life of the mount (the 8c case, now
     // reopened by a second history source rather than the first). The fix
     // re-arms the latch in phase 3 (agent set changed while behind), so
     // this sync IS a settle.

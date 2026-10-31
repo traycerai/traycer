@@ -2366,12 +2366,12 @@ describe("<HarnessModelPicker />", () => {
     expect(selections).toEqual([]);
   });
 
-  // P1. Every other test in this file leaves `candidates: []`, so
+  // Every other test in this file leaves `candidates: []`, so
   // `fallbackRunnable` has always been false and the picker's "is this provider
   // selectable" logic has only ever been exercised against packs that DO block.
   // The state below - downloading behind a runnable binary - is the common one
   // on a first boot, and it is the one the rail deliberately keeps selectable.
-  // P6. An ungated tab is an ordinary destination, so its accessible NAME is
+  // An ungated tab is an ordinary destination, so its accessible NAME is
   // the plain harness label - the progress sentence lives in its description,
   // where a number that changes every 1.5s belongs. It used to be the name, so
   // arrowing across a converging rail announced thirteen nine-word sentences.
@@ -2444,7 +2444,7 @@ describe("<HarnessModelPicker />", () => {
   });
 
   it("does not bounce the selection off a provider downloading behind a runnable binary", async () => {
-    // The failure P1 named: the rail offered the tab, `handleRailEntryChange`
+    // The failure: the rail offered the tab, `handleRailEntryChange`
     // committed the selection, and `resolveActiveProviderId` then recomputed
     // and threw it away - so the tab visibly sprang back, once per provider,
     // until the whole ~1.6 GB queue drained. Asserted on the browsed provider

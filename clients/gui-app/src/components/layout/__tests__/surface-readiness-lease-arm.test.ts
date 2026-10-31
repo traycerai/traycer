@@ -140,7 +140,7 @@ describe("resolveSurfaceReadiness — absence of evidence keeps the old answer",
 
   /**
    * Looked up BY ID. Seeded with another host's death, this window must not
-   * inherit it — the P12 shape, at the gate.
+   * inherit it, at the gate.
    */
   it("does not borrow another host's lease", () => {
     expect(

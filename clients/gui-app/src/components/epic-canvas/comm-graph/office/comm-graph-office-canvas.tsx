@@ -3131,7 +3131,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     // `feedSettled` flag on the sync input below rather than by anything here.
     // This comment once read "the re-plan that follows is the same population
     // change any arrival causes", which was wrong and is the cold reviewer's
-    // P2: an arrival changes the agent set and re-plans, while settling
+    // An arrival changes the agent set and re-plans, while settling
     // changes only statuses, which deliberately never re-plans on its own - so
     // the provisional floor, cold teams and quiet cubbies and all, stayed on
     // screen for the life of the mount.

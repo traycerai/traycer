@@ -1969,7 +1969,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 16 - internal-tab-bottom-follow: reaching true bottom past an in-flight clamped free-scrolling restore releases persistence", async () => {
-    // Regression for the live-Electron identity-pinned P1: a saved
+    // Regression for the live-Electron identity pinning: a saved
     // free-scrolling anchor that is missing from `messages` at mount
     // (branch edit / suffix removal) arms a mount-time clamped restore
     // convergence AND `pendingHydrationRestoreAnchorIdRef`. If the reader

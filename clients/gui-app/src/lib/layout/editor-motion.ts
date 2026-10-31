@@ -10,7 +10,7 @@ import type {
  *
  * Nothing here animates a width: the shell reflows beside the inspector in ONE
  * frame, and what glides is a pair of snapshots the browser composites for it,
- * so no text is ever scaled or re-laid-out mid flight (P2). The guarded
+ * so no text is ever scaled or re-laid-out mid flight. The guarded
  * fallback is that single-frame snap plus the inspector's own slide, which is
  * the stylesheet's doing; what this module adds there is holding the session
  * open until the slide-out has played, because the inspector renders session

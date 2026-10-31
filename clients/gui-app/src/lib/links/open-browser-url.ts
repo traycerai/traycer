@@ -51,8 +51,8 @@ interface MatchedTab {
  * else this machine's own host, else the host of the tile the link is in.
  *
  * A tab already showing the same page is focused instead of opening a second
- * one - that is what keeps repeated link clicks from stacking tabs and splits
- * (P2). Only that host's tabs are matched: a tab showing the page on another
+ * one - that is what keeps repeated link clicks from stacking tabs and splits.
+ * Only that host's tabs are matched: a tab showing the page on another
  * machine is not where the person asked for it. Middle-click bypasses the
  * match on purpose: it means "another one, in the background" (B4).
  *

@@ -1525,7 +1525,7 @@ describe("<WindowsBridgeProvider /> - renderer parking's window visibility input
   });
 
   // ── A transient snapshot failure is retried, because "the next edge" never
-  // comes for a window minimised at startup and left alone (P2) ──────────────
+  // comes for a window minimised at startup and left alone ──────────────
   it("retries a failed startup snapshot and reclaims a quiet minimised window without any further edge", async () => {
     const EPIC = "epic-provider-snapshot-retry";
     const VIEW = "view-provider-snapshot-retry";

@@ -446,7 +446,7 @@ describe("useChatSessionHandle owner identity (R-1)", () => {
 });
 
 /**
- * The P0's actual user-visible failure, composed end to end.
+ * The actual user-visible failure, composed end to end.
  *
  * The isolated tests all passed while this was broken, which is the point of
  * putting it here: the mapper collapsed `unknown` into a non-dialable entry,

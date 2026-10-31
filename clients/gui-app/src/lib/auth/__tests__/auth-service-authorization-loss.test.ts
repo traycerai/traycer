@@ -54,7 +54,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 // Companion to `auth-service.test.ts`, isolated into its own file because it
 // straddles TWO module-level singletons at once - the auth store AND the
 // process-global remote-session cache (`active-remote-sessions.ts`) - and the
-// harness for driving each is large enough on its own. See P1 in the task
+// harness for driving each is large enough on its own. See the task
 // brief: `demoteVerifiedSessionToUnverified` must sweep
 // `retireAllRemoteSessions()` when, and only when, a verified session is
 // genuinely being demoted (not on the ordinary never-verified
@@ -441,7 +441,7 @@ describe("AuthService authorization-loss remote-session sweep", () => {
   it("closes an already-established remote session when a verified session is demoted on a terminal refresh-rejection", async () => {
     // Acquire a held remote session into the REAL, module-global cache first -
     // this is what an already-open chat/terminal tab looks like from the
-    // cache's point of view. Held, not released: the whole point of P1 is
+    // cache's point of view. Held, not released: the whole point here is
     // that a HELD entry (an open tab) must not be able to outlive the
     // account's authorization.
     const identity = freshIdentity();

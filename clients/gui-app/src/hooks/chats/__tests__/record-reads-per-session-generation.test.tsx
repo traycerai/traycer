@@ -1,6 +1,6 @@
 /**
  * The park-then-show cache-reuse defect (cold Codex review of renderer
- * parking, P2).
+ * parking).
  *
  * `EpicRecordSyncEffects` (`components/epic-canvas/epic-route-session-body.tsx`)
  * gates `useEpicSyncChatRecords` and `useEpicSyncTuiAgentRecords` on

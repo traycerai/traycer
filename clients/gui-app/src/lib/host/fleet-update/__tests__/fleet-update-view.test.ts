@@ -2357,7 +2357,7 @@ describe("projectFleetUpdateView — terminal attempts yield to the record parks
 });
 
 /**
- * P1 window A: the view carries WHICH POSITION of the attempt it describes.
+ * Window A: the view carries WHICH POSITION of the attempt it describes.
  *
  * The bound dispatch sends this as `expected` so the host can refuse a Force
  * that names a park the user was never shown. The renderer had been truncating

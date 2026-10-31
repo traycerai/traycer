@@ -4,7 +4,7 @@
  * Everything here styles the app's OWN elements through data attributes that
  * `use-layout-region.ts` writes onto them, plus the two overlay elements the
  * canvas controllers create. There is no scrim, no proxy layer and no
- * duplicate of the app: what the user points at is the real thing (P3, P4).
+ * duplicate of the app: what the user points at is the real thing.
  *
  * The motion values are frozen in the plan's section 6 and only `transform`,
  * `opacity` and `filter` animate (L-29). Both reduced-motion gates are

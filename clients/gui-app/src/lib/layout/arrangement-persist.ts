@@ -342,7 +342,7 @@ function persistedIds<Id extends string>(
  *
  * "Known" is `TOOLBAR_REGION_IDS`, so an id this build retired - `agent`,
  * deleted by L-136 - is dropped here rather than migrated away, and the
- * remaining members keep their stored order (P5).
+ * remaining members keep their stored order.
  */
 function persistedCluster(
   value: unknown,
