@@ -192,8 +192,8 @@ function expectTicket5TabKeysEvicted(epicId: string): void {
   const identity = identityFor(epicId);
   // Tab-key half is gone (canvas close sweep). Durable chat-key half of the
   // dual-key registries still has the scroll/A2A/activity-group/
-  // tool/subagent entries - the SWEEP ITSELF promoted them,
-  // not a separate component/hook commit - so a reopen via
+  // tool/subagent entries - the SWEEP ITSELF promoted them
+  // (round 3), not a separate component/hook commit - so a reopen via
   // getOrCreate re-seeds from durable.
   expect(
     useToolOpenStore

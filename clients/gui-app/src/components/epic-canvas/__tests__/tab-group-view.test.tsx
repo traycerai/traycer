@@ -665,7 +665,7 @@ function ownershipSnapshot(instanceId: string): OwnershipSnapshot {
 /**
  * Design-review slice-4 F2 residual: a genuine sibling `useLayoutEffect`
  * (no deps array - it re-samples on EVERY commit that touches this tree)
- * captures the four-way ownership shape.
+ * captures the four-way ownership shape the reviewer's own probe used.
  * Rendered as the LAST sibling after `TabGroupView` and
  * `StableTileSurfaceHost`, its layout effect only runs once React has
  * finished processing every earlier sibling's own layout effects for the

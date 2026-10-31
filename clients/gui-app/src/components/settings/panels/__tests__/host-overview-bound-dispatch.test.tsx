@@ -1861,8 +1861,8 @@ describe("HostOverviewPanel — the bound control takes the page's gates (ticket
 /**
  * WHAT DEFER PROMISES, by park.
  *
- * The staged-wait force's Defer was rewritten because a stage on disk has
- * nobody scheduled to install it. The rule that established is about EVIDENCE,
+ * Round 11 rewrote the staged-wait force's Defer because a stage on disk has
+ * nobody scheduled to install it. The rule it established is about EVIDENCE,
  * not phrasing, so the three dialogs land differently and nothing pinned that:
  * the `waiting-for-work` park is resumed by the reconciler and keeps the
  * promise; the `waiting-to-activate` park is resumed by nobody and must not.

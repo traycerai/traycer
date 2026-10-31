@@ -241,7 +241,7 @@ describe("useEpicSetPinned - task-contexts cache race (PR 2150 cold review)", ()
   });
 
   /**
-   * On top of the above: the committed-bit re-patch in
+   * Small review fix on top of the above: the committed-bit re-patch in
    * `onSuccess` now scopes `setEpicPinnedInTaskContextsCaches` with
    * `hostId: null` - every host's task-contexts cache for this user, not just
    * the dispatch host's. Before, an unpin dispatched to host-1 left a SECOND
@@ -324,7 +324,7 @@ describe("useEpicSetPinned - task-contexts cache race (PR 2150 cold review)", ()
   });
 
   /**
-   * On top of the above two: `onSuccess` now also calls
+   * Review fix on top of the above two: `onSuccess` now also calls
    * `restartInFlightFirstTaskContextsReads`. `cancelInFlightTaskContextsReads`
    * (the helper the first test in this file exercises) deliberately skips a
    * FIRST fetch - one that holds no data yet - because cancelling it alone
