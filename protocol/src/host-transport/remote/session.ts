@@ -920,6 +920,14 @@ interface AdoptingLeg {
   readonly socket: RelaySocket;
   /** What the leg delivered while waiting, in arrival order. */
   readonly events: (() => void)[];
+  /**
+   * How this leg's socket ended, if it ended while waiting. The close it
+   * delivered is QUEUED like any other event, so nothing has acted on it yet -
+   * and if the adoption then fails, nothing ever will: the connection that
+   * would have replayed it never exists. Recorded here so the teardown can
+   * still report the leg's real end rather than a close of its own.
+   */
+  legEnd: RelayLegEnd | null;
 }
 
 /**
@@ -2860,7 +2868,15 @@ export class RemoteSession<
       onPeerGone: (reason) =>
         deliver((generation) => this.onPeerGone(generation, reason)),
       onError: () => undefined,
-      onClose: (info) =>
+      onClose: (info) => {
+        // Before `deliver` can queue it: a close that lands mid-adoption is
+        // the only event whose FACT the session needs while it is still
+        // queued, because a failed adoption retires the queue unreplayed and
+        // the leg's end would go with it.
+        const adopting = this.adoptingLeg;
+        if (adopting?.socket === socket()) {
+          adopting.legEnd = { code: info.code, reason: info.reason };
+        }
         deliver((generation) => {
           // The socket's own verdict on the current wake-probe arm, read at
           // the one moment it matters: this close IS the arm's negative
@@ -2884,7 +2900,8 @@ export class RemoteSession<
             // backoff rung the funnel armed would be pure added outage.
             this.pullRedialToNow("wake-probe-failed");
           }
-        }),
+        });
+      },
     };
   }
 
@@ -5525,7 +5542,7 @@ export class RemoteSession<
       socket.close(1000, "closed-by-caller");
       return;
     }
-    const adopted: AdoptingLeg = { socket, events: [] };
+    const adopted: AdoptingLeg = { socket, events: [], legEnd: null };
     this.adoptingLeg = adopted;
     const nextGeneration = ++this.connectGeneration;
     this.pendingForceGeneration = null;
@@ -7189,12 +7206,16 @@ export class RemoteSession<
     const adopting = this.adoptingLeg;
     if (adopting !== null) {
       adopting.socket.close(1000, reason);
-      // This close ENDS it, and `adoptFreshLeg` only ever adopts a leg the
-      // relay acknowledged, so it carried a session and its end is the next
-      // dial's `prev`. Unconditional because an adopting leg has no connection
-      // to hold that fact: the one it came from was torn down with `keepLeg`,
-      // and the one it is bound for does not exist until its channel does.
-      this.recordReplacedLeg(true, { code: 1000, reason });
+      // The adoption ends here, so the leg does: either the close above ends
+      // it, or it had already ended while waiting and that close is the one it
+      // delivered - which nothing has acted on, and nothing will, because the
+      // connection that would have replayed it never exists. `adoptFreshLeg`
+      // only ever adopts a leg the relay acknowledged, so either way it
+      // carried a session and its end is the next dial's `prev`. Reported
+      // unconditionally because an adopting leg has no connection to hold that
+      // fact: the one it came from was torn down with `keepLeg`, and the one
+      // it is bound for does not exist until its channel does.
+      this.recordReplacedLeg(true, adopting.legEnd ?? { code: 1000, reason });
     }
     this.adoptingLeg = null;
     if (connection === null) {

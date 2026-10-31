@@ -1389,6 +1389,30 @@ describe("RemoteSession relink on an own-leg loss", () => {
       expect(relay.legs[2]?.params.get("prev")).toBe("1000:connect-path-threw");
     });
 
+    // A leg that ended WHILE the adoption ran delivered its close into the
+    // adopting queue, which a failed adoption retires unreplayed - so the
+    // teardown's own close of it is a no-op and reports nothing. The leg's
+    // real end is still the one it had.
+    it("takes the close an adopted leg already had when the adoption then fails", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { relay } = fixture;
+      vi.spyOn(NoiseChannel, "begin").mockRejectedValueOnce(
+        new Error("the key could not be imported"),
+      );
+      relay.expireRows = true;
+      relay.onFreshAck = (leg) => {
+        leg.closed = true;
+        relay.onLegClosed(leg, 1006);
+        leg.onclose?.({ code: 1006, reason: "gone", wasClean: false });
+      };
+
+      relay.dropLeg(1006, "net");
+      await advanceUntil(() => relay.legs.length === 3, 30_000);
+
+      expect(relay.legs[2]?.params.has("resume")).toBe(false);
+      expect(relay.legs[2]?.params.get("prev")).toBe("1006:gone");
+    });
+
     // Past RESUME_HOLD_MS the claim ladder keeps claiming, so a fresh attach is
     // reached through a rebuild instead: a frame that fails to decode ends the
     // relink and the session attaches afresh.
