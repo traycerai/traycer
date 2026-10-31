@@ -16,10 +16,7 @@ import {
   VOICE_SESSION_INPUT_MAX_CHARS,
 } from "@/lib/voice/briefing";
 import type { ReplyRef } from "@/lib/voice/queue-sources";
-import {
-  confirmationWords,
-  type SpeechScheduler,
-} from "@/lib/voice/scheduler";
+import { confirmationWords, type SpeechScheduler } from "@/lib/voice/scheduler";
 import { createVoiceQueue, type VoiceQueue } from "@/lib/voice/voice-queue";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
@@ -207,7 +204,7 @@ export function useVoiceQueueOwner(input: {
       markRead: ({ hostId, botId, chatId }) => {
         const mark = marksRef.current.get(hostId);
         if (mark === undefined) {
-          appLogger.warn("[voice] no read marker for the item's host");
+          appLogger.warn("[voice] no read marker for the item's host", {});
           return;
         }
         mark({ epicId: botId, chatId });
@@ -223,8 +220,9 @@ export function useVoiceQueueOwner(input: {
 
   // `status`: one bot's readings gathered by a reader mounted for the ask,
   // composed once, and appended under the request it answers.
-  const [statusRequest, setStatusRequest] =
-    useState<VoiceStatusRequest | null>(null);
+  const [statusRequest, setStatusRequest] = useState<VoiceStatusRequest | null>(
+    null,
+  );
   const statusSeqRef = useRef(0);
   const onStatusComposed = useCallback(
     (request: VoiceStatusRequest, text: string) => {

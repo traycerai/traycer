@@ -13,8 +13,15 @@ import {
   createSpeechScheduler,
   type SpeechScheduler,
 } from "../scheduler";
-import { waitingItems, type QueueItem } from "@/stores/voice/voice-session-store";
-import { createVoiceQueue, type VoiceQueue, type VoiceQueueDeps } from "../voice-queue";
+import {
+  waitingItems,
+  type QueueItem,
+} from "@/stores/voice/voice-session-store";
+import {
+  createVoiceQueue,
+  type VoiceQueue,
+  type VoiceQueueDeps,
+} from "../voice-queue";
 
 interface Timer {
   readonly handle: number;
@@ -227,7 +234,10 @@ describe("a reply seen from two views", () => {
 
     // The focused feed schedules a row whose offer is still queued.
     scheduler.noteInputTranscript();
-    arrive(replyRef({ messageId: "r-3" }), botRow("r-3", "Rolled back the canary."));
+    arrive(
+      replyRef({ messageId: "r-3" }),
+      botRow("r-3", "Rolled back the canary."),
+    );
     expect(queue.items().map((item) => item.id)).toEqual(["r-1", "r-3"]);
     queue.noteFocused("r-3");
     expect(queue.items().map((item) => item.id)).toEqual(["r-1"]);
@@ -319,8 +329,14 @@ describe("two posts about the same approval", () => {
       ],
       hostOf,
     );
-    queue.hydrated("r-1", approvalRow("r-1", "The task needs your approval to deploy."));
-    queue.hydrated("r-2", approvalRow("r-2", "Still waiting on the deploy approval."));
+    queue.hydrated(
+      "r-1",
+      approvalRow("r-1", "The task needs your approval to deploy."),
+    );
+    queue.hydrated(
+      "r-2",
+      approvalRow("r-2", "Still waiting on the deploy approval."),
+    );
 
     expect(
       queue.items().map((item) => [item.id, item.kind, item.surfaceId]),
@@ -379,7 +395,9 @@ describe("read, asked while the offer is on its way unconfirmed", () => {
 
     scheduler.noteOutputTranscript(" The Safari fix landed");
     clock.advance(CONFIRM_WINDOW_MS * 4);
-    expect(appended.filter((entry) => entry.text.includes("Want it?"))).toHaveLength(1);
+    expect(
+      appended.filter((entry) => entry.text.includes("Want it?")),
+    ).toHaveLength(1);
     expect(appended).toHaveLength(2);
   });
 });
@@ -401,7 +419,9 @@ describe("a bot's stopped answer", () => {
     sync(stopped("req-1"));
 
     expect(
-      queue.items().map((item) => [item.id, item.kind, item.chatId, item.state]),
+      queue
+        .items()
+        .map((item) => [item.id, item.kind, item.chatId, item.state]),
     ).toEqual([["stopped:bot-2:req-1", "failed", "thread-x", "queued"]]);
     expect(waitingItems(queue.items())).toHaveLength(1);
     clock.advance(120_000);
@@ -416,7 +436,11 @@ describe("a bot's stopped answer", () => {
   it("is read as its line, and has nothing of its own to mark read", () => {
     sync(stopped("req-1"));
 
-    queue.run({ kind: "read", itemId: "stopped:bot-2:req-1", delegationId: null });
+    queue.run({
+      kind: "read",
+      itemId: "stopped:bot-2:req-1",
+      delegationId: null,
+    });
     expect(appended).toEqual([
       {
         text: "Release bot stopped before answering in a thread.",
@@ -475,7 +499,10 @@ describe("looking at the channel", () => {
 describe("what the session started with", () => {
   it("is queued and briefed, never offered", () => {
     queue.begin(
-      [replyRef({ messageId: "r-1" }), replyRef({ messageId: "r-2", at: 6_000 })],
+      [
+        replyRef({ messageId: "r-1" }),
+        replyRef({ messageId: "r-2", at: 6_000 }),
+      ],
       hostOf,
     );
     queue.hydrated("r-1", botRow("r-1", REPLY_TEXT));
@@ -530,9 +557,24 @@ describe("brief", () => {
   it("is composed from the attention tier's unread answers and the prompts waiting on the person", () => {
     attentionNow = {
       answers: [
-        replyRef({ messageId: "r-1", botId: "bot-2", threadId: "thread-a", at: 9_000 }),
-        replyRef({ messageId: "r-2", botId: "bot-2", threadId: "thread-b", at: 8_000 }),
-        replyRef({ messageId: "r-3", botId: "bot-3", threadId: "thread-c", at: 7_000 }),
+        replyRef({
+          messageId: "r-1",
+          botId: "bot-2",
+          threadId: "thread-a",
+          at: 9_000,
+        }),
+        replyRef({
+          messageId: "r-2",
+          botId: "bot-2",
+          threadId: "thread-b",
+          at: 8_000,
+        }),
+        replyRef({
+          messageId: "r-3",
+          botId: "bot-3",
+          threadId: "thread-c",
+          at: 7_000,
+        }),
       ],
       prompts: { approvals: 1, questions: 2 },
     };

@@ -45,7 +45,11 @@ function post(messageId: string, timestamp: number): AnnouncementRow {
   };
 }
 
-function handle(epicId: string, chatId: string, state: ChannelState): FakeHandle {
+function handle(
+  epicId: string,
+  chatId: string,
+  state: ChannelState,
+): FakeHandle {
   return { epicId, chatId, store: createStore<ChannelState>()(() => state) };
 }
 
@@ -175,7 +179,9 @@ describe("watchAnnouncements", () => {
       messages: [post("old", 1_000), post("news", 2_000)],
     });
 
-    expect(found.map((entry) => entry.announcement.messageId)).toEqual(["news"]);
+    expect(found.map((entry) => entry.announcement.messageId)).toEqual([
+      "news",
+    ]);
   });
 
   it("stops reading once stopped: later rows and new channel stores produce nothing", () => {

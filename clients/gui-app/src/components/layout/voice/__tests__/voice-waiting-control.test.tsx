@@ -1,6 +1,14 @@
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
 import { itemLineOf } from "@/lib/voice/briefing";
 import {
   useVoiceSessionStore,
@@ -120,7 +128,9 @@ describe("VoiceWaitingControl", () => {
     await userEvent.click(screen.getByTestId("voice-strip-waiting"));
     const row = screen
       .getAllByTestId("voice-waiting-item")
-      .find((candidate) => candidate.getAttribute("data-item-id") === "question");
+      .find(
+        (candidate) => candidate.getAttribute("data-item-id") === "question",
+      );
     if (row === undefined) throw new Error("the question row is not listed");
 
     await userEvent.click(within(row).getByRole("button", { name: "Read" }));

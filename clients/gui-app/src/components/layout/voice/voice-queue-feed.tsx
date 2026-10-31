@@ -36,10 +36,7 @@ import {
 } from "@/lib/registries/chat-session-registry";
 import { watchAnnouncements } from "@/lib/voice/announcement-watch";
 import { composeBotStatus } from "@/lib/voice/bot-status";
-import {
-  stoppedAnswersOf,
-  type ReplyRef,
-} from "@/lib/voice/queue-sources";
+import { stoppedAnswersOf, type ReplyRef } from "@/lib/voice/queue-sources";
 import type { PendingHydration, VoiceQueue } from "@/lib/voice/voice-queue";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
@@ -50,7 +47,6 @@ import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
  * landing after the notification that named it.
  */
 export const HYDRATION_TIMEOUT_MS = 15_000;
-
 
 /**
  * Everything the queue reads while a session runs: its sources, and the
@@ -160,17 +156,19 @@ function VoiceQueueFeed(props: {
           queue={queue}
         />
       ))}
-      {queueHosts.split("\n").flatMap((hostId) =>
-        hostId.length === 0 ? [] : (
-          [
-            <VoiceReadMarker
-              key={hostId}
-              hostId={hostId}
-              register={registerMark}
-            />,
-          ]
-        ),
-      )}
+      {queueHosts
+        .split("\n")
+        .flatMap((hostId) =>
+          hostId.length === 0
+            ? []
+            : [
+                <VoiceReadMarker
+                  key={hostId}
+                  hostId={hostId}
+                  register={registerMark}
+                />,
+              ],
+        )}
     </>
   );
 }
@@ -258,7 +256,6 @@ function VoiceReadMarker(props: {
   return null;
 }
 
-
 /** How long `status` waits for the bot's readings before it says what it has. */
 export const STATUS_READ_TIMEOUT_MS = 4_000;
 /** The usage window `status` reports, in days. */
@@ -316,8 +313,7 @@ function VoiceBotStatusReader(props: {
   const composedRef = useRef(false);
   const usageSettled =
     !usageSupported || usage.data !== undefined || usage.isError;
-  const ready =
-    timedOut || (subscription.snapshot !== null && usageSettled);
+  const ready = timedOut || (subscription.snapshot !== null && usageSettled);
   useEffect(() => {
     if (!ready || composedRef.current) return;
     composedRef.current = true;
@@ -329,13 +325,20 @@ function VoiceBotStatusReader(props: {
         activity,
         tasks: trackingTasksOf(tasks).length,
         running: summary.running.length,
-        finishedThisWeek: finishedThisWeek(finishedTasksOf(tasks), now)
-          .length,
+        finishedThisWeek: finishedThisWeek(finishedTasksOf(tasks), now).length,
         costUsd: usage.data?.summary.totals.knownCostUsd ?? null,
         costWindowDays: STATUS_COST_WINDOW_DAYS,
       }),
     );
-  }, [activity, onComposed, ready, request, summary.running, tasks, usage.data]);
+  }, [
+    activity,
+    onComposed,
+    ready,
+    request,
+    summary.running,
+    tasks,
+    usage.data,
+  ]);
   return null;
 }
 

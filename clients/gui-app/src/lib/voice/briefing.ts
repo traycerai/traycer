@@ -25,7 +25,10 @@ const TITLE_WORDS = 10;
  * the notification's excerpt is copy, so the row's own words name it.
  */
 export function itemTitleOf(content: string): string {
-  const firstSentence = content.replace(/\s+/g, " ").trim().split(/(?<=[.!?])\s/u)[0];
+  const firstSentence = content
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(/(?<=[.!?])\s/u)[0];
   const words = firstSentence.split(" ").filter((word) => word.length > 0);
   const kept = words.slice(0, TITLE_WORDS).join(" ");
   const trimmed = kept.replace(/[\s.!?,;:]+$/u, "");
@@ -107,7 +110,9 @@ export function composeBriefing(input: {
     (item) => item.state === "queued" || item.state === "offered",
   );
   const itemized = new Set(
-    waiting.flatMap((item) => (item.messageId === null ? [] : [item.messageId])),
+    waiting.flatMap((item) =>
+      item.messageId === null ? [] : [item.messageId],
+    ),
   );
   for (const item of waiting) {
     if (item.kind === "announcement") continue;

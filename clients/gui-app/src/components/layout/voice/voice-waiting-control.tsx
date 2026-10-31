@@ -57,9 +57,7 @@ function WaitingRow(props: { readonly item: QueueItem }): ReactNode {
       className="flex w-full flex-col gap-1"
     >
       <span className="text-ui-xs text-foreground">{item.line}</span>
-      <span className="text-ui-xs text-muted-foreground">
-        {age}
-      </span>
+      <span className="text-ui-xs text-muted-foreground">{age}</span>
       <span className="flex items-center gap-1">
         <Button
           type="button"

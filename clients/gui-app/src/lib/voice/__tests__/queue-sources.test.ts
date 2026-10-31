@@ -78,7 +78,10 @@ describe("replyRefsOf", () => {
 
   it.each<{ readonly name: string; readonly excluded: MergedNotificationRow }>([
     { name: "a read row", excluded: row({ readAt: 2_000 }) },
-    { name: "a row that is no bot answer", excluded: row({ botAnswer: false }) },
+    {
+      name: "a row that is no bot answer",
+      excluded: row({ botAnswer: false }),
+    },
     { name: "a blocking prompt", excluded: row({ severity: "needs_action" }) },
     { name: "a failure", excluded: row({ severity: "failure" }) },
     { name: "a global row", excluded: row({ source: "global" }) },
@@ -156,7 +159,10 @@ describe("attentionPromptsOf", () => {
   });
 });
 
-function textBlock(text: string, providerNotice: OpenTextBlock["providerNotice"]): OpenTextBlock {
+function textBlock(
+  text: string,
+  providerNotice: OpenTextBlock["providerNotice"],
+): OpenTextBlock {
   return {
     blockId: `block-${text}`,
     status: "completed",
@@ -323,7 +329,9 @@ describe("announcementsOf", () => {
   function post(
     messageId: string,
     timestamp: number,
-    overrides: Partial<Extract<AnnouncementRow, { readonly role: "assistant" }>>,
+    overrides: Partial<
+      Extract<AnnouncementRow, { readonly role: "assistant" }>
+    >,
   ): AnnouncementRow {
     return {
       role: "assistant",

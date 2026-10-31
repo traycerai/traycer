@@ -15,10 +15,7 @@ import {
   type StoppedAnswer,
 } from "@/lib/voice/queue-sources";
 import type { QueueVerb, QueueVerbOutcome } from "@/lib/voice/queue-verbs";
-import {
-  confirmationWords,
-  type SpeechScheduler,
-} from "@/lib/voice/scheduler";
+import { confirmationWords, type SpeechScheduler } from "@/lib/voice/scheduler";
 import {
   waitingItems,
   type QueueItem,
@@ -294,7 +291,11 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       priority: "focused",
       text,
       delegationId,
-      confirmWords: confirmationWords({ botTitle: null, threadTitle: null, text }),
+      confirmWords: confirmationWords({
+        botTitle: null,
+        threadTitle: null,
+        text,
+      }),
       onDelivered: null,
       onGivenUp: null,
     });
@@ -414,7 +415,8 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
         stopped.map((answer) => stoppedId(botId, answer.requestId)),
       );
       for (const [id, entry] of entries) {
-        if (entry.item.kind !== "failed" || entry.item.botId !== botId) continue;
+        if (entry.item.kind !== "failed" || entry.item.botId !== botId)
+          continue;
         if (live.has(id) || entry.item.state !== "queued") continue;
         entries.delete(id);
         changed = true;

@@ -62,8 +62,18 @@ describe("composeBriefing", () => {
       answers: [answerRef({ at: 2_000 })],
       prompts: NO_PROMPTS,
       items: [
-        queueItem({ id: "old", messageId: "old", title: "older post", at: 1_000 }),
-        queueItem({ id: "new", messageId: "new", title: "newest post", at: 3_000 }),
+        queueItem({
+          id: "old",
+          messageId: "old",
+          title: "older post",
+          at: 1_000,
+        }),
+        queueItem({
+          id: "new",
+          messageId: "new",
+          title: "newest post",
+          at: 3_000,
+        }),
       ],
       botTitle,
       maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
@@ -79,14 +89,18 @@ describe("composeBriefing", () => {
 
   it("says an answer once when its reply is already an item", () => {
     const text = composeBriefing({
-      answers: [answerRef({ messageId: "i-1", botId: "bot-2", threadId: "thread-x" })],
+      answers: [
+        answerRef({ messageId: "i-1", botId: "bot-2", threadId: "thread-x" }),
+      ],
       prompts: NO_PROMPTS,
       items: [queueItem({ title: "Safari fix landed" })],
       botTitle,
       maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
     });
 
-    expect(text).toContain('Release bot answered in a thread: "Safari fix landed".');
+    expect(text).toContain(
+      'Release bot answered in a thread: "Safari fix landed".',
+    );
     expect(text.match(/Release bot answered in a thread/g)).toHaveLength(1);
   });
 
@@ -95,8 +109,18 @@ describe("composeBriefing", () => {
       answers: [],
       prompts: NO_PROMPTS,
       items: [
-        queueItem({ id: "h", messageId: "h", title: "heard post", state: "heard" }),
-        queueItem({ id: "d", messageId: "d", title: "later post", state: "dismissed" }),
+        queueItem({
+          id: "h",
+          messageId: "h",
+          title: "heard post",
+          state: "heard",
+        }),
+        queueItem({
+          id: "d",
+          messageId: "d",
+          title: "later post",
+          state: "dismissed",
+        }),
       ],
       botTitle,
       maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
@@ -157,14 +181,28 @@ describe("remintInput", () => {
           title: "nightly build",
           at: 2_000,
         }),
-        queueItem({ id: "h", messageId: "h", title: "heard post", state: "heard" }),
-        queueItem({ id: "d", messageId: "d", title: "later post", state: "dismissed" }),
+        queueItem({
+          id: "h",
+          messageId: "h",
+          title: "heard post",
+          state: "heard",
+        }),
+        queueItem({
+          id: "d",
+          messageId: "d",
+          title: "later post",
+          state: "dismissed",
+        }),
       ],
     });
 
     expect(text.indexOf("offered post")).toBeGreaterThan(-1);
-    expect(text.indexOf("nightly build")).toBeGreaterThan(text.indexOf("offered post"));
-    expect(text.indexOf("queued post")).toBeGreaterThan(text.indexOf("nightly build"));
+    expect(text.indexOf("nightly build")).toBeGreaterThan(
+      text.indexOf("offered post"),
+    );
+    expect(text.indexOf("queued post")).toBeGreaterThan(
+      text.indexOf("nightly build"),
+    );
     expect(text).not.toContain("heard post");
     expect(text).not.toContain("later post");
   });

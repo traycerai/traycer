@@ -1103,7 +1103,15 @@ function VoiceSelectionSync(props: {
     const selection = focusOf(activeBotId, tab.hostId, thread, listed);
     if (followsVoiceSwitch(selection, voiceSwitch)) return;
     applySelection(selection, onManualChange, onResolved);
-  }, [activeBotId, listed, onManualChange, onResolved, tab, thread, voiceSwitch]);
+  }, [
+    activeBotId,
+    listed,
+    onManualChange,
+    onResolved,
+    tab,
+    thread,
+    voiceSwitch,
+  ]);
 
   return null;
 }
