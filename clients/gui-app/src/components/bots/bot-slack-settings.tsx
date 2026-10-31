@@ -136,7 +136,7 @@ function BotSlackNotConnected(props: { readonly botId: string }): ReactNode {
         />
       ) : (
         <pre
-          className="max-h-48 overflow-auto rounded-md border border-border/60 bg-muted p-3 font-mono text-ui-xs text-foreground"
+          className="max-h-48 overflow-auto rounded-md border border-border/60 bg-foreground/3 p-3 font-mono text-ui-xs text-foreground"
           data-testid="bot-settings-slack-manifest"
         >
           {text}
