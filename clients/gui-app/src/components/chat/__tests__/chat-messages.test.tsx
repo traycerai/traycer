@@ -9781,7 +9781,7 @@ describe("ChatMessages scroll policy", () => {
           // reader asked for the END, so this must actually deliver one.
           // Without this spy a regression that cancelled 801 and then
           // dropped the end scroll would still pass every assertion below
-          // (CodeRabbit on #3148): nothing else here calls `scrollToEnd`.
+          // - nothing else here calls `scrollToEnd`.
           const scrollToEnd = vi.spyOn(list, "scrollToEnd");
           try {
             rerenderWith({ scrollRequest: { kind: "end", requestId: 802 } });
@@ -9875,7 +9875,7 @@ describe("ChatMessages scroll policy", () => {
           // the reader asked for the END, so this must actually deliver
           // one. Without this spy a regression that cancelled 901 and then
           // dropped the end scroll would still pass every assertion below
-          // (CodeRabbit on #3148, same class as the sibling witness above).
+          // - the same class as the sibling witness above.
           const scrollToEnd = vi.spyOn(list, "scrollToEnd");
           try {
             rerenderWith({ scrollRequest: { kind: "end", requestId: 902 } });

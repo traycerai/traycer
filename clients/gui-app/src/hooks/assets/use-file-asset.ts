@@ -93,7 +93,7 @@ export type FileAssetRequest =
       readonly side: "old" | "new";
       readonly stage: "staged" | "unstaged";
       /**
-       * Scopes pre-header subscription COALESCING ONLY (sol re-review) -
+       * Scopes pre-header subscription COALESCING ONLY -
        * never `requestKeyFor` (a change here always accompanies a full
        * caller-side remount already, so no request ever needs to detect it
        * changing while staying mounted) or `buildFileAssetCacheKey` (whose
@@ -225,7 +225,7 @@ function assetSourceFor(request: FileAssetRequest): FileAssetSource {
 
 /**
  * The path whose extension decides what this request renders AS: the OLD side
- * of a rename is the file at `previousPath` (sol review) - classifying it by
+ * of a rename is the file at `previousPath` - classifying it by
  * the new path would give e.g. the pdf half of `report.pdf -> report.bin`
  * image failure copy and drop its PDF telemetry.
  */
@@ -303,7 +303,7 @@ function requestKeyFor(request: FileAssetRequest): string {
 }
 
 /**
- * The pre-header shared-subscription coalescing map's key (sol re-review) -
+ * The pre-header shared-subscription coalescing map's key -
  * `hostScopeKey` + `requestKeyFor` + a git request's `coalesceRevision` (absent
  * for a workspace request, which has no revision concept) + this hook's
  * current `focusRefreshGeneration`. Deliberately WIDER than `requestKeyFor`
@@ -313,7 +313,7 @@ function requestKeyFor(request: FileAssetRequest): string {
  * request (by design - neither is part of what decides whether a single
  * mount's own effect needs to re-run).
  *
- * The generation specifically closes a worktree-file gap (Codex re-review):
+ * The generation specifically closes a worktree-file gap:
  * it is only ever an effect DEPENDENCY (triggers a worktree-backed request's
  * own refetch on refocus, decision #11), never part of the shared key before
  * this - so a second, still-focused pane's refocus-triggered "refresh" could
@@ -321,7 +321,7 @@ function requestKeyFor(request: FileAssetRequest): string {
  * fresh one, defeating the exact staleness signal it exists to send.
  *
  * MUST be `nextFocusRefreshGeneration`'s module-global value, never a
- * per-hook local counter (sol final-delta re-review): two DIFFERENT hooks'
+ * per-hook local counter: two DIFFERENT hooks'
  * local counters traverse the identical value sequence independently, so
  * pane A's first refocus and pane B's OWN first refocus - happening LATER,
  * while A's refreshed stream is still in flight - would both land on the
@@ -405,7 +405,7 @@ interface SharedAssetSubscription {
   >;
   readonly failureListeners: Set<(failure: AssetStreamFailure) => void>;
   /**
-   * The CREATOR's `HostStreamClientBinding.unpin` (Codex re-review) - `client`
+   * The CREATOR's `HostStreamClientBinding.unpin` - `client`
    * above was opened through the creator's own transient transport, which
    * that transport's owning hook instance would otherwise close the moment
    * IT unmounts, regardless of whether a sibling that joined this entry is
@@ -420,7 +420,7 @@ interface SharedAssetSubscription {
 
 /**
  * Coalesces concurrent requests for the SAME (host, request) pair into ONE
- * underlying `AssetStreamClient` (thermo re-review, ticket 09 follow-up):
+ * underlying `AssetStreamClient` (ticket 09 follow-up):
  * the host reads and emits an entire asset synchronously in one call stack
  * the instant a stream opens, before any client-side close from a losing
  * consumer can land - so deduping only AFTER the fact (`imageBlobCache`'s
@@ -442,7 +442,7 @@ interface SharedAssetSubscription {
  * already handles that case correctly.
  *
  * A joiner can arrive in the window AFTER `assetHeader` already fired but
- * BEFORE settle (sol re-review, ticket 09 follow-up #2): the underlying
+ * BEFORE settle (ticket 09 follow-up #2): the underlying
  * client only ever calls `onHeader` once, so a joiner registered after that
  * point would otherwise never see it - never acquiring its own
  * `imageBlobCache` lease, leaving it stuck at `"loading"` forever even
@@ -456,8 +456,8 @@ interface SharedAssetSubscription {
 const sharedAssetSubscriptions = new Map<string, SharedAssetSubscription>();
 
 /**
- * The NEXT value a refocus-triggered refresh will claim (sol final-delta
- * re-review) - module-global, not per-hook. A per-hook local counter looked
+ * The NEXT value a refocus-triggered refresh will claim
+ * - module-global, not per-hook. A per-hook local counter looked
  * sufficient (two panes mounting concurrently both start at 0 and still
  * coalesce) but is actually WRONG: two DIFFERENT hooks' local counters
  * traverse the identical value sequence independently, so pane A's first
@@ -481,8 +481,8 @@ function acquireSharedAssetSubscription(
   callbacks: AssetStreamCallbacks,
   // Only consulted when THIS call creates a NEW entry (this caller becomes
   // the creator) - a joiner's own pin/unpin are irrelevant, since the
-  // underlying session never uses the joiner's transport (Codex re-review,
-  // see `SharedAssetSubscription.unpin`'s doc comment for the full "why").
+  // underlying session never uses the joiner's transport -
+  // see `SharedAssetSubscription.unpin`'s doc comment for the full "why".
   pin: () => void,
   unpin: () => void,
 ): {
@@ -579,7 +579,7 @@ function acquireSharedAssetSubscription(
  * `usePrDetailSubscription`'s tab-scoped stream pattern. Takes the full
  * binding, not just its `.client` - `pin`/`unpin` let the shared-subscription
  * coalescing layer keep a transport alive past ITS OWN unmount for as long
- * as a sibling still needs it (Codex re-review).
+ * as a sibling still needs it.
  *
  * The caller passes a fresh `request` literal every render, so the fetch
  * effect below depends on `requestKeyFor(request)` (a string, stable across
@@ -620,7 +620,7 @@ export function useHostFileAsset(args: {
   const assetHostScope = JSON.stringify([accountId, hostId]);
   const target = useHostDirectoryEntry(hostId);
   const auth = useStreamAuthRevalidator();
-  // The full binding, not just its `.client` (Codex re-review) - the shared
+  // The full binding, not just its `.client` - the shared
   // subscription coalescing layer needs `pin`/`unpin` too, see
   // `acquireSharedAssetSubscription`'s call site below.
   const streamBinding = useHostStreamClientBindingFor(target, auth);
@@ -641,8 +641,8 @@ export function useHostFileAsset(args: {
   // this on the pane's blurred->focused transition, so a still-mounted tile
   // reopens the stream and picks up an externally edited file. An immutable
   // git-object request never bumps it - refetching would only re-confirm the
-  // same OID. Claims the NEXT MODULE-GLOBAL value (sol final-delta
-  // re-review), never a per-hook local increment - see
+  // same OID. Claims the NEXT MODULE-GLOBAL value,
+  // never a per-hook local increment - see
   // `nextFocusRefreshGeneration`'s own comment for why a local counter is
   // wrong here: two different hooks' independent refresh events must never
   // land on the same generation by coincidence.
@@ -689,7 +689,7 @@ export function useHostFileAsset(args: {
     resolvedRef.current = resolved;
   });
 
-  // Recreated per `resolved` transition (CodeRabbit finding) - a decode
+  // Recreated per `resolved` transition - a decode
   // error is reported by a specific `<img>`, but this callback has no
   // parameter carrying which `url` failed, so it must instead close over
   // whatever `resolved` WAS when the render that handed this exact closure
@@ -700,7 +700,7 @@ export function useHostFileAsset(args: {
   // `fallback` would clobber that newer, perfectly valid ready state
   // instead of the stale one that actually failed to decode.
   //
-  // Object identity alone isn't enough (sol re-review): switching from
+  // Object identity alone isn't enough: switching from
   // request A to request B does NOT reset `resolved` - it stays A's stale
   // object (render-time key comparison only hides it behind
   // `LOADING_STATE`) until B's own callbacks eventually call `setResolved`.
