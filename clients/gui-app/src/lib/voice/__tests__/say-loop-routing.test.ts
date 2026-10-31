@@ -411,16 +411,19 @@ describe("a confirmation whose answer never closes an utterance", () => {
   });
 });
 
-describe("a routed read", () => {
+describe("a routed verb on the queue", () => {
   /** The real voice queue under the store's driver, over a scheduler that records what it is given. */
   function liveQueue() {
     const enqueued: SpeechItem[] = [];
+    const withdrawn: string[] = [];
     const queue = createVoiceQueue({
       scheduler: {
         enqueue: (item) => {
           enqueued.push(item);
         },
-        withdraw: () => undefined,
+        withdraw: (itemId) => {
+          withdrawn.push(itemId);
+        },
       },
       publish: (items) => useVoiceSessionStore.getState().setQueue(items),
       botTitle: (botId) => botId,
@@ -436,8 +439,9 @@ describe("a routed read", () => {
     useVoiceSessionStore.setState({ phase: "live" });
     useVoiceSessionStore.getState().setQueueDriver({
       run: (verb) => (verb.kind === "status" ? "nothing" : queue.run(verb)),
+      noteSwitched: (itemId) => queue.noteSwitched(itemId),
     });
-    return { queue, enqueued };
+    return { queue, enqueued, withdrawn };
   }
 
   function routedItem(
@@ -453,8 +457,12 @@ describe("a routed read", () => {
   const readOf = (itemId: string | null): RouterResult =>
     routedItem("read", itemId);
 
-  /** The live queue holding one waiting reply, `r-1` of the CI bot, and the directory that lists it. */
-  function withWaitingItem() {
+  /**
+   * The live queue holding one waiting reply, `r-1` of the CI bot, and the
+   * directory that lists it. `briefed`: it was waiting when the session
+   * began; `arrived`: it came while the session ran, so it is offered.
+   */
+  function withWaitingItem(arrival: "briefed" | "arrived") {
     const live = liveQueue();
     const text: OpenTextBlock = {
       blockId: "block-1",
@@ -465,20 +473,17 @@ describe("a routed read", () => {
       text: "The Safari fix landed in build forty.",
       providerNotice: null,
     };
-    live.queue.begin(
-      [
-        {
-          messageId: "r-1",
-          botId: CI,
-          threadId: null,
-          chatId: "chan-ci",
-          originHostId: "host-1",
-          at: NOW,
-          blocking: false,
-        },
-      ],
-      () => "host-1",
-    );
+    const ref = {
+      messageId: "r-1",
+      botId: CI,
+      threadId: null,
+      chatId: "chan-ci",
+      originHostId: "host-1",
+      at: NOW,
+      blocking: false,
+    };
+    if (arrival === "briefed") live.queue.begin([ref], () => "host-1");
+    else live.queue.ingestReplies([ref], () => "host-1");
     live.queue.hydrated(
       "r-1",
       { role: "assistant", messageId: "r-1", blocks: [text] },
@@ -492,7 +497,7 @@ describe("a routed read", () => {
   }
 
   it("reads the item it names, under the request's delegation, and posts nothing", async () => {
-    const { enqueued, directory } = withWaitingItem();
+    const { enqueued, directory } = withWaitingItem("briefed");
     const h = buildFor({ recheckHolds: true, canSend: true }, directory);
     h.answers.push(() => Promise.resolve(readOf("r-1")));
 
@@ -508,7 +513,7 @@ describe("a routed read", () => {
   });
 
   it("does not read an item the person set aside while the route was being made", async () => {
-    const { queue, enqueued, directory } = withWaitingItem();
+    const { queue, enqueued, directory } = withWaitingItem("briefed");
     const h = buildFor({ recheckHolds: true, canSend: true }, directory);
     const held = heldAnswer();
     h.answers.push(held.answer);
@@ -526,7 +531,7 @@ describe("a routed read", () => {
   });
 
   it("does not set aside an item that was heard while the route was being made", async () => {
-    const { queue, enqueued, directory } = withWaitingItem();
+    const { queue, enqueued, directory } = withWaitingItem("briefed");
     const h = buildFor({ recheckHolds: true, canSend: true }, directory);
     const held = heldAnswer();
     h.answers.push(held.answer);
@@ -542,6 +547,34 @@ describe("a routed read", () => {
     expect(queue.items().map((item) => item.state)).toEqual(["heard"]);
     expect(h.notices).toEqual([NOTHING_WAITING_NOTICE]);
     expect(h.noticeDelegations).toEqual(["d-1"]);
+  });
+
+  it("does not say the offer of an item the person is routed to", async () => {
+    const { queue, enqueued, withdrawn, directory } =
+      withWaitingItem("arrived");
+    const offers = enqueued.filter((item) => item.text.endsWith("Want it?"));
+    expect(offers).toHaveLength(1);
+    const h = buildFor({ recheckHolds: true, canSend: true }, directory);
+    h.answers.push(() =>
+      Promise.resolve({
+        ...route("switch", null, null, 2),
+        target: {
+          environmentId: null,
+          botId: null,
+          threadId: null,
+          itemId: "r-1",
+        },
+      }),
+    );
+
+    speak("go", " there");
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(withdrawn).toEqual(offers.map((offer) => offer.id));
+    expect(queue.items().map((item) => [item.id, item.state])).toEqual([
+      ["r-1", "queued"],
+    ]);
+    expect(h.sends).toEqual([]);
   });
 
   it("says that nothing is waiting, under the request's delegation, when there is nothing to read", async () => {

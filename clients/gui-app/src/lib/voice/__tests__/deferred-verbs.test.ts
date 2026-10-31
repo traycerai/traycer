@@ -60,7 +60,10 @@ function goLive(queue: ReadonlyArray<QueueItem>): void {
   useVoiceSessionStore.setState({
     phase: "live",
     queue,
-    queueDriver: { run },
+    queueDriver: {
+      run,
+      noteSwitched: vi.fn<VoiceQueueDriver["noteSwitched"]>(),
+    },
   });
 }
 
