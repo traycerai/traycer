@@ -160,7 +160,7 @@ export function mapInstallVersionOutcome(
       //    (`host-maintenance-resolvers.ts`) is a PRE-CUTOVER placeholder. It
       //    exists because the executor cohort gate is `shadow` and the
       //    detached spawn has no adoption acknowledgement to await yet.
-      //    Ticket 07 wires that acknowledgement through and that null becomes
+      //    A later change wires that acknowledgement through and that null becomes
       //    a real id.
       //  - THIS null is a permanent property of the lane. It is not waiting on
       //    anything. This decorator serves hosts that predate the maintenance
@@ -344,7 +344,7 @@ export function buildMaintenanceFallbackServeMap(
           // Same `null` as the `accepted` arm above, for the same reason and
           // with the same permanence: the lane is busy with an update this
           // client cannot name, and never will be able to. See that arm's note
-          // before touching this at the ticket-07 cutover.
+          // before touching this at the cutover.
           return { outcome: "already-updating", attemptId: null };
         }
         // Transient contention, reported the same way this map already

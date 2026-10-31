@@ -641,7 +641,7 @@ describe("Report issue capture dialog (deep interactions)", () => {
 
     it("satisfies the gate for idea/other with an attached image and empty intent text", async () => {
       // Mirror the "satisfies the gate by typing intent" shape, but evidence
-      // is a screenshot instead of typed text (ticket 08 / D7 hasImages).
+      // is a screenshot instead of typed text (D7 hasImages).
       const harness = createSupportBridgeHarness({
         snapshot: undefined,
         submitReport: undefined,
@@ -2809,7 +2809,7 @@ describe("evidence review shows the whole error message", () => {
   });
 });
 
-// --- image attachment helpers (ticket 08) ---------------------------------
+// --- image attachment helpers --------------------------------------------
 
 function makePngFile(name: string): File {
   const bytes = new Uint8Array(32);

@@ -59,7 +59,7 @@ const TRANSACTION: HostUpdateTransactionCapability = {
 };
 
 // Builds a WIRE observation. Retyped (annotation only — no assertion changed)
-// when Ticket 07 §5.2.7 made `FleetUpdateObservation` a union: `Partial<union>`
+// when `FleetUpdateObservation` became a union: `Partial<union>`
 // does not narrow, so the literal below no longer identified an arm.
 function observation(
   overrides: Partial<FleetUpdateWireObservation>,
@@ -1297,7 +1297,7 @@ describe("holdsLifecycleGate — direct unit coverage", () => {
   });
 });
 
-// ---- Ticket 07 §5.2.7 — the record-derived arm ----------------------------
+// ---- The record-derived arm -----------------------------------------------
 
 /**
  * One instant for both legs, for the cases that are not ABOUT the split.

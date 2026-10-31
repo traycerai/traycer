@@ -1561,7 +1561,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // One-shot read: the doc content of an unreachable owner's chat cannot
   // change while its owner is away.
   "epic.chatReplicaRead": { ...LATEST_SCHEDULING, poll: null },
-  // The store-backed chat RECORD channel (chat-sync-v2 ticket 49).
+  // The store-backed chat RECORD channel.
   //
   // POLLED, at a cadence, and the reason is that there is no invalidation edge
   // to ride. The facts this serves - a chat was created, renamed, re-parented,
@@ -2917,7 +2917,7 @@ export const HOST_METHOD_POLL_TABLE = {
   // retry) and opts out of polling; the ambient epic cost badge opts in
   // (matching `host.getRateLimitUsage`'s cadence below) so it self-heals
   // within a bounded time from a silently-reverted fetch instead of staying
-  // stuck pending forever with no other trigger (ticket-7 fixup-01).
+  // stuck pending forever with no other trigger.
   "host.usage.summary": {
     ...LATEST_SCHEDULING,
     joinResponseTimeoutMs: USAGE_SUMMARY_RESPONSE_TIMEOUT_MS,

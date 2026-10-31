@@ -166,7 +166,7 @@ describe("AppColumnFrame", () => {
         ),
       ).toEqual([content]);
 
-      // Ticket 02 (D1/D2): the column paints the ground the header (top
+      // D1/D2: the column paints the ground the header (top
       // placement) and the side strip go transparent on, so it has to span
       // every placement, not just the beside ones.
       expect(column.classList.contains("md:bg-shell-ground")).toBe(true);

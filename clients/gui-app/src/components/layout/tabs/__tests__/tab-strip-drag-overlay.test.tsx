@@ -89,7 +89,7 @@ describe("HeaderTabDragOverlay: ghost-carried identity + indicator state", () =>
 
     // `--swatch-border`, not `borderTopColor`: the chrome carries its identity
     // colour as a custom property and paints with
-    // `border-t-[var(--swatch-border)]` (ticket 02's inline-style migration),
+    // `border-t-[var(--swatch-border)]` (the inline-style migration),
     // so the CSS property this used to read is empty - and an assertion that
     // compares "" against a colour fails loudly, unlike the ones that compare
     // it against nothing.

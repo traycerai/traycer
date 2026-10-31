@@ -1094,7 +1094,7 @@ describe("<TopLevelTabHost />", () => {
 });
 
 /**
- * Sheet shell (ticket 02, D1/D2): `TopLevelSurfaceMount` is the single sheet
+ * Sheet shell (D1/D2): `TopLevelSurfaceMount` is the single sheet
  * for every non-epic surface (Home/History/Settings/draft) and carries no
  * sheet marker of its own for an epic tab - the epic surface paints its own
  * two sheets (panel/content) internally, proven separately in

@@ -38,7 +38,7 @@ const BAR_GAP = 8;
  * (`writeArrangementField`), so each press is one recorded gesture, and it
  * honours the same availability. It is portalled to `<body>` because the
  * app column is behind the edit firewall, and it sits toward the content, the
- * side the overlay hook (ticket 01) names for the surface's edge.
+ * side the overlay hook names for the surface's edge.
  */
 export function SurfacePlacementBar(): ReactNode {
   const surface = useLayoutEditorStore((state) => state.selectedSurface);

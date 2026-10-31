@@ -35,7 +35,7 @@ import { providerCliIdForHarness } from "@/lib/provider-ordering";
  * spin up a sibling chat on it, leaving the original tab untouched. Returns
  * the same caller-owned cancel as `openNewChatInActiveTile`.
  *
- * ## History carries over (chat-sync-v2 ticket 34B1)
+ * ## History carries over
  *
  * The sibling is a latest-checkpoint FORK of the source chat
  * (`forkSource: {boundary: "latest"}`), not an empty chat: the host resolves
@@ -50,7 +50,7 @@ import { providerCliIdForHarness } from "@/lib/provider-ordering";
  * rather than failing the whole create. There is a SECOND, client-side-only
  * way the same request cannot be served: `epic.createChat@1.1`'s
  * `boundary: "latest"` variant has no `assistantMessageId` at all, so a
- * target host still on `@1.0` (every released host as of ticket 34B1) can
+ * target host still on `@1.0` (every released host at the time) can
  * never receive it - the transport's same-major minor-downgrade re-parses
  * the canonical request against the host's older schema before a frame is
  * even sent, that re-parse has nothing to put in the required
@@ -58,7 +58,7 @@ import { providerCliIdForHarness } from "@/lib/provider-ordering";
  * `DOWNGRADE_UNSUPPORTED` (see `classifyHostRequestFailure`). Both cases
  * mean the SAME thing to this flow - "this attempt cannot carry history" -
  * and get the SAME recovery: retry EXACTLY once, without `forkSource`, so
- * the clone still lands - settings-only, same as before ticket 34B1 - with
+ * the clone still lands - settings-only, same as before - with
  * a toast explaining why history did not come along. The retry is
  * structurally single-shot: a request with no `forkSource` cannot produce
  * either failure, so the retry's own error handler has nothing left to
@@ -71,7 +71,7 @@ export interface CloneChatOnHostSwitchArgs {
   readonly sourceChatId: string;
   /**
    * The owner this surface was SHOWING for that chat, or `null` when it
-   * genuinely does not know (chat-sync-v2 ticket 37).
+   * genuinely does not know.
    *
    * Only ever what was actually rendered - the published ref's `ownerUserId`,
    * or the owner the dead-tile fallback already derived from the live
@@ -268,7 +268,7 @@ export function cloneChatOnHostSwitch(
       openWithForkSource(resolution.settings, {
         boundary: "latest",
         sourceChatId: args.sourceChatId,
-        // Ticket 37: whatever owner this surface was ACTUALLY rendering, so the
+        // Whatever owner this surface was ACTUALLY rendering, so the
         // host's cloud tier has an expectation to check when it holds no local
         // registry facts of its own (a post-restart swept chat, a fresh
         // identity) - without it the clone silently degrades to settings-only

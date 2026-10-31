@@ -57,7 +57,7 @@ export const PLACEMENT_EDGE_LABELS: Readonly<Record<PlacementEdge, string>> = {
 /**
  * The column edge a surface stands at, or `null` for the tab strip across the
  * top: what `ColumnEdgeContext` would say inside the surface, so the bar can
- * ask the overlay hook which way the content is (ticket 01).
+ * ask the overlay hook which way the content is.
  */
 export function surfaceColumnEdge(
   surface: PlacementSurfaceId,

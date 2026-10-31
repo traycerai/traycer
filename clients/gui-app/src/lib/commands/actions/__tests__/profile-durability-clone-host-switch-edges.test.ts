@@ -34,7 +34,7 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
  * of `resolveClonedChatSettings` in isolation (unreachable source, no
  * matching accountUuid, source-side RPC failure). This file adds the two
  * gaps that file doesn't: (1) an explicitly EMPTY target `profiles[]`
- * (mirrors ticket 04's documented "flag off -> profiles: []" contract, as
+ * (mirrors the documented "flag off -> profiles: []" contract, as
  * opposed to a non-empty array that merely lacks a match), a TARGET-side (not
  * source-side) RPC failure, and (2) the orchestrating
  * `cloneChatOnHostSwitch` itself - which had ZERO existing test coverage -
@@ -228,7 +228,7 @@ function baseCloneArgs(
     epicId: "epic-1",
     tabId: "tab-1",
     sourceChatId: "source-chat-1",
-    // Ticket 37: these edge cases are about orchestration, not the owner hint,
+    // These edge cases are about orchestration, not the owner hint,
     // so they answer it the way a surface that does not know does.
     sourceOwnerUserId: null,
     sourceHostId: "source-host",
@@ -567,7 +567,7 @@ describe("cloneChatOnHostSwitch: orchestration edges (previously untested)", () 
   });
 });
 
-// chat-sync-v2 ticket 34B1: the clone is a latest-checkpoint fork
+// The clone is a latest-checkpoint fork
 // (`forkSource: {boundary: "latest"}`) of the source chat, not an empty
 // chat. A source with no assistant turn yet has no checkpoint to fork
 // through - the host answers that as a typed refusal, and this flow retries
@@ -631,7 +631,7 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
     expect(request.forkSource).toEqual({
       boundary: "latest",
       sourceChatId: "source-chat-1",
-      // `baseCloneArgs` is a surface that does not know the owner (ticket 37);
+      // `baseCloneArgs` is a surface that does not know the owner;
       // the request still states that explicitly rather than omitting it.
       sourceOwnerUserId: null,
     });
@@ -923,7 +923,7 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
     // The flag must reflect what the REQUEST that actually succeeded sent,
     // not the flow's original intent - the retry carries no `forkSource`, so
     // no history came along, and `include_history: true` here would be a
-    // known-false analytics value on the exact path ticket 34B1 built.
+    // known-false analytics value on the exact path the clone flow built.
     const track = vi.spyOn(Analytics.getInstance(), "track");
     const createChat: CreateChatCommand = (request, callbacks) => {
       if (request.forkSource !== null && request.forkSource !== undefined) {
