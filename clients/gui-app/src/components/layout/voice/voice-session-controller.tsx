@@ -140,8 +140,7 @@ export function VoiceSessionController(): ReactNode {
   const { mutateAsync: mintAsync } = useVoiceSessionMintMutation();
   const { mutateAsync: endAsync } = useVoiceSessionEndMutation();
   const { mutateAsync: shellLiveAsync } = useVoiceShellLiveMutation();
-  const { mutateAsync: shellIndicatorAsync } =
-    useVoiceShellIndicatorMutation();
+  const { mutateAsync: shellIndicatorAsync } = useVoiceShellIndicatorMutation();
   const { mutateAsync: microphoneAccessAsync } =
     useVoiceMicrophoneAccessMutation();
   const queryClient = useQueryClient();

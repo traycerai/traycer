@@ -8,7 +8,10 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceTrayAction } from "../../../ipc-contracts/host-types";
-import { createElectronVoiceTrayView, VoiceTrayItems } from "../voice-tray-items";
+import {
+  createElectronVoiceTrayView,
+  VoiceTrayItems,
+} from "../voice-tray-items";
 import {
   installVoiceAwayTracking,
   VoiceLiveWindows,
@@ -80,7 +83,6 @@ vi.mock("electron-log", () => ({
     debug: vi.fn(),
   },
 }));
-
 
 /** A window whose focus the test moves by hand. */
 class FakeWindow implements VoiceAwayTarget {

@@ -124,7 +124,10 @@ function voiceSessionIndicatorOf(value: unknown): VoiceSessionIndicator {
   const muted: unknown = Reflect.get(value, "muted");
   const pausedForDictation: unknown = Reflect.get(value, "pausedForDictation");
   assertBoolean(muted, "setVoiceSessionIndicator.muted");
-  assertBoolean(pausedForDictation, "setVoiceSessionIndicator.pausedForDictation");
+  assertBoolean(
+    pausedForDictation,
+    "setVoiceSessionIndicator.pausedForDictation",
+  );
   return { muted, pausedForDictation };
 }
 

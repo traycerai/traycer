@@ -1007,7 +1007,11 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
         actions,
       }),
     sendAction: (windowId, action) => {
-      bridge.safeSendToWindow(windowId, RunnerHostEvent.voiceTrayAction, action);
+      bridge.safeSendToWindow(
+        windowId,
+        RunnerHostEvent.voiceTrayAction,
+        action,
+      );
     },
     returnTo: (windowId) => {
       const window = windowRegistry.getWindowById(windowId);

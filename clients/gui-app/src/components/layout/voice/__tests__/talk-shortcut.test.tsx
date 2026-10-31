@@ -77,7 +77,13 @@ function press(init: KeyboardEventInit): KeyboardEvent {
 
 /** Talk's default off macOS: Alt+Shift+T. */
 function pressTalk(repeat: boolean): KeyboardEvent {
-  return press({ code: "KeyT", key: "T", altKey: true, shiftKey: true, repeat });
+  return press({
+    code: "KeyT",
+    key: "T",
+    altKey: true,
+    shiftKey: true,
+    repeat,
+  });
 }
 
 /** Dictation's default: Control+Shift+M. */
