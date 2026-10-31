@@ -290,6 +290,7 @@ describe("<HomeBotsGroupCard /> adding a bot", () => {
 describe("<HomeBotsGroupCard /> a team's main bot still to be set up", () => {
   const SETUP: TeamSetup = {
     environmentId: "env-1",
+    teamName: "Acme",
     botId: "bot-tracy-env",
     title: "Tracy",
   };
