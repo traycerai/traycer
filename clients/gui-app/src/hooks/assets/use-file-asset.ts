@@ -420,7 +420,7 @@ interface SharedAssetSubscription {
 
 /**
  * Coalesces concurrent requests for the SAME (host, request) pair into ONE
- * underlying `AssetStreamClient`:
+ * underlying `AssetStreamClient` (thermo re-review):
  * the host reads and emits an entire asset synchronously in one call stack
  * the instant a stream opens, before any client-side close from a losing
  * consumer can land - so deduping only AFTER the fact (`imageBlobCache`'s
@@ -442,7 +442,7 @@ interface SharedAssetSubscription {
  * already handles that case correctly.
  *
  * A joiner can arrive in the window AFTER `assetHeader` already fired but
- * BEFORE settle: the underlying
+ * BEFORE settle (sol re-review): the underlying
  * client only ever calls `onHeader` once, so a joiner registered after that
  * point would otherwise never see it - never acquiring its own
  * `imageBlobCache` lease, leaving it stuck at `"loading"` forever even

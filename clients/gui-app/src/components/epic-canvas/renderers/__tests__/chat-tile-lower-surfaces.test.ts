@@ -105,7 +105,7 @@ describe("humanActionableApprovals", () => {
 });
 
 /**
- * Revised for a defect in this coverage (the runtime
+ * Revised per review finding (the runtime
  * half previously mounted a hand-copied structural twin of the measurement
  * effect, which could not fail for a real production lifecycle defect -
  * only for a change to the twin itself). The measurement is now extracted

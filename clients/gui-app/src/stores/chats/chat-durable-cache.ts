@@ -39,7 +39,7 @@ export function createChatDurableCache<T>(limit: number): ChatDurableCache<T> {
     get: (identity) => {
       const key = chatTabPersistenceChatKey(identity);
       const value = cache.get(key);
-      // A get() must also refresh recency - without
+      // Review (F6): a get() must also refresh recency - without
       // this, insertion order alone means an entry read every reopen but
       // never re-saved (e.g. a chat that is only ever browsed, never
       // scrolled) still ages out on schedule while genuinely idle entries

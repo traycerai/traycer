@@ -3730,7 +3730,7 @@ useEpicCanvasStore.subscribe((state) => {
     evictPendingHydrationRestores(removed);
     evictActivityGroupOpenStores(removed);
     evictA2AOpenStores(removed);
-    // Tile-find serves every tile kind, not just chat -
+    // F4 (review): tile-find serves every tile kind, not just chat -
     // a tile whose adapter unregistered while still live (switched-away, not
     // closed) is skipped by scheduleUiReclaim's own liveness check and never
     // revisited if it is later closed without remounting. This sweep is that

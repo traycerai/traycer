@@ -508,7 +508,7 @@ function flushPendingSearch(tileInstanceId: string): boolean {
 // return and `replayRegisteredAdapterSearch` (below) restores the session
 // onto it.
 //
-// F4: this liveness check means a tile that unregisters
+// F4 (review): this liveness check means a tile that unregisters
 // WHILE live is skipped here and never revisited - if that tile is later
 // closed without ever remounting (closed directly from an inactive tab, no
 // switch-back), nothing calls `scheduleUiReclaim` again and `ui` would leak
@@ -533,7 +533,7 @@ function scheduleUiReclaim(tileInstanceId: string): void {
 }
 
 /**
- * F4: drops `ui` entries outright for tiles removed from
+ * F4 (review): drops `ui` entries outright for tiles removed from
  * the canvas for good - called from the canvas store's tile-removal
  * subscriber, the same sweep that evicts the other per-tab registries.
  * Complements `scheduleUiReclaim`'s deferred, liveness-gated path: that path
