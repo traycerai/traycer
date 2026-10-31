@@ -13,6 +13,7 @@ afterEach(() => {
  * produces a frame and therefore never produces a hit region to hover. What
  * they SAY is the part that can go wrong silently, and it is asserted directly.
  */
+
 /**
  * The office no longer draws its own agent card: the hover is
  * `AgentHoverTooltip`, the same component the sidebar and the graph use. What

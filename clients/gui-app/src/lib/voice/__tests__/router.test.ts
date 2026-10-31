@@ -187,6 +187,7 @@ function threadSummary(fixture: ThreadFixture): BotThreadSummary {
       senderUserId: VIEWER,
       sentAt: fixture.sentAt,
       resolvedAt: null,
+      excerpt: null,
     },
     replyCount: 2,
     lastReplyAt: fixture.sentAt + 60_000,

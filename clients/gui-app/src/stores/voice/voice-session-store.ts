@@ -188,7 +188,13 @@ export type VoiceEndReason =
   | "credits"
   | "connection"
   | "locked"
+  /** The app went to the background (the phone, where the screen lock is one). */
+  | "background"
+  /** A call or another app took the sound while the session was live. */
+  | "interrupted"
   | "microphone"
+  /** The person refused the microphone; only the OS settings repair it. */
+  | "microphone-denied"
   /** The voice's sound could not be played, so nothing could be heard. */
   | "playback"
   | "unavailable";
@@ -294,6 +300,21 @@ export interface VoiceSessionState {
    */
   readonly destinationKnown: boolean;
   readonly muted: boolean;
+  /**
+   * Push-to-talk, the phone's per-session switch (V5): the microphone carries
+   * the person only while the talk button is held. Off at every start: open
+   * microphone is the default.
+   */
+  readonly pushToTalk: boolean;
+  /** The talk button is held down, under push-to-talk. */
+  readonly talkHeld: boolean;
+  /**
+   * The phone's full-screen voice view is up. Up at every start; down while
+   * the person looks at the channel behind it, with the session still live.
+   * Putting it down lets go of a held talk button: the button is gone, so
+   * no release could reach it.
+   */
+  readonly phoneViewOpen: boolean;
   readonly driver: VoiceSessionDriver | null;
   /** The queue's executor while the controller is mounted; the session's state says whether it acts. */
   readonly queueDriver: VoiceQueueDriver | null;
@@ -355,6 +376,17 @@ export interface VoiceSessionState {
   readonly resumeFromDictation: () => void;
   readonly setDestinationKnown: (known: boolean) => void;
   readonly setMuted: (muted: boolean) => void;
+  /** Switching either way starts the new mode listening: unmuted, not held. */
+  readonly setPushToTalk: (on: boolean) => void;
+  readonly setTalkHeld: (held: boolean) => void;
+  readonly setPhoneViewOpen: (open: boolean) => void;
+  /**
+   * Leaves push-to-talk with the microphone closed: the open microphone,
+   * muted. For a layout with no talk button to hold, where only the person
+   * may open the microphone again (Unmute). Nothing while push-to-talk is
+   * off.
+   */
+  readonly leavePushToTalkMuted: () => void;
   readonly setDriver: (driver: VoiceSessionDriver | null) => void;
   readonly setQueueDriver: (driver: VoiceQueueDriver | null) => void;
 }
@@ -395,6 +427,9 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   dictationPauseLatched: false,
   destinationKnown: true,
   muted: false,
+  pushToTalk: false,
+  talkHeld: false,
+  phoneViewOpen: false,
   driver: null,
   queueDriver: null,
 
@@ -408,6 +443,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
       engineGeneration: get().engineGeneration + 1,
       // Started while dictation records: paused until the person resumes.
       dictationPauseLatched: get().dictationHolds.size > 0,
+      phoneViewOpen: true,
     }),
   engineReplacing: () =>
     set({
@@ -432,6 +468,9 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
       pendingAction: null,
       captionLines: NO_CAPTIONS,
       muted: false,
+      pushToTalk: false,
+      talkHeld: false,
+      phoneViewOpen: false,
       dictationPauseLatched: false,
       pausedForDictation: get().dictationHolds.size > 0,
     }),
@@ -556,6 +595,20 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
     set({ dictationPauseLatched: false, pausedForDictation: false });
   },
   setMuted: (muted) => set({ muted }),
+  setPushToTalk: (pushToTalk) => {
+    if (get().pushToTalk === pushToTalk) return;
+    set({ pushToTalk, talkHeld: false, muted: false });
+  },
+  setTalkHeld: (talkHeld) => {
+    if (get().talkHeld === talkHeld) return;
+    set({ talkHeld });
+  },
+  setPhoneViewOpen: (phoneViewOpen) =>
+    set(phoneViewOpen ? { phoneViewOpen } : { phoneViewOpen, talkHeld: false }),
+  leavePushToTalkMuted: () => {
+    if (!get().pushToTalk) return;
+    set({ pushToTalk: false, talkHeld: false, muted: true });
+  },
   setDriver: (driver) => set({ driver }),
   setQueueDriver: (queueDriver) => set({ queueDriver }),
 }));

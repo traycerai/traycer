@@ -244,6 +244,14 @@ function locationFor(request: FileAssetRequest): string {
 }
 
 /**
+ * Namespace for every workspace/git asset entry in the shared image blob
+ * cache. A constant rather than a per-request value because
+ * {@link buildFileAssetCacheKey} already carries this hook's whole
+ * authorization surface (host, source, location, path) in the subject.
+ */
+const FILE_ASSET_SCOPE_KEY = "file-asset";
+
+/**
  * Composite key for `imageBlobCache`: `hostScopeKey`/`source`/location/`filePath`/
  * `contentIdentity`, as a JSON
  * array - not delimiter-joined, since any of those fields can legally
@@ -253,14 +261,6 @@ function locationFor(request: FileAssetRequest): string {
  * `contentIdentity`, so a re-stat that finds the same fingerprint reuses the
  * cached blob instead of re-transferring bytes.
  */
-/**
- * Namespace for every workspace/git asset entry in the shared image blob
- * cache. A constant rather than a per-request value because
- * {@link buildFileAssetCacheKey} already carries this hook's whole
- * authorization surface (host, source, location, path) in the subject.
- */
-const FILE_ASSET_SCOPE_KEY = "file-asset";
-
 function buildFileAssetCacheKey(parts: {
   // Account-scoped (see `assetHostScope`), not a bare host id: a caller that
   // ever passed one would collide across accounts.

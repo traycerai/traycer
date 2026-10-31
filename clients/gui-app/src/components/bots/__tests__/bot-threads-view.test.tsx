@@ -171,6 +171,7 @@ function thread(
       senderUserId: "user-1",
       sentAt: 1_000,
       resolvedAt: null,
+      excerpt: null,
     },
     replyCount: 2,
     lastReplyAt,

@@ -840,6 +840,7 @@ function readerEndCandidateFor(input: {
  *  it afterwards would otherwise leave the reader free at an end they
  *  reached.
  *
+ *  Whether the view has reached the end a toward-end gesture was thrown at.
  *  `unreadable` is not `short`: the end moved by an amount nothing can read
  *  back, so it can never be judged again and the caller retires it. Keeping
  *  it would let a row that returns to the size it was - a block collapsed

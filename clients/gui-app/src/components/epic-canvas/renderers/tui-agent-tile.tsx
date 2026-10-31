@@ -1183,19 +1183,6 @@ interface TerminalAgentPreLaunchToolbarProps {
   readonly onWorkspaceBindingCommitted: () => void;
 }
 
-/**
- * Always-on toolbar above the terminal-agent body. The host + workspace
- * chips sit beside the harness controls so the user can see where the agent
- * runs without leaving the tile. The host select is locked because a PTY
- * can't migrate; the workspace picker remains editable and restarts the PTY
- * after a committed folder-binding change.
- *
- * The binding is read via `worktree.getBinding` (a unary RPC) so the chip can
- * render `repo · branch` accurately even though terminal-agents do not
- * subscribe to `chat.subscribe`. While the query is loading we pass
- * `binding={null}` so the chip degrades to "not selected"; once it resolves
- * the chip reflects Local / worktree branch deterministically.
- */
 /** Tooltip/aria reason for the disabled "Continue under another profile…"
  *  dropdown item: the old-host capability gate takes precedence over the
  *  same session/binding readiness gate plain Fork uses, since it names a
@@ -1213,6 +1200,19 @@ function continueUnderProfileDisabledReasonFor(
   return undefined;
 }
 
+/**
+ * Always-on toolbar above the terminal-agent body. The host + workspace
+ * chips sit beside the harness controls so the user can see where the agent
+ * runs without leaving the tile. The host select is locked because a PTY
+ * can't migrate; the workspace picker remains editable and restarts the PTY
+ * after a committed folder-binding change.
+ *
+ * The binding is read via `worktree.getBinding` (a unary RPC) so the chip can
+ * render `repo · branch` accurately even though terminal-agents do not
+ * subscribe to `chat.subscribe`. While the query is loading we pass
+ * `binding={null}` so the chip degrades to "not selected"; once it resolves
+ * the chip reflects Local / worktree branch deterministically.
+ */
 function TerminalAgentPreLaunchToolbar(
   props: TerminalAgentPreLaunchToolbarProps,
 ) {

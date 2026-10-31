@@ -322,15 +322,6 @@ export const NOTIFICATION_INDICATOR_ERROR_POLL_LANE: ConditionPollLane = {
   maxDelayMs: 30 * SECOND_MS,
 };
 /**
- * `host.update.check` answered `cli-unavailable`. That answer retires the
- * whole update region and the retired region hides Check now, so with no
- * focus/reconnect refetch in production nothing would ever notice the Traycer
- * CLI being reinstalled — the region stayed retired until the user left the
- * host scope and came back. The probe fails fast on the host while the CLI is
- * genuinely absent, and the first ok answer revives the region and ends the
- * lane.
- */
-/**
  * A fork boundary waiting on the publisher: the chat has not been backed up
  * yet, or the chosen turn is not covered by the last receipt.
  *
@@ -349,6 +340,15 @@ export const CHAT_PUBLICATION_WAIT_POLL_LANE: ConditionPollLane = {
   initialDelayMs: 5 * SECOND_MS,
   maxDelayMs: 30 * SECOND_MS,
 };
+/**
+ * `host.update.check` answered `cli-unavailable`. That answer retires the
+ * whole update region and the retired region hides Check now, so with no
+ * focus/reconnect refetch in production nothing would ever notice the Traycer
+ * CLI being reinstalled — the region stayed retired until the user left the
+ * host scope and came back. The probe fails fast on the host while the CLI is
+ * genuinely absent, and the first ok answer revives the region and ends the
+ * lane.
+ */
 export const UPDATE_CHECK_CLI_RECOVERY_POLL_LANE: ConditionPollLane = {
   id: "host-update-check.cli-recovery",
   initialDelayMs: 5 * SECOND_MS,

@@ -483,11 +483,6 @@ export function ChatTile(props: ChatTileProps) {
 }
 
 /**
- * The wait for this chat's first transcript, with what the pre-content body
- * needs from above the handle branch. See `ChatLoadWait` for why it lives
- * here and not in the body.
- */
-/**
  * Whether this viewer's epic role can create agents - the gate the dead-tile
  * banner draws Clone agent on. The live tile reads it once, into its
  * pre-content frame, and hands that one value to both its banner and the
@@ -500,6 +495,11 @@ function useChatCloneAllowed(): boolean {
   return permissionRole === null || isEditableRole(permissionRole);
 }
 
+/**
+ * The wait for this chat's first transcript, with what the pre-content body
+ * needs from above the handle branch. See `ChatLoadWait` for why it lives
+ * here and not in the body.
+ */
 function useChatTilePreContentFrame(
   reachability: HostReachability,
   hasReadySession: boolean,

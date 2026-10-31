@@ -15,4 +15,6 @@ export const voiceMutationKeys = {
   shellIndicator: () => ["voice.shell.indicator"] as const,
   /** The microphone permission prompt. */
   microphoneAccess: () => ["voice.microphone.access"] as const,
+  /** The OS settings page where a refused microphone is allowed again. */
+  microphoneSettings: () => ["voice.microphone.settings"] as const,
 };

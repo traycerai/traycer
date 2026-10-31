@@ -1,3 +1,4 @@
+import { botThreadAnchorExcerptOf } from "@traycer/protocol/host/bot/conversation-schemas";
 import { choicesSentence } from "@/lib/voice/focused-replies";
 import type { AttentionPrompts, ReplyRef } from "@/lib/voice/queue-sources";
 import type { QueueItem } from "@/stores/voice/voice-session-store";
@@ -17,23 +18,14 @@ import type { QueueItem } from "@/stores/voice/voice-session-store";
  */
 export const VOICE_SESSION_INPUT_MAX_CHARS = 4_000;
 
-/** How many words of an item's own content name it in a line. */
-const TITLE_WORDS = 10;
-
 /**
  * What an item is about, from its own content: its first sentence, cut to a
- * few words. The thread's opening post is not in the thread's records, and
- * the notification's excerpt is copy, so the row's own words name it.
+ * few words, as a thread's anchor excerpt is. The thread's opening post is
+ * not in the thread's records, and the notification's excerpt is copy, so
+ * the row's own words name it.
  */
 export function itemTitleOf(content: string): string {
-  const firstSentence = content
-    .replace(/\s+/g, " ")
-    .trim()
-    .split(/(?<=[.!?])\s/u)[0];
-  const words = firstSentence.split(" ").filter((word) => word.length > 0);
-  const kept = words.slice(0, TITLE_WORDS).join(" ");
-  const trimmed = kept.replace(/[\s.!?,;:]+$/u, "");
-  return words.length > TITLE_WORDS ? `${trimmed}…` : trimmed;
+  return botThreadAnchorExcerptOf(content) ?? "";
 }
 
 /** Where an item is, for its line: a thread, or the bot's channel. */

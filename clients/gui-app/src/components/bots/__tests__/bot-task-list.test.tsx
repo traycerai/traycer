@@ -208,6 +208,7 @@ function threadOn(
       senderUserId,
       sentAt: 1_000,
       resolvedAt: null,
+      excerpt: null,
     },
     replyCount: 2,
     lastReplyAt: 2_000,

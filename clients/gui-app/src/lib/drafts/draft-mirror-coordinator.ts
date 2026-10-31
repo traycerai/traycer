@@ -1654,27 +1654,6 @@ export async function ingestCloudDraftSummary(input: {
 }
 
 /**
- * Remember the published image addresses of a cloud-ingested draft without
- * pulling image bytes into this window during bootstrap.
- *
- * This is the ONLY path where that can be true. A document that arrives on
- * `drafts.subscribe` came from a host this window holds a mirror on, so
- * `applyHostDocument` has already read its blobs off that host; a document that
- * arrives here is owned by a host this window is not mirroring, which is the
- * second-window and offline-owner case the replica exists for.
- *
- * Run AFTER the apply so the row already roots these hashes. Visible-draft
- * idle prefetch and render/submit resolution use these addresses later.
- *
- * Landing and new-chat only. Stash entries also reach this function, and their
- * bytes are deliberately NOT recovered here: a stash row is converted into a
- * closed start-page draft, and `convertStashEntry` writes its images into the
- * landing partition as part of that one conversion - so bytes fetched after
- * the row lands have nowhere to go. Recovering them means handing an images
- * map to `convertStashDocument` BEFORE it applies, which is custody work of
- * its own.
- */
-/**
  * Fetch a cloud-ingested STASH document's images, for handing to the apply.
  *
  * The stash twin of {@link recoverIngestedCloudDraftImages} runs before apply:
@@ -1804,6 +1783,27 @@ function nextStashImageFallbackHost(
   return null;
 }
 
+/**
+ * Remember the published image addresses of a cloud-ingested draft without
+ * pulling image bytes into this window during bootstrap.
+ *
+ * This is the ONLY path where that can be true. A document that arrives on
+ * `drafts.subscribe` came from a host this window holds a mirror on, so
+ * `applyHostDocument` has already read its blobs off that host; a document that
+ * arrives here may be owned by a host this window is not mirroring, which is the
+ * second-window and offline-owner case the replica exists for.
+ *
+ * Run AFTER the apply so the row already roots these hashes. Visible-draft
+ * idle prefetch and render/submit resolution use these addresses later.
+ *
+ * Landing and new-chat only. Stash entries also reach this function, and their
+ * bytes are deliberately NOT recovered here: a stash row is converted into a
+ * closed start-page draft, and `convertStashEntry` writes its images into the
+ * landing partition as part of that one conversion - so bytes fetched after
+ * the row lands have nowhere to go. Recovering them means handing an images
+ * map to `convertStashDocument` BEFORE it applies, which is custody work of
+ * its own.
+ */
 function recoverIngestedCloudDraftImages(input: {
   readonly hostId: string;
   readonly summary: CloudChatSummary;

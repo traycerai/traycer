@@ -1019,6 +1019,14 @@ class ArtifactMentionProvider extends ComposerMentionProvider {
 }
 
 /**
+ * The screen-reader's why for a held row. The visible chrome already carries
+ * the state (the `Searching GitHub…` row below the list); this is the same
+ * fact for the row itself, where "Disabled." alone would read as a mystery.
+ */
+export const GITHUB_MENTION_HELD_ROWS_DISABLED_REASON =
+  "Showing the previous filter's results while GitHub answers the current one.";
+
+/**
  * The two repo-flavoured mention categories. Structurally identical - only the
  * row vocabulary and the filter presets differ - so they share one class and
  * differ by `section`.
@@ -1031,14 +1039,6 @@ class ArtifactMentionProvider extends ComposerMentionProvider {
  * Hiding them would make the feature undiscoverable for precisely the users
  * who need to learn why it is empty; the section explains itself inside.
  */
-/**
- * The screen-reader's why for a held row. The visible chrome already carries
- * the state (the `Searching GitHub…` row below the list); this is the same
- * fact for the row itself, where "Disabled." alone would read as a mystery.
- */
-export const GITHUB_MENTION_HELD_ROWS_DISABLED_REASON =
-  "Showing the previous filter's results while GitHub answers the current one.";
-
 class GithubMentionProvider extends ComposerMentionProvider {
   readonly id: MentionProviderId;
   readonly rootOrder: number;

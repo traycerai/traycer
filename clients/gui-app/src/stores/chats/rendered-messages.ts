@@ -522,8 +522,7 @@ function checkpointSignature(view: CheckpointManifestView | null): string {
  * rendered rows. `withTurnCompletion` upgrades this into the UI-facing
  * `ChatMessageStoppedInfo` (adding `turnHadOutput`) once it has row
  * visibility, which this pure scan does not.
- */
-/*
+ *
  * `turn.stopped` folding lives in the shared row projection: a stopped turn can
  * ADD a row (the synthesized boundary after a trailing steer) and can BE a row
  * (a Stop that landed before any assistant record), so the host numbers
@@ -2581,11 +2580,6 @@ function userMessagesByIdFromMessages(
   return usersById;
 }
 
-/*
- * Steered-user suppression decides whether a persisted user record occupies a
- * top-level row, so it decides an ordinal. Shared with the host - see
- * `row-projection.ts`.
- */
 /**
  * Which user rows render the completed-steer badge.
  *
@@ -2629,6 +2623,11 @@ function completedSteerMessageIds(
   return widened;
 }
 
+/*
+ * Steered-user suppression decides whether a persisted user record occupies a
+ * top-level row, so it decides an ordinal. Shared with the host - see
+ * `row-projection.ts`.
+ */
 function nestedSteeredMessageIdsFromTurns(
   turnAccumulator: ReadonlyMap<string, AssistantTurnAccumulator>,
   usersById: ReadonlyMap<string, OpenUserMessage>,

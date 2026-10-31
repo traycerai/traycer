@@ -35,7 +35,7 @@ import { MigrationRunController } from "@/components/migration/migration-run-con
 import { TracyEntryController } from "@/components/layout/tabs/tracy-entry-controller";
 import { TalkShortcutBridge } from "@/components/layout/voice/talk-control";
 import { VoiceSessionController } from "@/components/layout/voice/voice-session-controller";
-import { VoiceSessionStrip } from "@/components/layout/voice/voice-session-strip";
+import { VoiceSessionChrome } from "@/components/layout/voice/voice-session-chrome";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { LandingTerminalHost } from "@/components/home/terminal-panel/landing-terminal-host";
 import { OpenFolderDialog } from "@/components/open-folder-dialog";
@@ -148,8 +148,10 @@ function AppShellBody(props: AppShellProps) {
                   />
                   {/* Beneath the tab strip and across every tab while a
                     voice session is live (V6): the destination the next
-                    spoken post goes to, Mute, End, captions. */}
-                  {UNRELEASED_FEATURES_ENABLED ? <VoiceSessionStrip /> : null}
+                    spoken post goes to, Mute, End, captions. The phone
+                    draws its full-screen view instead, and this bar while
+                    that view is down (V5). */}
+                  {UNRELEASED_FEATURES_ENABLED ? <VoiceSessionChrome /> : null}
                 </>
               }
               surface={

@@ -207,6 +207,7 @@ import {
  * the pixel art stays square; the bounds are what keeps a one-agent room from
  * filling the tile with a single desk and a fifty-agent floor from vanishing.
  */
+
 /**
  * Far below one sprite pixel per screen pixel, because a thousand-agent City
  * is tens of thousands of sprite pixels across and the overview band exists to
@@ -349,11 +350,6 @@ type OfficeSelectedDetail =
   | { readonly kind: "agent"; readonly agentId: string }
   | { readonly kind: "pair"; readonly edgeId: string };
 
-/**
- * The hovered character and where its card should sit, in container-relative
- * screen pixels. Set on pointer move, and moved by the frame loop only while
- * the character under the pointer is itself moving.
- */
 /**
  * The open hover card's subject and geometry.
  *
@@ -1401,16 +1397,6 @@ function drawFloorSigns(args: {
   ctx.restore();
 }
 
-/**
- * A room's name on a wall plate.
- *
- * SIGNAGE, not a name tag - and the distinction is the point. Cabin, area and
- * pod names used to be drawn in the same face as an agent's name, so a reader
- * counted "Cafeteria" as another person standing in the room. Uppercase,
- * tracked out, and set on a plate, it reads as a fixture instead. The plate is
- * also its own backing, so the four-offset outline the name tags use would
- * only muddy it.
- */
 /** Puts the plate's own face on the context. Shared, so measuring matches drawing. */
 function applySignPlateFont(ctx: CanvasRenderingContext2D): void {
   ctx.font = `bold ${OFFICE_SIGN_FONT_PX}px ${OFFICE_SIGN_MONOSPACE_STACK}`;
@@ -1460,6 +1446,16 @@ function signPlateBox(
   };
 }
 
+/**
+ * A room's name on a wall plate.
+ *
+ * SIGNAGE, not a name tag - and the distinction is the point. Cabin, area and
+ * pod names used to be drawn in the same face as an agent's name, so a reader
+ * counted "Cafeteria" as another person standing in the room. Uppercase,
+ * tracked out, and set on a plate, it reads as a fixture instead. The plate is
+ * also its own backing, so the four-offset outline the name tags use would
+ * only muddy it.
+ */
 function drawSignPlate(
   ctx: CanvasRenderingContext2D,
   sign: {

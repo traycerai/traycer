@@ -136,11 +136,6 @@ type PendingSend = {
 };
 
 /**
- * One host's live draft mirror: `drafts.list` snapshot + `drafts.subscribe`
- * frames, debounced upsert, delete. Unreachable / `E_HOST_UNSUPPORTED` leaves
- * the sink's local persist as the source of truth.
- */
-/**
  * How a `drafts.delete` ended: `deleted` (the host removed its row),
  * `absent` (the host does not hold the row), `unsupported` (the host has no
  * drafts capability; nothing to delete), `failed` (closed or transport
@@ -152,6 +147,11 @@ export type DraftDeleteOutcome =
   | "unsupported"
   | "failed";
 
+/**
+ * One host's live draft mirror: `drafts.list` snapshot + `drafts.subscribe`
+ * frames, debounced upsert, delete. Unreachable / `E_HOST_UNSUPPORTED` leaves
+ * the sink's local persist as the source of truth.
+ */
 export class DraftMirrorSession {
   readonly hostId: string;
   private readonly rpc: DraftsHostRpc;
@@ -809,11 +809,6 @@ export class DraftMirrorSession {
   }
 
   /**
-   * Read through a method so post-await checks are not CFA-narrowed to
-   * the pre-await `false`. `close()` / `markUnsupported()` can run
-   * while `list`/`upsert` are in flight.
-   */
-  /**
    * Has this bootstrap lost the right to mutate anything? Either the session
    * closed under it, or a newer bootstrap superseded it. Both answers mean the
    * same thing to every caller, and every caller is on the far side of an
@@ -896,6 +891,11 @@ export class DraftMirrorSession {
     }
   }
 
+  /**
+   * Read through a method so post-await checks are not CFA-narrowed to
+   * the pre-await `false`. `close()` / `markUnsupported()` can run
+   * while `list`/`upsert` are in flight.
+   */
   private isClosed(): boolean {
     return this.closed;
   }

@@ -190,12 +190,10 @@ export type BotConversationSendResponse = z.infer<
 // ---- bot.thread.list (T41) --------------------------------------------- //
 
 /**
- * The post a thread hangs off, as its list row shows it. It names the post
- * and carries no text: a client reads the text from the channel's row
- * `messageId` names, and a summary stays one small entry wherever it is
- * kept (the bot's environment room holds one per thread, T65).
+ * The post a thread hangs off, as `bot.thread.list@1.0` and `@1.1` show it,
+ * frozen by hand: it names the post and carries no text.
  */
-export const botThreadAnchorSchema = lazySchema(() =>
+export const botThreadAnchorSchemaV10 = lazySchema(() =>
   z.object({
     messageId: z.string().min(1),
     requestId: z.string().min(1),
@@ -206,7 +204,146 @@ export const botThreadAnchorSchema = lazySchema(() =>
     resolvedAt: z.number().int().nullable(),
   }),
 );
+
+/** The most characters an anchor's excerpt carries, its ellipsis included. */
+export const BOT_THREAD_ANCHOR_EXCERPT_MAX_CHARS = 160;
+
+/** How many words of a post's first sentence its excerpt keeps. */
+const ANCHOR_EXCERPT_WORDS = 10;
+
+/**
+ * A sentence's end: a run of `.`, `!`, `?` or `…`, which ends one only when
+ * a space follows, or of `。`, `！`, `？`, which end one on their own; either
+ * with the closing quotes, brackets and Markdown markers after it.
+ */
+const SENTENCE_END = /([.!?…]+|[。！？]+)(["'”’)\]}*_`」』）]*)/gu;
+
+/** Punctuation an excerpt does not end on, before any closers that follow it. */
+const TRAILING_PUNCTUATION =
+  /[\s.!?,;:…。！？、，；：]+(["'”’)\]}*_`」』）]*)$/u;
+
+/** Words a `.` ends without ending the sentence, before a lowercase word. */
+const ABBREVIATIONS = new Set([
+  "approx",
+  "cf",
+  "etc",
+  "fig",
+  "incl",
+  "no",
+  "vol",
+  "vs",
+]);
+
+/**
+ * Whether the word ending at a `.` is an abbreviation: a single letter or
+ * dotted letters (`e.g`, `U.S`), or one of {@link ABBREVIATIONS}.
+ */
+function isAbbreviation(before: string): boolean {
+  const word = (/(\S+)$/u.exec(before)?.[1] ?? "").replace(
+    /^["'“‘(\[{*_`]+/u,
+    "",
+  );
+  return (
+    /^(?:\p{L}\.)*\p{L}$/u.test(word) || ABBREVIATIONS.has(word.toLowerCase())
+  );
+}
+
+/**
+ * The first sentence of whitespace-collapsed `text`. A `.` inside a word
+ * (`1.5.1`) ends nothing, and neither does an ellipsis or a `.` after an
+ * abbreviation when a lowercase word follows (`e.g. the build`).
+ */
+function firstSentenceOf(text: string): string {
+  for (const match of text.matchAll(SENTENCE_END)) {
+    const end = match.index + match[0].length;
+    const terminator = match[1] ?? "";
+    if (/[。！？]/u.test(terminator)) return text.slice(0, end);
+    const rest = text.slice(end);
+    if (!rest.startsWith(" ")) {
+      if (rest.length === 0) return text;
+      continue;
+    }
+    // An ellipsis, or a `.` after an abbreviation, before a lowercase word
+    // is a pause, not an end.
+    const pause =
+      /^(?:\.{2,}|…+)$/u.test(terminator) ||
+      (terminator === "." && isAbbreviation(text.slice(0, match.index)));
+    if (pause && match[2] === "" && /^ \p{Ll}/u.test(rest)) continue;
+    return text.slice(0, end);
+  }
+  return text;
+}
+
+/**
+ * A post's excerpt: its first sentence, cut to a few words and to
+ * {@link BOT_THREAD_ANCHOR_EXCERPT_MAX_CHARS}, its closing punctuation
+ * dropped (a closing quote or Markdown marker kept) and an ellipsis marking
+ * a cut; `null` for a post with no words. The one cut: the bound host fills
+ * `anchor.excerpt` with it, and the voice names a queue item by it.
+ */
+export function botThreadAnchorExcerptOf(text: string): string | null {
+  const firstSentence = firstSentenceOf(text.replace(/\s+/g, " ").trim());
+  const words = firstSentence.split(" ").filter((word) => word.length > 0);
+  const kept = words
+    .slice(0, ANCHOR_EXCERPT_WORDS)
+    .join(" ")
+    .replace(TRAILING_PUNCTUATION, "$1");
+  // Nothing but punctuation is no words.
+  if (!/[^\s\p{P}\p{Sk}]/u.test(kept)) return null;
+  const cut = words.length > ANCHOR_EXCERPT_WORDS;
+  const whole = cut ? `${kept}…` : kept;
+  if (whole.length <= BOT_THREAD_ANCHOR_EXCERPT_MAX_CHARS) return whole;
+  // Cut by code point, so a surrogate pair is never split.
+  let fitted = "";
+  for (const char of kept) {
+    if (fitted.length + char.length > BOT_THREAD_ANCHOR_EXCERPT_MAX_CHARS - 1) {
+      break;
+    }
+    fitted += char;
+  }
+  return `${fitted.trimEnd()}…`;
+}
+
+/**
+ * The post a thread hangs off, as its list row shows it. A summary stays one
+ * small entry wherever it is kept (the bot's environment room holds one per
+ * thread, T65), so it carries the post's excerpt and never its text: a
+ * client reads the text from the channel's row `messageId` names.
+ */
+export const botThreadAnchorSchema = lazySchema(() =>
+  botThreadAnchorSchemaV10.extend({
+    /**
+     * `bot.thread.list@1.2`: the post's excerpt
+     * ({@link botThreadAnchorExcerptOf}). `null` when the answering host
+     * does not hold the post's text, as a host below the minor and a room
+     * entry written before it.
+     */
+    excerpt: z
+      .string()
+      .min(1)
+      .max(BOT_THREAD_ANCHOR_EXCERPT_MAX_CHARS)
+      .nullable()
+      .default(null),
+  }),
+);
 export type BotThreadAnchor = z.infer<typeof botThreadAnchorSchema>;
+
+/**
+ * One thread of a bot's channel as `bot.thread.list@1.0` and `@1.1` show it,
+ * frozen by hand: its anchor without the excerpt.
+ */
+export const botThreadSummarySchemaV10 = lazySchema(() =>
+  z.object({
+    threadId: z.string().min(1),
+    conversationId: z.string().min(1),
+    sessionChatId: z.string().min(1),
+    anchor: botThreadAnchorSchemaV10.nullable(),
+    replyCount: z.number().int().nonnegative(),
+    lastReplyAt: z.number().int().nullable(),
+    openRequestCount: z.number().int().nonnegative(),
+    costUsd: z.number().nonnegative().nullable(),
+  }),
+);
 
 /**
  * One thread of a bot's channel: the thread record (`tenant_kind =
@@ -247,7 +384,7 @@ export type BotThreadListRequest = z.infer<typeof botThreadListRequestSchema>;
 /** `bot.thread.list@1.0`'s response, frozen by hand: without `threadAnchors`. */
 export const botThreadListResponseSchemaV10 = lazySchema(() =>
   z.object({
-    threads: z.array(botThreadSummarySchema),
+    threads: z.array(botThreadSummarySchemaV10),
     /**
      * What the bot's trunk has cost in USD on the bound host, every member's
      * turns; `null` when this host cannot say. The bot's figure is this plus
@@ -293,7 +430,8 @@ export const botThreadAnchorsSchema = lazySchema(() =>
 );
 export type BotThreadAnchors = z.infer<typeof botThreadAnchorsSchema>;
 
-export const botThreadListResponseSchema = lazySchema(() =>
+/** `bot.thread.list@1.1`'s response, frozen by hand: anchors without the excerpt. */
+export const botThreadListResponseSchemaV11 = lazySchema(() =>
   botThreadListResponseSchemaV10.extend({
     /**
      * `bot.thread.list@1.1`: the rows the bot's bound host opens a thread
@@ -302,6 +440,13 @@ export const botThreadListResponseSchema = lazySchema(() =>
      * row is then refused.
      */
     threadAnchors: botThreadAnchorsSchema.nullable(),
+  }),
+);
+
+/** `bot.thread.list@1.2`: each anchor carries its post's excerpt. */
+export const botThreadListResponseSchema = lazySchema(() =>
+  botThreadListResponseSchemaV11.extend({
+    threads: z.array(botThreadSummarySchema),
   }),
 );
 export type BotThreadListResponse = z.infer<typeof botThreadListResponseSchema>;

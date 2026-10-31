@@ -147,6 +147,19 @@ import {
 import { buildChatRunSettings } from "@/lib/composer/chat-run-settings";
 import { contentIsSubmittable } from "@/lib/composer/composer-content";
 import { sessionObjectUrl } from "@/lib/composer/landing-image-store";
+import { appendImageAttachmentAtoms } from "@/lib/composer/image-atoms";
+import {
+  sessionAnnotationImageAtoms,
+  type AnnotationImageAtom,
+} from "@/lib/composer/annotation-image-atoms";
+import type { BrowserAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
+import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
+import { BrowserAnnotationCard } from "@/components/chat/composer/browser-annotation-card";
+import { useLandingImageFetcher } from "@/hooks/composer/use-landing-image-fetcher";
+import {
+  readNewConversationAnnotations,
+  useNewConversationAnnotationStore,
+} from "@/stores/epics/new-conversation-annotation-store";
 import { currentDraftBlobOwnerId } from "@/lib/drafts/draft-blob-transport";
 import {
   confirmAttachmentsByHash,
@@ -316,6 +329,72 @@ async function confirmCreateAttachmentHashes(input: {
  * `NewConversationModalBody`) means only the attachment strip re-renders while
  * typing - the toolbar / workspace controls / editor wrapper stay put.
  */
+const NO_ANNOTATIONS: readonly never[] = [];
+
+/** A staged sandbox's create carries no sidecar, so a capture cannot ride it. */
+const STAGED_SANDBOX_CAPTURE_UNAVAILABLE =
+  "A chat waiting for a sandbox can't start with a capture. Remove the capture to send.";
+
+/** `epic.createChat@1.5`: the first message carries the annotation sidecar. */
+function hostCreatesChatWithAnnotations(hostId: string): boolean {
+  const version = readNegotiatedMethodVersion(hostId, "epic.createChat");
+  return (
+    version !== null &&
+    version !== false &&
+    version.major === 1 &&
+    version.minor >= 5
+  );
+}
+
+/**
+ * The browser-annotation sidecar a create carries, or why it cannot. The
+ * records need `epic.createChat@1.5` on the host the chat is created on -
+ * below it they would be stripped on the wire and the message would arrive
+ * without its cards - and each crop must still be in this window's image
+ * store, since it rides as an inline image atom the record's hash names.
+ */
+function annotationSidecarForCreate(
+  epicId: string,
+  hostId: string,
+):
+  | {
+      readonly kind: "ready";
+      readonly browserAnnotations: ReadonlyArray<BrowserAnnotationRecord>;
+      readonly atoms: ReadonlyArray<AnnotationImageAtom>;
+    }
+  | { readonly kind: "refused"; readonly message: string } {
+  const browserAnnotations = readNewConversationAnnotations(epicId);
+  if (browserAnnotations.length > 0 && !hostCreatesChatWithAnnotations(hostId))
+    return {
+      kind: "refused",
+      message: "Update the host to start a chat with this capture.",
+    };
+  const atoms = sessionAnnotationImageAtoms(browserAnnotations);
+  if (atoms === null)
+    return {
+      kind: "refused",
+      message:
+        "The capture's image is missing. Send it from the artifact again.",
+    };
+  return { kind: "ready", browserAnnotations, atoms };
+}
+
+/** A card alone is a message, as it is in a chat composer. */
+function useHasSubmittableContent(
+  epicId: string,
+  seed: NewConversationModalSeed,
+): boolean {
+  const hasText = useNewConversationModalStore((state) =>
+    contentIsSubmittable(
+      state.draftPatchesByEpicId[epicId]?.content ?? seed.content,
+    ),
+  );
+  const hasCards = useNewConversationAnnotationStore(
+    (state) => (state.byEpicId[epicId]?.length ?? 0) > 0,
+  );
+  return hasText || hasCards;
+}
+
 function NewConversationModalAttachmentStrip(props: {
   readonly epicId: string;
   readonly hostId: string | null;
@@ -335,6 +414,11 @@ function NewConversationModalAttachmentStrip(props: {
     useEpicImageFetcher(),
     props.hostId,
   );
+  // The cards a selection sent to "New chat" brought along, beside the images.
+  const annotations = useNewConversationAnnotationStore(
+    (state) => state.byEpicId[props.epicId] ?? NO_ANNOTATIONS,
+  );
+  const annotationImageFetcher = useLandingImageFetcher();
   return (
     <>
       <VisibleDraftImagePrefetch content={content} active />
@@ -342,6 +426,26 @@ function NewConversationModalAttachmentStrip(props: {
         content={content}
         onRemoveImage={props.onRemoveImage}
         fetcher={fetcher}
+        leadingAttachments={
+          annotations.length > 0 ? (
+            <div data-testid="browser-annotation-cards" className="contents">
+              {annotations.map((record) => (
+                <BrowserAnnotationCard
+                  key={record.annotationId}
+                  record={record}
+                  targetControl={undefined}
+                  onRemove={(annotationId) =>
+                    useNewConversationAnnotationStore
+                      .getState()
+                      .remove(props.epicId, annotationId)
+                  }
+                  imageFetcher={annotationImageFetcher}
+                  sessionObjectUrl={sessionObjectUrl}
+                />
+              ))}
+            </div>
+          ) : undefined
+        }
         // This composer is hash-first now, so a just-pasted chip has no epic
         // attachment to fetch - its bytes are in this window's composer store,
         // and the session object-URL is what paints it without a placeholder
@@ -391,7 +495,7 @@ export function NewConversationModalAction(
       // Names no host: the modal resolves its own per-EPIC placement (this
       // Epic's last created chat's host, else the host the Epic is served
       // from - `useEpicConversationPlacement`), with the picker live. Naming
-      // one here would freeze the picker for a trigger that has no
+      // one here would freeze the picker (§55) for a trigger that has no
       // machine in mind.
       hostId: null,
     });
@@ -880,7 +984,7 @@ export function NewConversationModalBody(props: {
   // Epic is served from. Resolving the window's landing pin instead (what
   // this used to share) answered "where did the landing chip last point",
   // which is not a fact about this Epic. A request that DOES name a host
-  // keeps it, with the picker inert.
+  // keeps it, with the picker inert (§55).
   //
   // Same placement UNIT as the landing composer: the READ client for this
   // body's queries, the host-FROZEN client every create below is sent on, and
@@ -932,11 +1036,7 @@ export function NewConversationModalBody(props: {
     composerMode: draftComposerMode,
     workspace: draftWorkspace,
   } = useNewConversationDraftFields(epicId, seed);
-  const hasSubmittableContent = useNewConversationModalStore((state) =>
-    contentIsSubmittable(
-      state.draftPatchesByEpicId[epicId]?.content ?? seed.content,
-    ),
-  );
+  const hasSubmittableContent = useHasSubmittableContent(epicId, seed);
   const [initialContent] = useState<JsonContent>(
     () =>
       useNewConversationModalStore.getState().draftPatchesByEpicId[epicId]
@@ -1346,7 +1446,7 @@ export function NewConversationModalBody(props: {
     />
   );
   const header = <NewConversationModalHeader switcher={switcher} />;
-  // Placement refusal copy, as on the landing composer. The G4 re-point used to
+  // §54 refusal copy, as on the landing composer. The G4 re-point used to
   // share this slot; it narrates as a toast now, and only when it actually
   // reset staged intent.
   const {
@@ -1368,7 +1468,7 @@ export function NewConversationModalBody(props: {
   // its placement - no named host, no per-Epic pin in force, no session host
   // in force - and only then does a derivation move re-point it. Its staged
   // worktree/branch intent names refs on the machine the user picked them on
-  // and must not travel; the folder set stays, per the orchestrator's
+  // and must not travel; the §51 folder set stays, per the orchestrator's
   // ruling on the landing row. A modal resting on its pin or on the Epic's
   // host is not moved by the derivation and must not narrate a move.
   // A move that reset nothing stays silent: the switch itself is
@@ -1392,6 +1492,7 @@ export function NewConversationModalBody(props: {
   const cleanupAfterSubmit = useCallback((): void => {
     if (mirrorLineShown) markMirrorLineSeen();
     clearDraft(epicId);
+    useNewConversationAnnotationStore.getState().clear(epicId);
     clearStagedIntent(stagingKey);
     editorRef.current?.clear();
     onSubmitted();
@@ -1419,7 +1520,7 @@ export function NewConversationModalBody(props: {
    * `liveContent` is a parameter rather than a read off `editorRef` because
    * the byte-resolution branch below re-reads the live document AFTER its
    * await and hands that re-read in - so every guard from here down, the
-   * placement re-validation included, runs against the same document the
+   * §54 placement re-validation included, runs against the same document the
    * create carries, and a keystroke typed during resolution rides along
    * instead of being cleared unsent.
    */
@@ -1456,7 +1557,7 @@ export function NewConversationModalBody(props: {
       // Global, single-selection billing context captured at create time; it
       // rides as a sibling of the per-chat settings on the initial message.
       const accountContext = useAccountContextStore.getState().accountContext;
-      // The ORDERING is the point: re-validate the
+      // Selection model §54, and the ORDERING is the point: re-validate the
       // placement BEFORE any persistent write, because `cleanupAfterSubmit`
       // below clears the draft and closes the modal synchronously, well before
       // the create can fail. An existence check (`getActiveHostId() !== null`)
@@ -1478,9 +1579,21 @@ export function NewConversationModalBody(props: {
       // derive from the SAME captured submitTarget, and the verdict REFUSES
       // rather than migrates when its frozen client no longer addresses it.
       const activeHostId = placementVerdict.hostId;
+      // Before any write, like the placement check above: a refusal leaves the
+      // draft and its cards exactly as the user left them.
+      const sidecar = annotationSidecarForCreate(epicId, activeHostId);
+      if (sidecar.kind === "refused") {
+        raiseHostNotice({
+          kind: "refused",
+          message: sidecar.message,
+          action: null,
+        });
+        return;
+      }
+      const { browserAnnotations } = sidecar;
       recordPlacement(activeHostId);
       const content = buildSubmittedChatJSONContent(
-        liveContent,
+        appendImageAttachmentAtoms(liveContent, sidecar.atoms),
         pickerStore.getState().knownSlashCommands,
       );
       const chatId = uuidv4();
@@ -1544,6 +1657,9 @@ export function NewConversationModalBody(props: {
               // the wire honest about which creates carry hashes.
               ...(attachmentsByHash
                 ? { attachmentsByHash: true as const }
+                : {}),
+              ...(browserAnnotations.length > 0
+                ? { browserAnnotations: [...browserAnnotations] }
                 : {}),
             };
       if (initialMessage !== null) {
@@ -1740,6 +1856,23 @@ export function NewConversationModalBody(props: {
     [],
   );
 
+  /**
+   * The staged create carries the message alone, with no sidecar, and the
+   * sandbox's host is not up to ask: a capture would arrive as a bare image
+   * without its card. Asked at Send and again at the handoff, because a
+   * capture can land during the sign-in check without moving the draft's
+   * revision, and the handoff clears the cards.
+   */
+  const refuseStagedCapture = useCallback((): boolean => {
+    if (readNewConversationAnnotations(epicId).length === 0) return false;
+    raiseHostNotice({
+      kind: "refused",
+      message: STAGED_SANDBOX_CAPTURE_UNAVAILABLE,
+      action: null,
+    });
+    return true;
+  }, [epicId, raiseHostNotice]);
+
   const submitStagedSandbox = useCallback(
     (
       stagedKey: string,
@@ -1776,6 +1909,7 @@ export function NewConversationModalBody(props: {
             raiseSendRefusal();
             return;
           }
+          if (refuseStagedCapture()) return;
           const content = buildSubmittedChatJSONContent(
             captured,
             pickerStore.getState().knownSlashCommands,
@@ -1808,6 +1942,7 @@ export function NewConversationModalBody(props: {
       pickerStore,
       placement,
       raiseSendRefusal,
+      refuseStagedCapture,
       stagedSignInCheck,
       toolbarStore,
     ],
@@ -1873,7 +2008,19 @@ export function NewConversationModalBody(props: {
     }
     const editor = editorRef.current;
     if (editor === null) return;
-    const captured = editor.getJSON();
+    const editorContent = editor.getJSON();
+    const browserAnnotations = readNewConversationAnnotations(epicId);
+    // PLANNED over the document the create will carry, never SENT:
+    // `submitPreparedDraft` appends the sidecar's crops itself, to whichever
+    // document reaches it, so handing it this one would carry every crop
+    // twice. With the crops appended a node holds bytes beside its hash,
+    // which is the case the by-hash upload below declines, so a create with
+    // cards stays on the inline path and the host never probes a crop's hash
+    // in its staging tier.
+    const captured = appendImageAttachmentAtoms(
+      editorContent,
+      sessionAnnotationImageAtoms(browserAnnotations) ?? [],
+    );
     // A staged sandbox takes the send: the
     // message waits in this task, behind the setup line, until the agent the
     // person picked is ready on the sandbox, and the modal closes at once. It
@@ -1881,7 +2028,9 @@ export function NewConversationModalBody(props: {
     const stagedKey = stagingSurfaceKey(sandboxStaging);
     const staged = stagedKey === null ? null : readStagedSandbox(stagedKey);
     if (stagedKey !== null && staged !== null && staged.phase !== "handoff") {
-      void submitStagedSandbox(stagedKey, staged, captured);
+      // Before the sign-in check wakes anything; asked again at the handoff.
+      if (refuseStagedCapture()) return;
+      void submitStagedSandbox(stagedKey, staged, editorContent);
       return;
     }
 
@@ -1936,7 +2085,7 @@ export function NewConversationModalBody(props: {
       return draftImageInliningNeeded(live.getJSON(), liveHostHeld());
     };
     if (pending.length === 0) {
-      submitPreparedDraft(captured, false);
+      submitPreparedDraft(editorContent, false);
       return;
     }
     // One preparation at a time. A second Enter during resolution would
@@ -2194,6 +2343,7 @@ export function NewConversationModalBody(props: {
     // received.
     submitTarget,
     setSubmitReentryTick,
+    refuseStagedCapture,
     submitStagedSandbox,
     submitPreparedDraft,
     teamSandboxHarnessBlocked,
@@ -2233,7 +2383,7 @@ export function NewConversationModalBody(props: {
         });
         return false;
       }
-      // Same placement gate as `handleSubmit`, and for the same ordering reason:
+      // Same §54 gate as `handleSubmit`, and for the same ordering reason:
       // `cleanupAfterSubmit` runs before the async create, so a placement that
       // cannot be created on must be refused here or the draft is gone before
       // anything reports the failure.

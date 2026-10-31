@@ -301,8 +301,9 @@ export function HostSwitcher(props: {
   readonly selected: HostScopeOption | null;
   readonly activeHostId: string | null;
   readonly onSelect: (hostId: string) => void;
-  /** How this list ends — see `HostSwitcherAction`. */
   /**
+   * How this list ends — see `HostSwitcherAction`.
+   *
    * `null` for a surface with nowhere to send host management - the onboarding
    * tour renders outside the app shell, so the Settings overlay it would open
    * has no surface to appear on, and a row that does nothing is worse than no
