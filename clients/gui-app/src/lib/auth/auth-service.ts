@@ -3140,6 +3140,7 @@ export class AuthService {
    * bearer, the way a list has an empty state to render; the writes throw, for
    * the reason {@link updateHostVersionPolicy} gives.
    */
+
   /** `IRunnerHost.sandboxControlUnavailableReason`, for a caller to say why. */
   sandboxControlUnavailableReason(): string | null {
     const reason = this.runnerHost.sandboxControlUnavailableReason;
