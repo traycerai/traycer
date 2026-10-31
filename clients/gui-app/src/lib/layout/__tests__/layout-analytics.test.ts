@@ -112,7 +112,7 @@ describe("layoutSnapshotProperties (L-46, L-54, L-55)", () => {
     // event is dense, never sparse (L-55). The fifteen beside the per-setting
     // keys are the built-ins the snapshot carries: the preset, the count, the
     // four placement fields the two bar readings pick (L-156), the tab strip
-    // placement, the sidebar side (S-01, S-06) and the strip's view (D8), the
+    // placement, the sidebar side (S-01, S-06) and the strip's view, the
     // minimap side and the five reorder flags.
     expect(Object.keys(properties)).toHaveLength(
       LAYOUT_SETTING_PROPERTY_KEYS.length + 15,

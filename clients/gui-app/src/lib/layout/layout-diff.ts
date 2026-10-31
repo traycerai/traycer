@@ -177,7 +177,7 @@ export function sidebarSideChanged(
   return a.sidebarSide !== b.sidebarSide;
 }
 
-/** Whether the vertical strip's view differs between two arrangements (D8). */
+/** Whether the vertical strip's view differs between two arrangements. */
 export function sideStripViewChanged(
   a: LayoutArrangement,
   b: LayoutArrangement,

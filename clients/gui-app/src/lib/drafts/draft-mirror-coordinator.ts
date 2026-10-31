@@ -147,7 +147,7 @@ const sessionListeners = new Set<() => void>();
 
 /**
  * Whether this window holds a draft mirror session with `hostId` - the "All"
- * filter's live-host set (D09). `composer-draft-store` is persisted and never
+ * filter's live-host set. `composer-draft-store` is persisted and never
  * sweeps an unmounted chat, so without this every chat draft any host ever
  * listed would keep listing after its session is gone, with a dead Open.
  */
@@ -392,7 +392,7 @@ export function draftsCloudScopeId(hostId: string): string | null {
 }
 
 /**
- * A `stash-entry` row an old client wrote (D20 keeps the kind on the wire):
+ * A `stash-entry` row an old client wrote (the kind stays on the wire):
  * converted into a closed start-page draft exactly once - the converted map
  * is app-global and survives restarts - and the source row retired so it
  * stops being listed.

@@ -984,7 +984,7 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
 
   it("clones onto the target host regardless of app-wide selection (redesign P1.2, D6)", async () => {
     // Previously (`selectedHostIdAtStart` / the app-wide-selection guard,
-    // deleted by D6): a mid-resolution move of the ACTIVE host failed the
+    // deleted): a mid-resolution move of the ACTIVE host failed the
     // clone rather than risk landing it on the moved-to host, because the
     // create mutation used to stamp the ambient active host at mutate time.
     // Now the clone always creates on the TARGET host's own client

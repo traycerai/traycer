@@ -2015,7 +2015,7 @@ describe("the tab strip's placement and the sidebar's side (S-01, S-02, S-05, S-
 });
 
 /**
- * D8: what the vertical strip shows, and D9's predicate for when it lists the
+ * What the vertical strip shows, and the predicate for when it lists the
  * active task's live agents under its row.
  */
 describe("the vertical strip's view (D8, D9)", () => {
@@ -2105,7 +2105,7 @@ describe("the vertical strip's view (D8, D9)", () => {
 /**
  * The persisted enum fields (L-133): the tab strip's placement, the sidebar's
  * side, the reading width (audit R1: how wide the transcript, the composer and
- * an artifact's body run), the vertical strip's view (D8) and Tab overflow.
+ * an artifact's body run), the vertical strip's view and Tab overflow.
  * Each keeps a value this build knows verbatim and reads anything else as its
  * shipped default, field by field.
  *

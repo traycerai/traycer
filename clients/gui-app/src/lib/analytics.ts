@@ -976,7 +976,7 @@ export interface AnalyticsEventProperties {
   /**
    * How an MCP App's tool call ended: `approved` when the host ran it (with or
    * without asking), `denied` when the reader declined, `refused` when the
-   * host refused it. Never the server, tool or arguments (D31).
+   * host refused it. Never the server, tool or arguments.
    */
   readonly [AnalyticsEvent.McpAppCall]: {
     readonly outcome: "approved" | "denied" | "refused";

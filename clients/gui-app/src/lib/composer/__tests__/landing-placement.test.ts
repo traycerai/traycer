@@ -199,7 +199,7 @@ describe("resolveLandingPlacement", () => {
     expect(placement.kind).toBe("refused");
   });
 
-  // D6: a pin is never blocked by the `namedHostDead` arm. A pinned host that
+  // A pin is never blocked by the `namedHostDead` arm. A pinned host that
   // dies has already auto-followed to `effective` by the time this runs -
   // `resolvedHostId` names the live host, `namedHostDead` stays false, and a
   // good client for it resolves ready, exactly like an unpinned target.

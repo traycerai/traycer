@@ -27,7 +27,7 @@ export function writeArrangement(arrangement: LayoutArrangement): void {
  * One arrangement field, written against the arrangement as it is NOW. The
  * surface placements' one writer: the dock's rows, the canvas's placement bar
  * and its drop to an edge all call this, so the three can never write the
- * same pick two ways (D14).
+ * same pick two ways.
  */
 export function writeArrangementField<K extends keyof LayoutArrangement>(
   key: K,

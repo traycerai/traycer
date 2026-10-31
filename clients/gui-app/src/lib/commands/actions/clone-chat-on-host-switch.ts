@@ -194,7 +194,7 @@ export function cloneChatOnHostSwitch(
     forkSource: CreateChatMutationInput["forkSource"] | null,
   ): void => {
     if (cancelled) return;
-    // No app-wide-selection guard any more (redesign P1.2, D6): the clone
+    // No app-wide-selection guard any more (redesign P1.2): the clone
     // does not move the app, and `createChat` is the TARGET host's mutation,
     // which validates the client it is about to send on against the
     // `hostId` this request names. A failover mid-resolution can no longer

@@ -739,10 +739,10 @@ export interface DesktopReportIssueForm {
   readonly type: DesktopReportType;
   // The single required question ("What were you trying to do?").
   readonly intent: string;
-  // D9: null when left unselected (default) or hidden because the ledger
+  // Null when left unselected (default) or hidden because the ledger
   // already knows the repeat count.
   readonly frequency: DesktopReportFrequency | null;
-  // D7: only non-null when the user actively changed the pre-filled
+  // Only non-null when the user actively changed the pre-filled
   // "Where did this happen?" selector away from its default.
   readonly location: string | null;
   // Retained for older clients. Signed-in email always accompanies private reports.
@@ -751,7 +751,7 @@ export interface DesktopReportIssueForm {
   // the private submission / diagnostic bundle when false.
   readonly includeDesktopLog: boolean;
   readonly includeHostLog: boolean;
-  // One toggle covering both browser diagnostic files (plan D3):
+  // One toggle covering both browser diagnostic files:
   // `browser-telemetry.jsonl` and `browser-trace.jsonl`. Default on, same
   // shape as `includeDesktopLog`/`includeHostLog` - withholds both frozen
   // tails when false. Field-for-field match with main's

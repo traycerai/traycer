@@ -80,7 +80,7 @@ export function isReportIssueDraftContext(
 /**
  * Assembles the full draft context from an already-normalized public prefill
  * plus an optional error capture: pulls the current support-context registry
- * snapshot (D5) for session state, and reuses the correlation id / fingerprint
+ * snapshot for session state, and reuses the correlation id / fingerprint
  * / stack family already minted by `captureReportIssueError` at catch time -
  * it does NOT recompute them, so the private report stays joined to the
  * actual Sentry event even if the registry has since drifted (user navigated
