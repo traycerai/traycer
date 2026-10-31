@@ -954,7 +954,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
                 ) {
                   return;
                 }
-                spendLateAnswer(held);
+                spendLateAnswer();
                 dropConfirmation(held);
                 deps.notify(UNANSWERED_TEXT, delegationOf(held.entry));
               }, CONFIRM_ANSWER_WINDOW_MS);
@@ -995,21 +995,45 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   }
 
   /**
-   * The words said after the question that make an answer, still open
-   * because no boundary closed them (a bare "yes" the engine did not
-   * delegate): spent with the post the answer was for, so they never ride
-   * into the next request. Words that are a new request stay open.
+   * The reply still open when the answer window lapses, because no boundary
+   * closed it (a bare "yes" the engine did not delegate): when it is an
+   * answer, read whole as at a boundary, it is spent whole with the post it
+   * was for, words said before the question was heard included, so none of
+   * it rides into the next request. Words that are a new request stay open.
    */
-  function spendLateAnswer(held: Confirming): void {
-    const after = held.heardAfterSeq;
-    if (after === null) return;
+  function spendLateAnswer(): void {
     const state = store.getState();
-    const late = state.segments.filter(
-      (segment) => segment.reservedBy === null && segment.seq > after,
+    const open = state.segments.filter(
+      (segment) => segment.reservedBy === null,
     );
-    if (late.length === 0) return;
-    if (confirmationAnswer(joinSegments(late)) === "not-an-answer") return;
-    state.consumeReservation(late.map((segment) => segment.seq));
+    if (open.length === 0) return;
+    if (confirmationAnswer(joinSegments(open)) === "not-an-answer") return;
+    state.consumeReservation(open.map((segment) => segment.seq));
+  }
+
+  /**
+   * Where a waiting post can go now. It goes to the destination it was
+   * bound to, whatever an earlier acceptance did to the focus since (one
+   * that opened a thread moved the focus into it). Only a post bound under
+   * an anchor whose thread was still resolving takes that resolution from
+   * the focus, and so needs the focus still on that anchor. `"wait"` while
+   * its channel is not known or its anchor still resolves; `"gone"` when
+   * the focus left that anchor, so it never will.
+   */
+  function resumableDestination(
+    action: Action,
+    focus: VoiceFocus | null,
+  ): VoiceFocus | "wait" | "gone" {
+    if (action.focus.anchorThread !== "resolving") {
+      return deps.canSend(action.focus) ? action.focus : "wait";
+    }
+    if (focus === null || !stillDestination(focus, action.focus)) {
+      return "gone";
+    }
+    if (focus.anchorThread === "resolving" || !deps.canSend(focus)) {
+      return "wait";
+    }
+    return focus;
   }
 
   /**
@@ -1169,16 +1193,15 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
             unresolved.shift();
             continue;
           }
-          const focus = state.focus;
-          // Not resolved yet, or not the anchor it was said under (the
-          // anchor changes only with the generation): it waits.
-          if (
-            focus === null ||
-            focus.anchorThread === "resolving" ||
-            !stillDestination(focus, action.focus) ||
-            !deps.canSend(focus)
-          ) {
-            return;
+          const destination = resumableDestination(action, state.focus);
+          // Its destination cannot carry it yet: it waits, at the head.
+          if (destination === "wait") return;
+          if (destination === "gone") {
+            // The anchor it was said under is no longer the focus, so its
+            // thread will never resolve here: settled, never left waiting.
+            unresolved.shift();
+            refuse(action, "moved-on");
+            continue;
           }
           unresolved.shift();
           // Checked again at execution: the destination may have stopped
@@ -1187,7 +1210,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
             refuse(action, "gone");
             continue;
           }
-          const resumed: Action = { ...action, focus };
+          const resumed: Action = { ...action, focus: destination };
           inFlight.set(resumed.actionId, resumed);
           await post(resumed);
         }

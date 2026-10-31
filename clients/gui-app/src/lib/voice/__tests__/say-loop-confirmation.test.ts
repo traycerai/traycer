@@ -141,7 +141,7 @@ function build() {
   const timers: Array<{ readonly ms: number; readonly run: () => void }> = [];
   const sendGates: Array<(response: BotConversationSendResponse) => void> = [];
   let deferSends = false;
-  const wiring = { recheck: true, holdNavigation: false };
+  const wiring = { recheck: true, holdNavigation: false, canSend: true };
   const navGates: Array<(landed: boolean) => void> = [];
   const loop = createSayLoop({
     store: useVoiceSessionStore,
@@ -172,7 +172,7 @@ function build() {
     },
     think: () => undefined,
     control: () => undefined,
-    canSend: () => true,
+    canSend: () => wiring.canSend,
     schedule: (fn, ms) => {
       let live = true;
       timers.push({
@@ -403,5 +403,76 @@ describe("confirmationAnswer", () => {
     ["please", "not-an-answer"],
   ])("reads %j as %s, whole", (text, verdict) => {
     expect(confirmationAnswer(text)).toBe(verdict);
+  });
+});
+
+describe("the answer window and the queue, settling what they hold", () => {
+  it("an answer split around the question's delivery is spent whole when the answer window lapses, and none of it rides into the next request", async () => {
+    const h = build();
+    h.answers.push(() =>
+      Promise.resolve(uncertainly(route("post", CI, PERSONAL, 2))),
+    );
+    // The next request covers every segment the router is given.
+    h.answers.push(() => {
+      const given = useVoiceSessionStore
+        .getState()
+        .segments.filter((segment) => segment.reservedBy !== null).length;
+      return Promise.resolve(route("post", null, null, given));
+    });
+    speak("hello", " there bot");
+    await h.loop.onDelegationCreated("d-1");
+    speak("don't ");
+    h.asks[0]?.onDelivered();
+    speak("send it");
+    h.timers.find((timer) => timer.ms === CONFIRM_ANSWER_WINDOW_MS)?.run();
+
+    // The answer's fragments are spent with the dropped post.
+    expect(
+      useVoiceSessionStore.getState().segments.map((segment) => segment.text),
+    ).toEqual([]);
+
+    speak("tell", " tracy hello");
+    await h.loop.onDelegationCreated("d-2");
+
+    expect(h.sends.map((send) => send.text)).toEqual(["tell tracy hello"]);
+  });
+
+  it("two posts queued on a loading channel both go to the channel they bound, though the first's answer opened a thread", async () => {
+    const h = build();
+    h.wiring.canSend = false;
+    h.deferSends();
+    h.answers.push(() => Promise.resolve(route("post", null, null, 2)));
+    h.answers.push(() => Promise.resolve(route("post", null, null, 2)));
+    speak("first", " request");
+    await h.loop.onDelegationCreated("d-1");
+    speak("second", " request");
+    await h.loop.onDelegationCreated("d-2");
+    expect(h.sends).toEqual([]);
+
+    h.wiring.canSend = true;
+    const resumed = h.loop.onFocusResolved();
+    await tick();
+    expect(h.sends.map((send) => send.text)).toEqual(["first request"]);
+
+    // The first post's answer opens a thread: the focus follows into it.
+    h.sendGates[0]?.({ ...SEND_RESPONSE, threadId: "thr-1" });
+    await tick();
+    expect(useVoiceSessionStore.getState().focus).toMatchObject({
+      botId: TRACY,
+      threadId: "thr-1",
+    });
+    expect(h.sends.map((send) => send.text)).toEqual([
+      "first request",
+      "second request",
+    ]);
+    expect(h.sends[1]?.focus).toMatchObject({
+      botId: TRACY,
+      threadId: null,
+      anchorMessageId: null,
+    });
+
+    h.sendGates[1]?.(SEND_RESPONSE);
+    await resumed;
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
   });
 });
