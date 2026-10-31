@@ -466,8 +466,8 @@ export const useCloudNotificationsStore = create<CloudNotificationsState>()(
 // eslint-disable-next-line max-params -- The reconnect policy, transport, owning account and two unrelated callbacks (auth, snapshot) describe distinct stream boundaries.
 export function openCloudNotificationsStream(
   /**
-   * THE reconnect policy for this stream's host (redesign P4.1 /
-   * connection-registry §6), acquired from the connection registry by the one
+   * THE reconnect policy for this stream's host (redesign P4.1),
+   * acquired from the connection registry by the one
    * place that opens these streams. This store no longer constructs its own
    * scheduler: the constants, the terminal-close classification and the
    * backoff shape live once, in the engine, and each stream still gets its

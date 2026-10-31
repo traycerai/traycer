@@ -674,7 +674,7 @@ describe("EpicAccessCoordinator", () => {
     );
 
     // Both epics behind the split are deleted together, in ONE notification -
-    // exactly the shape a real batch delete produces. Plan §9 requires this
+    // exactly the shape a real batch delete produces. It must be
     // routed through ONE coordinated command, not one `handleEpicAccessLoss`
     // call per epic: firing a separate coordinator transaction (and a
     // separate persistence flush) per epic for what is semantically one

@@ -2559,7 +2559,7 @@ describe("<NotificationsSessionProvider />", () => {
     expect(collabEntryBefore.id).toBe("collab-host-switch");
   });
 
-  // THE SINGLE-OWNERSHIP PIN (redesign P4.1 / connection-registry §6).
+  // THE SINGLE-OWNERSHIP PIN (redesign P4.1).
   //
   // The acceptance is "exactly one reconnection policy per transport kind",
   // and this provider is the single wiring point that makes it true: it

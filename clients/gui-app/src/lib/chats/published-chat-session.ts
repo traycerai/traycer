@@ -364,7 +364,7 @@ export function publishedChatSessionState(
     // A published copy is a FULL-materialized transcript, so it is on the
     // legacy side of the window seam by construction: `messages`/`events`
     // above hold everything, and there is no host to hydrate a range from.
-    // The windowed index for a `1.2` head is its own path (`publish-path §4`).
+    // The windowed index for a `1.2` head is its own path.
     transcriptWindow: emptyTranscriptWindow(),
     transcriptDerived: null,
     accumulatedFileChangeCount: 0,

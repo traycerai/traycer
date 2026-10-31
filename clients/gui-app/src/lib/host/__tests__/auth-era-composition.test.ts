@@ -380,7 +380,7 @@ describe("auth-era composition — the credential a refresh actually uses", () =
     const mark = endpoint.bearers.length;
 
     // The user signs into B in the same app lifetime: the shared credentials
-    // file changes, the §4 watcher reconciles it, and the cross-user branch
+    // file changes, the watcher reconciles it, and the cross-user branch
     // runs the full signed-in projection - emitting the new RequestContext,
     // inside which the runtime issues the mandatory refresh.
     await composition.runnerHost.tokenStore.signIn(

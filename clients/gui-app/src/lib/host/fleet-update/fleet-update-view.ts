@@ -116,7 +116,7 @@ export interface FleetUpdateWireObservation {
 
 /**
  * What the DURABLE RECORD on this machine establishes, for the host-down
- * window (Ticket 07 §5.2.7).
+ * window (Ticket 07).
  *
  * ## Why this is a second arm rather than a synthesized `operation`
  *
@@ -550,7 +550,7 @@ export function projectFleetUpdateView(
     return UNKNOWN_FLEET_UPDATE_VIEW;
   }
 
-  // THE HOST-DOWN WINDOW (Ticket 07 §5.2.7). Handled before the wire arms
+  // THE HOST-DOWN WINDOW (Ticket 07). Handled before the wire arms
   // because it answers a different question with different evidence, and the
   // guards below all presuppose a peer that spoke.
   //
@@ -566,7 +566,7 @@ export function projectFleetUpdateView(
   //                            throwing it away would replace a qualified
   //                            truth with nothing.
   //
-  // That is exactly the distinction §5.2.7 asks for: "attempt progressing" is a
+  // That is exactly the distinction needed: "attempt progressing" is a
   // live `kind`, "attempt exists, host unreachable" is `unknown` + a retained
   // phase, so a surface renders "last seen preparing v2.0.0" rather than either
   // a bare offline badge or a false claim of progress.
@@ -1418,7 +1418,7 @@ export function holdsLifecycleGate(view: FleetUpdateView): boolean {
  * can sit for a week (`waiting-to-activate` survives a reboot by design), a
  * terminal one is retained for seven days, and a qualified one is evidence we
  * already know we cannot refresh — none of those justify polling a host every
- * two seconds, and doing so would be the retry storm §6 forbids.
+ * two seconds, and doing so would be a retry storm.
  *
  * The coarse `updating` kind does not earn it either, and for the same
  * reason it does not hold the lifecycle gate: the marker proves a file
@@ -1469,7 +1469,7 @@ function kindWarrantsFastPoll(kind: FleetUpdateViewKind): boolean {
 }
 
 /**
- * Precedence between a live read and the durable record (Ticket 07 §5.2.7,
+ * Precedence between a live read and the durable record (Ticket 07,
  * ordering per D13).
  *
  * A FRESH wire observation always wins: a running host reporting on itself is

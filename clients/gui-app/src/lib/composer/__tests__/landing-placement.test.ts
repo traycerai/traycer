@@ -13,8 +13,8 @@ import {
 const TEST_WEBSOCKET_URL = "ws://127.0.0.1:4917/rpc";
 
 /**
- * Submit-time re-validation for the landing composer (redesign P1.2,
- * selection model §54): "submit re-validates the resolved host is usable
+ * Submit-time re-validation for the landing composer (redesign P1.2):
+ * "submit re-validates the resolved host is usable
  * (refuse with an inline error, never create on a silently different host)".
  *
  * The property under test is the second clause. Before P1.2 the composer's

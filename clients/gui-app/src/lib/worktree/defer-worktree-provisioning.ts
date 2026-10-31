@@ -29,8 +29,8 @@ export interface DeferWorktreeProvisioningFacts {
  * definition of the opt-in, shared by the landing composer and the in-epic
  * new-conversation modal so the two surfaces cannot drift.
  *
- * Four facts, three of them the host's own predicate (async worktree
- * provisioning §1) and the fourth the negotiated minor:
+ * Four facts, three of them the host's own predicate and the fourth the
+ * negotiated minor:
  *
  *  1. `initialMessage !== null`. Without one there is no queued row to seed, no
  *     setup card to anchor and nothing for the deferred drain to run.

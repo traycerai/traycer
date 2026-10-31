@@ -59,7 +59,7 @@ const TRANSACTION: HostUpdateTransactionCapability = {
 };
 
 // Builds a WIRE observation. Retyped (annotation only — no assertion changed)
-// when Ticket 07 §5.2.7 made `FleetUpdateObservation` a union: `Partial<union>`
+// when Ticket 07 made `FleetUpdateObservation` a union: `Partial<union>`
 // does not narrow, so the literal below no longer identified an arm.
 function observation(
   overrides: Partial<FleetUpdateWireObservation>,
@@ -1297,7 +1297,7 @@ describe("holdsLifecycleGate — direct unit coverage", () => {
   });
 });
 
-// ---- Ticket 07 §5.2.7 — the record-derived arm ----------------------------
+// ---- Ticket 07 — the record-derived arm -----------------------------------
 
 /**
  * One instant for both legs, for the cases that are not ABOUT the split.
@@ -1399,7 +1399,7 @@ describe("projectFleetUpdateView — the durable-record arm (host-down window)",
   });
 
   it("distinguishes 'attempt exists, host unreachable' from 'attempt progressing'", () => {
-    // The §5.2.7 requirement, asserted directly rather than inferred from the
+    // The host-down requirement, asserted directly rather than inferred from the
     // shape. Same phase, two evidence sources, two different renderings.
     const fromWire = projectFleetUpdateView({
       observation: observation({
@@ -1947,7 +1947,7 @@ describe("isQuietUpdateView", () => {
   });
 });
 
-// ---- record-derived parks (legacyFacts) — Ticket beside 07 §5.2.7 ----------
+// ---- record-derived parks (legacyFacts) — Ticket beside 07 -----------------
 //
 // `legacyFactsView` is consulted in BOTH the `operation === null` arm and the
 // `operation.kind === "none"` arm, AFTER the coarse `updateProgress` marker

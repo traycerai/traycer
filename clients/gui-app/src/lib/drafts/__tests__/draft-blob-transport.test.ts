@@ -1427,7 +1427,7 @@ describe("draft blob transport", () => {
 });
 
 /**
- * PORTED with the keyed dispatch (§8 of the merge resolution). Every OTHER fake
+ * PORTED with the keyed dispatch. Every OTHER fake
  * in this file answers both members identically - which is what keeps those
  * cases about digests, retries and epochs - so none of them can observe WHICH
  * member a dispatch used. That observation lives here and nowhere else.

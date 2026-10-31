@@ -147,9 +147,9 @@ import {
   writeProvisionalSessionSnapshot,
 } from "./provisional-session-snapshot";
 
-// Legacy encrypted-localStorage token slots (the pre-§3 desktop store). Two
+// Legacy encrypted-localStorage token slots (the old desktop store). Two
 // separate string slots — NOT one JSON blob — matching the retired
-// `desktop-runner-host` keys. The write path is gone (§3); §6 reads these one
+// `desktop-runner-host` keys. The write path is gone; a migration reads these one
 // last time via the generic `secureStorage` seam to migrate the pair onto the
 // shared file, then wipes them.
 const LEGACY_ACCESS_TOKEN_KEY = "traycer.token";
@@ -677,7 +677,7 @@ export class AuthService {
   private currentSubscription: SubscriptionStatus | null = null;
   private lastError: string | null = null;
   private callbackDisposable: Disposable | null = null;
-  // §4 owned-watcher subscription (tokenStore.subscribe); disposed on dispose().
+  // Owned-watcher subscription (tokenStore.subscribe); disposed on dispose().
   private tokenStoreChangeDisposable: Disposable | null = null;
   private pendingTimeoutHandle: number | null = null;
   private currentRevalidation: Promise<LiveRevalidationOutcome | null> | null =
@@ -698,7 +698,7 @@ export class AuthService {
   // (sign-in, sign-out, or any other rotation) naturally clears this by no
   // longer matching.
   private unrepairableSessionsBearer: string | null = null;
-  // §4 reconcile worker: single-flight + trailing re-run so overlapping watcher
+  // Reconcile worker: single-flight + trailing re-run so overlapping watcher
   // events never interleave applies. Never writes, never spends.
   private currentReconcile: Promise<void> | null = null;
   private reconcileQueued = false;
@@ -1056,7 +1056,7 @@ export class AuthService {
     // file-authoritative token with a staler projection. Symmetric with the
     // reconcile path's post-validate currentBearer no-op.
     const bearerBefore = this.currentBearer;
-    // Access-only validation (§3): the cross-window snapshot is a UI projection,
+    // Access-only validation: the cross-window snapshot is a UI projection,
     // not a token write. A stale projected bearer is handled by the local rotate
     // path; here we only mint the local UI session for the same identity.
     const outcome = await this.validateToken(inboundToken);
@@ -1099,7 +1099,7 @@ export class AuthService {
     this.callbackDisposable = this.runnerHost.onAuthCallback(() => {
       this.handleReturnSignal();
     });
-    // §4: subscribe to the owned credentials-file watcher. Events are a hint;
+    // Subscribe to the owned credentials-file watcher. Events are a hint;
     // the reconcile worker re-reads the store (disk is truth) and never spends.
     // Subscribe before the first get so a change that lands during rehydration
     // is not missed (the reconcile generation fence drops any race with start).
@@ -1110,7 +1110,7 @@ export class AuthService {
     }
 
     try {
-      // §6: one-time migration of the legacy per-window localStorage token pair
+      // One-time migration of the legacy per-window localStorage token pair
       // onto the shared file, BEFORE the first file read so the rehydrate below
       // adopts the migrated session. Bounded + single-flighted in main; on any
       // fault it declines and leaves the legacy slots for a later launch. Never
@@ -1385,8 +1385,8 @@ export class AuthService {
   }
 
   /**
-   * §6 migration pre-step. Reads the legacy per-window localStorage token pair
-   * (retired in §3) one last time and hands it to the main store, which
+   * Migration pre-step. Reads the legacy per-window localStorage token pair
+   * (retired) one last time and hands it to the main store, which
    * reconciles it onto the shared file and single-flights across windows. The
    * legacy slots are wiped only on an outcome that consolidated or discarded the
    * pair (`shouldWipeLegacyCredentials`); `retryable`/`commit-failed` keeps them
@@ -1446,7 +1446,7 @@ export class AuthService {
 
   /**
    * The one spend-capable re-establishment path for a stored-but-stale session,
-   * shared by startup rehydration, the background recovery loop, and the §4
+   * shared by startup rehydration, the background recovery loop, and the
    * reconcile (via recovery) when the file's access token no longer validates.
    * Runs the locked `rotate` (the one spend, under the file lock in main), then
    * either mints a fresh signed-in session from the rotated/adopted pair or
@@ -1458,7 +1458,7 @@ export class AuthService {
    * sign-out destroys it (settled decision / H1).
    *
    * Stand-down invariant: every caller enters with NO live bearer, so a
-   * bearer observed after any await means a competing path (the §4 watcher
+   * bearer observed after any await means a competing path (the watcher
    * adopting an externally-written session mid-flight) already established a
    * session - one that may belong to a DIFFERENT user and does not bump the
    * identity generation the `stillWanted` fences watch. Applying or clearing
@@ -2266,7 +2266,7 @@ export class AuthService {
     this.discardActiveAttempt();
     // The single file-destroying path in the app (the other is `traycer logout`).
     // `delete()` rejects if the delete cannot land; a failed sign-out must stay
-    // signed in and surface, never falsely report signed-out (§5).
+    // signed in and surface, never falsely report signed-out.
     const deleteError = await this.tokenStore.delete().then(
       () => null,
       (error: unknown) => error ?? new Error("sign-out delete rejected"),
@@ -3094,7 +3094,7 @@ export class AuthService {
 
   /**
    * "Update now" / auto-update policy toggle / "Apply now — ends N sessions"
-   * (Remote Host Support §13, T16): `PATCH /api/v3/hosts/:hostId` via the
+   * (T16): `PATCH /api/v3/hosts/:hostId` via the
    * runner host (run in Electron main for CORS, mirroring
    * {@link fetchRegisteredHosts}). Never returns `null` when there is no cloud
    * bearer: it throws, because a mutation has no empty state to render the way
@@ -3577,7 +3577,7 @@ export class AuthService {
     const currentUserId = ctx.identity.userId;
     const currentToken = this.currentBearer;
     const credentialGeneration = this.getCredentialGeneration();
-    // Access-only (§3): validate the live bearer without spending. A stale bearer
+    // Access-only: validate the live bearer without spending. A stale bearer
     // comes back `rejected`, and the spend routes through the locked `rotate`.
     const outcome = await this.validateToken(currentToken);
     if (!this.isIdentityCurrent(generation)) {
@@ -3733,7 +3733,7 @@ export class AuthService {
   // Rotate the live credential lease in place onto `bearerToken` - observably
   // silent on the provider, so host-runtime / cache state survives - and re-arm
   // the refresh scheduler. The single point every same-user adoption goes through
-  // (locked-rotate outcomes and the §4 reconcile worker).
+  // (locked-rotate outcomes and the reconcile worker).
   private rotateLiveBearer(userId: string, bearerToken: string): void {
     // NO server-time sample here, deliberately. This is the generic
     // lease-adoption helper, and MOST of what it adopts is not freshly minted:
@@ -3916,7 +3916,7 @@ export class AuthService {
   /**
    * UI-only sign-out: abort the live context + project signed-out WITHOUT
    * touching the shared credentials file (only explicit user intent destroys it,
-   * settled decision). Used by every automatic failure path; the §4 watch
+   * settled decision). Used by every automatic failure path; the watch
    * re-adopts if a sibling rotation later lands.
    */
   private clearUiSession(): void {
@@ -3956,7 +3956,7 @@ export class AuthService {
   }
 
   /**
-   * §4 reconcile worker trigger. Single-flight with a trailing re-run so
+   * Reconcile worker trigger. Single-flight with a trailing re-run so
    * overlapping watcher events collapse to one re-read after the in-flight
    * reconcile settles. Never writes, never spends.
    */
@@ -4993,7 +4993,7 @@ export class AuthService {
    * preserve the same identity shape that host-minted contexts already
    * carry.
    *
-   * Access-only (§3): validates the bearer without spending. A stale/expired
+   * Access-only: validates the bearer without spending. A stale/expired
    * token returns `rejected`; the refresh spend is owned exclusively by the
    * locked `rotate` path, never here.
    *
@@ -5345,7 +5345,7 @@ export class AuthService {
    * Projects a terminal sign-in FAILURE. UI-only: the credentials file is NOT
    * touched (only explicit sign-out destroys it). The paths that reach here
    * failed validation BEFORE any `signIn` wrote the file, so there is nothing to
-   * clean up; a pre-existing file is left for the §4 watch / next launch to
+   * clean up; a pre-existing file is left for the watch / next launch to
    * reconcile (H1: an automatic failure never deletes the shared file).
    */
   private applyFailure(error: string): void {
@@ -6123,7 +6123,7 @@ function refreshRejectedLoss(
  */
 function identityFromUser(user: AuthenticatedUser): StoredCredentialsIdentity {
   // Single source of truth for the projection lives in shared auth-validation
-  // (the §6 migration probe stamps the same shape from main).
+  // (the migration probe stamps the same shape from main).
   return credentialsIdentityFromAuthenticatedUser(user);
 }
 

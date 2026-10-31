@@ -1,5 +1,5 @@
 /**
- * The resolver IS the placement spec (plan §5.1 steps 1-7, decisions C3-C7,
+ * The resolver IS the placement spec (decisions C3-C7,
  * C10), so this suite is the spec's executable form: one case per rule, built
  * on the real canvas fixtures the store suites use.
  */
