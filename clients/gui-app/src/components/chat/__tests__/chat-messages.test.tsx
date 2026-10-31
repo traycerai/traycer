@@ -9776,22 +9776,37 @@ describe("ChatMessages scroll policy", () => {
           // supersede check this request would survive, unreported, and
           // the show below would re-issue it on top of the end the reader
           // asked for more recently.
-          rerenderWith({ scrollRequest: { kind: "end", requestId: 802 } });
-          await settleLegendList();
-          expect(onScrollRequestSettled).toHaveBeenCalledWith(801, "cancelled");
-          // An end request has no landing of its own and settles nothing.
-          expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
-            802,
-            "landed",
-          );
-          expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
-            802,
-            "cancelled",
-          );
-          expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
-            802,
-            "exhausted",
-          );
+          //
+          // Cancelling the older request is only half the claim - the
+          // reader asked for the END, so this must actually deliver one.
+          // Without this spy a regression that cancelled 801 and then
+          // dropped the end scroll would still pass every assertion below
+          // (CodeRabbit on #3148): nothing else here calls `scrollToEnd`.
+          const scrollToEnd = vi.spyOn(list, "scrollToEnd");
+          try {
+            rerenderWith({ scrollRequest: { kind: "end", requestId: 802 } });
+            await settleLegendList();
+            expect(scrollToEnd).toHaveBeenCalledWith({ animated: true });
+            expect(onScrollRequestSettled).toHaveBeenCalledWith(
+              801,
+              "cancelled",
+            );
+            // An end request has no landing of its own and settles nothing.
+            expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
+              802,
+              "landed",
+            );
+            expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
+              802,
+              "cancelled",
+            );
+            expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
+              802,
+              "exhausted",
+            );
+          } finally {
+            scrollToEnd.mockRestore();
+          }
 
           // The load-bearing assertion: on show, the OLDER navigation must
           // not be re-issued over the end the reader already asked for.
@@ -9856,8 +9871,19 @@ describe("ChatMessages scroll policy", () => {
           expect(onScrollRequestSettled).not.toHaveBeenCalled();
           expect(scrollToOffsetSpy).not.toHaveBeenCalled();
 
-          rerenderWith({ scrollRequest: { kind: "end", requestId: 902 } });
-          await settleLegendList();
+          // Cancelling the never-issued landing is only half the claim -
+          // the reader asked for the END, so this must actually deliver
+          // one. Without this spy a regression that cancelled 901 and then
+          // dropped the end scroll would still pass every assertion below
+          // (CodeRabbit on #3148, same class as the sibling witness above).
+          const scrollToEnd = vi.spyOn(list, "scrollToEnd");
+          try {
+            rerenderWith({ scrollRequest: { kind: "end", requestId: 902 } });
+            await settleLegendList();
+            expect(scrollToEnd).toHaveBeenCalledWith({ animated: true });
+          } finally {
+            scrollToEnd.mockRestore();
+          }
           // The end request cancels the never-issued message landing right
           // here - the newer intent wins immediately, with nothing left
           // pending for a later hydration to place.
