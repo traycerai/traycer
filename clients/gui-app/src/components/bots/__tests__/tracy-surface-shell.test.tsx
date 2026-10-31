@@ -282,6 +282,7 @@ import {
   __resetTabNavigationControllerForTesting,
   tracyNavigationPending,
 } from "@/lib/tab-navigation";
+import { useBotColumnLayoutStore } from "@/stores/bots/bot-column-layout-store";
 import { useBotDraftsStore } from "@/stores/bots/bot-drafts-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useBotSurfaceActionsStore } from "@/stores/bots/bot-surface-actions-store";
@@ -354,6 +355,7 @@ const ENVIRONMENTS = [
 const NOTES = bot("bot-notes", "env-me", "notes-bot");
 const RELEASE = bot("bot-release", "env-team", "release-bot");
 const TRIAGE = bot("bot-triage", "env-team", "triage-bot");
+const DEPLOY = bot("bot-deploy", "env-team", "deploy-bot");
 
 function answerList(
   bots: ReadonlyArray<BotRecord>,
@@ -543,6 +545,11 @@ function resetStores(): void {
     botId: null,
     visitedBotIds: [],
   });
+  useBotColumnLayoutStore.setState({
+    sectionOrder: [],
+    channelOrder: {},
+    collapsed: [],
+  });
   useBotOpenThreadStore.setState({ byBotId: {} });
   useBotDraftsStore.setState({ answers: {}, threadBoxes: {} });
   useBotSurfaceActionsStore.setState({ entries: {} });
@@ -712,6 +719,28 @@ describe("the Tracy surface shell", () => {
       expect(keptState("bot-release").visited).toBe(false);
     },
   );
+
+  it("selects the first channel in the person's arranged order when the selected bot goes away and there is no personal main bot", async () => {
+    // The model sorts a section by title (deploy, release, triage); the person
+    // put triage first.
+    useBotColumnLayoutStore.setState({
+      channelOrder: {
+        "env-team": ["bot-triage", "bot-deploy", "bot-release"],
+      },
+    });
+    answerList([RELEASE, TRIAGE, DEPLOY], null);
+    const mounted = await mount();
+    open(mounted, "bot-release");
+    await shownChannel("bot-release");
+
+    act(() => answerList([TRIAGE, DEPLOY], null));
+
+    await shownChannel("bot-triage");
+    expect({
+      pathname: mounted.pathname(),
+      botId: useTracySurfaceStore.getState().botId,
+    }).toEqual({ pathname: "/bot/bot-triage", botId: "bot-triage" });
+  });
 
   it("shows the empty state, with the column still there, when there are no bots", async () => {
     answerList([], null);
