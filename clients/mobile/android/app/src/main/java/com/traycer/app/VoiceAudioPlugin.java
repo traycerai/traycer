@@ -2,9 +2,9 @@ package com.traycer.app;
 
 import android.Manifest;
 import android.content.Context;
-import android.media.AudioAttributes;
-import android.media.AudioFocusRequest;
 import android.media.AudioManager;
+import android.os.Build;
+import androidx.annotation.RequiresApi;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
@@ -26,11 +26,12 @@ import com.getcapacitor.annotation.PermissionCallback;
  * remembered refusal otherwise - after a second "Don't allow" Android never
  * asks again, and only the app's settings page repairs it.
  *
- * setLive(true) takes transient audio focus for voice communication, which
- * pauses other apps' playback for the session; losing that focus to a call,
- * an alarm or another app's playback raises `interrupted`, and the voice
- * session ends. A ducking loss (a notification sound) is not an
- * interruption. setLive(false) gives the focus back.
+ * While setLive(true) holds, a call raises `interrupted` and the voice
+ * session ends: the audio mode moving to ringing, a call or call screening
+ * (API 31+, where the mode can be listened to; below that a call is not
+ * noticed). The mode is watched rather than audio focus on purpose: the web
+ * view's own playback can move focus, which must never end the session, and
+ * the communication mode the web view's call audio sets is the session's own.
  */
 @CapacitorPlugin(
     name = "VoiceAudio",
@@ -39,7 +40,8 @@ import com.getcapacitor.annotation.PermissionCallback;
 public class VoiceAudioPlugin extends Plugin {
     static final String MICROPHONE = "microphone";
 
-    private AudioFocusRequest focusRequest;
+    /** An AudioManager.OnModeChangedListener while live; typed loosely because that interface is API 31 and minSdk is 26. */
+    private Object modeListener;
 
     @PluginMethod
     public void checkMicrophone(PluginCall call) {
@@ -65,30 +67,23 @@ public class VoiceAudioPlugin extends Plugin {
     public void setLive(PluginCall call) {
         boolean live = Boolean.TRUE.equals(call.getBoolean("live", false));
         AudioManager audio = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
-        if (audio == null) {
+        if (audio == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
             call.resolve();
             return;
         }
         if (!live) {
-            releaseFocus(audio);
+            stopWatching(audio);
             call.resolve();
             return;
         }
-        if (focusRequest == null) {
-            AudioAttributes attributes = new AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                .build();
-            AudioFocusRequest request = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
-                .setAudioAttributes(attributes)
-                .setOnAudioFocusChangeListener(this::onFocusChange)
-                .build();
-            focusRequest = request;
-            // Refused while a call holds the audio: the session cannot be heard.
-            if (audio.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_FAILED) {
-                focusRequest = null;
-                notifyListeners("interrupted", new JSObject());
-            }
+        if (modeListener == null) {
+            AudioManager.OnModeChangedListener listener = (mode) -> {
+                if (isCallMode(mode)) notifyListeners("interrupted", new JSObject());
+            };
+            modeListener = listener;
+            audio.addOnModeChangedListener(getContext().getMainExecutor(), listener);
+            // Started during a call: the session could not be heard.
+            if (isCallMode(audio.getMode())) notifyListeners("interrupted", new JSObject());
         }
         call.resolve();
     }
@@ -96,20 +91,24 @@ public class VoiceAudioPlugin extends Plugin {
     @Override
     protected void handleOnDestroy() {
         AudioManager audio = (AudioManager) getContext().getSystemService(Context.AUDIO_SERVICE);
-        if (audio != null) releaseFocus(audio);
+        if (audio != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) stopWatching(audio);
         super.handleOnDestroy();
     }
 
-    private void onFocusChange(int change) {
-        if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
-            notifyListeners("interrupted", new JSObject());
-        }
+    @RequiresApi(Build.VERSION_CODES.S)
+    private void stopWatching(AudioManager audio) {
+        if (modeListener == null) return;
+        audio.removeOnModeChangedListener((AudioManager.OnModeChangedListener) modeListener);
+        modeListener = null;
     }
 
-    private void releaseFocus(AudioManager audio) {
-        if (focusRequest == null) return;
-        audio.abandonAudioFocusRequest(focusRequest);
-        focusRequest = null;
+    private static boolean isCallMode(int mode) {
+        return (
+            mode == AudioManager.MODE_RINGTONE ||
+            mode == AudioManager.MODE_IN_CALL ||
+            mode == AudioManager.MODE_CALL_SCREENING ||
+            mode == AudioManager.MODE_CALL_REDIRECT
+        );
     }
 
     private static String stateName(PermissionState state) {

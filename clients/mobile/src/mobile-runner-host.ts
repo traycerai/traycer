@@ -824,8 +824,7 @@ export class MobileRunnerHost implements IRunnerHost {
   setVoiceSessionLive(live: boolean): Promise<void> {
     // The phone has one window and no close, so nothing keeps a live session
     // alive here; its background edge ends one (`onSystemSuspended`). Live is
-    // when the OS interruptions are watched, and on Android when the session
-    // holds the audio focus.
+    // when the OS interruptions are watched.
     return this.voiceAudio?.setLive(live) ?? Promise.resolve();
   }
 

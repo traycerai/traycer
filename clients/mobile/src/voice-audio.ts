@@ -25,9 +25,8 @@ export interface VoiceAudioPluginSlice {
    */
   requestMicrophone(): Promise<{ readonly state: MicrophonePermissionState }>;
   /**
-   * While live, an interruption (a call, an alarm, another app taking the
-   * sound) raises `interrupted`. Android also holds audio focus for the
-   * session, pausing other apps' playback.
+   * While live, an interruption raises `interrupted`: the audio session's on
+   * iOS (a call, an alarm, Siri), a call's audio mode on Android 12 and up.
    */
   setLive(options: { readonly live: boolean }): Promise<void>;
   addListener(
