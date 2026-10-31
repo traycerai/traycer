@@ -8846,5 +8846,133 @@ describe("useChatTimelineFollowLatch", () => {
         expect(listRef.scrollToEnd).not.toHaveBeenCalled();
       });
     });
+
+    // --- intentReplacesArm parity witnesses (Class 2: green on main AND on
+    // the fix; teeth only from mutants) ----------------------------------
+
+    describe("a standing arm's replacement by the next gesture", () => {
+      it("Class 2.1: a toward-end intent with room to move still takes the arm from a standing press", () => {
+        // Mount already at the strict bottom so the mount-time maintain
+        // pass is a no-op and permission stays granted, then move off it
+        // with no scroll report - the press itself is the first thing to
+        // happen, before any report of the view having left the tail.
+        const node = shim.makeNode({
+          scrollTop: 1000,
+          scrollHeight: 1500,
+          clientHeight: 500,
+        });
+        const listRef = makeFakeListRef(node);
+        const onFollowIntentChange = vi.fn();
+        const { result } = renderHook(() =>
+          useChatTimelineFollowLatch(listRef, true, true, {
+            ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+            onFollowIntentChange,
+          }),
+        );
+        listRef.scrollToEnd.mockClear();
+        shim.setGeometry(node, { scrollTop: 600 });
+
+        // A scrollbar press standing at scrollTop=600 (indeterminate).
+        result.current.noteReaderGesture({
+          direction: "indeterminate",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        // A toward-end intent with 400px of room: replaces the press's arm,
+        // exactly as on main - the press gets no special treatment here.
+        result.current.noteReaderGesture({
+          direction: "toward-end",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+
+        // A report back at the SAME offset (600, unchanged). An
+        // indeterminate press's own hold (`indeterminateArmHoldsFollow`)
+        // would read this as "not landed yet" and stay silent; a replaced
+        // arm has no such hold, so nothing blocks the normal maintain
+        // correction toward the end.
+        fireNativeScroll(node);
+
+        expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+        expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      });
+
+      it("Class 2.1: a non-indeterminate standing gesture is replaced by a later toward-end intent with no room, exactly as on main", () => {
+        const node = shim.makeNode({
+          scrollTop: 1000,
+          scrollHeight: 1500,
+          clientHeight: 500,
+        });
+        const listRef = makeFakeListRef(node);
+        const onFollowIntentChange = vi.fn();
+        const { result } = renderHook(() =>
+          useChatTimelineFollowLatch(listRef, true, true, {
+            ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+            onFollowIntentChange,
+          }),
+        );
+        listRef.scrollToEnd.mockClear();
+
+        // A standing away-from-end gesture (a wheel up, say) at the strict
+        // bottom - movable, so it blocks automatic correction, but it is
+        // never a press: `armHoldsPressContact` only ever answers true for
+        // an INDETERMINATE direction.
+        result.current.noteReaderGesture({
+          direction: "away-from-end",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        // A toward-end key at the strict bottom, with no room to move:
+        // still replaces the standing arm, because it was never a press.
+        result.current.noteReaderGesture({
+          direction: "toward-end",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+
+        shim.setGeometry(node, { scrollTop: 950 });
+        fireNativeScroll(node);
+
+        expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+        expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      });
+
+      it("Class 2.3: a touch contact absorbs a same-offset report as a tap; a replaced arm would not", () => {
+        // Mount at the strict bottom (so the mount-time maintain pass is a
+        // no-op and never silently writes scrollTop back to the end), then
+        // move off it with no scroll report, as the press-room test above
+        // does.
+        const node = shim.makeNode({
+          scrollTop: 1000,
+          scrollHeight: 1500,
+          clientHeight: 500,
+        });
+        const listRef = makeFakeListRef(node);
+        const onFollowIntentChange = vi.fn();
+        renderHook(() =>
+          useChatTimelineFollowLatch(listRef, true, true, {
+            ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+            onFollowIntentChange,
+          }),
+        );
+        listRef.scrollToEnd.mockClear();
+        shim.setGeometry(node, { scrollTop: 900 });
+
+        fireTouch(node, "touchstart", 100);
+        // A touchmove reports a toward-end intent mid-contact (the real
+        // production path: `handleTouchMove` itself calls
+        // `noteReaderGesture`). It must not displace the touch arm.
+        fireTouch(node, "touchmove", 80);
+
+        // A report back at the exact step offset (900, unchanged) - a tap,
+        // by the touch arm's own rule (`publishArmedDeparture`'s touch
+        // branch). A plain gesture arm has no such exception and would
+        // read this as its own one-shot departure.
+        fireNativeScroll(node);
+
+        expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+        expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      });
+    });
   });
 });
