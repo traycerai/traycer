@@ -56,6 +56,7 @@ interface AttachInput {
 const outside = vi.hoisted(() => ({
   attach: vi.fn(),
   reveal: vi.fn(),
+  realMenu: { current: false },
 }));
 const attach = outside.attach as Mock<
   (input: AttachInput) => Promise<CanvasAnnotationRecord>
@@ -97,40 +98,56 @@ vi.mock(
 );
 vi.mock(
   "@/components/epic-canvas/renderers/chat-target-menu/chat-target-menu",
-  () => ({
-    ChatTargetMenu: (props: {
-      readonly trigger: ReactNode;
-      readonly targets: readonly QuoteChatTarget[];
-      readonly open: boolean;
-      readonly onOpenChange: (open: boolean) => void;
-      readonly onSelectChat: (chatId: string) => void;
-    }) => (
-      <div>
-        <div
-          role="presentation"
-          onClick={() => props.onOpenChange(!props.open)}
-          onKeyDown={() => undefined}
-        >
-          {props.trigger}
-        </div>
-        {props.open ? (
-          <div role="menu">
-            {props.targets.map((target) => (
-              <button
-                key={target.chatId}
-                type="button"
-                role="menuitem"
-                onClick={() => props.onSelectChat(target.chatId)}
-              >
-                {target.title}
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </div>
-    ),
-  }),
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/components/epic-canvas/renderers/chat-target-menu/chat-target-menu")
+      >();
+    return {
+      // Only the regression case needs Radix's portalled menu; the rest use
+      // a stub that keeps the roster inside the box.
+      ChatTargetMenu: (props: Parameters<typeof actual.ChatTargetMenu>[0]) =>
+        outside.realMenu.current ? (
+          <actual.ChatTargetMenu {...props} />
+        ) : (
+          <StubChatTargetMenu {...props} />
+        ),
+    };
+  },
 );
+function StubChatTargetMenu(props: {
+  readonly trigger: ReactNode;
+  readonly targets: readonly QuoteChatTarget[];
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly onSelectChat: (chatId: string) => void;
+}) {
+  return (
+    <div>
+      <div
+        role="presentation"
+        onClick={() => props.onOpenChange(!props.open)}
+        onKeyDown={() => undefined}
+      >
+        {props.trigger}
+      </div>
+      {props.open ? (
+        <div role="menu">
+          {props.targets.map((target) => (
+            <button
+              key={target.chatId}
+              type="button"
+              role="menuitem"
+              onClick={() => props.onSelectChat(target.chatId)}
+            >
+              {target.title}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 vi.mock("@/hooks/files/use-artifact-object-text-query", () => ({
   useArtifactObjectTextQuery: () => ({
     data: { kind: "text", text: `<p data-tid="t">Hello big world</p>` },
@@ -225,6 +242,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  outside.realMenu.current = false;
+  vi.restoreAllMocks();
   cleanup();
   useAnchoredDraftStore.setState({ byEpicId: {} });
   useComposerDraftStore.setState({ drafts: {} });
@@ -293,6 +312,37 @@ describe("the comment draft box's Send to chat", () => {
     expect(readComposerDraftSnapshot("chat-1").content.content).toEqual([
       { type: "paragraph" },
     ]);
+  });
+
+  it("keeps a click in the real picker inside the box: no discard prompt, one send", async () => {
+    outside.realMenu.current = true;
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    storeDraft({});
+    renderPopover(SURFACE);
+    typeIntoEditor(composerEditorAt(0), "make this bolder");
+
+    fireEvent.pointerDown(sendButton(), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: "mouse",
+    });
+    const item = await screen.findByRole("menuitem", { name: /Chat one/ });
+    fireEvent.pointerDown(item, { button: 0, pointerType: "mouse" });
+    fireEvent.pointerUp(item, { button: 0, pointerType: "mouse" });
+    fireEvent.click(item);
+
+    await waitFor(() => {
+      expect(reveal).toHaveBeenCalledWith("chat-1");
+    });
+    expect(confirm).not.toHaveBeenCalled();
+    expect(attach).toHaveBeenCalledOnce();
+    expect(readComposerDraftSnapshot("chat-1").content.content).toEqual([
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: "make this bolder" }],
+      },
+    ]);
+    expect(useAnchoredDraftStore.getState().byEpicId[EPIC_ID]).toBeUndefined();
   });
 
   it("is absent on a surface that cannot capture elements", () => {
