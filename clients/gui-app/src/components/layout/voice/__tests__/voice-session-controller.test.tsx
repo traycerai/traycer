@@ -1075,9 +1075,13 @@ describe("a bot answering in its channel", () => {
       "d1",
     );
     act(() => eventsOf(0).onOutputTranscriptDelta("merged"));
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(60_000);
-    });
+    await settle();
+    // Each confirmed delivery marks the channel read: the announcement's,
+    // then the answer's. Nothing was appended twice.
+    expect(fake.markRead.mock.calls).toEqual([
+      [{ epicId: BOT_ID, chatId: CHANNEL_ID }],
+      [{ epicId: BOT_ID, chatId: CHANNEL_ID }],
+    ]);
     expect(commentary).toHaveBeenCalledTimes(2);
   });
 });
