@@ -23,6 +23,7 @@ import type {
 } from "@traycer/protocol/host/chat-fallback";
 import { tierRungSkipReasonSchema } from "@traycer/protocol/host/fallback-policy";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { BotUpdateRunSettingsRequest } from "@traycer/protocol/host/bot/schemas";
 import {
   advertisedServiceTierOption,
   DEFAULT_PERMISSION,
@@ -595,8 +596,7 @@ type RoutingRequest =
     }
   | {
       readonly kind: "bot-write-then-retry";
-      readonly botId: string;
-      readonly target: ChatRunSettings;
+      readonly write: BotUpdateRunSettingsRequest;
       readonly attempt: LastFailedAttempt;
     }
   | {
@@ -617,21 +617,28 @@ function routingRequestFor(input: {
   readonly botId: string | null;
 }): RoutingRequest | null {
   const { entry } = input;
-  const target = confirmTarget(
-    input.store.getState(),
-    input.data,
-    input.failedTuple,
-  );
+  const pick = input.store.getState();
+  const target = confirmTarget(pick, input.data, input.failedTuple);
   if (target === null) return null;
   if (entry.kind === "failed-turn") {
-    return input.botId === null
-      ? { kind: "switch-attempt", target, attempt: entry.attempt }
-      : {
-          kind: "bot-write-then-retry",
-          botId: input.botId,
-          target,
-          attempt: entry.attempt,
-        };
+    if (input.botId === null) {
+      return { kind: "switch-attempt", target, attempt: entry.attempt };
+    }
+    // The pick itself, as the Channel settings' Model group writes it: the
+    // selection and its derived effort, never a listed destination's
+    // representation of that effort (whose `null` means "the model's
+    // default"). The bot row keeps no permission, agent mode or tier.
+    return {
+      kind: "bot-write-then-retry",
+      write: {
+        botId: input.botId,
+        harness: pick.selection.harnessId,
+        model: pick.selection.modelSlug,
+        effort: pick.reasoning.length === 0 ? null : pick.reasoning,
+        profile: pick.selection.profileId,
+      },
+      attempt: entry.attempt,
+    };
   }
   return {
     kind: "choose",
@@ -765,26 +772,20 @@ function useRoutingVerbs(input: {
         sendRung("switch", request.target, request.attempt);
         return;
       case "bot-write-then-retry": {
-        const { attempt, target } = request;
-        // Exactly what the Channel settings' Model group writes: the bot row
-        // keeps no permission, agent mode or tier.
-        writeBot.mutate(
-          {
-            botId: request.botId,
-            harness: target.harnessId,
-            model: target.model,
-            effort: target.reasoningEffort,
-            profile: target.profileId,
+        const { attempt } = request;
+        // A promise rather than per-call handlers, which TanStack drops once
+        // this surface unmounts (its thread panel or tab closed mid-write):
+        // a confirmed Switch and retry finishes either way. The retry reads
+        // the row, so it goes only once the host took the write, and its
+        // answer finds the announcer through the verb's own reporting when
+        // nothing here is left to show it. A refused write leaves the row as
+        // it was and is said inline; unmounted, there is no line to say it.
+        void writeBot.mutateAsync(request.write).then(
+          () => {
+            sendRung("retry", null, attempt);
           },
-          {
-            // The retry reads the row, so it goes only once the host took the
-            // write; a refused write leaves the row as it was.
-            onSuccess: () => {
-              sendRung("retry", null, attempt);
-            },
-            onError: (error) => {
-              onBotWriteRefused(error.message);
-            },
+          (error: Error) => {
+            onBotWriteRefused(error.message);
           },
         );
         return;

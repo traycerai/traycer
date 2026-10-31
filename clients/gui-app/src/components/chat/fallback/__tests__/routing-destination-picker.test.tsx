@@ -1943,7 +1943,9 @@ describe("RoutingDestinationPicker", () => {
       act(() => {
         kit.pendingResponses[0]();
       });
-      expect(kit.mutations).toEqual([write, RETRY]);
+      await waitFor(() => {
+        expect(kit.mutations).toEqual([write, RETRY]);
+      });
 
       act(() => {
         kit.pendingResponses[1]();
@@ -1964,11 +1966,76 @@ describe("RoutingDestinationPicker", () => {
       fireEvent.click(option(/Claude Opus 4/));
       fireEvent.click(switchAndRetry());
 
+      await waitFor(() => {
+        expect(statusLines()).toContain(sentence);
+      });
       expect(kit.mutations.map((call) => call.method)).toEqual([
         "bot.updateRunSettings",
       ]);
-      expect(statusLines()).toContain(sentence);
       expect(screen.getByRole("dialog", { name: "Select model" })).toBeTruthy();
+    });
+
+    it("finishes a confirmed Switch and retry after the surface unmounts mid-write", async () => {
+      kit.deferResponses = true;
+      const view = mountInBotTab({ botId: EPIC_ID, opener: null });
+      await open();
+      fireEvent.click(option(/Claude Opus 4/));
+      fireEvent.click(switchAndRetry());
+      expect(kit.pendingResponses).toHaveLength(1);
+
+      // The thread panel or the tab closes with the write in flight.
+      view.unmount();
+      act(() => {
+        kit.pendingResponses[0]();
+      });
+
+      await waitFor(() => {
+        expect(kit.mutations.map((call) => call.method)).toEqual([
+          "bot.updateRunSettings",
+          "chat.fallback.runManualRung",
+        ]);
+      });
+      expect(kit.mutations[1]).toEqual(RETRY);
+    });
+
+    it("writes the effort picked, where a listed destination names it as the model's default", async () => {
+      useLayoutStore
+        .getState()
+        .setRegionValues("model", { reasoningControl: "list" });
+      // Haiku's catalog default is "high"; the host lists it with a null
+      // effort, which the pick at "high" matches.
+      kit.listData = listingOf({
+        failedTuple: FAILED,
+        profileTargets: [],
+        modelTargets: [
+          modelTargetOf({
+            groupId: "grp-h",
+            target: {
+              ...FAILED,
+              model: "claude-haiku-4",
+              reasoningEffort: null,
+            },
+          }),
+        ],
+      });
+      mountInBotTab({ botId: EPIC_ID, opener: null });
+      await open();
+
+      fireEvent.click(option(/Claude Haiku 4/));
+      await chooseEffort("High");
+      fireEvent.click(switchAndRetry());
+
+      expect(kit.mutations[0]).toEqual({
+        clientId: TAB_CLIENT_ID,
+        method: "bot.updateRunSettings",
+        variables: {
+          botId: EPIC_ID,
+          harness: "claude",
+          model: "claude-haiku-4",
+          effort: "high",
+          profile: FAILED_PROFILE,
+        },
+      });
     });
 
     it("the footer says the bot's model moves for all its chats, and Bot settings opens the tab's settings", async () => {
