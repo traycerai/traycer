@@ -1247,6 +1247,18 @@ describe("<BotTabSurface /> bot.open", () => {
     ).toBe("Resize channels");
   });
 
+  it("lays the channel column and the conversation on the task page's grounds: the column on the page, the conversation on the canvas, the canvas hairline between them", () => {
+    render(surface());
+
+    const pane = screen.getByTestId("bot-channel-sidebar-pane");
+    expect(pane.classList.contains("border-canvas-border/70")).toBe(true);
+    expect(pane.classList.contains("md:bg-canvas")).toBe(false);
+    const content = screen.getByTestId("bot-tab-content-pane");
+    expect(content.classList.contains("md:bg-canvas")).toBe(true);
+    expect(within(content).getByTestId("bot-tab-title")).toBeTruthy();
+    expect(within(content).getByTestId("stub-channel")).toBeTruthy();
+  });
+
   it("shows the full tab, with no banner, when this host serves the bot", () => {
     const { container } = render(surface());
 
