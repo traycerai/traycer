@@ -105,7 +105,7 @@ describe("humanActionableApprovals", () => {
 });
 
 /**
- * Ticket 18 rider (orchestrator, revised per review finding: the runtime
+ * Ticket 18 rider (orchestrator: the runtime
  * half previously mounted a hand-copied structural twin of the measurement
  * effect, which could not fail for a real production lifecycle defect -
  * only for a change to the twin itself). The measurement is now extracted

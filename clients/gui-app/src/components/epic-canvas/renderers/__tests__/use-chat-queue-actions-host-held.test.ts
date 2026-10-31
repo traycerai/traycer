@@ -229,7 +229,7 @@ describe("editQueuedItem seeds host-held custody", () => {
 });
 
 /**
- * F3 (batch-1 review, P2): the composer draft saved underneath a queue edit
+ * F3: the composer draft saved underneath a queue edit
  * has no image root of its own. `editQueuedItem` replaces the persisted row
  * with the queued prompt's content, so `draft-mirror-coordinator.ts`'s root
  * source (which reads the CURRENT row only) stops seeing the saved
@@ -347,7 +347,7 @@ describe("the saved draft snapshot underneath a queue edit is a GC root", () => 
 });
 
 /**
- * R1 (re-review): a SUCCESSFUL queue-edit save left the saved draft's root
+ * R1: a SUCCESSFUL queue-edit save left the saved draft's root
  * installed forever. The discard effect (triggered when `editingQueueItemId`
  * goes back to `null`) used to clear `queuedEditRestoreDraftRef` directly,
  * without releasing `queue-edit-saved-draft:<nodeId>` - so the ref-clear and

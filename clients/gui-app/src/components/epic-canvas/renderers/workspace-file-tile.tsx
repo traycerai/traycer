@@ -286,8 +286,8 @@ function WorkspaceImageFileTile(props: {
     filePath: node.filePath,
   });
   // Magic-valid, header-parseable bytes can still fail to decode in the
-  // browser (pre-landing review, P1) - `<img onError>` has no other signal
-  // path. `reportDecodeFailure` (re-review P1 follow-up) discards the exact
+  // browser `<img onError>` has no other signal
+  // path. `reportDecodeFailure` discards the exact
   // cache entry AND transitions the hook's own state to `fallback`, so this
   // tile renders straight from `assetState.status` like every other
   // failure - no local decode-failed flag to track or reset.

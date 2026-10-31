@@ -2259,7 +2259,7 @@ describe("CommGraphTile", () => {
      * proves the drawn floor does too, which it did not: the agent set does
      * not change when a status finally arrives, and a status flip alone
      * deliberately never re-plans, so the rendered plan stayed the draft for
-     * the life of the mount. That is P2, reproduced here
+     * the life of the mount. That is reproduced here
      * through the real tile.
      *
      * Read off the PLANNER's own calls rather than the store or the frame:

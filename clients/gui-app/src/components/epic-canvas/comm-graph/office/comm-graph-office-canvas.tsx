@@ -3130,7 +3130,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
     // THE PLAN THAT SETTLING OWES is the scene's, asked for by the
     // `feedSettled` flag on the sync input below rather than by anything here.
     // This comment once read "the re-plan that follows is the same population
-    // change any arrival causes", which was wrong and is P2:
+    // change any arrival causes", which was wrong:
     // an arrival changes the agent set and re-plans, while settling
     // changes only statuses, which deliberately never re-plans on its own - so
     // the provisional floor, cold teams and quiet cubbies and all, stayed on

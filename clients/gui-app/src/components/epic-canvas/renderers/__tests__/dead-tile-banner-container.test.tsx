@@ -33,7 +33,7 @@ import {
 } from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
 
 /**
- * THE OWNERSHIP WIRING, against the REAL container (cold-review P3).
+ * THE OWNERSHIP WIRING, against the REAL container.
  *
  * The banner unit tests inject `ownedByViewer` / `cloneAllowed` directly and
  * the published tile's suite stubs this container, so before this file a
