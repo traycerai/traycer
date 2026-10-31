@@ -9,7 +9,7 @@ import type {
   BotRecord,
   BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
-import { useBotActivity } from "@/hooks/bots/use-bot-activity";
+import { liveActivityOf, useBotActivity } from "@/hooks/bots/use-bot-activity";
 import { useBotActivitySummary } from "@/hooks/bots/use-bot-activity-summary";
 import { useBotSubscriptionForHost } from "@/hooks/bots/use-bot-subscription";
 import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-members-query";
@@ -326,9 +326,12 @@ function VoiceBotStatusReader(props: {
     hostId: request.hostId,
     enabled: true,
   });
-  const snapshot = subscription.snapshot;
+  // A stream closed for good, or a bot deleted, keeps its last snapshot in
+  // the cache: that reading is not current, so nothing of it is said.
+  const closed = subscription.error !== null || subscription.deleted;
+  const snapshot = closed ? null : subscription.snapshot;
   const tasks = snapshot?.tasks ?? NO_TASKS;
-  const activity = snapshot?.activity ?? null;
+  const activity = liveActivityOf(subscription);
   const summary = useBotActivitySummary({
     botId: request.botId,
     trunkChatId: snapshot?.bot.trunkChatId ?? "",
@@ -362,7 +365,8 @@ function VoiceBotStatusReader(props: {
   const composedRef = useRef(false);
   const usageSettled =
     !usageSupported || usage.data !== undefined || usage.isError;
-  const ready = timedOut || (subscription.snapshot !== null && usageSettled);
+  const ready =
+    timedOut || ((snapshot !== null || closed) && usageSettled);
   useEffect(() => {
     if (!ready || composedRef.current) return;
     composedRef.current = true;
