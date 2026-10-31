@@ -193,7 +193,14 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
   ): void => {
     let changed = false;
     for (const ref of refs) {
-      if (known(ref.messageId)) continue;
+      // A notification naming a row is stronger evidence than the
+      // announcement fallback, which can classify an answer that landed
+      // before its request was resolved: the row is hydrated as what it is,
+      // and replaces the announcement once it is.
+      const existing = entries.get(ref.messageId);
+      const announced = existing?.item.kind === "announcement";
+      if (!announced && known(ref.messageId)) continue;
+      if (pending.has(ref.messageId)) continue;
       pending.set(ref.messageId, {
         hydration: { ref, hostId: hostOf(ref) },
         offer,
@@ -367,10 +374,21 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       notifyPending();
       const ref = waiting.hydration.ref;
       const entry = row === null ? null : hydratedEntryOf(row);
-      // No row, or no prose: nothing is queued, and the bell keeps it.
+      // No row, or no prose: nothing is queued, and the bell keeps it (an
+      // announcement already held for it stays as it was).
       if (entry === null) {
         settled.add(messageId);
         return;
+      }
+      // An announcement held for this row gives way to what the row is,
+      // keeping how far the person got with it (heard, set aside).
+      const replaced = entries.get(messageId);
+      const keptState =
+        replaced?.item.kind === "announcement" ? replaced.item.state : null;
+      if (replaced !== undefined && keptState !== null) {
+        withdrawOffer(replaced);
+        withdrawRead(replaced);
+        entries.delete(messageId);
       }
       // A surface is keyed by what it points at: a second post about the
       // same approval or question is the same thing waiting.
@@ -398,7 +416,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
           author: entry.kind === "message" ? author : null,
           line: "",
           at: ref.at,
-          state: "queued",
+          state: keptState ?? "queued",
         },
         content: entry.content,
         options: entry.options,
@@ -414,7 +432,11 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       // An arrival in the focused chat is the focused feed's to say: it is
       // queued, unoffered, until the feed claims it (`noteFocused`), and
       // stays in Waiting if the feed never does (a row it took for history).
-      if (waiting.offer && !deps.isFocused(ref.botId, ref.chatId)) {
+      if (
+        waiting.offer &&
+        created.item.state === "queued" &&
+        !deps.isFocused(ref.botId, ref.chatId)
+      ) {
         offer(created);
       }
     },
