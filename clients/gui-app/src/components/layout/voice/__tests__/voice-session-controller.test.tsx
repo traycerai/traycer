@@ -2461,3 +2461,41 @@ describe("a confirmation dropped before its question was said", () => {
     expect(questions()).toBe(1);
   });
 });
+
+describe("a voice move to another thread of the active bot that fails", () => {
+  it("puts the bot's rail back as it was, so nothing reads the failed move as the person's", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    fake.botThreads.set(BOT_ID, [
+      {
+        threadId: "t-safari",
+        conversationId: CHANNEL_ID,
+        sessionChatId: "session-safari",
+        anchor: {
+          messageId: "q-safari",
+          requestId: "r-safari",
+          senderUserId: "user-1",
+          sentAt: 1_000,
+          resolvedAt: null,
+        },
+        replyCount: 2,
+        lastReplyAt: 2_000,
+        openRequestCount: 0,
+        costUsd: null,
+      },
+    ]);
+    selectBotTab(BOT_ID);
+    await bringLive();
+    fake.routeAnswer = (body) => fake.routeToThread(BOT_ID, "t-safari", body);
+    fake.navigateOutcome = () => Promise.reject(new Error("blocked"));
+    const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+    await say("Is the Safari fix in tonight's train?", "d1");
+    await settle();
+
+    expect(useBotOpenThreadStore.getState().byBotId[BOT_ID]).toBeUndefined();
+    const state = useVoiceSessionStore.getState();
+    expect(state.focus).toEqual(CHANNEL_FOCUS);
+    expect(state.selectionGeneration).toBe(generation);
+    expect(fake.sendMock).not.toHaveBeenCalled();
+  });
+});

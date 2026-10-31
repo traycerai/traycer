@@ -94,6 +94,7 @@ import {
   useBotOpenThreadStore,
   useBotRail,
   type BotOpenThread,
+  type BotRail,
 } from "@/stores/bots/bot-open-thread-store";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { selectHostFocusedRef } from "@/stores/tabs/selectors";
@@ -1348,7 +1349,8 @@ function openMainBot(
  * on the channel, and the tab brought to the front. Resolves with what
  * `decide` makes of the navigation's outcome, called as it settles: `false`
  * for a refusal, or a route navigation that failed (the tab navigation
- * puts the previous tab back right after).
+ * puts the previous tab back right after). A move that does not land puts
+ * the rail back too, while it still holds what was set here.
  */
 function openTarget(
   target: BoundTarget,
@@ -1357,8 +1359,11 @@ function openTarget(
 ): Promise<boolean> {
   const { botId, hostId, threadId } = target.tuple;
   const anchorMessageId = target.focus.anchorMessageId;
-  useBotOpenThreadStore.getState().setRail(
-    botId,
+  const rails = useBotOpenThreadStore.getState();
+  const previousRail = Object.hasOwn(rails.byBotId, botId)
+    ? rails.byBotId[botId]
+    : null;
+  const rail: BotRail | null =
     threadId === null || anchorMessageId === null
       ? null
       : {
@@ -1367,17 +1372,28 @@ function openTarget(
           announcement: false,
           anchorKind: null,
           sent: null,
-        },
-  );
+        };
+  rails.setRail(botId, rail);
   useBotTabsStore
     .getState()
     .openBotTab({ botId, hostId, title: target.botTitle });
   return new Promise<boolean>((resolve) => {
     let settled = false;
-    const settle = (landed: boolean): void => {
+    const settle = (outcome: boolean): void => {
       if (settled) return;
       settled = true;
-      resolve(decide(landed));
+      const landed = decide(outcome);
+      // A move that did not land puts the bot's rail back as it was, unless
+      // something since (a newer navigation, the person) changed it from
+      // what the voice set.
+      if (!landed) {
+        const now = useBotOpenThreadStore.getState().byBotId;
+        const current = Object.hasOwn(now, botId) ? now[botId] : null;
+        if (current === rail) {
+          useBotOpenThreadStore.getState().setRail(botId, previousRail);
+        }
+      }
+      resolve(landed);
     };
     // The tab navigation reports a refusal, but not a route navigation
     // that fails after it accepted (it puts the previous tab back): the
