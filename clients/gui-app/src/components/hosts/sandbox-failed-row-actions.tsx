@@ -62,7 +62,7 @@ export function SandboxFailedRowActions(props: {
   readonly configuration: SandboxPageConfiguration | null;
 }): ReactNode {
   const { summary, configuration } = props;
-  const create = useSandboxCreate();
+  const create = useSandboxCreate("toast");
   const destroy = useSandboxDestroy(summary);
   const operation = useSandboxOperation(summary.id);
   const [destroyOpen, setDestroyOpen] = useState(false);
