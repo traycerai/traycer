@@ -186,10 +186,26 @@ describe("delivery confirmation", () => {
 
   it("keeps the sign: minus five confirms -5, five alone does not", () => {
     const negative = numericAnswer("-5");
+    expect(
+      confirmationWords({ botTitle: null, threadTitle: null, text: "-5" }),
+    ).toEqual(["-5", "minus five", "negative five"]);
     scheduler.noteOutputTranscript("Five.");
     expect(negative.delivered()).toBe(0);
     scheduler.noteOutputTranscript(" Minus five.");
     expect(negative.delivered()).toBe(1);
+  });
+
+  it("does not take the unsigned digit for a negative answer, even as the whole utterance: 5 is not -5, -5. is", () => {
+    const negative = numericAnswer("-5");
+    scheduler.noteOutputTranscript("5");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(negative.delivered()).toBe(0);
+    clock.advance(CONFIRM_WINDOW_MS);
+    expect(appended).toHaveLength(2);
+
+    scheduler.noteOutputTranscript("-5.");
+    expect(negative.delivered()).toBe(1);
+    expect(scheduler.pendingCount()).toBe(0);
   });
 
   it("keeps the decimal: three point five confirms 3.5, three alone does not", () => {

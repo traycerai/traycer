@@ -646,27 +646,40 @@ export function confirmationWords(input: {
 }
 
 /**
- * What proves a short answer: each number in it as a complete value, as
- * written and as said, its other short words that are not filler, and, for
- * a reply of one or two words, the reply whole: a "Yes." or an "OK." is all
- * acknowledgement vocabulary and would otherwise have no proof at all; it is
- * proven only by an output that is exactly it (see `containsConfirmWord`).
+ * What proves a short answer. A reply with a number in it: each number as a
+ * complete value, as written and as said, and its other short words that
+ * are not filler; never the reply's words whole, which would lose the sign
+ * and the decimal ("-5" read as the word "5"). A reply of one or two words
+ * with no number: the reply whole, as written but for case and the
+ * punctuation around it, since a "Yes." or an "OK." is all acknowledgement
+ * vocabulary and would otherwise have no proof at all; it is proven only by
+ * an output that is exactly it (see `isWholeAnswerSaid`).
  */
 function shortAnswerPhrases(
   text: string,
   content: ReadonlyArray<string>,
 ): ReadonlyArray<string> {
+  const numerals = numeralsOf(text);
   const phrases: string[] = [];
-  for (const numeral of numeralsOf(text)) {
+  for (const numeral of numerals) {
     phrases.push(numeral, ...spokenNumeral(numeral));
   }
   for (const word of content) {
     if (!NUMERAL_RE.test(word) && isDiscriminative(word)) phrases.push(word);
   }
-  if (content.length >= 1 && content.length <= WHOLE_REPLY_MAX_WORDS) {
-    phrases.push(content.join(" "));
+  if (
+    numerals.length === 0 &&
+    content.length >= 1 &&
+    content.length <= WHOLE_REPLY_MAX_WORDS
+  ) {
+    phrases.push(wholeReplyOf(text));
   }
   return phrases;
+}
+
+/** The reply as written, lowercased, the punctuation around it gone. */
+function wholeReplyOf(text: string): string {
+  return text.toLowerCase().replace(/^[\s"'“‘]+|[\s.!?,;:"'”’]+$/gu, "");
 }
 
 /** A reply this short is proven by being said whole; longer ones by their words. */
