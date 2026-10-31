@@ -498,6 +498,22 @@ function armHoldsPressContact(
   return arm?.source === "gesture" && arm.direction === "indeterminate";
 }
 
+/** Whether a scrollbar press stands after this intent.
+ *
+ *  A pointer contact is the only intent with no direction of its own, so it
+ *  both names a press beginning and ends whichever stood before it: one on the
+ *  scroller publishes a reading position and holds its button down, while any
+ *  other contact - or an owned navigation - says the last press is over. A
+ *  directional intent, a key or a wheel, leaves the press as it was, because
+ *  the button is still down through them. */
+function pressStandsAfterIntent(
+  intent: ChatTimelineReaderGestureIntent,
+  pressStands: boolean,
+): boolean {
+  if (intent.direction !== "indeterminate") return pressStands;
+  return intent.publishesReaderPosition;
+}
+
 /** Whether a gesture intent replaces the contact standing before it.
  *
  *  A touch contact outlives every intent during it: neither a delivered
@@ -1411,6 +1427,12 @@ export function useChatTimelineFollowLatch(
   const armedReaderDepartureRef = useRef<ArmedReaderDeparture>(null);
   const activeCorrectionRef = useRef<ActiveEndCorrection | null>(null);
   const pendingEndCorrectionScrollRef = useRef<Promise<void> | null>(null);
+  // Whether a scrollbar press is still held. A drag under it moves the view
+  // and reports late, so a correction that leaves the list a queued end
+  // command can land it after the drag has moved on - see `startEndCorrection`.
+  // The press's own release is not reliable evidence on its own: it can be
+  // delivered to another element entirely, so every clear below stands for it.
+  const pressIsDownRef = useRef(false);
   const readerEndCandidateRef = useRef<ReaderEndCandidate | null>(null);
   // From a touch lift until the next reader input or owned navigation: the
   // momentum after the lift is the reader's own motion, with no touch event
@@ -1564,6 +1586,10 @@ export function useChatTimelineFollowLatch(
         readerDepartureScrollTopRef.current = null;
         departureOwedRef.current = false;
       }
+      pressIsDownRef.current = pressStandsAfterIntent(
+        intent,
+        pressIsDownRef.current,
+      );
       const readerGestureGeneration = readerGestureGenerationRef.current;
       ownsFreeNavigationRef.current = false;
       cancelActiveCorrection();
@@ -1800,14 +1826,29 @@ export function useChatTimelineFollowLatch(
         moveChatTimelineScroller(node, end, () => {
           node.scrollTop = end;
         });
-        const pendingScroll = list.scrollToEnd({ animated: false });
-        pendingEndCorrectionScrollRef.current = pendingScroll;
-        const clearPendingScroll = (): void => {
-          if (pendingEndCorrectionScrollRef.current === pendingScroll) {
-            pendingEndCorrectionScrollRef.current = null;
-          }
-        };
-        void pendingScroll.then(clearPendingScroll, clearPendingScroll);
+        if (pressIsDownRef.current) {
+          // Under a held press the queued command is the one write that can
+          // outlive the reader's next movement: the list releases it once its
+          // layout has been still for two frames, and a drag reports late, so
+          // it can land after the drag has carried the view away and take it
+          // back to an end the reader has already left. The immediate write
+          // above still lands this correction's end, and the retry below still
+          // follows the content as it grows; only the queued copy, which exists
+          // to bring the list's own offset along, waits for the release.
+          supersedePendingEndCorrection();
+        } else {
+          const pendingScroll = list.scrollToEnd({ animated: false });
+          pendingEndCorrectionScrollRef.current = pendingScroll;
+          const clearPendingScroll = (): void => {
+            if (pendingEndCorrectionScrollRef.current === pendingScroll) {
+              pendingEndCorrectionScrollRef.current = null;
+            }
+          };
+          void pendingScroll.then(clearPendingScroll, clearPendingScroll);
+        }
+        // Outside the branch on purpose: this burst is what follows content
+        // that grows after the write above, so gating the queued command must
+        // never stop it being scheduled.
         scheduleValidation();
       };
 
@@ -1819,6 +1860,7 @@ export function useChatTimelineFollowLatch(
       noteViewRead,
       noteViewportGrowthClamp,
       publishUnannouncedDeparture,
+      supersedePendingEndCorrection,
     ],
   );
 
@@ -2881,7 +2923,23 @@ export function useChatTimelineFollowLatch(
       // scroll reports.
       noteReaderLift();
     };
+    // Every clear of `pressIsDownRef` publishes nothing and reads no geometry:
+    // the press ending is not itself reader movement, and the correction that
+    // follows decides what to do from live geometry as it always has.
+    const clearPressIsDown = (): void => {
+      pressIsDownRef.current = false;
+    };
+    // A pointer event with no button down cannot belong to a held press, so it
+    // stands for a release this node never saw: one delivered to another
+    // element, or swallowed while the window was not focused.
+    const clearPressIsDownIfNoButtons = (event: PointerEvent): void => {
+      if (event.buttons !== 0) return;
+      pressIsDownRef.current = false;
+    };
     const completePointerPreflight = (): void => {
+      // Ahead of the arm test below, which is a no-op once the arm is spent:
+      // the release ends the press whether or not an arm is still standing.
+      pressIsDownRef.current = false;
       const armedDeparture = armedReaderDepartureRef.current;
       if (
         armedDeparture?.source === "gesture" &&
@@ -2939,6 +2997,27 @@ export function useChatTimelineFollowLatch(
     node.addEventListener("pointercancel", completePointerPreflight, {
       passive: true,
     });
+    // A scrollbar press releases wherever the pointer happens to be, and the
+    // capture phase is the only place this node is guaranteed to hear it. The
+    // window loses focus with the button still down (an OS drag, a tab switch),
+    // and a later pointer event with no button down proves the release
+    // happened unseen. Together these stand for a node release that never
+    // comes, so the press cannot be left standing after it is over.
+    window.addEventListener("pointerup", clearPressIsDown, {
+      capture: true,
+      passive: true,
+    });
+    window.addEventListener("pointercancel", clearPressIsDown, {
+      capture: true,
+      passive: true,
+    });
+    window.addEventListener("blur", clearPressIsDown);
+    window.addEventListener("pointermove", clearPressIsDownIfNoButtons, {
+      passive: true,
+    });
+    window.addEventListener("pointerover", clearPressIsDownIfNoButtons, {
+      passive: true,
+    });
     // Viewport-layout trigger (divider drag / pane resize): fires with no
     // ChatTimeline render at all. Like every maintain trigger, it may heal a
     // stale false latch only when fresh geometry is already at the strict
@@ -2990,6 +3069,15 @@ export function useChatTimelineFollowLatch(
       node.removeEventListener("touchcancel", clearTouch);
       node.removeEventListener("pointerup", completePointerPreflight);
       node.removeEventListener("pointercancel", completePointerPreflight);
+      window.removeEventListener("pointerup", clearPressIsDown, {
+        capture: true,
+      });
+      window.removeEventListener("pointercancel", clearPressIsDown, {
+        capture: true,
+      });
+      window.removeEventListener("blur", clearPressIsDown);
+      window.removeEventListener("pointermove", clearPressIsDownIfNoButtons);
+      window.removeEventListener("pointerover", clearPressIsDownIfNoButtons);
       resizeObserver.disconnect();
       contentStyleObserver.disconnect();
       cancelActiveCorrection();
