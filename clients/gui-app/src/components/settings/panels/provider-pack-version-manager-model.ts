@@ -143,8 +143,8 @@ export type VersionUseEligibility =
  * Use is disabled for the current version, for rows not installed yet, and
  * for the signed positive refusals (`below-security-floor` /
  * `host-ineligible`). Nothing else gates it — a below-baseline version that
- * certifies eligible is selectable (D1 as revised 2026-08-12), and yanked /
- * uncertified installed copies remain selectable under D8.
+ * certifies eligible is selectable, and yanked / uncertified installed
+ * copies remain selectable.
  */
 export function versionUseEligibility(
   version: ProviderPackVersion,
@@ -273,7 +273,7 @@ export type VersionRowChip = {
  * They were two copies of the same three-member test, so a fourth blocking
  * certification would have given a row its chip and not its dimming, or the
  * reverse. `uncertified` is deliberately not a member - an installed copy the
- * channel stopped listing stays usable (D8).
+ * channel stopped listing stays usable.
  */
 export function isBlockingCertification(
   certification: ProviderPackVersionCertification,
@@ -500,8 +500,8 @@ export function installPackVersionRefusalMessage(
 /**
  * Primary user copy for a typed use-pack-version (Use / pin) refusal.
  * Exhaustive over the protocol enum. Hard policy codes must not invite retry
- * or say "withdrawn" (yanked/uncertified installed copies remain selectable
- * under D8 — these two refusals are signed positive ineligibility only).
+ * or say "withdrawn" (yanked/uncertified installed copies remain
+ * selectable — these two refusals are signed positive ineligibility only).
  * `detail` is operator-facing only.
  */
 export function packVersionUseRefusalMessage(

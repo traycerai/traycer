@@ -375,7 +375,7 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
 }
 
 /**
- * The Activate write, with its refusal arms rendered (F14/D13).
+ * The Activate write, with its refusal arms rendered (F14).
  *
  * Exported for its own test: this IS the "only Settings writes preferred"
  * acceptance seam, and reaching it through `useHostScopeFor` would mean
@@ -391,7 +391,7 @@ export function useMakeActiveHost(hosts: readonly HostScopeOption[]): {
  *
  * Deliberately not refused by the authority, and therefore never toasted
  * here: a registered host that is currently OFFLINE. Preferred is intent, not
- * liveness (D1/D5) - derivation serves a fallback until it returns.
+ * liveness - derivation serves a fallback until it returns.
  */
 export async function requestActivate(
   authority: SelectionAuthorityClient,

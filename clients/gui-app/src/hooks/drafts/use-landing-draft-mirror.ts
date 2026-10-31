@@ -23,7 +23,7 @@ export function LandingDraftMirrorMount(): ReactNode {
       bindLandingAdoptionHost(null);
     };
   }, [adoptionHostId]);
-  // One-shot stash conversion (D19). App-wide like this mount, and guarded by
+  // One-shot stash conversion. App-wide like this mount, and guarded by
   // its own module-level flag, so a re-render or a placement change cannot
   // start it twice; it waits for the landing store's own ready gate itself.
   useEffect(() => {

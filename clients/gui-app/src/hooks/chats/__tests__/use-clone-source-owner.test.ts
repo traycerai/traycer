@@ -3,7 +3,7 @@ import type { CloudChatSummary } from "@traycer/protocol/host/epic/cloud-chat";
 import { resolveCloneSourceOwnerUserId } from "@/hooks/chats/use-clone-source-owner";
 
 /**
- * The owner a clone surface sends with `forkSource` (chat-sync-v2 ticket 37).
+ * The owner a clone surface sends with `forkSource`.
  *
  * The central case is the third one: no local record, but a
  * cloud row the surface already rendered from. Everything else here pins the

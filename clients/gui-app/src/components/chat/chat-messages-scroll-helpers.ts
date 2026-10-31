@@ -42,7 +42,7 @@ export function buildRowKeyToIndex(
 /**
  * `role: "user"` covers two visually distinct row shapes -
  * genuinely human-sent turns and A2A agent-sent rows (`agentSenderInfo !==
- * null` - decision #8's fourth anchor-triggering event). Sharing one
+ * null` - the fourth anchor-triggering event). Sharing one
  * LegendList item type meant they shared one recycling pool and one running
  * measured-height average (`averageSizes[itemType]`), skewing the estimate
  * LegendList uses for not-yet-measured rows of either shape and letting a
@@ -125,7 +125,7 @@ export function chatTimelineLocationForMessage(
 /** The list-state slice `chatTimelineNavigationLandedAtLocation`
  *  needs to validate a settled navigation - same content-relative-vs-DOM-
  *  scroll shape as `ChatFreeScrollingMeasurementSource`/
- *  `ChatViewportAnchorListState` (decision #18), but the caller supplies
+ *  `ChatViewportAnchorListState`, but the caller supplies
  *  `scroll` directly (the scroll NODE's own live `scrollTop`, not
  *  `list.getState().scroll` - that internal value can lag a completed
  *  animated scroll for exactly the reason this validation exists, see the
@@ -247,7 +247,7 @@ export interface ChatViewportAnchorListState {
  *
  * `positionAtIndex` is content-relative (excludes the header pad); `scroll`
  * includes it - comparing them directly is off by the header's height
- * (decision #18's `topOffsetAdjustment`, same fix as
+ * (the `topOffsetAdjustment` fix, same as
  * `captureChatFreeScrollingOffset`). `targetY` is computed in
  * content-relative space (`scroll - topOffsetAdjustment`), matching
  * LegendList's own `computeViewability`'s `scroll = scrollState - topPad`.

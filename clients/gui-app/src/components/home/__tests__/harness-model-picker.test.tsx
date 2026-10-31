@@ -3055,7 +3055,7 @@ describe("<HarnessModelPicker />", () => {
       screen.getByRole("button", { name: "Codex profile: Personal" }),
     ).toBeDefined();
     // `--swatch`, not `background-color`: the profile dot carries its colour as
-    // a custom property and paints with `bg-[var(--swatch)]` (ticket 02's
+    // a custom property and paints with `bg-[var(--swatch)]` (the
     // inline-style migration), so a `background-color` selector matches nothing
     // and this assertion passed on an empty list.
     const swatchStyles = Array.from(

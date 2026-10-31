@@ -227,7 +227,7 @@ export function TabStripPositionRow(props: AreaRowPlacement): ReactNode {
 }
 
 /**
- * What the vertical strip shows (D8), each value drawn as the strip itself: the
+ * What the vertical strip shows, each value drawn as the strip itself: the
  * sample task's row and the one below it, with its live agents between them in
  * Tabs and agents. It only means something while the tabs are at an edge, so
  * at the top the pictures are disabled and the row says why; the stored value

@@ -121,7 +121,7 @@ vi.mock(import("@/hooks/ui/use-narrow-window"), async (importOriginal) => ({
   useIsNarrowWindow: () => viewport.narrow,
 }));
 
-// The toolbar's "open file" now dispatches on the TAB client (D15); these tests
+// The toolbar's "open file" now dispatches on the TAB client; these tests
 // mount the tile without the whole host runtime, so the seam is stubbed the
 // same way the sibling git-diff-tile suites already stub it.
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
@@ -129,7 +129,7 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
 }));
 
 // The tile dispatches `editor.openPaths` on its TAB client, not the app-wide
-// one - `editor.openPaths` resolves paths on the host it is sent to (D15). The
+// one - `editor.openPaths` resolves paths on the host it is sent to. The
 // mocked hook ignores the client it is handed; what this repoint pins is that
 // the tile no longer imports the app-wide `useEditorOpen` at all.
 vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({

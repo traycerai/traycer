@@ -11692,7 +11692,7 @@ describe("OfficeScene leads audience", () => {
   });
 });
 
-// ---- T2 fixup 1: cold-review findings F1-F9 ------------------------- //
+// ---- Cold-review findings F1-F9 ------------------------------------- //
 
 /** A projector whose x axis is offset far from the identity mapping. */
 const SHIFTED_PROJECTOR: OfficeProjector = {
@@ -12764,7 +12764,7 @@ describe("OfficeScene fixup 1 - F14 reception queue across aliased floors", () =
         realLayout.floors[floorIndex].receptionQueueTiles.length > 0,
     );
     // Two upper storeys of a single Towers/Building block alias the ground
-    // plaza's reception tiles (D13) - this fixture needs at least two such
+    // plaza's reception tiles - this fixture needs at least two such
     // floors to exercise the collision at all.
     expect(floorsWithAgents.length).toBeGreaterThanOrEqual(2);
     const [floorA, floorB] = floorsWithAgents;
@@ -13102,7 +13102,7 @@ describe("OfficeScene fixup 1 - F17 isometric growth reports a projected shift",
   });
 });
 
-// ---- T2 fixup 2: the reviewer's residuals ---------------------------- //
+// ---- The reviewer's residuals ---------------------------------------- //
 
 describe("OfficeScene fixup 2 - F2 a remembered errand tile follows the shift", () => {
   /**
@@ -13807,7 +13807,7 @@ describe("OfficeScene fixup 1 - F18 a seat's declared painted box (D53)", () => 
   it("leaves a seat with no declared box on its desk tiles", () => {
     const scene = sceneWithBoxedSeat();
 
-    // Desk tile (2,2) projected, two tiles square - exactly as before D53.
+    // Desk tile (2,2) projected, two tiles square - exactly as before.
     expect(scene.locate("plain")).toEqual({
       x: 2080,
       y: 32,
@@ -14291,7 +14291,7 @@ describe("OfficeScene fixup 8c - the settle plan walks people, it does not pop t
     // THE PREMISE READ OFF THE BOOK, not the plan. `layout.desks` is where
     // the plan put somebody; `whereabouts` is where the scene says they are,
     // and the two disagreeing for a whole settled office is the finding this
-    // fixup's second half exists for - a premise taken from the plan would
+    // fix's second half exists for - a premise taken from the plan would
     // have been satisfied by a floor nobody was standing on.
     const moved = team.memberAgentIds.find(
       (id) => scene.whereabouts(id) === "Quiet stack",
@@ -14413,7 +14413,7 @@ describe("OfficeScene fixup 8c - the book settles with the plan (D66)", () => {
    * answer from the CHARACTER while it is out of its chair, which is what the
    * settle deliberately sets thirty-nine of these agents doing - so with
    * motion on this would compare walkers against a reference office where
-   * nobody ever walked, and fail on the walk this fixup wants. Reduced motion
+   * nobody ever walked, and fail on the walk this case wants. Reduced motion
    * collapses the walk into sitting down, which leaves exactly the question
    * being asked: did the book take up the settled plan. The walking half is
    * pinned by the R4 cases, and the case below asserts the shortfall's own
@@ -14634,7 +14634,7 @@ describe("OfficeScene fixup 8 - a seated agent's name tag is fitted to its seat"
 });
 
 /**
- * Fixup 8d - the two cold-review fixes: the arrival queue keyed at the
+ * Two fixes: the arrival queue keyed at the
  * pool's own granularity (host, not floor), and a claim that will not answer
  * a request with a seat of the wrong kind.
  *
@@ -15066,7 +15066,7 @@ describe("OfficeScene fixup 8d - the queue and the claim answer the right pool",
 });
 
 /**
- * Fixup 8e - finding 3 (the instant-seating gate was too narrow) and finding
+ * Finding 3 (the instant-seating gate was too narrow) and finding
  * 6 (an instant seat walk never moved the character's own tile).
  *
  * Standalone for the same reason 8d is: these build scenes directly off
@@ -15316,7 +15316,7 @@ describe("OfficeScene fixup 8e - the instant-seating gate, and the tile it seats
 });
 
 /**
- * Fixup 3a - the playback entry of `settleForStilledMotion`. Reduced motion
+ * The playback entry of `settleForStilledMotion`. Reduced motion
  * already settled walks; playback did not, because `wasSuppressed` was read
  * after `this.playing = input.playing` and the transition was always false.
  */

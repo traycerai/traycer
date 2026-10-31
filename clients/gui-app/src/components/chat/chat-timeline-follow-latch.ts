@@ -29,7 +29,7 @@ export interface ChatTimelineScrollGeometry {
  * scrollHeight=clientHeight=0`. That is UNKNOWN geometry, never a confirmed
  * edge - treating it as "at the bottom" would let a restored free-reading
  * position get silently overwritten the moment the pane becomes visible
- * again (fixup review P1 finding 3).
+ * again (review P1 finding 3).
  */
 export function isChatTimelineGeometryMeasurable(
   geometry: ChatTimelineScrollGeometry,
@@ -838,8 +838,8 @@ function readerEndCandidateFor(input: {
  *  the viewport grew and the end came up to meet it - emits no scroll report,
  *  so a read is the only observation the arrival has, and a tail growing past
  *  it afterwards would otherwise leave the reader free at an end they
- *  reached. */
-/** Whether the view has reached the end a toward-end gesture was thrown at.
+ *  reached.
+ *
  *  `unreadable` is not `short`: the end moved by an amount nothing can read
  *  back, so it can never be judged again and the caller retires it. Keeping
  *  it would let a row that returns to the size it was - a block collapsed
@@ -1254,19 +1254,6 @@ function touchStep(
   return "away";
 }
 
-/**
- * A finger's step with a range move applied: the view's offset moves by it,
- * the edge element's recorded place on screen moves against it (lowering the
- * offset carries the content down the screen by as much), and the reference
- * row is untouched, because a range move leaves every content position where
- * it was.
- *
- * Carried, not re-measured. A step re-armed at the live geometry would take
- * the reader's own movement into its baseline and forget it: a step at 6, an
- * own move to 5 that has not reported, then a clamp 5 -> 4, re-armed at 4,
- * reads as a reader who never moved. Carried to 5, the step still sees their
- * own pixel.
- */
 /** An armed departure's references carried by a view movement that was none of
  *  the reader's, announced (`noteScrollerMoved`) or recognised
  *  (`noteViewportGrowthClamp`).
@@ -1292,6 +1279,19 @@ function armCarriedBy(
   return cause === "range" ? touchArmCarriedBy(arm, delta) : arm;
 }
 
+/**
+ * A finger's step with a range move applied: the view's offset moves by it,
+ * the edge element's recorded place on screen moves against it (lowering the
+ * offset carries the content down the screen by as much), and the reference
+ * row is untouched, because a range move leaves every content position where
+ * it was.
+ *
+ * Carried, not re-measured. A step re-armed at the live geometry would take
+ * the reader's own movement into its baseline and forget it: a step at 6, an
+ * own move to 5 that has not reported, then a clamp 5 -> 4, re-armed at 4,
+ * reads as a reader who never moved. Carried to 5, the step still sees their
+ * own pixel.
+ */
 function touchArmCarriedBy(arm: ReaderTouchArm, delta: number): ReaderTouchArm {
   return {
     ...arm,

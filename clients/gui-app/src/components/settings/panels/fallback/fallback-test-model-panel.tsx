@@ -680,7 +680,7 @@ function useTestAccount(
   );
   // A seed the picker does not offer is not a default: with nothing
   // remembered the seed is `null`, the Terminal account, and a provider whose
-  // Terminal account is disabled lists no such option (review D1). The first
+  // Terminal account is disabled lists no such option. The first
   // listed account is then the default, as it is what the picker shows first.
   const first = accounts.at(0);
   if (

@@ -529,7 +529,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
     );
   });
 
-  // A pin never sets `namedHostDead` (D6): by the time `useComposerPlacement`
+  // A pin never sets `namedHostDead`: by the time `useComposerPlacement`
   // resolves, a pinned host that died has already auto-followed to the
   // effective host - `resolvedHostId` names the LIVE host, and the create
   // must land there instead of being refused.

@@ -3,7 +3,7 @@ import type { HostLeaseSnapshot } from "@traycer-clients/shared/host-selection/s
 import type { SelectionKernelSnapshot } from "@traycer-clients/shared/host-selection/selection-evidence-kernel";
 
 /**
- * The window's READ-ONLY projection of the selection authority (D16).
+ * The window's READ-ONLY projection of the selection authority.
  *
  * The authority owns `preferredHostId` and derives `effectiveHostId` in the
  * desktop main process; this store is where the one renderer-side bridge

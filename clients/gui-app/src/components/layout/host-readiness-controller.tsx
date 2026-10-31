@@ -165,7 +165,7 @@ export function HostReadinessControllerProvider(props: {
   // folded into the intent - a shell with no local host is never booting one.
   // SURFACE, not capability - and worth stating what this still drives, because
   // its name outlived its old job. The automatic launch-time `convergeReady`
-  // was retired (D14/C5), so this no longer arms any process: what `enabled`
+  // was retired (C5), so this no longer arms any process: what `enabled`
   // reaches now is the removal-sentinel read in `useHostProvisioning`
   // (`useRunnerHostRemovalStateQuery`), which asks this machine's own disk
   // whether the user removed Traycer's background components. Every other
@@ -536,7 +536,7 @@ export function SurfaceReadinessFallback(props: {
  * switch - and every transient probe failure on a host that was running the
  * whole time - throw away the entire DOM: editors, terminals, scroll
  * positions, popovers. The recovery actions did not disappear with the block:
- * they are the window modal's now (D10/D11), which derives from the
+ * they are the window modal's now, which derives from the
  * authority's leases and narrates once, for the window, wherever the app is.
  *
  * Latch semantics: per-window runtime state, so a window reload always
@@ -834,7 +834,7 @@ type GateTerminalReadiness = Exclude<
  * `loading-host`, `provisioning-host` and `unavailable-host` are absent because
  * `GateDrawnReadiness` excludes them - the window narrator speaks for all three.
  * Their renderers went with them: `loadingFallback` (its last live kind was the
- * compat probe, deleted by D13 with the rest of the compat readiness
+ * compat probe, deleted with the rest of the compat readiness
  * vocabulary), and `unavailableFallback` + `SlowHostFallback`, which had been
  * unreachable since the narrator landed and which nothing detected because
  * reachability was a predicate rather than a type.

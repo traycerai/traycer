@@ -176,7 +176,7 @@ export function useHostOverviewUpdates(input: {
    */
   readonly foregroundUpdateLine: string | null;
   /**
-   * The dispatching panel mount's token (D8), threaded to all three update
+   * The dispatching panel mount's token, threaded to all three update
    * dispatches so an `accepted` answer can be attributed to the mount that
    * asked for it. See `host-overview-rpc.ts`'s `settleUpdateDispatch`.
    */
@@ -1966,7 +1966,7 @@ const CLI_TOO_OLD_MESSAGE =
   "This computer's Traycer CLI is too old to resume the update. Update the CLI, then try again.";
 
 /**
- * What a `dispatch-indeterminate` reason means to a person (D18).
+ * What a `dispatch-indeterminate` reason means to a person.
  *
  * The host names a reason from a closed grammar, and three of those reasons are
  * not really "we could not confirm" at all — they are definite answers about

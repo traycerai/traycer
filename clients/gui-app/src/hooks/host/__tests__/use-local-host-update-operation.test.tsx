@@ -2,7 +2,7 @@
 // resolves this machine's host id, reads the LIVE `host.status` leg over a
 // real client, reads the DURABLE-RECORD leg off `useRunnerHostControllerStatusQuery()`
 // via `recordObservationFromLocalAttempt`, and combines the two through
-// `preferLiveOverRecord` into one `FleetUpdateView` (Ticket 07 — the
+// `preferLiveOverRecord` into one `FleetUpdateView` (the
 // host-down window).
 //
 // This is a PRODUCTION-WIRING witness, not a pure-module test: it drives the
@@ -72,7 +72,7 @@ function localAttempt(
     continuation: null,
     updatedAt: "2026-08-27T00:00:00.000Z",
     error: null,
-    // Desktop's probed liveness (D13); `unknown` unless a case is about it.
+    // Desktop's probed liveness; `unknown` unless a case is about it.
     liveness: "unknown",
     livenessObservedAtMs: null,
     ...overrides,
@@ -338,7 +338,7 @@ describe("useLocalHostUpdateOperation — F1 host-down window (Ticket 07 §5.2.7
    * in `useLocalHostUpdateOperation` (its own real implementation already
    * returns `null` whenever `facts === null`) — in a throwaway copy of the
    * test above. Chose a mocked leaf over editing the production hook file
-   * directly: this worktree is shared with the agent doing the Ticket 07
+   * directly: this worktree is shared with the agent doing the
    * production wiring, and it was mid-edit on this exact file during this
    * session, so a live on-disk ablation risked colliding with that work.
    * The throwaway file was deleted immediately after confirming the result;
@@ -368,7 +368,7 @@ describe("useLocalHostUpdateOperation — F1 host-down window (Ticket 07 §5.2.7
 });
 
 /**
- * The 1s renderer-tick clock (Ticket 06 D13), exercised on the REAL hook. The
+ * The 1s renderer-tick clock, exercised on the REAL hook. The
  * suite above fakes only `Date` (`toFake: ["Date"]`) because it never needs to
  * drive a timer; this pin needs the 1s `useNowMs` interval to actually fire on
  * a deadline it controls, so it fakes every timer instead
@@ -481,7 +481,7 @@ describe("useLocalHostUpdateOperation — the 1s renderer tick ages the live-res
  * mounted mirror — the Overview's lives in
  * `host-overview-lifecycle-gate.test.tsx`, and the banner's are here.
  *
- * The RECORD slot's mirror is the D13 tick suite above, and it is a mirror in
+ * The RECORD slot's mirror is the tick suite above, and it is a mirror in
  * both directions: feeding `recordNowMs` from `statusQuery.dataUpdatedAt`
  * (verified) fails its very first assertion, because in that fixture
  * `host.status` never resolves and `dataUpdatedAt` is `0` — the proof's age

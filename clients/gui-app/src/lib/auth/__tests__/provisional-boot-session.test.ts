@@ -1051,7 +1051,7 @@ describe("AuthService provisional boot session", () => {
       );
       const outcome = await service.revalidateCurrentContext();
       expect(outcome?.kind).toBe("valid");
-      // The write is fire-and-forget, like its sibling in D16.
+      // The write is fire-and-forget, like its sibling elsewhere.
       await flush();
 
       const raw = host.secureStorageEntries.get(SNAPSHOT_KEY);

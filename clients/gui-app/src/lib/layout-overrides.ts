@@ -33,7 +33,7 @@ import { cn } from "@/lib/utils";
  * aside) - so one spread per region IS the merge, and there is no second level
  * for an inner override to drop.
  *
- * ## The passivity contract (D11) - the part that is easy to get wrong
+ * ## The passivity contract - the part that is easy to get wrong
  *
  * An override changes what a mounted component DRAWS. It does not, and must
  * not, change whether one exists. So what may be wrapped is a VISUAL LEAF:

@@ -1270,7 +1270,7 @@ function useWithoutNeedsYouRows(
   }, [feedIds, items]);
 }
 
-/** The Notifications drawer's first group: every prompt waiting on the person (D10). */
+/** The Notifications drawer's first group: every prompt waiting on the person. */
 function NeedsYouGroup(props: {
   readonly items: ReadonlyArray<NeedsYouItemData>;
   readonly onActivate: (row: MergedNotificationRow) => void;

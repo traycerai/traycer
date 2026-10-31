@@ -128,7 +128,7 @@ afterEach(() => {
 });
 
 /**
- * Fixup 02 / B2: reservation must stay charged through the conversion-to-
+ * B2: reservation must stay charged through the conversion-to-
  * insertion handoff and through every started sibling write on batch failure.
  * Release fires exactly once on every terminal path.
  */

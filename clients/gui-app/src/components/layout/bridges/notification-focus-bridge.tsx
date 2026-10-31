@@ -202,7 +202,7 @@ function isOriginUnavailable(input: {
     return false;
   }
   // A foreign-origin route lands on the origin-unavailable center rather
-  // than moving the app (redesign P1.2, D7's second limb). The app-wide
+  // than moving the app (redesign P1.2). The app-wide
   // selection has exactly one writer - Settings ▸ Activate, through the
   // authority - and a notification click is not it. What used to happen here
   // was a "transient" switch whose only way back was the restore machinery

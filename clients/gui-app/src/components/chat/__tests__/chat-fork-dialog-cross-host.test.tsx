@@ -485,7 +485,7 @@ function buildHostClient(hostId: string): HostClient<HostRpcRegistry> {
     }),
     findHostById: (id) => (id === hostId ? entry : null),
   });
-  // `bind()` died with the active slot (D17): address via a requester.
+  // `bind()` died with the active slot: address via a requester.
   return spine.createRequester(entry);
 }
 

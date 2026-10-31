@@ -128,7 +128,7 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
     () => buildUsageSummaryRequest({ windowDays, epicId: null, hostId, plane }),
     [windowDays, hostId, plane],
   );
-  // The activity heatmap's own fixed-year read (ticket 15) - independent of
+  // The activity heatmap's own fixed-year read - independent of
   // the 7/30/90 picker (an activity calendar over one month is all padding)
   // but scoped by the same host filter, so narrowing to a machine narrows
   // the calendar too.
@@ -159,7 +159,7 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
     true,
     false,
   );
-  // Hosts update independently of the app: one released before ticket 15
+  // Hosts update independently of the app: an older release
   // caps `windowDays` at 90 and rejects the year outright. ONLY that
   // classified rejection arms this narrower read - a transient failure on
   // the year read must surface as an error, not be quietly replaced by a

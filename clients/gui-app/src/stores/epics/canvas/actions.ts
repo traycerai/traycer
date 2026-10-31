@@ -1891,10 +1891,10 @@ export function updateCommGraphTileView(
         // the camera frames is read as a no-op and dropped - which is exactly
         // the shape of the reset on a tile whose camera is already neutral.
         ref.view.officeCameraView === view.officeCameraView &&
-        // And the EIGHTH, by the same argument one field over. Since D68 the
-        // office's framing lives here rather than in `x`/`y`/`zoom`, so every
-        // writer that neutralises it - a view pick or a Settings default
-        // that moved - now changes THIS and often nothing
+        // And the EIGHTH, by the same argument one field over. Since the
+        // split the office's framing lives here rather than in `x`/`y`/`zoom`,
+        // so every writer that neutralises it - a view pick or a Settings
+        // default that moved - now changes THIS and often nothing
         // else. Compared by value, not by identity: these writers build a
         // fresh object each time, and an identity compare would call every
         // one of them a change even when the numbers are the ones already
@@ -1919,7 +1919,7 @@ export function updateCommGraphTileView(
  * even `null`, which would quietly erase the framing record on every debounced
  * pan. Two writers, two paths, each saying only what it knows.
  *
- * Since D68 the separation is in the DATA and not only in the entry points:
+ * The split put the separation in the DATA and not only in the entry points:
  * this one writes `officeCamera` and `officeCameraView`, and the graph's
  * writes `x`, `y`, `zoom`. Neither can reach the other's fields, so a Graph
  * detour cannot move the office's framing and a pan on the floor cannot move
@@ -1975,7 +1975,7 @@ export function updateCommGraphTileOfficeCamera(
  * renderer last rendered, so a pan landing after a pick - which is exactly
  * what a debounced pan does - would put the old view back.
  *
- * Since D68 this is the GRAPH's camera alone. It already wrote only these
+ * Since the split this is the GRAPH's camera alone. It already wrote only these
  * three fields, so the split cost it no change - but that is now load-bearing
  * rather than incidental: a graph pan during a detour must leave the office's
  * framing exactly where the office left it.

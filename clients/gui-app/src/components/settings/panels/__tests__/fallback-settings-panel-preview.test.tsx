@@ -19,7 +19,7 @@ import {
 } from "@traycer/protocol/host/fallback-policy";
 
 /**
- * The per-row "matches ... today" verdicts (ticket 08, clause 4).
+ * The per-row "matches ... today" verdicts.
  *
  * Separate from `fallback-settings-panel.test.tsx`, which makes the preview hook
  * inert: this suite's whole subject is what that hook's answer renders, so it
@@ -479,7 +479,7 @@ describe("FallbackSettingsPanel - per-row preview verdicts render from the host'
           profileId: WORK_PROFILE_ID,
         }),
         // Not in the providers list - a profile deleted since the walk resolved
-        // it. The host's own rule (D118) degrades to a short prefix rather than
+        // it. The host's own rule degrades to a short prefix rather than
         // dropping the clause, because a card describing an account still has to
         // name it.
         previewRow(1, {

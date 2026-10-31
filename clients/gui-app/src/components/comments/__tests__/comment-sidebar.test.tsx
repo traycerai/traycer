@@ -39,7 +39,7 @@ const QUOTED_TEXT = "the sentence this thread hangs off";
 // The client is a PROP now, not an ambient read. `CommentSidebar` is mounted
 // from `epic-sidebar.tsx`, which is a sibling of the canvas and therefore
 // outside every `<TabHostProvider>`; its owner resolves the EPIC SESSION's
-// client and hands it down (D15). Nothing under `components/comments/` reads a
+// client and hands it down. Nothing under `components/comments/` reads a
 // host itself any more, so the `@/lib/host/runtime` mock this file used to
 // carry is gone - and its absence is the positive control: a re-added app-wide
 // read would throw outside a provider instead of quietly answering.
@@ -623,7 +623,7 @@ describe("<CommentSidebar /> local durability honesty", () => {
   });
 });
 
-// D15. The sidebar sits outside every `<TabHostProvider>`, so before this it
+// The sidebar sits outside every `<TabHostProvider>`, so before this it
 // read the app-wide client - and during an A->B re-point the A-backed Epic kept
 // rendering while that client already answered B, sending
 // `epic.listCommentThreads` to the wrong machine and caching the answer under

@@ -98,7 +98,7 @@ export function sideTabTitleIconOf(input: {
 }
 
 /**
- * The hues an uncoloured task's monogram may take (D11): greens through cyans,
+ * The hues an uncoloured task's monogram may take: greens through cyans,
  * then violets through magentas, 15 degrees apart so neighbours stay
  * distinguishable. Amber and red (the status hues) and the info blue that
  * marks unread are left out.
@@ -118,7 +118,7 @@ function hashOf(text: string): number {
 }
 
 /**
- * The stable tint of a task with no tab colour (D11): a hue derived from the
+ * The stable tint of a task with no tab colour: a hue derived from the
  * epic id, lighter in a dark theme than in a light one, as a CSS colour for
  * `--side-tab-tint`. An explicit tab colour always wins over it.
  */

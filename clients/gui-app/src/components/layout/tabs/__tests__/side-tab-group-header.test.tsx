@@ -115,7 +115,7 @@ function renderHeader(input: {
   readonly variant: SideTabRowVariant;
   readonly memberEntities: ReadonlyArray<HostNotificationsEntityRef>;
   readonly indicators: SurfaceNotificationIndicators;
-  /** The nearest vertical column's edge, `null` outside a column (D7). */
+  /** The nearest vertical column's edge, `null` outside a column. */
   readonly columnSide: EdgeSide | null;
 }): void {
   render(

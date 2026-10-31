@@ -493,7 +493,7 @@ function FallbackPolicyEditor(props: {
    * line for it would be an unrelated surface going dark.
    */
   // Resolved once for the whole editor: one providers read builds one label
-  // map, rather than each card rebuilding it (D190).
+  // map, rather than each card rebuilding it.
   const profileLabelFor = useFallbackSettingsProfileLabels();
   // Same shape, same reason: one model-catalog read per distinct harness in the
   // draft serves every row's Model and Effort cells.
@@ -845,7 +845,7 @@ function FallbackPolicyEditor(props: {
     setOverrideSavePolicy(null);
     const requestId = createFallbackSaveRequestId();
     // A restore sends nothing from the screen - the host picks the default
-    // groups - so it must not make the displayed values count as dispatched
+    // groups - so it must not make the displayed values count as dispatched,
     // (D339), and if its own reply is lost the notice has to say that the
     // RESTORE is what went unanswered (D347).
     dispatch({
@@ -1042,7 +1042,7 @@ function FallbackPolicyEditor(props: {
           // time the failure arrived, and the banner called a post-reset policy
           // "the settings you had before the reset".
           //
-          // D327 orders the three cases: a ROLLBACK is checked first, because
+          // The three cases are ordered: a ROLLBACK is checked first, because
           // it is neither of the other two and the banner says nothing about
           // provenance there.
           displaySubject={unrefreshedResetSubject(state)}
@@ -1472,7 +1472,7 @@ function unrefreshedResetBody(subject: UnrefreshedResetSubject): string {
       return "This page still shows the settings from before the reset. Select Reload settings to show what's now saved on this host.";
     case "own-edit":
       return "These are your edits. Select Reload settings to show what's now saved on this host.";
-    // D327: the notice under the control already says where these values came
+    // The notice under the control already says where these values came
     // from ("your last saved settings are back on screen", or that they still
     // predate the reset). The banner's subject is the RESET, so here it says
     // only that, and the two stop making the same decision in two places.
@@ -1489,8 +1489,8 @@ function UnrefreshedResetNotice(props: {
    * `pre-reset-values` is the only case where the banner names the displayed
    * values as out of date. Once anything has been submitted since the reset
    * went out, that is the user's own draft, which a save since may have stored;
-   * and once a refusal has rolled the display back, D327 gives the provenance
-   * sentence to the save notice and leaves this banner with its own subject -
+   * and once a refusal has rolled the display back, the provenance sentence
+   * belongs to the save notice, leaving this banner with its own subject -
    * the reset - alone. Two places describing one set of values is how the two
    * of them came to disagree.
    */
@@ -2006,7 +2006,7 @@ function TierStepHint({
  * Which of the three things the staleness banner is looking at, as one function
  * rather than a nested ternary at the call site.
  *
- * D327 orders the cases and the order is the rule: a ROLLBACK is checked first,
+ * The cases are ordered and the order is the rule: a ROLLBACK is checked first,
  * because the banner says nothing about provenance there - the notice owns the
  * display's story, and the banner is left saying only that the reset is unread.
  * Otherwise the display is the pre-reset values when its revision is still the

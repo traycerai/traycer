@@ -1,13 +1,13 @@
 /**
- * Low-contrast checkerboard behind transparent image regions
- * (decision #16). Built from `--canvas` /
+ * Low-contrast checkerboard behind transparent image regions.
+ * Built from `--canvas` /
  * `--muted` - the app's own theme tokens already redefine both together for
  * every preset (`:root`, `.dark`, and each named `[data-theme]` override), so
  * this never needs a per-theme override of its own and never inverts an
  * image in dark mode: the checker just rides whatever those two tokens are.
  * `--muted` is blended down via `color-mix` (rather than used at full
  * opacity) and the tiles are larger (24px, was 16px) - both reduce
- * prominence in large empty margins (ticket 07, UI polish) without
+ * prominence in large empty margins (UI polish) without
  * introducing a third color or breaking the theme-token contract.
  */
 .image-preview-checkerboard {
@@ -28,7 +28,7 @@
 }
 
 /**
- * 1px depth outline on every rendered preview image (ticket 07, UI polish
+ * 1px depth outline on every rendered preview image (UI polish
  * requirement #1) - pure black/white at low opacity, NEVER a tinted neutral
  * (a slate/zinc border reads as dirt on the image edge). `outline` (not
  * `border`) so it never perturbs the transform stage's layout math; negative

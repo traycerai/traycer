@@ -137,7 +137,7 @@ const surfaceCapture = vi.hoisted(() => ({
 }));
 
 /**
- * Cross-host fence bookkeeping (ticket 13): who each seam was actually
+ * Cross-host fence bookkeeping: who each seam was actually
  * called for, so a test can prove the tile bound to the TILE's own
  * `node.hostId` rather than the canvas host.
  */

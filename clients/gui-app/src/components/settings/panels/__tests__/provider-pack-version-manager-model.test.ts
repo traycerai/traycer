@@ -515,7 +515,7 @@ describe("labels and helpers", () => {
       expect(versionRowChip(sibling)?.tone).toBe("blocked");
       expect(versionTroubleLine(sibling)).toBeNull();
     }
-    // `uncertified` is NOT blocking (D8): a current copy the channel stopped
+    // `uncertified` is NOT blocking: a current copy the channel stopped
     // listing stays usable and must stay quiet.
     expect(
       versionTroubleLine(
@@ -546,7 +546,7 @@ describe("labels and helpers", () => {
     // Spec-published chain: catches numeric-vs-alphanumeric identifier
     // ordering and beta.2 < beta.11 (naive string compare gets both wrong).
     // Anchored on the list's own comparator since the baseline predicate
-    // left with the 2026-08-12 D1 revision.
+    // left with the 2026-08-12 revision.
     const chain = [
       "1.0.0-alpha",
       "1.0.0-alpha.1",

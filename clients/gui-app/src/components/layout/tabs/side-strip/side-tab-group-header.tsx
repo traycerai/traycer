@@ -159,7 +159,7 @@ export function SideTabGroupHeader(props: SideTabGroupHeaderProps): ReactNode {
  * A collapsed group's worst member notification, read from the strip's
  * indicator batch. Mounted only while the group is collapsed, so an expanded
  * header does not subscribe to the notifications store. Running is never a
- * badge: the meter carries it (D5).
+ * badge: the meter carries it.
  */
 function CollapsedGroupBadge(props: {
   readonly memberEntities: ReadonlyArray<HostNotificationsEntityRef>;

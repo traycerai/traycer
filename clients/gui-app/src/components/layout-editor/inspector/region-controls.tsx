@@ -45,7 +45,7 @@ import { useLayoutStore } from "@/stores/layout/layout-store";
  * around them.
  *
  * Both hosts draw these same controls; a second copy of one is how two
- * vocabularies for one value get built (D5).
+ * vocabularies for one value get built.
  */
 
 /**

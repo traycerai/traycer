@@ -92,7 +92,7 @@ import {
 // reads the selection authority's projection. No provider is mounted in this
 // suite, so the store is SEEDED below rather than the reader stubbed: the
 // spine accessor this used to mock now answers `null` for every host by
-// design (P4.2/D17 deleted the active slot), so a stub of it would have gone
+// design (P4.2 deleted the active slot), so a stub of it would have gone
 // on passing while the production read resolved nothing. Seeding what the
 // reader actually asks about keeps this suite able to catch that.
 

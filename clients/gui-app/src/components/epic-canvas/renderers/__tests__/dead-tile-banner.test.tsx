@@ -240,7 +240,7 @@ describe("<ChatDeadTileBanner />", () => {
     }
   });
 
-  // ticket 35: a reachable host can still have nothing to serve for this
+  // A reachable host can still have nothing to serve for this
   // chat (`chat.subscribe` terminated CHAT_NOT_VISIBLE) - "is offline" would
   // be false here, so this variant must say something else while keeping
   // the same Clone offer and two-Agents disclosure.
@@ -272,7 +272,7 @@ describe("<ChatDeadTileBanner />", () => {
     expect(text).toContain("mac-mini");
   });
 
-  // tickets 47/48: the same "not here" answer, from the host this device is
+  // The same "not here" answer, from the host this device is
   // CONNECTED to. Both sentences above would print the reader's own machine
   // as somewhere their history is unavailable / stays bound to - the copy
   // that sent two live debugging sessions after a healthy host on

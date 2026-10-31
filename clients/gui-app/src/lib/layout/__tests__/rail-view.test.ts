@@ -9,7 +9,7 @@ import {
 /**
  * Finding 8: the rail's "Move sidebar to..." writer, migrated onto
  * `writeArrangementField` - the same one writer the placement bar's drop and
- * the dock's `SidebarSideRow` use (D14), so a move from any of the three
+ * the dock's `SidebarSideRow` use, so a move from any of the three
  * takes the same recorded-gesture path.
  */
 

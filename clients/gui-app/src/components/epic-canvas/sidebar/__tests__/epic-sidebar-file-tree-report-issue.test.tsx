@@ -128,7 +128,7 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-1",
 }));
 
-// `usePinnedSurfaceDead`/its dead-state screen are gone (D6: a pinned host
+// `usePinnedSurfaceDead`/its dead-state screen are gone (a pinned host
 // that dies auto-follows to `effective` instead). These two mocks are now
 // vestigial for this suite's own render tree, but are left in place as
 // harmless stubs in case a sibling hook in the chain still reaches them.

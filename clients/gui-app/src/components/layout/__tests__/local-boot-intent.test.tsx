@@ -443,7 +443,7 @@ describe("local-boot intent", () => {
     // to converge. Nothing failed, because no test looked.
     //
     // Here the local host EXISTS in the fleet and has never been dialed, which
-    // is exactly when D14 wants it, so the authority requests the ensure and
+    // is exactly when the writer wants it, so the authority requests the ensure and
     // it must arrive at management. The remote-preferred test above is the
     // negative arm of the same mechanism: derivation that does NOT want local
     // must leave the controller alone.

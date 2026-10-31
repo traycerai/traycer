@@ -175,7 +175,7 @@ describe("<SplitResizeHandle />", () => {
     expect(committed[1]).toBeCloseTo(0.4, 10);
   });
 
-  // Ticket 21 wave-2 live pass (row 1): a live divider drag under a
+  // A live divider drag under a
   // stacked-plane layout showed `onDragStart` succeeding (capture engaged)
   // while every subsequent move/up event silently failed to reach the
   // handle's own listeners - jsdom cannot reproduce the browser's real hit-
@@ -234,7 +234,7 @@ describe("<SplitResizeHandle />", () => {
     expect(committed[1]).toBeCloseTo(0.4, 10);
   });
 
-  // Ticket 21 wave-2 live pass, fix round 2 (F1): moving move/up/cancel to
+  // Moving move/up/cancel to
   // window listeners means blur must be a terminal event this hook owns
   // directly - `beginPanelResizeInteraction`'s own blur cleanup only clears
   // the shared interaction id for the CSS class, it has no idea `dragRef`
@@ -329,7 +329,7 @@ describe("<SplitResizeHandle />", () => {
     expect(onCommitSizes.mock.calls[0][0]).toBe(GROUP_ID);
   });
 
-  // Ticket 21 wave-2 live pass, fix round 2 (F2): the pre-fix React-prop
+  // The pre-fix React-prop
   // design died with the element on unmount for free. Once move/up/cancel
   // are imperative window listeners, an unmount mid-drag must be an
   // explicit teardown path, or the dead component's closures keep

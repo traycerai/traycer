@@ -239,9 +239,9 @@ describe("comm-graph view mode", () => {
   });
 
   it("leaves the graph's x/y/zoom exactly where they were on a mode switch (D68, N10 guard)", async () => {
-    // Before D68 there was one shared camera, and a mode switch reset it so
+    // Before the split there was one shared camera, and a mode switch reset it so
     // the incoming mode would not inherit a framing made in the other
-    // renderer's units (sprite pixels vs. flow units). D68 gave each
+    // renderer's units (sprite pixels vs. flow units). The split gave each
     // renderer its own camera - `x`/`y`/`zoom` for the Graph, `officeCamera`
     // for the office - so there is nothing left for a switch to protect:
     // resetting the Graph's own camera here would only destroy the framing
@@ -280,7 +280,7 @@ describe("comm-graph view mode", () => {
   it("keeps officeView, officeAutoView and the graph's camera through Office -> Graph -> Office (D68)", async () => {
     // `handleModeChange` spreads the current value across the mode change,
     // so a toggle must not lose `officeView` / `officeAutoView` - the
-    // original claim here, kept verbatim - AND, since D68, must not touch
+    // original claim here, kept verbatim - AND, since the camera split, must not touch
     // the Graph's own `x`/`y`/`zoom` either: a mode switch is not a camera
     // event in either direction any more.
     act(() => {

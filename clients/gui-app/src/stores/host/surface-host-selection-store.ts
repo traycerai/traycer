@@ -205,7 +205,7 @@ export function subscribeFollowingSurfaceReset(
 
 /**
  * Invoke after `effective` changes. P1.2 is the first caller. Pinned
- * instances ignore this — they keep their pin (D6).
+ * instances ignore this — they keep their pin.
  */
 export function notifyEffectiveHostChanged(
   previousEffectiveHostId: string | null,

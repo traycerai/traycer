@@ -959,7 +959,7 @@ describe("HostStreamProvider", () => {
   });
 
   it("stops stream work when the window points at no host and recreates it only on re-point", () => {
-    // The client is keyed on the resolved host identity (D5.3), not on
+    // The client is keyed on the resolved host identity, not on
     // default-host surface readiness. Pointing the window at ∅ drops the
     // client; pointing it back mints a fresh one. Same-id endpoint loss
     // (websocketUrl null) is not an identity change for a local host - the
@@ -992,7 +992,7 @@ describe("HostStreamProvider", () => {
   });
 
   it("builds the stream client from the resolved host identity even while default-host readiness is non-ready", () => {
-    // D5.3: availability recovery (notifyRecoveredForNamedHost) is the only
+    // Availability recovery (notifyRecoveredForNamedHost) is the only
     // designed un-strand signal for host-scoped queries. Gating the stream
     // client on default-host readiness inverted that dependency - the
     // mechanism that restores readiness was disabled for exactly as long as

@@ -287,7 +287,7 @@ interface CityRoofFacts {
   /** The painted `block-top` box: where the user sees this building's roof. */
   readonly box: OfficeRect;
   readonly depth: number;
-  /** D53: the plan's own `hitBox` for this seat - the box a click resolves to. */
+  /** The plan's own `hitBox` for this seat - the box a click resolves to. */
   readonly hitBox: OfficeRect;
 }
 
@@ -497,7 +497,7 @@ function rectsOverlap(left: OfficeRect, right: OfficeRect): boolean {
  * a plan that moved this geometry fails the cases below loudly instead of
  * making them vacuous.
  */
-/** One seat's painted roof and its D53 `hitBox`, or `null` if it draws none. */
+/** One seat's painted roof and its `hitBox`, or `null` if it draws none. */
 function cityRoofFactsOf(
   layout: OfficeLayout,
   agentId: string,
@@ -525,7 +525,7 @@ function cityRoofFactsOf(
   );
   if (roof === undefined || roof.drawable.kind !== "sprite") return null;
   const size = officeSpriteSize(roof.drawable.sprite);
-  // D53: the plan's own declared hitBox for this seat, which is what the
+  // The plan's own declared hitBox for this seat, which is what the
   // scene actually resolves a click against - not a box restated from
   // `hitTiles`, which is the gap the skipped case used to name.
   if (seat.hitBox === null) {
@@ -1328,7 +1328,7 @@ describe("planCity", () => {
     );
 
     // 2. `hitTest` genuinely distinguishes the two buildings by their own
-    // D53 `hitBox` - each queried at a point that lands in ONLY that
+    // The `hitBox` - each queried at a point that lands in ONLY that
     // building's box, so a lookup that answered from the other seat's box
     // (or from neither) would fail loudly rather than by coincidence.
     const nearerOnlyPoint = {
@@ -1448,8 +1448,8 @@ describe("planCity", () => {
       if (seat.civicRoomId !== null) continue;
       const occupantId = occupantBySeatId.get(seat.seatId) ?? null;
 
-      // Occupied, not sheeted, `openRequests: 3` - the state this test
-      // measures the union against.
+      // Occupied, not sheeted, `openRequests: 3` - the state the union is
+      // measured against.
       const boxes = spriteBoxesOf(layout, seat, stateFor(occupantId, false));
       const mast = boxes.find((entry) => entry.name === "spire");
       const nonMast = boxes.filter((entry) => entry.name !== "spire");

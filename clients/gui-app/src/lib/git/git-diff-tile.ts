@@ -60,8 +60,7 @@ export interface GitImageDiffSides {
 /**
  * (side, stage) routing for `git.streamFileAsset` from a `GitChangedFile` -
  * there is no server-side "conflicted" signal, so the client constructs
- * these tuples itself (image-preview tech plan section 1 side-table;
- * decision log decisions #9, #10). Shared between the single-file diff tile
+ * these tuples itself. Shared between the single-file diff tile
  * and bundle sections, which both need the same routing for the same file.
  */
 export function gitImageDiffSides(file: GitChangedFile): GitImageDiffSides {
@@ -92,7 +91,7 @@ export function gitImageDiffSides(file: GitChangedFile): GitImageDiffSides {
  * `stagedOid` - so a staged or HEAD-relative side that stays mounted through
  * a commit/amend/re-stage keeps showing the OLD bytes, since `(path, stage)`
  * alone is unchanged. The unstaged/worktree side already has its own re-stat
- * (pane-focus nonce, decision #11) so this isn't strictly needed there, but
+ * (pane-focus nonce) so this isn't strictly needed there, but
  * including `worktreeOid` too keeps one key covering every side rather than
  * conditionally narrowing it per file. Forcing a full remount (rather than
  * threading these into the request type) is deliberate: zoom/pan/toolbar
@@ -157,17 +156,17 @@ export interface GitImageDiffRouting {
 }
 
 /**
- * Extension gate before any diff-text fetch (per
- * decision #6): a binary image extension, or `.svg` (never `isBinary` to
- * git - decision #5), routes to `ImageDiffView`. A rename's CURRENT path
+ * Extension gate before any diff-text fetch: a binary image extension,
+ * or `.svg` (never `isBinary` to git), routes to `ImageDiffView`.
+ * A rename's CURRENT path
  * alone is not enough (pre-landing review, P0: `old.png -> new.txt` must
  * still route for its old side) - route when EITHER the current or previous
  * path is allowlisted, and (re-review P1) OR the previous path into the SVG
  * check too (`old.svg -> new.txt` is text to git on the rename). A
- * conflicted file is exempted from the `isBinary` check entirely (live E2E
- * finding, ticket 06): the host's bulk `listChangedFiles` numstat pipeline
+ * conflicted file is exempted from the `isBinary` check entirely (a live
+ * E2E finding): the host's bulk `listChangedFiles` numstat pipeline
  * now resolves a `MERGE_HEAD`/`CHERRY_PICK_HEAD` peer ref for conflicted
- * paths (`resolveConflictedIsBinary`, ticket 08), but falls back to leaving
+ * paths (`resolveConflictedIsBinary`), but falls back to leaving
  * `isBinary: false` unchanged when no such peer ref can be found - decision
  * #10 routes every conflicted image unconditionally regardless, so the
  * extension gate stays the correct signal for that residual gap. Shared

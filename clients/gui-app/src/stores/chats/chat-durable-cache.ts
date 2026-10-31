@@ -7,11 +7,11 @@ import { isChatKeyTombstoned } from "@/stores/chats/chat-tab-persistence-tombsto
 type ChatIdentity = Pick<ChatTabPersistenceIdentity, "epicId" | "chatId">;
 
 /**
- * The durable (chat-key) half of a ticket-15 dual-key registry: a
+ * The durable (chat-key) half of a dual-key registry: a
  * module-scope, bounded LRU keyed by `(epicId, chatId)` so it survives a
  * tab's tileInstanceId being evicted on close. Memory-only, no persistence -
  * a reload falls through to the streaming-aware fresh-open policy, which is
- * the correct degraded behavior (decision #29).
+ * the correct degraded behavior.
  */
 export interface ChatDurableCache<T> {
   readonly get: (identity: ChatIdentity) => T | undefined;
@@ -39,7 +39,7 @@ export function createChatDurableCache<T>(limit: number): ChatDurableCache<T> {
     get: (identity) => {
       const key = chatTabPersistenceChatKey(identity);
       const value = cache.get(key);
-      // Ticket 15 review (F6): a get() must also refresh recency - without
+      // A get() must also refresh recency - without
       // this, insertion order alone means an entry read every reopen but
       // never re-saved (e.g. a chat that is only ever browsed, never
       // scrolled) still ages out on schedule while genuinely idle entries
@@ -52,7 +52,7 @@ export function createChatDurableCache<T>(limit: number): ChatDurableCache<T> {
     },
     set: (identity, value) => {
       const key = chatTabPersistenceChatKey(identity);
-      // Ticket 15 review round 3: a terminally deleted chat/epic refuses
+      // A terminally deleted chat/epic refuses
       // every future write regardless of who runs last - the sweep's
       // promotion and the deletion mutation's own eviction race (the sweep
       // fires synchronously on tab close; the deletion's `onSuccess` fires

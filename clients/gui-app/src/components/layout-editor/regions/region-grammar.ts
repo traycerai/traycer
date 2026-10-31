@@ -145,7 +145,7 @@ export type GrammarRow<K extends RegionId> =
   // Names its group and nothing else: how the list is operated, whether its
   // boundaries are items and what is pinned inside it are facts about the
   // GROUP, and they live once in `surface-groups.ts` rather than once per
-  // member (D1-D4, D8).
+  // member.
   | { readonly kind: "position-order"; readonly group: OrderGroupId }
   | {
       readonly kind: "style";

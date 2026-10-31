@@ -85,7 +85,7 @@ export interface DraftInventoryInput {
   /** Chat ids open as a tile anywhere in this window. */
   readonly openChatIds: ReadonlySet<string>;
   /**
-   * Hosts this window holds a draft mirror session with (D09). Chat and
+   * Hosts this window holds a draft mirror session with. Chat and
    * new-chat rows for any other host are hidden rather than listed with a
    * dead Open: their stores are persisted and never sweep a host that is
    * simply gone.
@@ -106,7 +106,7 @@ export function listDraftInventory(
   if (input.filter === "all") {
     rows.push(...chatRows(input), ...newChatRows(input));
   }
-  // D12: flat, newest first, ties broken by id so the order is total.
+  // Flat, newest first, ties broken by id so the order is total.
   return rows.sort(
     (left, right) =>
       right.lastTouchedAt - left.lastTouchedAt ||
@@ -217,7 +217,7 @@ function newChatRows(
         patch.lastTouchedAt,
         NEW_CHAT_TITLE_FALLBACK,
       ),
-      // A modal is never a tile, and its draft never replicates (D09).
+      // A modal is never a tile, and its draft never replicates.
       open: false,
       foreign: false,
       epicId,
@@ -258,7 +258,7 @@ function draftPreviewText(content: JsonContent, fallback: string): string {
 }
 
 /**
- * Which surface a row belongs to, in the words D12 gives it.
+ * Which surface a row belongs to, in the words the inventory gives it.
  *
  * A chat or new-agent row ALWAYS names itself, under either filter: the row's
  * own first line is the draft's text, and text does not say which chat it was

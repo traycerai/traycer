@@ -1094,14 +1094,14 @@ interface ActiveNavigationSettleCleanup {
  * Scroll ownership is a pure mirror of LegendList's own strict `isAtEnd`
  * (`following-end` / `free-scrolling` - behavior contract: "one edge, one
  * rule"). This component also owns the composer/queued-surface overlay
- * inset math (decision #13).
+ * inset math.
  */
 export function ChatMessages(props: ChatMessagesProps) {
-  // Decision #29: one identity built once per mount, threaded to
+  // One identity built once per mount, threaded to
   // every registry in the dual-key restoration family - the tab instanceId
   // stays primary; `epicId`/`taskId` (chatId) are
   // the durable fallback. Stable for the component's whole lifetime (a chat
-  // tile fully remounts on any real identity change - decision #17), so a
+  // tile fully remounts on any real identity change), so a
   // `useState` initializer is enough; no need to react to prop changes.
   const [identity] = useState<ChatTabPersistenceIdentity>(() => ({
     tileInstanceId: props.instanceId,
@@ -1140,7 +1140,7 @@ export function ChatMessages(props: ChatMessagesProps) {
   // Registry-backed, keyed by tile instance id, so expanded A2A
   // cards survive a remount of this SAME instance - retention-cap or top-level
   // eviction, or a hosted-eligibility flip; no longer an inner tab switch
-  // (decision #17 was reversed by pane chat retention) - and are evicted when
+  // (pane chat retention) - and are evicted when
   // the tab permanently closes (canvas store's tile-removal subscriber), never
   // on a mere remount. A reopen is a new instance, not a revival of this one.
   //
@@ -2208,8 +2208,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   );
 
   // Restore the persisted reading position once, on mount (tries
-  // the tab-key entry first, then the durable chat-key entry - RESTORE-FIRST,
-  // decision #29). The identity is stable for the mount, so re-reading per
+  // the tab-key entry first, then the durable chat-key entry - RESTORE-FIRST).
+  // The identity is stable for the mount, so re-reading per
   // render would only repeat an O(n) row scan whose result the
   // initializers below already captured.
   const [restoredTabState] = useState<SavedChatTabScrollState>(() =>
@@ -2362,7 +2362,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // hydration, and a value dependency would re-register the find adapter each
   // time.
   const transcriptWindowRef = useRef<TranscriptWindow | null>(transcriptWindow);
-  // Decision #18: LegendList's measured header size (the main
+  // LegendList's measured header size (the main
   // component of getTopOffsetAdjustment). Capture folds this into the saved
   // viewOffset so initialScrollIndex restore lands on the same pixel - bare
   // positionAtIndex - scroll under-counts by exactly this pad.
@@ -2595,7 +2595,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   );
 
   // `releasePersistenceGate` decouples "publish following-end" from "the
-  // saved coordinate is resolved" (fixup: hydration-transaction). A temporary
+  // saved coordinate is resolved". A temporary
   // landing at the strict edge while `pendingHydrationRestoreAnchorIdRef` is
   // still unresolved is not reader intent and must not release the
   // persistence gate - every caller that already represents a real gesture
@@ -2646,7 +2646,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     setTimelineMode("following-end", true);
   }, [resolveSuppressedEndLanding, setTimelineMode]);
 
-  // Decision #6/#5/#7: reader input freezes an in-flight native smooth-scroll
+  // Reader input freezes an in-flight native smooth-scroll
   // and re-syncs ownership against the actual physical position. Transcript
   // pointerdown is a preflight because a disclosure click can resize content
   // without publishing a reading position; wheel/touch/keyboard and scrollbar
@@ -2770,7 +2770,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // call below is decision-sanctioned and unconditional, same as before;
   // the settle/re-issue only corrects the LANDING it produces, never
   // re-decides whether the click counts as "following". Pill action is an
-  // explicit supersession (fixup: hydration-transaction), so the pending
+  // explicit supersession, so the pending
   // hydration id is cleared above and the gate always releases.
   const scrollToEnd = useCallback(
     (animated: boolean): void => {
@@ -3289,7 +3289,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // Registry-backed, keyed by tile instance id, so expanded
   // activity groups survive a remount of this SAME instance - retention-cap or
   // top-level eviction, or a hosted-eligibility flip; no longer an inner tab
-  // switch (decision #17 was reversed by pane chat retention) - and are evicted
+  // switch (pane chat retention) - and are evicted
   // when the tab permanently closes (canvas store's tile-removal subscriber),
   // never on a mere remount. A reopen is a new instance, not a revival.
   //
@@ -3299,7 +3299,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     getOrCreateActivityGroupOpenStore(identity),
   );
 
-  // Decision #29: dual-keys the global tool/subagent open
+  // Dual-keys the global tool/subagent open
   // stores for this tab - seeds this tab's expanded cards from the durable
   // chat-key snapshot on a genuinely fresh (never-initialized) scope only.
   // Round 3: the durable commit moved to the canvas sweep's promotion
@@ -3338,7 +3338,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         const rawState = chatTimelineRef.current?.getState();
         if (rawState === undefined) return;
         // list.getState() does not expose headerSize/topOffsetAdjustment -
-        // fold in the live measured value (decision #18), same as the
+        // fold in the live measured value, same as the
         // save path's measurementSource below.
         const state = {
           ...rawState,
@@ -3556,8 +3556,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // No visible traversal is allowed: `animated` is an explicit
   // caller intent, not a hardcoded constant - minimap/deep-link navigation
   // (this function's other two callers below) are real (if programmatic)
-  // user-triggered jumps, animated by design (decision #21's "manual-
-  // navigation cancellation" framing already treats them as navigations the
+  // user-triggered jumps, animated by design (manual-navigation
+  // cancellation already treats them as navigations the
   // reader should perceive happening). Find does NOT go through this
   // function at all - `use-chat-find-controller.ts`'s own
   // `scrollToMessageForFind` independently builds its location with
@@ -3574,8 +3574,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
    * reissues the same semantic target, bounded, if geometry moved underneath
    * it. A reader gesture bumps the shared generation and wins immediately.
    *
-   * `isAborted`/`onValidated`/`onExhausted` are caller-supplied (fixup:
-   * hydration-transaction) because the two callers below need different
+   * `isAborted`/`onValidated`/`onExhausted` are caller-supplied
+   * because the two callers below need different
    * failure policy: the reserve-convergence caller (below) accepts the
    * browser-clamped landing as its new fallback truth on exhaustion, while
    * the late-hydration catch-up caller must instead retain the original
@@ -4134,7 +4134,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   // `ChatMessages` stays mounted while its top-level task/epic pane hides
   // (`TopLevelTabHost`'s keep-alive). A same-pane inner chat-tab switch now
-  // takes THIS path too (pane chat retention, which reversed decision #17);
+  // takes THIS path too (pane chat retention);
   // the mount-time path above is reached only by a real remount -
   // retention-cap or top-level eviction, a close, or a hosted-eligibility
   // flip. A hide eventually zeroes this tile's measured geometry
@@ -4408,7 +4408,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     visible,
   ]);
 
-  // Decision #21: minimap/find/deep-link/status-bar navigation all perform
+  // Minimap/find/deep-link/status-bar navigation all perform
   // manual-navigation cancellation first. Not a real gesture - a plain
   // release, no freeze: the navigation's own scroll (issued right after, via
   // issueFreeTimelineNavigation) takes over immediately regardless.
@@ -4843,7 +4843,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     }
   }, [landScrollRequestRow, listRows, scrollRequest?.requestId]);
 
-  // --- Transcript completion signal (decision #24) -------------------------
+  // --- Transcript completion signal ----------------------------------------
 
   // The transcript observer uses the store's provenance to identify live
   // completions. They feed both the shared region and the "New reply" latch;
@@ -4856,14 +4856,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   });
   useLayoutEffect(() => {
     if (announcement === null) return;
-    // Decision #10/#16: turn completion below the fold stays anchored - no
+    // Turn completion below the fold stays anchored - no
     // auto-reveal. The pill flips to "New reply" instead, unless the reader
     // is already at the tail (nothing to signal).
     if (timelineScrollModeRef.current === "following-end") return;
     setHasUnseenTurnCompletion(true);
   }, [announcement]);
 
-  // --- Stateful scroll-to-end pill (decision #16) ----------------------------
+  // --- Stateful scroll-to-end pill -------------------------------------------
 
   const lastAssistantMessage = messages
     .filter((message) => message.role === "assistant")

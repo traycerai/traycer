@@ -449,7 +449,7 @@ describe("the per-frame room-population memo (H2)", () => {
         const { agents, statusById } = manyRootsAgents(count);
         const counter: RoomReadCounter = { reads: 0 };
         // This case is only about room reads; the overhang side of the
-        // instrumented view is exercised by the H2-fixup cases below.
+        // instrumented view is exercised by the H2 cases below.
         const overhangCounter: OverhangRecomputeCounter = { recomputes: 0 };
         const countedView = withCountedRooms(view, counter, overhangCounter);
         const scene = new OfficeScene(countedView, null);
@@ -497,7 +497,7 @@ describe("the per-frame room-population memo (H2)", () => {
   }
 });
 
-// ---- H2 fixup: the overhang memo's own invalidation --------------------- //
+// ---- H2: the overhang memo's own invalidation --------------------------- //
 
 /**
  * `blockOverhangPx` memoizes a scalar property of the LAYOUT alone, keyed on
@@ -553,7 +553,7 @@ describe("the block-overhang memo's own invalidation (H2 fixup)", () => {
 
         // Five more identical frames must neither re-walk the rooms (H2's
         // own regression, above) nor recompute the overhang again (this
-        // fixup's).
+        // case's).
         roomCounter.reads = 0;
         for (let frame = 0; frame < 5; frame += 1) {
           expect(scene.frame(0, OFF_MAP_OVERVIEW_RECT).floor).toEqual([]);

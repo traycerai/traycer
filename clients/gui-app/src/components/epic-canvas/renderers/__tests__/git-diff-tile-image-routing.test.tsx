@@ -136,7 +136,7 @@ vi.mock("@/hooks/use-refresh-spinner", () => ({
 }));
 
 // The tile dispatches `editor.openPaths` on its TAB client, not the app-wide
-// one - `editor.openPaths` resolves paths on the host it is sent to (D15). The
+// one - `editor.openPaths` resolves paths on the host it is sent to. The
 // mocked hook ignores the client it is handed; what this repoint pins is that
 // the tile no longer imports the app-wide `useEditorOpen` at all.
 vi.mock("@/hooks/editor/use-editor-open-mutation", () => ({
@@ -985,7 +985,7 @@ describe("<GitDiffTile /> image routing", () => {
     expect(state.editableCalls.at(-1)?.queryEnabled).toBe(false);
   });
 
-  // Live E2E (ticket 06) found a real conflicted binary image falling
+  // Live E2E found a real conflicted binary image falling
   // through to the old generic BinaryPlaceholder instead of ImageDiffView.
   // The host's bulk listChangedFiles numstat path has no MERGE_HEAD-aware
   // fallback for unmerged paths (unlike its single-file getFileDiff path),

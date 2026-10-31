@@ -22,7 +22,7 @@ import { useGitGetFileDiffQuery } from "../use-git-get-file-diff-query";
 
 // The client is an ARGUMENT now, not an ambient read. The hook used to call
 // `useHostClient()` while taking `hostId` separately and asserting in a comment
-// that the two were "correlated 1:1" - they were not, which is the D15 defect
+// that the two were "correlated 1:1" - they were not, which is the defect
 // `routesToThePassedClient` below pins. There is deliberately NO `@/lib/host`
 // mock left in this file: an app-wide read reintroduced here has nothing to
 // answer it.
@@ -250,7 +250,7 @@ describe("useGitGetFileDiffQuery", () => {
     ]);
   });
 
-  // The D15 arm. `hostId` names the TILE's host and `client` must be the one
+  // The defect's arm. `hostId` names the TILE's host and `client` must be the one
   // that addresses it; the hook used to read `useHostClient()` here, so a tile
   // bound to A kept its A-shaped query key while the request went to whichever
   // host the app was pointed at. Two real clients, and the app-wide one must

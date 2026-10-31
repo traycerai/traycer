@@ -75,7 +75,7 @@ const ACTIVATION_DEBT_STATES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * In-app host update / activation-debt banner (D4).
+ * In-app host update / activation-debt banner.
  * Driven entirely by the canonical two-lane
  * `HostControllerStatus` - never the raw registry probe - so it never shows
  * for a merely-detected update, only once a stage is `updateReady` or the
@@ -566,7 +566,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
  * controller does know.
  *
  * A RETAINED ATTEMPT phase does not lose, because it is not the absence of
- * knowledge — and rejecting it made the host-down window (Ticket 07)
+ * knowledge — and rejecting it made the host-down window
  * unrenderable on this surface. The projection's record arm ALWAYS returns
  * `kind: "unknown"` with `lastKnownKind` set: that is the deliberate shape for
  * "an attempt exists and the host is unreachable", chosen so the view holds no

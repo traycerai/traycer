@@ -779,7 +779,7 @@ describe("buildChatLinkPolicy", () => {
     // No structural candidate (default mock): falls to the deterministic
     // fallback, where in-root resolution misses (out-of-root) and the
     // absolute-file fallback supplies the synthesized ref so the file still
-    // opens (D1/D2).
+    // opens.
     mocks.workspaceFileRefFromLinkPath.mockReturnValue(null);
     mocks.workspaceFileRefFromAbsoluteFilePath.mockReturnValue({
       id: "abs-content",

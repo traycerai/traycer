@@ -31,7 +31,7 @@ const emptySlice = create<LastFailedAttemptSlice>()(() => ({
  *
  * Read BY VALUE and never accumulated. `undefined` is what clears the error
  * card's affordances, so a hook that remembered its last value would keep
- * offering Retry on a turn that has since succeeded - the defect D122 closed on
+ * offering Retry on a turn that has since succeeded - the defect closed on
  * the host side, reintroduced in the renderer.
  */
 export function useChatLastFailedAttempt(input: {

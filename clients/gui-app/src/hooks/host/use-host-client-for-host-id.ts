@@ -23,7 +23,7 @@ import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
  * local row therefore keeps its identity while endpoint-aware readiness parks
  * execution until the row becomes dialable.
  *
- * Both branches now resolve the same way (redesign D17 / P2.1): the `null`
+ * Both branches now resolve the same way (redesign P2.1): the `null`
  * branch hands back the effective host's pinned requester rather than the
  * spine itself, so "following" is a resolution of the selection layer's id -
  * not a privileged client that re-aims itself underneath its holder.

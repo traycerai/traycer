@@ -10,15 +10,15 @@ import { EpicUsageDialog } from "@/components/epic-canvas/panels/epic-usage-dial
 import { cn } from "@/lib/utils";
 
 /**
- * Ticket 12: replaces the ambient epic cost badge (ticket 7 + fixup-01).
+ * Ticket 12: replaces the ambient epic cost badge.
  * User ruling - "too in the face", and the one surface showing a dollar
  * figure without its qualifier visible - so this renders NO number at all,
  * just a numberless entry point that opens the scoped epic panel
  * (`EpicUsageDialog`) on click. Cost is on-demand by construction now: there
- * is no ambient query here to silently revert, which is what fixup-01 had
- * to work around for the old badge.
+ * is no ambient query here to silently revert, which is what the old
+ * badge's plumbing had to work around.
  *
- * The fixup-01 PLUMBING itself stays - `useUsageSummaryForClient`'s
+ * The PLUMBING itself stays - `useUsageSummaryForClient`'s
  * `enabled`/`poll` params, `StatusRowChromeBoundary` - just with no ambient
  * consumer of `poll: true` left in this file; the dialog opens the query
  * on-demand with `poll: false`, matching every other actively-viewed usage

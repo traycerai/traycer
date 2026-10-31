@@ -97,7 +97,7 @@ export interface FallbackTierGroupCardProps {
   readonly preview: readonly TierCandidatePreview[] | null;
   /**
    * Names the account a row resolved on. Threaded rather than resolved per card
-   * so one providers read builds one label map (D190).
+   * so one providers read builds one label map.
    */
   readonly labelFor: FallbackSettingsProfileLabel;
   /**
@@ -687,7 +687,7 @@ function CandidateRow(props: {
             // this cell's DESCRIPTION (AX8). Dropped when there is no line
             // rather than pointing at an element that is not rendered: a
             // dangling `aria-describedby` is a promise of detail with nothing
-            // behind it, and the absence is itself meaningful here (D159).
+            // behind it, and the absence is itself meaningful here.
             describedBy={status === null ? undefined : previewId}
             onChange={commitModel}
             onAnnounce={onAnnounce}

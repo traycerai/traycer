@@ -2,7 +2,7 @@
  * Which chat tiles a pane keeps ALIVE, as opposed to merely which one it
  * currently shows.
  *
- * Decision #17 originally excluded chat tabs from every keep-alive path: a
+ * Chat tabs were originally excluded from every keep-alive path: a
  * chat mounted only while it was its pane's active tab, and a same-pane tab
  * switch was a real unmount/remount that rebuilt the reading position from
  * the `chat-tab-state-cache` on the way back. That was defensible while the
@@ -23,7 +23,7 @@
  * ## Why the pane's own `activationHistory`
  *
  * Two independent layers have to agree on this set or they drift into the
- * two-owners failure design-review slice-4 finding 2 already cost us once:
+ * two-owners failure that already cost us once:
  *
  * - `tile-surface-membership.ts` decides which hosted records EXIST. It runs
  *   outside React, from a raw `canvasByTabId` snapshot.

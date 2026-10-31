@@ -123,7 +123,7 @@ export interface SandboxBridgeEvents {
    * Ask the reader to confirm an http(s) link the page asked to open, and open
    * it if they do. Resolves `true` once opened, `false` when they declined.
    * The frame cannot prove the reader clicked inside it (page script can fake
-   * focus and activation), so every request is confirmed by the app (D42).
+   * focus and activation), so every request is confirmed by the app.
    * A confirm still showing must be taken down when `onStatus` reports
    * "disposed".
    */

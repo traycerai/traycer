@@ -178,7 +178,7 @@ function cornerOf(
 }
 
 /**
- * A seat's own anchor point: D20's foot for the character that sits in it.
+ * A seat's own anchor point: the foot for the character that sits in it.
  *
  * The scene puts the character, its name tag and its envelope endpoint here,
  * so anything the painter draws AS that seat has to agree with it.
@@ -497,7 +497,7 @@ function quadOf(
  * NONE, and the reason is the same one the three identity painters give: the
  * block IS the tiles.
  *
- * D58 exists because an axis-aligned block standing in for a diamond was
+ * This exists because an axis-aligned block standing in for a diamond was
  * painted over pixels none of its own tiles projects to, so the scene's
  * inverse tile query - which assumes a block is drawn where its tiles are -
  * found no block for a corner that was plainly on screen, and the painter was
@@ -649,7 +649,7 @@ function envelopeStackOf(openRequests: number): OfficeSpriteName | null {
 }
 
 /**
- * WHERE A SEAT IS PAINTED, for the plan to put in `hitBox` (D53).
+ * WHERE A SEAT IS PAINTED, for the plan to put in `hitBox`.
  *
  * These two live here, next to the drawing they measure, because the box a
  * click has to land on is the box the painter puts on the screen and nothing
@@ -914,7 +914,7 @@ function paintSeat(
   state: OfficeDeskState,
   lod: OfficeLod,
 ): ReadonlyArray<OfficeWorldDrawable> {
-  // D27: at overview a seat is a pip the scene draws, and the block map is the
+  // At overview a seat is a pip the scene draws, and the block map is the
   // whole of the floor. Answered before projecting, so nothing is computed for
   // a seat that has nothing to say.
   if (lod === 0) return [];

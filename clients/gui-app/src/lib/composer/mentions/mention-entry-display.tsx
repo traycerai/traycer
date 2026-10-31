@@ -129,7 +129,7 @@ export function descriptionForSuggestion(
   // slot already shows the url (see `detailForSuggestion`), so the picker's
   // description slot stays empty rather than repeating it. The one thing it
   // does say is that a tab on another host attaches a snapshot, not a handle
-  // the agent can drive (spec decision #10) - naming the host, since that is
+  // the agent can drive - naming the host, since that is
   // the whole reason the row behaves differently.
   if (entry.kind === "browser-tab") {
     return entry.contextOnly

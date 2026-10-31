@@ -522,7 +522,7 @@ describe("formatWaitTime", () => {
  *
  * The two tests are a PAIR and neither means much alone. "Linear" is trivially
  * satisfied by a subscribe that never notifies anyone - which is precisely the
- * regression D170 was written to prevent - so the second test is the control
+ * regression this was written to prevent - so the second test is the control
  * that keeps the first honest.
  */
 describe("createSharedClock subscribe cost", () => {
@@ -575,7 +575,7 @@ describe("createSharedClock subscribe cost", () => {
     // freshly built clock is sampled at the instant its first subscriber
     // arrives. `startIfNeeded` re-samples on the way in, so a guard comparing
     // against `sampledNow` AFTER that call finds the two equal, skips, and
-    // leaves the newcomer rendering the old sample: D170 undone by the very
+    // leaves the newcomer rendering the old sample: the guard undone by the very
     // fix that made subscribe linear. This test exists because that is not
     // hypothetical - it is what the first version of the guard did.
     //
@@ -607,7 +607,7 @@ describe("createSharedClock subscribe cost", () => {
     expect(firstCalls).toBe(0);
 
     // 900ms in, between fires: the sample the first row is rendering against is
-    // now stale, and D170 says the newcomer's subscribe has to correct it for
+    // now stale, and the guard says the newcomer's subscribe has to correct it for
     // everyone - not just for itself, since the tick is shared.
     vi.setSystemTime(startedAt + 900);
     const stopLate = clock.subscribe(() => undefined);
@@ -767,7 +767,7 @@ describe("createSharedClock batching contract", () => {
 
   /**
    * An old sibling must synchronously observe the batch's FIRST correction
-   * (D170, unaffected by coalescing) and the batch's FINAL sample once the
+   * (unaffected by coalescing) and the batch's FINAL sample once the
    * trailing sweep fires - captured from INSIDE its own callback, not read
    * from the clock externally.
    */
@@ -1074,7 +1074,7 @@ describe("minute/second clock separation and interval lifecycle", () => {
     const createdAt = Date.now() - 30_000;
 
     // A vi.fn() probe called from a layout effect (post-render), not a write
-    // to an outer variable during render (D194).
+    // to an outer variable during render.
     const minuteRenderProbe = vi.fn();
     const { result: minuteResult, unmount: unmountMinute } = renderHook(() => {
       const label = useRelativeTimestamp(createdAt);

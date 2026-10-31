@@ -25,7 +25,7 @@
  * Lifecycle is reference-counted: a `"grace"`-retention URL is revoked once
  * nothing holds it, after a short grace window so scroll/remount churn
  * reuses the live blob; a `"session"`-retention URL (an immutable git
- * object, per image-preview decision #11) is never revoked once created,
+ * object) is never revoked once created,
  * only ever dropped by a page reload. The same grace applies while a fetch
  * is still in flight, including `"session"`: last-ref drop schedules abort
  * instead of cancelling immediately, so a remount joins the live request,
@@ -237,7 +237,7 @@ export function createImageBlobCache(
   const entries = new Map<string, CacheEntry>();
 
   const scheduleRevoke = (identity: string, entry: CacheEntry): void => {
-    // Session retention (immutable git object bytes, decision #11) keeps a
+    // Session retention (immutable git object bytes) keeps a
     // RESOLVED blob for the rest of the app session. An in-flight session
     // fetch still gets this grace: last-ref remount joins it, and if nothing
     // re-acquires, the transfer is cancelled instead of pinning a stream.

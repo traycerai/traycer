@@ -50,7 +50,7 @@ vi.mock("@/components/diff/diff-content-primitive", () => ({
 }));
 
 // The transcript renders inside a chat TILE, so its file-change rows resolve
-// the snapshot store on the TAB's host (D15). The query itself is mocked just
+// the snapshot store on the TAB's host. The query itself is mocked just
 // below, so `null` is enough here - what matters is that the seam exists and is
 // this one, not the app-wide read it replaced.
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
@@ -915,7 +915,7 @@ describe("<ActivityGroupSegment /> live window", () => {
   // which is exactly what a tab remount does.
   it("keeps the preserved header across a remount of the still-open group", () => {
     // The SAME store across both mounts - which is precisely what a tab switch
-    // does (the registry hands the tile back its existing store, decision #17).
+    // does (the registry hands the tile back its existing store).
     // `ChatExpansionTestProviders` passes `store={null}` and would hand out a
     // fresh one, hiding the whole defect.
     const store = createActivityGroupOpenStore(null);

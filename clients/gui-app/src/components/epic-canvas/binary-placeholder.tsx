@@ -10,7 +10,7 @@ import { cn } from "@/lib/utils";
 interface BinaryPlaceholderProps {
   readonly fileName: string;
   readonly sizeBytes: number | null;
-  /** One-line reason shown below the size (decision #14). `null` renders none. */
+  /** One-line reason shown below the size. `null` renders none. */
   readonly reason: string | null;
   /** `null` when no useful local open is available (remote host or no unambiguous file on disk) - hides the button entirely. */
   readonly onOpenExternally: (() => void) | null;
@@ -41,7 +41,7 @@ export function BinaryPlaceholder(props: BinaryPlaceholderProps) {
       />
       {props.compact ? null : (
         // "Binary File" above "This PDF is too large..." reads as a
-        // contradiction (live-testing review, D4) - name the type we know.
+        // contradiction (live-testing review) - name the type we know.
         <h3 className="text-base font-semibold">
           {documentKind === null
             ? "Binary File"

@@ -371,7 +371,7 @@ vi.mock("@/hooks/providers/use-providers-skills-mutate-mutation", () => ({
   }),
 }));
 
-// Sibling ticket 11 owns the MCP tab; mock its hooks so panel tests stay isolated.
+// The MCP tab is owned elsewhere; mock its hooks so panel tests stay isolated.
 vi.mock("@/hooks/providers/use-providers-mcp-list-query", () => ({
   useProvidersMcpList: () => ({
     data: { servers: [] },
