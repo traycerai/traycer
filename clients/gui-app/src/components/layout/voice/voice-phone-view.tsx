@@ -1,4 +1,4 @@
-import type { KeyboardEvent, ReactNode } from "react";
+import { useEffect, type KeyboardEvent, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { AudioLines, Captions, Mic, MicOff, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
@@ -190,6 +190,9 @@ function TalkButton(): ReactNode {
     })),
   );
   const setTalkHeld = useVoiceSessionStore((s) => s.setTalkHeld);
+  // A button taken off screen mid-press never hears its release: the hold
+  // goes with it.
+  useEffect(() => () => setTalkHeld(false), [setTalkHeld]);
   const live = state.phase === "live";
   const disabled = !live || state.driver === null || state.pausedForDictation;
   const listening = state.pushToTalk ? state.talkHeld : !state.muted;

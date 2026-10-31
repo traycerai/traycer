@@ -311,6 +311,8 @@ export interface VoiceSessionState {
   /**
    * The phone's full-screen voice view is up. Up at every start; down while
    * the person looks at the channel behind it, with the session still live.
+   * Putting it down lets go of a held talk button: the button is gone, so
+   * no release could reach it.
    */
   readonly phoneViewOpen: boolean;
   readonly driver: VoiceSessionDriver | null;
@@ -378,6 +380,13 @@ export interface VoiceSessionState {
   readonly setPushToTalk: (on: boolean) => void;
   readonly setTalkHeld: (held: boolean) => void;
   readonly setPhoneViewOpen: (open: boolean) => void;
+  /**
+   * Leaves push-to-talk with the microphone closed: the open microphone,
+   * muted. For a layout with no talk button to hold, where only the person
+   * may open the microphone again (Unmute). Nothing while push-to-talk is
+   * off.
+   */
+  readonly leavePushToTalkMuted: () => void;
   readonly setDriver: (driver: VoiceSessionDriver | null) => void;
   readonly setQueueDriver: (driver: VoiceQueueDriver | null) => void;
 }
@@ -594,7 +603,12 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
     if (get().talkHeld === talkHeld) return;
     set({ talkHeld });
   },
-  setPhoneViewOpen: (phoneViewOpen) => set({ phoneViewOpen }),
+  setPhoneViewOpen: (phoneViewOpen) =>
+    set(phoneViewOpen ? { phoneViewOpen } : { phoneViewOpen, talkHeld: false }),
+  leavePushToTalkMuted: () => {
+    if (!get().pushToTalk) return;
+    set({ pushToTalk: false, talkHeld: false, muted: true });
+  },
   setDriver: (driver) => set({ driver }),
   setQueueDriver: (queueDriver) => set({ queueDriver }),
 }));
