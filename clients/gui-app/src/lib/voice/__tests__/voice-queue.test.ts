@@ -520,6 +520,25 @@ describe("a bot's stopped answer", () => {
     expect(queue.items().map((item) => item.at)).toEqual([firstSeen]);
   });
 
+  it("that recovers takes back a read still waiting to be said", () => {
+    sync(stopped("req-1"));
+    scheduler.noteInputTranscript();
+
+    queue.run({
+      kind: "read",
+      itemId: "stopped:bot-2:req-1",
+      delegationId: null,
+    });
+    expect(appended).toEqual([]);
+
+    // The bot recovered: its stream no longer reports the answer.
+    sync([]);
+    expect(queue.items()).toEqual([]);
+    clock.advance(INPUT_ACTIVE_WINDOW_MS * 10);
+
+    expect(appended).toEqual([]);
+  });
+
   it("is read as its line, and has nothing of its own to mark read", () => {
     sync(stopped("req-1"));
 
