@@ -17,7 +17,7 @@ import {
  * - `hostId` is the surface's binding: set when the surface first opens (the
  *   window's host), moved only when this client can no longer dial it
  *   (`rebindUnreachableTracySurface`). A channel switch never moves it: the
- *   surface's host serves every bot's channel, threads and sessions (T65).
+ *   surface's host serves every bot's channel, threads and sessions.
  *   Non-null while `open`.
  * - `botId` is the selected channel, `null` for none. It is committed when a
  *   navigation to the channel's path is acknowledged, never before, so a

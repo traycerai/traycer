@@ -19,7 +19,7 @@ export type { BotActivity, BotSessionActivity };
  * answer. It joins the bot's one subscription on that host, so a reader
  * outside the surface (the Tracy entry) sees what the surface sees; a host
  * that does not run the bot serves what the bot's host wrote to the
- * environment room (T65). `null` for no bot, while the surface is closed, before the
+ * environment room. `null` for no bot, while the surface is closed, before the
  * first snapshot, while that host cannot read the room, and once the stream
  * closed for good: no frame will move a closed stream's last reading (the
  * channel says the stream failed). A reconnect keeps it, as the turn may yet

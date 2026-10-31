@@ -142,7 +142,7 @@ function isBotTabView(value: string): value is BotTabView {
  *
  * The person never picks the machine a bot runs on: the surface is bound to
  * ONE host through `TabHostProvider` (the window's, when it first opened) and
- * stays there whatever channel shows (T65) - that host serves every bot's
+ * stays there whatever channel shows - that host serves every bot's
  * channel, its threads and what the bot is doing, whether it runs the bot or
  * another host does; the bot's host only runs its turns. A surface left on a
  * host this client can no longer dial is moved to the window's host by the

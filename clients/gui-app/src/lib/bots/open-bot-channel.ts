@@ -35,7 +35,7 @@ export interface OpenBotChannelOptions {
  * notification, voice, the mobile drawer, the strip's slot - lands the one
  * surface on that channel, never a tab of its own.
  *
- * The surface keeps its host (a channel switch never moves it, T65), or binds
+ * The surface keeps its host (a channel switch never moves it), or binds
  * to this window's when it is closed. Any landing is asked for before the
  * navigation, so the channel finds it when it shows. The selection is
  * committed when the navigation is acknowledged (`TabNavigationController`),
