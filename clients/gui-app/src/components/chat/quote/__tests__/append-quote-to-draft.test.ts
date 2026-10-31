@@ -272,4 +272,13 @@ describe("appendQuoteMarkdown", () => {
       }),
     ).toBe("> ```ts\n> const a = 1;\n>\n> return a;\n> ```\n\n");
   });
+
+  it("fences a code selection that has a fence line of its own with a longer fence, so the quote stays one block", () => {
+    expect(
+      appendQuoteMarkdown("", {
+        text: "a\n```\nb",
+        fenceLanguage: "md",
+      }),
+    ).toBe("> ````md\n> a\n> ```\n> b\n> ````\n\n");
+  });
 });

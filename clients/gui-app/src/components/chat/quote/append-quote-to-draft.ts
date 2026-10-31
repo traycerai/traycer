@@ -81,17 +81,24 @@ export function appendQuoteMarkdown(
   const lines =
     snapshot.fenceLanguage === null
       ? normalizedQuoteLines(snapshot.text)
-      : [
-          `\`\`\`${snapshot.fenceLanguage}`,
-          ...snapshot.text.split(LINE_BREAK_REGEX),
-          "```",
-        ];
+      : fencedLines(snapshot.text, snapshot.fenceLanguage);
   const quote = lines
     .map((line) => (line.length === 0 ? ">" : `> ${line}`))
     .join("\n");
   // Blank lines the box already ends with are the gap, not more of it.
   const before = text.replace(/\n+$/, "");
   return `${before.length === 0 ? "" : `${before}\n\n`}${quote}\n\n`;
+}
+
+// The code between fences longer than any run of backticks in it, so no
+// line of it closes the fence early.
+function fencedLines(code: string, language: string): string[] {
+  const longestRun = Math.max(
+    0,
+    ...(code.match(/`+/g) ?? []).map((run) => run.length),
+  );
+  const fence = "`".repeat(Math.max(3, longestRun + 1));
+  return [`${fence}${language}`, ...code.split(LINE_BREAK_REGEX), fence];
 }
 
 function quoteCodeBlockNode(text: string, language: string): JsonContent {
