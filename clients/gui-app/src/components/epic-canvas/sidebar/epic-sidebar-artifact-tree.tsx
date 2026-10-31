@@ -323,18 +323,6 @@ function collectDescendantArtifactEntries(
   return entries;
 }
 
-/**
- * Per-node unread marker variant, subscribed narrowly so marking one artifact
- * read re-renders only the affected row and its collapsed ancestors - never the
- * whole tree. The read-state selector returns a scalar variant, so Zustand
- * bails the render for any node whose variant did not flip. Returns:
- *   - "self": this artifact itself has unread changes.
- *   - "descendant": this collapsed parent hides unread artifacts.
- *   - null: nothing to show (non-artifact row, or expanded parent with no self
- *     unread).
- * This mirrors the per-entity `useIsActive...` pattern instead of threading a
- * tab-wide map through the recursive node tree.
- */
 /** The read-state fields the variant is computed from. */
 interface ArtifactReadStateFacts {
   readonly seedAtByEpic: Readonly<Record<string, number>>;
@@ -419,6 +407,18 @@ function useArtifactRowNode(nodeId: string): ArtifactRowNodeFacts | null {
   );
 }
 
+/**
+ * Per-node unread marker variant, subscribed narrowly so marking one artifact
+ * read re-renders only the affected row and its collapsed ancestors - never the
+ * whole tree. The read-state selector returns a scalar variant, so Zustand
+ * bails the render for any node whose variant did not flip. Returns:
+ *   - "self": this artifact itself has unread changes.
+ *   - "descendant": this collapsed parent hides unread artifacts.
+ *   - null: nothing to show (non-artifact row, or expanded parent with no self
+ *     unread).
+ * This mirrors the per-entity `useIsActive...` pattern instead of threading a
+ * tab-wide map through the recursive node tree.
+ */
 function useArtifactUnreadMarkerVariant(args: {
   readonly epicId: string;
   readonly nodeId: string;

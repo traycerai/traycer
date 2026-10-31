@@ -962,12 +962,6 @@ function readLeftPanelDropTargetData(
 export type { EdgeDropPosition } from "@/stores/epics/canvas/types";
 
 /**
- * Drop-zone detection over a pane body. Delegates to the paseo-ported
- * 15%-edge / 40%-center hit testing (`pane-drop-geometry.ts`). Never
- * returns `null` - every point inside the group's body resolves to one of
- * the five zones.
- */
-/**
  * Optional corridor-aware pane-body resolution.
  *
  * Unlike `getEdgeDropPositionFromPoint`, this can answer "no target": the
@@ -988,6 +982,12 @@ export function getPaneCorridorPositionFromPoint(
   return resolved === "corridor" ? null : resolved;
 }
 
+/**
+ * Drop-zone detection over a pane body. Delegates to the paseo-ported
+ * 15%-edge / 40%-center hit testing (`pane-drop-geometry.ts`). Never
+ * returns `null` - every point inside the group's body resolves to one of
+ * the five zones.
+ */
 export function getEdgeDropPositionFromPoint(
   point: PointLike,
   rect: RectLike,

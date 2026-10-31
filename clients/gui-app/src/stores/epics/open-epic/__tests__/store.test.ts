@@ -1464,12 +1464,6 @@ describe("createOpenEpicStore", () => {
   }
 
   /**
-   * Artifact-room docs are only materialized while something leases them, so
-   * every fragment reader in these tests stands in for a mounted editor. The
-   * lease is intentionally not released: the room must stay hot for the rest
-   * of the test, exactly as it would while the editor is on screen.
-   */
-  /**
    * Take a lease and read the fragment once the body is RESIDENT.
    *
    * The `await` is the boundary, in one place. A lease now starts a
@@ -1499,6 +1493,12 @@ describe("createOpenEpicStore", () => {
     return read();
   }
 
+  /**
+   * Artifact-room docs are only materialized while something leases them, so
+   * every fragment reader in these tests stands in for a mounted editor. The
+   * lease is intentionally not released: the room must stay hot for the rest
+   * of the test, exactly as it would while the editor is on screen.
+   */
   async function leasedFragment(
     opened: OpenEpicStoreHandle,
     artifactId: string,

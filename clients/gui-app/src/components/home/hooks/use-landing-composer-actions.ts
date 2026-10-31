@@ -1014,22 +1014,6 @@ export function useLandingComposerActions(
   );
 
   /**
-   * The by-hash submit: confirm the bytes are on the placement host, inline
-   * only what could not be confirmed, and send the rest as hashes.
-   *
-   * ALWAYS ASYNC, unlike the two inline paths beside it, because "is it on the
-   * host" is not a question this window can answer synchronously. That costs
-   * the landing composer its one-stack-frame submit for a message with images,
-   * which is why the re-entry guard and the pending flag both cover it.
-   *
-   * REFUSES rather than dropping an image, which is the landing composer's own
-   * rule and not a general one: a hash here names bytes that were pasted into
-   * THIS window and exist nowhere else (no epic exists yet to hold them), so a
-   * hash it can neither confirm nor inline is an image that would silently
-   * vanish from the message. The chat and edit composers inline best-effort for
-   * the opposite reason - their hashes routinely address the host's epic store.
-   */
-  /**
    * The authoritative cap check, on the hashes the create will actually carry.
    *
    * The pre-upload check below sees only the plan's ELIGIBLE set, which is not
@@ -1056,6 +1040,22 @@ export function useLandingComposerActions(
     },
     [],
   );
+  /**
+   * The by-hash submit: confirm the bytes are on the placement host, inline
+   * only what could not be confirmed, and send the rest as hashes.
+   *
+   * ALWAYS ASYNC, unlike the two inline paths beside it, because "is it on the
+   * host" is not a question this window can answer synchronously. That costs
+   * the landing composer its one-stack-frame submit for a message with images,
+   * which is why the re-entry guard and the pending flag both cover it.
+   *
+   * REFUSES rather than dropping an image, which is the landing composer's own
+   * rule and not a general one: a hash here names bytes that were pasted into
+   * THIS window and exist nowhere else (no epic exists yet to hold them), so a
+   * hash it can neither confirm nor inline is an image that would silently
+   * vanish from the message. The chat and edit composers inline best-effort for
+   * the opposite reason - their hashes routinely address the host's epic store.
+   */
   const dispatchByHashSubmission = useCallback(
     (input: {
       readonly args: LandingComposerSubmitArgs;

@@ -369,11 +369,6 @@ interface MetadataHold {
   readonly timer: number;
 }
 
-/**
- * One in-flight acquisition or re-point, with the fences the provider's
- * effect cleanup used to provide: `cancelled` for every async tail, and
- * `cleanup` for the subscriptions, the deadline and a pending candidate.
- */
 /** What one reconcile pass reads, taken once so its arms agree. */
 interface ReconcileInputs {
   readonly userId: string | null;
@@ -395,6 +390,11 @@ interface RunInputs {
   readonly mounted: boolean;
 }
 
+/**
+ * One in-flight acquisition or re-point, with the fences the provider's
+ * effect cleanup used to provide: `cancelled` for every async tail, and
+ * `cleanup` for the subscriptions, the deadline and a pending candidate.
+ */
 interface ActiveRun {
   cancelled: boolean;
   cleanup: () => void;
@@ -588,12 +588,6 @@ function createEpicSessionController(): EpicSessionController {
   const deniedListeners = new Set<(epicId: string, tabId: string) => void>();
   let environment: EpicSessionControllerEnvironment | null = null;
   /**
-   * Re-entrancy: the registry notifies from inside its own transaction, and an
-   * acquisition inside `reconcile` notifies too. A nested reconcile request is
-   * queued and drained once the outer one returns, so no entry is reconciled
-   * while an arm of its own run is still on the stack.
-   */
-  /**
    * Bumped at every auth boundary; captured before an await and re-checked
    * after it, so a continuation issued under one identity cannot act under
    * the next (or under none).
@@ -606,6 +600,12 @@ function createEpicSessionController(): EpicSessionController {
    * to open in that state. What is fenced is acting after a sign-out.
    */
   let signedOutFence = false;
+  /**
+   * Re-entrancy: the registry notifies from inside its own transaction, and an
+   * acquisition inside `reconcile` notifies too. A nested reconcile request is
+   * queued and drained once the outer one returns, so no entry is reconciled
+   * while an arm of its own run is still on the stack.
+   */
   let reconciling = false;
   const pendingReconcile = new Set<string>();
   let reconcileAllPending = false;

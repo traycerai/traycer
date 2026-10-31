@@ -3319,11 +3319,6 @@ function statusGlyphKind(testId: string): string | null {
 }
 
 /**
- * A row's read-only lock, which `ChatProgressIcon` renders in the IDLE slot -
- * so it appears only once no attention tone, activity tier or unread completion
- * has claimed the icon. Scoped to the row so a sibling's lock cannot satisfy it.
- */
-/**
  * The hover label attached to `el`. Leaf tooltips mount on hover; the
  * `@/components/ui/tooltip` mock then renders content inline as a sibling of
  * the trigger.
@@ -3341,6 +3336,11 @@ function tooltipTextIn(el: HTMLElement): string | null {
   return tip === null ? null : tip.textContent;
 }
 
+/**
+ * A row's read-only lock, which `ChatProgressIcon` renders in the IDLE slot -
+ * so it appears only once no attention tone, activity tier or unread completion
+ * has claimed the icon. Scoped to the row so a sibling's lock cannot satisfy it.
+ */
 function readOnlyLock(nodeId: string): HTMLElement | null {
   const row = screen.queryByTestId(`epic-sidebar-item-${nodeId}`);
   if (row === null) return null;

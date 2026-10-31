@@ -240,11 +240,6 @@ export function UserMenu(props: UserMenuProps) {
   );
 }
 
-/**
- * One host in the account menu. Its tooltip says what a click does (the
- * activate hint, on a row that can take one) and, only when the menu's width
- * has truncated it, the host's full name (G4).
- */
 /** Whether the account menu may switch to this host now: the shared bind rule,
  * and no switch already in flight. */
 function isUserMenuHostPickable(
@@ -257,6 +252,11 @@ function isUserMenuHostPickable(
   );
 }
 
+/**
+ * One host in the account menu. Its tooltip says what a click does (the
+ * activate hint, on a row that can take one) and, only when the menu's width
+ * has truncated it, the host's full name (G4).
+ */
 function UserMenuHostRow(props: {
   readonly host: HostScopeOption;
   readonly active: boolean;

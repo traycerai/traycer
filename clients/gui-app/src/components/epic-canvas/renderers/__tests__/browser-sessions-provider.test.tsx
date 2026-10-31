@@ -166,14 +166,14 @@ vi.mock("@/providers/use-runner-host", () => ({
   useRunnerHost: () => ({ browserView: null }),
 }));
 
+/** What a host serving the live `browser.sessions` line negotiates. */
+const LIVE_BROWSER_STREAM_VERSION: SchemaVersion = { major: 2, minor: 0 };
+
 /**
  * Fake browser.sessions transport. When `dropUntilLive` is true, every client
  * frame is discarded until the stream reports `open` (provider lifecycle
  * `live`) - matching host behavior that drops pre-live readiness frames.
  */
-/** What a host serving the live `browser.sessions` line negotiates. */
-const LIVE_BROWSER_STREAM_VERSION: SchemaVersion = { major: 2, minor: 0 };
-
 class FakeStreamSession {
   readonly sentFrames: Array<Record<string, unknown>> = [];
   readonly droppedFrames: Array<Record<string, unknown>> = [];

@@ -160,11 +160,6 @@ export interface ReplaceDraftWithDocumentCommand {
   readonly previousDraftId: string;
   readonly nextDraftId: string;
   /**
-   * Installs the successor row (`nextDraftId`) in the landing store, open.
-   * Runs inside the transaction, after the strip item has been re-keyed
-   * and before the previous row is retired.
-   */
-  /**
    * Puts the successor row in the landing store. Returns whether it did: a
    * `false` aborts the transaction before the layout moves, so the strip
    * item is never re-keyed onto a row that does not exist.

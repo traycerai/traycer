@@ -253,7 +253,6 @@ function tileContentId(ref: TileIdentity): string {
   return ref.id;
 }
 
-/** The bound host of a tile kind that has one; null for the rest. */
 /**
  * The identity a tab is deduped and looked up by: content id plus bound host,
  * for the kinds that have one. Deliberately structural - callers that hold a
@@ -268,6 +267,7 @@ export interface TileIdentity {
   readonly hostId?: string | null;
 }
 
+/** The bound host of a tile kind that has one; null for the rest. */
 function tileHostId(ref: TileIdentity): string | null {
   return ref.hostId ?? null;
 }
@@ -1852,15 +1852,6 @@ export function updateSnapshotDiffTilePayload(
   );
 }
 
-/**
- * Rewrite a comm-graph tile's WHOLE view value: the mode, the office view
- * choice, and the camera those two decide.
- *
- * Every field is compared, the two office choices included. They are not
- * decoration on a viewport write - they are the reason this action exists
- * beside {@link updateCommGraphTileCamera}, and a compare that skipped them
- * would report "nothing changed" for a pick that only switched views.
- */
 /** Two office cameras that say the same thing, `null` (unframed) included. */
 function sameOfficeCamera(
   a: CommGraphTileCamera | null,
@@ -1870,6 +1861,15 @@ function sameOfficeCamera(
   return a.x === b.x && a.y === b.y && a.zoom === b.zoom;
 }
 
+/**
+ * Rewrite a comm-graph tile's WHOLE view value: the mode, the office view
+ * choice, and the camera those two decide.
+ *
+ * Every field is compared, the two office choices included. They are not
+ * decoration on a viewport write - they are the reason this action exists
+ * beside {@link updateCommGraphTileCamera}, and a compare that skipped them
+ * would report "nothing changed" for a pick that only switched views.
+ */
 export function updateCommGraphTileView(
   state: EpicCanvasState,
   tileId: string,
