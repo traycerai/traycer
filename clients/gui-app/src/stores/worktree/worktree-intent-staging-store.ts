@@ -429,6 +429,21 @@ interface WorktreeIntentStagingStore {
     intent: WorktreeIntent | null,
   ) => void;
   /**
+   * Take back a pick this dispatch's hand-back staged, when its prompt could
+   * not reach the composer after all.
+   *
+   * Scoped by REVISION rather than by a blanket clear: every mutation of this
+   * slot bumps `revisionByKey`, so an expectation that still matches proves
+   * nothing has touched the slot since the hand-back wrote it - not the user,
+   * not a newer dispatch's consume, not a purge. Anything else and this is a
+   * no-op, which is the fail-closed direction. A blind clear here would
+   * destroy a pick that another dispatch legitimately owns.
+   */
+  readonly releaseIntentForDispatch: (
+    key: WorktreeStagingKey,
+    expectedRevision: number,
+  ) => void;
+  /**
    * Stage a pick handed back by a DEAD dispatch, rather than chosen by the
    * user.
    *
@@ -445,21 +460,6 @@ interface WorktreeIntentStagingStore {
    * So this clears the mark and swept refs only when they are `clientActionId`'s
    * own, and otherwise leaves the other dispatch's records standing.
    */
-  /**
-   * Take back a pick this dispatch's hand-back staged, when its prompt could
-   * not reach the composer after all.
-   *
-   * Scoped by REVISION rather than by a blanket clear: every mutation of this
-   * slot bumps `revisionByKey`, so an expectation that still matches proves
-   * nothing has touched the slot since the hand-back wrote it - not the user,
-   * not a newer dispatch's consume, not a purge. Anything else and this is a
-   * no-op, which is the fail-closed direction. A blind clear here would
-   * destroy a pick that another dispatch legitimately owns.
-   */
-  readonly releaseIntentForDispatch: (
-    key: WorktreeStagingKey,
-    expectedRevision: number,
-  ) => void;
   readonly restoreIntentForDispatch: (
     key: WorktreeStagingKey,
     intent: WorktreeIntent,
@@ -554,15 +554,6 @@ interface WorktreeIntentStagingStore {
   readonly resetForTests: () => void;
 }
 
-/**
- * Why a consumed slot is in the state it is in.
- *
- * `"awaiting"` - a dispatch took the pick and may hand it back.
- * `"purged"` - a worktree sweep ran while that dispatch was in flight, so the
- * pick may name a worktree that no longer exists. The hand-back refuses, and
- * unlike a user's own newer choice this one is worth SAYING: the prompt comes
- * back unbound through no decision of theirs.
- */
 /**
  * The one outstanding dispatch for a slot: which action took it.
  *
@@ -665,21 +656,6 @@ export interface SweptIntentPartition {
 }
 
 /**
- * The sweep evidence recorded for one consumed slot, or `null` when none is.
- *
- * Exposed because this record has a SHORTER lifetime than some of its readers.
- * It is dropped by every mutation that resolves the slot - the user staging a
- * new folder included - so a hand-back that has to survive an arbitrary wait
- * (a silent send recovery, which may be awaiting an inlining round trip while
- * the user stages something else) cannot read it at the moment it speaks. Such
- * a reader snapshots it, keeps folding later evidence in, and partitions with
- * {@link partitionIntentAgainstSweptRefs} against what it accumulated.
- */
-/**
- * Everything swept on this host since the app started - the source a frozen
- * ref is tested against. See `sessionSweptRefsByHost`.
- */
-/**
  * Un-mark the paths a fresh staging names.
  *
  * `sessionSweptRefsByHost` only ever grows, which is what lets a frozen ref be
@@ -773,6 +749,10 @@ function withStagedPathsCleared(
   return { ...byHost, [hostId]: next };
 }
 
+/**
+ * Sweep evidence currently held for this host - the source a frozen
+ * ref is tested against. See `sessionSweptRefsByHost`.
+ */
 export function sessionSweptRefsForHost(
   hostId: string,
 ): RemovedWorktreeRefs | null {
@@ -782,6 +762,17 @@ export function sessionSweptRefsForHost(
   );
 }
 
+/**
+ * The sweep evidence recorded for one consumed slot, or `null` when none is.
+ *
+ * Exposed because this record has a SHORTER lifetime than some of its readers.
+ * It is dropped by every mutation that resolves the slot - the user staging a
+ * new folder included - so a hand-back that has to survive an arbitrary wait
+ * (a silent send recovery, which may be awaiting an inlining round trip while
+ * the user stages something else) cannot read it at the moment it speaks. Such
+ * a reader snapshots it, keeps folding later evidence in, and partitions with
+ * {@link partitionIntentAgainstSweptRefs} against what it accumulated.
+ */
 export function sweptRefsForKey(
   key: WorktreeStagingKey,
 ): RemovedWorktreeRefs | null {

@@ -285,56 +285,6 @@ export type ReconcileSnapshotPatch = {
 };
 
 /**
- * The statement for a dead send that could not claim the single
- * `failedSendRestoration` slot.
- *
- * The slot is deliberately first-writer-wins - the earlier send has waited
- * longest, and last-wins would bury it - so a displacement is expected. What
- * must not happen is a displaced send going quiet: the rejection ack path
- * already pairs the same rule with an `errorNotice`, and this is that
- * statement for both reconcile passes.
- *
- * It INLINES the message body, because by the time this fires the client is
- * the last holder of that text. Both passes settle the send outright - row
- * dropped, action dropped - so there is no surviving row to point at. That is
- * deliberate on both: a row that will never confirm keeps edit/delete gated
- * off and renders a user message the host never recorded, and (on the
- * reconnect path) an action left restoration-eligible re-states itself on
- * every later snapshot and pushes stale text back into the composer after the
- * user has already resent it.
- *
- * What survives the trip is TEXT, and {@link classifyContentRecovery} decides
- * what that costs. The criterion there is whether a loss is INVISIBLE in the
- * projected text and so unretypeable - attachment bytes, a mention's binding,
- * a quote's provenance - not whether the projection is byte-identical.
- * Markdown structure is visible in its absence and would only add noise.
- *
- * The classification is total and fails CLOSED, so a node kind nobody has
- * classified earns a generic qualification rather than passing as complete.
- * This defect shipped three times running - attachments, then mentions, then
- * sourced quotes - because each was fixed as itself; driving the clauses off
- * one classification is what makes a fourth a test failure instead.
- */
-/**
- * The one sentence that says a prompt came back WITHOUT the worktree it was
- * staged for, because a sweep removed that worktree while the dispatch was in
- * flight.
- *
- * Four surfaces owe it - the snapshot pass, the settled-turn pass, a
- * rejection's own notice, and a rejection DISPLACED into the statement
- * builder - and they reach it three different ways: two append it to
- * `failedSendRestoration.reason` (the composer says it), one appends it to
- * the rejection's `errorNotice` (its own surface already speaks there), and
- * the fourth needs {@link UnrecoverableSend.worktreeGone} instead, because a
- * statement names the branch and must not name it as re-pickable.
- *
- * It is a CONSTANT rather than three literals because it was three literals:
- * the fourth surface was missed twice running, and each miss was found only
- * after shipping. Nothing here can enforce that a new surface asks the
- * question, but nothing should be able to ask it and then phrase the answer
- * differently.
- */
-/**
  * The OTHER reason a prompt can come back unbound, and a different fact from
  * the sweep clause {@link worktreeAccountClause} builds - superseded, not
  * swept - so deliberately not the same sentence.
@@ -476,6 +426,37 @@ export function unrecoverableSendPrompt(
   };
 }
 
+/**
+ * The statement for a dead send that could not claim the single
+ * `failedSendRestoration` slot.
+ *
+ * The slot is deliberately first-writer-wins - the earlier send has waited
+ * longest, and last-wins would bury it - so a displacement is expected. What
+ * must not happen is a displaced send going quiet: the rejection ack path
+ * already pairs the same rule with an `errorNotice`, and this is that
+ * statement for both reconcile passes.
+ *
+ * It INLINES the message body, because by the time this fires the client is
+ * the last holder of that text. Both passes settle the send outright - row
+ * dropped, action dropped - so there is no surviving row to point at. That is
+ * deliberate on both: a row that will never confirm keeps edit/delete gated
+ * off and renders a user message the host never recorded, and (on the
+ * reconnect path) an action left restoration-eligible re-states itself on
+ * every later snapshot and pushes stale text back into the composer after the
+ * user has already resent it.
+ *
+ * What survives the trip is TEXT, and {@link classifyContentRecovery} decides
+ * what that costs. The criterion there is whether a loss is INVISIBLE in the
+ * projected text and so unretypeable - attachment bytes, a mention's binding,
+ * a quote's provenance - not whether the projection is byte-identical.
+ * Markdown structure is visible in its absence and would only add noise.
+ *
+ * The classification is total and fails CLOSED, so a node kind nobody has
+ * classified earns a generic qualification rather than passing as complete.
+ * This defect shipped three times running - attachments, then mentions, then
+ * sourced quotes - because each was fixed as itself; driving the clauses off
+ * one classification is what makes a fourth a test failure instead.
+ */
 export function unrecoverableSendNotice(
   send: UnrecoverableSend,
 ): ChatErrorNotice {
@@ -627,16 +608,6 @@ interface CountedLossClause {
 }
 
 /**
- * The staged worktree a STATED send was going to run in.
- *
- * Unlike the restored send's, this binding cannot be handed back: the staging
- * slot is single and per chat, and the send that won the restoration slot
- * rightfully holds it. So this is a statement obligation rather than a restore
- * one - the same rule as the text itself. Naming the branch makes it
- * actionable: re-picking blind is how the resubmit silently runs somewhere
- * else, which is exactly what the restore path exists to prevent.
- */
-/**
  * What the send was queued to WAIT for, when it was not the default.
  *
  * Delivery is dispatched per send and dies with the action, so a resend takes
@@ -706,6 +677,16 @@ export const NO_WORKTREE_SWEEP: WorktreeSweepAccount = {
  * cell of that cross-product. There is nowhere left for them to disagree.
  */
 export interface DeadSendAccount {
+  /**
+   * The staged worktree a STATED send was going to run in.
+   *
+   * Unlike the restored send's, this binding cannot be handed back: the staging
+   * slot is single and per chat, and the send that won the restoration slot
+   * rightfully holds it. So this is a statement obligation rather than a restore
+   * one - the same rule as the text itself. Naming the branch makes it
+   * actionable: re-picking blind is how the resubmit silently runs somewhere
+   * else, which is exactly what the restore path exists to prevent.
+   */
   readonly worktree: WorktreeSweepAccount;
   readonly sentSettings: ChatRunSettings | null;
   readonly currentSettings: ChatRunSettings | null;

@@ -181,16 +181,6 @@ export const useLayoutStore = create<LayoutStoreState>()(
 );
 
 /**
- * One or more regions' patches merged into the delta, through the SAME total
- * resolver a rehydrate runs.
- *
- * The resolver on the write path is what makes the registry's stringly-typed
- * control seam sound about the VALUE as well as the key (G1-08): a registry
- * typo like `"ringonly"` cannot reach the store, be drawn from a default
- * branch for a session and then vanish on the next launch when the read-side
- * resolver drops it. Write and read are now the same parse.
- */
-/**
  * One or more regions' keys taken back OUT of the delta, through that same
  * resolver - which is also what drops a region entirely once nothing of it is
  * left.
@@ -217,6 +207,16 @@ function clearedOverrides(
   return { overrides: resolvePersistedOverrides(merged) };
 }
 
+/**
+ * One or more regions' patches merged into the delta, through the SAME total
+ * resolver a rehydrate runs.
+ *
+ * The resolver on the write path is what makes the registry's stringly-typed
+ * control seam sound about the VALUE as well as the key (G1-08): a registry
+ * typo like `"ringonly"` cannot reach the store, be drawn from a default
+ * branch for a session and then vanish on the next launch when the read-side
+ * resolver drops it. Write and read are now the same parse.
+ */
 function nextOverrides(
   state: LayoutSnapshot,
   patches: LayoutValuePatches,

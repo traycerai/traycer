@@ -1531,16 +1531,6 @@ export function projectTreeSlice(
 // ─── Full-doc projection (snapshot + initial attach) ──────────────────────
 
 /**
- * Everything a projection folds in besides the doc itself.
- *
- * Grouped rather than passed positionally because all three share one
- * property: they arrive on their own schedule and must be read AT projection
- * time, never captured when the session was constructed. The projector holds a
- * lazy getter for each for that reason. (It also keeps `projectFullState`
- * inside the repo's parameter-count limit, which is the same pressure pointing
- * the same way.)
- */
-/**
  * Whether the epic doc is still a record SOURCE, per population.
  *
  * `false` - the post-cutover normal - means the record plane covers that
@@ -1602,6 +1592,16 @@ export const DOC_IS_THE_ONLY_RECORD_SOURCE: EpicDocRecordArms = Object.freeze({
   tuiAgents: true,
 });
 
+/**
+ * Everything a projection folds in besides the doc itself.
+ *
+ * Grouped rather than passed positionally because all three share one
+ * property: they arrive on their own schedule and must be read AT projection
+ * time, never captured when the session was constructed. The projector holds a
+ * lazy getter for each for that reason. (It also keeps `projectFullState`
+ * inside the repo's parameter-count limit, which is the same pressure pointing
+ * the same way.)
+ */
 export interface ProjectionInputs {
   /**
    * The host's store-backed chat records (`epic.listChatRecords`). Empty in

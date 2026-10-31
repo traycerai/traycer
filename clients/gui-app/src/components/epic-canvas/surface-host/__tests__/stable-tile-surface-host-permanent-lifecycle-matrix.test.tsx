@@ -374,10 +374,6 @@ function seedDocWithChats(doc: Y.Doc): void {
 }
 
 /**
- * Mutation-check / row 13 helper: remote-delete a chat by removing its entry
- * from the chats map of the live epic Y.Doc.
- */
-/**
  * Edit the root replica through the root-state PORT.
  *
  * A registry handle is a production handle and has no `Y.Doc` - the replica is
@@ -397,6 +393,10 @@ async function editLiveRootDoc(mutate: (root: Y.Doc) => void): Promise<void> {
   scratch.destroy();
 }
 
+/**
+ * Mutation-check / row 13 helper: remote-delete a chat by removing its entry
+ * from the chats map of the live epic Y.Doc.
+ */
 async function deleteChatFromLiveDoc(chatId: string): Promise<void> {
   await editLiveRootDoc((root) => {
     const chatsMap = getChatsMap(root);

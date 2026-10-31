@@ -210,12 +210,6 @@ export function ComposerMicPreparing({
 }
 
 /**
- * The mic's toolbar slot, as the `mic` region: `ComposerMicButton` while
- * dictation is available, `ComposerMicPreparing` while the on-device model
- * downloads, and nothing when the layout preference hides it or this host
- * cannot offer voice input at all.
- */
-/**
  * Whether the mic slot draws: its own `shown`, plus the editor's materialised
  * preview of a hidden one (L-14). Both leaves below render from the props the
  * slot already holds, so a preview of one starts no work.
@@ -226,6 +220,12 @@ function useMicDrawn(): boolean {
   return shown || ghost;
 }
 
+/**
+ * The mic's toolbar slot, as the `mic` region: `ComposerMicButton` while
+ * dictation is available, `ComposerMicPreparing` while the on-device model
+ * downloads, and nothing when the layout preference hides it or this host
+ * cannot offer voice input at all.
+ */
 export function ComposerMicSlot(props: {
   readonly dictation: ComposerDictationControl | null;
   readonly dictationPreparing: DictationPreparingStatus | null;

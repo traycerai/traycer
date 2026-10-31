@@ -2028,17 +2028,17 @@ export interface ChatSessionState {
    */
   refreshMissingWorktreePaths: (update: MissingWorktreePathsUpdate) => void;
 
-  /**
-   * Re-subscribe after a fatal close. Tears down the existing stream and opens
-   * a fresh `chat.subscribe`, clearing `fatalClose` and `snapshotLoaded`. Drives
-   * the tile error state's retry affordance.
-   */
   /** See the implementation - names the ordinal a pending jump is waiting on. */
   requestTranscriptOrdinal: (ordinal: number | null) => void;
   /** See the implementation - names the ordinal a find index read needs. */
   requestFindReadOrdinal: (ordinal: number | null) => void;
   /** See the implementation - holds a row hydrated for a surface that shows it. */
   holdTranscriptOrdinal: (ordinal: number) => () => void;
+  /**
+   * Re-subscribe after a fatal close. Tears down the existing stream and opens
+   * a fresh `chat.subscribe`, clearing `fatalClose` and `snapshotLoaded`. Drives
+   * the tile error state's retry affordance.
+   */
   retry: () => void;
   /**
    * {@link retry}, escalated to a transport re-dial first when - and only
@@ -2717,15 +2717,6 @@ function appendErrorNotice(
 }
 
 /**
- * Re-stage the worktree intent a `send`/`editUserMessage` pending captured,
- * unless the user has staged a newer selection since (revision guard). Shared
- * by the rejection ack and the reconnect sweep: an edit dropped before its ack
- * (connection lost mid-flight) never runs the rejection path, so without this
- * its staged selection would stay cleared and the next resend would silently
- * run against the prior binding - the exact silent-local-run the restore exists
- * to prevent.
- */
-/**
  * The two fields a revision-guarded re-stage needs. Structural rather than
  * tied to `PendingChatAction`, because the binding has to survive past the
  * accepted ack that drops the action - `PendingUserMessage` carries the same
@@ -2781,42 +2772,6 @@ function backgroundStopSlices(
   };
 }
 
-/**
- * Decide the slot between claimants that a reconnect killed together.
- *
- * The restored PROMPT is terminal, and terminal either way. If it carried a
- * worktree, that worktree is staged with it; if it was deliberately sent
- * WITHOUT one, the slot stays empty - that is its dispatch state, and it is
- * just as much a decision. What must not happen is a lower-priority claimant
- * filling the gap: an unrelated action's binding attaching itself to this
- * prompt is the wrong-binding hazard, and a prompt sent with no worktree is
- * exactly where it used to slip in, because a null claim looked like no claim.
- *
- * Only when NO prompt came back do the swept actions get their bindings, which
- * is the case the sweep's own reasoning was written for.
- */
-/**
- * The statement a rejected action earns.
- *
- * A rejected SEND that could not claim the restoration slot is a dead send
- * neither restored nor stated - the same hole the settle passes closed in
- * rounds 1-4, on the one surface that kept a reason-only notice. It routes
- * through the SAME builder they use rather than a parallel one, so it inherits
- * the inlined text and every qualification clause automatically; a second
- * notice shape here would drift from those the moment either changed.
- *
- * Everything else - a non-send, a send that DID claim the slot, an action with
- * no content - keeps the host's reason, which is the whole story for it.
- */
-/**
- * The send a rejection is about to state as UNRECOVERABLE, or `null` when this
- * rejection is not one.
- *
- * Shared by the notice and by the `lastCopyPrompts` record beside it, so
- * "which rejections are last copies" is decided once. Two copies of this
- * condition would drift, and the failure mode is silent: a notice with no
- * document behind it looks exactly like a notice.
- */
 /** Drop one last-copy document. `Record` spread is additive, so this is a doing. */
 function withoutLastCopyPrompt(
   prompts: Readonly<Record<string, UnrecoverableSendPrompt>>,
@@ -2851,6 +2806,15 @@ function recordLastCopyPrompt(
   };
 }
 
+/**
+ * The send a rejection is about to state as UNRECOVERABLE, or `null` when this
+ * rejection is not one.
+ *
+ * Shared by the notice and by the `lastCopyPrompts` record beside it, so
+ * "which rejections are last copies" is decided once. Two copies of this
+ * condition would drift, and the failure mode is silent: a notice with no
+ * document behind it looks exactly like a notice.
+ */
 function rejectionLastCopySend(input: {
   readonly frame: {
     readonly reason: string | null;
@@ -2880,6 +2844,20 @@ function rejectionLastCopySend(input: {
   };
 }
 
+/**
+ * The statement a rejected action earns.
+ *
+ * A rejected SEND that could not claim the restoration slot is a dead send
+ * neither restored nor stated - the same hole the settle passes closed in
+ * rounds 1-4, on the one surface that kept a reason-only notice. It routes
+ * through the SAME builder they use rather than a parallel one, so it inherits
+ * the inlined text and every qualification clause automatically; a second
+ * notice shape here would drift from those the moment either changed.
+ *
+ * Everything else - a non-send, a send that DID claim the slot, an action with
+ * no content - keeps the host's reason, and a non-displaced send with an
+ * account adds `deadSendAccountClauses` to it.
+ */
 function rejectionNotice(input: {
   readonly frame: {
     readonly reason: string | null;
@@ -3236,6 +3214,20 @@ function restorationSlotHeldByOther(
   return restoration !== null && restoration.clientActionId !== clientActionId;
 }
 
+/**
+ * Decide the slot between claimants that a reconnect killed together.
+ *
+ * The restored PROMPT is terminal, and terminal either way. If it carried a
+ * worktree, that worktree is staged with it; if it was deliberately sent
+ * WITHOUT one, the slot stays empty - that is its dispatch state, and it is
+ * just as much a decision. What must not happen is a lower-priority claimant
+ * filling the gap: an unrelated action's binding attaching itself to this
+ * prompt is the wrong-binding hazard, and a prompt sent with no worktree is
+ * exactly where it used to slip in, because a null claim looked like no claim.
+ *
+ * Only when NO prompt came back do the swept actions get their bindings, which
+ * is the case the sweep's own reasoning was written for.
+ */
 function restoreOneWorktreeIntent(
   restoredPrompt: StagedWorktreeIntentSource | null,
   sweptClaimants: ReadonlyArray<SweptWorktreeClaimant | undefined>,
@@ -7126,18 +7118,6 @@ export function createChatSessionStoreWithNotificationDependencies(
     });
 
     /**
-     * Hand a stalled recovery back to the composer, loudly - the ordinary
-     * refusal outcome, reached late.
-     *
-     * Every exit from recovery that is not a dispatched retry comes here: the
-     * resolver found nothing, the session was torn down, or `sendAction`
-     * refused because the connection is no longer open. Without it the
-     * prompt's only record was an async closure, and a reconnect during
-     * recovery lost it outright - no pending action, no queue row, no
-     * restoration, and for a QUEUED send not even an optimistic echo, because
-     * queued sends never get one.
-     */
-    /**
      * Action ids whose follow-up `errorNotice` must still be swallowed, and
      * the timer that stops swallowing.
      *
@@ -7411,14 +7391,13 @@ export function createChatSessionStoreWithNotificationDependencies(
 
     /**
      * The worktree half of a recovery's account, from evidence that OUTLIVED
-     * the staging store's own record of it. See `HashOnlyRecoveryState.sweptRefs`.
+     * the staging store's own record of it. See `stickySweptByAction`.
      */
     const recoverySweepAccount = (
       recovery: HashOnlyRecoveryState,
     ): WorktreeSweepAccount =>
       sweepAccountForIntent(recovery.worktreeIntent, recovery.clientActionId);
 
-    /** One answer to "what has been swept from this staging", for every speaker. */
     /**
      * Deletion facts this consumer has OBSERVED about its own frozen intent,
      * keyed by the action that owns them, and never retracted.
@@ -7463,6 +7442,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       return merged;
     };
 
+    /** One answer to "what has been swept from this staging", for every speaker. */
     const sweepAccountForIntent = (
       intent: WorktreeIntent | null,
       clientActionId: string,
@@ -7488,12 +7468,6 @@ export function createChatSessionStoreWithNotificationDependencies(
       return { survivors, swept, superseded: false };
     };
 
-    /**
-     * Returns the prompts this pass could NOT put in the restoration slot -
-     * the ones whose only remaining trace is a notice's text. A caller that is
-     * tearing the store down must hand those off durably; see
-     * {@link handOffUnrecordedPromptToStash}.
-     */
     /**
      * Capture deletion facts for every live consumer, before anything can
      * clear them.
@@ -7612,6 +7586,16 @@ export function createChatSessionStoreWithNotificationDependencies(
       // two cases are the same case.
     };
 
+    /**
+     * Hand a stalled recovery back to the composer, loudly - the ordinary
+     * refusal outcome, reached late.
+     *
+     * A torn-down session or a refused `sendAction` comes here. Without it the
+     * prompt's only record was an async closure, and a reconnect during
+     * recovery lost it outright - no pending action, no queue row, no
+     * restoration, and for a QUEUED send not even an optimistic echo, because
+     * queued sends never get one.
+     */
     const abandonHashOnlyRecovery = (
       recovery: HashOnlyRecoveryState,
       reason: string,
@@ -13790,31 +13774,6 @@ function withoutRecordKeyGeneric<T>(
 }
 
 /**
- * A refused hash-only send that this client is quietly recovering, held in the
- * store for exactly as long as the recovery runs.
- *
- * It exists because the recovery has an await in the middle of it, and during
- * that await the send must still be SOMETHING. The first version kept it only
- * in an async closure, which meant that for the length of a byte resolution the
- * prompt had no pending action, no queue row, no restoration slot and - for a
- * QUEUED send, which never gets an optimistic echo - no presence at all. A
- * reconnect in that window lost the message outright, and the GC root collector
- * (which walks pending actions, pending users and the restoration slot) could
- * release the very bytes the retry was waiting for.
- *
- * So this is custody: the store owns the send until the retry is dispatched or
- * it is handed back. Everything `sendMessage` would otherwise re-read from
- * ambient state at dispatch time is frozen here instead, because the ambient
- * values belong to whatever the user is doing NOW, not to this send.
- */
-/**
- * What `sendMessage` takes. NAMED because three consumers had hand-typed their
- * own copy of it - `useChatActions`, its test's store fake, and the composer
- * submit hook's local slice - and a copy is only correct until this one moves.
- * The last time it did, a copy that had drifted stayed green under compile and
- * went red only when someone ran the file.
- */
-/**
  * True while an AUTH IDENTITY teardown is disposing sessions.
  *
  * The durable handoff must never cross accounts. A handed-off prompt becomes a
@@ -13885,6 +13844,13 @@ export function disposingForIdentityTeardown(run: () => void): void {
   }
 }
 
+/**
+ * What `sendMessage` takes. NAMED because three consumers had hand-typed their
+ * own copy of it - `useChatActions`, its test's store fake, and the composer
+ * submit hook's local slice - and a copy is only correct until this one moves.
+ * The last time it did, a copy that had drifted stayed green under compile and
+ * went red only when someone ran the file.
+ */
 export interface SendChatSessionMessageInput {
   readonly content: JsonContent;
   readonly sender: UserMessageSender;
@@ -13894,6 +13860,24 @@ export interface SendChatSessionMessageInput {
   readonly restore: ChatSendRestore;
 }
 
+/**
+ * A refused hash-only send that this client is quietly recovering, held in the
+ * store for exactly as long as the recovery runs.
+ *
+ * It exists because the recovery has an await in the middle of it, and during
+ * that await the send must still be SOMETHING. The first version kept it only
+ * in an async closure, which meant that for the length of a byte resolution the
+ * prompt had no pending action, no queue row, no restoration slot and - for a
+ * QUEUED send, which never gets an optimistic echo - no presence at all. A
+ * reconnect in that window lost the message outright, and the GC root collector
+ * (which walks pending actions, pending users and the restoration slot) could
+ * release the very bytes the retry was waiting for.
+ *
+ * So this is custody: the store owns the send until the retry is dispatched or
+ * it is handed back. Everything `sendMessage` would otherwise re-read from
+ * ambient state at dispatch time is frozen here instead, because the ambient
+ * values belong to whatever the user is doing NOW, not to this send.
+ */
 interface HashOnlyRecoveryState {
   readonly sentAt: number;
   /** The settled action this replaces, still owning its queue row until dispatch. */
