@@ -16,6 +16,7 @@ import { isFramelessDesktop } from "@/components/layout/header/title-bar-drag";
 import { useMotionEnabled } from "@/lib/animation/use-motion-enabled";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import type { EdgeSide } from "@/lib/layout/layout-arrangement";
+import { useStatusBarVisible } from "@/lib/layout-overrides";
 import { cn } from "@/lib/utils";
 import { useWindowsBridgeHydrated } from "@/providers/windows-bridge-context";
 import {
@@ -24,6 +25,10 @@ import {
 } from "@/stores/layout/side-tab-strip-store";
 import { useTitleBarDraggingSuppressed } from "@/stores/layout/title-bar-drag-store";
 import { useTabsStore } from "@/stores/tabs/store";
+import {
+  useMobileStripForm,
+  useSideStripDrawnCollapsed,
+} from "../mobile-strip-form-context";
 import { useTabStripController } from "../tab-strip-controller";
 import { TabStripIndicatorScope } from "../tab-strip-indicator-scope";
 import { SideStripFoot } from "./side-strip-foot";
@@ -35,6 +40,7 @@ import { StripNeedsYouScope } from "./strip-needs-you-scope";
 import { StripSectionsScope } from "./strip-sections-scope";
 import type { SideTabRowVariant } from "./side-tab-row";
 import {
+  SIDE_STRIP_DEFAULT_WIDTH_PX,
   SIDE_STRIP_MAX_WIDTH_CLASS,
   SIDE_STRIP_RAIL_WIDTH_PX,
   SIDE_STRIP_TITLE_ROW_MIN_WIDTH_CLASS,
@@ -55,6 +61,11 @@ const NO_DRAG_REGION_CLASS = "[-webkit-app-region:no-drag]";
  *
  * `ownsTitleBar` is true only on macOS with the strip at the left, where the
  * top block's first row is the window's title bar.
+ *
+ * In the phone shell the form decides what draws. The expanded strip is always
+ * its default width and has no handle, because the width rule budgets exactly
+ * that. The rail offers no expand toggle where the form would keep it the rail.
+ * The foot clears the home indicator when no status bar sits under the strip.
  */
 export function SideTabStrip(props: {
   readonly edge: EdgeSide;
@@ -64,8 +75,16 @@ export function SideTabStrip(props: {
   const controller = useTabStripController();
   const hydrated = useWindowsBridgeHydrated();
   const persistedStripCount = useTabsStore((state) => state.stripOrder.length);
-  const collapsed = useSideStripCollapsed();
-  const widthPx = useSideTabStripStore((state) => state.widthPx);
+  const mobileForm = useMobileStripForm();
+  const collapsed = useSideStripDrawnCollapsed();
+  const collapsedChoice = useSideStripCollapsed();
+  const storedWidthPx = useSideTabStripStore((state) => state.widthPx);
+  const widthPx =
+    mobileForm === null ? storedWidthPx : SIDE_STRIP_DEFAULT_WIDTH_PX;
+  // The person chose expanded and the form still answers the rail: it does not
+  // fit, so the toggle would do nothing.
+  const expandUnavailable = mobileForm === "rail" && !collapsedChoice;
+  const statusBarShown = useStatusBarVisible();
   const variant: SideTabRowVariant = collapsed ? "collapsed" : "expanded";
   const stripRef = useRef<HTMLElement | null>(null);
   const widthEasing = useCollapseWidthEasing(stripRef);
@@ -118,6 +137,7 @@ export function SideTabStrip(props: {
             widthEasing.easing &&
               "transition-[width] duration-(--panel-motion-duration) ease-spring",
             dragClass,
+            mobileForm !== null && !statusBarShown && "pb-safe-bottom",
           )}
           style={{ width: collapsed ? SIDE_STRIP_RAIL_WIDTH_PX : widthPx }}
         >
@@ -132,7 +152,7 @@ export function SideTabStrip(props: {
               onHomeTab={controller.onHomeTab}
               tracy={controller.tracy}
               onNewTab={controller.onNewTab}
-              onToggleCollapsed={widthEasing.toggle}
+              onToggleCollapsed={expandUnavailable ? null : widthEasing.toggle}
               taskCount={controller.tabs.length}
             />
             <TabStripIndicatorScope indicators={controller.indicators}>
@@ -164,12 +184,14 @@ export function SideTabStrip(props: {
             row and activated by the shared SheetJoinScope. */}
           <div data-strip-drag-overlay-host className="contents" />
           <SheetJoinBridge edge={edge} />
-          <SideStripResizeHandle
-            edge={edge}
-            stripRef={stripRef}
-            easeWidth={widthEasing.ease}
-            stopWidthEasing={widthEasing.stop}
-          />
+          {mobileForm === null ? (
+            <SideStripResizeHandle
+              edge={edge}
+              stripRef={stripRef}
+              easeWidth={widthEasing.ease}
+              stopWidthEasing={widthEasing.stop}
+            />
+          ) : null}
           {controller.dialogs}
         </nav>
       </HoverCardGroup>

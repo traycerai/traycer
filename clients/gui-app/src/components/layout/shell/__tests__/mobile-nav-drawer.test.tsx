@@ -157,6 +157,14 @@ vi.mock("@/lib/host", () => ({
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => null,
 }));
+// The Notifications row's count and open path read the notification center's
+// host state, which needs a host runtime this suite does not mount.
+vi.mock("@/stores/notifications/merged-notifications", () => ({
+  useMergedNotificationUnreadCount: () => 0,
+}));
+vi.mock("@/hooks/notifications/use-open-mobile-notification-center", () => ({
+  useOpenMobileNotificationCenter: () => () => undefined,
+}));
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => ({ hostIds: [], resolved: true }),
 }));

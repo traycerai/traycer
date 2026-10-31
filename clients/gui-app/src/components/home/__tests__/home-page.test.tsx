@@ -664,7 +664,7 @@ describe("<HomePage />", () => {
       </QueryClientProvider>,
     );
 
-    // The hamburger drawer already carries "Recent tasks" + "View all" off the
+    // The hamburger drawer already carries "Recent tasks" + "All tasks" off the
     // same useHistoryQuery, so the inline copy is pure duplication here.
     expect(screen.queryByTestId("current-tasks-section")).toBeNull();
     expect(screen.getByTestId("home-hero")).not.toBeNull();

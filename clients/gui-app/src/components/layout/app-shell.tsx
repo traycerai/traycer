@@ -11,9 +11,12 @@ import { AppColumnFrame } from "@/components/layout/app-column-frame";
 import { AppHeader } from "@/components/layout/header/app-header";
 import {
   appColumnChrome,
+  PHONE_SHELL_STRIP_CHROME,
   sideStripOwnsTitleBar,
 } from "@/components/layout/header/app-title-band-kind";
 import { useAppColumnChromeInput } from "@/components/layout/use-app-column-chrome-input";
+import { useMobileStripForm } from "@/components/layout/tabs/mobile-strip-form-context";
+import { MobileStripFormScope } from "@/components/layout/tabs/mobile-strip-form-scope";
 import { SideTabStrip } from "@/components/layout/tabs/side-strip/side-tab-strip";
 import { TabStripKeybindingBridge } from "@/components/layout/tabs/tab-strip-keybinding-bridge";
 import { MobileNavDrawer } from "@/components/layout/shell/mobile-nav-drawer";
@@ -59,7 +62,9 @@ interface AppShellProps {
 export function AppShell(props: AppShellProps) {
   return (
     <MobileDrawerHistoryGateProvider>
-      <AppShellBody>{props.children}</AppShellBody>
+      <MobileStripFormScope>
+        <AppShellBody>{props.children}</AppShellBody>
+      </MobileStripFormScope>
     </MobileDrawerHistoryGateProvider>
   );
 }
@@ -112,7 +117,11 @@ function AppShellBody(props: AppShellProps) {
   // because the editor has to re-run its effects when the node arrives.
   const [appColumn, setAppColumn] = useState<HTMLDivElement | null>(null);
   const chromeInput = useAppColumnChromeInput();
-  const chrome = appColumnChrome(chromeInput);
+  const mobileStripForm = useMobileStripForm();
+  const chrome =
+    mobileStripForm === null
+      ? appColumnChrome(chromeInput)
+      : PHONE_SHELL_STRIP_CHROME;
   const stripEdge = sideTabStripEdge(chromeInput.placement);
 
   return (
@@ -133,7 +142,10 @@ function AppShellBody(props: AppShellProps) {
                 stripEdge === null ? null : (
                   <SideTabStrip
                     edge={stripEdge}
-                    ownsTitleBar={sideStripOwnsTitleBar(chromeInput)}
+                    ownsTitleBar={
+                      mobileStripForm === null &&
+                      sideStripOwnsTitleBar(chromeInput)
+                    }
                   />
                 )
               }
@@ -229,7 +241,9 @@ function AppShellBody(props: AppShellProps) {
                   {UNRELEASED_FEATURES_ENABLED ? <TalkShortcutBridge /> : null}
                   <MigrationRunController />
                   <MigrationBlockingModalHost />
-                  {isMobile ? <MobileNavDrawer /> : null}
+                  {isMobile && mobileStripForm === null ? (
+                    <MobileNavDrawer />
+                  ) : null}
                   {/* Test-only probe: binds the active hostId to a hidden DOM
                     attribute so the mobile-cardinality integration tests can
                     assert the runner-host auto-bind machinery without
