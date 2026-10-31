@@ -506,12 +506,29 @@ export type AgentMessageReceipt = z.infer<typeof agentMessageReceiptSchema>;
 // `tool_call.completed` from the post it committed while serving the call,
 // so the session view's card can read the post's state. Null for every other
 // tool call and for every block persisted before this field.
+//
+// A send posted in Slack instead (Slack for Tracy, S4b) carries `slack`: the
+// Slack channel and the thread root it went under (null for an announcement
+// at the channel's top level and for a DM), so the card says where it went
+// and links nowhere - no Traycer post exists. Its `messageId` is then the
+// relay's item id, and `conversationId` the session's thread or, for an
+// announcement, the Slack channel. Null for every Traycer post and for every
+// receipt persisted before this member.
+export const botSendSlackPostSchema = lazySchema(() =>
+  z.object({
+    channelId: z.string(),
+    threadTs: z.string().nullable(),
+  }),
+);
+export type BotSendSlackPost = z.infer<typeof botSendSlackPostSchema>;
+
 export const botSendReceiptSchema = lazySchema(() =>
   z.object({
     conversationId: z.string(),
     messageId: z.string(),
     requestId: z.string().nullable(),
     kind: z.enum(["reply", "ask", "announce"]),
+    slack: botSendSlackPostSchema.nullable().default(null),
   }),
 );
 export type BotSendReceipt = z.infer<typeof botSendReceiptSchema>;

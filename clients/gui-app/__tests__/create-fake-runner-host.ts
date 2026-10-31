@@ -122,6 +122,16 @@ export function createFakeRunnerHost(
       }),
     openSandboxAutomation: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
+    readSlackApp: () =>
+      Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
+    getSlackAppManifest: () =>
+      Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
+    registerSlackApp: () =>
+      Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
+    mintSlackAppInstallUrl: () =>
+      Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
+    disconnectSlackApp: () =>
+      Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getSandboxGrants: () =>
       Promise.resolve({ kind: "network-error" as const, detail: "fake" }),
     getTeamEnvironment: () =>

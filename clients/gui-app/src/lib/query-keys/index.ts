@@ -81,6 +81,10 @@ export { notificationsQueryKeys } from "@/lib/query-keys/notifications-query-key
 export { prQueryKeys } from "@/lib/query-keys/pr-query-keys";
 export { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
 export { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
+export {
+  botSlackMutationKeys,
+  botSlackQueryKeys,
+} from "@/lib/query-keys/bot-slack-query-keys";
 export { mentionQueryKeys } from "@/lib/query-keys/mention-query-keys";
 export { imageMutationKeys } from "@/lib/query-keys/image-mutation-keys";
 export { appearanceQueryKeys } from "@/lib/query-keys/appearance-query-keys";
