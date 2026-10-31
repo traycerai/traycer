@@ -72,7 +72,7 @@ const COARSE_POINTER_TRIGGER =
   "pointer-coarse:before:absolute pointer-coarse:before:inset-x-0 pointer-coarse:before:-inset-y-2.5";
 
 /**
- * The scoped epic panel replaces the ambient cost badge with:
+ * The scoped epic panel ticket 12 replaces the ambient cost badge with:
  * headline (`UsageCostFigure`), harness split, curated stat tiles, a
  * per-day trend chart, and a by-chat/agent breakdown, with window options
  * 7/30/90 - variant B of the usage-dialog redesign (48rem mini-dashboard

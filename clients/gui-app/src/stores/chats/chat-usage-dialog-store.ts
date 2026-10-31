@@ -14,7 +14,7 @@ interface ChatUsageDialogState {
 }
 
 /**
- * The chat cost line: the tab strip's "Usage" context-menu item opens
+ * Ticket 12's chat cost line: the tab strip's "Usage" context-menu item opens
  * this dialog by writing its target here, and `<ChatUsageDialog>` (mounted
  * once, host-agnostic until a target is set) reads it. A store rather than
  * component state because the trigger (tab strip) and the display (mounted

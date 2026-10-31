@@ -489,7 +489,7 @@ interface TabItemProps {
   readonly domRef: (el: HTMLElement | null) => void;
 }
 
-// The chat cost line: the tab's own overflow (this context menu),
+// Ticket 12's chat cost line: the tab's own overflow (this context menu),
 // never the header. `null` for every non-chat tab kind and for a chat whose
 // host hasn't negotiated `host.usage.summary` - "unsupported chats show
 /** The tab's bound host, for the tile kinds that have one. */

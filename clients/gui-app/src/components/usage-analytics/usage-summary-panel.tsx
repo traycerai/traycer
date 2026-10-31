@@ -118,7 +118,7 @@ export function UsageSummaryPanel(props: UsageSummaryPanelProps): ReactNode {
   const [chartGroupBy, setChartGroupBy] =
     useState<UsageChartGroupBy>("harness");
   // Defaults to "All hosts" - the whole point of ONE dashboard with a host
-  // filter rather than a second per-host surface (user ruling
+  // filter rather than a second per-host surface (ticket 13, user ruling
   // 2026-08-10). Kept in this component rather than in the request memo so
   // switching hosts is a normal query-key change, not a remount.
   const [hostId, setHostId] = useState<string | null>(null);

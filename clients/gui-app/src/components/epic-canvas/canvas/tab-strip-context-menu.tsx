@@ -47,7 +47,7 @@ export interface TabStripContextMenuProps {
   /** Switches the tab title into the inline editable input. */
   readonly onEditTitle: () => void;
   /**
-   * The chat cost line - opens the chat's usage/drill-down dialog.
+   * Ticket 12's chat cost line - opens the chat's usage/drill-down dialog.
    * `null` for every non-chat tab and for a chat whose host has not
    * negotiated `host.usage.summary` (the overflow item itself is the
    * "unsupported chats show nothing" case - see `ChatUsageDialog`).

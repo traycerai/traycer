@@ -41,7 +41,7 @@ export function buildUsageSummaryRequest(input: {
    */
   readonly window?: "epic";
   /**
-   * `null`/absent = every host on the account - the
+   * Ticket 13 addition. `null`/absent = every host on the account - the
    * global dashboard's "All hosts" default. Only the dashboard sets it; the
    * epic- and chat-scoped dialogs leave it alone, because at those scopes
    * the host dimension answers a question nobody asked (an epic's work is

@@ -10,7 +10,7 @@ import { EpicUsageDialog } from "@/components/epic-canvas/panels/epic-usage-dial
 import { cn } from "@/lib/utils";
 
 /**
- * Replaces the ambient epic cost badge.
+ * Ticket 12: replaces the ambient epic cost badge.
  * User ruling - "too in the face", and the one surface showing a dollar
  * figure without its qualifier visible - so this renders NO number at all,
  * just a numberless entry point that opens the scoped epic panel
