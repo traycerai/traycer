@@ -326,6 +326,7 @@ function harness(directory: VoiceDirectory): Harness {
     ask: (text, _delegationId, outcome) => {
       asks.push(text);
       outcomes.push(outcome);
+      return () => undefined;
     },
     decide: async (request) => {
       requests.push(request);

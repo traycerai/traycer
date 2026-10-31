@@ -215,6 +215,7 @@ const fake = vi.hoisted(() => {
     botId: string | null,
     threadId: string | null,
     body: string,
+    uncertain: boolean,
   ): unknown {
     const segments = body.split(String.raw`\"segment\":`).length - 1;
     return {
@@ -233,7 +234,7 @@ const fake = vi.hoisted(() => {
                   itemId: null,
                 },
                 span: { fromSegment: 0, toSegment: segments - 1 },
-                uncertain: false,
+                uncertain,
                 question: null,
                 control: null,
               }),
@@ -278,7 +279,7 @@ const fake = vi.hoisted(() => {
      * The router's answer for these cases: every utterance posts, whole, to
      * the focus, which is what the say loop's post path they pin needs.
      */
-    routeToFocus: (body: string): unknown => routePost(null, null, body),
+    routeToFocus: (body: string): unknown => routePost(null, null, body, false),
     /** A router answer for one case, in place of {@link routeToFocus}; reset for every case. */
     routeAnswer: null as ((body: string) => unknown) | null,
     /**
@@ -299,9 +300,12 @@ const fake = vi.hoisted(() => {
     conversationLists,
     /** The answer that posts the whole utterance to bot `botId`'s channel. */
     routeToBot: (botId: string, body: string): unknown =>
-      routePost(botId, null, body),
+      routePost(botId, null, body, false),
+    /** A post to `botId`'s channel the router is unsure of: it is confirmed first. */
+    routeToBotUnsure: (botId: string, body: string): unknown =>
+      routePost(botId, null, body, true),
     routeToThread: (botId: string, threadId: string, body: string): unknown =>
-      routePost(botId, threadId, body),
+      routePost(botId, threadId, body, false),
     /** Each bot's threads as `bot.thread.list` answers the voice's directory. */
     botThreads: new Map<string, ReadonlyArray<unknown>>(),
   };
@@ -2391,5 +2395,39 @@ describe("a held voice move within the active bot", () => {
       generation + 1,
     );
     expect(fake.sendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("a confirmation dropped before its question was said", () => {
+  it("withdraws the question: a new request in its place leaves nothing asking about the dropped post", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    await bringLive();
+    const routes = [
+      (body: string) => fake.routeToBotUnsure("bot-2", body),
+      (body: string) => fake.routeToFocus(body),
+    ];
+    fake.routeAnswer = (body) => (routes.shift() ?? fake.routeToFocus)(body);
+
+    // The question waits behind the voice's own acknowledgement; before it
+    // is said, the person makes a new request instead.
+    await say("Tell the release bot hello.", "d1");
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "confirming",
+    });
+    await say("Check the build.", "d2");
+    expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    const said = (fake.engines[0]?.appendCommentary.mock.calls ?? []).map(
+      ([text]) => text,
+    );
+    expect(said.some((text) => text.startsWith("Did you mean"))).toBe(false);
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    expect(fake.sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({ botId: BOT_ID, text: "Check the build." }),
+    );
   });
 });

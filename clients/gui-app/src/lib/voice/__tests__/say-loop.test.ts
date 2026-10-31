@@ -99,6 +99,7 @@ function harness(): Harness {
     ask: (text, _delegationId, outcome) => {
       asks.push(text);
       outcomes.push(outcome);
+      return () => undefined;
     },
     openThread: (_focus, answer) => opened.push(answer),
     botTitle: () => "Tracy",

@@ -136,6 +136,8 @@ function build() {
   const sends: Array<{ focus: VoiceFocus; text: string }> = [];
   const notices: string[] = [];
   const asks: AskOutcome[] = [];
+  /** The questions withdrawn, by their index in `asks`. */
+  const withdrawn: number[] = [];
   const opened: string[] = [];
   const answers: Array<() => Promise<RouterResult>> = [];
   const timers: Array<{ readonly ms: number; readonly run: () => void }> = [];
@@ -157,6 +159,10 @@ function build() {
     },
     ask: (_text, _delegationId, outcome) => {
       asks.push(outcome);
+      const index = asks.length - 1;
+      return () => {
+        withdrawn.push(index);
+      };
     },
     decide: async (request) => {
       const next = answers.shift();
@@ -202,6 +208,7 @@ function build() {
     sendGates,
     wiring,
     navGates,
+    withdrawn,
     deferSends: () => {
       deferSends = true;
     },
@@ -473,6 +480,71 @@ describe("the answer window and the queue, settling what they hold", () => {
 
     h.sendGates[1]?.(SEND_RESPONSE);
     await resumed;
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+});
+
+describe("a confirmation that goes, and its question", () => {
+  it.each([
+    ["a new request in its place", "tell tracy hello"],
+    ["a no", "no"],
+  ])("withdraws the question on %s", async (_name, reply) => {
+    const h = build();
+    h.answers.push(() =>
+      Promise.resolve(uncertainly(route("post", CI, PERSONAL, 2))),
+    );
+    h.answers.push(() => Promise.resolve(route("post", null, null, 3)));
+    speak("hello", " there bot");
+    await h.loop.onDelegationCreated("d-1");
+    h.asks[0]?.onDelivered();
+    speak(reply);
+    await h.loop.onDelegationCreated("d-2");
+
+    expect(h.withdrawn).toEqual([0]);
+  });
+
+  it("withdraws the question when the person moves", async () => {
+    const h = build();
+    h.answers.push(() =>
+      Promise.resolve(uncertainly(route("post", CI, PERSONAL, 2))),
+    );
+    speak("hello", " there bot");
+    await h.loop.onDelegationCreated("d-1");
+    useVoiceSessionStore
+      .getState()
+      .selectionChanged({ ...FOCUS_TRACY, threadId: "thr-9" });
+    h.loop.onSelectionChanged();
+
+    expect(h.withdrawn).toEqual([0]);
+  });
+});
+
+describe("a navigation to the focus that finishes after the voice moved", () => {
+  it("is not reported as landed: it is refused and said, and the focus stays where the voice moved", async () => {
+    const h = build();
+    let releaseFirst: (result: RouterResult) => void = () => undefined;
+    h.answers.push(
+      () =>
+        new Promise<RouterResult>((resolve) => {
+          releaseFirst = resolve;
+        }),
+    );
+    h.answers.push(() => Promise.resolve(route("navigate", CI, PERSONAL, 2)));
+
+    speak("stay", " with tracy");
+    const first = h.loop.onDelegationCreated("d-a");
+    speak("go", " to CI");
+    await h.loop.onDelegationCreated("d-b");
+    expect(useVoiceSessionStore.getState().focus?.botId).toBe(CI);
+
+    releaseFirst(route("navigate", TRACY, PERSONAL, 2));
+    await first;
+
+    expect(useVoiceSessionStore.getState().focus?.botId).toBe(CI);
+    expect(h.notices).toHaveLength(1);
+    expect(h.notices[0]).toMatch(
+      /^Nothing was posted: that request was for where/,
+    );
     expect(useVoiceSessionStore.getState().segments).toEqual([]);
   });
 });

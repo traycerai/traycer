@@ -191,6 +191,8 @@ export function VoiceSessionController(): ReactNode {
   const voiceNavigationRef = useRef<VoiceNavigation | null>(null);
   /** Counts voice navigations, so a settling one can tell whether a later one superseded it. */
   const voiceNavigationSerialRef = useRef(0);
+  /** Gives each question the voice asks its own scheduler id, to withdraw it by. */
+  const askSerialRef = useRef(0);
   /** The strip's own actions by voice; set once the session's controls exist. */
   const controlRef = useRef<(verb: ControlVerb) => void>(() => undefined);
   // Whether this deployment offers voice, read once per window before Talk
@@ -441,9 +443,12 @@ export function VoiceSessionController(): ReactNode {
           onDelivered: null,
           onGivenUp: null,
         }),
-      ask: (text, delegationId, outcome) =>
-        ensureSpeech().enqueue({
-          id: `ask:${Date.now()}`,
+      ask: (text, delegationId, outcome) => {
+        askSerialRef.current += 1;
+        const id = `ask:${askSerialRef.current}`;
+        const speech = ensureSpeech();
+        speech.enqueue({
+          id,
           priority: "ask",
           text,
           delegationId,
@@ -454,7 +459,9 @@ export function VoiceSessionController(): ReactNode {
           }),
           onDelivered: outcome.onDelivered,
           onGivenUp: outcome.onGivenUp,
-        }),
+        });
+        return () => speech.remove(id);
+      },
       openThread: (target, response, text) => {
         if (response.threadId === null) return;
         useBotOpenThreadStore.getState().setRail(target.botId, {

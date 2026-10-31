@@ -82,13 +82,14 @@ export interface SayLoopDeps {
   /**
    * A question the voice puts to the person: after a move (under no
    * delegation), or before a routed post (under its request's). The
-   * scheduler reports whether it was heard, or given up on.
+   * scheduler reports whether it was heard, or given up on. Returns the
+   * withdrawal of the question while it has not been said yet.
    */
   readonly ask: (
     text: string,
     delegationId: string | null,
     outcome: AskOutcome,
-  ) => void;
+  ) => () => void;
   /**
    * The router: one action for the reserved words, checked against the
    * directory. Rejects only on a transport failure, which is refused.
@@ -273,6 +274,8 @@ interface Confirming {
   heardAfterSeq: number | null;
   /** Cancels the wait for an answer once the question was heard. */
   cancelWait: () => void;
+  /** Withdraws the question while it waits to be said. */
+  withdrawQuestion: () => void;
 }
 
 /**
@@ -825,7 +828,18 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       refuse(entry, "gone");
       return;
     }
-    if (!target.isFocus && !(await arrive(entry, target))) return;
+    if (target.isFocus) {
+      // Bound to the focus when routed: there already only while the focus
+      // is still that destination. Another request may have navigated
+      // since, and the voice never reports a move that did not happen.
+      const now = store.getState().focus;
+      if (now === null || !stillDestination(now, target.focus)) {
+        refuse(entry, "moved-on");
+        return;
+      }
+    } else if (!(await arrive(entry, target))) {
+      return;
+    }
     store.getState().consumeReservation(entry.seqs);
     settleDelegation(entry.delegationId);
     const delegationId = delegationOf(entry);
@@ -849,6 +863,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     }
     if (confirming !== null) {
       confirming.cancelWait();
+      confirming.withdrawQuestion();
       state.releaseReservation(confirming.entry.seqs);
       confirming = null;
     }
@@ -926,6 +941,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
           heard: false,
           heardAfterSeq: null,
           cancelWait: () => undefined,
+          withdrawQuestion: () => undefined,
         };
         confirming = held;
         store.getState().setPendingAction({
@@ -936,7 +952,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
           selectionGeneration: entry.selectionGeneration,
           askState: "asking",
         });
-        deps.ask(
+        held.withdrawQuestion = deps.ask(
           confirmQuestion(decision.target, decision.confirm === "uncertain"),
           delegationOf(entry),
           {
@@ -981,6 +997,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   /** The held post goes, with its words; nothing is said. */
   function dropConfirmation(held: Confirming): void {
     held.cancelWait();
+    held.withdrawQuestion();
     confirming = null;
     const state = store.getState();
     state.consumeReservation(held.entry.seqs);
@@ -1079,6 +1096,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     }
     state.consumeReservation(answer.seqs);
     held.cancelWait();
+    held.withdrawQuestion();
     confirming = null;
     state.setPendingAction(null);
     if (held.entry.sessionToken !== store.getState().sessionToken) {
@@ -1332,6 +1350,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     dispose() {
       disposed = true;
       confirming?.cancelWait();
+      confirming?.withdrawQuestion();
       confirming = null;
     },
   };

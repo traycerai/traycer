@@ -153,6 +153,7 @@ function build(wiring: Wiring) {
     },
     ask: (_text, _delegationId, outcome) => {
       asks.push(outcome);
+      return () => undefined;
     },
     decide: async (request) => {
       const next = answers.shift();
