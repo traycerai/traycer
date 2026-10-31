@@ -3,7 +3,9 @@
  * chord, and none from a profile an enabled build saved. Its keys reach the
  * page as they did before the voice layer existed, no browser tile forwards
  * them, and no rebind conflicts with them; the stored chord is kept for a
- * build that has Talk again.
+ * build that has Talk again. The installed mobile app matches the other
+ * desktop-only actions as it did before Talk, so their default chords stay
+ * reserved there.
  */
 import { act, cleanup, render } from "@testing-library/react";
 import { createMemoryHistory, createRouter } from "@tanstack/react-router";
@@ -11,8 +13,13 @@ import { QueryClient } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPlatformMock } from "@/__tests__/create-platform-mock";
 import { reservedBrowserChordsFor } from "@/lib/browser-view/reserved-chords-registration";
-import { getDefaultBindings } from "@/lib/keybindings/actions";
+import {
+  effectiveBinding,
+  getDefaultBindings,
+} from "@/lib/keybindings/actions";
 import { findConflict } from "@/lib/keybindings/conflicts";
+import { findActionMatchForChord } from "@/lib/keybindings/dispatch";
+import { setMobileApp } from "@/lib/mobile-app";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { routeTree } from "@/routeTree.gen";
@@ -125,6 +132,34 @@ describe("Talk with the voice layer unreleased", () => {
         ),
       ).toBeNull();
       cleanup();
+    }
+  });
+});
+
+describe("the vertical-tabs collapse chord in the installed mobile app", () => {
+  it("is still reserved there: its default chord matches and the key is swallowed", () => {
+    const bindings = useKeybindingStore.getState().bindings;
+    const chord = bindings["app.tabs.vertical.collapse"];
+    expect(chord).toBe("shift+alt+s");
+    if (chord === null) return;
+    setMobileApp(true);
+    try {
+      expect(effectiveBinding(bindings, "app.tabs.vertical.collapse")).toBe(
+        chord,
+      );
+      expect(findActionMatchForChord(chord)?.actionId).toBe(
+        "app.tabs.vertical.collapse",
+      );
+      renderProvider();
+      const event = press({
+        code: "KeyS",
+        key: "S",
+        altKey: true,
+        shiftKey: true,
+      });
+      expect(event.defaultPrevented).toBe(true);
+    } finally {
+      setMobileApp(false);
     }
   });
 });
