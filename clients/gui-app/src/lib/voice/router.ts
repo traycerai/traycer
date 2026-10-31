@@ -137,6 +137,14 @@ function ageOf(at: number, now: number): string {
 }
 
 /**
+ * One entry as a JSON line with every `<` escaped, so no text inside it can
+ * open or close a fence.
+ */
+function fencedLine(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+
+/**
  * The directory as the model reads it: one JSON line per entry inside a
  * fence, so no excerpt can close it or pass for an instruction. First in the
  * input, so repeated calls share a cacheable prefix.
@@ -148,7 +156,7 @@ export function renderDirectory(
   const lines: string[] = [];
   for (const bot of directory.bots) {
     lines.push(
-      JSON.stringify({
+      fencedLine({
         bot: bot.botId,
         title: bot.title,
         environment: bot.environmentId,
@@ -159,7 +167,7 @@ export function renderDirectory(
   }
   for (const thread of directory.threads) {
     lines.push(
-      JSON.stringify({
+      fencedLine({
         thread: thread.threadId,
         bot: thread.botId,
         environment: thread.environmentId,
@@ -172,7 +180,7 @@ export function renderDirectory(
   }
   for (const item of directory.queue) {
     lines.push(
-      JSON.stringify({
+      fencedLine({
         item: item.itemId,
         bot: item.botId,
         thread: item.threadId,
@@ -190,18 +198,18 @@ function renderUtterance(
   const focus = directory.focus;
   const focusLine =
     focus === null
-      ? JSON.stringify({ bot: null })
-      : JSON.stringify({
+      ? fencedLine({ bot: null })
+      : fencedLine({
           bot: focus.botId,
           thread: focus.threadId,
         });
   const segments = utterance.segments.map((text, index) =>
-    JSON.stringify({ segment: index, text }),
+    fencedLine({ segment: index, text }),
   );
   const asked =
     utterance.askedQuestion === null
       ? ""
-      : `<asked>\n${JSON.stringify({ question: utterance.askedQuestion })}\n</asked>\n`;
+      : `<asked>\n${fencedLine({ question: utterance.askedQuestion })}\n</asked>\n`;
   return `<focus>\n${focusLine}\n</focus>\n${asked}<utterance>\n${segments.join("\n")}\n</utterance>`;
 }
 
