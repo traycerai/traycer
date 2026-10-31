@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { X } from "lucide-react";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import { useRunnerHost } from "@/providers/use-runner-host";
+import { useVoiceMicrophoneSettingsMutation } from "@/hooks/voice/use-voice-session-mutations";
 import type { VoiceEndReason } from "@/stores/voice/voice-session-store";
 
 /**
@@ -14,7 +15,7 @@ export function VoiceEndedLine(props: {
   readonly reason: VoiceEndReason;
   readonly onDismiss: () => void;
 }): ReactNode {
-  const runnerHost = useRunnerHost();
+  const openSettings = useVoiceMicrophoneSettingsMutation();
   return (
     <output
       data-testid="voice-session-strip"
@@ -30,9 +31,17 @@ export function VoiceEndedLine(props: {
           variant="outline"
           size="xs"
           data-testid="voice-strip-microphone-settings"
-          onClick={() => void runnerHost.openMicrophoneSettings()}
+          disabled={openSettings.isPending}
+          onClick={() => openSettings.mutate()}
         >
           Open Settings
+          {openSettings.isPending ? (
+            <AgentSpinningDots
+              className={undefined}
+              testId={undefined}
+              variant={undefined}
+            />
+          ) : null}
         </Button>
       ) : null}
       <Button
