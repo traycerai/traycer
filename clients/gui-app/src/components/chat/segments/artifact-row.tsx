@@ -239,6 +239,7 @@ function ShownArtifact(props: {
           title={stamp.title}
           className="w-full"
           height={height}
+          pageZoom
           onSize={handleSize}
           onStatus={handleStatus}
           onBridge={null}

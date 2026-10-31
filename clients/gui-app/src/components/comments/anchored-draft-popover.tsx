@@ -35,6 +35,10 @@ import {
   CommentComposer,
   type CommentComposerHandle,
 } from "./comment-composer";
+import {
+  AnchoredDraftSendToChatSlot,
+  type AnchoredDraftSendToChatSurface,
+} from "./anchored-draft-send-to-chat";
 
 export interface AnchoredDraftTidInsertion {
   readonly boardPath: string;
@@ -62,6 +66,11 @@ export function AnchoredDraftPopover(props: {
   readonly onTidInserted?: (
     insertion: AnchoredDraftTidInsertion,
   ) => Promise<void>;
+  /**
+   * Lets the box send its element and text to a chat instead of posting a
+   * thread; `null` on a surface that cannot capture elements.
+   */
+  readonly sendToChat: AnchoredDraftSendToChatSurface | null;
 }) {
   const { epicId, artifactId, tileId, hostClient, onCreated, onClosed } = props;
   const stored = useAnchoredDraftStore((state) => state.byEpicId[epicId]);
@@ -303,6 +312,24 @@ export function AnchoredDraftPopover(props: {
         onCancel={() => {
           dismiss();
         }}
+        leadingActions={
+          <AnchoredDraftSendToChatSlot
+            key={draft.draftId}
+            surface={props.sendToChat}
+            selection={draft.selection}
+            readDraft={() =>
+              composer.current?.getContent() ?? { type: "doc", content: [] }
+            }
+            disabled={pending}
+            onSent={() => {
+              // Sent, not saved: the box closes without the discard prompt,
+              // because the text now lives in the chat composer.
+              useAnchoredDraftStore.getState().clearDraft(epicId, draft.draftId);
+              onClosed();
+            }}
+            onFailure={(text) => setFailure({ draftId: draft.draftId, text })}
+          />
+        }
         className={undefined}
       />
     </dialog>,

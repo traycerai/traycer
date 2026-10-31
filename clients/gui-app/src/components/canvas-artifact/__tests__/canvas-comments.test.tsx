@@ -49,6 +49,7 @@ const scope = {
   epicId: EPIC_ID,
   artifactId: ARTIFACT_ID,
   artifactTitle: "Canvas",
+  artifactType: "canvas" as const,
   hostId: "host-1",
   viewTabId: "tab-1",
 };

@@ -153,6 +153,7 @@ const SCOPE = {
   epicId: "epic-1",
   artifactId: "canvas-1",
   artifactTitle: "Wiring",
+  artifactType: "canvas" as const,
   hostId: "host-1",
   viewTabId: "tab-1",
 };

@@ -15,6 +15,7 @@ export function HtmlArtifactFrame(props: {
       title={props.title}
       className="h-full w-full"
       height={null}
+      pageZoom
       onSize={noop}
       onStatus={noop}
       onBridge={null}
