@@ -24,7 +24,11 @@ import { buildAppUrl } from "../app/app-protocol";
 import { devRendererUrlFromEnv } from "../../ipc-contracts/dev-renderer-origin";
 import { minimumWindowSize } from "./window-layout";
 import { installBackgroundRenderingReset } from "./background-rendering";
-import { installVoiceLiveReset, voiceLiveWindows } from "./voice-live-windows";
+import {
+  installVoiceAwayTracking,
+  installVoiceLiveReset,
+  voiceLiveWindows,
+} from "./voice-live-windows";
 import {
   placementToBrowserWindowBounds,
   type WindowGeometryPlacement,
@@ -166,6 +170,7 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   installBackgroundRenderingReset(window.webContents);
   installWebviewAttachGuards(window.webContents, options.windowId);
   installVoiceLiveReset(window, options.windowId, voiceLiveWindows);
+  installVoiceAwayTracking(window, options.windowId, voiceLiveWindows);
 
   const devWindowTitle = options.devWindowTitle;
   if (devWindowTitle !== null) {

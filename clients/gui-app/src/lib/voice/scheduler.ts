@@ -109,6 +109,15 @@ export interface SpeechScheduler {
    */
   setReady(ready: boolean): void;
   /**
+   * The voice was silenced under the item being spoken (paused for
+   * dictation): the in-flight item goes back to the front of the queue as
+   * if it had never been appended, its spent attempt refunded, and the
+   * transcript of its silent speech confirms nothing. It is appended again
+   * as a fresh item once appends are taken again. A no-op with nothing in
+   * flight.
+   */
+  suspendInFlight(): void;
+  /**
    * The vendor session is being replaced under the same person: every fact
    * the old engine produced is retired (its playback, its acknowledgement,
    * its in-flight append and the detector it was heard through), while the
@@ -471,6 +480,15 @@ export function createSpeechScheduler(
     setReady(next) {
       ready = next;
       if (ready) dispatch();
+    },
+    suspendInFlight() {
+      const current = inFlight;
+      if (current === null) return;
+      inFlight = null;
+      if (current.timer !== null) deps.clearTimer(current.timer);
+      current.queued.attempts = Math.max(0, current.queued.attempts - 1);
+      queue.unshift(current.queued);
+      notify();
     },
     handoff() {
       const carried = retireFacts();

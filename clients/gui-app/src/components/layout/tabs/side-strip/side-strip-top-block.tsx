@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { useBindingForAction } from "@/stores/settings/keybinding-store";
 import { TalkControl } from "@/components/layout/voice/talk-control";
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 import { SideHomeRow } from "./side-home-row";
 import { SideTracyRow } from "./side-tracy-row";
 import type { TracyStripEntry } from "../tab-strip-controller";
@@ -172,6 +173,13 @@ function sideFixedRows(
 ): ReactNode {
   if (!props.homeTabDrawn && props.tracy === null && !talkDrawn) return null;
   const collapsed = props.variant === "collapsed";
+  const talk = collapsed ? (
+    <TalkControl compact />
+  ) : (
+    <div className="flex">
+      <TalkControl compact={false} />
+    </div>
+  );
   return (
     <>
       {props.homeTabDrawn ? (
@@ -184,13 +192,9 @@ function sideFixedRows(
       {props.tracy === null ? null : (
         <SideTracyRow variant={props.variant} entry={props.tracy} />
       )}
-      {collapsed ? (
-        <TalkControl compact />
-      ) : (
-        <div className="flex">
-          <TalkControl compact={false} />
-        </div>
-      )}
+      {/* The slot exists only with the features, so the build without them
+          keeps the column's gaps as they were. */}
+      {UNRELEASED_FEATURES_ENABLED ? talk : null}
     </>
   );
 }

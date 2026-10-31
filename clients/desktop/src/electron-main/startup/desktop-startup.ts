@@ -103,6 +103,10 @@ import { voiceLiveWindows } from "../windows/voice-live-windows";
 import { createJsonFileStore } from "../app/json-file-store";
 import { trayHostLifecyclePresentation } from "../tray/tray-host-lifecycle";
 import {
+  createElectronVoiceTrayView,
+  VoiceTrayItems,
+} from "../tray/voice-tray-items";
+import {
   probeLinuxTrayHost,
   trayVisibleAtClose,
 } from "../tray/linux-tray-host";
@@ -983,6 +987,41 @@ async function runWindowPhase(state: BootState): Promise<AppServices> {
   state.bridge = bridge;
   hostLifecycle.startObserving();
   bridge.disposeFns.push(() => hostLifecycle.dispose());
+
+  // The voice item: shown while a window's voice session is live and the
+  // window is away, gone when the session ends; disposed with the bridge at
+  // quit.
+  const voiceTrayItems = new VoiceTrayItems({
+    source: voiceLiveWindows,
+    trayVisible: () =>
+      process.platform === "linux"
+        ? probeLinuxTrayHost(null)
+        : Promise.resolve(true),
+    createView: async (indicator, actions) =>
+      createElectronVoiceTrayView({
+        image: await loadTrayIconImage(
+          resolveTrayIconPath(buildTrayAssetContext()),
+        ),
+        platform: process.platform,
+        indicator,
+        actions,
+      }),
+    sendAction: (windowId, action) => {
+      bridge.safeSendToWindow(
+        windowId,
+        RunnerHostEvent.voiceTrayAction,
+        action,
+      );
+    },
+    returnTo: (windowId) => {
+      const window = windowRegistry.getWindowById(windowId);
+      if (window !== null && !window.isDestroyed() && window.isMinimized()) {
+        window.restore();
+      }
+      windowRegistry.focusById(windowId);
+    },
+  });
+  bridge.disposeFns.push(() => voiceTrayItems.dispose());
 
   installAccessibilityThemeForwarder((snapshot) => {
     bridge.fanOut(RunnerHostEvent.accessibilityThemeChange, snapshot);
