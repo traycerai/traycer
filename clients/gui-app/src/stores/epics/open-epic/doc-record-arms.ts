@@ -39,7 +39,7 @@
  * its next RPC and overwrites its entry - so an unknown resolves rather than
  * latching, and both transports publish into it.
  *
- * **This whole module is temporary**, retired by the same support-horizon
+ * **This whole module is Phase 5 material**, retired by the same support-horizon
  * decision that deletes the `@1` legacy adapters. It is retained code with a
  * named sunset, not an oversight: when the released floor no longer includes a
  * host that lacks these methods, both members become constant `false` and the
