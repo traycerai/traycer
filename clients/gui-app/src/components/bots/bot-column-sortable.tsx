@@ -3,8 +3,10 @@ import {
   DndContext,
   DragOverlay,
   KeyboardSensor,
+  rectIntersection,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragStartEvent,
   type DraggableAttributes,
@@ -35,6 +37,36 @@ const KEYBOARD_CODES: KeyboardCodes = {
   end: ["Space"],
 };
 
+/**
+ * The default rect intersection, except that a pointer outside the list (the
+ * box its rows span) is over nothing. The vertical-axis modifier keeps the
+ * lifted row inside the column, so a pointer carried sideways out of the
+ * list would otherwise still drop on the row the lifted one last covered. A
+ * keyboard drag has no pointer and keeps the default.
+ */
+const collisionDetection: CollisionDetection = (args) => {
+  const pointer = args.pointerCoordinates;
+  if (pointer === null) return rectIntersection(args);
+  let left = Infinity;
+  let right = -Infinity;
+  let top = Infinity;
+  let bottom = -Infinity;
+  for (const container of args.droppableContainers) {
+    const rect = args.droppableRects.get(container.id);
+    if (rect === undefined) continue;
+    left = Math.min(left, rect.left);
+    right = Math.max(right, rect.right);
+    top = Math.min(top, rect.top);
+    bottom = Math.max(bottom, rect.bottom);
+  }
+  const inside =
+    pointer.x >= left &&
+    pointer.x <= right &&
+    pointer.y >= top &&
+    pointer.y <= bottom;
+  return inside ? rectIntersection(args) : [];
+};
+
 /** What a sortable row spreads on the element it is dragged by. */
 export type ColumnDragHandle = {
   readonly ref: (element: HTMLElement | null) => void;
@@ -45,7 +77,8 @@ export type ColumnDragHandle = {
 /**
  * One list of the channel column the person reorders by dragging (decision
  * 151): the sections, or one section's channels. Its own drag context, so a
- * row never leaves its list: a drop over nothing of it changes nothing. The
+ * row never leaves its list: a drop over nothing of it, or with the pointer
+ * outside it, changes nothing. The
  * sensors are the tab strip's: the pointer past the same activation distance,
  * never a touch press (that is a scroll), and the keyboard. The dragged row
  * lifts while the list reflows under it to show where it lands; on a drop
@@ -85,6 +118,7 @@ export function SortableColumnList(props: {
   return (
     <DndContext
       sensors={sensors}
+      collisionDetection={collisionDetection}
       modifiers={MODIFIERS}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}

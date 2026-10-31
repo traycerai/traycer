@@ -1322,12 +1322,12 @@ function layOutColumn(): MockInstance<() => DOMRect> {
     });
 }
 
-function pointerOptions(clientY: number): PointerEventInit {
+function pointerOptions(clientX: number, clientY: number): PointerEventInit {
   return {
     isPrimary: true,
     button: 0,
     pointerType: "mouse",
-    clientX: 10,
+    clientX,
     clientY,
   };
 }
@@ -1340,15 +1340,24 @@ async function liftedCopyGone(): Promise<void> {
 }
 
 /**
- * A mouse drag of `handle` by `distance` px: the press, a first move that
- * crosses the activation distance, a second that carries the row, the release.
+ * A mouse drag of `handle` down by `distance` px from where its row stands:
+ * the press, a first move that crosses the activation distance, a second that
+ * carries the row, then `release` px sideways before the release.
  */
-async function dragBy(handle: HTMLElement, distance: number): Promise<void> {
-  fireEvent.pointerDown(handle, pointerOptions(0));
-  fireEvent.pointerMove(document, pointerOptions(10));
-  fireEvent.pointerMove(document, pointerOptions(distance));
+async function dragBy(
+  handle: HTMLElement,
+  distance: number,
+  release: number,
+): Promise<void> {
+  const row = handle.closest("li, [data-testid='bot-channel-section']");
+  if (row === null) throw new Error("the handle is in no row");
+  const y = row.getBoundingClientRect().top + 5;
+  fireEvent.pointerDown(handle, pointerOptions(10, y));
+  fireEvent.pointerMove(document, pointerOptions(10, y + 10));
+  fireEvent.pointerMove(document, pointerOptions(10, y + distance));
   expect(document.querySelector("[inert]")).not.toBeNull();
-  fireEvent.pointerUp(document, pointerOptions(distance));
+  fireEvent.pointerMove(document, pointerOptions(10 + release, y + distance));
+  fireEvent.pointerUp(document, pointerOptions(10 + release, y + distance));
   await liftedCopyGone();
 }
 
@@ -1385,7 +1394,7 @@ describe("<BotChannelSidebar /> arranging the column", () => {
       "bot-triage",
     ]);
 
-    await dragBy(row("bot-release"), DRAG_ROW_HEIGHT);
+    await dragBy(row("bot-release"), DRAG_ROW_HEIGHT, 0);
 
     expect(useBotColumnLayoutStore.getState().channelOrder).toEqual({
       "env-team": ["bot-alerts", "bot-triage", "bot-release"],
@@ -1400,7 +1409,7 @@ describe("<BotChannelSidebar /> arranging the column", () => {
   it("changes nothing when a channel is dropped over nothing of its section", async () => {
     mount("bot-notes");
 
-    await dragBy(row("bot-release"), 600);
+    await dragBy(row("bot-release"), 600, 0);
 
     expect(useBotColumnLayoutStore.getState().channelOrder).toEqual({});
     expect(botIdsIn("env-team")).toEqual([
@@ -1409,6 +1418,21 @@ describe("<BotChannelSidebar /> arranging the column", () => {
       "bot-triage",
     ]);
     expect(useBotColumnLayoutStore.getState().sectionOrder).toEqual([]);
+  });
+
+  it("changes nothing when the pointer leaves the section sideways after carrying a channel over another", async () => {
+    mount("bot-notes");
+
+    // Over triage-bot, then out into the conversation pane: the column
+    // keeps the lifted row on its axis, the pointer is outside the list.
+    await dragBy(row("bot-release"), DRAG_ROW_HEIGHT, 600);
+
+    expect(useBotColumnLayoutStore.getState().channelOrder).toEqual({});
+    expect(botIdsIn("env-team")).toEqual([
+      "bot-alerts",
+      "bot-release",
+      "bot-triage",
+    ]);
   });
 
   it("writes the sections' new order when a section is dragged by its label, and the sections follow", async () => {
@@ -1420,7 +1444,7 @@ describe("<BotChannelSidebar /> arranging the column", () => {
       "Quiet team",
     ]);
 
-    await dragBy(labels[2], -2 * DRAG_SECTION_HEIGHT);
+    await dragBy(labels[2], -2 * DRAG_SECTION_HEIGHT, 0);
 
     expect(useBotColumnLayoutStore.getState().sectionOrder).toEqual([
       "env-empty",
