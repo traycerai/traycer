@@ -474,7 +474,7 @@ describe("chat-session-store lastFallbackOutcome D215", () => {
       // below is not by itself proof that this response re-entered the
       // deferral branch at all - a response that instead completed the tail,
       // or short-circuited before touching `lastFallbackOutcome`, would read
-      // the same value and pass for the wrong reason (the D219 shape: green
+      // the same value and pass for the wrong reason (green
       // without having exercised anything). This assertion is what rules
       // that out: the tail is STILL not hydrated, which is possible only if
       // `applyOrDeferWindowedSnapshot` actually deferred again rather than

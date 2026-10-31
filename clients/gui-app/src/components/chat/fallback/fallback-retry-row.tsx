@@ -114,7 +114,7 @@ function retryRowText(
   modelLabelFor: FallbackModelLabelResolver,
 ): { readonly retryingOn: string; readonly attemptCount: string } {
   // The tuple being retried is the one that FAILED: a transient retry is the
-  // same tuple again by definition (D57 - a retry never commits settings and
+  // same tuple again by definition (a retry never commits settings and
   // never restamps), so `targetTuple` is null here and reading it would render
   // an empty chip.
   const identity = fallbackTupleIdentity(

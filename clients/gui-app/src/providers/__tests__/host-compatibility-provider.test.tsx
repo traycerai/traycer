@@ -645,7 +645,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
   });
 
   it("a still-dialing probe yields checking, not failed", async () => {
-    // D5.1: a pending-class transport error with no held data is not a
+    // A pending-class transport error with no held data is not a
     // settled verdict. Treating `RetryableTransportError` as `failed` is what
     // put a full-screen "Traycer Host is not responding" in front of a remote
     // host that was seconds from ready.
@@ -679,7 +679,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
 
   it("a settled HostTransportFailureError still yields failed + unreachable", async () => {
     // Plain transport failure (session closed / host down) is a settled
-    // answer, not a still-dialing one - D5.1 only parks pending-class errors.
+    // answer, not a still-dialing one - only pending-class errors are parked.
     const getTaskContexts = vi.fn(taskContextsFor([STARTUP_EPIC_ID]));
     const listHarnesses = vi.fn((): ListHarnessesResponse => ({
       harnesses: [],
@@ -736,7 +736,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
   });
 
   it("verdict for A survives bind A→B→A from the session-lived cache", async () => {
-    // D2: gcTime: Infinity keeps the probe entry after it is re-keyed away, so
+    // gcTime: Infinity keeps the probe entry after it is re-keyed away, so
     // A → B → A within a session is render-instant from the held verdict. The
     // whole point of the pin is that the UI must not bounce through
     // "checking" on the way back to A.
@@ -887,7 +887,7 @@ describe("HostCompatibilityProvider startup consumers", () => {
   });
 
   /**
-   * D2 pin: `useHostStatusReprobeOnRepoint` invalidates EXACTLY the incoming
+   * The pin: `useHostStatusReprobeOnRepoint` invalidates EXACTLY the incoming
    * host's `host.status` probe entry on a re-point, and the held verdict
    * keeps rendering while that refetch is in flight.
    *

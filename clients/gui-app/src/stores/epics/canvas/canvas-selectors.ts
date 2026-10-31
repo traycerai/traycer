@@ -133,7 +133,7 @@ export function useEpicArtifactRecords(
  * two - only the presence lookup differs.
  *
  * `isCloudKnown` is the same shape, added for the SAME-host counterpart of
- * the cross-host exemption above (chat-sync-v2 ticket 36): a chat can be
+ * the cross-host exemption above: a chat can be
  * bound to THIS device's active host and still have no local record - a
  * leased identity that never adopted its rows - which is a different chat
  * than one this host's registry has genuinely tombstoned. `epic.listCloudChats`

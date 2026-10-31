@@ -10,7 +10,7 @@ import {
 
 /**
  * Renderer-side ingest for the report-issue dialog's attachment target
- * (ticket 08 / tech-plan T5). Reuses the composer's ingest RULES (image/*
+ * (T5). Reuses the composer's ingest RULES (image/*
  * only, 5 MiB per image, 15s read timeout - see `use-composer-paste.ts`) but
  * not its hook: that hook inserts into a tiptap editor document, while this
  * one holds a flat list of up to 3 images for a thumbnail strip with
@@ -19,7 +19,7 @@ import {
  *
  * Every rejection here is a UI-visible, attach-time decision (count, type,
  * per-image size, running-total budget) - never a silent drop at submit
- * time (ticket 08 guardrail G5).
+ * time (guardrail G5).
  */
 
 export interface ReportIssueAttachmentImage {

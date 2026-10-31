@@ -51,7 +51,7 @@ export interface ImagePreviewProps {
   readonly meta: FileAssetMeta | null;
   /**
    * Whether `url` resolved from the shared asset cache rather than a fresh
-   * stream (`FileAssetState.servedFromCache`, ticket 07 closing E2E item:
+   * stream (`FileAssetState.servedFromCache`:
    * a brand-new `<img>` element mounted for a cache hit still reports
    * `complete === false` at layout time even though the bytes are already
    * local - that per-element browser signal can't carry "already resident"
@@ -61,14 +61,14 @@ export interface ImagePreviewProps {
   readonly servedFromCache: boolean;
   /** Alt text and the file name copy/report actions would reference. */
   readonly fileName: string;
-  /** Drops this instance's own toolbar (ticket 05) - decision #18. Independent of `gesturesEnabled`: `ImageDiffView`'s linked sides pass `compact` but keep gestures on, driven by its own shared toolbar. */
+  /** Drops this instance's own toolbar. Independent of `gesturesEnabled`: `ImageDiffView`'s linked sides pass `compact` but keep gestures on, driven by its own shared toolbar. */
   readonly compact: boolean;
-  /** Pan/pinch/wheel-zoom/double-click-toggle on or off. `false` for the bundle diff variant (decision #18's affordance-free intent) - static fit only, no gesture traps inside a virtualized list. */
+  /** Pan/pinch/wheel-zoom/double-click-toggle on or off. `false` for the bundle diff variant (the affordance-free intent) - static fit only, no gesture traps inside a virtualized list. */
   readonly gesturesEnabled: boolean;
   /**
    * Exposes this instance's imperative transform controls (`setTransform`,
    * `centerView`, `zoomIn`/`zoomOut`) to a caller that links multiple
-   * instances (`ImageDiffView`, ticket 07) - `null` manages its own ref
+   * instances (`ImageDiffView`) - `null` manages its own ref
    * internally (today's other caller, the workspace tile).
    */
   readonly transformRef: RefObject<ReactZoomPanPinchRef | null> | null;
@@ -102,7 +102,7 @@ export interface ImagePreviewProps {
   readonly doubleClickOverride: (() => void) | null;
   /**
    * Toolbar/gesture transform animation duration in ms - ONE motion
-   * language per context (ticket 07, better-ui audit): `0` for a caller
+   * language per context (better-ui audit): `0` for a caller
    * driving multiple linked instances (`ImageDiffView`), whose dual-dispatch
    * must stay reentrancy-safe (an animated peer update would still be
    * mid-flight, firing more `onTransform` events, when the NEXT toolbar
@@ -191,7 +191,7 @@ export function ImagePreview(props: ImagePreviewProps) {
   // Destructured (not `props.x` inline in JSX below) so the ref-safety
   // linter can see these are plain values, not a live ref read during
   // render - same reasoning as `diff-content-primitive.tsx`'s
-  // `scrollContainerRef` destructure (ticket 05).
+  // `scrollContainerRef` destructure.
   const {
     onDecodeError,
     onTransformChange,
@@ -792,7 +792,7 @@ function renderSkeleton(aspectRatio: number | null): ReactNode {
 function ImageStageImg(props: {
   readonly url: string;
   readonly fileName: string;
-  /** Ticket 07 closing E2E item: see {@link ImagePreviewProps.servedFromCache}. */
+  /** See {@link ImagePreviewProps.servedFromCache}. */
   readonly servedFromCache: boolean;
   readonly setImgRef: (el: HTMLImageElement | null) => void;
   readonly onDecodeError: () => void;

@@ -583,7 +583,7 @@ describe("FallbackSettingsPanel - reset reads from the refetch, never the mutati
     //
     // The mutation resolves with a policy that is DISABLED and has a
     // DIFFERENT grace window - if the panel ever wrote this response into the
-    // reducer (the D116/D127 bug this test exists to catch), the assertions
+    // reducer (the bug this test exists to catch), the assertions
     // below would see these values instead of the refetch's.
     fallbackMocks.resetMutateAsync.mockImplementationOnce(() => {
       // Put the post-reset policy in the cache the panel is about to READ. The
@@ -2253,7 +2253,7 @@ describe("FallbackSettingsPanel - cold review R1/R2: a failed read-back, and a w
     // no existing test had ever had reason to notice. The property this pin
     // needs is only that TYPING sends nothing, and that is what this now says.
     // NOT focused, deliberately, and this is the second thing the fixture got
-    // wrong. `commitOnLeave` commits the group name on BLUR (D181), and Radix
+    // wrong. `commitOnLeave` commits the group name on BLUR, and Radix
     // restores focus to the Select's trigger asynchronously after
     // `chooseOption` - so focusing the input here handed it a blur on the next
     // flush and committed "opus" as a third save. That is the blur rule working

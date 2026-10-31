@@ -1786,12 +1786,12 @@ export class TabCommandCoordinator {
     pruneRecoveryEpics(epicIds);
     const ids = new Set(epicIds);
     if (ids.size === 0) return;
-    // Ticket 15 (decision #29): drop every durable chat-key entry under
+    // Drop every durable chat-key entry under
     // these epics across all seven per-tab registries - independent of
     // whether any tab for them is currently open (a chat can leave a
     // durable entry behind long after its own tab closed).
     //
-    // Ticket 15 (item 2): ONE batched call, not a `forEach`
+    // (item 2): ONE batched call, not a `forEach`
     // of the singular per-epic evict - the canvas close sweep below writes
     // durable state back for whichever of these epics still had open tiles,
     // so every epic in this access-loss batch must still be fenced by the

@@ -75,9 +75,9 @@ import type { HotDocEvictionOutcome } from "./epic-runtime-accounting-port";
  * Per-artifact-room Y.Doc replicas mirroring the host-side artifact-rooms. The
  * runtime treats these as the GUI-side authority for artifact body fragments;
  * editors bind to `artifactRoom.doc.getXmlFragment(artifact-body:{id})` rather
- * than to anything inside the root Epic doc (per Decision 7 in the artifact-room
- * approach spec). Kept outside any projection because `Y.Doc` mutates in place
- * and cannot cross a structured clone - the rooms plane publishes its own
+ * than to anything inside the root Epic doc.
+ * Kept outside any projection because `Y.Doc` mutates in place and cannot
+ * cross a structured clone - the rooms plane publishes its own
  * availability slice and binding epoch for reactivity instead, and callers reach
  * the live fragment through the runtime's escape hatches.
  */
@@ -113,9 +113,8 @@ export interface ArtifactRoomReplicaEntry {
    * Local artifact-room-body updates produced while the stream is not ready to
    * send are queued here and replayed once the fresh root snapshot confirms
    * write permission. This mirrors the root-doc unsynced queue so reconnect
-   * windows do not silently discard user edits - see ticket
-   * 4a598302-ac79-47a5-a686-cc9e35bde18b "GUI artifact-room-doc awareness and
-   * reconnect-safe body edits".
+   * windows do not silently discard user edits: artifact-room-doc awareness
+   * and reconnect-safe body edits.
    *
    * On viewer downgrade the queue is cleared (fail-closed). When a
    * `artifactRoomSnapshot` arrives, the queue is collapsed into a single

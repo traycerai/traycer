@@ -21,7 +21,7 @@ interface DraftRowProps {
   readonly row: DraftInventoryRow;
   /** Where the draft came from, or `null` when the list is already scoped. */
   readonly sourceChip: string | null;
-  /** Phones swap the key hints for tappable trailing buttons (D22). */
+  /** Phones swap the key hints for tappable trailing buttons. */
   readonly mobile: boolean;
   readonly onHighlight: () => void;
   readonly onOpen: (input: AnalyticsDraftInput) => void;
@@ -31,7 +31,7 @@ interface DraftRowProps {
 
 /**
  * The draft's text, wrapped and clamped to three lines, then a metadata line
- * with the row's provenance and its age. (D13 originally drew a derived title
+ * with the row's provenance and its age. (an earlier row drew a derived title
  * above a one-line preview; for the usual one-line draft that printed the
  * same words twice.) Hover or highlight trades the age for the three actions,
  * which is the same swap the prompt stash used - the metadata and the actions

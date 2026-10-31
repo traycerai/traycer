@@ -235,7 +235,7 @@ export function joinCostClauses(
 /**
  * The hold the host declined - the chooser says so.
  *
- * NO CAUSE, deliberately (D220). This used to end "— this chat has moved on",
+ * NO CAUSE, deliberately. This used to end "— this chat has moved on",
  * which is one cause stated as the only one and unproven at every site that
  * renders it: an ACCEPTED ack carrying no token refuses too (the host took the
  * freeze and minted nothing), and since B1 made reopening from `choosing` a
@@ -332,7 +332,7 @@ export function describeWaitDisposition(
       // SILENT, deliberately.
       //
       // The line here used to read "Waiting isn't available for this message."
-      // It claimed no cause, which was right (D220 - the host withheld the wait
+      // It claimed no cause, which was right (the host withheld the wait
       // replay envelope, and why is not ours to state), but a sentence that
       // claims no cause and names no remedy is a sentence with nothing in it.
       // The reader never saw a wait control on this row, so its absence needs

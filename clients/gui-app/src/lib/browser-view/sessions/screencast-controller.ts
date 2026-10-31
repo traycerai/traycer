@@ -111,7 +111,7 @@ export interface ScreencastControllerListeners {
 }
 
 /**
- * Ticket 15's input transport: the video plane's DataChannels, as one
+ * The input transport: the video plane's DataChannels, as one
  * function. `false` means the channel could not take the frame, and the
  * controller re-sends it on the mux - which is what keeps every discrete frame
  * on exactly one transport across a switchover.
@@ -263,8 +263,8 @@ export function createScreencastController(options: {
   readonly listeners: ScreencastControllerListeners;
   /**
    * The host's measured control-plane RTT for this subscription, or `null`
-   * before any `rttProbe` has landed. Only the arm buffer's timeout reads it
-   * (ticket 18), and only when a press is buffered.
+   * before any `rttProbe` has landed. Only the arm buffer's timeout reads
+   * it, and only when a press is buffered.
    */
   readonly readControlPlaneRttMs: () => number | null;
   /**
@@ -370,7 +370,7 @@ export function createScreencastController(options: {
 
   /**
    * The element a pointer's coordinates are normalized against: whichever
-   * plane is PAINTING, since exactly one ever is (ticket 26) and both are
+   * plane is PAINTING, since exactly one ever is, and both are
    * `object-contain` inside the same overlay button. `null` for the whole
    * loader window - a mounted-but-blank `<video>` is not a surface - and a
    * pointer frame built against nothing is dropped rather than misaimed.

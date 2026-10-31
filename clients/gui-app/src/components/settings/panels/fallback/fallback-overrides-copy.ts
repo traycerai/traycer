@@ -147,7 +147,7 @@ export const REASON_ROW_NOTES: Readonly<
 };
 
 /**
- * D142/D146: the matrix authors step choices, not every wire policy value.
+ * The matrix authors step choices, not every wire policy value.
  *
  * The first clause used to promise the HOLD survived an all-off row -
  * *"preserves that failure's pre-retry/hold behavior and terminal Notify"* -
@@ -160,7 +160,7 @@ export const REASON_ROW_NOTES: Readonly<
  * those: the brief same-tuple retry the two outage-shaped failures do before
  * anything else (which is not a step and has no chip), and the notification at
  * the end. The two clauses that were already true are kept word for word -
- * "does not author" is the D146 scope limit, and "Notify stays last" is a
+ * "does not author" is the scope limit, and "Notify stays last" is a
  * promise `togglePolicyOverrideRung` is built to keep.
  *
  * "Cancellation window", never "grace": the vocabulary table bans the latter -
@@ -168,7 +168,7 @@ export const REASON_ROW_NOTES: Readonly<
  * "cancellation window" was itself unexplained vocabulary. The ban
  * is on "grace"; plain words for the same thing are fine.
  *
- * The user-facing sentence also drops the D146 scope limit - *"this editor does not
+ * The user-facing sentence also drops the scope limit - *"this editor does not
  * author the wire's per-reason off value"* - which the doc above keeps. It
  * describes what this EDITOR cannot write, a distinction visible only to
  * someone comparing the panel against the wire format; a reader deciding

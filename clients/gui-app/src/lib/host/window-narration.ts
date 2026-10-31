@@ -10,7 +10,7 @@ import {
 
 /**
  * WHAT THE WINDOW NARRATOR SAYS, as a pure function of the authority's
- * projection (status narration, D10).
+ * projection (status narration).
  *
  * Exactly one narrator per scope: this module owns the WINDOW scope, and the
  * window scope owns exactly two facts - "nothing can serve this window" and

@@ -915,7 +915,7 @@ describe("<ActivityGroupSegment /> live window", () => {
   // which is exactly what a tab remount does.
   it("keeps the preserved header across a remount of the still-open group", () => {
     // The SAME store across both mounts - which is precisely what a tab switch
-    // does (the registry hands the tile back its existing store, decision #17).
+    // does (the registry hands the tile back its existing store).
     // `ChatExpansionTestProviders` passes `store={null}` and would hand out a
     // fresh one, hiding the whole defect.
     const store = createActivityGroupOpenStore(null);

@@ -630,7 +630,7 @@ describe("Settings - Layout", () => {
 
       // The eye button on every rail list row is what used to undo this: it
       // wrote through `regionShownOnValue`, so two presses anywhere on the
-      // page turned the pin back into `auto` without saying so (D5). There is
+      // page turned the pin back into `auto` without saying so. There is
       // one control per region now, and nothing else on the page can reach
       // this value.
       expect(

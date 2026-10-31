@@ -1370,7 +1370,7 @@ function buildDistrict(
   });
 
   // The skyline is raised before a single building is built, so the plan can
-  // say where each one is PAINTED (D53) while it is still laying them out.
+  // say where each one is PAINTED while it is still laying them out.
   const origin: IsoOrigin = { rows: pack.rows, stackHeight: pack.stackHeight };
 
   const rooms: OfficeRoom[] = [];

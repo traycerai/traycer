@@ -230,7 +230,7 @@ export interface ImageDiffViewProps {
   readonly newStage: "staged" | "unstaged" | null;
   readonly fileName: string;
   readonly conflicted: boolean;
-  /** Drops the shared toolbar and all gestures for bundle use - static fit only (decision #18; ticket 07). */
+  /** Drops the shared toolbar and all gestures for bundle use - static fit only. */
   readonly compact: boolean;
   /** `null` when there is no single unambiguous file on disk to open for a per-side failure (e.g. a bundle row). */
   readonly onOpenExternally: (() => void) | null;
@@ -238,10 +238,10 @@ export interface ImageDiffViewProps {
 }
 
 /**
- * Two `ImagePreview` instances side by side (per
- * decision #9), always two columns - a missing side renders an Added/Deleted
+ * Two `ImagePreview` instances side by side, always two
+ * columns - a missing side renders an Added/Deleted
  * empty state rather than collapsing to one column. Zoom + pan are LINKED
- * (decision #17, rebuilt on `react-zoom-pan-pinch` - ticket 07):
+ * (rebuilt on `react-zoom-pan-pinch`):
  * - The shared toolbar's fit/actual/zoom buttons drive BOTH sides
  *   independently and instantly (`animationTime: 0`, so `onTransform` fires
  *   once synchronously per side, never mid-animation) - each side computes
@@ -252,14 +252,14 @@ export interface ImageDiffViewProps {
  *   `setTransform` - exact for same-dimension sides. `setTransform` calls
  *   the library's `setState` directly and bypasses `limitToBounds` entirely,
  *   so for mismatched dimensions the mirrored position is clamped against
- *   the peer's OWN live bounds first - sane containment only (ticket 07: "do
+ *   the peer's OWN live bounds first - sane containment only ("do
  *   not over-engineer sub-pixel alignment for mismatched dimensions"), never
  *   a reimplementation of the library's padding-aware bounds engine.
  * - A PROGRAMMATIC transform (this side's own resize-refit, or a
  *   double-click) is never mirrored at all: each side recomputes its own
  *   fit/actual-size independently instead.
  * Compact (bundle) variant: static fit only, no toolbar, no gestures -
- * matches decision #18's affordance-free intent.
+ * matches the affordance-free intent.
  */
 export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
   const oldTransformRef = useRef<ReactZoomPanPinchRef | null>(null);
@@ -444,8 +444,8 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
     dualDispatch((instance) => instance.zoomOut(ZOOM_STEP, 0));
   }, [dualDispatch]);
 
-  // Matches the shared toolbar's own instant dual-dispatch
-  // rather than letting one side's internal handler run solo
+  // Matches the shared toolbar's own instant dual-dispatch rather than
+  // letting one side's internal handler run solo
   // - that would mirror a raw fit/actual transform computed for THIS side's
   // size onto the differently-sized peer instead of the peer computing its
   // own.
@@ -597,7 +597,7 @@ function dispatchToSide(
  * gestures) - position bounds are then computed at that CLAMPED scale, not
  * the raw mirrored one, so they describe the transform actually being
  * applied. Sane containment only, not a reimplementation of the library's
- * padding-aware bounds engine (ticket 07: "do not over-engineer sub-pixel
+ * padding-aware bounds engine ("do not over-engineer sub-pixel
  * alignment for mismatched dimensions"). Increments the PEER's own pending
  * count, never a shared synchronous bracket - the peer's `onTransform`
  * consuming it is what suppresses the echo, correct however long delivery
@@ -707,7 +707,7 @@ function ImageDiffSide(props: {
       fileName={props.effectivePath}
       compact
       gesturesEnabled={!props.compact}
-      // One motion language within the diff view (ticket 07, better-ui
+      // One motion language within the diff view (better-ui
       // audit): double-click is intercepted entirely by
       // `doubleClickOverride` - it drives the shared toolbar's own
       // dual-dispatch instead of this instance's internal

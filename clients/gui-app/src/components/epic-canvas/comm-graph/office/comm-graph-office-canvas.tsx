@@ -2764,7 +2764,7 @@ export interface CommGraphOfficeCanvasProps extends CommGraphCanvasProps {
    * frame), so a framing made within that window is still pending when a mode
    * switch unmounts this canvas - and the unmount cancels the timer, which is
    * the right thing for the VIEW-PICK remount (a pan on the old view must not
-   * land on the new one) but wrong for a mode switch, which D68 promises keeps
+   * land on the new one) but wrong for a mode switch, which the camera split promises keeps
    * each renderer's camera. So the tile calls the registered function before a
    * mode change: it clears the pending timer and returns the patch that would
    * have been persisted, or `null` when nothing is pending, and the tile folds

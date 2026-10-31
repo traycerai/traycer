@@ -281,7 +281,7 @@ function deferredWindowedSnapshot(
       // below drives the DEFERRAL branch, not the ordinary fold. `rowCount: 2`
       // with `fromOrdinal: 0` below leaves ordinal 1 uncovered, so a partial
       // range genuinely stays partial rather than accidentally completing the
-      // tail (the D219 trap `last-fallback-outcome`'s re-entry test hit).
+      // tail (the trap `last-fallback-outcome`'s re-entry test hit).
       transcriptEpoch: 4,
       rowCount: 2,
       indexRevision: null,

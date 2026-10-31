@@ -13,7 +13,7 @@ import {
  * replacement at MODULE LOAD TIME (before any test body runs, so it is in
  * place before this coordinator's lazily-constructed singleton observer is
  * ever created) lets these tests fire real RO callbacks on demand. Same
- * technique this repo already used for the ticket-17/18 stack's height-only
+ * technique this repo already used for the height-only
  * resize pin.
  */
 class ControllableResizeObserver implements ResizeObserver {
@@ -262,7 +262,7 @@ describe("unregister and re-registration", () => {
 
     // The first registration's own cleanup fires late, after the second
     // registration has already replaced it under the identical key -
-    // exactly the StrictMode double-invoke ordering ticket 22's sentinel
+    // exactly the StrictMode double-invoke ordering the sentinel
     // bug got wrong ("cleanup cancelled but didn't clear").
     unregisterFirst();
 

@@ -15,7 +15,7 @@ import {
 } from "@/stores/notifications/needs-you-items";
 
 /**
- * `selectNeedsYouItems` / `needsYouReasonOf` (D10): the pure selector behind
+ * `selectNeedsYouItems` / `needsYouReasonOf`: the pure selector behind
  * the Notifications drawer's Needs you group and its count. Rows are built by hand rather
  * than through a live store, since the selector's contract is entirely a
  * function of the merged row - resolution, host kind, and payload. The group's

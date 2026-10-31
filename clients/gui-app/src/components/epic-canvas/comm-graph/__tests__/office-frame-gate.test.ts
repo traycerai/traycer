@@ -335,7 +335,7 @@ describe("isElementInViewport", () => {
     // case reads `true` even though a tile scrolled out of an
     // `overflow-hidden` epic canvas is not really on screen - the
     // IntersectionObserver is the authority on that and tears the eligible
-    // state back down a beat later. Same geometry as before D68, flipped
+    // state back down a beat later. Same geometry as before the camera split, flipped
     // expectation.
     stubViewport(1024, 768);
     const parent = document.createElement("div");

@@ -1,9 +1,8 @@
 /**
- * Ticket 21 slice 2: the canvas-wide, transaction-aware set of chat
+ * The canvas-wide, transaction-aware set of chat
  * `instanceId`s a stable tile surface host must keep painted.
  *
- * Three layers, matching the design (`ticket-21-stable-tile-surface-identity`,
- * "Host membership and lifecycle"):
+ * Three layers, matching the design's "Host membership and lifecycle":
  *
  * 1. Canvas-wide RETAINED identity - the chat tiles each pane, across every
  *    open top-level tab's canvas, keeps alive: the one it currently shows,
@@ -13,7 +12,7 @@
  *    membership.
  *
  *    This layer used to admit the SELECTED chat only, which made an inner
- *    pane tab switch a real unmount (decision #17) and left the reader
+ *    pane tab switch a real unmount and left the reader
  *    watching the transcript re-converge on the way back. Retention is
  *    derived through the shared `retainedPaneChatInstanceIds` policy, and -
  *    critically - the WINDOW is picked on tile kind alone, with eligibility
@@ -49,14 +48,14 @@
  * `useEpicCanvasStore`, `useTabsStore`, `tabCommandCoordinator`, and
  * `remote-deleted-chat-registry.ts` - deriving from observed state at each
  * checkpoint rather than trusting any one store's change to imply the others
- * are consistent (the same observation-over-claim lesson slice 1's identity
+ * are consistent (the same observation-over-claim lesson the identity
  * machinery learned the hard way).
  *
  * A selected chat also has to pass `isHostedSurfaceEligible` (shared with
  * `surface-owner.ts`'s render-routing decision)
  * - a remote-deleted chat leaves membership the same instant
  * `ActiveTabBody` reports it, so the registry entry it's holding gets cleared
- * by slice 2's existing membership-loss subscription instead of lingering
+ * by the existing membership-loss subscription instead of lingering
  * alongside the inline `DeletedArtifactBody`.
  */
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";

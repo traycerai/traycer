@@ -77,7 +77,7 @@ function hostFeedStayedOnOrigin(input: {
  * leaves it unread via server truth (no optimistic read-state here for a
  * failed write to reconcile).
  *
- * Activation does NOT move the app-wide selection (redesign P1.2, D7): the
+ * Activation does NOT move the app-wide selection (redesign P1.2): the
  * routed surface resolves against the effective host or its own tab binding,
  * and a notification click is not the user answering "which host do you work
  * on" - that gesture exists only in Settings ▸ Activate. The origin-host
@@ -117,7 +117,7 @@ export function useNotificationActivationWithNavigate(
   const effectiveHostId = useEffectiveHostId();
   // APP-WIDE BY INTENT, and it must stay that way if this ever mounts under a
   // host-scoped subtree. `beforeRouteHostId`/`afterRouteHostId` below record
-  // which host the WINDOW was addressing across an activation (D7: it must not
+  // which host the WINDOW was addressing across an activation (it must not
   // move) - that is a property of the window, not of whatever surface happens
   // to be on screen, and a scoped panel's host would report a move that never
   // happened. Reading it off the spine stopped meaning anything when P4.2
@@ -154,7 +154,7 @@ export function useNotificationActivationWithNavigate(
       // ORIGIN-REQUIRED routes may not fall back to the hostless intent.
       //
       // `ensureOriginHostSelected` used to carry two rules at once: it SELECTED
-      // the origin host (which D7 forbids - a notification click is not the
+      // the origin host (which is forbidden - a notification click is not the
       // app-wide selection's writer, and P1.2 removed it), and it REFUSED an
       // activation it could not route to that host. Deleting the function took
       // the refusal with the switch. An approval or interview raised on host B
@@ -202,7 +202,7 @@ export function useNotificationActivationWithNavigate(
           // READ LIVE, and that is the whole point of this line.
           //
           // The guard asks "did the app-wide pointer move while we were
-          // routing" (D7: a notification activation must not switch the
+          // routing" (a notification activation must not switch the
           // window's host). It used to ask the client twice, which worked
           // only because `bind()` mutated one shared object between the two
           // reads. `client` above is an id-pinned requester and CANNOT

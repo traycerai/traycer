@@ -195,7 +195,7 @@ function publishLease(status: "restarting-expected" | "connecting"): void {
 }
 
 /**
- * D4: an announced restart holds the wait on every tile. While the lease says
+ * An announced restart holds the wait on every tile. While the lease says
  * `restarting-expected`, `host-starting` does not fall at the budget, and a
  * directory `offline` reads `host-starting`. The lease's own bounds end the
  * hold, and the budget starts when it stops vouching. The fall with no lease at

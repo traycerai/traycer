@@ -2270,7 +2270,7 @@ describe("<RateLimitPopover /> rail", () => {
       "claude-code": readyResult(claudeReady()),
     };
     renderPopover();
-    // Fixup C #4: the "All providers" header (and its divider) is gone; only the
+    // The "All providers" header (and its divider) is gone; only the
     // between-block dividers remain: 2 providers -> 1 divider. PopoverContent
     // portals to body.
     expect(document.querySelectorAll('[class*="bg-border/70"]').length).toBe(1);
@@ -2404,7 +2404,7 @@ describe("<RateLimitPopover /> rail", () => {
       }),
     };
     renderPopover();
-    // Fixup C #1: 5h primary -> relative countdown; weekly secondary -> absolute
+    // 5h primary -> relative countdown; weekly secondary -> absolute
     // full calendar date/time. Both split the same way as the Settings card.
     expect(screen.getByText(/^Resets in /)).toBeTruthy();
     expect(

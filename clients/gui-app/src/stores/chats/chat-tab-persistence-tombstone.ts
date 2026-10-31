@@ -1,6 +1,6 @@
 /**
- * Ticket 15 (chat-delete/epic-access-loss durable
- * resurrection): a chat's mutation-driven deletion and the canvas sweep's
+ * Chat-delete/epic-access-loss durable
+ * resurrection: a chat's mutation-driven deletion and the canvas sweep's
  * own promote-then-evict pass (store.ts) race - the sweep runs first
  * (synchronous, on tab close) and the deletion's `onSuccess` fires later
  * (after the host round-trip), so a naive "delete durable state" call in
@@ -22,13 +22,13 @@
  * fills that gap; a chat tile mounting under a given epic is the signal that
  * the epic is open/accessible again, so it clears both.
  *
- * Ticket 15: the epic-prefix set is bounded the
+ * The epic-prefix set is bounded the
  * same FIFO way as the exact-key set, for the same reason - a session that
  * loses access to many epics without any of them being reopened should not
  * grow this (and `isChatKeyTombstoned`'s per-write linear scan over it)
  * without limit.
  *
- * Ticket 15: `tombstoneChatKey`
+ * `tombstoneChatKey`
  * fires from `epic.deleteChat`'s `onSuccess` (use-epic-chat-mutations.ts) -
  * AFTER a real host round-trip, not synchronously with the delete click.
  * `clearChatKeyTombstone` fires from a chat tile's mount effect
@@ -50,7 +50,7 @@
  * ordering or the epic-doc sync path, both outside this persistence
  * mechanism (tombstone set + initialized-marker set only).
  *
- * Ticket 15 (item 2): a fence must survive its own
+ * (item 2): a fence must survive its own
  * transaction. `handleEpicAccessLoss` tombstones every epic in one batch,
  * THEN the canvas sweep runs (writing durable state back for whichever of
  * those epics still had open tiles) - so within a single access-loss batch

@@ -6,7 +6,7 @@ import {
 } from "@/lib/browser-view/sessions/peek-frame-cache";
 
 /**
- * `snapshotVideoFrameIntoPeekCache` guards (ticket 13). jsdom has no real
+ * `snapshotVideoFrameIntoPeekCache` guards. jsdom has no real
  * canvas 2D backend, so `getContext`/`toDataURL` are stubbed the same way
  * `image-preview-clipboard.test.ts` stubs them - what this file pins is the
  * GUARD logic and the cache write/key, not the actual JPEG encode of a real

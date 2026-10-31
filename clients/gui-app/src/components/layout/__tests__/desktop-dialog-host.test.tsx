@@ -154,7 +154,7 @@ const snapshot: DesktopSupportSnapshot = {
 
 const EPIC_A = { id: "e-a", name: "A", draft: false };
 
-// A faithful-enough stand-in for `support:buildPublicDraft` (ticket 09/07):
+// A faithful-enough stand-in for `support:buildPublicDraft`:
 // echoes the form back the way the real builder would with no
 // `privateDiagnostics.cause` (these tests never attach one) - the derived
 // title falls back to the user's own intent text (unmodified, since these
@@ -842,7 +842,7 @@ describe("<DesktopDialogHost />", () => {
   // type-chip routing, all four delivery states, confirmation persistence,
   // preview flow) lives in report-issue-capture-dialog.test.tsx - these are
   // wire-level smoke tests proving the store <-> dialog <-> support bridge
-  // round trip still works after the ticket 07 rewrite.
+  // round trip still works after the rewrite.
 
   it("opens a true manual report with type chips and an empty intent field", async () => {
     useDesktopDialogStore.getState().openReportIssue();

@@ -1955,7 +1955,7 @@ describe("partitionOfficePopulation", () => {
       // HQ - Q holds the office now - so R reads as a later root leading a
       // team of its own, and L is its child. Adoption would quietly move L
       // into team R and leave team L standing with M in it and L outside,
-      // which is the very shape this whole chain of fixups exists to ban.
+      // which is the very shape this whole chain of fixes exists to ban.
       const base: ReadonlyArray<OfficeAgentInput> = [
         agent({ id: "R", hostId: "host-a", createdAt: 0 }),
         agent({ id: "L", parentId: "R", hostId: "host-a", createdAt: 1 }),
@@ -2001,7 +2001,7 @@ describe("partitionOfficePopulation", () => {
   /**
    * THE WHOLE FAMILY OF TRANSITIONS, NOT A LIST OF THE ONES SOMEBODY THOUGHT OF.
    *
-   * Six fixups of this file were each found by a reader constructing one more
+   * Six fixes of this file were each found by a reader constructing one more
    * sequence by hand, and every one of them was a shape the cases above had no
    * reason to reach. The rows are still worth having - they say what the office
    * is SUPPOSED to look like - but they cannot be what closes the question, so

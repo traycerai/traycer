@@ -1,6 +1,6 @@
 /**
  * Client-side conversion of the retired prompt stash into closed start-page
- * drafts (D19). Two entry points share one converted map and one install
+ * drafts. Two entry points share one converted map and one install
  * sequence:
  *
  * - `migrateLocalStash()` reads the app-global IndexedDB stash once per

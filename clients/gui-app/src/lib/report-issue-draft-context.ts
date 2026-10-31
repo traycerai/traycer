@@ -61,8 +61,8 @@ export interface ReportIssuePrivateDiagnostics {
 /**
  * Draft context assembled once at report-open: `publicPrefill` is the
  * existing caller-declared public-safe contract (unchanged);
- * `privateDiagnostics` is the new private branch. Ticket 04 owns the IPC wire
- * shape that carries `privateDiagnostics` to Electron main; this module
+ * `privateDiagnostics` is the new private branch. The IPC wire shape that
+ * carries `privateDiagnostics` to Electron main lives elsewhere; this module
  * exports {@link serializeReportIssuePrivateDiagnostics} as the plain-JSON
  * shape for that wire to plug into.
  */
@@ -80,7 +80,7 @@ export function isReportIssueDraftContext(
 /**
  * Assembles the full draft context from an already-normalized public prefill
  * plus an optional error capture: pulls the current support-context registry
- * snapshot (D5) for session state, and reuses the correlation id / fingerprint
+ * snapshot for session state, and reuses the correlation id / fingerprint
  * / stack family already minted by `captureReportIssueError` at catch time -
  * it does NOT recompute them, so the private report stays joined to the
  * actual Sentry event even if the registry has since drifted (user navigated
@@ -142,7 +142,7 @@ export function createReportIssueDraftContext(input: {
 /**
  * Plain-JSON shape of {@link ReportIssuePrivateDiagnostics}. Exported
  * separately (rather than trusting callers to serialize the interface ad
- * hoc) so the exact field list is a single, testable contract for ticket 04's
+ * hoc) so the exact field list is a single, testable contract for the
  * IPC wire shape to match: `cause` (type/message/stack/componentStack/
  * errorCode/sourceAction/timestamp), `registry`, `fingerprint`, `stackFamily`,
  * `correlationId`, `environment`.

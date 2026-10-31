@@ -102,7 +102,7 @@ export type MentionMenuAction =
   | { readonly kind: "complete"; readonly mention: MentionAttachment }
   /**
    * A tab on another host: attach snapshot context (text line + screenshot)
-   * rather than a mention the agent could try to drive (spec decision #10).
+   * rather than a mention the agent could try to drive.
    */
   | {
       readonly kind: "attach-tab-preview";

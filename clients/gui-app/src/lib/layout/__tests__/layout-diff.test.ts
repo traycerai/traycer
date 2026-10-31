@@ -215,7 +215,7 @@ describe("Reset layout (L-20)", () => {
         // sidebar side too.
         tabStripPlacement: "right",
         sidebarSide: "right",
-        // D8: and the vertical strip's view.
+        // And the vertical strip's view.
         sideStripView: "activity",
         wideReadingWidthPx: 1600,
       },

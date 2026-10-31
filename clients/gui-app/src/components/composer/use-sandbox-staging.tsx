@@ -229,7 +229,7 @@ interface NewRowFacts {
 }
 
 /**
- * The composer and new-terminal pickers' staging (sandboxes redesign D9): the
+ * The composer and new-terminal pickers' staging (the sandboxes redesign): the
  * New rows, what a pick stages, the staged chip's label, the consequences
  * block's input and the shape sheet. A pick only stages; the surface's first
  * action runs the create or wake.

@@ -1,8 +1,8 @@
 /**
- * Ticket 21 slice 4: `TabGroupView`'s hosted-chat counterpart to
+ * `TabGroupView`'s hosted-chat counterpart to
  * `ActiveTabBody` - a pure geometry anchor and environment publisher, no
  * chat content of its own. The real `ChatTile`/`ChatMessages` body paints
- * inside `StableTileSurfaceHost`'s fixed plane (slice 3); this slot only
+ * inside `StableTileSurfaceHost`'s fixed plane; this slot only
  * marks WHERE that body should be positioned and publishes the environment
  * it needs to render itself correctly there.
  *

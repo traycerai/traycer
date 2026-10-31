@@ -22,7 +22,7 @@ import {
 } from "@/hooks/host/use-host-negotiated-method-version";
 
 /**
- * Pins the tri-state contract fixed by the A2 fixup: `null` for "not yet
+ * Pins the tri-state contract fixed by A2: `null` for "not yet
  * negotiated" must not collapse into `false` for "negotiated but absent",
  * mirroring `useHostMethodSupport`'s precedent.
  */

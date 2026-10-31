@@ -97,8 +97,8 @@ export function useEpicRouteSynchronization(
   const snapshotLoaded = useEpicSnapshotLoaded();
   const persistedFocus = useEpicLastFocusedArtifactId();
   const records = useEpicArtifactRecords();
-  // Same-host counterpart of the cross-host cloud fallback (chat-sync-v2
-  // ticket 36): `epic.listCloudChats` already excludes anything this host's
+  // Same-host counterpart of the cross-host cloud fallback:
+  // `epic.listCloudChats` already excludes anything this host's
   // own registry has tombstoned, so "still cloud-known" is what tells a
   // never-adopted chat apart from a genuinely deleted one for
   // `isTileRefRecordLive` below. `useCloudChatList`'s TanStack Query cache is

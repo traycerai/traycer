@@ -591,8 +591,8 @@ export function projectDefaultHostReadiness(args: {
 }
 
 /**
- * Whether the WINDOW NARRATOR owns this readiness kind (status narration,
- * D10).
+ * Whether the WINDOW NARRATOR owns this readiness kind (status
+ * narration).
  *
  * Exactly one narrator per scope is the rule, and these three kinds are the
  * ones the global modal now speaks for: a window with no host yet, a window

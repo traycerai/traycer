@@ -58,7 +58,7 @@ import { useLayoutStore } from "@/stores/layout/layout-store";
  * column, the sample workspace's copy of it and the inspector's own picture.
  *
  * Served here because this module is the rail's own ancestor seam - what it
- * answers is which panels EXIST and in what order, and D11 keeps a specimen's
+ * answers is which panels EXIST and in what order, and the contract keeps a specimen's
  * preview out of a read that decides a mount.
  */
 export function useLayoutRail(): ReadonlyArray<RailEntry> {
@@ -137,7 +137,7 @@ export function unstackRailMember(panelId: LeftPanelId): void {
 /**
  * The per-epic sidebar's side (S-06), written from the rail's own "Move
  * sidebar to..." menu item (S-32) through `writeArrangementField`, the
- * surface placements' one writer (D14).
+ * surface placements' one writer.
  */
 export function setSidebarSide(side: EdgeSide): void {
   writeArrangementField("sidebarSide", side);

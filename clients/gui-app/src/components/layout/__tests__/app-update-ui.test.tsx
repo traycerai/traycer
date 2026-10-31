@@ -373,7 +373,7 @@ describe("desktop app update UI", () => {
     expect(bridge.downloadUpdate).toHaveBeenCalledTimes(1);
   });
 
-  // The strip foot's row layout (D6): the same states, drawn as a full-width
+  // The strip foot's row layout: the same states, drawn as a full-width
   // row with the state spelled out in text, present only while an update is
   // actually pending - absent for idle, same as the icon layout.
   it("row layout: shows the update row only while an update is pending", async () => {

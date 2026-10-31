@@ -1,6 +1,6 @@
 /**
  * Pure pan/zoom transform math shared between `ImagePreview` and
- * `ImageDiffView` (ticket 07) - kept out of `image-preview.tsx` so that
+ * `ImageDiffView` - kept out of `image-preview.tsx` so that
  * file stays component-only (Fast Refresh only works when a file exports
  * ONLY components).
  */
@@ -75,7 +75,7 @@ const MIN_SAFE_SCALE = 1e-3;
  * setup entirely (verified against installed v4.0.4's `setState`), so this
  * clamp is the only one that applies to a caller-supplied fit scale. Used by
  * `ImageDiffView` to compute the SAME fit independently for each of its two
- * linked sides (ticket 07) rather than forcing one side's shared number onto
+ * linked sides rather than forcing one side's shared number onto
  * a differently-sized peer.
  */
 export function fitScaleFor(
@@ -143,7 +143,7 @@ const MIN_VISIBLE_OVERLAP_PX = 1;
  * loosest bound that guarantees at least `MIN_VISIBLE_OVERLAP_PX` of
  * overlap between the scaled content rect and the wrapper rect on one
  * axis, nothing tighter. Deliberately NOT a reimplementation of the
- * library's own padding-aware bounds engine (ticket 07: "do not over-
+ * library's own padding-aware bounds engine ("do not over-
  * engineer sub-pixel alignment for mismatched dimensions") - a same-
  * dimension mirror (the common case) is already exact and never gets
  * anywhere near this range; only a genuine mismatch can.

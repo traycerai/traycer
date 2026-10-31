@@ -1,5 +1,5 @@
 /**
- * Ticket 21 slice 3: dedicated physical DOM identity for hosted tile
+ * Dedicated physical DOM identity for hosted tile
  * surface records.
  *
  * Portal events follow the React tree, not the physical pane tree, so a
@@ -11,9 +11,9 @@
  *
  * Wiring these attributes into the four broken lookup paths (chat keyboard
  * ownership, command-to-composer, route focus, deferred pane-activation
- * containment) is slice 4's "host-aware activation/focus resolution" per
- * the design's own slice table - this module and `hosted-tile-resolver.ts`
- * are the infrastructure slice 4 wires in, not the wiring itself.
+ * containment) is the "host-aware activation/focus resolution" the design
+ * calls for - this module and `hosted-tile-resolver.ts`
+ * are the infrastructure that wiring needs, not the wiring itself.
  */
 export const HOSTED_TILE_INSTANCE_ID_ATTRIBUTE = "data-hosted-tile-instance-id";
 export const HOSTED_TILE_PANE_ID_ATTRIBUTE = "data-hosted-canvas-pane-id";

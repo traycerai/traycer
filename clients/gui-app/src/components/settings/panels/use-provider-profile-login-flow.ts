@@ -908,7 +908,7 @@ export function useProviderProfileLoginFlow(
       liveLoginRef.current = null;
       lastAnswerRef.current = null;
       lastTouchAtRef.current = 0;
-      // Statefulness fixup: without this, a restart's fresh `CodePasteField`
+      // Without this, a restart's fresh `CodePasteField`
       // (remounted via `key={attemptId}`) would still render the PREVIOUS
       // attempt's `submitError`/pending flags off the shared mutation
       // object, since TanStack Query mutation state otherwise persists

@@ -404,7 +404,7 @@ describe("<BundleFileSection /> image routing", () => {
     expect(screen.getAllByTestId("bundle-image-preview")).toHaveLength(2);
   });
 
-  // Live E2E (ticket 06) found a real conflicted binary image falling
+  // Live E2E found a real conflicted binary image falling
   // through to the old generic bundle placeholder instead of ImageDiffView.
   // The host's bulk listChangedFiles numstat path has no MERGE_HEAD-aware
   // fallback for unmerged paths, so `isBinary: false` is the REAL shape a

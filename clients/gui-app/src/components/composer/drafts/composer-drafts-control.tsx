@@ -431,7 +431,7 @@ function isPlainPrintableKeydown(event: KeyboardEvent): boolean {
  * printable closes the list and reaches the still-focused editor, which is how
  * the prompt stash behaved and why typing never got trapped behind it.
  * `useBareKeyClaimer` arbitrates WHO answers a claimed letter; this predicate
- * is what stops the close-on-printable branch from firing first (D6),
+ * is what stops the close-on-printable branch from firing first,
  * which is precisely the bug a hardcoded `d` left in the stash.
  *
  * Read from `key`, not `code`, on purpose: these are accelerators on the

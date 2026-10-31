@@ -1290,7 +1290,7 @@ describe("fallbackAnnouncementPlan: the announcer reads the frame the card reads
 
   const RESUME_SENTENCE = `The chat will resume on ${FAILED_IDENTITY}.`;
 
-  // The live D8 frame: a profile rung whose target is the account that
+  // The live frame: a profile rung whose target is the account that
   // failed. The card said "Resuming in 12s"; the announcer said "The chat will
   // switch to" that same account.
   it("a profile rung whose target is the failed tuple announces a resume, never a switch - hold and switching", () => {

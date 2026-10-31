@@ -30,7 +30,7 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
  * Which side of which surface an image asset came from - the routing part of
- * the blob-cache key (decision #11).
+ * the blob-cache key.
  */
 type FileAssetSource = "workspace" | "git-old" | "git-new";
 
@@ -127,8 +127,8 @@ const LOADING_STATE: FileAssetState = {
 export type FileAssetRenderKind = "image" | DocumentAssetKind;
 
 /**
- * Every `AssetStreamFailureReason` maps to the SAME uniform fallback UI
- * (decision #14) - this is only the one-line
+ * Every `AssetStreamFailureReason` maps to the SAME uniform fallback UI -
+ * this is only the one-line
  * message shown alongside it, per render kind so a document failure never
  * reads as an image bug ("not one of the supported image formats" next to a
  * PDF that the app usually previews would read as broken, not as a limit).
@@ -253,7 +253,7 @@ const FILE_ASSET_SCOPE_KEY = "file-asset";
 
 /**
  * Composite key for `imageBlobCache`: `hostScopeKey`/`source`/location/`filePath`/
- * `contentIdentity` (decision #11), as a JSON
+ * `contentIdentity`, as a JSON
  * array - not delimiter-joined, since any of those fields can legally
  * contain the delimiter and alias two different files onto the same key.
  * Git object sides are immutable by OID, so their key never changes for the
@@ -315,7 +315,7 @@ function requestKeyFor(request: FileAssetRequest): string {
  *
  * The generation specifically closes a worktree-file gap:
  * it is only ever an effect DEPENDENCY (triggers a worktree-backed request's
- * own refetch on refocus, decision #11), never part of the shared key before
+ * own refetch on refocus), never part of the shared key before
  * this - so a second, still-focused pane's refocus-triggered "refresh" could
  * silently JOIN a first pane's older in-flight transfer instead of forcing a
  * fresh one, defeating the exact staleness signal it exists to send.
@@ -357,7 +357,7 @@ function sharedSubscriptionKeyFor(
  * of any git object identity - the workspace file itself, or a git side's
  * "new" position while unstaged (worktree via fs).
  * Every other git side (staged/HEAD/index reads) is
- * immutable for the life of the session (decision #11): it must neither
+ * immutable for the life of the session: it must neither
  * re-fetch on refocus nor lose its cached blob to grace-window revocation.
  */
 function isWorktreeBackedRequest(request: FileAssetRequest): boolean {
@@ -420,7 +420,7 @@ interface SharedAssetSubscription {
 
 /**
  * Coalesces concurrent requests for the SAME (host, request) pair into ONE
- * underlying `AssetStreamClient` (ticket 09 follow-up):
+ * underlying `AssetStreamClient`:
  * the host reads and emits an entire asset synchronously in one call stack
  * the instant a stream opens, before any client-side close from a losing
  * consumer can land - so deduping only AFTER the fact (`imageBlobCache`'s
@@ -442,7 +442,7 @@ interface SharedAssetSubscription {
  * already handles that case correctly.
  *
  * A joiner can arrive in the window AFTER `assetHeader` already fired but
- * BEFORE settle (ticket 09 follow-up #2): the underlying
+ * BEFORE settle: the underlying
  * client only ever calls `onHeader` once, so a joiner registered after that
  * point would otherwise never see it - never acquiring its own
  * `imageBlobCache` lease, leaving it stuck at `"loading"` forever even
@@ -570,7 +570,7 @@ function acquireSharedAssetSubscription(
 
 /**
  * Fetches one image asset - a workspace file or one side of a git-tracked
- * file - over the ticket-01 asset stream, surfacing the header before bytes
+ * file - over the asset stream, surfacing the header before bytes
  * finish (for an aspect-ratio skeleton) and sharing the assembled bytes'
  * blob URL through the content-addressed `imageBlobCache`.
  *
@@ -589,8 +589,8 @@ function acquireSharedAssetSubscription(
  * right one to act on whenever the effect actually re-runs.
  *
  * On a re-focus of a worktree-backed request (a workspace file, or a git
- * side's unstaged worktree position), the stream reopens to re-stat the file
- * (decision #11); immutable git-object sides never do. Whichever request
+ * side's unstaged worktree position), the stream reopens to re-stat the
+ * file; immutable git-object sides never do. Whichever request
  * OWNS the shared cache fetch (the first to reach a given identity) keeps its
  * stream alive across its own unmount as long as the cache still has other
  * consumers - only the cache's own last-reference-drops abort, or this
@@ -637,7 +637,7 @@ export function useHostFileAsset(args: {
   const renderKind: FileAssetRenderKind =
     request === null ? "image" : renderKindFor(request);
 
-  // Re-stat on refocus (decision #11): only a worktree-backed request bumps
+  // Re-stat on refocus: only a worktree-backed request bumps
   // this on the pane's blurred->focused transition, so a still-mounted tile
   // reopens the stream and picks up an externally edited file. An immutable
   // git-object request never bumps it - refetching would only re-confirm the

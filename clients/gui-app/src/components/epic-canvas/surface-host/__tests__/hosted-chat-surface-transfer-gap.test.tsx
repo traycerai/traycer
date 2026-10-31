@@ -1,5 +1,5 @@
 /**
- * Ticket 21 slice 4: a header tear-off must
+ * A header tear-off must
  * not unmount/remount the hosted chat body. Reproduces the exact
  * transfer-gap discriminator - a REAL tear-off action moves the tile's
  * canvas entry to a destination tab in one synchronous `EpicCanvasStore`

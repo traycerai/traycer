@@ -121,10 +121,10 @@ export interface ScreencastSession {
    * The video plane's display state. `media` is non-null from the inbound
    * track onwards so the `<video>` can mount and decode; `active` says it has
    * decoded a frame and is the surface to show. The window in between is the
-   * loader's, never a JPEG frame kept alive underneath (ticket 26).
+   * loader's, never a JPEG frame kept alive underneath.
    */
   readonly video: VideoPlaneView;
-  /** The video plane's latest 5s stats sample (ticket 11); `null` off the live round. */
+  /** The video plane's latest 5s stats sample; `null` off the live round. */
   readonly videoStats: WebrtcVideoStatsSample | null;
   readonly lifecycle: ScreencastLifecycle;
   readonly details: string | null;
@@ -357,7 +357,7 @@ export function useScreencastSession(
   const lastViewportRef = useRef<ScreencastViewportInput | null>(null);
   /**
    * The host's smoothed control-plane RTT for this subscription, refreshed by
-   * every `rttProbe`, `null` until the first one lands (ticket 18). One value
+   * every `rttProbe`, `null` until the first one lands. One value
    * feeds all three viewer-side deadlines - the arm buffer inside the
    * controller, the video plane's first-frame window, and staleness below -
    * so they can never disagree about how slow this link is.
@@ -622,7 +622,7 @@ export function useScreencastSession(
     });
     videoPlaneRef.current = videoPlane;
 
-    // Ticket 15: human input rides the round's DataChannels while both are
+    // Human input rides the round's DataChannels while both are
     // open, and reverts to the mux the moment they are not. Two independent
     // reverts, deliberately - the entry publishes `inputReady: false` on
     // channel close / round supersede / peer failure, and the controller's
@@ -728,8 +728,8 @@ export function useScreencastSession(
         // The JPEG cast has stopped, so the frame still on screen is the last
         // one of a plane that is no longer producing: drop it - and with it the
         // geometry its hit test was measured against - and let the tile show
-        // its connecting loader until a plane actually paints again (ticket
-        // 26). This is the ONLY thing that retires a JPEG frame; a frame
+        // its connecting loader until a plane actually paints again.
+        // This is the ONLY thing that retires a JPEG frame; a frame
         // arriving is what puts one up.
         if (frame.mode === "video") {
           patchStreamState({ image: null, frameSize: null });
@@ -899,8 +899,8 @@ export function useScreencastSession(
       videoPlaneRef.current?.noteVideoFrame(null);
     };
     let frameHandle: number | null = null;
-    // The metadata argument is the whole glass-to-glass measurement (ticket
-    // 17): `captureTime`/`receiveTime`/`expectedDisplayTime` are the only
+    // The metadata argument is the whole glass-to-glass measurement:
+    // `captureTime`/`receiveTime`/`expectedDisplayTime` are the only
     // client-side view of capture-to-paint there is, and discarding them was
     // what left `glassToGlassMs` null on every sample.
     const onDecodedFrame: VideoFrameRequestCallback = (_now, metadata) => {

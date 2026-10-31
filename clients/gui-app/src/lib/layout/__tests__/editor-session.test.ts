@@ -722,7 +722,7 @@ describe("the guarded fallback exit (5.2)", () => {
     closeLayoutEditor("done");
 
     // Still rendering the section the user was in: an inspector torn down
-    // first would slide out as the empty index, which is the flash ticket 07
+    // first would slide out as the empty index, which is the flash that was
     // deferred rather than shipped.
     const state = useLayoutEditorStore.getState();
     expect(state.session).not.toBeNull();

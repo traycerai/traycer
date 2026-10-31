@@ -192,8 +192,8 @@ const OFFICE_VIEW: CommGraphTileViewState = {
   officeAutoView: null,
   officeAutoGeneration: null,
   officeCameraView: null,
-  // Unread by this canvas, which is handed the PROJECTION the tile builds
-  // (D68): `x`, `y` and `zoom` above are this suite's camera, and the office
+  // Unread by this canvas, which is handed the PROJECTION the tile builds:
+  // `x`, `y` and `zoom` above are this suite's camera, and the office
   // canvas has no idea the field exists.
   officeCamera: null,
 };
@@ -457,7 +457,7 @@ function lastHitRegions(spy: SpiedResults): ReadonlyArray<OfficeHitRegion> {
  * available box shrinks by `FIT_PADDING` (24px) on every side, the zoom that
  * fits what is left is capped at `MAX_FIT_ZOOM` (6x), and the camera centres
  * the floor inside the padded box. Both constants come straight off the
- * fixup 10 ticket's citation of the source, not a guess.
+ * cited source, not a guess.
  */
 function fitCameraLike(
   floor: { readonly width: number; readonly height: number },
@@ -2638,7 +2638,7 @@ describe("CommGraphOfficeCanvas", () => {
   });
 
   /**
-   * Fixup 10 (L5, live sitting): pressing Fit used to be a one-off the moment
+   * L5, live sitting: pressing Fit used to be a one-off the moment
    * a person had touched the camera even once beforehand, because
    * `takeManualControl` (which every path into `fitToFloor` calls on the way
    * in, to abandon a playback pan in flight) cleared auto-fit for good and
@@ -2739,7 +2739,7 @@ describe("CommGraphOfficeCanvas", () => {
 
       // The zoom lands AFTER the Fit this time, so it is what takes manual
       // control last - auto-fit stays off from here on, exactly as it always
-      // has, fixup 10 or not. This is the guard: nothing about re-arming Fit
+      // has, re-armed or not. This is the guard: nothing about re-arming Fit
       // is supposed to touch a camera a person deliberately moved afterward.
       fireEvent.click(screen.getByTestId("comm-graph-office-zoom-in"));
       step();
@@ -5157,8 +5157,8 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     readonly col: number;
     readonly row: number;
     /**
-     * The seat's own tile width - a REQUIRED argument, not a default: fixup
-     * 8 fits a seated tag to exactly this width, so a caller that means to
+     * The seat's own tile width - a REQUIRED argument, not a default: a
+     * seated tag is fitted to exactly this width, so a caller that means to
      * exercise that fit (the cluster below) has to say so, and every other
      * caller has to say it does not mean to.
      */
@@ -5332,7 +5332,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     // The control that makes it a walker case: the other agent is seated,
     // unselected and unhovered, so the middle band leaves it unnamed.
     //
-    // FIXUP 8: "Alpha Sitter" itself is no longer a possible reading at this
+    // "Alpha Sitter" itself is no longer a possible reading at this
     // zoom - a 1-tile seat's 16px budget only ever admits its initials, "AS"
     // (the search-matched sibling case above proves that is exactly what a
     // QUALIFIED sitter paints here). Asserting the absence of a string the
@@ -5361,7 +5361,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     // and the same tag. Drop the tag for walkers and the walker's count falls
     // short of the sitter's by one label's worth of calls.
     //
-    // FIXUP 8: the sitter's own tag is now fitted to `seatAt`'s one-tile seat
+    // The sitter's own tag is now fitted to `seatAt`'s one-tile seat
     // (16px at this zoom), and "Alpha Sitter" (12 chars) fits nothing past
     // its initials - "AS" - so the FULL "Alpha Sitter" string this case used
     // to count is gone from the canvas entirely. The walker keeps its
@@ -5386,9 +5386,9 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     // guard left to be vacuous about. This negative is real: it is the FIT
     // ladder alone standing between "Alpha Sitter" and the canvas, and
     // removing the fit (the seated tag drawing its written name, as it did
-    // before this fixup) paints it and reddens this line.
+    // before this fix) paints it and reddens this line.
     //
-    // FIXUP 8: the sitter's tag is fitted to its one-tile seat (32px at this
+    // The sitter's tag is fitted to its one-tile seat (32px at this
     // zoom), which admits "Alpha" (its first word) but not the written
     // "Alpha Sitter" (72px) or a clip that keeps the required six characters
     // in front of the ellipsis. The walker is unaffected (`fitTiles: null`).
@@ -5463,7 +5463,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
   });
 
   it("F11 fixup 7: names all five of a wide HQ board's hottest, spelt out rather than lettered to initials", () => {
-    // The original fixture: ordinary two-word names. Fixup 7 removes
+    // The original fixture: ordinary two-word names. Gone now is
     // the initials rung this case used to land on ("AB BQ GS DA ED" at eight
     // tiles) - below the first-names rung the HQ board now counts instead of
     // lettering, so pinning "all five named, none dropped" needs a board
@@ -5682,10 +5682,10 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
   });
 
   /**
-   * T5 fixup 5: the block map's new `quad` drawable actually reaches the
+   * T5: the block map's new `quad` drawable actually reaches the
    * canvas as a filled path.
    *
-   * D28/D58 rewrote what a lod-0 region emits - four PROJECTED corners
+   * A rewrite changed what a lod-0 region emits - four PROJECTED corners
    * instead of an axis-aligned box - but nothing upstream of the renderer
    * proves the new `kind: "quad"` arm of `drawDrawableLayer` is wired at
    * all. A painter that started emitting `quad` and a canvas that had not
@@ -5905,7 +5905,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      *
      * The ordinary tag cuts a long name to fit - "Quilfeather Zarrowmere" is
      * painted "Quilfeather Z…" - so counting exact matches misses the very
-     * label this case is about. That is how the shipped fixup-3 case passed
+     * label this case is about. That is how the shipped case passed
      * while two names were being drawn: the long name hid the truncated tag,
      * and only Find's untruncated copy was counted.
      *
@@ -5935,7 +5935,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     });
 
     it("keeps one name when the ordinary tag TRUNCATES it", async () => {
-      // ZOOM RAISED FOR FIXUP 8: a City lot is one tile, and a seated tag is
+      // ZOOM RAISED: a City lot is one tile, and a seated tag is
       // now fitted to that seat's own width. At zoom 1 the one-tile budget
       // (16px) admits nothing past initials ("QZ"), which drops this case's
       // own mechanism - a TRUNCATED tag, not an initialed or dropped one.
@@ -5951,7 +5951,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       // The control this case exists to be. A long name is painted
       // "Quilfe…" by the tag path and in full by Find, so the two strings
       // differ and an exact-match count sees only one of them - which is
-      // exactly how the fixup-3 case passed while two names were on screen.
+      // exactly how this case passed while two names were on screen.
       expect(namePaints(matched.name)).toBe(PASSES_PER_LABEL);
       // And the one that survived is the tag's, fitted to its own seat -
       // not Find's untruncated copy over the top of it.
@@ -6065,8 +6065,8 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * pairs overlap and the fourth (rightmost) is the one left with nowhere
      * to go.
      *
-     * FIXUP 8 fits a seated tag to its own seat, and requirement 4 there is
-     * that two neighbours' tags then never overlap BY CONSTRUCTION - which
+     * A seated tag is fitted to its own seat, so
+     * two neighbours' tags then never overlap BY CONSTRUCTION - which
      * retires a one-tile-pitch collision as a real scenario: a seat that
      * narrow would have fitted its neighbour's tag down to initials long
      * before the pitch mattered. So each seat here is given `width: 4` -
@@ -6164,7 +6164,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * Every `fillText` pass that NAMES this agent, truncation included - the
      * same shape as N1's `namePaints`, reused here because the tag path
      * truncates a long name while Find does not, and an exact-match count
-     * would miss the truncated tag exactly as it did before N1's fixup.
+     * would miss the truncated tag exactly as it did before N1's fix.
      */
     function namePaints(name: string): number {
       return paintedText().filter(
@@ -7000,7 +7000,7 @@ describe("CommGraphOfficeCanvas fixup 2 - real Towers semantic zoom", () => {
   });
 
   it("draws a qualified real Towers name at LOD 1 when selected", () => {
-    // ZOOM RAISED FOR FIXUP 8: Orchestrator's desk is two tiles, and at
+    // ZOOM RAISED: Orchestrator's desk is two tiles, and at
     // zoom 1 that budget (32px) admits nothing readable - not even initials,
     // since "Orchestrator" is one word - so its tag is DROPPED there rather
     // than qualified. 1.5 is still inside LOD 1 (below the 1.6 close-up
@@ -7064,7 +7064,7 @@ describe("CommGraphOfficeCanvas fixup 2 - real Towers semantic zoom", () => {
   });
 
   it("draws a qualified real Towers name when Find matches it", async () => {
-    // PASSES FOR A DIFFERENT REASON since fixup 8: at zoom 1 Orchestrator's
+    // PASSES FOR A DIFFERENT REASON now: at zoom 1 Orchestrator's
     // own tag is fitted to its two-tile seat and finds nothing readable to
     // keep (not even initials - "Orchestrator" is one word), so the tag is
     // DROPPED here and it is Find's own untruncated copy that names the
@@ -7283,8 +7283,8 @@ describe("CommGraphOfficeCanvas fixup 8 - the caught-up feed is not an input to 
     // `officeElement`'s own defaults already carry `ready` and an
     // uncaught-up feed (`initialHistoryCaughtUp={false}`) - passed
     // explicitly here so the case reads as the fact under test rather than
-    // an accident of the helper's defaults. Before fixup 8 the canvas
-    // itself gated its first plan on `ready`, which the TILE computed from
+    // an accident of the helper's defaults. The canvas used to gate its
+    // own first plan on `ready`, which the TILE computed from
     // `inputsReady` (feed included); this seam proves the canvas's own plan
     // no longer needs the feed at all, only `ready` and eligibility.
     const plan = vi.spyOn(OFFICE_VIEWS.floor, "plan");

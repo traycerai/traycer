@@ -55,7 +55,7 @@ import { useSettingsStore } from "@/stores/settings/settings-store";
  * the pointer is on, and the one ring that travels between selections.
  *
  * Pointer resolution lives on `document` in the capture phase rather than on
- * the column, because the edit firewall (ticket 07) sits on the column and
+ * the column, because the edit firewall sits on the column and
  * stops immediate propagation there: a capture listener one level up reads the
  * gesture before the firewall swallows it, whatever order the two mount in.
  *

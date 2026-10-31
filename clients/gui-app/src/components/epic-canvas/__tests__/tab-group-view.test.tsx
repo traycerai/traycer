@@ -142,7 +142,7 @@ interface TestState {
    * answers; unlisted chat ids answer `null` (no fatal close observed). */
   readonly fatalCloseCodeByChatId: Map<string, string>;
   /** Chat ids the `useCloudChatList` mock answers as present
-   * (chat-sync-v2 ticket 36's same-host cloud-known exemption). */
+   * (the same-host cloud-known exemption). */
   readonly cloudKnownChatIds: Set<string>;
   /** Whether the cloud list is still resolving, answered, or failed. */
   cloudListState: "pending" | "success" | "error" | "unsupported";
@@ -326,7 +326,7 @@ vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => testState.sessionHostId,
 }));
 
-// ticket 36's same-host cloud-known exemption reads the cloud list on the
+// The same-host cloud-known exemption reads the cloud list on the
 // Epic session's client - stubbed at the same hook boundary as the pair
 // above, for the same reason (provider-less suite).
 vi.mock("@/hooks/epic/use-epic-session-host-client", () => ({
@@ -947,7 +947,7 @@ describe("<TabGroupView />", () => {
   });
 
   it("falls back to the first tab when pane.activeTabId is null (resolveActivePaneTab wiring)", async () => {
-    // Byte-equivalence pin for Ticket 21 slice 1: TabGroupView delegates
+    // Byte-equivalence pin: TabGroupView delegates
     // body active-tab resolution to `resolveActivePaneTab`. A null
     // activeTabId must still mount/select the first strip tab - same as the
     // previous inline fallback. Inactive never-visited tabs stay unmounted
@@ -994,7 +994,7 @@ describe("<TabGroupView />", () => {
 });
 
 /**
- * Ticket 21 slice 4: with the stable-tile-surface-host switch ON, ActiveTabBody
+ * With the stable-tile-surface-host switch ON, ActiveTabBody
  * routes live chats through `TileSurfaceSlot` instead of the inline
  * EpicNodeTile body. The switch module is mocked with a live getter (see
  * `testState.stableTileSurfaceHostEnabled`) so these pins can flip it without
@@ -1639,7 +1639,7 @@ describe("<TabGroupView /> published-copy fallback for an unreachable bound host
   });
 });
 
-// chat-sync-v2 ticket 35's view arm: a REACHABLE host can still have
+// The reachable-owner view arm: a REACHABLE host can still have
 // nothing to serve for a specific chat (`chat.subscribe` terminates
 // `CHAT_NOT_VISIBLE` - a leased identity that never adopted this chat's
 // rows, among other causes). Same substitution shape as the unreachable
@@ -1760,15 +1760,15 @@ describe("<TabGroupView /> published-copy fallback for a confirmed-absent chat o
   });
 });
 
-// chat-sync-v2 ticket 36, NARROWED by ticket 49: a SAME-host chat (the
+// The same-host arm, NARROWED: a SAME-host chat (the
 // active host IS the chat's bound host) with no local record but still
 // cloud-known is the ORDINARY shape of a healthy migrated chat, not evidence
-// of absence - creation stopped projecting into the epic doc (ticket 19) and
-// `ChatDocEntrySweep` deletes every entry whose publication it proves (ticket
-// 20). So the cloud row now supplies the copy's OWNER while the trigger must
+// of absence - creation stopped projecting into the epic doc and
+// `ChatDocEntrySweep` deletes every entry whose publication it proves.
+// So the cloud row now supplies the copy's OWNER while the trigger must
 // be an honest absence signal: an unreachable owner, or the host's own
 // `CHAT_NOT_VISIBLE` terminate (which `chat-tile.tsx` can now produce for
-// this shape, because ticket 49 widened its record gate to let a cloud-known
+// this shape, because its record gate was widened to let a cloud-known
 // chat subscribe).
 describe("<TabGroupView /> published-copy fallback for a same-host chat with no local record (tickets 36 + 49)", () => {
   beforeEach(() => {
@@ -1803,7 +1803,7 @@ describe("<TabGroupView /> published-copy fallback for a same-host chat with no 
 
   const PUBLISHED_COPY_TILE_ID = "published-chat:epic-1:user-1:chat-1";
 
-  // This assertion is the INVERSE of the one that shipped with ticket 36
+  // This assertion is the INVERSE of the one that shipped first
   // ("substitutes for a same-host chat with no local record that is still
   // cloud-known"), which codified the defect: post-sweep that shape is every
   // healthy migrated chat, and substituting locked each one read-only on its
@@ -2074,7 +2074,7 @@ describe("<TabGroupView /> published-copy fallback for a same-host chat with no 
  * and is not yours to read.
  *
  * Both arms are ABSENT-BY-DEFAULT: without a retraction these fixtures render
- * exactly what the ticket-49 tests above assert, which is what keeps this
+ * exactly what the tests above assert, which is what keeps this
  * additive.
  */
 describe("<TabGroupView /> open-tab retraction from the record plane", () => {
@@ -2103,7 +2103,7 @@ describe("<TabGroupView /> open-tab retraction from the record plane", () => {
 
   it("routes a DELETED retraction into the existing remote-deleted close flow", async () => {
     // The chat is cloud-known and its host is reachable - the exact shape
-    // ticket 49 narrowed `computeIsRemoteDeleted` to LEAVE ALONE, because a
+    // `computeIsRemoteDeleted` was narrowed to LEAVE ALONE, because a
     // record-less cloud-known chat is the steady state of a healthy migrated
     // one. A `deleted` delta is the positive evidence that was missing.
     //

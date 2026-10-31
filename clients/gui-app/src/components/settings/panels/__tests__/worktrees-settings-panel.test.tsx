@@ -1319,7 +1319,7 @@ describe("WorktreesList delete flow", () => {
 
     const selectAll = screen.getByTestId("worktrees-select-all");
     expect(selectAll.hasAttribute("disabled")).toBe(false);
-    // The control no longer carries an explicit `text-foreground`: ticket 04's
+    // The control no longer carries an explicit `text-foreground`: the
     // Button contract removed it, because `outline` already renders enabled
     // text at full foreground and restating it was the restyle the rule bans.
     // What this test is actually about survives as the negative - an enabled

@@ -20,14 +20,14 @@ import type { RegionId, ToolbarRegionId } from "@/lib/layout/region-id";
  * and not in `regions/*`: the reorder instruction the nine rail regions used to
  * carry nine copies of, the "here or on the canvas" line the composer's eight
  * carried eight, and the pinned-right note that the Model region alone happened
- * to state for the whole right cluster (D1-D4, D8). The docked inspector reads
+ * to state for the whole right cluster. The docked inspector reads
  * the same table, so neither host owns a second copy of the words.
  */
 
 export interface OrderGroupFacts {
   /** The heading above the list. */
   readonly label: string;
-  /** How this list is operated, said once by the list (D8). */
+  /** How this list is operated, said once by the list. */
   readonly description: string;
   /** A rule about the whole group, said by the group rather than by a member. */
   readonly note: string | null;
@@ -55,7 +55,7 @@ export const ORDER_GROUPS: Readonly<Record<OrderGroupId, OrderGroupFacts>> = {
     description: "Drag to reorder, here or on the canvas.",
     // Said by the cluster the rule is about. It used to be drawn by the Model
     // region's own Position row, which meant the Microphone's copy of the same
-    // list silently omitted it (D4).
+    // list silently omitted it.
     note: "The model chip stays on the right.",
     dividers: false,
   },

@@ -40,7 +40,7 @@ export type CommandGroupId =
  * fresh on every palette open / query change so sources stay pure.
  *
  * `focusedComposerKind` is stubbed to `null` in this phase - the
- * composer-scoped source wires it up in ticket 04.
+ * composer-scoped source wires it up later.
  */
 export interface CommandContext {
   readonly pathname: string;
