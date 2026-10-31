@@ -84,9 +84,6 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
         set({ hostId });
       },
       markVisited: (botId) => {
-        // The channel shows: its landing is its own to spend from here, and
-        // forgotten with it.
-        stagedLandings.delete(botId);
         const visited = get().visitedBotIds;
         if (visited.includes(botId)) return;
         set({ visitedBotIds: [...visited, botId] });
@@ -127,22 +124,29 @@ export const useTracySurfaceStore = create<TracySurfaceState>()(
 
 /**
  * Landings the surface asked for, by bot id, for channels that have not shown
- * since: a channel that shows owns its landing from then on (`markVisited`),
- * one whose navigation never landed is released (`releaseTracyLanding`), and
- * closing the surface releases every one left. Session-only.
+ * since: a channel that shows owns its landing from then on
+ * (`handTracyLandingToChannel`), one whose navigation never landed is
+ * released (`releaseTracyLanding`), and closing the surface releases every
+ * one left. A visited channel is no exception: its pane is not mounted while
+ * another channel shows, so nothing else would withdraw it. Session-only.
  */
 const stagedLandings = new Map<string, BotTabLanding>();
 
 /**
  * Asks `botId`'s channel to land at `landing` when it shows, before the
- * navigation to it is issued. A visited channel's landing is already the
- * surface's to forget, so only an unvisited one is staged.
+ * navigation to it is issued.
  */
 export function stageTracyLanding(botId: string, landing: BotTabLanding): void {
-  if (!useTracySurfaceStore.getState().visitedBotIds.includes(botId)) {
-    stagedLandings.set(botId, landing);
-  }
+  stagedLandings.set(botId, landing);
   useBotTabLandingStore.getState().request(botId, landing);
+}
+
+/**
+ * `botId`'s channel shows: the landing staged for it is its own to spend from
+ * here, and is forgotten with the channel.
+ */
+export function handTracyLandingToChannel(botId: string): void {
+  stagedLandings.delete(botId);
 }
 
 /**

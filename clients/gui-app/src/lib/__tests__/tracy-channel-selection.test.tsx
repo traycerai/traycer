@@ -440,4 +440,102 @@ describe("Tracy channel selection commits on navigation acknowledgement", () => 
       expect(landingOf("bot-b")).toBeUndefined();
     });
   });
+
+  describe("a landing for a channel visited before", () => {
+    /**
+     * B was opened and shown earlier (the suite mounts no pane, so the visit is
+     * marked as the pane would), and A shows now: B's pane is not mounted, so
+     * nothing but the surface can withdraw a landing requested for it.
+     */
+    async function mountOnChannelAAfterVisitingB(): Promise<Mounted> {
+      const router = await mount("/");
+      act(() => {
+        open(router.navigate, "bot-b");
+      });
+      await waitFor(() => {
+        expect(selection(router)).toEqual({
+          pathname: "/bot/bot-b",
+          botId: "bot-b",
+        });
+      });
+      act(() => {
+        useTracySurfaceStore.getState().markVisited("bot-b");
+      });
+      act(() => {
+        open(router.navigate, "bot-a");
+      });
+      await waitFor(() => {
+        expect(selection(router)).toEqual({
+          pathname: "/bot/bot-a",
+          botId: "bot-a",
+        });
+      });
+      return router;
+    }
+
+    function landingOf(botId: string): BotTabLanding | undefined {
+      return useBotTabLandingStore.getState().byBotId[botId];
+    }
+
+    it("is withdrawn when its navigation is refused, so an ordinary visit to it later lands nowhere", async () => {
+      const router = await mountOnChannelAAfterVisitingB();
+      const rejection = Promise.reject<void>(new Error("navigation refused"));
+      const rejecting: UseNavigateResult<string> = () => rejection;
+      await act(async () => {
+        openWithLanding(rejecting, "bot-b", {
+          kind: "thread",
+          threadId: "t-1",
+          messageId: null,
+        });
+        await rejection.catch(() => undefined);
+      });
+      expect(selection(router)).toEqual({
+        pathname: "/bot/bot-a",
+        botId: "bot-a",
+      });
+
+      act(() => {
+        openWithLanding(router.navigate, "bot-b", null);
+      });
+      await waitFor(() => {
+        expect(selection(router)).toEqual({
+          pathname: "/bot/bot-b",
+          botId: "bot-b",
+        });
+      });
+      expect(landingOf("bot-b")).toBeUndefined();
+    });
+
+    it("is withdrawn when an open of another channel supersedes it", async () => {
+      const router = await mountOnChannelAAfterVisitingB();
+      const held = holdNavigation(router);
+      act(() => {
+        openWithLanding(held.navigate, "bot-b", {
+          kind: "thread",
+          threadId: "t-1",
+          messageId: null,
+        });
+      });
+
+      act(() => {
+        open(router.navigate, "bot-c");
+      });
+      await waitFor(() => {
+        expect(selection(router)).toEqual({
+          pathname: "/bot/bot-c",
+          botId: "bot-c",
+        });
+      });
+      await act(() => Promise.resolve(held.release()));
+
+      await waitFor(() => {
+        expect(tracyNavigationPending()).toBe(false);
+      });
+      expect(landingOf("bot-b")).toBeUndefined();
+      expect(selection(router)).toEqual({
+        pathname: "/bot/bot-c",
+        botId: "bot-c",
+      });
+    });
+  });
 });

@@ -59,7 +59,10 @@ import {
   tracyNavigationPending,
 } from "@/lib/tab-navigation";
 import { defaultTracyChannelOf } from "@/lib/bots/tracy-channel";
-import { useTracySurfaceStore } from "@/stores/bots/tracy-surface-store";
+import {
+  handTracyLandingToChannel,
+  useTracySurfaceStore,
+} from "@/stores/bots/tracy-surface-store";
 import { TRACY_TAB_LABEL } from "@/stores/tabs/kinds/tracy";
 import {
   useBotTabLandingStore,
@@ -512,10 +515,12 @@ function TracyChannelPane(props: {
 }): ReactNode {
   const { botId, hostId, threadsShown } = props;
   const client = useTabHostClient();
-  // Before any passive effect of the pane's: a channel reported gone on its
-  // first commit is forgotten after it was marked visited, not before.
+  // The channel shows: it is visited, and takes over the landing staged for
+  // it. Before any passive effect of the pane's, so a channel reported gone on
+  // its first commit is forgotten after it was marked visited, not before.
   useLayoutEffect(() => {
     useTracySurfaceStore.getState().markVisited(botId);
+    handTracyLandingToChannel(botId);
   }, [botId]);
   const { route, botList, retry } = useChannelRoute(botId, hostId);
   if (threadsShown && route.kind !== "bot") return null;
