@@ -14,12 +14,6 @@ import { Button } from "@/components/ui/button";
 import { TalkControl } from "@/components/layout/voice/talk-control";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
@@ -33,7 +27,6 @@ import {
   type BotSubscriptionSnapshot,
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
-import { useBotMarkChannelRead } from "@/hooks/bots/use-bot-read-cursor";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -999,11 +992,6 @@ function BotTabContent(props: {
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
   // A link inside the tab (the switcher's "Bot settings") opens them too.
   const openSettings = useCallback(() => setSettingsOpen(true), []);
-  const markRead = useBotMarkChannelRead(
-    botId,
-    hostId,
-    snapshot.bot.appConversationChatId,
-  );
   const viewer = useAuthStore((s) => s.profile);
   const owner = useMemo((): BotOwner | null => {
     if (environment === null) return null;
@@ -1112,7 +1100,6 @@ function BotTabContent(props: {
                         isMain={isMain === true}
                         settingsOpen={settingsOpen}
                         onToggleSettings={toggleSettings}
-                        onMarkRead={markRead}
                         activityLabel={activityLabelParts({
                           stopped: activitySummary.stopped.length,
                           running: activitySummary.running.length,
@@ -1291,9 +1278,8 @@ function ErrorNotice(props: {
 
 /**
  * Slack's channel header: the bot's picture (its card on hover and click),
- * its name with the main bot's star, the ⋮ that opens the channel's settings
- * (and marks it read, where the host keeps read cursors), and the channel's views
- * under it. What the bot is for is the top of its channel; nothing else
+ * its name with the main bot's star, the ⋮ that opens the channel's settings,
+ * and the channel's views under it. What the bot is for is the top of its channel; nothing else
  * sits here but, on the phone, Talk: the phone has no tab strip to carry it,
  * so every bot channel does (V5), and a session started here is focused on
  * this channel. Activity's label is the bot's indicator: what stopped, in red
@@ -1304,8 +1290,6 @@ function BotChannelHeader(props: {
   readonly isMain: boolean;
   readonly settingsOpen: boolean;
   readonly onToggleSettings: () => void;
-  /** Clears the channel's bold; `null` where the host keeps no read cursors, and the ⋮ opens the settings directly. */
-  readonly onMarkRead: (() => void) | null;
   readonly activityLabel: ReadonlyArray<BotActivityLabelPart>;
 }): ReactNode {
   const { settingsOpen } = props;
@@ -1346,51 +1330,19 @@ function BotChannelHeader(props: {
             <TalkControl form="touch" />
           </>
         ) : null}
-        {props.onMarkRead === null ? (
-          <Button
-            ref={settingsButtonRef}
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Channel settings"
-            aria-expanded={settingsOpen}
-            data-testid="bot-channel-settings-open"
-            className="ml-auto"
-            onClick={props.onToggleSettings}
-          >
-            <EllipsisVertical aria-hidden="true" />
-          </Button>
-        ) : (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                ref={settingsButtonRef}
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Channel actions"
-                data-testid="bot-channel-settings-open"
-                className="ml-auto"
-              >
-                <EllipsisVertical aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                data-testid="bot-channel-mark-read"
-                onSelect={props.onMarkRead}
-              >
-                Mark as read
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                data-testid="bot-channel-settings-item"
-                onSelect={props.onToggleSettings}
-              >
-                {settingsOpen ? "Close channel settings" : "Channel settings"}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+        <Button
+          ref={settingsButtonRef}
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Channel settings"
+          aria-expanded={settingsOpen}
+          data-testid="bot-channel-settings-open"
+          className="ml-auto"
+          onClick={props.onToggleSettings}
+        >
+          <EllipsisVertical aria-hidden="true" />
+        </Button>
       </div>
       <TabsList variant="line" aria-label="Channel view">
         <TabsTrigger value="messages" data-testid="bot-tab-view-messages">

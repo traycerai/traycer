@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import {
-  useBotMarkChannelRead,
   useBotReadCursorAdvanceMutation,
   useBotReadCursorQuery,
 } from "@/hooks/bots/use-bot-read-cursor";
@@ -47,7 +46,6 @@ describe("useBotReadCursorAdvanceMutation", () => {
     const fixture = createReadCursorHostFixture({
       cursors: { [CHANNEL]: position(1_000) },
       latest: { [CHANNEL]: position(3_000) },
-      follows: {},
     });
     const { result } = renderHook(
       () => ({
@@ -84,7 +82,6 @@ describe("useBotReadCursorAdvanceMutation", () => {
     const fixture = createReadCursorHostFixture({
       cursors: {},
       latest: { [CHANNEL]: position(3_000) },
-      follows: {},
     });
     const { result } = renderHook(
       () => ({
@@ -116,7 +113,6 @@ describe("useBotReadCursorAdvanceMutation", () => {
     const fixture = createReadCursorHostFixture({
       cursors: { [CHANNEL]: position(5_000) },
       latest: { [CHANNEL]: position(5_000) },
-      follows: {},
     });
     // A host that has not yet seen the 5,000 cursor answers the 2,000 one.
     fixture.advanceAnswers.set(CHANNEL, position(2_000));
@@ -149,7 +145,6 @@ describe("useBotReadCursorAdvanceMutation", () => {
     const fixture = createReadCursorHostFixture({
       cursors: { [CHANNEL]: position(1_000) },
       latest: { [CHANNEL]: position(3_000) },
-      follows: {},
     });
     const { result } = renderHook(
       () => ({
@@ -203,7 +198,6 @@ describe("useBotReadCursorAdvanceMutation", () => {
     const fixture = createReadCursorHostFixture({
       cursors: { [CHANNEL]: position(1_000) },
       latest: { [CHANNEL]: position(3_000) },
-      follows: {},
     });
     const { result } = renderHook(
       () => ({
@@ -230,62 +224,5 @@ describe("useBotReadCursorAdvanceMutation", () => {
     expect(result.current.other.data?.cursors[CHANNEL]).toEqual(
       position(1_000),
     );
-  });
-});
-
-describe("useBotMarkChannelRead", () => {
-  it("advances the channel and each followed thread behind its newest row to the host, and leaves caught-up and unfollowed ones alone", async () => {
-    const fixture = createReadCursorHostFixture({
-      cursors: {
-        [CHANNEL]: position(1_000),
-        "thread-caught-up": position(2_000),
-      },
-      latest: {
-        [CHANNEL]: position(3_000),
-        "thread-a": position(4_000),
-        "thread-caught-up": position(2_000),
-        "thread-unfollowed": position(5_000),
-      },
-      follows: {
-        "thread-a": { state: "following", reason: "manual" },
-        "thread-caught-up": { state: "following", reason: "manual" },
-        "thread-unfollowed": { state: "unfollowed", reason: "manual" },
-      },
-    });
-    mocks.fixture = fixture;
-    const { result } = renderHook(
-      () => useBotMarkChannelRead(BOT_ID, "host-1", CHANNEL),
-      { wrapper: fixture.Wrapper },
-    );
-    await waitFor(() => {
-      expect(result.current).not.toBeNull();
-    });
-
-    act(() => {
-      result.current?.();
-    });
-
-    await waitFor(() => {
-      expect(fixture.advances).toHaveLength(2);
-    });
-    expect(fixture.advances).toEqual([
-      { botId: BOT_ID, conversationId: CHANNEL, ...position(3_000) },
-      { botId: BOT_ID, conversationId: "thread-a", ...position(4_000) },
-    ]);
-  });
-
-  it("offers nothing without a channel", () => {
-    const fixture = createReadCursorHostFixture({
-      cursors: {},
-      latest: {},
-      follows: {},
-    });
-    mocks.fixture = fixture;
-    const { result } = renderHook(
-      () => useBotMarkChannelRead(BOT_ID, "host-1", null),
-      { wrapper: fixture.Wrapper },
-    );
-
-    expect(result.current).toBeNull();
   });
 });
