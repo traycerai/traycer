@@ -110,10 +110,11 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   // not resolve registered shortcut identity, which remains code-derived.
   "gui-app/src/components/browser-tile/browser-viewport-handles.tsx": 6,
   "gui-app/src/components/browser-tile/browser-viewport-toolbar.tsx": 5,
-  // Escape on a canvas artifact: the overlay clears the selected element
-  // before the board itself deselects, and the structure gesture abandons a
-  // drag or resize in flight. A named key, not a registered chord.
-  "gui-app/src/components/canvas-artifact/canvas-selection-overlay.tsx": 1,
+  // Escape and Shift+Enter on a canvas artifact: the overlay clears the
+  // selected element before the board itself deselects, or moves the
+  // selection to its parent element, and the structure gesture abandons a
+  // drag or resize in flight. Named keys, not registered chords.
+  "gui-app/src/components/canvas-artifact/canvas-selection-overlay.tsx": 2,
   "gui-app/src/components/canvas-artifact/use-canvas-structure-gesture.ts": 1,
   "gui-app/src/components/chat/chat-messages.tsx": 10,
   "gui-app/src/components/chat/composer/menu/github-mention-filter-popover.tsx": 3,

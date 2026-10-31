@@ -13,7 +13,11 @@ import { useDictationHotkey } from "@/hooks/composer/use-dictation-hotkey";
 import { reservedBrowserChordsFor } from "@/lib/browser-view/reserved-chords-registration";
 import { actionsSource } from "@/lib/commands/sources/actions.source";
 import type { CommandContext } from "@/lib/commands/types";
-import { getDefaultBindings } from "@/lib/keybindings/actions";
+import {
+  effectiveBinding,
+  getDefaultBindings,
+} from "@/lib/keybindings/actions";
+import { findActionMatchForChord } from "@/lib/keybindings/dispatch";
 import { setMobileApp } from "@/lib/mobile-app";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { routeTree } from "@/routeTree.gen";
@@ -171,6 +175,22 @@ describe("the Talk shortcut in the installed mobile app", () => {
       const event = pressTalk(false);
       expect(event.defaultPrevented).toBe(false);
       expect(driver.start).not.toHaveBeenCalled();
+    } finally {
+      setMobileApp(false);
+    }
+  });
+
+  it("leaves the vertical-tabs collapse chord unmatched too: every desktop-only action is", () => {
+    const bindings = useKeybindingStore.getState().bindings;
+    const chord = bindings["app.tabs.vertical.collapse"];
+    expect(chord).toBe("shift+alt+s");
+    if (chord === null) return;
+    setMobileApp(true);
+    try {
+      expect(effectiveBinding(bindings, "app.tabs.vertical.collapse")).toBe(
+        null,
+      );
+      expect(findActionMatchForChord(chord)).toBeNull();
     } finally {
       setMobileApp(false);
     }

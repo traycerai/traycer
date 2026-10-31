@@ -239,12 +239,14 @@ function ShownArtifact(props: {
           title={stamp.title}
           className="w-full"
           height={height}
+          pageZoom
           onSize={handleSize}
           onStatus={handleStatus}
           onBridge={null}
           onTextSelection={null}
           onFrame={null}
           renderOverlay={null}
+          sourceEquivalent={undefined}
           toolbarControls={
             <InlineArtifactActions
               source={source}

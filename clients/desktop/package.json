@@ -153,7 +153,7 @@
       "entitlements": "resources/bundle/entitlements.mac.plist",
       "entitlementsInherit": "resources/bundle/entitlements.mac.plist",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Traycer uses the microphone to dictate into the composer and to talk to your bots."
+        "NSMicrophoneUsageDescription": "Traycer uses the microphone for voice dictation in the composer."
       },
       "extraResources": [
         {

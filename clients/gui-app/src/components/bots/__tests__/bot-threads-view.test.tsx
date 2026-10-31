@@ -355,7 +355,7 @@ describe("<BotThreadsView />", () => {
     await user.click(within(item("team-new")).getByTestId("bot-thread-row"));
 
     expect(useBotTabLandingStore.getState().byBotId).toEqual({
-      [TEAM]: { threadId: "team-new", messageId: null },
+      [TEAM]: { kind: "thread", threadId: "team-new", messageId: null },
     });
     expect(lookupBotTab(useBotTabsStore.getState().tabs, TEAM)?.hostId).toBe(
       "host-1",

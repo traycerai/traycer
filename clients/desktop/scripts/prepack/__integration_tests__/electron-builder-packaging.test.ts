@@ -377,7 +377,7 @@ describe.skipIf(process.platform !== "darwin")(
       expect(agentPlist).not.toContain(RELEASE_DIR);
     });
 
-    it("names both uses of the microphone in the packaged app's usage description", () => {
+    it("keeps the production package's microphone usage description to dictation", () => {
       if (packagedAppPath === null) {
         throw new Error(
           "packagedAppPath was not set - packaging must have failed",
@@ -394,7 +394,7 @@ describe.skipIf(process.platform !== "darwin")(
         { encoding: "utf8" },
       ).trim();
       expect(usage).toBe(
-        "Traycer uses the microphone to dictate into the composer and to talk to your bots.",
+        "Traycer uses the microphone for voice dictation in the composer.",
       );
     });
 
