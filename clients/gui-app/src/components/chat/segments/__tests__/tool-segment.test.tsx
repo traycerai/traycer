@@ -136,7 +136,7 @@ vi.mock("@/lib/epic-selectors", () => ({
     }
     return null;
   },
-  useOpenEpicId: () => "epic-1",
+  useMaybeOpenEpicId: () => "epic-1",
 }));
 
 // Cross-task peers come from the shared `useA2AMessagePeer` hook. An id with
