@@ -18,7 +18,7 @@ import {
 } from "@/stores/layout/layout-store";
 
 /**
- * The floating bar's own writes (D14): the pictogram row (through
+ * The floating bar's own writes: the pictogram row (through
  * `writeArrangementField`, the same writer as the dock's rows) and the View
  * pair that joins it while the tab strip is vertical. Both are one recorded
  * gesture, undoable, and both honour the same availability the dock rows do.

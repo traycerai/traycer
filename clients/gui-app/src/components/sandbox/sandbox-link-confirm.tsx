@@ -32,7 +32,7 @@ function linkAsker(kind: SandboxKind, appName: string | null): string {
 
 /**
  * The app's own confirm for a link an agent page, wireframe or MCP App asked
- * to open (D42). The page cannot prove the reader clicked inside it, so the
+ * to open. The page cannot prove the reader clicked inside it, so the
  * reader sees the whole URL and decides here, outside the page's reach.
  * Cancel comes first, so it is what the dialog focuses; Esc cancels too.
  */

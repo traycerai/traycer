@@ -36,7 +36,7 @@ export interface FloatingDraftPopoverProps {
   /** The host serving the TILE this draft was opened over - passed down by
    *  `collab-tile-body.tsx` from `useTabHostClient()`. The thread must be
    *  created on the host that serves the artifact being annotated, not on
-   *  whichever one the app is currently pointed at (D15). */
+   *  whichever one the app is currently pointed at. */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly artifactType: MarkdownArtifactKind;
   readonly artifactId: string;

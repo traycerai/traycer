@@ -473,7 +473,7 @@ type ActiveHostWorkspaceControlsProps = {
   readonly hostScope: HostWorkspaceControlsHostScope;
   readonly disabled: boolean;
   /**
-   * A composer's sandbox staging (sandboxes redesign D9): the picker offers
+   * A composer's sandbox staging (the sandboxes redesign): the picker offers
    * New sandbox rows, a pick only stages, and the consequences block renders
    * under the row. `null` for a surface that does not create work on a new
    * host (the fork dialogs, the terminal-agent launcher).
@@ -500,7 +500,7 @@ export function ActiveHostWorkspaceControls(
     directoryEntries.find((entry) => entry.hostId === activeHostId) ?? null;
   // "Local" is the neutral pre-directory default, and it is only honest while
   // this surface is FOLLOWING: a pin naming a host the directory does not
-  // carry is a real unavailable state (D6), not a slow first paint.
+  // carry is a real unavailable state, not a slow first paint.
   const hostLabel =
     activeEntry?.label ??
     (scopeHostId === null && !composerPin.isPinned ? "Local" : "Unavailable");

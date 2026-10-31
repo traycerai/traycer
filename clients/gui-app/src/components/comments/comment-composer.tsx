@@ -57,8 +57,8 @@ export interface CommentComposerProps {
   /** The host serving the surface this composer was mounted from - the tab's
    *  client under a collab tile, the Epic session's under the sidebar. Passed
    *  rather than read here because this component is mounted from BOTH, and an
-   *  ambient app-wide read would offer the wrong machine's collaborators
-   *  (D15). */
+   *  ambient app-wide read would offer the wrong machine's
+   *  collaborators. */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   /** Initial JSONContent. Pass `null` for a blank composer (most flows). */
   readonly initialContent: JsonContent | null;

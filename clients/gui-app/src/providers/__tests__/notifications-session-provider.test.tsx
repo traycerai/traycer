@@ -2577,7 +2577,7 @@ describe("<NotificationsSessionProvider />", () => {
   // Scope, stated so it cannot be over-read: this pins the four PER-LEASE
   // stream owners. R12's chat-session wake retry is deliberately outside it -
   // its subject is a handle, not a host, so it uses the process-scoped engine
-  // by ruling D1. "One engine per host" is the claim; "one engine in the
+  // by design. "One engine per host" is the claim; "one engine in the
   // process" is not.
   it("opens every stream's reopen lane off the ONE per-lease reconnect engine", async () => {
     const lease = acquireHostConnection(mockLocalHostEntry.hostId);
@@ -2587,8 +2587,8 @@ describe("<NotificationsSessionProvider />", () => {
       // Host mode opens three streams - host notifications, collaboration
       // notifications, agent activity - and each takes its OWN lane off the
       // SHARED engine. Both halves matter: a single call would mean the
-      // streams had been folded onto one timer (the behavior change ruling D1
-      // forbids), and zero would mean each store built its own engine.
+      // streams had been folded onto one timer (the behavior change that is
+      // forbidden), and zero would mean each store built its own engine.
       expect(openReopenLane).toHaveBeenCalledTimes(3);
     } finally {
       openReopenLane.mockRestore();

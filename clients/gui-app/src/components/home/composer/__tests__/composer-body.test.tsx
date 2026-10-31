@@ -365,7 +365,7 @@ describe("ComposerBody overlay utility visibility", () => {
     ).toBeNull();
   });
 
-  // D11: a terminal-mode start-page draft is still a draft, so the rail is no
+  // A terminal-mode start-page draft is still a draft, so the rail is no
   // longer gated on the composer's mode - only the attachments strip is.
   it("keeps the drafts control in terminal mode", () => {
     renderComposerBody({

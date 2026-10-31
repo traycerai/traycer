@@ -8,7 +8,7 @@ import type { SettingsRowDefinition } from "@/lib/settings-search/settings-defin
 import type { PlacementSurfaceId } from "@/stores/layout/layout-editor-store";
 
 /**
- * Where a placement surface can sit, and the one write that moves it (D14).
+ * Where a placement surface can sit, and the one write that moves it.
  *
  * The canvas's placement bar and its drop to an edge both read this table, and
  * both write through `writeArrangementField` - the writer the dock's

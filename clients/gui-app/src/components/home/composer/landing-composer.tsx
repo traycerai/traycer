@@ -596,7 +596,7 @@ export function LandingComposer(props: LandingComposerProps) {
     hasSubmittableContent,
   });
 
-  // A terminal agent's Start on a staged sandbox (sandboxes plan D1). Phase 2
+  // A terminal agent's Start on a staged sandbox (the sandboxes plan). Phase 2
   // resets the draft's workspace to the new host's, which starts empty, then
   // launches it there. The latest resubmit, which is declared below and
   // reads this hook.
@@ -705,7 +705,7 @@ export function LandingComposer(props: LandingComposerProps) {
   // `honoredSelection` is null, and that composer genuinely re-pointed - the
   // stale `isPinned` gate would suppress both the notice and the staged-intent
   // reset for a move that just happened. A composer resting on its pin is not
-  // moved by the derivation and must not narrate one (D6).
+  // moved by the derivation and must not narrate one.
   //
   // Deliberately scoped to the staged INTENT, not to the draft's chosen
   // folders: an automatic failover is not a user gesture, and discarding a
@@ -1201,7 +1201,7 @@ export function LandingComposer(props: LandingComposerProps) {
             hostId={resolvedHostId}
             pickerStore={pickerStore}
             editorRef={editorRef}
-            // The rail is no longer chat-mode-only (D11), so the Cmd+S owner is
+            // The rail is no longer chat-mode-only, so the Cmd+S owner is
             // the surface being edited, whichever composer mode it is in.
             active={activityEnabled}
           />

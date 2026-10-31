@@ -76,7 +76,7 @@ const ACTIVATION_DEBT_STATES: ReadonlySet<string> = new Set([
 
 /**
  * In-app host update / activation-debt banner (Host Update Layer Redesign
- * Tech Plan, D4). Driven entirely by the canonical two-lane
+ * Tech Plan). Driven entirely by the canonical two-lane
  * `HostControllerStatus` - never the raw registry probe - so it never shows
  * for a merely-detected update, only once a stage is `updateReady` or the
  * host carries activation debt. A ready update supersedes debt (applying new

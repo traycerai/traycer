@@ -11,7 +11,7 @@ import {
 import type { PlacementEdge } from "@/components/layout-editor/canvas/surface-placement";
 
 /**
- * `dropZonesOf` / `dropEdgeAt` are pure arithmetic on a measured box (D14),
+ * `dropZonesOf` / `dropEdgeAt` are pure arithmetic on a measured box,
  * and `armSurfaceDrag` is the DOM wiring around them: the arm
  * phase it shares with a reorder, the zones it paints onto `<body>` while the
  * surface is in hand, and the single `onDrop` at release.

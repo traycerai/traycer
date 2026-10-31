@@ -412,7 +412,7 @@ describe("composer host picker writes a surface pin", () => {
     pickBuildHost();
     expect(chipLabel()).toBe("Build Box");
 
-    // Derivation moves the effective host; a PINNED surface keeps its own (D6).
+    // Derivation moves the effective host; a PINNED surface keeps its own.
     cleanup();
     mocks.effectiveHostId.current = "host-home";
     renderComposerPicker({ kind: "active" }, null);

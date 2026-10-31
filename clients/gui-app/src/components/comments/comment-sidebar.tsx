@@ -32,7 +32,7 @@ export interface CommentSidebarProps {
    *  is outside every per-tile provider and must not read the app-wide host:
    *  during a re-point that host already answers B while this Epic still
    *  renders A's threads. Passed rather than read here so the same surface
-   *  stays mountable from a tile (D15). */
+   *  stays mountable from a tile. */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly artifactType: CommentArtifactKind;
   readonly artifactId: string;

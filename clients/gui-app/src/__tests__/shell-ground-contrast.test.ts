@@ -14,7 +14,7 @@ import {
 } from "@/../__tests__/contrast";
 
 /**
- * `--shell-ground` (D1/D2): `oklch(from var(--canvas) max(calc(l -
+ * `--shell-ground`: `oklch(from var(--canvas) max(calc(l -
  * X), calc(X - l)) c h)`, i.e. groundL = |canvasL - X|, has to read as a
  * distinct surface from BOTH `--canvas` and `--background` in every builtin
  * preset, light and dark - including Amoled's pure-black canvas, which a

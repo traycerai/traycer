@@ -18,7 +18,7 @@ const REASON_TONE: Readonly<Record<NeedsYouReason, IndicatorTone>> = {
 };
 
 /**
- * One prompt waiting on the person (D13): the ask, "task · agent" and the
+ * One prompt waiting on the person: the ask, "task · agent" and the
  * time. The whole row opens the chat on its pending card through the
  * notification's own activation; replying and approving happen there. Shared
  * by the Notifications drawer's Needs you group and the Activity view's Needs you block.

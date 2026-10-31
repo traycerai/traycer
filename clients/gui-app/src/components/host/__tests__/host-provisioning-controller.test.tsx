@@ -423,9 +423,9 @@ describe("HostProvisioningController - retry/force gestures and the busy-keep la
     });
     const { readLifecycle } = mountProvisioningLifecycle(host);
 
-    // THE AUTHORITY CONVERGES TOO, and through this same spy. D14 wants a
-    // never-dialed local host, so the in-process authority requests an ensure
-    // at construction and `MockRunnerHost` routes it to
+    // THE AUTHORITY CONVERGES TOO, and through this same spy. This case
+    // wants a never-dialed local host, so the in-process authority requests
+    // an ensure at construction and `MockRunnerHost` routes it to
     // `hostManagement.convergeReady` exactly as the real desktop port does.
     // Settling it here is what makes the counts below describe the GESTURES
     // rather than a race between two actors.

@@ -106,7 +106,7 @@ export interface CommentThreadCardProps {
   readonly epicId: string;
   /** The host serving the surface this card was mounted from - the Epic
    *  session's client under the sidebar. Passed rather than read here so the
-   *  card stays mountable from a tile too (D15). */
+   *  card stays mountable from a tile too. */
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly artifactType: CommentArtifactKind;
   readonly artifactId: string;
