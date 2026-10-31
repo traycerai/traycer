@@ -360,10 +360,7 @@ function annotationSidecarForCreate(
     }
   | { readonly kind: "refused"; readonly message: string } {
   const browserAnnotations = readNewConversationAnnotations(epicId);
-  if (
-    browserAnnotations.length > 0 &&
-    !hostCreatesChatWithAnnotations(hostId)
-  )
+  if (browserAnnotations.length > 0 && !hostCreatesChatWithAnnotations(hostId))
     return {
       kind: "refused",
       message: "Update the host to start a chat with this capture.",
@@ -1582,7 +1579,11 @@ export function NewConversationModalBody(props: {
       // draft and its cards exactly as the user left them.
       const sidecar = annotationSidecarForCreate(epicId, activeHostId);
       if (sidecar.kind === "refused") {
-        raiseHostNotice({ kind: "refused", message: sidecar.message, action: null });
+        raiseHostNotice({
+          kind: "refused",
+          message: sidecar.message,
+          action: null,
+        });
         return;
       }
       const { browserAnnotations } = sidecar;
@@ -1988,8 +1989,7 @@ export function NewConversationModalBody(props: {
     // inline path and the host never probes a crop's hash in its staging tier.
     const captured = appendImageAttachmentAtoms(
       editor.getJSON(),
-      sessionAnnotationImageAtoms(readNewConversationAnnotations(epicId)) ??
-        [],
+      sessionAnnotationImageAtoms(readNewConversationAnnotations(epicId)) ?? [],
     );
     // A staged sandbox takes the send (sandboxes redesign Flow 1): the
     // message waits in this task, behind the setup line, until the agent the

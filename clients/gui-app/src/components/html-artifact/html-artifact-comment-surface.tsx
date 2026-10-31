@@ -133,9 +133,7 @@ function HtmlArtifactCommentFrame(
   const servedSha256 = Object.hasOwn(files, path) ? files[path].sha256 : null;
   const served = useMemo<ArtifactSource>(
     () =>
-      commenting
-        ? { ...source, canvas: true, canvasLinks: "native" }
-        : source,
+      commenting ? { ...source, canvas: true, canvasLinks: "native" } : source,
     [source, commenting],
   );
   const view = useMemo<CanvasCommentView>(
@@ -193,9 +191,7 @@ function HtmlArtifactCommentFrame(
         }
         onFrame={(frame) => events.onFrame?.(path, frame)}
         renderOverlay={(onEntryPage) =>
-          commenting && onEntryPage
-            ? events.renderOverlay?.(path, true)
-            : null
+          commenting && onEntryPage ? events.renderOverlay?.(path, true) : null
         }
         sourceEquivalent={sourceEquivalent}
         toolbarControls={

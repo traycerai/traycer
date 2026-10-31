@@ -44,8 +44,6 @@ import {
   resolveAnnotationImageAtoms,
   type AnnotationImageAtom,
 } from "@/lib/composer/annotation-image-atoms";
-import {
-} from "@/lib/composer/landing-image-store";
 import type { BrowserAnnotationRecord } from "@/lib/browser-view/annotation/browser-annotation-record";
 import type { ChatSendRestore } from "@/stores/chats/chat-session-store";
 import {
@@ -1286,4 +1284,3 @@ function isEmptyComposerSubmit(input: {
     input.annotationRecords.length === 0
   );
 }
-

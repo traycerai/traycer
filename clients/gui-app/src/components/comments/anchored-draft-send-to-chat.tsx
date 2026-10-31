@@ -48,7 +48,11 @@ export function AnchoredDraftSendToChatSlot(
   const { surface, selection, ...rest } = props;
   if (surface === null || selection === null) return null;
   return (
-    <AnchoredDraftSendToChat {...rest} surface={surface} selection={selection} />
+    <AnchoredDraftSendToChat
+      {...rest}
+      surface={surface}
+      selection={selection}
+    />
   );
 }
 

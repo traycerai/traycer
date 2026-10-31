@@ -100,7 +100,8 @@ function appendBelow(
   paragraphs: ReadonlyArray<JsonContent>,
 ): JsonContent {
   const existing = (content.content ?? []).filter(
-    (block) => !(block.type === "paragraph" && (block.content ?? []).length === 0),
+    (block) =>
+      !(block.type === "paragraph" && (block.content ?? []).length === 0),
   );
   const separator: ReadonlyArray<JsonContent> =
     existing.length === 0 ? [] : [{ type: "paragraph" }];
