@@ -3347,6 +3347,42 @@ describe("a provisional answer on the focused channel", () => {
     ).toEqual(["heard"]);
   });
 
+  it("never says a row the person set aside while its Read drained, once the request resolves", async () => {
+    const { channel, answer } = await provisionalAnswer();
+    const commentary = fake.engines[0]?.appendCommentary;
+    await notificationNamesIt();
+    act(() => {
+      runVoiceQueueVerb({
+        kind: "read",
+        itemId: "a-9",
+        delegationId: "d-read",
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(commentary.mock.calls).toEqual([
+      [`CI bot said: ${ANSWER_TEXT}`, "d-read"],
+    ]);
+
+    act(() => {
+      runVoiceQueueVerb({ kind: "later", itemId: "a-9" });
+    });
+    resolveRequest(channel, answer);
+    act(() =>
+      eventsOf(0).onOutputTranscriptDelta("The nightly build is green"),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(commentary).toHaveBeenCalledTimes(1);
+    expect(
+      useVoiceSessionStore.getState().queue.map((item) => item.state),
+    ).toEqual(["dismissed"]);
+    expect(fake.markRead).not.toHaveBeenCalled();
+  });
+
   it("leaves a Read still waiting for the voice to the queue: it is said once, under its delegation", async () => {
     const { channel, answer } = await provisionalAnswer();
     const commentary = fake.engines[0]?.appendCommentary;
