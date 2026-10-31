@@ -281,7 +281,6 @@ export function BotMessageComposer(props: {
           className="max-h-60 min-h-10"
           data-testid={`${testId}-input`}
           aria-autocomplete="list"
-          aria-expanded={mentions.listOpen}
           aria-controls={mentions.listOpen ? mentionListId : undefined}
           aria-activedescendant={mentions.activeOptionId ?? undefined}
           onSelect={(event) =>

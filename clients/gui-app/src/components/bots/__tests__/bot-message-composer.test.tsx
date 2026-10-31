@@ -869,22 +869,43 @@ describe("the member list for assistive technology", () => {
     );
   }
 
-  it("is collapsed with nothing active while no list shows", async () => {
+  it("names no highlighted member while no list shows", async () => {
     const user = userEvent.setup();
     await user.type(box(), "hello");
 
-    expect(box().getAttribute("aria-expanded")).toBe("false");
     expect(box().hasAttribute("aria-activedescendant")).toBe(false);
   });
 
-  it("is expanded on the highlighted member while the list shows", async () => {
+  it("names the highlighted member while the list shows", async () => {
     const user = userEvent.setup();
     await user.type(box(), "@an");
 
     const highlighted = highlightedId();
     expect(highlighted).not.toBeNull();
-    expect(box().getAttribute("aria-expanded")).toBe("true");
     expect(box().getAttribute("aria-activedescendant")).toBe(highlighted);
+  });
+
+  it("carries only attributes a multiline box allows, with valid values, while the list shows", async () => {
+    const user = userEvent.setup();
+    await user.type(box(), "@an");
+    const { default: axe } = await import("axe-core");
+
+    const result = await axe.run(document.body, {
+      runOnly: {
+        type: "rule",
+        values: ["aria-allowed-attr", "aria-valid-attr-value"],
+      },
+    });
+
+    expect(
+      result.violations.map((violation) => ({
+        id: violation.id,
+        nodes: violation.nodes.map((node) => ({
+          html: node.html,
+          summary: node.failureSummary,
+        })),
+      })),
+    ).toEqual([]);
   });
 
   it("follows the highlight as the arrows move it", async () => {
@@ -899,12 +920,11 @@ describe("the member list for assistive technology", () => {
     expect(box().getAttribute("aria-activedescendant")).toBe(second);
   });
 
-  it("is collapsed again once Escape closes the list", async () => {
+  it("names no highlighted member once Escape closes the list", async () => {
     const user = userEvent.setup();
     await user.type(box(), "@an");
     await user.keyboard("{Escape}");
 
-    expect(box().getAttribute("aria-expanded")).toBe("false");
     expect(box().hasAttribute("aria-activedescendant")).toBe(false);
   });
 });
