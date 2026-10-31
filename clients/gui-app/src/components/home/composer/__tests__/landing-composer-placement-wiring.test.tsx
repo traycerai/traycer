@@ -673,7 +673,7 @@ describe("landing composer G4 re-point", () => {
   });
 });
 
-// Codex review finding: a placement refusal names the placement it refused, so ANY
+// A placement refusal names the placement it refused, so ANY
 // change of the RESOLVED host retires it - a derivation move, or the picker
 // writing a new pin. Real refusal DERIVATION has its own unit suite
 // (`resolveLandingPlacement`); this only pins that the composer's own

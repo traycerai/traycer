@@ -1046,7 +1046,7 @@ describe("host notifications store", () => {
     expect(after.unreadRecentStatus).toBe("idle");
   });
 
-  // These three reproduce the exact ABA collision from the review's read-only
+  // These three reproduce the exact ABA collision from the read-only
   // repro: a page-request token is captured, `reset()` fires, and a fresh
   // snapshot lands whose epoch/revision would equal the captured token again
   // if the counters were zeroed by reset. Because both counters are

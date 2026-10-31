@@ -33,7 +33,7 @@ vi.mock("@/hooks/runner/use-runner-feature-settings-query", () => ({
   useAgentRolesEnabled: () => featureSettings.enabled,
 }));
 // The app-wide addressable host, deliberately DIFFERENT from any session
-// host below: the record fallback must never read it (Codex #1243 T-49).
+// host below: the record fallback must never read it.
 vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => "host-addressable",
 }));

@@ -1,5 +1,5 @@
 /**
- * R6F1 (P1, cross-account leak): the durable handoff must NOT install the
+ * R6F1 (cross-account leak): the durable handoff must NOT install the
  * outgoing account's prompt as a start-page draft on sign-out / user-switch.
  *
  * `disposingForIdentityTeardown` wraps the WHOLE bridge teardown in a module

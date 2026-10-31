@@ -3040,7 +3040,7 @@ describe("<RateLimitPopover /> Refresh all", () => {
     // of queries silently inherited the global QueryClient's default retry
     // policy for the exact same query key `RateLimitProviderBlock`'s own
     // `useHostProviderRateLimitsQuery` deliberately sets `retry: false` for.
-    // Regression 2 (review feedback): both httpFetch providers are configured
+    // Regression 2: both httpFetch providers are configured
     // here - not just one - because production derives the shared options from
     // `httpFetchProviders[0]` (safe today: `providerRateLimitQueryOptions`
     // branches on lane, never provider id, so all httpFetch options are

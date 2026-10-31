@@ -84,7 +84,7 @@ export type LandingPlacement =
  *
  * Applied AFTER `resolveLandingPlacement` says `ready`, on the same host id
  * that placement named, so the version consulted is the target's own. A
- * `signed-in` session is never refused here. Found in review.
+ * `signed-in` session is never refused here.
  */
 export function refuseCreateWithoutCloudVerdict(input: {
   readonly status: AuthStatus;

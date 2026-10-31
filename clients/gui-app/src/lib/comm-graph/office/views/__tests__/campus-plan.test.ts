@@ -1353,7 +1353,7 @@ describe("planCampus", () => {
     // D38 replaced the old one-room-per-lineage-root Campus with one room per
     // partition team, so `triage(1000, 1)` - the largest room count any view
     // still has - plans 32 rooms (HQ + 30 team cabins + 1 bullpen), not the
-    // review's "1,000 rooms and 1,011 props" against the old plan. Measured on
+    // "1,000 rooms and 1,011 props" against the old plan. Measured on
     // this fixture.
     //
     // 70 props where the civic quarter found 47, and the 23 decompose exactly:
@@ -1897,7 +1897,7 @@ describe("planCampus", () => {
     // several: `buildSeatProps` caches a seat's/spot's own painter output by
     // seat id/tile, so a selection that re-enters view under a cache hit
     // would never reach `seatProps`/`spotProps` again, and this callback
-    // would miss it - exactly the gap the reviewer's own probe had to work
+    // would miss it - exactly the gap the original probe had to work
     // around by reaching into the cache. A fresh scene per window has no
     // such cache to hide behind.
     const epic = makeTestEpic("triage", 1000, 1);
@@ -2066,7 +2066,7 @@ describe("planCampus", () => {
 /**
  * WHAT THE PAINTER OWES A CIVIC ROOM, and what it must not give it.
  *
- * Read O's findings 1 and 2: the civic seats and rooms reached the plan and then
+ * The civic seats and rooms reached the plan and then
  * fell through the painter. Beds and benches entered `layout.seats`, the scene
  * asked for their props like any other seat's, and the isometric painter had no
  * branch for them - so `campusSeatProps` put a `desk-iso` slab on a hospital bed

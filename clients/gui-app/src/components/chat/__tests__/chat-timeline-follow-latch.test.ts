@@ -6225,7 +6225,7 @@ describe("useChatTimelineFollowLatch", () => {
   // drop shrinks "distance from end" out from under the reader, so a later
   // drag that moves the view up could still read as closer to the (now
   // nearer) end than the press was, and "farther from the end" never held.
-  // PR #3048 round 2 fixed the helper to require only "up from the carried
+  // PR #3048 fixed the helper to require only "up from the carried
   // offset" once the view is off the strict bottom, with the distance half
   // applying only on the strict bottom. Regression test for that fix.
   it("departs a following reader whose drag moves up but lands closer to an end a mid-press pad drop shrank", () => {
@@ -6712,7 +6712,7 @@ describe("useChatTimelineFollowLatch", () => {
   });
 
   // P8 - three refusals of the maintenance-read arrival (P7's mechanism),
-  // plus a fourth case from CodeRabbit. A stale-generation refusal is not
+  // plus a fourth case. A stale-generation refusal is not
   // listed here: every call that bumps `readerGestureGenerationRef` also
   // replaces or nulls `readerEndCandidateRef` in the same act
   // (`noteReaderGesture`, `handleTouchStart`), so a candidate whose own
@@ -6768,7 +6768,7 @@ describe("useChatTimelineFollowLatch", () => {
       expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
     });
 
-    // CodeRabbit: the candidate is read fresh every call, so a reader who
+    // The candidate is read fresh every call, so a reader who
     // moves away for real between the clamp and the maintenance read is
     // judged by where they ended up, not by a momentary match the clamp
     // alone would have produced.
@@ -6981,7 +6981,7 @@ describe("useChatTimelineFollowLatch", () => {
     expect(listRef.scrollToEnd).not.toHaveBeenCalled();
 
     // Scroll DOWNWARD again but still 200px short of the (grown) end -
-    // review's exact counter-example against a numeric baseline.
+    // exact counter-example against a numeric baseline.
     shim.setGeometry(node, { scrollTop: 1000, scrollHeight: 1700 });
     fireNativeScroll(node);
     result.current.followEndIfPermitted();

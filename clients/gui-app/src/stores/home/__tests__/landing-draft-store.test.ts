@@ -1329,7 +1329,7 @@ describe("useLandingDraftStore", () => {
     expect(parsed.state?.drafts?.[0]?.settings).toBeNull();
   });
 
-  // Mechanism A (round 5): the strip lives at the two SERIALIZATION seams — the
+  // Mechanism A: the strip lives at the two SERIALIZATION seams — the
   // localStorage `partialize` and the desktop projection — NOT in
   // `setDraftContent`. The in-memory draft is canonical and keeps a paste's
   // still-pending b64 node so a keyed remount / in-session navigate-back can
@@ -1581,7 +1581,7 @@ describe("useLandingDraftStore", () => {
     it("preserves non-empty in-memory drafts on empty inbound and re-projects outbound", () => {
       // Stub the GC gates (no call-through): this suite has no idb-keyval mock,
       // and the assertion is about whether the guard fires them, not the sweep.
-      // [B1-P2] mount→readiness is covered with the real GC in
+      // mount→readiness is covered with the real GC in
       // landing-image-gc.test.ts `[B1+B2]` (spyOn cannot intercept same-module
       // internal calls from markLandingEditorMounted → markLandingDraftsReady).
       const markReady = vi

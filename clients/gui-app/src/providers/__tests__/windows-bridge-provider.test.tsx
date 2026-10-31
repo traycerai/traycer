@@ -1422,7 +1422,7 @@ describe("<WindowsBridgeProvider /> - renderer parking's window visibility input
   });
 
   // ── The startup read is OLDER than any event that lands while it is in
-  // flight (Codex re-review of 343f6cc0b9, P1) ───────────────────────────────
+  // flight ───────────────────────────────────────────────────────────────────
   //
   // Main answers the snapshot from what the window looked like when the invoke
   // arrived; an `onChange` that lands before the answer does is newer. Applying
@@ -1645,8 +1645,8 @@ describe("<WindowsBridgeProvider /> - renderer parking's window visibility input
         // Microtasks only: the settle runs the leg's `.then`/`.catch`.
         await vi.advanceTimersByTimeAsync(0);
       });
-      // The discriminator for teardown's `snapshotLeg.cancel()` (Codex on
-      // 7f3f67441): a rejection after teardown must not ARM a retry timer.
+      // The discriminator for teardown's `snapshotLeg.cancel()`:
+      // a rejection after teardown must not ARM a retry timer.
       // Asserted on the timer count before the backoff elapses, because a
       // stray retry that does fire returns at `snapshotSuperseded()` before
       // it reads, leaving `snapshotCalls` unchanged - so the count below is

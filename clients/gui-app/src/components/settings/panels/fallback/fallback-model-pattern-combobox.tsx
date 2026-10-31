@@ -390,7 +390,7 @@ function openingState(input: {
 /**
  * The list's query and highlight: opened by {@link openingState}, then
  * RE-SEEDED once if the provider's catalog answers while the list is open
- * (review R7).
+ * (R7).
  *
  * Opened cold, the picker cannot know `gpt-5.6-terra` is a model, so the
  * stored value becomes the query and the highlight the "contains" pattern -

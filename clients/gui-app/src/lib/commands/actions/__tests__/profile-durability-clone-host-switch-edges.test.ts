@@ -780,7 +780,7 @@ describe("cloneChatOnHostSwitch: history-carrying fork and its retry", () => {
     expect(onCloneFailed).toHaveBeenCalledTimes(1);
   });
 
-  // The blocker the cold review found: every released host is
+  // The blocker: every released host is
   // `epic.createChat@1.0`-only, so the FIRST attempt against a real host
   // never even reaches the server - the client-side downgrade fails before
   // a frame is sent. Pre-B1 behavior always landed settings-only; this must

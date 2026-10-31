@@ -25,7 +25,7 @@ import ts from "typescript";
  * follows from whether the site resolves one of OUR tokens or a convention that
  * belongs to the platform.
  *
- * This file exists because "we fixed the class" has been wrong twice. Round 15
+ * This file exists because "we fixed the class" has been wrong twice. One fix
  * moved two matchers onto `code` and called the class closed; the streamed
  * screencast matcher was still on `key`. Fixing that at the shared point then
  * swept the PASTE caller physical too, breaking native paste on Dvorak - the

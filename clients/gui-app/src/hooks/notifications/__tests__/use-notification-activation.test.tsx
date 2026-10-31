@@ -495,7 +495,7 @@ describe("useNotificationActivation", () => {
     expect(onResult).toHaveBeenCalledWith("success");
   });
 
-  // Cold review #8: retained closed epic tab records must reopen (via
+  // Retained closed epic tab records must reopen (via
   // coordinator resolve) before nested-focus preparation + activation.
   it("reopens a retained closed terminal tab before nested-focus activation", () => {
     const store = useEpicCanvasStore.getState();

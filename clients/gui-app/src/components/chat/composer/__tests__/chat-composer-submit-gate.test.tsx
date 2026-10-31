@@ -28,7 +28,7 @@ import {
 } from "@/hooks/composer/use-composer-paste";
 
 /**
- * Chat-composer submit gate (finding 3).
+ * Chat-composer submit gate.
  *
  * `chat-composer.tsx` feeds `attachmentPreparationPending` into
  * `useChatComposerSubmit` from `isAttachmentIngestPending({isIngestingImages,

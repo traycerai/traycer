@@ -1,6 +1,6 @@
 /**
- * Ticket 21 slice 3: the direct-flush geometry coordinator design-review
- * finding 2 requires in place of `ResizeObserver -> requestAnimationFrame`.
+ * Ticket 21 slice 3: the direct-flush geometry coordinator used
+ * in place of `ResizeObserver -> requestAnimationFrame`.
  *
  * ONE shared `ResizeObserver` for the host root and every registered slot.
  * Its callback applies every registered rect DIRECTLY - synchronously, in
@@ -33,7 +33,7 @@
  * has already replaced it - the same compare-before-clear discipline
  * ticket 22's geometry scheduler needed for its own StrictMode replay.
  *
- * A same-key re-registration (slice-3 review finding 2) unobserves the
+ * A same-key re-registration unobserves the
  * DISPLACED element before observing the new one, at replacement time -
  * the identity-guarded cleanup above correctly refuses to remove the new
  * mapping entry, but that guard alone left the old element observed

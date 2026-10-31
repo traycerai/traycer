@@ -1426,7 +1426,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
   // so its reply stream can flow visually behind it. Measuring the whole
   // overlay as one unit (rather than composer/queued-surface separately) is
   // a deliberate ticket-3 scope narrowing - see ticket-3 report for the
-  // follow-up split. `useMeasuredElementHeight` (review finding: extracted so
+  // follow-up split. `useMeasuredElementHeight` (extracted so
   // this measurement -> prop contract is directly testable, ticket 18 rider)
   // owns the ResizeObserver plumbing.
   const {

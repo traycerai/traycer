@@ -263,7 +263,7 @@ export type EpicCommentRoomAvailability =
    * this disk), but its comment room lives in the cloud-backed artifact room
    * and every read (`epic.listCommentThreads` poll) and write goes through
    * the local-host context, which does not carry the renderer's verdict.
-   * A local-homed room (`local` / `promoting`) is exempt. Found in review.
+   * A local-homed room (`local` / `promoting`) is exempt.
    */
   | { readonly kind: "unauthorized" };
 
@@ -687,7 +687,7 @@ export function deriveEpicDurabilityView(
   }
   if (status === null || status === "unknown") {
     // The frame's absence rule, stated as code: an absent `durability` key
-    // from a `@1.4` peer means UNKNOWN, never synced. Review found the
+    // from a `@1.4` peer means UNKNOWN, never synced. The
     // earlier arm here resolving absence-beside-`armed` into the calm
     // rendering, which let a schema-permitted omission claim "All changes
     // synced" - the silence-as-reassurance inference this minor exists to
@@ -2584,7 +2584,7 @@ export function useEpicArtifactStatus(id: string): number | null {
  * Ancestor ids of `nodeId`, nearest first, cycle-guarded. Empty for a root, a
  * null id, or an id the tree does not hold.
  *
- * ## Subscribed to the ANSWER (epic-sync-overhaul finding 12, round 2)
+ * ## Subscribed to the ANSWER
  *
  * This read the whole `tree` slice and walked it in a `useMemo`, so it returned
  * a fresh `Set` on every store tick that re-minted the slice - which a body

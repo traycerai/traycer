@@ -83,7 +83,7 @@ describe("recordObservationFromLocalAttempt", () => {
     },
   );
 
-  // Codex round 3. `failed` used to be dropped with the other two, which meant
+  // `failed` used to be dropped with the other two, which meant
   // the one terminal phase the LIVE path renders (it maps `failed` -> `failed`
   // and only collapses `superseded` -> `idle`) was discarded exactly when the
   // host is unreachable and this record is the only evidence there is -
