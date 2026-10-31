@@ -717,6 +717,9 @@ export function VoiceSessionController(): ReactNode {
       clearTimers();
       releaseAudio();
       speechRef.current?.reset();
+      // What the loop scheduled (a confirmation's answer window) dies with
+      // the session, so nothing of it reaches the next one.
+      sayLoopRef.current?.dispose();
       sayLoopRef.current = null;
       watchMemories.clear();
       setShellVoiceLive(false);

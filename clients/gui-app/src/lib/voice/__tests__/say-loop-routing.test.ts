@@ -386,6 +386,7 @@ describe("a confirmation whose answer never closes an utterance", () => {
     speak("hello", " ci bot");
     await h.loop.onDelegationCreated("d-1");
     h.asks[0]?.onDelivered();
+    expect(h.timers).toHaveLength(1);
     speak("yes please");
     await h.loop.onDelegationCreated("d-2");
     h.timers[0]?.run();

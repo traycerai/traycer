@@ -208,6 +208,11 @@ export interface SayLoop {
   isAwaiting(requestId: string): boolean;
   /** Actions whose send has not settled. */
   inFlightCount(): number;
+  /**
+   * The session is over: the loop cancels what it scheduled (the wait for a
+   * confirmation's answer), so nothing of it reaches a later session.
+   */
+  dispose(): void;
 }
 
 interface Action {
@@ -261,6 +266,11 @@ interface Confirming {
   readonly text: string;
   /** The question was confirmed spoken; only then is a boundary its answer. */
   heard: boolean;
+  /**
+   * The newest segment said when the question was confirmed heard: only
+   * words said after it can answer it. `null` until it is heard.
+   */
+  heardAfterSeq: number | null;
   /** Cancels the wait for an answer once the question was heard. */
   cancelWait: () => void;
 }
@@ -337,6 +347,53 @@ function landedText(target: BoundTarget): string {
 }
 
 /**
+ * Where an accepted post stands against the focus now: `"here"` when nobody
+ * moved, so the focus follows it; `"moved"` when the person moved while it
+ * was out; `"moved-on"` when the voice itself moved on (a later request
+ * navigated). Only `"here"` adopts the destination.
+ */
+function whereItLanded(
+  action: Pick<Action, "movedWhileSending" | "selectionGeneration" | "focus">,
+  after: Pick<VoiceSessionState, "selectionGeneration" | "focus">,
+): "here" | "moved" | "moved-on" {
+  if (
+    action.movedWhileSending ||
+    after.selectionGeneration !== action.selectionGeneration
+  ) {
+    return "moved";
+  }
+  return after.focus !== null && stillDestination(after.focus, action.focus)
+    ? "here"
+    : "moved-on";
+}
+
+/**
+ * What the voice says about an accepted post, in one notice: where it landed
+ * when the focus is elsewhere, and that it is queued. `null` for an ordinary
+ * post, which the voice says nothing about beyond the reply itself.
+ */
+function acceptanceNotice(
+  where: "here" | "moved" | "moved-on",
+  response: BotConversationSendResponse,
+  botTitle: string,
+): string | null {
+  const landed =
+    response.threadId === null
+      ? `${botTitle}'s channel`
+      : `a thread with ${botTitle}`;
+  const lines = [
+    where === "moved"
+      ? `Posted in ${landed} before the person moved on.`
+      : null,
+    where === "moved-on" ? `Posted in ${landed}.` : null,
+    response.delivery === "queued"
+      ? `The post is queued until the bot's machine takes it.`
+      : null,
+  ].filter((line) => line !== null);
+  return lines.length === 0 ? null : lines.join(" ");
+}
+
+/**
  * Whether the focus now is still the destination a route bound to the focus:
  * the same bot, host and anchor, the anchor's thread at most resolved since.
  */
@@ -381,11 +438,34 @@ const NEGATIVE = new Set([
   "stop",
   "never",
 ]);
+/** Words that open a question; an utterance starting with one is never an answer. */
+const QUESTION_STARTS = new Set([
+  "is",
+  "are",
+  "was",
+  "were",
+  "am",
+  "does",
+  "did",
+  "can",
+  "could",
+  "should",
+  "would",
+  "will",
+  "shall",
+  "what",
+  "which",
+  "who",
+  "why",
+  "how",
+  "where",
+  "when",
+]);
+
 /** Words an answer may carry around its yes or no and still be only an answer. */
 const ANSWER_FILLER = new Set([
   "please",
   "it",
-  "that",
   "that's",
   "thats",
   "go",
@@ -400,7 +480,6 @@ const ANSWER_FILLER = new Set([
   "um",
   "uh",
   "yes",
-  "is",
   "fine",
   "thing",
   "sounds",
@@ -417,6 +496,8 @@ const ANSWER_FILLER = new Set([
 export function confirmationAnswer(
   text: string,
 ): "yes" | "no" | "not-an-answer" {
+  // A question is not an answer, whatever words it uses ("is that okay?").
+  if (text.includes("?")) return "not-an-answer";
   const words = text
     .toLowerCase()
     .replace(/[^a-z' ]+/g, " ")
@@ -428,7 +509,10 @@ export function confirmationAnswer(
       (word) =>
         AFFIRMATIVE.has(word) || NEGATIVE.has(word) || ANSWER_FILLER.has(word),
     );
-  if (!answerOnly) return "not-an-answer";
+  const first = words.at(0);
+  if (!answerOnly || (first !== undefined && QUESTION_STARTS.has(first))) {
+    return "not-an-answer";
+  }
   if (words.some((word) => NEGATIVE.has(word))) return "no";
   const joined = words.join(" ");
   if (
@@ -466,6 +550,8 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   const navigating = new Map<string, RoutingEntry>();
   /** The routed post waiting for the person's yes; mirrored by the store's `pendingAction`. */
   let confirming: Confirming | null = null;
+  /** The session is over; nothing scheduled by this loop acts any more. */
+  let disposed = false;
   /** The question the voice just asked about words it handed back, for the next route. */
   let askedQuestion: {
     readonly text: string;
@@ -557,23 +643,14 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       threadId: response.threadId,
       openedThread,
     });
-    const moved =
-      action.movedWhileSending ||
-      after.selectionGeneration !== action.selectionGeneration;
-    const landed =
-      response.threadId === null
-        ? `${deps.botTitle(focus.botId)}'s channel`
-        : `a thread with ${deps.botTitle(focus.botId)}`;
-    if (!moved) adoptDestination(action, response);
-    // One notice covers both facts: the voice says nothing about an ordinary
-    // post beyond the reply itself.
-    const notice = [
-      moved ? `Posted in ${landed} before the person moved on.` : null,
-      response.delivery === "queued"
-        ? `The post is queued until the bot's machine takes it.`
-        : null,
-    ].filter((line) => line !== null);
-    if (notice.length > 0) deps.notify(notice.join(" "), delegationOf(action));
+    const where = whereItLanded(action, after);
+    if (where === "here") adoptDestination(action, response);
+    const notice = acceptanceNotice(
+      where,
+      response,
+      deps.botTitle(focus.botId),
+    );
+    if (notice !== null) deps.notify(notice, delegationOf(action));
     // Last: the answer may already be in a loaded snapshot.
     deps.onAccepted({
       requestId: response.requestId,
@@ -815,6 +892,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
           target: decision.target,
           text,
           heard: false,
+          heardAfterSeq: null,
           cancelWait: () => undefined,
         };
         confirming = held;
@@ -833,8 +911,18 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
             onDelivered: () => {
               if (confirming !== held || held.heard) return;
               held.heard = true;
+              held.heardAfterSeq =
+                store.getState().segments.at(-1)?.seq ??
+                Number.NEGATIVE_INFINITY;
               held.cancelWait = deps.schedule(() => {
-                if (confirming !== held) return;
+                if (
+                  disposed ||
+                  confirming !== held ||
+                  store.getState().sessionToken !== held.entry.sessionToken
+                ) {
+                  return;
+                }
+                spendLateAnswer(held);
                 dropConfirmation(held);
                 deps.notify(UNANSWERED_TEXT, delegationOf(held.entry));
               }, CONFIRM_ANSWER_WINDOW_MS);
@@ -864,9 +952,32 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     confirming = null;
     const state = store.getState();
     state.consumeReservation(held.entry.seqs);
-    if (state.pendingAction?.kind === "confirming")
+    const pending = state.pendingAction;
+    if (
+      pending?.kind === "confirming" &&
+      pending.delegationId === held.entry.delegationId
+    ) {
       state.setPendingAction(null);
+    }
     settleDelegation(held.entry.delegationId);
+  }
+
+  /**
+   * The words said after the question that make an answer, still open
+   * because no boundary closed them (a bare "yes" the engine did not
+   * delegate): spent with the post the answer was for, so they never ride
+   * into the next request. Words that are a new request stay open.
+   */
+  function spendLateAnswer(held: Confirming): void {
+    const after = held.heardAfterSeq;
+    if (after === null) return;
+    const state = store.getState();
+    const late = state.segments.filter(
+      (segment) => segment.reservedBy === null && segment.seq > after,
+    );
+    if (late.length === 0) return;
+    if (confirmationAnswer(joinSegments(late)) === "not-an-answer") return;
+    state.consumeReservation(late.map((segment) => segment.seq));
   }
 
   /**
@@ -887,10 +998,27 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       }
       return "route";
     }
-    const answer = state.reserveOpenSpan(`answer:${boundary}`);
+    const answerId = `answer:${boundary}`;
+    const answer = state.reserveOpenSpan(answerId);
     // A boundary with no words answers nothing yet.
     if (answer === null) return "handled";
-    const verdict = confirmationAnswer(answer.text);
+    // Only words said after the question was heard can answer it, however
+    // late their boundary came: earlier ones are spent and answer nothing.
+    const heardAfter = held.heardAfterSeq;
+    const eligible =
+      heardAfter === null
+        ? []
+        : store
+            .getState()
+            .segments.filter(
+              (segment) =>
+                segment.reservedBy === answerId && segment.seq > heardAfter,
+            );
+    if (eligible.length === 0) {
+      state.consumeReservation(answer.seqs);
+      return "handled";
+    }
+    const verdict = confirmationAnswer(joinSegments(eligible));
     if (verdict === "not-an-answer") {
       state.releaseReservation(answer.seqs);
       dropConfirmation(held);
@@ -898,9 +1026,6 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       return "route";
     }
     state.consumeReservation(answer.seqs);
-    // An answer said before the question was heard answers nothing: the
-    // post waits for one to the question once it is heard.
-    if (!held.heard) return "handled";
     held.cancelWait();
     confirming = null;
     state.setPendingAction(null);
@@ -1152,5 +1277,11 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     isAwaiting: (requestId) => awaiting.has(requestId),
 
     inFlightCount: () => inFlight.size,
+
+    dispose() {
+      disposed = true;
+      confirming?.cancelWait();
+      confirming = null;
+    },
   };
 }
