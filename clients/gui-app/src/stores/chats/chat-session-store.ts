@@ -7126,18 +7126,6 @@ export function createChatSessionStoreWithNotificationDependencies(
     });
 
     /**
-     * Hand a stalled recovery back to the composer, loudly - the ordinary
-     * refusal outcome, reached late.
-     *
-     * Every exit from recovery that is not a dispatched retry comes here: the
-     * resolver found nothing, the session was torn down, or `sendAction`
-     * refused because the connection is no longer open. Without it the
-     * prompt's only record was an async closure, and a reconnect during
-     * recovery lost it outright - no pending action, no queue row, no
-     * restoration, and for a QUEUED send not even an optimistic echo, because
-     * queued sends never get one.
-     */
-    /**
      * Action ids whose follow-up `errorNotice` must still be swallowed, and
      * the timer that stops swallowing.
      *
@@ -7418,7 +7406,6 @@ export function createChatSessionStoreWithNotificationDependencies(
     ): WorktreeSweepAccount =>
       sweepAccountForIntent(recovery.worktreeIntent, recovery.clientActionId);
 
-    /** One answer to "what has been swept from this staging", for every speaker. */
     /**
      * Deletion facts this consumer has OBSERVED about its own frozen intent,
      * keyed by the action that owns them, and never retracted.
@@ -7463,6 +7450,7 @@ export function createChatSessionStoreWithNotificationDependencies(
       return merged;
     };
 
+    /** One answer to "what has been swept from this staging", for every speaker. */
     const sweepAccountForIntent = (
       intent: WorktreeIntent | null,
       clientActionId: string,
@@ -7488,12 +7476,6 @@ export function createChatSessionStoreWithNotificationDependencies(
       return { survivors, swept, superseded: false };
     };
 
-    /**
-     * Returns the prompts this pass could NOT put in the restoration slot -
-     * the ones whose only remaining trace is a notice's text. A caller that is
-     * tearing the store down must hand those off durably; see
-     * {@link handOffUnrecordedPromptToStash}.
-     */
     /**
      * Capture deletion facts for every live consumer, before anything can
      * clear them.
@@ -7612,6 +7594,18 @@ export function createChatSessionStoreWithNotificationDependencies(
       // two cases are the same case.
     };
 
+    /**
+     * Hand a stalled recovery back to the composer, loudly - the ordinary
+     * refusal outcome, reached late.
+     *
+     * Every exit from recovery that is not a dispatched retry comes here: the
+     * resolver found nothing, the session was torn down, or `sendAction`
+     * refused because the connection is no longer open. Without it the
+     * prompt's only record was an async closure, and a reconnect during
+     * recovery lost it outright - no pending action, no queue row, no
+     * restoration, and for a QUEUED send not even an optimistic echo, because
+     * queued sends never get one.
+     */
     const abandonHashOnlyRecovery = (
       recovery: HashOnlyRecoveryState,
       reason: string,
@@ -13790,31 +13784,6 @@ function withoutRecordKeyGeneric<T>(
 }
 
 /**
- * A refused hash-only send that this client is quietly recovering, held in the
- * store for exactly as long as the recovery runs.
- *
- * It exists because the recovery has an await in the middle of it, and during
- * that await the send must still be SOMETHING. The first version kept it only
- * in an async closure, which meant that for the length of a byte resolution the
- * prompt had no pending action, no queue row, no restoration slot and - for a
- * QUEUED send, which never gets an optimistic echo - no presence at all. A
- * reconnect in that window lost the message outright, and the GC root collector
- * (which walks pending actions, pending users and the restoration slot) could
- * release the very bytes the retry was waiting for.
- *
- * So this is custody: the store owns the send until the retry is dispatched or
- * it is handed back. Everything `sendMessage` would otherwise re-read from
- * ambient state at dispatch time is frozen here instead, because the ambient
- * values belong to whatever the user is doing NOW, not to this send.
- */
-/**
- * What `sendMessage` takes. NAMED because three consumers had hand-typed their
- * own copy of it - `useChatActions`, its test's store fake, and the composer
- * submit hook's local slice - and a copy is only correct until this one moves.
- * The last time it did, a copy that had drifted stayed green under compile and
- * went red only when someone ran the file.
- */
-/**
  * True while an AUTH IDENTITY teardown is disposing sessions.
  *
  * The durable handoff must never cross accounts. A handed-off prompt becomes a
@@ -13885,6 +13854,13 @@ export function disposingForIdentityTeardown(run: () => void): void {
   }
 }
 
+/**
+ * What `sendMessage` takes. NAMED because three consumers had hand-typed their
+ * own copy of it - `useChatActions`, its test's store fake, and the composer
+ * submit hook's local slice - and a copy is only correct until this one moves.
+ * The last time it did, a copy that had drifted stayed green under compile and
+ * went red only when someone ran the file.
+ */
 export interface SendChatSessionMessageInput {
   readonly content: JsonContent;
   readonly sender: UserMessageSender;
@@ -13894,6 +13870,24 @@ export interface SendChatSessionMessageInput {
   readonly restore: ChatSendRestore;
 }
 
+/**
+ * A refused hash-only send that this client is quietly recovering, held in the
+ * store for exactly as long as the recovery runs.
+ *
+ * It exists because the recovery has an await in the middle of it, and during
+ * that await the send must still be SOMETHING. The first version kept it only
+ * in an async closure, which meant that for the length of a byte resolution the
+ * prompt had no pending action, no queue row, no restoration slot and - for a
+ * QUEUED send, which never gets an optimistic echo - no presence at all. A
+ * reconnect in that window lost the message outright, and the GC root collector
+ * (which walks pending actions, pending users and the restoration slot) could
+ * release the very bytes the retry was waiting for.
+ *
+ * So this is custody: the store owns the send until the retry is dispatched or
+ * it is handed back. Everything `sendMessage` would otherwise re-read from
+ * ambient state at dispatch time is frozen here instead, because the ambient
+ * values belong to whatever the user is doing NOW, not to this send.
+ */
 interface HashOnlyRecoveryState {
   readonly sentAt: number;
   /** The settled action this replaces, still owning its queue row until dispatch. */
