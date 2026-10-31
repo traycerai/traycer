@@ -19,6 +19,13 @@ import type { ReactNode } from "react";
 import { createStore } from "zustand/vanilla";
 import type { CanvasAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
 import type { QuoteChatTarget } from "@/components/epic-canvas/renderers/chat-target-menu/quote-chat-targets";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { useNewConversationAnnotationStore } from "@/stores/epics/new-conversation-annotation-store";
+import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import { useNewConversationModalStore } from "@/stores/epics/new-conversation-modal-store";
 import { AnchoredDraftPopover } from "@/components/comments/anchored-draft-popover";
 import {
   BOARD_PATH,
@@ -121,6 +128,7 @@ function StubChatTargetMenu(props: {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
   readonly onSelectChat: (chatId: string) => void;
+  readonly onSelectNewChat: (() => void) | null;
 }) {
   return (
     <div>
@@ -143,6 +151,15 @@ function StubChatTargetMenu(props: {
               {target.title}
             </button>
           ))}
+          {props.onSelectNewChat === null ? null : (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={props.onSelectNewChat}
+            >
+              New chat
+            </button>
+          )}
         </div>
       ) : null}
     </div>
@@ -239,9 +256,13 @@ beforeEach(() => {
   onClosed.mockReset();
   useAnchoredDraftStore.setState({ byEpicId: {} });
   useComposerDraftStore.setState({ drafts: {} });
+  resetNegotiatedManifests();
 });
 
 afterEach(() => {
+  useNewConversationAnnotationStore.setState({ byEpicId: {} });
+  useNewConversationModalOpenStore.setState({ request: null });
+  useNewConversationModalStore.setState({ draftPatchesByEpicId: {} });
   outside.realMenu.current = false;
   vi.restoreAllMocks();
   cleanup();
@@ -358,5 +379,63 @@ describe("the comment draft box's Send to chat", () => {
     });
     renderPopover(SURFACE);
     expect(screen.queryByRole("button", { name: "Send to chat" })).toBeNull();
+  });
+});
+
+describe("the draft box's New chat", () => {
+  async function openPicker(): Promise<void> {
+    storeDraft({});
+    renderPopover(SURFACE);
+    typeIntoEditor(composerEditorAt(0), "make this bolder");
+    fireEvent.click(sendButton());
+    await screen.findByRole("menuitem", { name: "Chat one" });
+  }
+
+  it("moves the element and the text into the new-conversation modal and closes the box", async () => {
+    recordNegotiatedHostManifest(SCOPE.hostId, {
+      "epic.createChat": { major: 1, minor: 5 },
+    });
+    await openPicker();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "New chat" }));
+
+    await waitFor(() => {
+      expect(onClosed).toHaveBeenCalledOnce();
+    });
+    expect(
+      useNewConversationAnnotationStore.getState().byEpicId[EPIC_ID],
+    ).toHaveLength(1);
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+        ?.content.content,
+    ).toEqual([
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: "make this bolder" }],
+      },
+    ]);
+    expect(useNewConversationModalOpenStore.getState().request).toEqual({
+      epicId: EPIC_ID,
+      tabId: SCOPE.viewTabId,
+      placement: null,
+      parentId: null,
+      hostId: null,
+    });
+    expect(useAnchoredDraftStore.getState().byEpicId[EPIC_ID]).toBeUndefined();
+    expect(attach).not.toHaveBeenCalled();
+    expect(reveal).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a host below the minor", { major: 1, minor: 4 }],
+    ["a host that has not negotiated", null],
+  ])("offers no New chat for %s", async (_name, version) => {
+    if (version !== null)
+      recordNegotiatedHostManifest(SCOPE.hostId, {
+        "epic.createChat": version,
+      });
+    await openPicker();
+
+    expect(screen.queryByRole("menuitem", { name: "New chat" })).toBeNull();
   });
 });
