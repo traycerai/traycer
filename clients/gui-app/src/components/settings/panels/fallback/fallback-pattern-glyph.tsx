@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
  * wildcard), so the thing that marks a pattern is also the thing that teaches
  * how to write one.
  *
- * Its text alternative is "pattern" (spec §Accessibility): the glyph is
+ * Its text alternative is "pattern": the glyph is
  * `aria-hidden` and the word rides beside it for assistive technology, so a
  * trigger reads "*opus*, pattern, 2 models" rather than "star opus star star".
  *

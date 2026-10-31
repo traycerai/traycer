@@ -41,7 +41,7 @@ import { effectiveLadderFor } from "@/components/settings/panels/fallback/fallba
 import type { FallbackSettingsProfileLabel } from "@/components/settings/panels/fallback/fallback-profile-labels";
 
 /**
- * The pure half of the Test a model panel (spec §Wireframe 4): which tier a
+ * The pure half of the Test a model panel: which tier a
  * hypothetical blocked model routes to, what the draft's steps after the tier
  * are, and how the host's dry run reads row by row.
  *

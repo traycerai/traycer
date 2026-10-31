@@ -167,7 +167,7 @@ const PHASE_SENTENCE: Record<
   applying: ({ to }) => `Installing update${to}`,
   "waiting-for-work": ({ view, cliFloorBlocked }) =>
     waitingForWorkSentence(view.blockingSessionCount, cliFloorBlocked),
-  // The plan names this string explicitly (§3.1): a parked activation must NOT
+  // A parked activation must NOT
   // keep saying "Updating". It is placed, it is waiting for a restart, and the
   // host is still serving in the meantime.
   "waiting-to-activate": () => "Update installed — restart host to finish",

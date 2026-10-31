@@ -566,7 +566,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
  * controller does know.
  *
  * A RETAINED ATTEMPT phase does not lose, because it is not the absence of
- * knowledge — and rejecting it made the host-down window (Ticket 07 §5.2.7)
+ * knowledge — and rejecting it made the host-down window (Ticket 07)
  * unrenderable on this surface. The projection's record arm ALWAYS returns
  * `kind: "unknown"` with `lastKnownKind` set: that is the deliberate shape for
  * "an attempt exists and the host is unreachable", chosen so the view holds no
@@ -765,7 +765,7 @@ function OperationRecoveryAction(props: OperationRecoveryActionProps) {
  *
  * WHAT IS DELIBERATELY ABSENT: any control that disables anything else. This
  * banner never gates Restart, Diagnostics, Activate or the overflow menu.
- * Update state is not a host-action mutex (plan §4), and the user is never
+ * Update state is not a host-action mutex, and the user is never
  * required to clear or dismiss this banner before recovering the host — which
  * is why there is no dismiss affordance on an active operation and no disabled
  * state applied to anything outside this element.

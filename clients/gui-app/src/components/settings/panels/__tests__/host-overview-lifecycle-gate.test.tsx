@@ -749,7 +749,7 @@ describe("HostOverviewPanel — probed local liveness on the record leg (Ticket 
     // Falsifies: `recordObservationView` reaching its qualified-stale arm
     // instead of the live `restarting` one for a fresh, valid `live` proof —
     // or the panel still calling `projectFleetUpdateView` directly with no
-    // `localAttempt` leg at all (the invariant §19 of the ticket names).
+    // `localAttempt` leg at all.
     await waitFor(() => {
       expect(
         screen.getByTestId("host-overview-operation-phase").textContent,

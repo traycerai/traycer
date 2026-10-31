@@ -11,7 +11,7 @@ import { busyWorkPhrase } from "@/components/host/host-restart-copy";
  *
  * This is step 3 of `deriveHostHealth`'s precedence and nothing renders it
  * directly. That distinction is the whole point of the redesign's
- * single-vocabulary rule (connection registry §1, quoted at
+ * single-vocabulary rule (quoted at
  * `hooks/host/use-host-lease.ts`): a person reads ONE set of status words,
  * and those words come from `HostHealth`. What lives here is one of the
  * inputs that produces them, which is why its type is named for the source
@@ -157,7 +157,7 @@ export interface HostUpdatePill {
 }
 
 /**
- * Maps the update lifecycle to a pill (Architecture §7/§13). `current` shows
+ * Maps the update lifecycle to a pill. `current` shows
  * nothing. S1 populates `current`/`pending`/`required`; the remaining states
  * are rendered for completeness once the S3 reconciler emits them.
  */
@@ -181,7 +181,7 @@ export function deriveUpdatePill(
 }
 
 // -----------------------------------------------------------------------------
-// Update affordances (Architecture §13, T16): "Update now" version input,
+// Update affordances (T16): "Update now" version input,
 // auto-policy toggle, and the "Apply now — ends N sessions" drain-gate force.
 // -----------------------------------------------------------------------------
 
@@ -412,7 +412,7 @@ function pluralizeSessions(count: number): string {
 }
 
 /**
- * Derives the update affordances (Architecture §13) from two sources with
+ * Derives the update affordances from two sources with
  * deliberately different reliability, and the split is the whole point.
  *
  * The registry-backed half of this — the free-text "Update to version…" pin and

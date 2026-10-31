@@ -425,7 +425,7 @@ function useHostProvisioning(args: {
     );
   }, [queryClient, run, runnerHost.hostManagement]);
 
-  // THE AUTOMATIC LAUNCH-TIME `convergeReady` IS RETIRED (D14/C5, registry §5).
+  // THE AUTOMATIC LAUNCH-TIME `convergeReady` IS RETIRED (D14/C5).
   //
   // It used to fire here, once per session, whenever a signed-in local-host
   // shell had no reachable host. That made the renderer a SECOND process actor
@@ -439,8 +439,8 @@ function useHostProvisioning(args: {
   // provisioning state described different worlds; engine-wins produced two
   // converge calls for one boot.
   //
-  // It is also what made the ∅ definitions two rather than one: registry §5
-  // says ∅ is "no usable lease AND the ensure path is unavailable or has
+  // It is also what made the ∅ definitions two rather than one: ∅ is
+  // "no usable lease AND the ensure path is unavailable or has
   // failed", which is only decidable if the engine is the one asking.
   //
   // What stays HERE is presentation state and USER-INITIATED recovery: Retry,

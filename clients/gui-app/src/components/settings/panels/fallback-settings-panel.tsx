@@ -530,7 +530,7 @@ function FallbackPolicyEditor(props: {
   );
 
   /**
-   * The Test a model panel (spec §Wireframe 4): whether it is open, and the
+   * The Test a model panel: whether it is open, and the
    * header button the keyboard goes back to when Escape or ✕ closes it - the
    * panel's own controls are about to unmount, so the browser would otherwise
    * drop focus on the body.
