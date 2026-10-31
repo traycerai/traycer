@@ -2802,10 +2802,9 @@ function UnscopedTraycerUsage(): ReactNode {
  * The synthetic "Traycer" block - the GUI-sourced analogue of
  * `RateLimitProviderBlock`. Its data is the signed-in user's subscription
  * (`useAuthUser`) for the globally-selected account (`useAccountContextStore`),
- * NOT a `host.getRateLimitUsage` provider pull. Header mirrors the provider
- * blocks (name + plan/tier chip + "Updated Xm ago" + refresh) - the chip
- * (`subscriptionPlanLabel`) reflects whichever account is currently selected
- * and is shown on each account card in the single-provider tab. The detail
+ * NOT a `host.getRateLimitUsage` provider pull. Header shows the name and, in the single-provider tab, refresh.
+ * Each account card shows its own update time and, outside the installed
+ * mobile app, its own plan/tier chip (`subscriptionPlanLabel`). The detail
  * variant and Overview both render Personal/Team cards like the Codex and
  * Claude profile cards; selecting a card updates the global account selection
  * (and therefore Overview, the Settings card, and what a Traycer run bills).

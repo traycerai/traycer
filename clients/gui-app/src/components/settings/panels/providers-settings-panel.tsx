@@ -241,7 +241,7 @@ const PROVIDERS_DESCRIPTION_WITHOUT_ENVIRONMENTS =
 
 /**
  * Providers on a Local row: the old page whole, about that one computer, so
- * its subtitle names it.
+ * its subtitle names it when environments are enabled.
  */
 function localProvidersDescription(hostName: string): string {
   if (!UNRELEASED_FEATURES_ENABLED) {

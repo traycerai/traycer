@@ -452,7 +452,7 @@ function DrawerRowProvenanceLabel(props: {
  * page's embedded list (`useHistoryQuery` → `useCloudEpicTasksQuery`) and the
  * same ambient search memory every history surface shares - the drawer shows
  * the list the way the user last filtered it, with no filter/sort/selection
- * chrome of its own; the full surface stays one tap away on the landing page.
+ * chrome of its own; the full surface stays one tap away through "View all".
  */
 function DrawerTaskList(props: DrawerTaskListProps): ReactNode {
   const navigate = useNavigate();

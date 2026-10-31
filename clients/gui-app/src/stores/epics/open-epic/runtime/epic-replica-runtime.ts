@@ -1371,8 +1371,7 @@ export function createEpicReplicaRuntime(
   /**
    * A lane the installed arm requires is not served. Fall back to legacy.
    *
-   * The arm is installed on ALL its required lanes being served, not on the
-   * first one that answers. A host can serve `epic.status.subscribe` and
+   * The installed arm requires ALL its required lanes to be served. A host can serve `epic.status.subscribe` and
    * refuse `epic.state.subscribe` - a rolling upgrade, a lane behind a flag -
    * and on that host the probe succeeds, the arm installs, and the records
    * lane then dies with a typed refusal that no manifest will ever repeat. The

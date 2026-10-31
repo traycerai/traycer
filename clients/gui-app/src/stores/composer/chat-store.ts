@@ -410,8 +410,8 @@ export interface ArtifactSegmentChange {
 /**
  * A semantic artifact create / update / delete card. The card resolves the live
  * title / ticket status / deletion tombstone reactively from the open-epic
- * projection by `artifactId`; `title` is only a fallback for the short delete
- * window before the tombstone projection arrives. `kind` is the segment
+ * projection by `artifactId`; `title` is a fallback when no projection
+ * title is available. `kind` is the segment
  * discriminant, so the artifact's own kind is named `artifactKind`.
  */
 export interface ArtifactOperationSegment {

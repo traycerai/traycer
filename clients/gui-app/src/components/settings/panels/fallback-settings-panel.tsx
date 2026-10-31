@@ -1456,8 +1456,8 @@ function unrefreshedResetBody(subject: UnrefreshedResetSubject): string {
  * A banner rather than a line under the danger zone, because it is not about
  * the button that was pressed - it is about every control above it. The reset
  * SUCCEEDED and cleared the seed marker, so the host's row is now the default
- * plus whatever the next read re-seeds; the values still rendered are the ones
- * from before it. That is a claim about the whole editor, and it has to sit
+ * plus whatever the next read re-seeds; the values still rendered may be the
+ * ones from before it, the user's edits, or restored values. That is a claim about the whole editor, and it has to sit
  * where the whole editor is, next to the other notice that says the same kind
  * of thing.
  *

@@ -62,12 +62,12 @@ export interface HotDocEvictionOutcome extends EvictionOutcome {
  * What the accounting books need to ask the runtime, in the runtime's terms.
  *
  * **This is the direction that makes 4e hard.** The outbound members below are
- * all `void` and push cleanly across a thread; these four are called
+ * all `void` and push cleanly across a thread; these five are called
  * SYNCHRONOUSLY by the accountant during a reconcile, and after the flip the
  * accountant is on main while the tier is in the worker — so a synchronous
  * main→worker call is exactly what cannot exist.
  *
- * Three of the four are pure reads and are answerable from a main-side cache
+ * Four of the five are pure reads and are answerable from a main-side cache
  * the worker refreshes on every settle push. {@link demoteColdestUnpinned} is
  * not: it performs the eviction, and its return decrements a running total.
  * At the flip it becomes a request — the proxy answers `reclaimedBytes: 0`,

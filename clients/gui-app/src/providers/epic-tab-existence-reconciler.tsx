@@ -417,8 +417,9 @@ function negotiatedLineCarriesLocalRows(
  * host returned a complete-enough first page. A missed host, a rejected
  * request (including unsupported `epic.listTasks`), or a truncated page
  * leaves an unprovable hole, so the destructive effect must wait rather than
- * equate that hole with no local epics. Older successful schemas can omit the
- * marker; absence is not a truncation claim and their rows remain useful.
+ * equate that hole with no local epics. Only negotiated schemas before 1.4
+ * can omit the marker; an absent marker on a capable or unknown line leaves
+ * the exemption unproven.
  */
 function combineLocallyProtectedEpicIds(
   probes: ReadonlyArray<LocalHomeProbe> | null,

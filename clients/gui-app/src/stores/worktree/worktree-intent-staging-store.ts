@@ -750,7 +750,7 @@ function withStagedPathsCleared(
 }
 
 /**
- * Everything swept on this host since the app started - the source a frozen
+ * Sweep evidence currently held for this host - the source a frozen
  * ref is tested against. See `sessionSweptRefsByHost`.
  */
 export function sessionSweptRefsForHost(

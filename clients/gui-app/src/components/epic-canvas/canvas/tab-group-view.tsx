@@ -599,15 +599,16 @@ const noopClone = (): void => undefined;
 
 /**
  * CONSISTENCY over ref provenance (user ruling, 2026-08-09): a live chat tab
- * whose bound host is unreachable renders what a fresh click on its row
+ * whose serving host is unreachable renders what a fresh click on its row
  * renders - the published copy, locked - instead of a dead dial wearing a
  * live tab's face. The ref itself is untouched (bind-for-life protects DATA
  * identity: we never show a different host's chat under this tab); only the
  * SURFACE follows reachability, and it flips back to live the moment the
- * owner returns. The copy ref binds a LIVE reading host - serving a cloud
+ * serving host returns. The copy ref binds a LIVE reading host - serving a cloud
  * read through the dead bound host would just be the same dial with extra
- * steps - so it needs a resolvable active host that differs from the bound
- * one, and an owner user id derivable from the projection.
+ * steps - so it uses the captured reading host (or the pool for an
+ * index-unavailable fallback), and an owner user id from the projection or
+ * cloud row.
  *
  * ## Extended for a REACHABLE owner with a confirmed-absent chat (ticket 35)
  *
@@ -661,7 +662,7 @@ const noopClone = (): void => undefined;
  * So cloud-known-and-record-less no longer substitutes on its own. It is now
  * the `ownerUserId` SOURCE for a same-host substitution, and the proof that
  * there IS a published copy to substitute with - never the trigger. The
- * triggers are the same two facts the cross-host arms already use:
+ * triggers are:
  *
  * - the owner host is unreachable (nothing can be dialed), or
  * - `chat.subscribe` itself terminated `CHAT_NOT_VISIBLE`.

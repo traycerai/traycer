@@ -456,11 +456,9 @@ function buildSupportSource(mode: SupportMode): SupportController | null {
 
 /**
  * Builds a real `createEpicReplicaRuntime`, with a real (lane-capable)
- * `laneSelection` wired to counting factories. Every non-lane source is the
- * same one `store.ts` passes in production - `createRendererRuntimeEnvironment`,
- * `createBatchingDelivery`, `DOC_IS_THE_ONLY_RECORD_SOURCE` - reused rather
- * than reinvented, so the only thing under test is the lane-selection wiring
- * itself.
+ * `laneSelection` wired to counting factories. `createRendererRuntimeEnvironment`,
+ * `createBatchingDelivery` and `DOC_IS_THE_ONLY_RECORD_SOURCE` supply the
+ * environment, delivery and doc arm.
  */
 function buildRuntimeRig(mode: SupportMode): RuntimeRig {
   nextEpicSequence += 1;

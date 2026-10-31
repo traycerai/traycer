@@ -5854,8 +5854,7 @@ export class OfficeScene {
    *
    * A still office asks for the same floor sixty times a second - same plan,
    * same band, same rectangle - and the floor is the largest thing in a frame
-   * by an order of magnitude. Handing back the SAME array is also what tells
-   * the renderer's bitmap cache it has nothing to repaint.
+   * by an order of magnitude.
    */
   private floorIn(
     layout: OfficeLayout,
@@ -6876,7 +6875,7 @@ export class OfficeScene {
    * WAKING. A cold agent in a cubby whose status turns hot takes the first free
    * reserve seat it can, and gives it back once it has gone quiet and is home.
    *
-   * The claim waits for RECEPTION. An attention or failure agent queues at the
+   * The claim waits for RECEPTION. An attention agent queues at the
    * counter first, and a desk it is not walking to yet is a desk nobody else
    * can have: claiming at the moment the wake is decided held a seat empty for
    * however long the queue took. It is claimed on the sync that ends the

@@ -13,7 +13,7 @@ const MIN_KEYBOARD_INSET_PX = 120;
  * keyboard, or 0 when no keyboard is up (or the browser resizes the layout
  * itself, e.g. Android with `interactive-widget=resizes-content`, which
  * leaves nothing covered). The installed iOS app ALSO overlays (`resize:
- * none`) and measures a real inset here - but its shell handles the lift
+ * none`) and its shell handles the lift
  * through the `--keyboard-inset` safe-height tokens, so consumers gate their
  * use of this measurement to the browser (`!isMobileApp()`).
  *

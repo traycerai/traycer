@@ -249,10 +249,9 @@ function tileWakeGesture(node: EpicCanvasTileRef): SandboxVerbGesture | null {
  * surfaces and stay interactive; personal hosts have no lifecycle overlay.
  *
  * Accepted cost: the coordinator is acquired EAGERLY while the tile is
- * mounted - a lazy one would not be live at click time, so the first link
- * click would still fall out to the OS browser. A tile on a host that is
- * asleep therefore holds a capped-backoff (1s→30s) reconnect loop, one socket
- * per host per epic. Gating on reachability was rejected: stale or pending
+ * mounted if its transport is ready, or retained if it already exists - a lazy one would not be live at click time, so the first link
+ * click would still fall out to the OS browser. A new coordinator is not created while its
+ * transport is unavailable. Gating on reachability was rejected: stale or pending
  * reachability reintroduces exactly the first-click failure this closes.
  */
 export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {

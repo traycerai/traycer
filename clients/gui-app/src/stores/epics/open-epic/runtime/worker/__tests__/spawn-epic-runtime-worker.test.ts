@@ -615,8 +615,8 @@ const RECORD_SERVING_MANIFEST: ConnectionManifest = {
  * the legacy `@1` arm - so every worker-hosted runtime held legacy for its
  * whole life, on lane-serving hosts included. The capability PROBE masks the
  * cold case (the status lane's own subscribe settles a connection's verdict),
- * which is exactly why this went unnoticed; what a probe cannot do is move a
- * tab whose host upgraded underneath it, because that signal exists only here.
+ * which is exactly why this went unnoticed; the manifest also carries support changes
+ * without waiting for another probe.
  *
  * The chain is pinned END TO END rather than at the emit: main emits, the REAL
  * worker host applies, the PRODUCTION support reader reads what it applied, and

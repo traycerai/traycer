@@ -222,7 +222,7 @@ export interface SpawnEpicRuntimeWorkerOptions<TProjection> {
   /**
    * The process-backed books this worker's runtime reports into.
    *
-   * Built by the CALLER on main, exactly as the in-process store builds it, so
+   * Built by the CALLER on main, so
    * both arms draw their runtime token from the one process-wide sequence.
    * Nothing about it crosses the bridge - the worker pushes byte facts in the
    * runtime's own vocabulary and this side names the holders.
@@ -238,7 +238,7 @@ export interface SpawnEpicRuntimeWorkerOptions<TProjection> {
    * its absence caused.
    */
   readonly hostId: string;
-  /** Identifies this renderer window in the worker's log lines. */
+  /** Label attached to main-side stream-proxy error logs. */
   readonly windowLabel: string;
 }
 

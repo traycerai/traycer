@@ -60,8 +60,8 @@ export interface HostUpdateDispatchSlot {
  *
  * `externallyManagedRefusal` is deliberately un-timed: it records a
  * STRUCTURAL refusal (the supervisor is configured into the host's
- * environment), released only by a scope flip — a new process that may have
- * been reconfigured.
+ * environment), released by a scope flip or when the
+ * service adapter mounts.
  */
 export interface HostServiceWriteLatches {
   readonly deregisterAcceptedAt: number | null;

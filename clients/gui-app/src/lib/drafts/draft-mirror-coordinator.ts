@@ -1790,7 +1790,7 @@ function nextStashImageFallbackHost(
  * This is the ONLY path where that can be true. A document that arrives on
  * `drafts.subscribe` came from a host this window holds a mirror on, so
  * `applyHostDocument` has already read its blobs off that host; a document that
- * arrives here is owned by a host this window is not mirroring, which is the
+ * arrives here may be owned by a host this window is not mirroring, which is the
  * second-window and offline-owner case the replica exists for.
  *
  * Run AFTER the apply so the row already roots these hashes. Visible-draft

@@ -1187,10 +1187,8 @@ export function isProjectionPatch(
  * Constructs a fresh per-Epic session.
  *
  * Responsibilities, all of them adapter-shaped:
- *   - Build the replica runtime and give it a delivery that lands in this
- *     store, coalescing a multi-plane frame into one `setState`
- *   - Map the runtime's `bindingEpoch` onto the React remount token, and
- *     republish the live `Y` handles when the replica is replaced
+ *   - Apply the supplied runtime's projection patches to this store
+ *   - Map the runtime's `bindingEpoch` onto the React remount token
  *   - Feed the runtime the signed-in identity, and rebuild the owner-selected
  *     record slices when it changes
  *   - Persist only `lastFocusedArtifactId` + `lastFocusedThreadId` to

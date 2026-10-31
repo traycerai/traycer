@@ -447,10 +447,10 @@ function candidateAreaFor(args: {
 }
 
 /**
- * An empty candidate list means "nothing runnable was found on this machine",
- * not "nothing detected yet": the host only omits the bundled row for the
+ * Once the host's PATH probe settles, an empty candidate list means
+ * "nothing runnable was found on this machine", not "nothing detected yet": the host only omits the bundled row for the
  * providers it ships no binary for (`PROVIDERS_WITHOUT_BUNDLED_BINARY`), and
- * for everyone else the row is always present even when unavailable. So an
+ * for everyone else the row is always present even when unavailable. So a settled
  * empty table is a terminal state that owes the user a sentence and, where one
  * exists, a link - not a bare header with no rows under it.
  *

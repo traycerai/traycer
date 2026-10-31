@@ -1908,7 +1908,8 @@ export class OpenEpicSessionRegistry {
   }
 
   /**
-   * Snapshot of every live session that currently has unsynced edits.
+   * Snapshot of every epic with unsynced edits anywhere - live session or
+   * retained buffer.
    * Keyed by epicId; value carries the best-available title (live Y.Doc
    * title, falling back to snapshot-meta epicLight). Empty array means
    * every tab is either fully synced or has no unresolved local dirty state.

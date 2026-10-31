@@ -188,7 +188,7 @@ export interface HeldChatRecordRow extends ChatRecordSummary {
 export type TuiAgentProjectionOrigin = "registry" | "doc" | "cloud";
 
 /**
- * Projected representation of an `epic.tuiAgents[id]` Y.Map entry.
+ * Projected terminal-agent row from the registry, doc or cloud plane.
  * Mirrors `TuiAgent` from the persistence registry but keeps the fields
  * the renderer needs to surface a tile + cascade them into the tree slice.
  */

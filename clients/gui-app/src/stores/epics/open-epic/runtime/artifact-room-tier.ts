@@ -953,10 +953,7 @@ export function createArtifactRoomTier(
    *    where cooling would encode away the very bytes the reconnect reconcile
    *    is supposed to ship and silently lose user edits;
    *  - a remote collaborator is present in the room. Cooling destroys the
-   *    room's `Awareness`, and while cold every inbound awareness frame is
-   *    dropped with no way to ask for a resync, so a peer who was sitting in
-   *    the body would simply vanish - caret, selection and avatar - until they
-   *    happened to move again. Presence is exactly what a shared room is for,
+   *    room's `Awareness`. Presence is exactly what a shared room is for,
    *    so a room someone else is in is not a room worth reclaiming.
    */
   function isPinned(artifactRoomId: string): boolean {

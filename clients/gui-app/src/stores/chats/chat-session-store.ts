@@ -2855,7 +2855,8 @@ function rejectionLastCopySend(input: {
  * notice shape here would drift from those the moment either changed.
  *
  * Everything else - a non-send, a send that DID claim the slot, an action with
- * no content - keeps the host's reason, which is the whole story for it.
+ * no content - keeps the host's reason, and a non-displaced send with an
+ * account adds `deadSendAccountClauses` to it.
  */
 function rejectionNotice(input: {
   readonly frame: {
@@ -7390,7 +7391,7 @@ export function createChatSessionStoreWithNotificationDependencies(
 
     /**
      * The worktree half of a recovery's account, from evidence that OUTLIVED
-     * the staging store's own record of it. See `HashOnlyRecoveryState.sweptRefs`.
+     * the staging store's own record of it. See `stickySweptByAction`.
      */
     const recoverySweepAccount = (
       recovery: HashOnlyRecoveryState,
@@ -7589,9 +7590,7 @@ export function createChatSessionStoreWithNotificationDependencies(
      * Hand a stalled recovery back to the composer, loudly - the ordinary
      * refusal outcome, reached late.
      *
-     * Every exit from recovery that is not a dispatched retry comes here: the
-     * resolver found nothing, the session was torn down, or `sendAction`
-     * refused because the connection is no longer open. Without it the
+     * A torn-down session or a refused `sendAction` comes here. Without it the
      * prompt's only record was an async closure, and a reconnect during
      * recovery lost it outright - no pending action, no queue row, no
      * restoration, and for a QUEUED send not even an optimistic echo, because
