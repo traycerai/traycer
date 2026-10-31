@@ -443,7 +443,7 @@ function CollabTileBodyEditor(props: CollabTileBodyEditorProps) {
   const draft = useDraftRange(epicId);
   // The artifact this tile edits is served by the TAB's host, so its threads
   // are read (and its comments written) on that client - never the app-wide
-  // one, which answers a different machine mid re-point (D15). Resolved once
+  // one, which answers a different machine mid re-point. Resolved once
   // here and handed to both comment popovers so all three share one cache key.
   const tabHostClient = useTabHostClient();
   // The byte scope for images inside THIS artifact's body. On the lane arm the

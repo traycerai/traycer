@@ -1421,7 +1421,7 @@ describe("<GitDiffPanelBodyLive /> workspace switcher integration", () => {
 
     // The pin is deposed, so the surface resolves to the effective host and the
     // requester it asks for is host-2, never the dead host-1 - there is no
-    // separate dead-state screen to fall back to (D6 deleted it).
+    // separate dead-state screen to fall back to (it was deleted).
     await waitFor(() => {
       expect(pinTestState.lastClientHostId).toBe("host-2");
     });

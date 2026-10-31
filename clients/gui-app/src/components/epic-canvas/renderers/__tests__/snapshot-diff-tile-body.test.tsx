@@ -132,7 +132,7 @@ vi.mock("@/lib/registries/chat-session-registry", () => ({
   useChatSessionHandle: () => state.handle,
 }));
 
-// The tile resolves the snapshot store on its TAB's host (D15). The real
+// The tile resolves the snapshot store on its TAB's host. The real
 // `<TabHostProvider>` below supplies the host ID, but resolving a client from it
 // needs the whole host runtime; the query is mocked just below, so the seam is
 // what matters here, not a live client.
@@ -241,7 +241,7 @@ function binaryCumulativeChange(filePath: string): ChatAccumulatedFileChange {
 
 function renderSnapshotTile(node: SnapshotDiffTileRef): void {
   // The tile is a Query consumer on every path now: hash-backed tiles fetch by
-  // content hash and cumulative ones fetch by accumulated-change digest (D7).
+  // content hash and cumulative ones fetch by accumulated-change digest.
   // Production always mounts it under the app's provider; this supplies one.
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },

@@ -257,7 +257,7 @@ export function TerminalTile(props: TerminalTileProps) {
   }
   // "host-starting" = the bound host is coming back: the local host hasn't
   // published yet (boot/ensure/wake), or the host's lease vouches for a
-  // restart it announced (D4). Rendering the dead banner there showed
+  // restart it announced. Rendering the dead banner there showed
   // "permanently closed" for terminals that were seconds from reconnecting -
   // so this stays a non-destructive wait, but a wait WITH WORDS and an end.
   // Past its budget the reachability hook itself falls to `unreachable` (F4),

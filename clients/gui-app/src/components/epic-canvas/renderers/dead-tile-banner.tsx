@@ -318,7 +318,7 @@ export interface ChatHostStartingBannerProps {
  * Non-destructive counterpart to `ChatDeadTileBanner` for the
  * `"host-starting"` reachability state: this machine's own host has not
  * published yet (boot, ensure/respawn, post-wake re-probe), or the bound
- * host's lease vouches for a restart it announced (D4), remote hosts
+ * host's lease vouches for a restart it announced, remote hosts
  * included. No bound host's fate is knowable in that window, so offering
  * "Clone chat" would invite users to fork healthy threads - the banner is
  * purely informational and clears on its own once the host is back.

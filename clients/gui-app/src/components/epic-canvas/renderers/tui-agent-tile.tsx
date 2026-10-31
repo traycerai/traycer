@@ -306,7 +306,7 @@ export function TuiAgentTile(props: TuiAgentTileProps) {
     );
   }
   // "host-starting": the local host has not published yet (boot/ensure/wake),
-  // or the host's lease vouches for an announced restart (D4) - show
+  // or the host's lease vouches for an announced restart - show
   // the loading shell, never the permanently-closed banner. The shell and its
   // worktree notice stay; only the wordless skeleton inside it is retired for
   // a bounded state that names the host it is waiting on (audit S5, and

@@ -757,7 +757,7 @@ function ChatTileForChat(props: ChatTileProps) {
     if (strip === "starting") {
       // The bound host is coming back: this machine's host hasn't published
       // yet (boot/ensure/wake), or the host's lease vouches for a restart it
-      // announced (D4), remote hosts included. Never offer Clone here -
+      // announced, remote hosts included. Never offer Clone here -
       // cloning would fork a healthy thread.
       return (
         <ChatHostStartingBanner
