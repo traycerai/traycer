@@ -2164,26 +2164,25 @@ describe("a bot's question at the focused channel's top level", () => {
     });
 
     // No repliesTo, no member request resolved to it: an open question.
-    act(() => {
-      channel.setState({
-        snapshotLoaded: true,
-        messages: [
+    const question: Extract<ReplyRow, { readonly role: "assistant" }> = {
+      role: "assistant",
+      messageId: "q-1",
+      timestamp: Date.now(),
+      blocks: [textBlock("Ready to release. Ship or hold?")],
+      question: {
+        requestId: "req-q",
+        questions: [
           {
-            ...botRow("q-1", "Ready to release. Ship or hold?"),
-            question: {
-              requestId: "req-q",
-              questions: [
-                {
-                  text: "Ship or hold?",
-                  options: ["Ship", "Hold"],
-                  allowFreeText: false,
-                  settlement: null,
-                },
-              ],
-            },
+            text: "Ship or hold?",
+            options: ["Ship", "Hold"],
+            allowFreeText: false,
+            settlement: null,
           },
         ],
-      });
+      },
+    };
+    act(() => {
+      channel.setState({ snapshotLoaded: true, messages: [question] });
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_000);
