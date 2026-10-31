@@ -17,6 +17,7 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentMember } from "@traycer/protocol/host/environment/contracts";
 import { avatarShape } from "@/components/bots/__tests__/avatar-shape";
+import { creatureMark, drawCreatureMark } from "@/lib/bots/creature-mark";
 import {
   BotIdentityContext,
   type BotIdentity,
@@ -232,8 +233,13 @@ describe("a bot channel's rows", () => {
     expect(
       avatarShape(within(memberRow).getByTestId("chat-sender-avatar")),
     ).toBe("circle");
-    // Without a picture, the initials stand in.
-    expect(within(botRow).getByTestId("bot-avatar").textContent).toBe("TR");
+    // The bot is its own creature mark, at the message row's 40 px.
+    expect(
+      within(botRow)
+        .getByTestId("bot-avatar")
+        .querySelector('[data-slot="bot-creature"] path')
+        ?.getAttribute("d"),
+    ).toBe(drawCreatureMark(creatureMark(BOT_ID), 40).path);
   });
 });
 

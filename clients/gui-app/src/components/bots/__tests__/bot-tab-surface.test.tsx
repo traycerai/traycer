@@ -135,10 +135,7 @@ const mocks = vi.hoisted(() => ({
   }>,
   useBotListChangedSubscriptionForHost:
     vi.fn<(hostId: string, enabled: boolean) => void>(),
-  /** Mark as read, where the host keeps read cursors; `null` where it does not. */
-  markRead: vi.fn<() => void>(),
   state: {
-    markReadAvailable: false,
     snapshot: null as BotSubscriptionSnapshot | null,
     deleted: false,
     error: null as string | null,
@@ -294,12 +291,6 @@ vi.mock(
   }),
 );
 // The card's memory row is driven in `bot-memory-pane.test.tsx`.
-// "Mark as read" sends its advances through the host (decision 139); what
-// the surface decides is whether the ⋮ offers it.
-vi.mock("@/hooks/bots/use-bot-read-cursor", () => ({
-  useBotMarkChannelRead: () =>
-    mocks.state.markReadAvailable ? mocks.markRead : null,
-}));
 vi.mock("@/hooks/bots/use-bot-memory", () => ({
   useBotMemory: () => ({ kind: "unsupported" }),
 }));
@@ -808,7 +799,6 @@ beforeEach(() => {
   mocks.membersQueries.length = 0;
   mocks.state.membersSupport = true;
   mocks.state.snapshot = snapshot();
-  mocks.state.markReadAvailable = false;
   mocks.state.deleted = false;
   mocks.state.error = null;
   mocks.state.paneVisible = true;
@@ -2340,48 +2330,6 @@ describe("<BotTabSurface /> re-subscribe on return", () => {
   });
 });
 
-describe("<BotTabSurface /> channel actions menu", () => {
-  it("offers Mark as read beside the settings where the host keeps read cursors, and marks the channel read from it", async () => {
-    const user = userEvent.setup();
-    mocks.state.markReadAvailable = true;
-    render(surface());
-
-    await user.click(screen.getByTestId("bot-channel-settings-open"));
-    await user.click(await screen.findByTestId("bot-channel-mark-read"));
-
-    expect(mocks.markRead).toHaveBeenCalledTimes(1);
-    expect(screen.queryByTestId("stub-settings")).toBeNull();
-  });
-
-  it("opens the settings from its menu item, and closes them from it again", async () => {
-    const user = userEvent.setup();
-    mocks.state.markReadAvailable = true;
-    render(surface());
-
-    await user.click(screen.getByTestId("bot-channel-settings-open"));
-    await user.click(await screen.findByTestId("bot-channel-settings-item"));
-    expect(screen.getByTestId("stub-settings")).toBeTruthy();
-    expect(mocks.markRead).not.toHaveBeenCalled();
-
-    await user.click(screen.getByTestId("bot-channel-settings-open"));
-    expect(
-      (await screen.findByTestId("bot-channel-settings-item")).textContent,
-    ).toBe("Close channel settings");
-    await user.click(screen.getByTestId("bot-channel-settings-item"));
-    expect(screen.queryByTestId("stub-settings")).toBeNull();
-  });
-
-  it("offers no Mark as read where the host keeps no read cursors: the ⋮ opens the settings directly", async () => {
-    const user = userEvent.setup();
-    render(surface());
-
-    await user.click(screen.getByTestId("bot-channel-settings-open"));
-
-    expect(screen.getByTestId("stub-settings")).toBeTruthy();
-    expect(screen.queryByTestId("bot-channel-mark-read")).toBeNull();
-  });
-});
-
 describe("<BotTabSurface /> main bot", () => {
   it("draws the header as the bot's picture, the channel's name with the main bot's star, its two views and the settings ⋮ only", () => {
     mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
@@ -2401,6 +2349,7 @@ describe("<BotTabSurface /> main bot", () => {
     expect(
       within(header).getByRole("button", { name: "Channel settings" }),
     ).toBe(screen.getByTestId("bot-channel-settings-open"));
+    expect(screen.queryByTestId("bot-channel-mark-read")).toBeNull();
     expect(screen.getByTestId("bot-tab-title").nextElementSibling).toBe(
       within(header).getByRole("img", { name: "Main bot" }).parentElement,
     );

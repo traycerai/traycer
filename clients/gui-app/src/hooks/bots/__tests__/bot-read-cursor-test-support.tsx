@@ -12,7 +12,6 @@ import type {
   BotReadCursorAdvanceRequest,
   BotReadCursorReadResponse,
   BotReadPosition,
-  BotThreadFollow,
 } from "@traycer/protocol/host/bot/schemas";
 
 /**
@@ -21,8 +20,8 @@ import type {
  * QueryClient. `cursors` and `latest` are what the next read answers; tests
  * change them to play another device or a row landing. `advanceAnswers`
  * overrides what an advance answers, to play a host that lags the cache.
- * `follows` is what `bot.threadFollow.read` answers. While `heldRead.promise`
- * is set, a read is counted and answered by it, to play a read in flight.
+ * While `heldRead.promise` is set, a read is counted and answered by it, to
+ * play a read in flight.
  */
 export interface ReadCursorHostFixture {
   readonly client: HostClient<HostRpcRegistry>;
@@ -33,18 +32,15 @@ export interface ReadCursorHostFixture {
   readonly reads: { count: number };
   readonly advances: BotReadCursorAdvanceRequest[];
   readonly advanceAnswers: Map<string, BotReadPosition>;
-  readonly follows: Record<string, BotThreadFollow>;
   readonly heldRead: { promise: Promise<BotReadCursorReadResponse> | null };
 }
 
 export function createReadCursorHostFixture(initial: {
   readonly cursors: Record<string, BotReadPosition>;
   readonly latest: Record<string, BotReadPosition>;
-  readonly follows: Record<string, BotThreadFollow>;
 }): ReadCursorHostFixture {
   const cursors: Record<string, BotReadPosition> = { ...initial.cursors };
   const latest: Record<string, BotReadPosition> = { ...initial.latest };
-  const follows: Record<string, BotThreadFollow> = { ...initial.follows };
   const heldRead: ReadCursorHostFixture["heldRead"] = { promise: null };
   const reads = { count: 0 };
   const advances: BotReadCursorAdvanceRequest[] = [];
@@ -69,7 +65,6 @@ export function createReadCursorHostFixture(initial: {
           if (heldRead.promise !== null) return heldRead.promise;
           return { cursors: { ...cursors }, latest: { ...latest } };
         },
-        "bot.threadFollow.read": () => ({ follows: { ...follows } }),
         "bot.readCursor.advance": (params) => {
           advances.push(params);
           const position = { messageId: params.messageId, seq: params.seq };
@@ -102,7 +97,6 @@ export function createReadCursorHostFixture(initial: {
     reads,
     advances,
     advanceAnswers,
-    follows,
     heldRead,
   };
 }

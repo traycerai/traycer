@@ -891,7 +891,7 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
       within(bots)
         .getAllByRole("listitem")
         .map((li) => li.textContent),
-    ).toEqual(["RBRelease Bot", "TBTriage Bot"]);
+    ).toEqual(["Release Bot", "Triage Bot"]);
     // A team bot always answers in threads: no reply mode here.
     expect(screen.queryByTestId("bot-settings-reply-mode")).toBeNull();
     // The model picker is drawn without a click.

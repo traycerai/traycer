@@ -19,8 +19,7 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useBotNotificationLevelsQuery } from "@/hooks/bots/use-bot-notification-level";
-import { advanceTarget, channelBold } from "@/lib/bots/bot-read-cursor";
-import { useBotThreadFollows } from "@/hooks/bots/use-bot-thread-follow";
+import { channelBold } from "@/lib/bots/bot-read-cursor";
 import { botMutationKeys, hostQueryKeys } from "@/lib/query-keys";
 
 const READ_METHOD = "bot.readCursor.read" as const;
@@ -232,31 +231,4 @@ export function useAnyBotChannelBold(
     }
   }
   return answered ? false : null;
-}
-
-/**
- * "Mark as read" on a bot's channel: advances the person's cursor on the
- * channel and on every thread they follow to its newest row, which clears
- * every bold in the channel. `null` on a host that keeps no read cursors,
- * or until they are read.
- */
-export function useBotMarkChannelRead(
-  botId: string,
-  hostId: string,
-  channelId: string | null,
-): (() => void) | null {
-  const client = useTabHostClient();
-  const read = useBotReadCursors(botId, hostId)?.data;
-  const follows = useBotThreadFollows(botId, hostId)?.data?.follows;
-  const { mutate: advance } = useBotReadCursorAdvanceMutation(client);
-  if (read === undefined || channelId === null) return null;
-  return () => {
-    const followed = Object.entries(follows ?? {})
-      .filter(([, follow]) => follow.state === "following")
-      .map(([threadId]) => threadId);
-    for (const conversationId of [channelId, ...followed]) {
-      const target = advanceTarget(read, conversationId);
-      if (target !== null) advance({ botId, conversationId, ...target });
-    }
-  };
 }

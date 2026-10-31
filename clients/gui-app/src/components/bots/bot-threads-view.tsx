@@ -241,7 +241,7 @@ function ThreadRowBody(props: {
       className="flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-foreground/6 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2 disabled:hover:bg-transparent"
     >
       <span className="flex min-w-0 items-center gap-1.5 text-ui-xs text-muted-foreground">
-        <NamedBotAvatar botId={bot.botId} title={bot.title} size="xs" />
+        <NamedBotAvatar botId={bot.botId} size="xs" />
         <span
           className="min-w-0 truncate font-medium text-foreground"
           data-testid="bot-thread-row-bot"
