@@ -4748,6 +4748,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // view covering it would hide where the jump lands.
     closeSubagentDrillIn();
     if (request.kind === "end") {
+      // A newer navigation supersedes an older one, the same rule the message
+      // branch below applies. Only a SUSPENDED landing needs it here: it has no
+      // loop left to report its own outcome, so without this the show would
+      // re-issue that older message navigation on top of the end the reader
+      // asked for more recently. A live loop still reports its own, unchanged.
+      const superseded = pendingScrollRequestLandingRef.current;
+      if (superseded !== null && superseded.state === "suspended")
+        settleScrollRequest(superseded.requestId, "cancelled");
       scrollToEnd(request.animated ?? true);
       scrollRequestRef.current = null;
       return;
