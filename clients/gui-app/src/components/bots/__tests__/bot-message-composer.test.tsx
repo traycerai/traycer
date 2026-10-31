@@ -825,3 +825,86 @@ describe("the member list after Escape", () => {
     expect(screen.queryByTestId("bot-mention-list")).toBeNull();
   });
 });
+
+describe("the member list for assistive technology", () => {
+  const TEAM: BotOwner = {
+    kind: "team",
+    name: "Acme",
+    members: [
+      { userId: "u-viewer", displayName: "Andy Viewer", avatarUrl: null },
+      { userId: "u-ann", displayName: "Ann Lee", avatarUrl: null },
+      { userId: "u-anders", displayName: "Anders", avatarUrl: null },
+    ],
+  };
+
+  beforeEach(() => {
+    useAuthStore.setState({
+      profile: {
+        userId: "u-viewer",
+        userName: "Andy Viewer",
+        email: "andy@example.com",
+        avatarUrl: null,
+      },
+    });
+    render(
+      <BotIdentityContext
+        value={{ botId: "bot-1", title: "Tracy", owner: TEAM }}
+      >
+        {composer(null)}
+      </BotIdentityContext>,
+    );
+  });
+
+  afterEach(() => {
+    useAuthStore.setState({ profile: null });
+  });
+
+  /** The member the list has highlighted, by id. */
+  function highlightedId(): string | null {
+    return (
+      screen
+        .getAllByTestId("bot-mention-option")
+        .find((option) => option.getAttribute("aria-selected") === "true")
+        ?.id ?? null
+    );
+  }
+
+  it("is collapsed with nothing active while no list shows", async () => {
+    const user = userEvent.setup();
+    await user.type(box(), "hello");
+
+    expect(box().getAttribute("aria-expanded")).toBe("false");
+    expect(box().hasAttribute("aria-activedescendant")).toBe(false);
+  });
+
+  it("is expanded on the highlighted member while the list shows", async () => {
+    const user = userEvent.setup();
+    await user.type(box(), "@an");
+
+    const highlighted = highlightedId();
+    expect(highlighted).not.toBeNull();
+    expect(box().getAttribute("aria-expanded")).toBe("true");
+    expect(box().getAttribute("aria-activedescendant")).toBe(highlighted);
+  });
+
+  it("follows the highlight as the arrows move it", async () => {
+    const user = userEvent.setup();
+    await user.type(box(), "@an");
+    const first = highlightedId();
+
+    await user.keyboard("{ArrowDown}");
+
+    const second = highlightedId();
+    expect(second).not.toBe(first);
+    expect(box().getAttribute("aria-activedescendant")).toBe(second);
+  });
+
+  it("is collapsed again once Escape closes the list", async () => {
+    const user = userEvent.setup();
+    await user.type(box(), "@an");
+    await user.keyboard("{Escape}");
+
+    expect(box().getAttribute("aria-expanded")).toBe("false");
+    expect(box().hasAttribute("aria-activedescendant")).toBe(false);
+  });
+});

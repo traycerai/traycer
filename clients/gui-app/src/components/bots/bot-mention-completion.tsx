@@ -32,6 +32,8 @@ export interface BotMentionCompletion {
   /** The list under an `@` being typed; `null` while none shows. */
   readonly list: ReactNode;
   readonly listOpen: boolean;
+  /** The id of the member the list has highlighted; `null` while none shows. */
+  readonly activeOptionId: string | null;
   /** Handles a key the list takes (moving, picking, closing); `true` when it did. */
   readonly onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => boolean;
   /** The caret moved: what follows it decides the list. */
@@ -208,6 +210,7 @@ export function useBotMentionCompletion(args: {
       {matches.map((candidate, index) => (
         <li
           key={candidate.userId}
+          id={optionId(listId, index)}
           role="option"
           aria-selected={index === active}
           data-testid="bot-mention-option"
@@ -240,6 +243,7 @@ export function useBotMentionCompletion(args: {
   return {
     list,
     listOpen: open,
+    activeOptionId: open ? optionId(listId, active) : null,
     onKeyDown,
     onCaret: (next) => {
       setCaret(next);
@@ -281,4 +285,8 @@ export function useBotMentionCompletion(args: {
       return display.text;
     },
   };
+}
+
+function optionId(listId: string, index: number): string {
+  return `${listId}-option-${index}`;
 }
