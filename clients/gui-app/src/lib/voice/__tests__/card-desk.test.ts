@@ -1582,6 +1582,43 @@ describe("an old call answered after a new act went out on the same card", () =>
   );
 });
 
+describe("an item set aside", () => {
+  it("leaves its card alone while an act is out on it", async () => {
+    const old = deferred<SurfaceActOutcome>();
+    const h = setup(APPROVAL);
+    h.api.actSurface.mockImplementationOnce(() => old.promise);
+    await h.listen();
+    await h.candidate("approve");
+    h.say("yes");
+    const spokenBefore = h.spoken.length;
+
+    h.desk.dismiss(ITEM);
+
+    expect(h.card()).toMatchObject({
+      state: "sending",
+      draft: [option(0, "Allow")],
+    });
+    expect(h.spoken).toHaveLength(spokenBefore);
+    expect(h.withdrawn).toEqual([]);
+  });
+
+  it("closes its card while an offer to post is out, taking the offer back", async () => {
+    const h = setup(BOT_QUESTION);
+    await h.listen();
+    await h.candidate("Staging");
+    h.records.content = null;
+    h.records.settledBy = "Dana";
+    h.deliver();
+    const offer = h.latest();
+    expect(offer.text).toBe(settledElsewhere("Dana", "answered"));
+
+    h.desk.dismiss(ITEM);
+
+    expect(h.card()).toBeNull();
+    expect(h.withdrawn).toEqual([offer.id]);
+  });
+});
+
 describe("the delegation of a card's words", () => {
   it("is not left behind by words the card routes: a later notice goes out under none", async () => {
     const h = setup(BOT_QUESTION);
