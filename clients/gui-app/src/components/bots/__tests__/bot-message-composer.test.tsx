@@ -224,7 +224,7 @@ describe("<BotMessageComposer /> reporting a send", () => {
     expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?");
   });
 
-  it("reports nothing for an edit's send the person moved on from, and keeps the edit they opened since", async () => {
+  it("reports an edit's send the person moved on from, and keeps the edit they opened since", async () => {
     const user = userEvent.setup();
     const view = render(
       composer({ requestId: "request-first", text: "Is CI green?" }),
@@ -237,14 +237,14 @@ describe("<BotMessageComposer /> reporting a send", () => {
 
     await settleSend(callbacks, (sent) => sent.onSuccess?.(RESPONSE));
 
-    expect(onSent).not.toHaveBeenCalled();
+    expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?");
     expect(onEditEnd).not.toHaveBeenCalled();
     expect(box().value).toBe("Is the nightly green?");
   });
 });
 
 describe("<BotMessageComposer /> quoting", () => {
-  it("keeps a quote added while a send is in flight when the send lands", async () => {
+  it("keeps a quote added while a send is in flight when the send lands, and reports the send", async () => {
     const user = userEvent.setup();
     const view = render(composer(null));
     await user.type(box(), "Is CI green?");
@@ -262,6 +262,7 @@ describe("<BotMessageComposer /> quoting", () => {
     await settleSend(callbacks, (sent) => sent.onSuccess?.(RESPONSE));
 
     expect(box().value).toBe("Is CI green?\n\n> quoted\n\n");
+    expect(onSent).toHaveBeenCalledWith(RESPONSE, "Is CI green?");
   });
 });
 

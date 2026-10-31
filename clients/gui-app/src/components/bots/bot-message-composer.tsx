@@ -56,8 +56,9 @@ const MESSAGE_MAX = 100_000;
  * outlives the box, and spends that draft once it is sent - even when the
  * send lands after the box is gone.
  *
- * A send that lands clears the box only while the box still holds the
- * draft it sent: an edit or a seed loaded since is a newer draft, and stays.
+ * A send that lands is reported, and clears the box only while the box
+ * still holds the draft it sent: an edit, a seed or a quote loaded since is
+ * a newer draft, and stays.
  *
  * A quote of a selection in the conversation (`quote`) is added after what
  * the box shows, as markdown quote lines - an edit in progress included,
@@ -219,16 +220,20 @@ export function BotMessageComposer(props: {
       })
       .then(
         (response) => {
-          // The box is cleared, the edit ended, the send's delivery said and
-          // the send reported, only while it still holds the draft it sent:
-          // an edit or a seed loaded since keeps its draft, with nothing said
-          // under it.
-          if (generationRef.current !== started) return;
-          if (supersedes === null && held !== null) keptDraft?.spend(held);
+          // The send went, so it is reported whatever the box did meanwhile.
+          // The box is cleared, the edit ended and the delivery said under
+          // it only while it still holds the draft it sent: an edit, a seed
+          // or a quote loaded since is a newer draft, and stays, with
+          // nothing said under it.
+          const sentDraftHeld = generationRef.current === started;
+          if (sentDraftHeld && supersedes === null && held !== null) {
+            keptDraft?.spend(held);
+          }
           if (!mountedRef.current) return;
+          const deliverySaid = onSent(response, trimmed);
+          if (!sentDraftHeld) return;
           setText("");
           if (supersedes !== null) onEditEnd();
-          const deliverySaid = onSent(response, trimmed);
           setLastDelivery(deliverySaid ? null : response.delivery);
         },
         () => failure.fail(),
