@@ -74,12 +74,17 @@ import {
   isGitDiffTileRef,
   isManagedCommandOutputTileRef,
   isOpenableEpicNodeKind,
+  isRecordBackedEpicNodeKind,
 } from "@/stores/epics/canvas/types";
 import { isEpicNodeTileRef } from "@/stores/epics/canvas/tile-schema";
 import { CommGraphTileIcon } from "@/components/epic-canvas/comm-graph/comm-graph-tile-icon";
 import { ManagedCommandMonitorIcon } from "@/components/managed-commands/managed-command-monitor-icon";
 import { useManagedCommandOnHost } from "@/stores/managed-commands/managed-commands-for-chat";
-import { useIsActivePane, useTabActivation } from "@/stores/epics/canvas/store";
+import {
+  useEpicCanvasStore,
+  useIsActivePane,
+  useTabActivation,
+} from "@/stores/epics/canvas/store";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
@@ -571,6 +576,8 @@ function TerminalTabItem(
 function useTabRenameControl(args: {
   readonly tab: EpicCanvasTileRef;
   readonly epicId: string;
+  /** The view (canvas) tab id the tile's persisted snapshot lives under. */
+  readonly viewTabId: string;
   readonly groupId: string;
   readonly canRenameTabs: boolean;
   readonly terminalControl: TerminalTabControl | null;
@@ -580,6 +587,7 @@ function useTabRenameControl(args: {
   const {
     tab,
     epicId,
+    viewTabId,
     groupId,
     canRenameTabs,
     terminalControl,
@@ -604,6 +612,7 @@ function useTabRenameControl(args: {
     epicId,
     terminalHostClient,
   );
+  useRecordTitleWriteThrough(tab, viewTabId, fallbackDisplayTitle);
   const displayTitle =
     browserPresentation?.title ??
     (terminalControl?.mode === "capable" || terminalControl?.mode === "unknown"
@@ -632,6 +641,39 @@ function useTabRenameControl(args: {
     onCommit: handleRename,
   });
   return { displayTitle, browserPresentation, canRename, rename };
+}
+
+/**
+ * Keeps a record-backed tile's persisted `name` snapshot at the last title the
+ * strip resolved live. The snapshot is written once at open, which for a chat
+ * is before its title is generated, and only an explicit rename touched it
+ * afterwards: so every reader that has no live source (the drag overlay chip,
+ * the strip before the projection hydrates) kept announcing "Untitled agent"
+ * for the tile's life. Written through the same rename action an explicit
+ * rename uses, held to the tile's own host, and only when the live answer is
+ * a different non-empty title - the hook falls back to the snapshot itself,
+ * so an unresolved title never writes. Terminal tiles are out: their snapshot
+ * carries a title source the terminal rename path owns.
+ */
+function useRecordTitleWriteThrough(
+  tab: EpicCanvasTileRef,
+  viewTabId: string,
+  liveTitle: string,
+): void {
+  const renameArtifactInTab = useEpicCanvasStore((s) => s.renameArtifactInTab);
+  const trimmed = liveTitle.trim();
+  const nextName =
+    isEpicNodeTileRef(tab) &&
+    isRecordBackedEpicNodeKind(tab.type) &&
+    trimmed.length > 0 &&
+    trimmed !== tab.name
+      ? trimmed
+      : null;
+  const hostId = tabHostId(tab);
+  useEffect(() => {
+    if (nextName === null) return;
+    renameArtifactInTab(viewTabId, tab.id, nextName, hostId);
+  }, [hostId, nextName, renameArtifactInTab, tab.id, viewTabId]);
 }
 
 function canRenameCanvasTab(
@@ -726,6 +768,7 @@ function TabItemBody(
     useTabRenameControl({
       tab,
       epicId,
+      viewTabId: tabId,
       groupId,
       canRenameTabs,
       terminalControl: props.terminalControl,
