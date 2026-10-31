@@ -7,18 +7,20 @@ import {
   type ReactNode,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, type UseNavigateResult } from "@tanstack/react-router";
 import type {
   BotConversationRecord,
   BotConversationSendResponse,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { MicrophoneAccessStatus } from "@traycer-clients/shared/platform/runner-host";
 import { useBotConversationListQuery } from "@/hooks/bots/use-bot-conversation-list-query";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
+import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { dictationCaptureConstraints } from "@/hooks/composer/dictation-capture-constraints";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
@@ -37,6 +39,7 @@ import { appLogger, describeLogError } from "@/lib/logger";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
+import { mainBotOf } from "@/lib/bots/bot-main";
 import { watchAudioLevel, type AudioLevelWatch } from "@/lib/voice/audio-level";
 import { VoiceEngineError, type VoiceEngine } from "@/lib/voice/engine";
 import {
@@ -155,8 +158,37 @@ export function VoiceSessionController(): ReactNode {
   const bots = useBotListQuery(appClient, botsSupported);
   const phase = useVoiceSessionStore((state) => state.phase);
   const focus = useVoiceSessionStore((state) => state.focus);
-  const fixedBotId = useBotTabsStore((state) => state.fixedBotId);
   const focusClient = useHostClientForHostId(focus?.hostId ?? null);
+
+  // Where a session goes with nothing selected: the personal environment's
+  // main bot, read from the bot list itself (the record the fixed Tracy
+  // entry resolves from too), so "Show Tracy" off takes nothing away from
+  // the voice. Unknown while the list or the environment has not answered,
+  // or with no main bot: then Talk is disabled and the start refuses, since a
+  // session with nowhere to post would still be billed.
+  const personal = usePersonalEnvironment(appClient, botsSupported);
+  const mainBot = useMemo(() => {
+    if (
+      !personal.resolved ||
+      personal.environmentId === null ||
+      bots.data === undefined
+    ) {
+      return null;
+    }
+    return mainBotOf(bots.data, personal.environmentId);
+  }, [bots.data, personal]);
+  const mainBotRef = useRef(mainBot);
+  useEffect(() => {
+    mainBotRef.current = mainBot;
+  }, [mainBot]);
+  const selectedBotId = useTabsStore((state) => {
+    const ref = selectHostFocusedRef(state);
+    return ref !== null && ref.kind === "bot" ? ref.id : null;
+  });
+  const destinationKnown = selectedBotId !== null || mainBot !== null;
+  useEffect(() => {
+    useVoiceSessionStore.getState().setDestinationKnown(destinationKnown);
+  }, [destinationKnown]);
 
   const botTitle = useCallback(
     (botId: string): string =>
@@ -793,28 +825,18 @@ export function VoiceSessionController(): ReactNode {
   const start = useCallback(async (): Promise<void> => {
     const store = useVoiceSessionStore.getState();
     if (store.phase !== "idle" || store.availability !== "live") return;
+    // The session starts focused on the channel or thread the person has
+    // open, or on the personal main bot when none is (V6), whose tab opens
+    // then. With neither, nothing starts: no session is minted with nowhere
+    // to post.
+    const destination =
+      readSelection() ?? openMainBot(mainBotRef.current, appHostId, navigate);
+    if (destination === null) return;
     store.sessionConnecting();
     shortSessionsRef.current = 0;
     const { sessionToken: token, engineGeneration: generation } =
       useVoiceSessionStore.getState();
-    // The session starts focused on the channel or thread the person has
-    // open, or on personal Tracy when none is (V6); Tracy's tab opens then.
-    const selected = readSelection();
-    if (selected !== null) {
-      store.setFocus(selected);
-    } else if (fixedBotId !== null) {
-      const tab = lookupBotTab(useBotTabsStore.getState().tabs, fixedBotId);
-      if (tab !== null) {
-        store.setFocus({
-          botId: fixedBotId,
-          hostId: tab.hostId,
-          threadId: null,
-          anchorMessageId: null,
-          anchorThread: null,
-        });
-        navigateToTabIntent(navigate, botTabIntent(fixedBotId), undefined);
-      }
-    }
+    store.setFocus(destination);
     const stillStarting = (): boolean => {
       const now = useVoiceSessionStore.getState();
       return (
@@ -860,10 +882,10 @@ export function VoiceSessionController(): ReactNode {
     applyCapture();
     await connectEngine(FIRST_SESSION_INPUT);
   }, [
+    appHostId,
     applyCapture,
     connectEngine,
     finishLocal,
-    fixedBotId,
     microphoneAccessAsync,
     navigate,
   ]);
@@ -932,7 +954,7 @@ export function VoiceSessionController(): ReactNode {
           focus={focus}
           channelId={channelId}
           client={focusClient}
-          speaksAsThisBot={focus.botId === fixedBotId}
+          speaksAsThisBot={focus.botId === mainBot?.botId}
           botTitle={botTitle(focus.botId)}
           scheduler={speech}
           memory={watchMemoryFor(focus.threadId ?? channelId)}
@@ -972,6 +994,30 @@ function channelConversation(
     if (first === null || row.createdAt < first.createdAt) first = row;
   }
   return first;
+}
+
+/**
+ * The default destination with no bot tab selected: the personal main bot's
+ * channel, whose tab opens on this window's host (as the fixed entry opens
+ * it) and comes to the front. `null` with no main bot known, or no host.
+ */
+function openMainBot(
+  main: BotRecord | null,
+  hostId: string | null,
+  navigate: UseNavigateResult<string>,
+): VoiceFocus | null {
+  if (main === null || hostId === null) return null;
+  useBotTabsStore
+    .getState()
+    .openBotTab({ botId: main.botId, hostId, title: main.title });
+  navigateToTabIntent(navigate, botTabIntent(main.botId), undefined);
+  return {
+    botId: main.botId,
+    hostId,
+    threadId: null,
+    anchorMessageId: null,
+    anchorThread: null,
+  };
 }
 
 /**

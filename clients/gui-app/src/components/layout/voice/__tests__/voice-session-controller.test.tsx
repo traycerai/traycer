@@ -88,7 +88,27 @@ const fake = vi.hoisted(() => {
       for (const listener of threadListListeners) listener();
     },
   };
+  // The personal environment as `usePersonalEnvironment` answers it: resolved
+  // to env-1 unless a test says it has not answered.
+  const personalEnvironment = {
+    value: { environmentId: "env-1", resolved: true, retry: () => undefined },
+    pending: () => {
+      personalEnvironment.value = {
+        environmentId: "",
+        resolved: false,
+        retry: () => undefined,
+      };
+    },
+    resolved: () => {
+      personalEnvironment.value = {
+        environmentId: "env-1",
+        resolved: true,
+        retry: () => undefined,
+      };
+    },
+  };
   return {
+    personalEnvironment,
     threadList,
     deferred,
     track,
@@ -148,10 +168,21 @@ const BOT_LIST = {
         environmentId: "env-1",
         title: "CI bot",
         appConversationChatId: "chan-1",
+        archivedAt: null,
       },
     ],
+    mainBotIds: { "env-1": "bot-1" },
   },
 };
+vi.mock(
+  "@/hooks/environment/use-addressed-environment",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/hooks/environment/use-addressed-environment")
+    >()),
+    usePersonalEnvironment: () => fake.personalEnvironment.value,
+  }),
+);
 const CONVERSATION_LIST = {
   data: {
     conversations: [
@@ -394,6 +425,7 @@ beforeEach(() => {
   fake.engines.length = 0;
   fake.handles.clear();
   fake.threadList.set(undefined);
+  fake.personalEnvironment.resolved();
   fake.track.stop.mockClear();
   fake.setVoiceSessionLive.mockReset();
   fake.setVoiceSessionLive.mockImplementation(() => Promise.resolve());
@@ -1180,6 +1212,41 @@ describe("a Talk ended and started again while dictation records", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(fake.sendMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("a Talk with no bot tab open", () => {
+  it("goes to the personal environment's main bot and opens its tab, whatever the Show Tracy setting", async () => {
+    // Show Tracy off: no fixed entry.
+    expect(useBotTabsStore.getState().fixedBotId).toBeNull();
+    expect(useVoiceSessionStore.getState().destinationKnown).toBe(true);
+    await bringLive();
+
+    expect(useVoiceSessionStore.getState().focus).toEqual(CHANNEL_FOCUS);
+    expect(useBotTabsStore.getState().tabs[BOT_ID]).toMatchObject({
+      hostId: "host-a",
+      title: "CI bot",
+    });
+    expect(useBotTabsStore.getState().fixedBotId).toBeNull();
+  });
+
+  it("does not start while no main bot is known: Talk is disabled and nothing is minted", async () => {
+    // The environment has not answered when this window's controller mounts.
+    fake.personalEnvironment.pending();
+    cleanup();
+    renderController();
+    await settle();
+    expect(useVoiceSessionStore.getState().destinationKnown).toBe(false);
+
+    await startTalk();
+    await grantMicrophone();
+    expect(useVoiceSessionStore.getState().phase).toBe("idle");
+    expect(fake.engines).toEqual([]);
+    expect(
+      queryClient
+        .getMutationCache()
+        .findAll({ mutationKey: voiceMutationKeys.mint() }),
+    ).toEqual([]);
   });
 });
 

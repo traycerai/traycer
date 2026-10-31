@@ -192,6 +192,13 @@ export interface VoiceSessionState {
    * only its own hold, so an idle instance never frees another's.
    */
   readonly dictationHolds: ReadonlySet<string>;
+  /**
+   * Whether a session started now would have a bot to talk to: the bot tab
+   * the person has open, else the personal environment's main bot. Set by
+   * the controller; `false` draws Talk disabled and refuses the start, so
+   * no session is minted with nowhere to post.
+   */
+  readonly destinationKnown: boolean;
   readonly muted: boolean;
   readonly driver: VoiceSessionDriver | null;
 
@@ -238,6 +245,7 @@ export interface VoiceSessionState {
   readonly pushCaptionLine: (line: CaptionDelta) => void;
   readonly acquireDictationHold: (owner: string) => void;
   readonly releaseDictationHold: (owner: string) => void;
+  readonly setDestinationKnown: (known: boolean) => void;
   readonly setMuted: (muted: boolean) => void;
   readonly setDriver: (driver: VoiceSessionDriver | null) => void;
 }
@@ -275,6 +283,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   captionLines: NO_CAPTIONS,
   pausedForDictation: false,
   dictationHolds: NO_HOLDS,
+  destinationKnown: true,
   muted: false,
   driver: null,
 
@@ -408,6 +417,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
     dictationHolds.add(owner);
     set({ dictationHolds, pausedForDictation: true });
   },
+  setDestinationKnown: (destinationKnown) => set({ destinationKnown }),
   releaseDictationHold: (owner) => {
     if (!get().dictationHolds.has(owner)) return;
     const dictationHolds = new Set(get().dictationHolds);

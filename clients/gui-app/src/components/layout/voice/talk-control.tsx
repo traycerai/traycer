@@ -23,17 +23,22 @@ export function TalkControl(props: {
   const availability = useVoiceSessionStore((state) => state.availability);
   const phase = useVoiceSessionStore((state) => state.phase);
   const driver = useVoiceSessionStore((state) => state.driver);
+  const destinationKnown = useVoiceSessionStore(
+    (state) => state.destinationKnown,
+  );
   // Drawn only once the server has said it offers voice: before that answer
   // a Talk would open the microphone to learn there is nothing to talk to.
   if (availability !== "live" || driver === null) return null;
   const live = phase !== "idle";
+  // With no bot to talk to (none selected, no main bot known yet) a session
+  // would have nowhere to post: Talk stays, disabled, and says so.
+  const nowhere = !live && !destinationKnown;
+  let label = "Talk with your bots. Costs credits while on.";
+  if (live) label = "End the voice session";
+  else if (nowhere) label = "No bot to talk to yet.";
   return (
     <TooltipWrapper
-      label={
-        live
-          ? "End the voice session"
-          : "Talk with your bots. Costs credits while on."
-      }
+      label={label}
       side="bottom"
       sideOffset={undefined}
       align={undefined}
@@ -46,7 +51,7 @@ export function TalkControl(props: {
         aria-pressed={live}
         data-testid="voice-talk-control"
         data-state={phase}
-        disabled={phase === "connecting" || phase === "ending"}
+        disabled={phase === "connecting" || phase === "ending" || nowhere}
         onClick={() => {
           if (live) driver.end();
           else driver.start();

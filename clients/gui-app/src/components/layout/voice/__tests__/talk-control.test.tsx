@@ -93,6 +93,21 @@ describe("TalkControl", () => {
     expect(driver.start).not.toHaveBeenCalled();
   });
 
+  it("is disabled, and stays drawn, while there is no bot to talk to", async () => {
+    const driver = makeDriver();
+    useVoiceSessionStore.setState({
+      driver,
+      availability: "live",
+      destinationKnown: false,
+    });
+    renderControl();
+
+    const button = screen.getByRole("button", { name: "Talk" });
+    expect(button.hasAttribute("disabled")).toBe(true);
+    await userEvent.click(button);
+    expect(driver.start).not.toHaveBeenCalled();
+  });
+
   it("is disabled while connecting", () => {
     useVoiceSessionStore.setState({
       driver: makeDriver(),

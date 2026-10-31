@@ -8,7 +8,7 @@ import { useBotListChangedSubscriptionForApp } from "@/hooks/bots/use-bot-list-c
 import { usePersonalEnvironment } from "@/hooks/environment/use-addressed-environment";
 import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
-import { mainBotIdOf } from "@/lib/bots/bot-main";
+import { mainBotOf } from "@/lib/bots/bot-main";
 import { useHostClient } from "@/lib/host/runtime";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import "@/stores/bots/tracy-entry";
@@ -115,9 +115,6 @@ function resolveTracy(
   ) {
     return UNKNOWN;
   }
-  const botId = mainBotIdOf(list.mainBotIds, personalEnvironmentId);
-  const bot = list.bots.find(
-    (candidate) => candidate.botId === botId && candidate.archivedAt === null,
-  );
-  return bot === undefined ? NONE : { kind: "bot", bot };
+  const bot = mainBotOf(list, personalEnvironmentId);
+  return bot === null ? NONE : { kind: "bot", bot };
 }
