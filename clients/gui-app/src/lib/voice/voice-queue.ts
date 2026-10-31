@@ -326,6 +326,18 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
         settled.add(messageId);
         return;
       }
+      // A surface is keyed by what it points at: a second post about the
+      // same approval or question is the same thing waiting.
+      const surfaceId = entry.surfaceId;
+      if (
+        surfaceId !== null &&
+        Array.from(entries.values()).some(
+          (existing) => existing.item.surfaceId === surfaceId,
+        )
+      ) {
+        settled.add(messageId);
+        return;
+      }
       const created: Entry = {
         item: {
           id: messageId,
