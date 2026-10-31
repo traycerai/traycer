@@ -293,7 +293,7 @@ function distinctSpritesIn(frame: OfficeFrame): number {
 
 /**
  * The layout in force, or a thrown error: `null` before the first sync is the
- * contract, and a non-null assertion is what the type rules forbid (D23).
+ * contract, and a non-null assertion is what the type rules forbid.
  */
 function layoutOf(scene: OfficeScene): OfficeLayout {
   const layout = scene.layout();
@@ -873,7 +873,7 @@ describe.each(OFFICE_VIEW_IDS)("%s at a thousand agents", (viewId) => {
   it("is one pip per character and a block map at overview, and nothing else", () => {
     // The whole reading of lod 0. A character is four pixels there, so no
     // sprite is worth building and no seat prop is worth asking the painter
-    // for (D27) - which is what makes the overview of a thousand agents cost
+    // for - which is what makes the overview of a thousand agents cost
     // a thousand dots and a few dozen rectangles.
     const scene = new OfficeScene(view, null);
     scene.sync(

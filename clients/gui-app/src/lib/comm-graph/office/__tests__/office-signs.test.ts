@@ -586,7 +586,7 @@ for (const viewId of ["towers", "building"] as const) {
       // The same counts the spelt-out reading would have carried - the hidden
       // member excluded rather than defaulted to idle - said at the rung a
       // six-tile board has the pixels for. What this case is about is WHO was
-      // counted; the vocabulary is D55's ladder doing its own job.
+      // counted; the vocabulary is the ladder doing its own job.
       expect(drawn[0].text).toBe(`${counted}D · 0W · 0I`);
       // That rung is the one MEASUREMENT picks, not the one a character budget
       // would have. Six tiles is ninety-six pixels and the spelt-out reading

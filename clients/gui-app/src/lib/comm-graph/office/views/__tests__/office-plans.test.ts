@@ -1042,7 +1042,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
       const garden = layout.floors.flatMap((floor) =>
         floor.errandSpots.filter((spot) => spot.kind === "garden"),
       );
-      // D25: views without gardens intentionally skip this shared-plan case;
+      // Views without gardens intentionally skip this shared-plan case;
       // Floor remains the reference view and must keep both outcomes.
       if (garden.length === 0 && viewId !== "floor") {
         context.skip(`${viewId} intentionally has no garden spots`);
@@ -1194,7 +1194,7 @@ describe.each(OFFICE_VIEW_IDS)("%s view", (viewId) => {
         return;
       }
 
-      // Every storey of a host shares the host's plaza door (D13), so the
+      // Every storey of a host shares the host's plaza door, so the
       // first floor of the host is the right door on every view.
       const doorFor = (hostId: string): OfficeTilePos => {
         const floor = layout.floors.find(

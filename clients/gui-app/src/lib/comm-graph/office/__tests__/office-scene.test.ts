@@ -12764,7 +12764,7 @@ describe("OfficeScene fixup 1 - F14 reception queue across aliased floors", () =
         realLayout.floors[floorIndex].receptionQueueTiles.length > 0,
     );
     // Two upper storeys of a single Towers/Building block alias the ground
-    // plaza's reception tiles (D13) - this fixture needs at least two such
+    // plaza's reception tiles - this fixture needs at least two such
     // floors to exercise the collision at all.
     expect(floorsWithAgents.length).toBeGreaterThanOrEqual(2);
     const [floorA, floorB] = floorsWithAgents;
@@ -13807,7 +13807,7 @@ describe("OfficeScene fixup 1 - F18 a seat's declared painted box (D53)", () => 
   it("leaves a seat with no declared box on its desk tiles", () => {
     const scene = sceneWithBoxedSeat();
 
-    // Desk tile (2,2) projected, two tiles square - exactly as before D53.
+    // Desk tile (2,2) projected, two tiles square - exactly as before.
     expect(scene.locate("plain")).toEqual({
       x: 2080,
       y: 32,

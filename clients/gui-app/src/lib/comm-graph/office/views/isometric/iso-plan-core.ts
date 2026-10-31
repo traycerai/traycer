@@ -960,7 +960,7 @@ export interface CityFrozenDistrict {
 }
 
 /**
- * How far above its D20 anchor a City seat's envelope leaves: the CENTRE of
+ * How far above its anchor a City seat's envelope leaves: the CENTRE of
  * the roof its occupant works under, not the roof's top edge.
  *
  * The scene puts an endpoint at `anchor.y - OFFICE_CHARACTER_HEIGHT - lift`,
