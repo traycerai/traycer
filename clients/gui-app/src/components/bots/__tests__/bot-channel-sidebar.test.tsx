@@ -453,7 +453,7 @@ describe("<BotChannelSidebar /> sections", () => {
       within(section("env-team"))
         .getAllByTestId("bot-channel-row")
         .map((r) => r.textContent),
-    ).toEqual(["RErelease-bot", "TRtriage-bot"]);
+    ).toEqual(["release-bot", "triage-bot"]);
     expect(
       within(section("env-team")).getAllByTestId("bot-avatar"),
     ).toHaveLength(2);

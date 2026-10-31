@@ -618,7 +618,7 @@ function SetupChannelRow(props: {
           : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
       )}
     >
-      <NamedBotAvatar botId={setup.botId} title={setup.title} size="sm" />
+      <NamedBotAvatar botId={setup.botId} size="sm" />
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
         <span className="truncate">{setup.title}</span>
         <MainBotBadge
@@ -677,7 +677,7 @@ function ChannelRow(props: {
         bold && !active && "font-semibold text-foreground",
       )}
     >
-      <NamedBotAvatar botId={bot.botId} title={bot.title} size="sm" />
+      <NamedBotAvatar botId={bot.botId} size="sm" />
       {/* The star sits on the name, before any count. */}
       <span className="flex min-w-0 flex-1 items-center gap-1.5">
         <span className="truncate">{bot.title}</span>
