@@ -57,7 +57,7 @@ export function createActivityGroupOpenStore(
   }));
 }
 
-// Ticket 5: the SAME tile instance still fully remounts - evicted past its
+// The SAME tile instance still fully remounts - evicted past its
 // pane's chat retention cap, evicted with its owning top-level surface, or
 // losing and regaining hosted eligibility. It no longer remounts on every
 // inner tab switch (decision #17 was reversed by pane chat retention - see
@@ -74,12 +74,12 @@ const activityGroupOpenStoreRegistry = new Map<
   StoreApi<ActivityGroupOpenState>
 >();
 
-// Ticket 15 (decision #29): durable chat-key mirror - survives the tab-key
+// Decision #29: durable chat-key mirror - survives the tab-key
 // store being evicted on close, so a reopened chat's expanded activity
 // groups come back. Last-writer-wins across multiple open views of the same
 // chat.
 //
-// Ticket 15 review round 3: promoted explicitly from the canvas close
+// Promoted explicitly from the canvas close
 // sweep's choke point (store.ts) - see the matching comment in
 // a2a-open-store-context.ts for why (covers active AND inactive/
 // never-mounted views alike).
@@ -105,7 +105,7 @@ export function evictActivityGroupOpenStores(
   tileInstanceIds.forEach((id) => activityGroupOpenStoreRegistry.delete(id));
 }
 
-/** Ticket 15 review round 3: promotes this tab's CURRENT state to durable -
+/** Promotes this tab's CURRENT state to durable -
  *  called from the canvas close sweep for every removed chat tile, BEFORE
  *  `evictActivityGroupOpenStores` drops the registry entry. A no-op if no
  *  store was ever created for this tab (never mounted). */

@@ -139,7 +139,7 @@ describe("ChatSessionRegistry", () => {
     expect(registry.peek("epic-1", "chat-1", HOST)).not.toBeNull();
   });
 
-  // The headline of ticket 43. Two tiles, ONE (epic, chat), TWO hosts - which
+  // Two tiles, ONE (epic, chat), TWO hosts - which
   // is reachable in production (post-fork twins keep the source's chat id) and
   // trivially reachable in dev (`--adopt-store` copies one identity store onto
   // a second host). The pre-fix registry keyed entries on `epic:chat` only, so

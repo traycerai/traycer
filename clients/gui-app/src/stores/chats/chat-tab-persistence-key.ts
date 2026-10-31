@@ -1,7 +1,7 @@
 /**
- * Dual-key identity for the per-tab chat UI restoration family (ticket 15;
- * decision #29). The tab key (`tileInstanceId`) is primary - unchanged from
- * ticket 5, unique per open, evicted outright when the tab permanently
+ * Dual-key identity for the per-tab chat UI restoration family
+ * (decision #29). The tab key (`tileInstanceId`) is primary - unchanged,
+ * unique per open, evicted outright when the tab permanently
  * closes. The chat key is durable (`${epicId}:${chatId}`, the
  * `chatSessionKey` precedent in `session-registry.ts:283`): it survives a
  * close/reopen and is shared last-writer-wins across every view of the same

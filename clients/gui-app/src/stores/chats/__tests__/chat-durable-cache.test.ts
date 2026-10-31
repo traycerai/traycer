@@ -1,5 +1,5 @@
 /**
- * Ticket 15 review round F6: `createChatDurableCache` must be a true LRU -
+ * `createChatDurableCache` must be a true LRU -
  * a `get()` has to refresh recency, not just `set()`, or a frequently
  * *reopened* but rarely *re-saved* chat still ages out on schedule.
  */
