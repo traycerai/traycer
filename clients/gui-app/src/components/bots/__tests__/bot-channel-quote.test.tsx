@@ -9,7 +9,7 @@
  */
 import { StrictMode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostRequester } from "@traycer-clients/shared/host-client/host-client";
@@ -124,6 +124,7 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
 const CHANNEL_TEXT = "CI is green.";
 /** Text the thread panel's transcript draws, from the thread's reply. */
 const THREAD_TEXT = "Yes, the thread agrees.";
+const SECOND_CHANNEL_TEXT = "The nightly is red.";
 const TYPED = "Agreed, but";
 
 function nonZeroRect(): DOMRect {
@@ -374,6 +375,74 @@ describe("select-to-quote with a thread open beside the channel", () => {
     expect(keptThreadText()).toBe(expected);
     expect(channelBox().value).toBe("");
     expectSelectionCleared();
+  });
+});
+
+/** Selects `text` of the channel and quotes it with the button. */
+async function quoteChannelText(user: UserEvent, text: string): Promise<void> {
+  await selectText(channelSection(), text);
+  const button = quoteButton();
+  if (button === null) throw new Error("no Quote button");
+  await user.click(button);
+}
+
+describe("select-to-quote while the open thread's box is not drawn", () => {
+  // The thread is open but not listed yet: its panel draws no box.
+  beforeEach(() => {
+    mocks.threads = [];
+    scene.channel.setState({
+      messages: [
+        botReply({ messageId: REPLY_ID, text: CHANNEL_TEXT, timestamp: 2_000 }),
+        botReply({
+          messageId: "reply-second",
+          text: SECOND_CHANNEL_TEXT,
+          timestamp: 3_000,
+        }),
+      ],
+    });
+  });
+
+  it("holds the quotes for the thread's box, in order, until it is drawn", async () => {
+    const user = userEvent.setup();
+    await mountChannelWithThread();
+    expect(screen.queryByTestId("bot-thread-composer-input")).toBeNull();
+
+    await quoteChannelText(user, CHANNEL_TEXT);
+    await quoteChannelText(user, SECOND_CHANNEL_TEXT);
+    expect(channelBox().value).toBe("");
+
+    mocks.threads = [postThread()];
+    act(() => {
+      useBotOpenThreadStore.getState().setRail(BOT_ID, null);
+      useBotOpenThreadStore
+        .getState()
+        .setRail(BOT_ID, { kind: "thread", ...THREAD_OPEN });
+    });
+
+    expect(threadBox().value).toBe(
+      `> ${CHANNEL_TEXT}\n\n> ${SECOND_CHANNEL_TEXT}\n\n`,
+    );
+    expect(channelBox().value).toBe("");
+  });
+
+  it("keeps a quote for the thread's box when the thread is closed and the channel is quoted, each reaching its own box", async () => {
+    const user = userEvent.setup();
+    await mountChannelWithThread();
+    await quoteChannelText(user, CHANNEL_TEXT);
+
+    act(() => useBotOpenThreadStore.getState().setRail(BOT_ID, null));
+    await quoteChannelText(user, SECOND_CHANNEL_TEXT);
+    expect(channelBox().value).toBe(`> ${SECOND_CHANNEL_TEXT}\n\n`);
+
+    mocks.threads = [postThread()];
+    act(() =>
+      useBotOpenThreadStore
+        .getState()
+        .setRail(BOT_ID, { kind: "thread", ...THREAD_OPEN }),
+    );
+
+    expect(threadBox().value).toBe(`> ${CHANNEL_TEXT}\n\n`);
+    expect(channelBox().value).toBe(`> ${SECOND_CHANNEL_TEXT}\n\n`);
   });
 });
 

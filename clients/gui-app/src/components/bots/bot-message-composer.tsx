@@ -164,7 +164,7 @@ export function BotMessageComposer(props: {
       setText("");
     }
   }
-  useBoxQuote(quote, setText, inputRef);
+  useBoxQuote({ quote, setText, setGeneration, inputRef });
   // The draft the box holds now, for a send that lands after the person
   // moved on to another; and whether the box is still there to say anything.
   const generationRef = useRef(generation);
@@ -405,17 +405,21 @@ export function BotMessageComposerUnavailable(props: {
 
 /**
  * Adds each quote once, by its id, to what the box shows then, and moves the
- * focus into the box with the caret after it.
+ * focus into the box with the caret after it. The box then holds a newer
+ * draft: a send still in flight does not clear it when it lands.
  */
-function useBoxQuote(
-  quote: BotComposerQuote | null,
-  setText: Dispatch<SetStateAction<string>>,
-  inputRef: RefObject<HTMLTextAreaElement | null>,
-): void {
+function useBoxQuote(args: {
+  readonly quote: BotComposerQuote | null;
+  readonly setText: Dispatch<SetStateAction<string>>;
+  readonly setGeneration: Dispatch<SetStateAction<number>>;
+  readonly inputRef: RefObject<HTMLTextAreaElement | null>;
+}): void {
+  const { quote, setText, setGeneration, inputRef } = args;
   const [takenQuoteId, setTakenQuoteId] = useState<number | null>(null);
   if (quote !== null && quote.id !== takenQuoteId) {
     setTakenQuoteId(quote.id);
-    setText((current) => appendQuoteMarkdown(current, quote.snapshot));
+    setText((current) => quote.snapshots.reduce(appendQuoteMarkdown, current));
+    setGeneration((current) => current + 1);
   }
   useEffect(() => {
     if (quote === null || quote.id !== takenQuoteId) return;
@@ -457,12 +461,13 @@ export type BotKeptDraft = {
   readonly spend: (revision: number) => void;
 };
 
-/** A quote of a selection, for the box to add to what it shows. */
+/** Quotes of selections, for the box to add to what it shows. */
 export type BotComposerQuote = {
   /** Which quote it is: the box adds each id once. */
   readonly id: number;
-  readonly snapshot: QuoteTextSnapshot;
-  /** The box added it: the owner stops offering it. */
+  /** The selections, added in order. */
+  readonly snapshots: ReadonlyArray<QuoteTextSnapshot>;
+  /** The box added them: the owner stops offering them. */
   readonly taken: () => void;
 };
 

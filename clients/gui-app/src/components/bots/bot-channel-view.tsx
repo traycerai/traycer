@@ -618,31 +618,7 @@ export function BotChannelView(props: {
     openThreadPostId === null
       ? null
       : (threadsByPost.get(openThreadPostId) ?? null);
-  // A quote, from the channel or the thread beside it, goes into the box
-  // that is open: the thread's while a thread is open, else the channel's.
-  // The box adds it after what it shows and hands it back once it has; a
-  // thread's box not drawn yet takes it once it is.
-  const quoteCount = useRef(0);
-  const [pendingQuote, setPendingQuote] = useState<PendingQuote | null>(null);
-  const quoteIntoOpenBox = useCallback<QuoteSink>(
-    (_chatId, snapshot) => {
-      quoteCount.current += 1;
-      const id = quoteCount.current;
-      setPendingQuote({
-        postId: railThreadPostId,
-        quote: {
-          id,
-          snapshot,
-          taken: () =>
-            setPendingQuote((current) =>
-              current?.quote.id === id ? null : current,
-            ),
-        },
-      });
-      clearBrowserSelection();
-    },
-    [railThreadPostId],
-  );
+  const { quoteIntoOpenBox, quoteFor } = useBoxQuotes(railThreadPostId);
   const threadLanding = useThreadPanelLanding(
     props.landOn,
     drawnPanelThreadId({
@@ -810,7 +786,7 @@ export function BotChannelView(props: {
                 onEditEnd={endEdit}
                 seed={null}
                 keptDraft={null}
-                quote={quoteForBox(pendingQuote, null)}
+                quote={quoteFor(null)}
                 onSent={openPostedThread}
               />
             </section>
@@ -862,7 +838,7 @@ export function BotChannelView(props: {
                   onEditPost={editPostFromThread}
                   onOpenTurn={onOpenTurn}
                   onOpenSession={onOpenSession}
-                  quote={quoteForBox(pendingQuote, postId)}
+                  quote={quoteFor(postId)}
                 />
               )}
             />
@@ -1363,17 +1339,51 @@ function useAdvanceWhilePresented(args: {
   }, [advance, botId, conversationId, targetMessageId, targetSeq]);
 }
 
-/** A quote waiting for the box it goes into. */
-type PendingQuote = {
-  /** The thread whose box takes it; `null` for the channel's. */
-  readonly postId: string | null;
-  readonly quote: BotComposerQuote;
-};
+/** Quotes waiting for their box, by the thread's post; `null` for the channel's. */
+type PendingQuotes = ReadonlyMap<string | null, BotComposerQuote>;
 
-/** The quote for the box of the thread `postId` (`null`: the channel's), if it is that box's. */
-function quoteForBox(
-  pending: PendingQuote | null,
-  postId: string | null,
-): BotComposerQuote | null {
-  return pending !== null && pending.postId === postId ? pending.quote : null;
+/**
+ * A quote, from the channel or the thread beside it, goes into the box that
+ * is open: the thread's while a thread is open (`openPostId`), else the
+ * channel's. The box adds it after what it shows and hands it back once it
+ * has. Quotes wait per box: a thread's box not drawn yet, or closed, takes
+ * its quotes, in order, once it is drawn.
+ */
+function useBoxQuotes(openPostId: string | null): {
+  readonly quoteIntoOpenBox: QuoteSink;
+  /** The quotes waiting for the box of the thread `postId`; `null` for the channel's. */
+  readonly quoteFor: (postId: string | null) => BotComposerQuote | null;
+} {
+  const quoteCount = useRef(0);
+  const [pendingQuotes, setPendingQuotes] = useState<PendingQuotes>(
+    () => new Map(),
+  );
+  const quoteIntoOpenBox = useCallback<QuoteSink>(
+    (_chatId, snapshot) => {
+      quoteCount.current += 1;
+      const id = quoteCount.current;
+      const postId = openPostId;
+      const taken = (): void =>
+        setPendingQuotes((current) => {
+          if (current.get(postId)?.id !== id) return current;
+          const next = new Map(current);
+          next.delete(postId);
+          return next;
+        });
+      setPendingQuotes((current) => {
+        const earlier = current.get(postId)?.snapshots ?? [];
+        return new Map(current).set(postId, {
+          id,
+          snapshots: [...earlier, snapshot],
+          taken,
+        });
+      });
+      clearBrowserSelection();
+    },
+    [openPostId],
+  );
+  return {
+    quoteIntoOpenBox,
+    quoteFor: (postId) => pendingQuotes.get(postId) ?? null,
+  };
 }

@@ -69,6 +69,7 @@ import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   BotMessageComposer,
   type BotComposerEdit,
+  type BotComposerQuote,
 } from "@/components/bots/bot-message-composer";
 
 const RESPONSE: BotConversationSendResponse = {
@@ -89,6 +90,13 @@ const onSent =
 const onEditEnd = vi.fn<() => void>();
 
 function composer(edit: BotComposerEdit | null): ReactNode {
+  return composerQuoting(edit, null);
+}
+
+function composerQuoting(
+  edit: BotComposerEdit | null,
+  quote: BotComposerQuote | null,
+): ReactNode {
   return (
     <BotMessageComposer
       botId="bot-1"
@@ -104,7 +112,7 @@ function composer(edit: BotComposerEdit | null): ReactNode {
       onEditEnd={onEditEnd}
       seed={null}
       keptDraft={null}
-      quote={null}
+      quote={quote}
       onSent={onSent}
     />
   );
@@ -232,6 +240,28 @@ describe("<BotMessageComposer /> reporting a send", () => {
     expect(onSent).not.toHaveBeenCalled();
     expect(onEditEnd).not.toHaveBeenCalled();
     expect(box().value).toBe("Is the nightly green?");
+  });
+});
+
+describe("<BotMessageComposer /> quoting", () => {
+  it("keeps a quote added while a send is in flight when the send lands", async () => {
+    const user = userEvent.setup();
+    const view = render(composer(null));
+    await user.type(box(), "Is CI green?");
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    const callbacks = lastSend();
+
+    view.rerender(
+      composerQuoting(null, {
+        id: 1,
+        snapshots: [{ text: "quoted", fenceLanguage: null }],
+        taken: vi.fn(),
+      }),
+    );
+    expect(box().value).toBe("Is CI green?\n\n> quoted\n\n");
+    await settleSend(callbacks, (sent) => sent.onSuccess?.(RESPONSE));
+
+    expect(box().value).toBe("Is CI green?\n\n> quoted\n\n");
   });
 });
 
