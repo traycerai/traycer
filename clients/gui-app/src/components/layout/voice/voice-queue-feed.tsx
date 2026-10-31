@@ -373,7 +373,7 @@ function VoiceBotStatusReader(props: {
         botTitle: request.botTitle,
         activity,
         tasks: trackingTasksOf(tasks).length,
-        running: summary.running.length,
+        working: summary.running.length > 0,
         finishedThisWeek: finishedThisWeek(finishedTasksOf(tasks), now).length,
         costUsd: usage.data?.summary.totals.knownCostUsd ?? null,
         costWindowDays: STATUS_COST_WINDOW_DAYS,
