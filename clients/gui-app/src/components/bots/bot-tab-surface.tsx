@@ -292,18 +292,6 @@ function TracySurfaceShell(props: {
 }
 
 /**
- * Keeps the visited channels' state in step with the bots that exist, and a
- * channel selected: forgets each visited bot once a list that answered no
- * longer carries it after carrying it, and returns the way the selected
- * channel's own pane reports one gone. With no channel selected, or the
- * selected one gone, `select`s the default channel once the lists answered.
- *
- * The default is the surface's own choice, never an opener's: while a
- * navigation to the surface is in flight (a channel someone opened, not yet
- * acknowledged) it waits, so it never supersedes that navigation, and a
- * selected bot that goes away meanwhile is only deselected.
- */
-/**
  * A `sender` landing waits in its channel's pane for the thread list, and a
  * move of the channel while it waits spends it unlanded
  * (`useSpendTabLanding`). Leaving the channel is such a move, but it unmounts
@@ -342,6 +330,18 @@ function useSenderLandingSpentOnDeparture(botId: string | null): void {
   }, [botId, shownLanding]);
 }
 
+/**
+ * Keeps the visited channels' state in step with the bots that exist, and a
+ * channel selected: forgets each visited bot once a list that answered no
+ * longer carries it after carrying it, and returns the way the selected
+ * channel's own pane reports one gone. With no channel selected, or the
+ * selected one gone, `select`s the default channel once the lists answered.
+ *
+ * The default is the surface's own choice, never an opener's: while a
+ * navigation to the surface is in flight (a channel someone opened, not yet
+ * acknowledged) it waits, so it never supersedes that navigation, and a
+ * selected bot that goes away meanwhile is only deselected.
+ */
 function useTracyChannelUpkeep(input: {
   readonly botId: string | null;
   readonly groups: ReadonlyArray<HomeBotsGroup> | null;
