@@ -77,6 +77,34 @@ describe("mentionsToWire", () => {
     );
   });
 
+  describe("a shared full name beside a shorter unique name", () => {
+    const SHORT = member("u-short", "Ann");
+    const LEE_1 = member("u-lee-1", "Ann Lee");
+    const LEE_2 = member("u-lee-2", "Ann Lee");
+
+    it("stays as typed with no pick, rather than reading as the shorter name and a word", () => {
+      expect(mentionsToWire("hi @Ann Lee", [SHORT, LEE_1, LEE_2], [])).toBe(
+        "hi @Ann Lee",
+      );
+    });
+
+    it("still gives the token of a shared name's valid pick", () => {
+      expect(
+        mentionsToWire(
+          "hi @Ann Lee",
+          [SHORT, LEE_1, LEE_2],
+          [pick(3, 11, "u-lee-2")],
+        ),
+      ).toBe("hi <@u-lee-2>");
+    });
+
+    it("still gives the unique shorter name its token", () => {
+      expect(mentionsToWire("hi @Ann", [SHORT, LEE_1, LEE_2], [])).toBe(
+        "hi <@u-short>",
+      );
+    });
+  });
+
   it("writes a unique name typed plainly with no pick as that member's token", () => {
     expect(mentionsToWire("hi @Bob", [BOB, ANN], [])).toBe("hi <@u-bob>");
   });
@@ -134,36 +162,112 @@ describe("moving picks with the text", () => {
   const PICKS = [pick(3, 11, "u-ann")];
 
   it("moves a pick when text is inserted before it", () => {
-    expect(shiftMentionPicks("hi @Ann Lee", "oh, hi @Ann Lee", PICKS)).toEqual([
-      pick(7, 15, "u-ann"),
-    ]);
+    expect(
+      shiftMentionPicks("hi @Ann Lee", "oh, hi @Ann Lee", PICKS, null),
+    ).toEqual([pick(7, 15, "u-ann")]);
     expect(spliceMentionPicks(PICKS, 0, 0, 4)).toEqual([pick(7, 15, "u-ann")]);
   });
 
   it("moves a pick back when text before it is deleted", () => {
     expect(
-      shiftMentionPicks("oh, hi @Ann Lee", "hi @Ann Lee", [
-        pick(7, 15, "u-ann"),
-      ]),
+      shiftMentionPicks(
+        "oh, hi @Ann Lee",
+        "hi @Ann Lee",
+        [pick(7, 15, "u-ann")],
+        null,
+      ),
     ).toEqual(PICKS);
   });
 
   it("drops a pick an edit inside it touches", () => {
-    expect(shiftMentionPicks("hi @Ann Lee", "hi @Ann Le", PICKS)).toEqual([]);
+    expect(shiftMentionPicks("hi @Ann Lee", "hi @Ann Le", PICKS, null)).toEqual(
+      [],
+    );
     expect(spliceMentionPicks(PICKS, 5, 6, 1)).toEqual([]);
-    expect(shiftMentionPicks("hi @Ann Lee", "hi ", PICKS)).toEqual([]);
+    expect(shiftMentionPicks("hi @Ann Lee", "hi ", PICKS, null)).toEqual([]);
   });
 
   it("keeps a pick an edit after it leaves alone", () => {
     expect(
-      shiftMentionPicks("hi @Ann Lee", "hi @Ann Lee, hello", PICKS),
+      shiftMentionPicks("hi @Ann Lee", "hi @Ann Lee, hello", PICKS, null),
     ).toEqual(PICKS);
   });
 
   it("moves, rather than touches, a pick when text is typed just before it", () => {
-    expect(shiftMentionPicks("hi @Ann Lee", "hi x@Ann Lee", PICKS)).toEqual([
-      pick(4, 12, "u-ann"),
-    ]);
+    expect(
+      shiftMentionPicks("hi @Ann Lee", "hi x@Ann Lee", PICKS, null),
+    ).toEqual([pick(4, 12, "u-ann")]);
+  });
+
+  describe("where the box's selection is known", () => {
+    // Two picks of the same `@Name`: the texts alone cannot say which of the
+    // two a deletion took.
+    const TWO = [pick(0, 8, "u-ann"), pick(9, 17, "u-ann-2")];
+    const BOTH = "@Ann Lee @Ann Lee ";
+    const FIRST_ONLY = "@Ann Lee ";
+
+    it("drops the second of two identical mentions when the selection deleted it", () => {
+      expect(
+        shiftMentionPicks(BOTH, FIRST_ONLY, TWO, {
+          start: 9,
+          end: 18,
+          caretAfter: 9,
+        }),
+      ).toEqual([pick(0, 8, "u-ann")]);
+      // Read from the texts alone, it is the first that goes.
+      expect(shiftMentionPicks(BOTH, FIRST_ONLY, TWO, null)).toEqual([
+        pick(0, 8, "u-ann-2"),
+      ]);
+    });
+
+    // The same text results from Backspace and from Delete here, so only the
+    // caret tells whether the pick's last letter was the one deleted.
+    const PICKED = [pick(0, 8, "u-ann")];
+    const BEFORE = "@Ann Leee";
+    const AFTER = "@Ann Lee";
+
+    it("takes a Backspace at a collapsed caret as a deletion behind it", () => {
+      expect(
+        shiftMentionPicks(BEFORE, AFTER, PICKED, {
+          start: 8,
+          end: 8,
+          caretAfter: 7,
+        }),
+      ).toEqual([]);
+    });
+
+    it("takes a forward Delete at a collapsed caret as a deletion ahead of it", () => {
+      expect(
+        shiftMentionPicks(BEFORE, AFTER, PICKED, {
+          start: 8,
+          end: 8,
+          caretAfter: 8,
+        }),
+      ).toEqual(PICKED);
+    });
+
+    it("takes text longer than before as an insertion at the caret", () => {
+      expect(
+        shiftMentionPicks("hi @Ann Lee", "oh, hi @Ann Lee", PICKS, {
+          start: 0,
+          end: 0,
+          caretAfter: 4,
+        }),
+      ).toEqual([pick(7, 15, "u-ann")]);
+    });
+
+    it("reads the texts alone when the selection did not make the edit", () => {
+      // The texts differ by a deletion at the front, but the selection says
+      // the caret was at the end.
+      expect(
+        shiftMentionPicks(
+          "oh, hi @Ann Lee",
+          "hi @Ann Lee",
+          [pick(7, 15, "u-ann")],
+          { start: 15, end: 15, caretAfter: 15 },
+        ),
+      ).toEqual(PICKS);
+    });
   });
 });
 

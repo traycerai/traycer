@@ -5,7 +5,13 @@
  * answer or refusal would land.
  */
 import type { ReactNode } from "react";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -304,14 +310,15 @@ describe("<BotMessageComposer /> @ mentions", () => {
   });
 
   describe("two members with the same name", () => {
+    const SHARED_MEMBERS = [
+      { userId: "u-viewer", displayName: "Andy Viewer", avatarUrl: null },
+      { userId: "u-ann", displayName: "Ann Lee", avatarUrl: null },
+      { userId: "u-ann-2", displayName: "Ann Lee", avatarUrl: null },
+    ];
     const SHARED: BotOwner = {
       kind: "team",
       name: "Acme",
-      members: [
-        { userId: "u-viewer", displayName: "Andy Viewer", avatarUrl: null },
-        { userId: "u-ann", displayName: "Ann Lee", avatarUrl: null },
-        { userId: "u-ann-2", displayName: "Ann Lee", avatarUrl: null },
-      ],
+      members: SHARED_MEMBERS,
     };
 
     async function sentText(user: UserEvent): Promise<string> {
@@ -410,6 +417,103 @@ describe("<BotMessageComposer /> @ mentions", () => {
       act(() => box().setSelectionRange(0, 8));
 
       await user.keyboard("@Ann Lee");
+
+      expect(box().value).toBe("@Ann Lee ");
+      expect(await sentText(user)).toBe("@Ann Lee");
+    });
+
+    function mountEdit(text: string): void {
+      render(
+        <BotIdentityContext
+          value={{ botId: "bot-1", title: "Tracy", owner: SHARED }}
+        >
+          {composer({ requestId: "request-failed", text })}
+        </BotIdentityContext>,
+      );
+    }
+
+    it("keeps the first recipient when the second of two identical mentions is deleted", async () => {
+      const user = userEvent.setup();
+      mountEdit("<@u-ann> <@u-ann-2> ");
+      expect(box().value).toBe("@Ann Lee @Ann Lee ");
+      await user.click(box());
+      act(() => box().setSelectionRange(9, 18));
+
+      await user.keyboard("{Backspace}");
+
+      expect(box().value).toBe("@Ann Lee ");
+      expect(await sentText(user)).toBe("<@u-ann>");
+    });
+
+    it("does not give text pasted over two mentions the identity of an old one", async () => {
+      const user = userEvent.setup();
+      mountEdit("<@u-ann> <@u-ann-2> <@u-ann>");
+      await user.click(box());
+      act(() => box().setSelectionRange(0, 18));
+
+      await user.paste("@Ann Lee ");
+
+      expect(box().value).toBe("@Ann Lee @Ann Lee");
+      expect(await sentText(user)).toBe("@Ann Lee <@u-ann>");
+    });
+
+    it("sends a shared full name as typed rather than as a shorter unique name and a word", async () => {
+      const user = userEvent.setup();
+      mountIn({
+        ...SHARED,
+        members: [
+          ...SHARED_MEMBERS,
+          { userId: "u-short", displayName: "Ann", avatarUrl: null },
+        ],
+      });
+      await user.type(box(), "hi @Ann Lee");
+
+      expect(await sentText(user)).toBe("hi @Ann Lee");
+    });
+
+    it("keeps a mention's member when a shorter text replaces the words before it", async () => {
+      const user = userEvent.setup();
+      mountEdit("hello <@u-ann-2> tail");
+      await user.click(box());
+      act(() => box().setSelectionRange(0, 5));
+
+      fireEvent.compositionStart(box());
+      fireEvent.input(box(), {
+        target: { value: "你好 @Ann Lee tail" },
+        data: "你好",
+        inputType: "insertCompositionText",
+        isComposing: true,
+      });
+      fireEvent.compositionEnd(box(), { data: "你好" });
+
+      expect(await sentText(user)).toBe("你好 <@u-ann-2> tail");
+    });
+
+    it("keeps a mention that an undo leaves textually intact with its member", async () => {
+      const user = userEvent.setup();
+      mountIn(SHARED);
+      await user.type(box(), "@ann");
+      await user.keyboard("{ArrowDown}{Enter}");
+      await user.keyboard("later");
+      expect(box().value).toBe("@Ann Lee later");
+
+      // jsdom has no undo: the box is set back to the value it held before.
+      fireEvent.input(box(), { target: { value: "@Ann Lee " } });
+
+      expect(box().value).toBe("@Ann Lee ");
+      expect(await sentText(user)).toBe("<@u-ann-2>");
+    });
+
+    it("sends as typed a shared name an undo restores after its mention was deleted", async () => {
+      const user = userEvent.setup();
+      mountIn(SHARED);
+      await user.type(box(), "@ann");
+      await user.keyboard("{ArrowDown}{Enter}");
+      act(() => box().setSelectionRange(0, 8));
+      await user.keyboard("{Backspace}");
+      expect(box().value).toBe(" ");
+
+      fireEvent.input(box(), { target: { value: "@Ann Lee " } });
 
       expect(box().value).toBe("@Ann Lee ");
       expect(await sentText(user)).toBe("@Ann Lee");

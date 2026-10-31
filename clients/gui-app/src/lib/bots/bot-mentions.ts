@@ -54,16 +54,62 @@ export function spliceMentionPicks(
 }
 
 /**
- * `picks` across the change from `previous` to `next`, read as the one span
- * between their common start and end. The common end is taken first, so
- * typing just before a pick moves it rather than touching it.
+ * Where the box's selection was before an edit, `[start, end)`, and where
+ * the caret is after it.
  */
-export function shiftMentionPicks(
+export interface BotMentionEditSelection {
+  readonly start: number;
+  readonly end: number;
+  readonly caretAfter: number;
+}
+
+interface EditedSpan {
+  readonly start: number;
+  readonly end: number;
+  readonly insertedLength: number;
+}
+
+/** The edit a selection makes that changes the text's length by `delta`. */
+function editAtSelection(
+  selection: BotMentionEditSelection,
+  delta: number,
+): EditedSpan {
+  const { start, end, caretAfter } = selection;
+  if (start < end) return { start, end, insertedLength: delta + end - start };
+  if (delta >= 0) return { start, end: start, insertedLength: delta };
+  if (caretAfter < start) {
+    return { start: start + delta, end: start, insertedLength: 0 };
+  }
+  return { start, end: start - delta, insertedLength: 0 };
+}
+
+/**
+ * The edit from `previous` to `next` that the selection made: a selected
+ * range is replaced; at a caret, text is inserted there, or deleted behind
+ * it when the caret moved back, ahead of it when it did not. `null` when
+ * the texts do not agree with that edit, so the selection did not make it.
+ */
+function selectionEdit(
   previous: string,
   next: string,
-  picks: ReadonlyArray<BotMentionPick>,
-): ReadonlyArray<BotMentionPick> {
-  if (previous === next || picks.length === 0) return picks;
+  selection: BotMentionEditSelection,
+): EditedSpan | null {
+  const span = editAtSelection(selection, next.length - previous.length);
+  const agrees =
+    span.start >= 0 &&
+    span.end <= previous.length &&
+    span.insertedLength >= 0 &&
+    previous.slice(0, span.start) === next.slice(0, span.start) &&
+    previous.slice(span.end) === next.slice(span.start + span.insertedLength);
+  return agrees ? span : null;
+}
+
+/**
+ * The one span between `previous` and `next`'s common start and end. The
+ * common end is taken first, so typing just before a pick moves it rather
+ * than touching it.
+ */
+function diffEdit(previous: string, next: string): EditedSpan {
   const shorter = Math.min(previous.length, next.length);
   let suffix = 0;
   while (
@@ -76,11 +122,47 @@ export function shiftMentionPicks(
   while (prefix < shorter - suffix && previous[prefix] === next[prefix]) {
     prefix += 1;
   }
-  return spliceMentionPicks(
-    picks,
-    prefix,
-    previous.length - suffix,
-    next.length - suffix - prefix,
+  return {
+    start: prefix,
+    end: previous.length - suffix,
+    insertedLength: next.length - suffix - prefix,
+  };
+}
+
+/**
+ * `picks` across the change from `previous` to `next`. Where the box's
+ * selection is known, the edit is the one it made, which tells two of the
+ * same `@Name` apart; otherwise (a text set by the app, or a selection that
+ * did not make this edit) it is read from the texts alone.
+ */
+export function shiftMentionPicks(
+  previous: string,
+  next: string,
+  picks: ReadonlyArray<BotMentionPick>,
+  selection: BotMentionEditSelection | null,
+): ReadonlyArray<BotMentionPick> {
+  if (previous === next || picks.length === 0) return picks;
+  const span =
+    (selection === null ? null : selectionEdit(previous, next, selection)) ??
+    diffEdit(previous, next);
+  return spliceMentionPicks(picks, span.start, span.end, span.insertedLength);
+}
+
+function endsNameAt(text: string, at: number): boolean {
+  const after = text.charAt(at);
+  return after === "" || NAME_BOUNDARY.test(after);
+}
+
+/** Whether `pick`'s range of `text` still reads `@Name` of the member it picked. */
+function pickHolds(
+  text: string,
+  pick: BotMentionPick,
+  name: string | undefined,
+): boolean {
+  if (name === undefined || name.trim().length === 0) return false;
+  return (
+    text.slice(pick.start, pick.end) === `@${name}` &&
+    endsNameAt(text, pick.end)
   );
 }
 
@@ -103,16 +185,9 @@ export function mentionsToWire(
     if (name.length === 0) continue;
     byName.set(name, [...(byName.get(name) ?? []), member.userId]);
   }
-  const unique = [...byName]
-    .flatMap(([name, userIds]) =>
-      userIds.length === 1 ? [{ name, userId: userIds[0] }] : [],
-    )
-    .sort((a, b) => b.name.length - a.name.length);
+  const names = [...byName.keys()].sort((a, b) => b.length - a.length);
   const pickAt = new Map(picks.map((pick) => [pick.start, pick]));
-  const endsName = (at: number): boolean => {
-    const after = text.charAt(at);
-    return after === "" || NAME_BOUNDARY.test(after);
-  };
+  const endsName = (at: number): boolean => endsNameAt(text, at);
   let out = "";
   let index = 0;
   while (index < text.length) {
@@ -126,29 +201,26 @@ export function mentionsToWire(
       continue;
     }
     const pick = pickAt.get(at);
-    const picked = pick === undefined ? undefined : nameOf.get(pick.userId);
-    if (
-      pick !== undefined &&
-      picked !== undefined &&
-      picked.trim().length > 0 &&
-      text.slice(at, pick.end) === `@${picked}` &&
-      endsName(pick.end)
-    ) {
+    if (pick !== undefined && pickHolds(text, pick, nameOf.get(pick.userId))) {
       out += botMentionToken(pick.userId);
       index = pick.end;
       continue;
     }
-    const named = unique.find(
-      ({ name }) =>
-        text.startsWith(name, at + 1) && endsName(at + 1 + name.length),
+    const name = names.find(
+      (candidate) =>
+        text.startsWith(candidate, at + 1) &&
+        endsName(at + 1 + candidate.length),
     );
-    if (named === undefined) {
+    if (name === undefined) {
       out += "@";
       index = at + 1;
       continue;
     }
-    out += botMentionToken(named.userId);
-    index = at + 1 + named.name.length;
+    // A name two members share is neither of them unless picked, nor a
+    // shorter name that starts it.
+    const userIds = byName.get(name) ?? [];
+    out += userIds.length === 1 ? botMentionToken(userIds[0]) : `@${name}`;
+    index = at + 1 + name.length;
   }
   return out + text.slice(index);
 }

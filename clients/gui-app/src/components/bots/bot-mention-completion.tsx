@@ -34,6 +34,10 @@ export interface BotMentionCompletion {
   readonly onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => boolean;
   /** The caret moved: what follows it decides the list. */
   readonly onCaret: (caret: number) => void;
+  /** The box's selection may have moved, or is about to be edited. */
+  readonly onSelection: (input: HTMLTextAreaElement) => void;
+  /** The person changed what the box holds; `input` is the box after it. */
+  readonly onInput: (input: HTMLTextAreaElement) => void;
   /** The text as sent: each completed name as its member's token. */
   readonly toWire: (text: string) => string;
   /** A sent text as the box shows it: each member's token as their name. */
@@ -93,9 +97,22 @@ export function useBotMentionCompletion(args: {
   if (anchored.text !== text) {
     setAnchored({
       text,
-      picks: shiftMentionPicks(anchored.text, text, anchored.picks),
+      picks: shiftMentionPicks(anchored.text, text, anchored.picks, null),
     });
   }
+  // The box's selection as last seen, which an edit replaces: where it is
+  // known, an edit moves the picks by what it changed, not by what the texts
+  // differ in, which cannot tell two of the same `@Name` apart.
+  const selection = useRef<{
+    readonly start: number;
+    readonly end: number;
+  } | null>(null);
+  const noteSelection = (input: HTMLTextAreaElement): void => {
+    selection.current = {
+      start: input.selectionStart,
+      end: input.selectionEnd,
+    };
+  };
   const mention = activeMentionQuery(text, Math.min(caret, text.length));
   const matches =
     mention === null || candidates.length === 0
@@ -125,7 +142,7 @@ export function useBotMentionCompletion(args: {
       text: written,
       picks: [
         ...spliceMentionPicks(
-          shiftMentionPicks(anchored.text, text, anchored.picks),
+          shiftMentionPicks(anchored.text, text, anchored.picks, null),
           mention.start,
           end,
           inserted.length,
@@ -139,12 +156,14 @@ export function useBotMentionCompletion(args: {
     });
     setText(written);
     const next = before.length + inserted.length;
+    selection.current = { start: next, end: next };
     setCaret(next);
     setHighlight(0);
     placeCaret.current = next;
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): boolean => {
+    noteSelection(event.currentTarget);
     if (!open || event.nativeEvent.isComposing) return false;
     switch (event.key) {
       case "ArrowDown":
@@ -215,13 +234,31 @@ export function useBotMentionCompletion(args: {
       setCaret(next);
       setHighlight(0);
     },
+    onSelection: noteSelection,
+    onInput: (input) => {
+      const next = input.value;
+      const known = selection.current;
+      const caretAfter = input.selectionStart;
+      setAnchored((current) => ({
+        text: next,
+        picks: shiftMentionPicks(
+          current.text,
+          next,
+          current.picks,
+          known === null ? null : { ...known, caretAfter },
+        ),
+      }));
+      noteSelection(input);
+      setCaret(caretAfter);
+      setHighlight(0);
+    },
     // The text sent is the box's trimmed, which starts where the box's
     // leading space ends.
     toWire: (sent) => {
       const offset = anchored.text.indexOf(sent);
       const picks =
         offset === -1
-          ? shiftMentionPicks(anchored.text, sent, anchored.picks)
+          ? shiftMentionPicks(anchored.text, sent, anchored.picks, null)
           : spliceMentionPicks(anchored.picks, 0, offset, 0);
       return mentionsToWire(sent, everyone, picks);
     },
@@ -230,6 +267,7 @@ export function useBotMentionCompletion(args: {
     toDisplay: (sent) => {
       const display = mentionsToDisplay(sent, nameOf);
       setAnchored(display);
+      selection.current = null;
       return display.text;
     },
   };
