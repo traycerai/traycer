@@ -109,6 +109,11 @@ import {
 interface VoiceNavigation {
   /** The bot whose tab was active when the voice moved; `null` for none. */
   readonly fromBotId: string | null;
+  /**
+   * What that tab's rail held then (the anchor of its open thread, `null`
+   * for the channel): only that selection, still showing, is the voice's own.
+   */
+  readonly fromAnchorMessageId: string | null;
 }
 
 /**
@@ -458,7 +463,9 @@ export function VoiceSessionController(): ReactNode {
         const from = selectHostFocusedRef(useTabsStore.getState());
         const fromBotId = from !== null && from.kind === "bot" ? from.id : null;
         voiceNavigationRef.current =
-          fromBotId === target.tuple.botId ? null : { fromBotId };
+          fromBotId === target.tuple.botId
+            ? null
+            : { fromBotId, fromAnchorMessageId: railAnchorOf(fromBotId) };
         openTarget(target, navigateRef.current);
       },
       think: (text, delegationId) => {
@@ -1130,6 +1137,14 @@ export function VoiceSessionController(): ReactNode {
   );
 }
 
+/** The anchor of the thread open in `botId`'s rail; `null` for none. */
+function railAnchorOf(botId: string | null): string | null {
+  if (botId === null) return null;
+  const { byBotId } = useBotOpenThreadStore.getState();
+  const rail = Object.hasOwn(byBotId, botId) ? byBotId[botId] : null;
+  return rail !== null && rail.kind === "thread" ? rail.anchorMessageId : null;
+}
+
 function conversationIdOf(
   channel: { readonly conversationId: string } | null,
 ): string | null {
@@ -1262,8 +1277,14 @@ function VoiceSelectionSync(props: {
     if (activeBotId === null || tab === null) return;
     const navigation = voiceNavigationRef.current;
     if (navigation !== null) {
-      // The tab the voice is leaving is still the active one: not a move.
-      if (activeBotId === navigation.fromBotId) return;
+      // The tab the voice is leaving still shows what it showed when the
+      // voice moved: not a move. Anything else on it is the person's.
+      if (
+        activeBotId === navigation.fromBotId &&
+        (thread?.anchorMessageId ?? null) === navigation.fromAnchorMessageId
+      ) {
+        return;
+      }
       voiceNavigationRef.current = null;
     }
     applySelection(

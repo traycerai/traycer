@@ -1761,3 +1761,31 @@ describe("a replacement asked for before its session started", () => {
     expect(fake.endVoiceSession).toHaveBeenCalledTimes(3);
   });
 });
+
+describe("a rail change in the bot the voice is leaving", () => {
+  it("counts as the person moving while the target's tab has not come up", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    await bringLive();
+    fake.routeAnswer = (body) => fake.routeToBot("bot-2", body);
+    await say("Ask the release bot when the train leaves.", "d1");
+    const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+    // bot-1's tab is still the active one (navigation is mocked); the person
+    // opens a thread in its rail by hand.
+    act(() =>
+      useBotOpenThreadStore.getState().setRail(BOT_ID, {
+        kind: "thread",
+        anchorMessageId: "q1",
+        announcement: true,
+        anchorKind: null,
+        sent: null,
+      }),
+    );
+    await settle();
+
+    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
+      generation + 1,
+    );
+  });
+});
