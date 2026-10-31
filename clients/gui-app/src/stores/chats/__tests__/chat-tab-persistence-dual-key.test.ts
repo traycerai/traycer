@@ -445,7 +445,7 @@ describe("ticket 15 dual-key scroll cache", () => {
     expect(peekSavedChatTabState(reopened) !== null).toBe(false);
 
     // Terminal regardless of who writes DURABLE state after the delete -
-    // the whole point of the tombstone (round-3 finding: a late-arriving
+    // the whole point of the tombstone (a late-arriving
     // sweep promotion used to resurrect a just-deleted chat). A save while
     // this identity is still live legitimately writes the ephemeral
     // tab-key entry (real-time scroll tracking for whatever view is

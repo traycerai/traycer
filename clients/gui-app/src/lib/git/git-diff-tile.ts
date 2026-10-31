@@ -162,7 +162,7 @@ export interface GitImageDiffRouting {
  * git - decision #5), routes to `ImageDiffView`. A rename's CURRENT path
  * alone is not enough (`old.png -> new.txt` must
  * still route for its old side) - route when EITHER the current or previous
- * path is allowlisted, and (re-review P1) OR the previous path into the SVG
+ * path is allowlisted, and OR the previous path into the SVG
  * check too (`old.svg -> new.txt` is text to git on the rename). A
  * conflicted file is exempted from the `isBinary` check entirely (live E2E
  * finding, ticket 06): the host's bulk `listChangedFiles` numstat pipeline

@@ -3108,7 +3108,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
     harness.handle.dispose();
 
     // Exactly one of the two could take the single restoration slot; the
-    // other is the "displaced" loser this round's finding is about.
+    // other is the "displaced" loser this case is about.
     const afterDispose = harness.handle.store.getState();
     expect(afterDispose.failedSendRestoration).not.toBeNull();
     const winnerId = afterDispose.failedSendRestoration?.clientActionId;
