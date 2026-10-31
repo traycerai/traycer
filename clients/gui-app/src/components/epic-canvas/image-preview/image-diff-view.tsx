@@ -141,7 +141,7 @@ function aspectRatioOf(meta: FileAssetMeta | null): number | null {
 
 /**
  * The COMPACT root's own width:height ratio for a CSS `aspect-ratio` style
- * (Codex re-review, #3773298843) - `null` when neither side has a usable
+ * `null` when neither side has a usable
  * ratio (both dimensionless, or still loading), the caller's cue to fall
  * back to a fixed-vh height instead.
  *
@@ -168,8 +168,8 @@ interface CompactRootSizing {
 }
 
 /**
- * The compact root's own height (Codex re-review, #3773015605's follow-up
- * #3773298843): a definite `h-full` needs a definite ancestor height, which
+ * The compact root's own height:
+ * a definite `h-full` needs a definite ancestor height, which
  * a bundle row never provides on its own - but a FIXED px/rem value is a
  * `gui-app/AGENTS.md` fluid-layout violation regardless of what fills it
  * (an upscaled icon in a mostly-empty box on a small image, or an
@@ -181,7 +181,7 @@ interface CompactRootSizing {
  * (never px/rem) height only when NEITHER side has decoded dimensions yet
  * to derive a ratio from.
  *
- * `min-h-24` (sol re-review, #3773298843's follow-up): a panoramic/sprite-
+ * `min-h-24`: a panoramic/sprite-
  * strip ratio (e.g. 4000x100) can derive a root height BELOW each compact
  * `ImagePreview`'s own non-shrinking `h-6` caption, collapsing the
  * `min-h-0 flex-1` image stage to zero beneath it - a valid image renders
@@ -213,16 +213,15 @@ export interface ImageDiffViewProps {
   readonly previousPath: string | null;
   /**
    * `gitImageDiffRevisionKey(file, headSha)` - the SAME value the caller
-   * already uses as this component's own `key=` (remount-on-revision-change,
-   * PR review P1). Threaded into each side's git request too, as
+   * already uses as this component's own `key=` (remount-on-revision-change).
+   * Threaded into each side's git request too, as
    * `coalesceRevision`, because the `key=` remount alone doesn't close the
    * gap when a SEPARATE, still-mounted consumer of the identical (path,
    * stage) at the OLD revision keeps that revision's shared pre-header
    * subscription alive (e.g. the same file open in two panes, one remounts
    * before the other's git-status catches up) - without this, the
    * remounted side's fresh `useFileAsset` call would still coalesce onto
-   * that surviving old-revision subscription and replay its stale header
-   * (sol re-review).
+   * that surviving old-revision subscription and replay its stale header.
    */
   readonly revisionKey: string;
   /** Stage to request the OLD (pre-change) side at; `null` = no old side (Added empty state). */
@@ -658,8 +657,8 @@ function ImageDiffSide(props: {
 }): ReactNode {
   const asset = props.asset;
   // Magic-valid, header-parseable bytes can still fail to DECODE in the
-  // browser (pre-landing review, P1) - `<img onError>` has no other signal
-  // path. `reportDecodeFailure` (re-review P1 follow-up) discards the exact
+  // browser `<img onError>` has no other signal
+  // path. `reportDecodeFailure` discards the exact
   // cache entry AND transitions the hook's own state to `fallback`, so this
   // side renders straight from `asset.status` like every other failure -
   // no local decode-failed flag to track or reset.
