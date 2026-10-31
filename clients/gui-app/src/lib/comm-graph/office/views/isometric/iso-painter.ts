@@ -497,8 +497,8 @@ function quadOf(
  * NONE, and the reason is the same one the three identity painters give: the
  * block IS the tiles.
  *
- * This exists because an axis-aligned block standing in for a diamond was
- * painted over pixels none of its own tiles projects to, so the scene's
+ * Overhang is declared because an axis-aligned block standing in for a diamond
+ * was painted over pixels none of its own tiles projects to, so the scene's
  * inverse tile query - which assumes a block is drawn where its tiles are -
  * found no block for a corner that was plainly on screen, and the painter was
  * made to declare how far past its tiles it reached. A `quad` reaches nowhere
