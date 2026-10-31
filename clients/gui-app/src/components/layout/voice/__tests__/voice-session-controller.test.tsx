@@ -2262,3 +2262,78 @@ describe("a held voice navigation to another bot", () => {
     expect(fake.sendMock).not.toHaveBeenCalled();
   });
 });
+
+describe("two overlapping voice navigations", () => {
+  it("when the older settles last, keep the focus on the newer destination, interrupt nothing, and post only the newer request", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    fake.botThreads.set(BOT_ID, [
+      {
+        threadId: "t-safari",
+        conversationId: CHANNEL_ID,
+        sessionChatId: "session-safari",
+        anchor: {
+          messageId: "q-safari",
+          requestId: "r-safari",
+          senderUserId: "user-1",
+          sentAt: 1_000,
+          resolvedAt: null,
+        },
+        replyCount: 2,
+        lastReplyAt: 2_000,
+        openRequestCount: 0,
+        costUsd: null,
+      },
+    ]);
+    selectBotTab(BOT_ID);
+    await bringLive();
+    // The first request goes to bot-2's channel, the second to bot-1's
+    // Safari thread; each navigation is held until the test lands it.
+    const routes = [
+      (body: string) => fake.routeToBot("bot-2", body),
+      (body: string) => fake.routeToThread(BOT_ID, "t-safari", body),
+    ];
+    fake.routeAnswer = (body) => (routes.shift() ?? fake.routeToFocus)(body);
+    const lands: Array<() => void> = [];
+    fake.navigateOutcome = () =>
+      new Promise<void>((resolve) => {
+        lands.push(resolve);
+      });
+    const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+    await say("Ask the release bot when the train leaves.", "d1");
+    await say("Is the Safari fix in tonight's train?", "d2");
+    expect(lands).toHaveLength(2);
+
+    // The newer navigation lands first, then the superseded older one.
+    await act(async () => {
+      lands[1]?.();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      lands[0]?.();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await settle();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.focus).toMatchObject({
+      botId: BOT_ID,
+      threadId: "t-safari",
+      anchorMessageId: "q-safari",
+    });
+    expect(state.selectionGeneration).toBe(generation);
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    expect(fake.sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        botId: BOT_ID,
+        threadId: "t-safari",
+        text: "Is the Safari fix in tonight's train?",
+      }),
+    );
+    expect(
+      (fake.engines[0]?.appendCommentary.mock.calls ?? []).filter(
+        ([text]) => text === MOVED_ASK_TEXT,
+      ),
+    ).toEqual([]);
+  });
+});

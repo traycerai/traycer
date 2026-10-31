@@ -187,6 +187,8 @@ export function VoiceSessionController(): ReactNode {
    * the selection sync does not read the tab it leaves as a move.
    */
   const voiceNavigationRef = useRef<VoiceNavigation | null>(null);
+  /** Counts voice navigations, so a settling one can tell whether a later one superseded it. */
+  const voiceNavigationSerialRef = useRef(0);
   /** The strip's own actions by voice; set once the session's controls exist. */
   const controlRef = useRef<(verb: ControlVerb) => void>(() => undefined);
   // Whether this deployment offers voice, read once per window before Talk
@@ -488,7 +490,17 @@ export function VoiceSessionController(): ReactNode {
           outcome: "pending",
         };
         voiceNavigationRef.current = navigation;
-        return openTarget(target, navigateRef.current).then((landed) => {
+        voiceNavigationSerialRef.current += 1;
+        const serial = voiceNavigationSerialRef.current;
+        return openTarget(target, navigateRef.current).then((settled) => {
+          // A navigation a later one superseded can still settle as landed
+          // (the tab navigation drops it without rejecting): it counts only
+          // while it is the latest voice navigation and the tab shows what
+          // it opened.
+          const landed =
+            settled &&
+            serial === voiceNavigationSerialRef.current &&
+            showsDestination(target);
           navigation.outcome = landed ? "landed" : "failed";
           return landed;
         });
@@ -1241,6 +1253,20 @@ export function VoiceSessionController(): ReactNode {
       ) : null}
     </>
   );
+}
+
+/**
+ * Whether the app shows a routed destination now: its bot's tab is the
+ * active one, with its rail on the thread named (or on no thread for the
+ * channel).
+ */
+function showsDestination(target: BoundTarget): boolean {
+  const active = selectHostFocusedRef(useTabsStore.getState());
+  if (active === null || active.kind !== "bot") return false;
+  if (active.id !== target.tuple.botId) return false;
+  const expected =
+    target.tuple.threadId === null ? null : target.focus.anchorMessageId;
+  return railAnchorOf(target.tuple.botId) === expected;
 }
 
 /** The anchor of the thread open in `botId`'s rail; `null` for none. */
