@@ -398,6 +398,75 @@ describe("parseKnownHostNotificationPayloadForKind", () => {
   });
 });
 
+describe("a bot's row under host.operation.finished", () => {
+  const FINISHED = "host.operation.finished";
+  const VERDICT = {
+    kind: "bot_thread_verdict",
+    operation: "bot.thread.verdict",
+    title: "Tracy answered",
+    message: "Your question about the release",
+    botId: "bot-1",
+    threadId: "thread-1",
+    replyMessageId: "reply-1",
+  };
+  const CONVERSATION = {
+    kind: "bot_conversation",
+    event: "bot.reply",
+    operation: "bot.reply",
+    title: "Tracy",
+    message: "Something in the thread",
+    botId: "bot-1",
+    conversationId: "conversation-1",
+    threadId: null,
+    messageId: "message-1",
+    authorUserId: null,
+    mention: false,
+    botTitle: "Tracy",
+  };
+
+  it("parses a thread verdict", () => {
+    expect(
+      parseKnownHostNotificationPayloadForKind(FINISHED, VERDICT),
+    ).toMatchObject({
+      kind: "bot_thread_verdict",
+      botId: "bot-1",
+      threadId: "thread-1",
+      replyMessageId: "reply-1",
+    });
+  });
+
+  it("parses a conversation row, keeping a field a newer producer added", () => {
+    expect(
+      parseKnownHostNotificationPayloadForKind(FINISHED, CONVERSATION),
+    ).toMatchObject({
+      kind: "bot_conversation",
+      conversationId: "conversation-1",
+      threadId: null,
+      botTitle: "Tracy",
+    });
+  });
+
+  it("rejects each under another notification kind", () => {
+    expect(
+      parseKnownHostNotificationPayloadForKind("agent.stopped", VERDICT),
+    ).toBeNull();
+    expect(
+      parseKnownHostNotificationPayloadForKind("agent.stopped", CONVERSATION),
+    ).toBeNull();
+  });
+
+  it("leaves an unrelated finished operation with an unknown payload unparsed", () => {
+    expect(
+      parseKnownHostNotificationPayloadForKind(FINISHED, {
+        kind: "test_box",
+        operation: "testbox.provision",
+        title: "Test box ready",
+        message: "Provisioned 1 test box.",
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("isBotConversationAttention", () => {
   const FINISHED = "host.operation.finished";
 

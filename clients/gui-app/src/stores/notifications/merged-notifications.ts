@@ -2370,6 +2370,8 @@ function navigationPayloadFromKnown(
   known: HostNotificationKnownPayload,
 ): NotificationPayload | null {
   if (isRowCompletePayload(known)) return null;
+  // A bot's row opens the bot's tab on it, as its push does.
+  if (isBotRowPayload(known)) return navigationPayloadForBotRow(known);
   switch (known.kind) {
     // Never shown: readers drop these rows.
     case "notification_hooks_removed":
@@ -2426,6 +2428,33 @@ function navigationPayloadFromKnown(
     case "secret_grant_request":
       return navigationPayloadForSecretsRow(known.epicId, known.chatId);
   }
+}
+
+type BotRowPayload = Extract<
+  HostNotificationKnownPayload,
+  { readonly kind: "bot_thread_verdict" | "bot_conversation" }
+>;
+
+function isBotRowPayload(
+  known: HostNotificationKnownPayload,
+): known is BotRowPayload {
+  return (
+    known.kind === "bot_thread_verdict" || known.kind === "bot_conversation"
+  );
+}
+
+function navigationPayloadForBotRow(known: BotRowPayload): NotificationPayload {
+  const verdict = known.kind === "bot_thread_verdict";
+  return {
+    kind: "chat",
+    epicId: known.botId,
+    chatId: verdict ? known.threadId : (known.threadId ?? known.conversationId),
+    bot: {
+      botId: known.botId,
+      threadId: known.threadId,
+      messageId: verdict ? known.replyMessageId : known.messageId,
+    },
+  };
 }
 
 function navigationPayloadForSecretsRow(
