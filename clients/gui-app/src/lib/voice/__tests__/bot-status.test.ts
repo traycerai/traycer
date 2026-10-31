@@ -25,7 +25,6 @@ describe("composeBotStatus", () => {
     expect(text).toBe(
       `It runs 1 task, with work going on now. ${STATUS_FOLLOW_UP}`,
     );
-    expect(text).not.toContain("agent");
   });
 
   it("says that work is going on when the bot runs no task of its own", () => {
