@@ -4,7 +4,7 @@
  * drawn by the real `<ChatMessage>`), its message box and the `bot.conversation
  * .send` mutation run over a host client whose messenger records the request
  * that leaves. Only the virtualised list is replaced by a stub, as in the
- * reply-jump suite. What is asserted is what the host RECEIVES: a first reply
+ * channel-rows suite. What is asserted is what the host RECEIVES: a first reply
  * under a question opens its thread, an option clicked in a thread is the
  * person's next message in it, and a thread hung off the bot's own row is
  * drawn as the bot's, with no request to show. Every state opens on the
