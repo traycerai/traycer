@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ACK_TIMEOUT_MS,
   CHUNK_MAX_CHARS,
@@ -733,6 +733,130 @@ describe("relabel", () => {
       { text: "reply a", delegationId: "d-a" },
       { text: "reply a", delegationId: "d-a" },
     ]);
+  });
+});
+
+describe("withdraw", () => {
+  it("never appends a queued item", () => {
+    scheduler.noteInputTranscript();
+    scheduler.enqueue(item("a", {}));
+    scheduler.enqueue(item("b", {}));
+
+    scheduler.withdraw("a");
+    clock.advance(INPUT_ACTIVE_WINDOW_MS);
+
+    expect(appended).toEqual([{ text: "reply b", delegationId: "d-b" }]);
+  });
+
+  it("never re-appends an item in flight after its confirm window, and runs neither callback", () => {
+    const onDelivered = vi.fn();
+    const onGivenUp = vi.fn();
+    scheduler.enqueue(item("a", { onDelivered, onGivenUp }));
+    expect(appended).toHaveLength(1);
+
+    scheduler.withdraw("a");
+    clock.advance(CONFIRM_WINDOW_MS * (MAX_DELIVERY_ATTEMPTS + 1));
+    // Even the words it was waiting for prove nothing now.
+    scheduler.noteOutputTranscript("Tracy says hello");
+
+    expect(appended).toHaveLength(1);
+    expect(onDelivered).not.toHaveBeenCalled();
+    expect(onGivenUp).not.toHaveBeenCalled();
+    expect(scheduler.pendingCount()).toBe(0);
+  });
+
+  it("lets the next item go once the playback facts are clear, without waiting out the confirm window", () => {
+    scheduler.enqueue(item("a", {}));
+    scheduler.enqueue(item("b", {}));
+    scheduler.noteOutputLevel(true);
+    scheduler.noteOutputTranscript("Working on it.");
+
+    scheduler.withdraw("a");
+    expect(appended).toHaveLength(1);
+
+    scheduler.noteOutputLevel(false);
+    expect(appended).toHaveLength(1);
+    clock.advance(OUTPUT_HANGOVER_MS);
+
+    expect(appended).toEqual([
+      { text: "reply a", delegationId: "d-a" },
+      { text: "reply b", delegationId: "d-b" },
+    ]);
+    expect(OUTPUT_HANGOVER_MS).toBeLessThan(CONFIRM_WINDOW_MS);
+  });
+});
+
+describe("a withdrawn item in flight", () => {
+  it("keeps the slot until its own output has come and gone, and that output confirms nothing", () => {
+    const onDelivered = vi.fn();
+    scheduler.enqueue(item("a", { onDelivered }));
+    scheduler.enqueue(item("b", {}));
+
+    scheduler.withdraw("a");
+    // Facts are clear, but a's words are still to come.
+    expect(scheduler.isClear()).toBe(true);
+    expect(appended).toHaveLength(1);
+
+    scheduler.noteOutputTranscript("Tracy says reply a");
+    clock.advance(OUTPUT_HANGOVER_MS - 1);
+    expect(appended).toHaveLength(1);
+    clock.advance(1);
+
+    expect(appended.map((entry) => entry.text)).toEqual(["reply a", "reply b"]);
+    expect(onDelivered).not.toHaveBeenCalled();
+  });
+
+  it("frees the slot when its confirm window ends with no output", () => {
+    scheduler.enqueue(item("a", {}));
+    scheduler.enqueue(item("b", {}));
+
+    scheduler.withdraw("a");
+    clock.advance(CONFIRM_WINDOW_MS - 1);
+    expect(appended).toHaveLength(1);
+    clock.advance(1);
+
+    expect(appended.map((entry) => entry.text)).toEqual(["reply a", "reply b"]);
+  });
+
+  it("does not come back when the voice is suspended and resumed", () => {
+    const onGivenUp = vi.fn();
+    scheduler.enqueue(item("a", { onGivenUp }));
+    scheduler.withdraw("a");
+
+    scheduler.setReady(false);
+    scheduler.suspendInFlight();
+    scheduler.setReady(true);
+    clock.advance(CONFIRM_WINDOW_MS * (MAX_DELIVERY_ATTEMPTS + 1));
+
+    expect(appended).toEqual([{ text: "reply a", delegationId: "d-a" }]);
+    expect(scheduler.pendingCount()).toBe(0);
+    expect(onGivenUp).not.toHaveBeenCalled();
+  });
+});
+
+describe("a withdrawn item suspended in flight", () => {
+  it("keeps draining through the pause: its late words confirm nothing, and the next item goes only once they are over", () => {
+    const onDelivered = vi.fn();
+    scheduler.enqueue(item("a", {}));
+    scheduler.enqueue(item("b", { onDelivered }));
+    scheduler.withdraw("a");
+
+    scheduler.setReady(false);
+    scheduler.suspendInFlight();
+    scheduler.setReady(true);
+    expect(appended).toHaveLength(1);
+
+    // The engine goes on producing the withdrawn item's words.
+    scheduler.noteOutputTranscript("Tracy says reply a");
+    expect(onDelivered).not.toHaveBeenCalled();
+    expect(appended).toHaveLength(1);
+
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(appended.map((entry) => entry.text)).toEqual(["reply a", "reply b"]);
+    expect(onDelivered).not.toHaveBeenCalled();
+
+    scheduler.noteOutputTranscript("Tracy says reply b");
+    expect(onDelivered).toHaveBeenCalledTimes(1);
   });
 });
 

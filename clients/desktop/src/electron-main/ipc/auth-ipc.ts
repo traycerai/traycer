@@ -35,6 +35,7 @@ import {
   type VoiceSessionIndicator,
   type VoiceSessionMintRequest,
 } from "@traycer-clients/shared/host-client/voice-sessions";
+import { voiceRouteViaHttp } from "@traycer-clients/shared/host-client/voice-router";
 import { voiceLiveWindows } from "../windows/voice-live-windows";
 import {
   decideSecretRequestViaHttp,
@@ -265,6 +266,22 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         bearerToken,
         await iapProxyToken(),
         voiceSessionId,
+      );
+    },
+  );
+
+  // The voice router's model call: the body is the renderer's JSON, relayed
+  // unread; the answer goes back opaque for the renderer's parser.
+  bridge.handleInvoke(
+    RunnerHostInvoke.routeVoiceUtterance,
+    async (_event, bearerToken: unknown, requestBody: unknown) => {
+      assertString(bearerToken, "routeVoiceUtterance.bearerToken");
+      assertString(requestBody, "routeVoiceUtterance.requestBody");
+      return voiceRouteViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        requestBody,
       );
     },
   );

@@ -43,6 +43,7 @@ import {
   type VoiceSessionMintRequest,
   type VoiceTrayAction,
 } from "../voice-sessions";
+import { voiceRouteViaHttp, type VoiceRouteFetchResult } from "../voice-router";
 import {
   decideSecretRequestViaHttp,
   fetchEnvironmentProvidersViaHttp,
@@ -730,6 +731,18 @@ export class MockRunnerHost implements IRunnerHost {
       bearerToken,
       null,
       voiceSessionId,
+    );
+  }
+
+  routeVoiceUtterance(
+    bearerToken: string,
+    requestBody: string,
+  ): Promise<VoiceRouteFetchResult> {
+    return voiceRouteViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      requestBody,
     );
   }
 

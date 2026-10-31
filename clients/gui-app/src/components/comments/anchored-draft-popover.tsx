@@ -1,5 +1,7 @@
 import { FrameCommentPortalContext } from "./frame-comment-surface-context";
 import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
+import { useCanvasSelectionStore } from "@/components/canvas-artifact/canvas-selection-store";
+import { cn } from "@/lib/utils";
 import type { CommentAnchor } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   useContext,
@@ -35,6 +37,10 @@ import {
   CommentComposer,
   type CommentComposerHandle,
 } from "./comment-composer";
+import {
+  AnchoredDraftSendToChatSlot,
+  type AnchoredDraftSendToChatSurface,
+} from "./anchored-draft-send-to-chat";
 
 export interface AnchoredDraftTidInsertion {
   readonly boardPath: string;
@@ -62,6 +68,11 @@ export function AnchoredDraftPopover(props: {
   readonly onTidInserted?: (
     insertion: AnchoredDraftTidInsertion,
   ) => Promise<void>;
+  /**
+   * Lets the box send its element and text to a chat instead of posting a
+   * thread; `null` on a surface that cannot capture elements.
+   */
+  readonly sendToChat: AnchoredDraftSendToChatSurface | null;
 }) {
   const { epicId, artifactId, tileId, hostClient, onCreated, onClosed } = props;
   const stored = useAnchoredDraftStore((state) => state.byEpicId[epicId]);
@@ -97,10 +108,29 @@ export function AnchoredDraftPopover(props: {
     event.preventDefault();
     dismiss();
   });
+  // The Send to chat picker is a Radix menu portalled to the body, so a click
+  // in it lands outside the dialog element. It belongs to the box when its
+  // trigger does: dismissing on that click would both prompt to discard the
+  // draft and break Radix's pointer tracking, which then selects the item
+  // twice.
+  const insideOwnMenu = (target: Node): boolean => {
+    if (!(target instanceof Element)) return false;
+    const triggerId = target
+      .closest("[data-slot=dropdown-menu-content]")
+      ?.getAttribute("aria-labelledby");
+    const trigger =
+      triggerId === null || triggerId === undefined
+        ? null
+        : document.getElementById(triggerId);
+    return (
+      trigger !== null && (floatingRef.current?.contains(trigger) ?? false)
+    );
+  };
   const outside = useEffectEvent((event: PointerEvent) => {
     if (
       !(event.target instanceof Node) ||
       floatingRef.current?.contains(event.target) ||
+      insideOwnMenu(event.target) ||
       event
         .composedPath()
         .some(
@@ -262,6 +292,10 @@ export function AnchoredDraftPopover(props: {
           .updateDraft(epicId, draft.draftId, { submitting: false });
       });
   };
+  // Send to chat screenshots the app window around the element, and this box
+  // sits right beside it. Invisible rather than unmounted for that frame: the
+  // send in flight lives in this box's footer.
+  const capturing = useCanvasSelectionStore((state) => state.capturing);
   if (draft === null) return null;
   let label = draft.artifactType === "canvas" ? "Whole canvas" : "Whole page";
   if (draft.anchor.kind !== "artifact") label = draft.anchor.label;
@@ -271,7 +305,10 @@ export function AnchoredDraftPopover(props: {
       open
       aria-label="New comment"
       data-slot="anchored-draft-popover"
-      className="fixed z-50 m-0 w-[min(90vw,24rem)] max-w-safe-dvw rounded-md border border-border bg-popover p-2 text-popover-foreground shadow-lg outline-none"
+      className={cn(
+        "fixed z-50 m-0 w-[min(90vw,24rem)] max-w-safe-dvw rounded-md border border-border bg-popover p-2 text-popover-foreground shadow-lg outline-none",
+        capturing && "invisible",
+      )}
     >
       <p className="mb-2 truncate text-ui-xs text-muted-foreground">{label}</p>
       {draft.generatedText ? (
@@ -303,6 +340,26 @@ export function AnchoredDraftPopover(props: {
         onCancel={() => {
           dismiss();
         }}
+        leadingActions={
+          <AnchoredDraftSendToChatSlot
+            key={draft.draftId}
+            surface={props.sendToChat}
+            selection={draft.selection}
+            readDraft={() =>
+              composer.current?.getContent() ?? { type: "doc", content: [] }
+            }
+            disabled={pending}
+            onSent={() => {
+              // Sent, not saved: the box closes without the discard prompt,
+              // because the text now lives in the chat composer.
+              useAnchoredDraftStore
+                .getState()
+                .clearDraft(epicId, draft.draftId);
+              onClosed();
+            }}
+            onFailure={(text) => setFailure({ draftId: draft.draftId, text })}
+          />
+        }
         className={undefined}
       />
     </dialog>,

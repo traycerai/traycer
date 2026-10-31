@@ -44,6 +44,7 @@ vi.mock("../canvas-editing-overlay", () => ({
     props: ComponentProps<typeof CanvasSelectionOverlay>,
   ) => (
     <CanvasSelectionOverlay
+      onSelectParent={null}
       scope={props.scope}
       boardPath={props.boardPath}
       registry={props.registry}
@@ -117,6 +118,7 @@ function scope(artifactId: string) {
     epicId: "epic-1",
     artifactId,
     artifactTitle: artifactId,
+    artifactType: "canvas" as const,
     hostId: "host-1",
     viewTabId: "tab-1",
   };

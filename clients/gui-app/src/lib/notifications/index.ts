@@ -1,5 +1,6 @@
 export {
   buildPayloadFromEvent,
+  isBotChatWithoutDevice,
   isNotificationPayloadRoutable,
   parseNotificationPayload,
   routeNotification,

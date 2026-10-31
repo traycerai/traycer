@@ -11,6 +11,7 @@ import {
   type NotificationEvent,
 } from "@traycer/protocol/notifications/notification-entry";
 import { parseKnownHostNotificationPayloadForKind } from "@traycer/protocol/host/notifications/contracts";
+import { botIdSchema } from "@traycer/protocol/host/bot/schemas";
 import {
   existingEpicTabIntentWithNestedFocus,
   navigateToTabIntent,
@@ -34,7 +35,10 @@ import { selectWorktreeCleanupView } from "@/stores/settings/worktree-cleanup-vi
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
-import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
+import {
+  useBotTabLandingStore,
+  type BotTabLanding,
+} from "@/stores/bots/bot-tab-landing-store";
 
 export type NotificationPayloadKind =
   | "session"
@@ -839,7 +843,11 @@ function parkChatTranscriptJump(
     );
 }
 
-/** A chat row: the bot's tab where the row names its bot, else the chat. */
+/**
+ * A chat row: the bot's tab where the chat is a bot's, else the chat. A bot's
+ * chat never opens as an epic: its container id is the bot id, so the epic
+ * route would open a tab named after it.
+ */
 function routeChatNotification(
   navigate: NotificationNavigate,
   payload: ChatNotificationPayload,
@@ -847,12 +855,8 @@ function routeChatNotification(
   context: NotificationHostRouteContext,
 ): boolean {
   const { originHostId, effectiveHostId } = context;
-  if (
-    payload.bot !== undefined &&
-    routeBotNotification(navigate, payload.bot, effectiveHostId)
-  ) {
-    return true;
-  }
+  const bot = botTargetOf(payload);
+  if (bot !== null) return routeBotNotification(navigate, bot, effectiveHostId);
   return routeEpicChatNotification(navigate, payload, receivedAt, {
     targetHostId: payload.hostId ?? originHostId,
     effectiveHostId,
@@ -860,30 +864,91 @@ function routeChatNotification(
   });
 }
 
+/** A bot's tab to open, and where to land it. */
+interface BotOpenTarget {
+  readonly botId: string;
+  readonly landing: BotTabLanding;
+}
+
 /**
- * Opens the bot's tab, landed on the thread beside its channel (or on the
- * channel) once the tab can: the tab already open keeps its host, and a new
- * one is bound to the window's. `false`, with nothing opened, while the
- * window has no host to open it on: the chat route then opens the row as a
- * chat.
+ * The bot a chat row opens: the one the row names, landed on its thread or
+ * channel, else the bot whose container the chat lives in (a chat search hit,
+ * a session link), landed on that chat, which the tab resolves to its channel,
+ * a thread or a session. `null` for an epic's chat.
+ */
+function botTargetOf(payload: ChatNotificationPayload): BotOpenTarget | null {
+  const { bot } = payload;
+  if (bot !== undefined) {
+    return {
+      botId: bot.botId,
+      landing: {
+        kind: "thread",
+        threadId: bot.threadId,
+        messageId: bot.messageId,
+      },
+    };
+  }
+  if (!botIdSchema.safeParse(payload.epicId).success) return null;
+  if (payload.chatId === undefined) {
+    return {
+      botId: payload.epicId,
+      landing: { kind: "thread", threadId: null, messageId: null },
+    };
+  }
+  return {
+    botId: payload.epicId,
+    landing: {
+      kind: "chat",
+      chatId: payload.chatId,
+      messageId: payload.messageId ?? null,
+    },
+  };
+}
+
+/** The host a bot's tab opens on: the open tab's, else the window's. */
+function botTabHostId(
+  botId: string,
+  effectiveHostId: string | null,
+): string | null {
+  return (
+    lookupBotTab(useBotTabsStore.getState().tabs, botId)?.hostId ??
+    effectiveHostId
+  );
+}
+
+/**
+ * Whether routing `payload` would open nothing because it is a bot's chat and
+ * the window has no device to open the bot's tab on: no tab of the bot is
+ * open and there is no effective host.
+ */
+export function isBotChatWithoutDevice(
+  payload: NotificationPayload,
+  effectiveHostId: string | null,
+): boolean {
+  if (payload.kind !== "chat") return false;
+  const bot = botTargetOf(payload);
+  return bot !== null && botTabHostId(bot.botId, effectiveHostId) === null;
+}
+
+/**
+ * Opens the bot's tab, landed where `target` asks once the tab can: the tab
+ * already open keeps its host, and a new one is bound to the window's.
+ * `false`, with nothing opened, while the window has no host to open it on.
  */
 function routeBotNotification(
   navigate: NotificationNavigate,
-  target: BotNotificationTarget,
+  target: BotOpenTarget,
   effectiveHostId: string | null,
 ): boolean {
   const tabs = useBotTabsStore.getState();
   const existing = lookupBotTab(tabs.tabs, target.botId);
-  const hostId = existing?.hostId ?? effectiveHostId;
+  const hostId = botTabHostId(target.botId, effectiveHostId);
   if (hostId === null) return false;
   // The tab names itself from the bot once it reads it.
   if (existing === null) {
     tabs.openBotTab({ botId: target.botId, hostId, title: "Bot" });
   }
-  useBotTabLandingStore.getState().request(target.botId, {
-    threadId: target.threadId,
-    messageId: target.messageId,
-  });
+  useBotTabLandingStore.getState().request(target.botId, target.landing);
   navigateToTabIntent(navigate, botTabIntent(target.botId), undefined);
   return true;
 }
