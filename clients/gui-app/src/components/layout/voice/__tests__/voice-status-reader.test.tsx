@@ -156,6 +156,7 @@ function ownerAsking(): VoiceQueueOwner {
     noteAnnouncement: () => undefined,
     noteStopped: () => undefined,
     forgetStopped: () => undefined,
+    dropStopped: () => undefined,
   };
 }
 
