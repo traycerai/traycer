@@ -1340,13 +1340,13 @@ describe("secret versions, Undo, Destroy, rotation and consent shapes, field for
     ).toBe(true);
   });
 
-  // `POST .../secrets/:secretId/consent` appends a `SecretConsentAcceptance`
-  // row for the disclosure version shown, the scope and the authenticated
-  // actor; the create route calls it for the consent checkbox, so no secret is
-  // created with a consent that has no evidence. `disclosure` is a closed enum
+  // `POST .../secrets/:secretId/consent` records the acceptance for the
+  // disclosure version shown, the scope and the authenticated actor; the
+  // create route calls it for the consent checkbox, so no secret is created
+  // with a consent that has no evidence. `disclosure` is a closed enum
   // (`plaintext_gateway`), `disclosureVersion` is the version of the disclosure
   // text that was shown, and `scope` is `secret` or `environment` (what the
-  // acceptance covers). The actor is a server column, never a request field.
+  // acceptance covers). The actor is server-side, never a request field.
   it("environment.secrets.consent: disclosure, version shown and scope, and no actor on the request", () => {
     const request = {
       secretId: "s1",

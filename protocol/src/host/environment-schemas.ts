@@ -1269,10 +1269,10 @@ export type EnvironmentSecretsRotationResponse = z.infer<
 
 /**
  * `environment.secrets.consent@1.0` (`POST .../secrets/:secretId/consent`):
- * "appends a `SecretConsentAcceptance` row for the disclosure version shown,
- * the scope and the authenticated actor". The actor is the caller, never a
- * field. `disclosure` is that row's closed enum, open on this wire with
- * `plaintext_gateway` known.
+ * records the acceptance for the disclosure version shown, the scope and the
+ * authenticated actor. The actor is the caller, never a field. `disclosure`
+ * is a closed enum on the host, open on this wire with `plaintext_gateway`
+ * known.
  */
 export const SECRET_CONSENT_DISCLOSURES = ["plaintext_gateway"] as const;
 export const environmentSecretsConsentRequestSchema = lazySchema(() =>
