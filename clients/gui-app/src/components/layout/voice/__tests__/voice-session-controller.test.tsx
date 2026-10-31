@@ -114,6 +114,45 @@ const fake = vi.hoisted(() => {
   function slot<T>(): { value: T | null } {
     return { value: null };
   }
+  // Each bot's channel as `bot.conversation.list` answers it (bot-1's is
+  // chan-1, bot-2's chan-bot-2); `answer(botId, false)` leaves a bot's list
+  // unanswered until a test answers it, re-rendering its readers.
+  const answeredLists = new Set(["bot-1", "bot-2"]);
+  const listAnswers = new Map(
+    ["bot-1", "bot-2"].map((botId) => [
+      botId,
+      {
+        data: {
+          conversations: [
+            {
+              conversationId: botId === "bot-1" ? "chan-1" : `chan-${botId}`,
+              botId,
+              title: null,
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+        },
+      },
+    ]),
+  );
+  const unanswered = { data: undefined };
+  const listListeners = new Set<() => void>();
+  const conversationLists = {
+    get: (botId: string) =>
+      answeredLists.has(botId)
+        ? (listAnswers.get(botId) ?? unanswered)
+        : unanswered,
+    subscribe: (listener: () => void): (() => void) => {
+      listListeners.add(listener);
+      return () => listListeners.delete(listener);
+    },
+    answer: (botId: string, answered: boolean): void => {
+      if (answered) answeredLists.add(botId);
+      else answeredLists.delete(botId);
+      for (const listener of listListeners) listener();
+    },
+  };
   // The bot list as `bot.list` answers it, read by a real query over the
   // test's cache, so the change subscription's invalidation refetches it.
   const mainBotList: BotListResponse = {
@@ -135,6 +174,24 @@ const fake = vi.hoisted(() => {
         directive: null,
         replyMode: "direct",
         appConversationChatId: "chan-1",
+      },
+      {
+        botId: "bot-2",
+        environmentId: "env-1",
+        createdByUserId: "user-1",
+        title: "Release bot",
+        harness: "claude",
+        model: "opus",
+        effort: null,
+        profile: null,
+        trunkChatId: "trunk-bot-2",
+        boundHostId: "host-a",
+        hostEpoch: 0,
+        createdAt: 2_000,
+        archivedAt: null,
+        directive: null,
+        replyMode: "direct",
+        appConversationChatId: "chan-bot-2",
       },
     ],
     mainBotIds: { "env-1": "bot-1" },
@@ -194,6 +251,22 @@ const fake = vi.hoisted(() => {
     routeToFocus: (body: string): unknown => routePost(null, body),
     /** A router answer for one case, in place of {@link routeToFocus}; reset for every case. */
     routeAnswer: null as ((body: string) => unknown) | null,
+    /**
+     * What the router's navigate resolves with for the next tab navigation:
+     * a settled navigation by default; a test makes it fail.
+     */
+    navigateOutcome: (): Promise<void> => Promise.resolve(),
+    navigate: vi.fn((_options: unknown): Promise<void> =>
+      fake.navigateOutcome(),
+    ),
+    /**
+     * How the tab navigation takes the voice's next activation: `"switches"`
+     * (the tab comes to the front at once and the route navigation runs; a
+     * rejected one puts the previous tab back), `"queued"` (accepted before
+     * the navigation is ready: nothing moves yet) or `"refused"`.
+     */
+    tabActivation: "switches",
+    conversationLists,
     /** The answer that posts the whole utterance to bot `botId`'s channel. */
     routeToBot: (botId: string, body: string): unknown =>
       routePost(botId, body),
@@ -229,30 +302,28 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   }),
   useHostClient: () => null,
 }));
-// The router's directory: the bots these cases talk to, both the person's
-// own, read with the focus as the store holds it.
-vi.mock("@/hooks/voice/use-voice-directory", async () => {
-  const { useVoiceSessionStore: voiceStore } =
-    await import("@/stores/voice/voice-session-store");
-  const directory = () => ({
-    bots: ["bot-1", "bot-2"].map((botId) => ({
-      botId,
-      title: botId === "bot-1" ? "CI bot" : "Release bot",
-      environmentId: "env-1",
-      environmentLabel: "Personal",
-      environmentKind: "personal" as const,
-      hostId: "host-a",
-    })),
-    threads: [],
-    queue: [],
-    focus: voiceStore.getState().focus,
-  });
-  const handle = {
-    current: directory,
-    refresh: () => Promise.resolve(directory()),
-  };
-  return { useVoiceDirectory: () => handle };
-});
+// The router's directory is the real one, over the bot list above and the
+// person's one environment as `environment.list` answers it.
+const ENVIRONMENT_LIST = {
+  data: {
+    environments: [
+      {
+        environmentId: "env-1",
+        ownerKind: "user" as const,
+        ownerId: "user-1",
+        roomId: "room-env-1",
+        label: "Personal",
+        effectiveRole: "owner" as const,
+        kind: "personal" as const,
+        hostCount: 1,
+        providerHandle: null,
+      },
+    ],
+  },
+};
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ENVIRONMENT_LIST,
+}));
 
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-a",
@@ -310,29 +381,15 @@ vi.mock(
     usePersonalEnvironment: () => fake.personalEnvironment.value,
   }),
 );
-/** Each bot's channel, as `bot.conversation.list` answers it: bot-1's is `chan-1`. */
-const CONVERSATION_LISTS = new Map(
-  ["bot-1", "bot-2"].map((botId) => [
-    botId,
-    {
-      data: {
-        conversations: [
-          {
-            conversationId: botId === "bot-1" ? "chan-1" : `chan-${botId}`,
-            botId,
-            title: null,
-            createdAt: 1,
-            updatedAt: 1,
-          },
-        ],
-      },
-    },
-  ]),
-);
-vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
-  useBotConversationListQuery: (_client: unknown, botId: string) =>
-    CONVERSATION_LISTS.get(botId) ?? { data: undefined },
-}));
+vi.mock("@/hooks/bots/use-bot-conversation-list-query", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    useBotConversationListQuery: (_client: unknown, botId: string) =>
+      useSyncExternalStore(fake.conversationLists.subscribe, () =>
+        fake.conversationLists.get(botId),
+      ),
+  };
+});
 vi.mock("@/hooks/bots/use-bot-thread-list-query", async () => {
   const { useSyncExternalStore } = await import("react");
   return {
@@ -384,9 +441,46 @@ vi.mock("@/lib/voice/gpt-live-engine", () => ({
 vi.mock("@/lib/voice/audio-level", () => ({
   watchAudioLevel: () => ({ stop: () => undefined }),
 }));
+// The tab navigation's activation as the real one behaves for the voice: it
+// brings the bot's tab to the front at once and runs the route navigation
+// (whose outcome `navigateOutcome` decides), putting the previous tab back
+// when that navigation fails; or it queues the activation, or refuses it.
+vi.mock("@/lib/tab-navigation", async (importOriginal) => {
+  const { useTabsStore: tabs } = await import("@/stores/tabs/store");
+  return {
+    ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
+    activateTabIntent: (
+      navigate: (options: object) => Promise<void>,
+      intent: { readonly kind: string; readonly botId?: string },
+      options: { readonly onRejected?: (error: Error) => void } | undefined,
+    ): boolean => {
+      if (fake.tabActivation === "refused") {
+        options?.onRejected?.(new Error("refused"));
+        return false;
+      }
+      if (fake.tabActivation === "queued") return true;
+      const before = tabs.getState();
+      const botId = intent.botId ?? "";
+      tabs.setState({
+        items: [
+          ...before.items.filter((item) => item.id !== `item-${botId}`),
+          { kind: "tab", id: `item-${botId}`, ref: { kind: "bot", id: botId } },
+        ],
+        activeItemId: `item-${botId}`,
+      });
+      void navigate({}).catch(() => {
+        tabs.setState({
+          items: before.items,
+          activeItemId: before.activeItemId,
+        });
+      });
+      return true;
+    },
+  };
+});
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
-  useNavigate: () => vi.fn(),
+  useNavigate: () => fake.navigate,
 }));
 
 const initialVoice = useVoiceSessionStore.getState();
@@ -567,6 +661,11 @@ beforeEach(() => {
     Promise.resolve({ kind: "ok", closedAt: 1 }),
   );
   fake.routeAnswer = null;
+  fake.navigateOutcome = () => Promise.resolve();
+  fake.navigate.mockClear();
+  fake.conversationLists.answer("bot-1", true);
+  fake.conversationLists.answer("bot-2", true);
+  fake.tabActivation = "switches";
   fake.sendMock.mockReset();
   fake.sendMock.mockImplementation(() => fake.send.promise);
   fake.markRead.mockReset();
@@ -862,18 +961,19 @@ describe("an interruption before the session's first delegation", () => {
 });
 
 describe("a routed post to another bot", () => {
-  it("opens that bot, sends only once its channel is known and never on the previous bot's, and does not read the tab it left as the person moving", async () => {
+  it("opens that bot, sends only once its channel is known and never on the previous bot's, and the voice's own tab change is no move", async () => {
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
     selectBotTab(BOT_ID);
     await bringLive();
     expect(useVoiceSessionStore.getState().focus).toEqual(CHANNEL_FOCUS);
     fake.routeAnswer = (body) => fake.routeToBot("bot-2", body);
+    act(() => fake.conversationLists.answer("bot-2", false));
     const generation = useVoiceSessionStore.getState().selectionGeneration;
 
     await say("Ask the release bot when the train leaves.", "d1");
 
-    // The voice moved to bot-2 itself; bot-1's tab is still the active one
-    // here (navigation is mocked), which is the tab it left, not a move.
+    // The voice moved to bot-2 and its tab came up: the focus is bot-2's
+    // channel, not a move, and nothing is sent while its channel is unknown.
     expect(useVoiceSessionStore.getState().focus).toEqual({
       ...CHANNEL_FOCUS,
       botId: "bot-2",
@@ -881,6 +981,11 @@ describe("a routed post to another bot", () => {
     expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
       generation,
     );
+    expect(fake.sendMock).not.toHaveBeenCalled();
+
+    act(() => fake.conversationLists.answer("bot-2", true));
+    await settle();
+
     expect(fake.sendMock).toHaveBeenCalledTimes(1);
     expect(fake.sendMock).toHaveBeenCalledWith({
       botId: "bot-2",
@@ -892,22 +997,45 @@ describe("a routed post to another bot", () => {
       supersedes: null,
       answer: null,
     });
-
-    // The tab then comes up: the voice already moved there, so it is not a move.
-    selectBotTab("bot-2");
-    await settle();
-
     expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
-    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
-      generation,
-    );
     expect(
       (fake.engines[0]?.appendCommentary.mock.calls ?? []).filter(
         ([text]) => text === MOVED_ASK_TEXT,
       ),
     ).toEqual([]);
-    expect(fake.sendMock).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    ["refused by the tab navigation", "refused" as const],
+    ["undone when its route navigation fails", "switches" as const],
+  ])(
+    "whose move is %s keeps the focus and the generation, posts nothing, and says the move did not happen",
+    async (_name, activation) => {
+      addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+      selectBotTab(BOT_ID);
+      await bringLive();
+      fake.routeAnswer = (body) => fake.routeToBot("bot-2", body);
+      fake.tabActivation = activation;
+      fake.navigateOutcome = () => Promise.reject(new Error("blocked"));
+      const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+      await say("Ask the release bot when the train leaves.", "d1");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+
+      const state = useVoiceSessionStore.getState();
+      expect(state.focus).toEqual(CHANNEL_FOCUS);
+      expect(state.selectionGeneration).toBe(generation);
+      expect(state.segments).toEqual([]);
+      expect(fake.sendMock).not.toHaveBeenCalled();
+      expect(
+        (fake.engines[0]?.appendCommentary.mock.calls ?? []).some(([text]) =>
+          text.includes("did not happen"),
+        ),
+      ).toBe(true);
+    },
+  );
 });
 
 describe("a fast answer in a cold existing thread", () => {
@@ -1768,11 +1896,13 @@ describe("a rail change in the bot the voice is leaving", () => {
     selectBotTab(BOT_ID);
     await bringLive();
     fake.routeAnswer = (body) => fake.routeToBot("bot-2", body);
+    // The activation is queued (the tab navigation is not ready yet): bot-1's
+    // tab stays the active one while the voice's move is out.
+    fake.tabActivation = "queued";
     await say("Ask the release bot when the train leaves.", "d1");
     const generation = useVoiceSessionStore.getState().selectionGeneration;
 
-    // bot-1's tab is still the active one (navigation is mocked); the person
-    // opens a thread in its rail by hand.
+    // The person opens a thread in bot-1's rail by hand.
     act(() =>
       useBotOpenThreadStore.getState().setRail(BOT_ID, {
         kind: "thread",
