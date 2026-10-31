@@ -2483,6 +2483,31 @@ describe("<BotTabSurface /> views", () => {
     expect(sidebar.getAttribute("data-threads-shown")).toBe("false");
   });
 
+  it.each([
+    ["the view's back control", "stub-threads-back"],
+    ["the column's row for this channel", "stub-sidebar-own-channel"],
+  ])(
+    "leaves Threads for the channel, not for a session open before it, through %s",
+    async (_way, testId) => {
+      const user = userEvent.setup();
+      render(surface());
+      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+      expect(screen.getByTestId("stub-session")).toBeTruthy();
+      await user.click(screen.getByTestId("stub-sidebar-threads"));
+
+      await user.click(screen.getByTestId(testId));
+
+      expect(screen.queryByTestId("stub-threads")).toBeNull();
+      expect(screen.queryByTestId("stub-session")).toBeNull();
+      expect(screen.getByTestId("stub-channel")).toBeTruthy();
+      expect(
+        screen
+          .getByTestId("bot-tab-view-messages")
+          .getAttribute("aria-selected"),
+      ).toBe("true");
+    },
+  );
+
   it("goes back from Threads to the channel where it was through the view's own back control, which names the tab's channel", async () => {
     const user = userEvent.setup();
     render(surface());

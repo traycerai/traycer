@@ -728,7 +728,7 @@ function BotTabContent(props: {
     onRetry,
     view,
     onViewChange,
-    threadsView,
+    threadsView: tabThreadsView,
     mainBotIds,
   } = props;
   const client = useTabHostClient();
@@ -810,6 +810,18 @@ function BotTabContent(props: {
     showThread,
   } = useBotTabSession({ threads, onViewChange, setOpenThread });
   useSpendTabLanding({ botId, threads, landChannel, showThread });
+  // Leaving Threads for the tab's channel shows the channel: a session open
+  // when Threads was chosen is not where either way back says it goes.
+  const threadsView = useMemo(
+    (): BotThreadsViewState => ({
+      ...tabThreadsView,
+      onLeave: () => {
+        closeSession();
+        tabThreadsView.onLeave();
+      },
+    }),
+    [closeSession, tabThreadsView],
+  );
   const openActivity = useCallback(() => changeView("activity"), [changeView]);
   const activitySummary = useBotActivitySummary({
     botId,
