@@ -225,6 +225,7 @@ function Harness(props: {
         <EpicSessionGate fallback={null}>
           {showA ? (
             <CommentComposer
+              leadingActions={null}
               epicId={epicId}
               hostClient={null}
               initialContent={null}
@@ -241,6 +242,7 @@ function Harness(props: {
           ) : null}
           {showB ? (
             <CommentComposer
+              leadingActions={null}
               epicId={epicId}
               hostClient={null}
               initialContent={null}
@@ -617,6 +619,7 @@ function EditHarness(props: {
       <TestEpicSessionTab epicId={epicId} tabId={epicId}>
         <EpicSessionGate fallback={null}>
           <CommentComposer
+            leadingActions={null}
             epicId={epicId}
             hostClient={null}
             initialContent={initialContent}

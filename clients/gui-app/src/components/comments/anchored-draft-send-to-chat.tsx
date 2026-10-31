@@ -5,6 +5,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ChatTargetMenu } from "@/components/epic-canvas/renderers/chat-target-menu/chat-target-menu";
+import { useChatTargetMenuClosed } from "@/components/epic-canvas/renderers/chat-target-menu/use-chat-target-menu-closed";
 import { useRevealChatInTab } from "@/components/epic-canvas/renderers/use-reveal-chat-in-tab";
 import { appendCommentTextToDraft } from "@/components/chat/quote/append-comment-text-to-draft";
 import type { CanvasAnnotationScope } from "@/components/canvas-artifact/canvas-annotation-action";
@@ -70,6 +71,7 @@ function AnchoredDraftSendToChat(props: AnchoredDraftSendToChatProps) {
     sha256: props.selection.servedSha256,
   });
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuClosed = useChatTargetMenuClosed(setMenuOpen);
   const send = useMutation({
     mutationKey: canvasMutationKeys.attach(scope.artifactId),
     mutationFn: async (chatId: string) => {
@@ -81,14 +83,16 @@ function AnchoredDraftSendToChat(props: AnchoredDraftSendToChatProps) {
         props.selection,
         source.data,
       );
-      const frame = frameFor(props.selection.boardPath);
       await captureAndAttachCanvasAnnotation({
         chatId,
         record,
-        captureRect:
-          frame === null
+        captureRect: () => {
+          const frame = frameFor(props.selection.boardPath);
+          return frame === null
             ? null
-            : canvasSelectionCaptureRect(frame, props.selection.element.box),
+            : canvasSelectionCaptureRect(frame, props.selection.element.box);
+        },
+        awaitPickerClosed: menuClosed.awaitClosed,
       });
       appendCommentTextToDraft(chatId, text);
       return chatId;
@@ -109,7 +113,8 @@ function AnchoredDraftSendToChat(props: AnchoredDraftSendToChatProps) {
       onSelectChat={(chatId) => send.mutate(chatId)}
       onSelectNewChat={null}
       open={menuOpen}
-      onOpenChange={setMenuOpen}
+      onOpenChange={menuClosed.onOpenChange}
+      onClosed={menuClosed.onClosed}
       trigger={
         <Button
           type="button"
