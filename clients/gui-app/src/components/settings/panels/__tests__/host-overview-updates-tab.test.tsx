@@ -1,9 +1,7 @@
 // T3 — Overview ▸ Updates tab: the single-row auto-update group, its work
 // while the host cannot be reached, the unreachable/not-manageable list
 // fallbacks, a refused install's two surfaces, and Check now (on the version
-// list's heading) sharing the answer card's own check. See the `t3-updates-tab` ticket and the
-// `host-overview-tabs` core-flows artifact ("Updates", "When the host can't
-// answer", "What changes from today") for the behaviour each test pins.
+// list's heading) sharing the answer card's own check.
 //
 // Same mocking boundary as the sibling Overview suites: `useHostScope` and
 // `@/lib/host`'s `useHostBinding` are mocked rather than standing up a host

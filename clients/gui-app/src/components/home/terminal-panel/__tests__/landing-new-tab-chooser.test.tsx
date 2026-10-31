@@ -71,7 +71,7 @@ describe("<LandingNewTabChooser />", () => {
     cleanup();
   });
 
-  // Against the core flows' Copy table: this is the first thing the panel says
+  // This is the first thing the panel says
   // about there being two kinds of tab, so a paraphrase here is a product
   // change, not a wording tweak. The two card blurbs are still verbatim; the
   // hint line's SHAPE is the spec and its chords are read from the bindings,

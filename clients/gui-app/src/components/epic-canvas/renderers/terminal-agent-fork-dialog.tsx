@@ -166,7 +166,7 @@ function resolveDialogAdmission(input: {
 
 /**
  * `"fork"` is today's plain sibling-session fork. `"continue"` is the T5
- * intent flag riding the SAME dialog (tech plan UX package): title/CTA copy
+ * intent flag riding the SAME dialog: title/CTA copy
  * change and the profile strip gets emphasis + bulk-admission row disabling,
  * but the submit path, workspace handling, and every other mechanism are
  * identical - this is a presentation flag, not a second dialog.
@@ -441,8 +441,8 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     capabilityLockExemptProfileId,
   });
 
-  // Live default title (tech plan UX package: "profile-changed default
-  // title"): reactive to the CURRENT picker selection, not frozen at
+  // Live default title (the profile-changed default
+  // title): reactive to the CURRENT picker selection, not frozen at
   // open-time, so switching profiles in the strip updates the title for as
   // long as the user hasn't typed their own.
   const defaultTitle =
@@ -582,7 +582,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
     );
     const toolbar = toolbarStore.getState();
     const submittedProfileId = toolbar.selection.profileId;
-    // Claude cross-profile disclosure moment (tech plan UX package): the
+    // Claude cross-profile disclosure moment: the
     // forked session's TodoWrite/rewind state is provider-account-scoped and
     // does not follow a profile switch. Gated to Claude - the only harness
     // this feature admits cross-profile forks for at all.
@@ -628,7 +628,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
             harness: target.sourceAgent.harnessId,
           });
           // No trivial persisted field exists to drive a tile-side one-time
-          // notice (tech plan UX package's documented fallback), so the
+          // notice, so the
           // cross-profile lossiness disclosure fires as a toast here instead.
           if (crossProfileClaudeFork) {
             toast(
@@ -928,7 +928,7 @@ function terminalForkSettingsSeed(agent: ForkableTuiAgent): ChatRunSettings {
 }
 
 /**
- * Tech plan UX package's "profile-changed default title":
+ * The "profile-changed default title":
  * `Continue · {profileLabel} - {sourceTitle}` once the picker's live
  * selection differs from the source's own profile, else the plain
  * `Fork - {sourceTitle}`. `profileLabel === null` is the caller's signal for

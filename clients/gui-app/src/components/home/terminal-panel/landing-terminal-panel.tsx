@@ -147,8 +147,8 @@ import {
 
 /**
  * The one "the device has not answered yet" string, shared by the body's status
- * line, the terminal create gate, and the chooser's cards. The core flows call
- * for the SAME message in all three, and four separate literals is four chances
+ * line, the terminal create gate, and the chooser's cards. All three show
+ * the SAME message, and four separate literals is four chances
  * for one to drift.
  */
 const LANDING_PANEL_CONNECTING_MESSAGE = "Connecting to the selected host…";
@@ -2706,7 +2706,7 @@ function LandingTerminalPanelBody(props: {
   const activeTab =
     props.tabs.find((tab) => tab.instanceId === props.activeInstanceId) ?? null;
   // The chooser outranks the connecting status line, and deliberately: the
-  // core flows want a device that is still connecting to show the chooser with
+  // device that is still connecting shows the chooser with
   // DISABLED cards carrying that same message, not a blank body that never
   // explains what the panel is waiting to offer.
   //

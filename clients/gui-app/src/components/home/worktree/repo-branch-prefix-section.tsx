@@ -28,8 +28,8 @@ const SET_REPO_BRANCH_PREFIX_METHOD = "worktree.setRepoBranchPrefix";
 
 /**
  * The "Branch prefix" section of the Environment dialog - the layered-setting
- * redesign of the old unlabeled-switch card (core-flows/worktree-environment-
- * layered-settings). Users configure a PREFIX only; the full worktree branch
+ * redesign of the old unlabeled-switch card.
+ * Users configure a PREFIX only; the full worktree branch
  * is always `prefix + generated name`, shown as a compact preview (prefix
  * emphasized, tail muted). Always targets `workspacePath` - the exact source
  * checkout shown in the picker - never a staged/existing worktree's own file

@@ -152,8 +152,8 @@ const RESET_TIMESTAMP_PLAUSIBLE_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
 
 /**
  * A window's label from its real duration, not a hardcoded "5-hour"/"Weekly"
- * (Core Flows: "if the provider tells us the window is 6 hours, that's what's
- * shown"). Every `ProviderRateLimitWindow` now carries `durationMinutes`, so
+ * - a 6-hour window says 6 hours.
+ * Every `ProviderRateLimitWindow` now carries `durationMinutes`, so
  * Codex's primary/secondary, Claude's fixed buckets, and Codex's per-model
  * `extraWindows` all label from the same formatter. `10080` (a 7-day window)
  * reads as "Weekly" rather than "7d" since that's the product's own wording;
@@ -394,7 +394,7 @@ function ProviderWindowRow({
 
 /**
  * A neutral labeled number (no bar, no severity color) - for values with no
- * computable "% of limit" (Core Flows: "Windows without a percentage"), e.g.
+ * computable "% of limit", e.g.
  * OpenRouter's spend/credits and Kilo Code's balance. Renders nothing when the
  * provider didn't report the value.
  */
@@ -535,8 +535,8 @@ function CodexRateLimitViewContent({
     </div>
   );
 
-  // Each per-model sub-limit becomes its own labeled window row (Core Flows:
-  // "no separate UI concept needed"), named by its `limitName`.
+  // Each per-model sub-limit becomes its own labeled window row, with no
+  // separate UI concept, named by its `limitName`.
   const perModelLimits: ReactNode =
     !overview && data.extraWindows.length > 0 ? (
       <div className="flex flex-col gap-3">
@@ -1060,7 +1060,7 @@ function OpenRouterCreditBar({
  * number the user cares about), and one with none at all - a pay-as-you-go
  * account that only ever reports what it has spent. In the second case there is
  * no denominator, so no bar and no fabricated "0 of unknown" row; spend stands
- * alone (Core Flows: "Windows without a percentage"). No plan chip either -
+ * alone. No plan chip either -
  * Hugging Face reports no tier on this endpoint.
  */
 export function HuggingFaceRateLimitView({
@@ -1190,7 +1190,7 @@ function HuggingFaceCreditBar({
 /**
  * Kilo Code's usage detail: a credit balance and Kilo Pass state, both as plain
  * neutral rows. No computable percentage exists for Kilo Code, so it never
- * renders a bar (Core Flows: "Windows without a percentage").
+ * renders a bar.
  */
 export function KiloCodeRateLimitView({
   data,
@@ -1737,7 +1737,7 @@ export function ChatCredentialNotice({
 /**
  * The failed-refresh / stale line the Settings usage card shows while it's
  * displaying a retained last-known-good reading after the latest poll failed
- * (Core Flows degraded state): the ORIGINAL `lastGoodAt` as "Updated Xm ago"
+ * (the degraded state): the ORIGINAL `lastGoodAt` as "Updated Xm ago"
  * (never the failed attempt's time, so it can't read as fresh) followed by a
  * note - the specific transient reason's plain-language copy when the envelope
  * itself is why (`degradedReason` non-null), otherwise the generic "refresh
@@ -1772,8 +1772,8 @@ function StaleUsageRefreshNote({
  * `available: true` arm (`data.provider` is now five-way, not the old binary
  * codex/claude split), so a new provider arm added to the wire union fails the
  * build here until it gets a view. Exported so the header popover reuses the
- * exact same per-provider bodies the Settings card shows (Core Flows: "both
- * read the same underlying provider usage data, so they never disagree").
+ * exact same per-provider bodies the Settings card shows: both
+ * read the same underlying provider usage data, so they never disagree.
  */
 export function ProviderRateLimitDetail({
   data,

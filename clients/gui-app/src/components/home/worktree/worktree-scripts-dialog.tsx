@@ -326,7 +326,7 @@ function WorktreeScriptsDialogBody(props: {
 
 /**
  * Dialog-wide description naming both concerns the "Worktree environment"
- * dialog hierarchy covers (core-flows/worktree-environment-layered-settings)
+ * dialog hierarchy covers
  * - Branch naming has no section of its own to describe itself in for
  * non-Git folders, since it doesn't render at all there.
  */
@@ -472,8 +472,7 @@ function RepositoryDefaultsSlot(props: {
  * "Single-picker opt-in draft replacement" offer: shown after a repository
  * branch-prefix save when this picker has a staged generated (`type: "new"`)
  * branch name to replace. Never fires automatically - the user opts in.
- * Names the OLD staged proposal explicitly (core-flows/worktree-environment-
- * layered-settings' "Saved override" frame: "This picker already proposed
+ * Names the OLD staged proposal explicitly ("This picker already proposed
  * X.") - Branch naming itself is showing the NEW candidate as its effective
  * result for the whole time this offer is up, so the offer is the only place
  * the value it would replace stays visible.
@@ -704,8 +703,7 @@ function describeTarget(input: {
     };
   }
   if (input.resolved.kind === "new-branch-worktree") {
-    // No path block here (core-flows/worktree-environment-layered-settings:
-    // "remove the disconnected top-level 'New worktree branch' presentation")
+    // No path block here
     // - the branch name it would show is already covered by Branch naming's
     // own effective-branch preview above.
     return {
