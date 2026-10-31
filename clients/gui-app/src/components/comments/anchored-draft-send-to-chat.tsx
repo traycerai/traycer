@@ -5,6 +5,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ChatTargetMenu } from "@/components/epic-canvas/renderers/chat-target-menu/chat-target-menu";
+import { useChatTargetMenuClosed } from "@/components/epic-canvas/renderers/chat-target-menu/use-chat-target-menu-closed";
 import { useRevealChatInTab } from "@/components/epic-canvas/renderers/use-reveal-chat-in-tab";
 import { appendCommentTextToDraft } from "@/components/chat/quote/append-comment-text-to-draft";
 import type { CanvasAnnotationScope } from "@/components/canvas-artifact/canvas-annotation-action";
@@ -15,8 +16,10 @@ import {
 import { canvasSelectionCaptureRect } from "@/components/canvas-artifact/canvas-selection-geometry";
 import type { CanvasSelection } from "@/components/canvas-artifact/canvas-selection-store";
 import { useCanvasAnnotationChatTargets } from "@/components/canvas-artifact/use-canvas-annotation-chat-targets";
+import { useCanvasAnnotationNewChat } from "@/components/canvas-artifact/use-canvas-annotation-new-chat";
 import { useArtifactObjectTextQuery } from "@/hooks/files/use-artifact-object-text-query";
 import { canvasMutationKeys } from "@/lib/query-keys/canvas-mutation-keys";
+import type { CanvasBox } from "@/lib/sandbox/canvas-bridge";
 
 /** What the draft box needs from the surface to send its element to a chat. */
 export interface AnchoredDraftSendToChatSurface {
@@ -64,15 +67,17 @@ export function AnchoredDraftSendToChatSlot(
 function AnchoredDraftSendToChat(props: AnchoredDraftSendToChatProps) {
   const { scope, frameFor } = props.surface;
   const targets = useCanvasAnnotationChatTargets(scope);
+  const newChat = useCanvasAnnotationNewChat(scope);
   const revealChat = useRevealChatInTab(scope);
   const source = useArtifactObjectTextQuery(scope.hostId, {
     epicId: scope.epicId,
     sha256: props.selection.servedSha256,
   });
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuClosed = useChatTargetMenuClosed(setMenuOpen);
   const send = useMutation({
     mutationKey: canvasMutationKeys.attach(scope.artifactId),
-    mutationFn: async (chatId: string) => {
+    mutationFn: async (chatId: string | null) => {
       // Read the text before anything moves: the capture and the attach are
       // async, and the box is gone once they land.
       const text = props.readDraft();
@@ -81,22 +86,27 @@ function AnchoredDraftSendToChat(props: AnchoredDraftSendToChatProps) {
         props.selection,
         source.data,
       );
-      const frame = frameFor(props.selection.boardPath);
-      await captureAndAttachCanvasAnnotation({
-        chatId,
-        record,
-        captureRect:
-          frame === null
+      const capture = {
+        captureRect: (): CanvasBox | null => {
+          const frame = frameFor(props.selection.boardPath);
+          return frame === null
             ? null
-            : canvasSelectionCaptureRect(frame, props.selection.element.box),
-      });
+            : canvasSelectionCaptureRect(frame, props.selection.element.box);
+        },
+        awaitPickerClosed: menuClosed.awaitClosed,
+      };
+      if (chatId === null) {
+        await newChat.send({ ...capture, record, text });
+        return null;
+      }
+      await captureAndAttachCanvasAnnotation({ ...capture, chatId, record });
       appendCommentTextToDraft(chatId, text);
       return chatId;
     },
     onSuccess: (chatId) => {
       setMenuOpen(false);
       props.onSent();
-      revealChat(chatId);
+      if (chatId !== null) revealChat(chatId);
     },
     onError: (error: Error) => {
       setMenuOpen(false);
@@ -107,15 +117,20 @@ function AnchoredDraftSendToChat(props: AnchoredDraftSendToChatProps) {
     <ChatTargetMenu
       targets={targets}
       onSelectChat={(chatId) => send.mutate(chatId)}
-      onSelectNewChat={null}
+      onSelectNewChat={newChat.supported ? () => send.mutate(null) : null}
       open={menuOpen}
-      onOpenChange={setMenuOpen}
+      onOpenChange={menuClosed.onOpenChange}
+      onClosed={menuClosed.onClosed}
       trigger={
         <Button
           type="button"
           variant="ghost"
           size="sm"
-          disabled={props.disabled || send.isPending || targets.length === 0}
+          disabled={
+            props.disabled ||
+            send.isPending ||
+            (targets.length === 0 && !newChat.supported)
+          }
           aria-label="Send to chat"
         >
           {send.isPending ? (

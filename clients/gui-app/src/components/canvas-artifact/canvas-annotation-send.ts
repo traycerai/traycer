@@ -1,11 +1,13 @@
 import type { CanvasAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
 import type { EpicReadArtifactObjectResponse } from "@traycer/protocol/host/epic/artifact-objects";
 import type { CanvasBox } from "@/lib/sandbox/canvas-bridge";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import type { CanvasAnnotationScope } from "./canvas-annotation-action";
 import {
   attachCanvasAnnotation,
   canvasAnnotationElement,
   canvasWindowCaptureBridge,
+  captureCanvasRegionWithoutChrome,
 } from "./canvas-annotation-attach";
 import type { CanvasSelection } from "./canvas-selection-store";
 
@@ -47,27 +49,52 @@ export function canvasSelectionAnnotationRecord(
   };
 }
 
+/** How a send photographs its element: where, and when the picker is gone. */
+export interface CanvasAnnotationCapture {
+  /** Measured right before the capture, since the board can move while the picker closes. */
+  readonly captureRect: () => CanvasBox | null;
+  /** Resolves once the caller's picker has left the screen. */
+  readonly awaitPickerClosed: () => Promise<void>;
+}
+
 /**
- * Captures the selected region through the window bridge and attaches the
- * record to a chat's composer draft. The capture happens here, on the explicit
- * send, before anything else moves on screen: the selection bar and the
- * comment draft box both route through this one path so their cards match.
+ * The crop of the selected region, cut from the app window as composited, or
+ * `null` where there is nothing to capture (no region, or no window bridge).
+ * The picture is taken only once the caller's picker has left the screen and
+ * with the selection chrome hidden, so neither ends up in the card.
  */
-export async function captureAndAttachCanvasAnnotation(input: {
-  readonly chatId: string;
-  readonly record: CanvasAnnotationRecord;
-  readonly captureRect: CanvasBox | null;
-}): Promise<CanvasAnnotationRecord> {
+export async function captureCanvasAnnotationCrop(
+  capture: CanvasAnnotationCapture,
+): Promise<ImageBytes | null> {
   const bridge = canvasWindowCaptureBridge();
-  const crop =
-    input.captureRect !== null && bridge !== null
-      ? await bridge.captureRegion(input.captureRect)
-      : null;
-  if (input.captureRect !== null && bridge !== null && crop === null)
+  // Whether there is anything on screen to photograph is decided now; the
+  // rectangle itself is measured again right before the capture.
+  if (bridge === null || capture.captureRect() === null) return null;
+  await capture.awaitPickerClosed();
+  const crop = await captureCanvasRegionWithoutChrome(
+    bridge,
+    capture.captureRect,
+  );
+  if (crop === null)
     throw new Error("The selected region could not be captured. Try again.");
+  return new Uint8Array(crop);
+}
+
+/**
+ * Captures the selected region and attaches the record to a chat's composer
+ * draft. The capture happens here, on the explicit send, before anything else
+ * moves on screen: the selection bar and the comment draft box both route
+ * through this one path so their cards match.
+ */
+export async function captureAndAttachCanvasAnnotation(
+  input: CanvasAnnotationCapture & {
+    readonly chatId: string;
+    readonly record: CanvasAnnotationRecord;
+  },
+): Promise<CanvasAnnotationRecord> {
   return attachCanvasAnnotation({
     chatId: input.chatId,
     record: input.record,
-    crop: crop === null ? null : new Uint8Array(crop),
+    crop: await captureCanvasAnnotationCrop(input),
   });
 }

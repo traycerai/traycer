@@ -1,6 +1,8 @@
 import {
   createChatRequestSchemaV14,
+  createChatRequestSchemaV15,
   createEpicRequestSchemaV14,
+  createEpicRequestSchemaV15,
   updateChatRunSettingsRequestSchemaV12,
 } from "./unary-schemas";
 import {
@@ -2473,6 +2475,45 @@ export const epicCreateChatUpgradeV13ToV14 = defineUpgradePath<
   from: epicCreateChatV13.schemaVersion,
   to: epicCreateChatV14.schemaVersion,
   upgradeRequest: (request) => createChatRequestSchemaV14.parse(request),
+  upgradeResponse: (response) => response,
+});
+
+/**
+ * `@1.5` of both creates: the first message carries the composer's
+ * browser-annotation sidecar, as a `chat.subscribe` `send` frame does, so a
+ * selection sent to a NEW chat arrives with the same card a send would carry.
+ * The upgrades parse through the `@1.5` schema. The sidecar key stays absent
+ * for a `@1.4` caller, which the host reads as no sidecar; the responses are
+ * unchanged.
+ */
+export const epicCreateV15 = defineRpcContract({
+  method: "epic.create",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  requestSchema: createEpicRequestSchemaV15,
+  responseSchema: createEpicResponseSchemaV12,
+});
+export const epicCreateUpgradeV14ToV15 = defineUpgradePath<
+  typeof epicCreateV14,
+  typeof epicCreateV15
+>({
+  from: epicCreateV14.schemaVersion,
+  to: epicCreateV15.schemaVersion,
+  upgradeRequest: (request) => createEpicRequestSchemaV15.parse(request),
+  upgradeResponse: (response) => response,
+});
+export const epicCreateChatV15 = defineRpcContract({
+  method: "epic.createChat",
+  schemaVersion: { major: 1, minor: 5 } as const,
+  requestSchema: createChatRequestSchemaV15,
+  responseSchema: createChatResponseSchemaV12,
+});
+export const epicCreateChatUpgradeV14ToV15 = defineUpgradePath<
+  typeof epicCreateChatV14,
+  typeof epicCreateChatV15
+>({
+  from: epicCreateChatV14.schemaVersion,
+  to: epicCreateChatV15.schemaVersion,
+  upgradeRequest: (request) => createChatRequestSchemaV15.parse(request),
   upgradeResponse: (response) => response,
 });
 export const epicUpdateChatRunSettingsV12 = defineRpcContract({

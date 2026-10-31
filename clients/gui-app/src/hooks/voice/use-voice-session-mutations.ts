@@ -9,6 +9,7 @@ import type { VoiceRouteFetchResult } from "@traycer-clients/shared/host-client/
 import type { MicrophoneAccessStatus } from "@traycer-clients/shared/platform/runner-host";
 import { useAuthService } from "@/lib/host";
 import { voiceMutationKeys } from "@/lib/query-keys";
+import { toastFromRunnerError } from "@/lib/runner-error-toast";
 import { useRunnerHost } from "@/providers/use-runner-host";
 
 /**
@@ -113,5 +114,24 @@ export function useVoiceMicrophoneAccessMutation(): UseMutationResult<
   return useMutation({
     mutationKey: voiceMutationKeys.microphoneAccess(),
     mutationFn: () => runnerHost.requestMicrophoneAccess(),
+  });
+}
+
+/**
+ * Opens the OS settings page for a refused microphone, from the ended line's
+ * Open Settings. A launch the OS refuses is the person's to hear about: the
+ * button did nothing they can see.
+ */
+export function useVoiceMicrophoneSettingsMutation(): UseMutationResult<
+  void,
+  Error,
+  void
+> {
+  const runnerHost = useRunnerHost();
+  return useMutation({
+    mutationKey: voiceMutationKeys.microphoneSettings(),
+    mutationFn: () => runnerHost.openMicrophoneSettings(),
+    onError: (error) =>
+      toastFromRunnerError(error, "Couldn't open the microphone settings"),
   });
 }
