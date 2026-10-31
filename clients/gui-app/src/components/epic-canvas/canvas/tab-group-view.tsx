@@ -590,6 +590,14 @@ const CHAT_SESSION_NOT_VISIBLE_CODE = "CHAT_NOT_VISIBLE";
 const CHAT_INDEX_UNAVAILABLE_CODE = "CHAT_INDEX_UNAVAILABLE";
 
 /**
+ * The revoked banner's clone handler. Module-level so it is reference-stable,
+ * and a no-op because that banner declares `offersClone: false` and therefore
+ * never renders a control that could call it - the prop exists only because
+ * `ChatDeadTileBanner` is shared with the three reasons that DO offer it.
+ */
+const noopClone = (): void => undefined;
+
+/**
  * CONSISTENCY over ref provenance (user ruling, 2026-08-09): a live chat tab
  * whose bound host is unreachable renders what a fresh click on its row
  * renders - the published copy, locked - instead of a dead dial wearing a
@@ -673,14 +681,6 @@ const CHAT_INDEX_UNAVAILABLE_CODE = "CHAT_INDEX_UNAVAILABLE";
  * swap it for is exactly what it does not have, so it keeps its live
  * generic-error surface).
  */
-/**
- * The revoked banner's clone handler. Module-level so it is reference-stable,
- * and a no-op because that banner declares `offersClone: false` and therefore
- * never renders a control that could call it - the prop exists only because
- * `ChatDeadTileBanner` is shared with the three reasons that DO offer it.
- */
-const noopClone = (): void => undefined;
-
 interface ChatFallbackDecision {
   readonly substitute: boolean;
   /** The banner the canvas mounts above the copy; `null` leaves it to the copy tile. */

@@ -286,15 +286,6 @@ export function chatViewportAnchorRowIndex(
 }
 
 /**
- * The hydrated message nearest the anchor row, searching at-or-before first
- * and then after. `selectActiveUserMessageId` reasons over message SEMANTICS
- * (roles, A2A senders), which a placeholder cannot answer - so when the
- * reading line sits inside unhydrated history, the nearest hydrated row is
- * the honest stand-in for "which turn is the reader inside". Transient by
- * construction: viewport-driven hydration is already fetching the rows the
- * reader is looking at.
- */
-/**
  * The indexes of the hydrated rows, ascending, built once per `rows` array.
  *
  * The scan below runs on every scroll frame, and a reading line inside a large
@@ -324,6 +315,15 @@ function hydratedIndexes(
   return indexes;
 }
 
+/**
+ * The hydrated message nearest the anchor row, searching at-or-before first
+ * and then after. `selectActiveUserMessageId` reasons over message SEMANTICS
+ * (roles, A2A senders), which a placeholder cannot answer - so when the
+ * reading line sits inside unhydrated history, the nearest hydrated row is
+ * the honest stand-in for "which turn is the reader inside". Transient by
+ * construction: viewport-driven hydration is already fetching the rows the
+ * reader is looking at.
+ */
 function nearestHydratedMessageId(
   rows: ReadonlyArray<TranscriptListRow>,
   anchorRowIndex: number,
