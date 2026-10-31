@@ -1031,16 +1031,24 @@ const UNRELEASED_ACTION_IDS: ReadonlySet<ActionId> = new Set([
 ]);
 
 /**
- * Whether `id` can run in this app: the build ships it, and it is not a
- * desktop-only action in the installed mobile app, where its handler is
- * never registered. One that cannot is bound to nothing, whatever a profile
- * stored for it: it matches no key, reserves no chord, is forwarded from no
- * browser tile, conflicts with no rebind and has no Settings row. The stored
- * chord itself is kept, so an app that can run the action again finds it
- * where the person left it.
+ * Whether `id` can run in this app: the build ships it, and, in a build with
+ * the unreleased features, it is not a desktop-only action in the installed
+ * mobile app, where its handler is never registered. One that cannot is bound
+ * to nothing, whatever a profile stored for it: it matches no key, reserves no
+ * chord, is forwarded from no browser tile, conflicts with no rebind and has
+ * no Settings row. The stored chord itself is kept, so an app that can run the
+ * action again finds it where the person left it.
  */
 export function isActionAvailable(id: ActionId): boolean {
-  if (ACTION_META[id].desktopOnly && isMobileApp()) return false;
+  // The mobile arm exists for the voice actions; off, the baseline's matching
+  // stands, so the mobile app still reserves a desktop-only default chord.
+  if (
+    UNRELEASED_FEATURES_ENABLED &&
+    ACTION_META[id].desktopOnly &&
+    isMobileApp()
+  ) {
+    return false;
+  }
   return UNRELEASED_FEATURES_ENABLED || !UNRELEASED_ACTION_IDS.has(id);
 }
 
