@@ -731,6 +731,48 @@ describe("a reply's notification for a row held as an announcement", () => {
     expect(briefing).not.toContain("posted in its channel");
   });
 
+  it("carries a Read still waiting to be said over to the reply, which is then not offered", () => {
+    queue.begin([], hostOf);
+    announce();
+    scheduler.noteInputTranscript();
+    queue.run({ kind: "read", itemId: "a-1", delegationId: "d-read" });
+
+    queue.ingestReplies([channelRef], hostOf);
+    queue.hydrated("a-1", botRow("a-1", REPLY_TEXT), null);
+    clock.advance(INPUT_ACTIVE_WINDOW_MS);
+
+    expect(appended).toEqual([
+      { text: `Release bot said: ${REPLY_TEXT}`, delegationId: "d-read" },
+    ]);
+    scheduler.noteOutputTranscript(" The Safari fix landed");
+    expect(markRead.mock.calls).toEqual([
+      [{ hostId: "host-a", botId: "bot-2", chatId: "chan-2" }],
+    ]);
+    expect(queue.items().map((item) => [item.kind, item.state])).toEqual([
+      ["reply", "heard"],
+    ]);
+  });
+
+  it("lets a Read already with the engine be confirmed on the reply, and offers nothing afterwards", () => {
+    queue.begin([], hostOf);
+    announce();
+    queue.run({ kind: "read", itemId: "a-1", delegationId: "d-read" });
+    expect(appended).toEqual([
+      { text: `Release bot said: ${REPLY_TEXT}`, delegationId: "d-read" },
+    ]);
+
+    queue.ingestReplies([channelRef], hostOf);
+    queue.hydrated("a-1", botRow("a-1", REPLY_TEXT), null);
+    scheduler.noteOutputTranscript(" The Safari fix landed");
+
+    expect(queue.items().map((item) => [item.kind, item.state])).toEqual([
+      ["reply", "heard"],
+    ]);
+    expect(markRead).toHaveBeenCalledTimes(1);
+    clock.advance(120_000);
+    expect(appended).toHaveLength(1);
+  });
+
   it("keeps a set-aside announcement set aside, and offers nothing", () => {
     queue.begin([], hostOf);
     announce();
