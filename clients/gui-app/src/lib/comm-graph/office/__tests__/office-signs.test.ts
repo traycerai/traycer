@@ -170,7 +170,7 @@ function unacceptableBoardRungReason(text: string): string | null {
   return `"${text}" is neither a name, a number, the overflow glyph, nor empty`;
 }
 
-/** A projector that shifts every projected x by +2048px - the review's own F5 recipe. */
+/** A projector that shifts every projected x by +2048px - the F5 recipe. */
 const SHIFTED_PROJECTOR: OfficeProjector = {
   project: (col, row) => ({
     x: 2048 + col * OFFICE_TILE,

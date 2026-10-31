@@ -2260,7 +2260,7 @@ describe("mission control plates: fixup 5 - plates fit their own arc segment and
 });
 
 /**
- * COLD REVIEW, FINDINGS 1-3: ONE HALL FOR EVERY HOST, and three things that
+ * ONE HALL FOR EVERY HOST, and three things that
  * assumed otherwise.
  *
  * This view is the only one whose single storey serves the whole epic, and every
@@ -2853,7 +2853,7 @@ describe("mission control painters: fixup 6 rule 4 - one reserve label per tier,
       // ON THE FLOOR UNDER THE CHAIR - the seated agents' own name-tag line,
       // read straight off the seat's own chair-tile geometry - not the
       // console's bottom edge, which is where `deskY + OFFICE_TILE` used to
-      // land it (feedback round 1: grey-on-grey, unreadable against the
+      // land it (grey-on-grey, unreadable against the
       // console art).
       expect(label.drawable.y).toBe(
         (seat.chairTile.row + 1) * OFFICE_TILE + OFFICE_LABEL_GAP,
