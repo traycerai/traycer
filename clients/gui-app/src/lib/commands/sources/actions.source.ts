@@ -20,8 +20,8 @@ import { useTabRecoveryHistory } from "@/lib/tab-recovery/history";
  *   - `desktopOnly` actions in the installed mobile app (the surface they
  *     act on is never drawn there);
  *   - `app.home.open` while the Home tab setting is off;
- *   - `voice.talk.toggle` while this window cannot talk (no voice offered,
- *     or its session owner is not mounted);
+ *   - `voice.talk.toggle` while Talk would do nothing: neither start a
+ *     session (voice offered, a bot to talk to) nor end a running one;
  *   - `app.tabs.vertical.collapse` while this window's tabs are at the top.
  */
 import { useMemo } from "react";
@@ -35,7 +35,10 @@ import { useTabStripPlacement } from "@/components/layout/tabs/use-tab-strip-pla
 import { isMobileApp } from "@/lib/mobile-app";
 import { useKeybindingStore } from "@/stores/settings/keybinding-store";
 import { isHomeTabEnabled } from "@/stores/layout/layout-store";
-import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
+import {
+  talkToggleAction,
+  useVoiceSessionStore,
+} from "@/stores/voice/voice-session-store";
 import type { CommandItem, ReactCommandSource } from "@/lib/commands/types";
 
 export const actionsSource: ReactCommandSource = {
@@ -48,7 +51,7 @@ export const actionsSource: ReactCommandSource = {
     const homeTabEnabled = isHomeTabEnabled();
     const verticalTabs = useTabStripPlacement() !== "top";
     const canTalk = useVoiceSessionStore(
-      (state) => state.availability === "live" && state.driver !== null,
+      (state) => talkToggleAction(state) !== null,
     );
     return useMemo<ReadonlyArray<CommandItem>>(() => {
       const items: Array<CommandItem> = [];

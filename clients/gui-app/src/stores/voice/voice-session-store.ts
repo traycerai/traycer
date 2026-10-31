@@ -506,6 +506,27 @@ export function isUtteranceOpen(state: VoiceSessionState): boolean {
   );
 }
 
+/**
+ * What Talk (the control's toggle and its shortcut) would do now: end a
+ * session that is connecting or live, start one when none runs and Talk can
+ * start one (voice offered, a bot to talk to), or nothing (no session owner
+ * mounted, or a session already ending).
+ */
+export function talkToggleAction(
+  state: VoiceSessionState,
+): "start" | "end" | null {
+  if (state.driver === null) return null;
+  if (state.phase === "connecting" || state.phase === "live") return "end";
+  if (
+    state.phase === "idle" &&
+    state.availability === "live" &&
+    state.destinationKnown
+  ) {
+    return "start";
+  }
+  return null;
+}
+
 /** Whether the session is live and drawn: the strip is on screen. */
 export function isVoiceSessionShown(state: VoiceSessionState): boolean {
   return state.phase !== "idle" || state.endReason !== null;

@@ -14,6 +14,7 @@ import { reservedBrowserChordsFor } from "@/lib/browser-view/reserved-chords-reg
 import { actionsSource } from "@/lib/commands/sources/actions.source";
 import type { CommandContext } from "@/lib/commands/types";
 import { getDefaultBindings } from "@/lib/keybindings/actions";
+import { setMobileApp } from "@/lib/mobile-app";
 import { KeybindingProvider } from "@/providers/keybinding-provider";
 import { routeTree } from "@/routeTree.gen";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -161,6 +162,21 @@ describe("the Talk shortcut", () => {
   });
 });
 
+describe("the Talk shortcut in the installed mobile app", () => {
+  it("takes no key: Talk is desktop-only, so nothing there would run it", () => {
+    cleanup();
+    setMobileApp(true);
+    try {
+      renderShell();
+      const event = pressTalk(false);
+      expect(event.defaultPrevented).toBe(false);
+      expect(driver.start).not.toHaveBeenCalled();
+    } finally {
+      setMobileApp(false);
+    }
+  });
+});
+
 describe("the Talk shortcut while a browser tile has the keyboard", () => {
   it("starts and ends the session from a streamed tile, default chord and a rebind alike", () => {
     useScreencastArmedStore.getState().claim("streamed-tile", vi.fn());
@@ -227,13 +243,23 @@ function paletteContext(): CommandContext {
 }
 
 describe("Talk in the command palette", () => {
-  it("is offered only while this window can talk", () => {
+  it("is offered exactly while Talk would start or end a session", () => {
     const talkRow = (): boolean =>
       renderHook(() =>
         actionsSource.useItems(paletteContext()),
       ).result.current.some((item) => item.actionId === "voice.talk.toggle");
     expect(talkRow()).toBe(true);
     useVoiceSessionStore.setState({ availability: "dormant" });
+    expect(talkRow()).toBe(false);
+    useVoiceSessionStore.setState({
+      availability: "live",
+      destinationKnown: false,
+    });
+    expect(talkRow()).toBe(false);
+    // A running session can always be ended, bot or none.
+    setPhase("live");
+    expect(talkRow()).toBe(true);
+    setPhase("ending");
     expect(talkRow()).toBe(false);
   });
 });

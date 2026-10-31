@@ -5,7 +5,10 @@ import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
 import { ACTION_META } from "@/lib/keybindings/actions";
 import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
 import { isMobileApp } from "@/lib/mobile-app";
-import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
+import {
+  talkToggleAction,
+  useVoiceSessionStore,
+} from "@/stores/voice/voice-session-store";
 
 export const TALK_CONTROL_LABEL = "Talk";
 
@@ -16,16 +19,10 @@ export const TALK_CONTROL_LABEL = "Talk";
  * touched here.
  */
 function toggleTalk(): void {
-  const { availability, phase, driver, destinationKnown } =
-    useVoiceSessionStore.getState();
-  if (driver === null) return;
-  if (phase === "connecting" || phase === "live") {
-    driver.end();
-    return;
-  }
-  if (phase === "idle" && availability === "live" && destinationKnown) {
-    driver.start();
-  }
+  const state = useVoiceSessionStore.getState();
+  const action = talkToggleAction(state);
+  if (action === "end") state.driver?.end();
+  else if (action === "start") state.driver?.start();
 }
 
 /**

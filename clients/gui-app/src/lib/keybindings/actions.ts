@@ -1,5 +1,6 @@
 import { canonicalChord, type ChordString } from "@/lib/keybindings/chord";
 import { isMac } from "@/lib/keybindings/platform";
+import { isMobileApp } from "@/lib/mobile-app";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
@@ -1030,22 +1031,25 @@ const UNRELEASED_ACTION_IDS: ReadonlySet<ActionId> = new Set([
 ]);
 
 /**
- * Whether `id` exists in this build. One that does not is bound to nothing,
- * whatever a profile saved by another build stored for it: it matches no key,
- * reserves no chord, is forwarded from no browser tile, conflicts with no
- * rebind and has no Settings row. The stored chord itself is kept, so a build
- * that has the action again finds it where the person left it.
+ * Whether `id` can run in this app: the build ships it, and it is not a
+ * desktop-only action in the installed mobile app, where its handler is
+ * never registered. One that cannot is bound to nothing, whatever a profile
+ * stored for it: it matches no key, reserves no chord, is forwarded from no
+ * browser tile, conflicts with no rebind and has no Settings row. The stored
+ * chord itself is kept, so an app that can run the action again finds it
+ * where the person left it.
  */
-export function isActionInBuild(id: ActionId): boolean {
+export function isActionAvailable(id: ActionId): boolean {
+  if (ACTION_META[id].desktopOnly && isMobileApp()) return false;
   return UNRELEASED_FEATURES_ENABLED || !UNRELEASED_ACTION_IDS.has(id);
 }
 
-/** The chord `id` is bound to in this build: the stored one, or none. */
+/** The chord `id` is bound to in this app: the stored one, or none. */
 export function effectiveBinding(
   bindings: Readonly<Record<ActionId, ChordString | null>>,
   id: ActionId,
 ): ChordString | null {
-  return isActionInBuild(id) ? (bindings[id] ?? null) : null;
+  return isActionAvailable(id) ? (bindings[id] ?? null) : null;
 }
 
 export function getDefaultBindings(): Readonly<

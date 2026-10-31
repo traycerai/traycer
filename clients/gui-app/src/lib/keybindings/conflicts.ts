@@ -1,5 +1,5 @@
 import { browserScopedChordLabel } from "@/lib/browser-view/reserved-chords-registration";
-import { isActionInBuild, type ActionId } from "@/lib/keybindings/actions";
+import { isActionAvailable, type ActionId } from "@/lib/keybindings/actions";
 import type { ChordString } from "@/lib/keybindings/chord";
 
 export type ConflictSeverity = "duplicate" | "os-clash";
@@ -51,7 +51,7 @@ export function findConflict(
   for (const [id, chord] of Object.entries(bindings) as Array<
     [ActionId, ChordString | null]
   >) {
-    if (id === excludeActionId || !isActionInBuild(id)) continue;
+    if (id === excludeActionId || !isActionAvailable(id)) continue;
     if (chord === candidate) {
       return {
         severity: "duplicate",
