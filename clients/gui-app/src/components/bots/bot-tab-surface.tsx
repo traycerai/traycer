@@ -242,10 +242,12 @@ function TracySurfaceShell(props: {
   const channelTitle =
     botList.data?.bots.find((bot) => bot.botId === botId)?.title ??
     TRACY_TAB_LABEL;
-  // With no channel selected, the pane says there are none only when there
-  // are none; otherwise the default (or a navigation in flight) is coming.
-  const noChannel =
-    groups !== null && defaultTracyChannelOf(groups, null) === null;
+  const { refetch: refetchBots } = botList;
+  const { refetch: refetchEnvironments } = environments;
+  const retryLists = useCallback(() => {
+    void refetchBots();
+    void refetchEnvironments();
+  }, [refetchBots, refetchEnvironments]);
 
   return (
     <div className="@container flex h-full min-h-0" data-testid="bot-tab">
@@ -276,8 +278,14 @@ function TracySurfaceShell(props: {
             onBack={leaveThreads}
           />
         ) : null}
-        {botId === null && !threadsShown && noChannel ? (
-          <TracyNoChannel />
+        {botId === null && !threadsShown ? (
+          <TracyUnselected
+            groups={groups}
+            listsFailed={
+              botList.status === "error" || environments.status === "error"
+            }
+            onRetry={retryLists}
+          />
         ) : null}
         {botId === null ? null : (
           <TracyChannelPane
@@ -413,6 +421,35 @@ function useBotsGroups(
     ),
   );
   return bots === undefined || environments === undefined ? null : model.groups;
+}
+
+/**
+ * The pane with no channel selected. Until both lists have answered: the
+ * connecting state, or, when a read failed, the failure and a Retry of both
+ * (the default channel is chosen from them, so nothing else would recover).
+ * Then: that there are no bots, when there are none; otherwise nothing, as
+ * the default channel (or a navigation in flight) is on its way.
+ */
+function TracyUnselected(props: {
+  readonly groups: ReadonlyArray<HomeBotsGroup> | null;
+  readonly listsFailed: boolean;
+  readonly onRetry: () => void;
+}): ReactNode {
+  const { groups } = props;
+  if (groups === null) {
+    return props.listsFailed ? (
+      <ErrorNotice
+        text="Couldn't load this channel."
+        onRetry={props.onRetry}
+        className="m-4"
+      />
+    ) : (
+      <BotTabConnecting />
+    );
+  }
+  return defaultTracyChannelOf(groups, null) === null ? (
+    <TracyNoChannel />
+  ) : null;
 }
 
 /** The surface with no channel: there is no bot to show yet. */

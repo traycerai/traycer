@@ -45,6 +45,12 @@ interface ListScript {
   readonly hasData: boolean;
 }
 
+/** What the environment-list read holds, as `ListScript` does for the bots'. */
+interface EnvironmentsScript {
+  readonly status: ListStatus;
+  readonly hasData: boolean;
+}
+
 /** What one bot's thread-list read holds; a bot with none holds no threads. */
 interface ThreadListScript {
   readonly threads: ReadonlyArray<BotThreadSummary>;
@@ -56,6 +62,8 @@ const script = vi.hoisted(() => {
   const listeners = new Set<() => void>();
   const state: {
     list: ListScript;
+    /** Replaced, never mutated, like `list`. */
+    environmentsRead: EnvironmentsScript;
     environments: ReadonlyArray<EnvironmentDescriptor>;
     /** Bot ids whose `bot.open` is refused. */
     openFails: Set<string>;
@@ -63,6 +71,7 @@ const script = vi.hoisted(() => {
     threadLists: Readonly<Record<string, ThreadListScript>>;
   } = {
     list: { status: "pending", bots: [], mainBotIds: null, hasData: false },
+    environmentsRead: { status: "success", hasData: true },
     environments: [],
     openFails: new Set(),
     threadLists: {},
@@ -70,6 +79,8 @@ const script = vi.hoisted(() => {
   return {
     state,
     listeners,
+    /** The two lists' `refetch`; a case sets what the next call answers. */
+    refetch: { bots: vi.fn(), environments: vi.fn() },
     subscribe: (listener: () => void): (() => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -100,6 +111,14 @@ const mocks = vi.hoisted(() => ({
     },
   },
 }));
+
+function useEnvironmentsScript(): EnvironmentsScript {
+  return useSyncExternalStore(
+    script.subscribe,
+    () => script.state.environmentsRead,
+    () => script.state.environmentsRead,
+  );
+}
 
 function useListScript(): ListScript {
   return useSyncExternalStore(
@@ -137,16 +156,21 @@ vi.mock("@/hooks/bots/use-bot-list-query", () => ({
       errorUpdatedAt: 0,
       isFetchedAfterMount: true,
       isFetching: false,
-      refetch: () => undefined,
+      refetch: script.refetch.bots,
     };
   },
 }));
 vi.mock("@/hooks/bots/use-environment-list-query", () => ({
-  useEnvironmentListQuery: () => ({
-    status: "success",
-    data: { environments: script.state.environments },
-    refetch: () => undefined,
-  }),
+  useEnvironmentListQuery: () => {
+    const read = useEnvironmentsScript();
+    return {
+      status: read.status,
+      data: read.hasData
+        ? { environments: script.state.environments }
+        : undefined,
+      refetch: script.refetch.environments,
+    };
+  },
 }));
 vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
   useBotListChangedSubscriptionForHost: () => undefined,
@@ -394,6 +418,11 @@ function setList(next: ListScript): void {
   script.notify();
 }
 
+function setEnvironmentsRead(next: EnvironmentsScript): void {
+  script.state.environmentsRead = next;
+  script.notify();
+}
+
 function setThreadList(botId: string, next: ThreadListScript): void {
   script.state.threadLists = { ...script.state.threadLists, [botId]: next };
   script.notify();
@@ -566,7 +595,10 @@ function resetStores(): void {
     mainBotIds: null,
     hasData: false,
   };
+  script.state.environmentsRead = { status: "success", hasData: true };
   script.state.environments = ENVIRONMENTS;
+  script.refetch.bots.mockReset();
+  script.refetch.environments.mockReset();
   script.state.openFails.clear();
   script.state.threadLists = {};
   useTracySurfaceStore.setState({
@@ -786,6 +818,83 @@ describe("the Tracy surface shell", () => {
     expect(screen.getByTestId("bot-channel-sidebar")).toBeTruthy();
     expect(screen.queryByTestId("stub-channel")).toBeNull();
     expect(useTracySurfaceStore.getState().botId).toBeNull();
+  });
+
+  describe("no channel selected while the lists have not answered", () => {
+    it.each([
+      {
+        failing: "bot list",
+        fail: (): void => {
+          setEnvironmentsRead({ status: "success", hasData: true });
+          setList({
+            status: "error",
+            bots: [],
+            mainBotIds: null,
+            hasData: false,
+          });
+        },
+        // Retry asks both lists again; the failed one answers this time.
+        answerOnRetry: (): void => {
+          script.refetch.bots.mockImplementation(() =>
+            answerList([NOTES, RELEASE], { "env-me": "bot-notes" }),
+          );
+        },
+      },
+      {
+        failing: "environment list",
+        fail: (): void => {
+          answerList([NOTES, RELEASE], { "env-me": "bot-notes" });
+          setEnvironmentsRead({ status: "error", hasData: false });
+        },
+        answerOnRetry: (): void => {
+          script.refetch.environments.mockImplementation(() =>
+            setEnvironmentsRead({ status: "success", hasData: true }),
+          );
+        },
+      },
+    ])(
+      "shows the failure with a Retry when the $failing fails before answering, and Retry selects the default once both answer",
+      async ({ fail, answerOnRetry }) => {
+        fail();
+        const mounted = await mount();
+        act(() => {
+          openTracyEntry(mounted.navigate, null);
+        });
+
+        const notice = await screen.findByTestId("bot-tab-error");
+        expect(
+          within(notice).getByText("Couldn't load this channel."),
+        ).toBeTruthy();
+        expect(screen.queryByTestId("bot-tab-connecting")).toBeNull();
+        expect(screen.queryByTestId("bot-tab-no-channel")).toBeNull();
+        expect(useTracySurfaceStore.getState().botId).toBeNull();
+
+        answerOnRetry();
+        fireEvent.click(within(notice).getByRole("button", { name: "Retry" }));
+
+        expect(script.refetch.bots).toHaveBeenCalledTimes(1);
+        expect(script.refetch.environments).toHaveBeenCalledTimes(1);
+        await shownChannel("bot-notes");
+        expect({
+          pathname: mounted.pathname(),
+          botId: useTracySurfaceStore.getState().botId,
+        }).toEqual({ pathname: "/bot/bot-notes", botId: "bot-notes" });
+        expect(screen.queryByTestId("bot-tab-error")).toBeNull();
+      },
+    );
+
+    it("shows the connecting state while the lists have not answered", async () => {
+      setEnvironmentsRead({ status: "pending", hasData: false });
+      const mounted = await mount();
+      act(() => {
+        openTracyEntry(mounted.navigate, null);
+      });
+
+      await screen.findByTestId("bot-tab-connecting");
+      expect(screen.queryByTestId("bot-tab-error")).toBeNull();
+      expect(screen.queryByTestId("bot-tab-no-channel")).toBeNull();
+      expect(useTracySurfaceStore.getState().botId).toBeNull();
+    });
   });
 
   describe("an explicit open that is still in flight", () => {
