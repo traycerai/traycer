@@ -77,7 +77,7 @@ export function VoiceCards(props: {
     <>
       {activeCard === null || desk === null ? null : (
         <VoiceCardWatch
-          key={activeCard.ids.itemId}
+          key={activeCard.opening}
           card={activeCard}
           desk={desk}
           bot={

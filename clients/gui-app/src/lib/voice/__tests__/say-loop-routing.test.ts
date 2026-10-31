@@ -5,9 +5,11 @@ import type {
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import type { OpenTextBlock } from "@traycer/protocol/persistence/epic/open-harness-records";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   useVoiceSessionStore,
+  type RouterCard,
+  type VoiceCardDriver,
   type VoiceFocus,
 } from "@/stores/voice/voice-session-store";
 import {
@@ -25,6 +27,7 @@ import {
   CONFIRM_ANSWER_WINDOW_MS,
   createSayLoop,
   type AskOutcome,
+  type RouteRequest,
 } from "../say-loop";
 
 const NOW = 1_800_000_000_000;
@@ -113,6 +116,7 @@ function route(
     uncertain: false,
     question: null,
     control: null,
+    choice: null,
   };
 }
 
@@ -152,6 +156,7 @@ function build(wiring: Wiring) {
 /** {@link build} over a directory the test composed. */
 function buildFor(wiring: Wiring, directory: VoiceDirectory) {
   const sends: VoiceFocus[] = [];
+  const requests: RouteRequest[] = [];
   const notices: string[] = [];
   const noticeDelegations: Array<string | null> = [];
   const navigations: BoundTarget[] = [];
@@ -174,6 +179,7 @@ function buildFor(wiring: Wiring, directory: VoiceDirectory) {
       return () => undefined;
     },
     decide: async (request) => {
+      requests.push(request);
       const next = answers.shift();
       if (next === undefined) throw new Error("no answer queued");
       // The directory is read when the route is made, as the real one does.
@@ -206,6 +212,7 @@ function buildFor(wiring: Wiring, directory: VoiceDirectory) {
   return {
     loop,
     sends,
+    requests,
     notices,
     noticeDelegations,
     navigations,
@@ -728,5 +735,139 @@ describe("a routed verb on the queue", () => {
     expect(h.sends).toEqual([]);
     expect(enqueued).toEqual([]);
     expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+});
+
+describe("the active card", () => {
+  const CARD: RouterCard = {
+    question: "Which environment?",
+    choices: ["Staging", "Production", "Skip"],
+    takesText: false,
+  };
+
+  /** A card desk that waits for an answer and takes the verdict it is given. */
+  function installDriver(verdict: "handled" | "route"): VoiceCardDriver {
+    const driver: VoiceCardDriver = {
+      open: vi.fn<VoiceCardDriver["open"]>(() => "appended"),
+      awaitsAnswer: vi.fn<VoiceCardDriver["awaitsAnswer"]>(() => true),
+      answer: vi.fn<VoiceCardDriver["answer"]>(() => verdict),
+      answerRouted: vi.fn<VoiceCardDriver["answerRouted"]>(() => true),
+      routerCard: vi.fn<VoiceCardDriver["routerCard"]>(() => CARD),
+      dropCandidate: vi.fn<VoiceCardDriver["dropCandidate"]>(),
+      invalidate: vi.fn<VoiceCardDriver["invalidate"]>(),
+    };
+    useVoiceSessionStore.getState().setCardDriver(driver);
+    return driver;
+  }
+
+  it("takes the words it handles: they are never routed, posted or kept", async () => {
+    const driver = installDriver("handled");
+    const h = build({ recheckHolds: true, canSend: true });
+
+    speak("the second", " one");
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(driver.answer).toHaveBeenCalledTimes(1);
+    const [words, delegationId] = vi.mocked(driver.answer).mock.calls[0];
+    expect(words.text).toBe("the second one");
+    expect(delegationId).toBe("d-1");
+    expect(h.requests).toEqual([]);
+    expect(h.sends).toEqual([]);
+    expect(h.notices).toEqual([]);
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+
+  it("routes the words it does not take with the card in view, and a post then drops the candidate", async () => {
+    const driver = installDriver("route");
+    const h = build({ recheckHolds: true, canSend: true });
+    h.answers.push(() => Promise.resolve(route("post", null, null, 2)));
+
+    speak("tell", " tracy hello");
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(h.requests.map((request) => request.card)).toEqual([CARD]);
+    expect(h.sends.map((focus) => focus.botId)).toEqual([TRACY]);
+    expect(driver.dropCandidate).toHaveBeenCalledTimes(1);
+    expect(driver.answerRouted).not.toHaveBeenCalled();
+  });
+
+  it("keeps the candidate when the words routed were an unfinished request", async () => {
+    const driver = installDriver("route");
+    const h = build({ recheckHolds: true, canSend: true });
+    h.answers.push(() => Promise.resolve(route("fragment", null, null, 2)));
+
+    speak("tell", " tracy");
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(h.requests.map((request) => request.card)).toEqual([CARD]);
+    expect(driver.dropCandidate).not.toHaveBeenCalled();
+  });
+
+  it("hands the router's answer to the card, with its choice and words, and posts nothing", async () => {
+    const driver = installDriver("route");
+    const h = build({ recheckHolds: true, canSend: true });
+    h.answers.push(() =>
+      Promise.resolve({ ...route("answer", null, null, 2), choice: 1 }),
+    );
+
+    speak("hold", " it");
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(driver.answerRouted).toHaveBeenCalledWith(1, "hold it", "d-1");
+    expect(driver.dropCandidate).not.toHaveBeenCalled();
+    expect(h.sends).toEqual([]);
+    expect(h.notices).toEqual([]);
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+
+  it.each([
+    ["no card waits", null],
+    ["the card no longer waits", "closed"],
+  ] as const)(
+    "says so and posts nothing when the router answers and %s",
+    async (_name, state) => {
+      if (state === "closed") {
+        const driver = installDriver("route");
+        vi.mocked(driver.answerRouted).mockReturnValue(false);
+        vi.mocked(driver.awaitsAnswer).mockReturnValue(false);
+      }
+      const h = build({ recheckHolds: true, canSend: true });
+      h.answers.push(() => Promise.resolve(route("answer", null, null, 2)));
+
+      speak("the", " second one");
+      await h.loop.onDelegationCreated("d-1");
+
+      expect(h.requests.map((request) => request.card)).toEqual([null]);
+      expect(h.sends).toEqual([]);
+      expect(h.notices).toHaveLength(1);
+      expect(h.notices[0]).toMatch(
+        /^Nothing was sent: no question or approval/,
+      );
+      expect(useVoiceSessionStore.getState().segments).toEqual([]);
+    },
+  );
+
+  it("leaves a card that waits for nothing out of the words' route", async () => {
+    const driver = installDriver("route");
+    vi.mocked(driver.awaitsAnswer).mockReturnValue(false);
+    const h = build({ recheckHolds: true, canSend: true });
+    h.answers.push(() => Promise.resolve(route("post", null, null, 2)));
+
+    speak("tell", " tracy hello");
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(driver.answer).not.toHaveBeenCalled();
+    expect(h.requests.map((request) => request.card)).toEqual([null]);
+    expect(driver.dropCandidate).not.toHaveBeenCalled();
+    expect(h.sends.map((focus) => focus.botId)).toEqual([TRACY]);
+  });
+
+  it("is told the person moved, so a candidate is offered again", () => {
+    const driver = installDriver("route");
+    const h = build({ recheckHolds: true, canSend: true });
+
+    h.loop.onSelectionChanged();
+
+    expect(driver.invalidate).toHaveBeenCalledExactlyOnceWith("focus");
   });
 });

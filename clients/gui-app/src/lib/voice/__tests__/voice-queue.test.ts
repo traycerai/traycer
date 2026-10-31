@@ -93,6 +93,7 @@ let attentionNow: {
 let markRead: Mock<VoiceQueueDeps["markRead"]>;
 let switchTo: Mock<VoiceQueueDeps["switchTo"]>;
 let noteHeard: Mock<VoiceQueueDeps["noteHeard"]>;
+let onOfferHeard: Mock<VoiceQueueDeps["onOfferHeard"]>;
 let queue: VoiceQueue;
 
 beforeEach(() => {
@@ -104,6 +105,7 @@ beforeEach(() => {
   markRead = vi.fn<VoiceQueueDeps["markRead"]>();
   switchTo = vi.fn<VoiceQueueDeps["switchTo"]>();
   noteHeard = vi.fn<VoiceQueueDeps["noteHeard"]>();
+  onOfferHeard = vi.fn<VoiceQueueDeps["onOfferHeard"]>();
   scheduler = createSpeechScheduler({
     now: clock.now,
     setTimer: clock.setTimer,
@@ -123,6 +125,7 @@ beforeEach(() => {
     noteHeard,
     isFocused: (botId, chatId) => focusedChats.has(`${botId}:${chatId}`),
     attention: () => attentionNow,
+    onOfferHeard,
   });
 });
 
@@ -199,6 +202,7 @@ describe("a reply elsewhere that arrives while the session runs", () => {
     // The voice said it: the item is offered, and nothing offers it again.
     scheduler.noteOutputTranscript("Release bot has an answer for you.");
     expect(stateOf("r-1")).toBe("offered");
+    expect(onOfferHeard).toHaveBeenCalledTimes(1);
     clock.advance(120_000);
     expect(appended).toHaveLength(1);
   });
@@ -369,6 +373,15 @@ describe("two posts about the same approval", () => {
     expect(queue.pendingHydrations()).toEqual([]);
     expect(appended).toHaveLength(1);
     expect(appended[0]?.text).toContain("says a task is waiting on you");
+    expect(queue.surfaceOf("r-1")).toEqual({
+      kind: "approval",
+      epicId: "epic-1",
+      hostId: "host-a",
+      chatId: "task-chat",
+      approvalId: "ap-1",
+      resolution: null,
+    });
+    expect(queue.surfaceOf("r-unknown")).toBeNull();
   });
 });
 

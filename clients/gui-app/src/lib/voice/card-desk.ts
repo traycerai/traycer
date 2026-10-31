@@ -796,7 +796,10 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
   const awaiting = (held: Desk | null): held is Desk => {
     const active = card();
     if (held === null || active === null) return false;
-    if (held.offer !== null) return held.offer.say.heard;
+    // An offer takes the person's words from the moment it is out: a yes
+    // said over it is spent by it (`answerOffer` gates on hearing), never
+    // routed as a request of its own.
+    if (held.offer !== null) return true;
     return (
       active.state === "proposed" &&
       held.content !== null &&
@@ -817,7 +820,10 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
       close(held);
       return "route";
     }
-    if (words.seqs.some((seq) => seq <= offer.say.heardAfterSeq)) {
+    if (
+      !offer.say.heard ||
+      words.seqs.some((seq) => seq <= offer.say.heardAfterSeq)
+    ) {
       return "handled";
     }
     const api = held.api;
@@ -979,6 +985,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     };
     desk = held;
     store.getState().setActiveCard({
+      opening: serial,
       family: target.family,
       ids: target.ids,
       questionIndex: 0,
@@ -1138,9 +1145,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     invalidate(reason) {
       const held = desk;
       const active = card();
-      if (held === null || active === null || active.state !== "proposed") {
-        return;
-      }
+      if (held === null || active === null) return;
       const prefix =
         reason === "focus" ? "You moved, so I did not send it." : "Still open:";
       if (held.offer !== null) {
@@ -1148,11 +1153,13 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
         if (!offer.say.heard) return;
         // Asked again, so a yes answers only the offer heard last.
         speech.withdraw(offer.say.id);
-        const text = `${prefix} ${OFFER_TEXT}`;
+        const again =
+          reason === "focus" ? "You moved, so nothing was posted." : prefix;
+        const text = `${again} ${OFFER_TEXT}`;
         offer.say = ask(held, text, text);
         return;
       }
-      if (active.candidate === null) return;
+      if (active.state !== "proposed" || active.candidate === null) return;
       readCandidate(held, active.candidate, prefix);
     },
 

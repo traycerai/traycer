@@ -233,6 +233,8 @@ export interface ActiveCardIds {
  * VT5). A "yes" binds to `candidate` and nothing else.
  */
 export interface ActiveCard {
+  /** Which opening this is: each `open` reads the card afresh, even the same one again. */
+  readonly opening: number;
   readonly family: CardFamily;
   readonly ids: ActiveCardIds;
   /** The question being answered: the row's index for a bot's question, the surface's for an agent's. */

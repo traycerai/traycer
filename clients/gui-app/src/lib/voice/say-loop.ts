@@ -559,6 +559,9 @@ export function confirmationAnswer(
   return AFFIRMATIVE_FORMS.has(core.join(" ")) ? "yes" : "not-an-answer";
 }
 
+/** What held a boundary before routing; see `heldBoundary`. */
+type BoundaryHold = "handled" | "route" | "none";
+
 export function createSayLoop(deps: SayLoopDeps): SayLoop {
   const { store } = deps;
   const inFlight = new Map<string, Action>();
@@ -1168,22 +1171,22 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
    * What holds a boundary before it is routed, in order: an interruption
    * (its words join the held ones), a post waiting for its yes, and the
    * active card waiting for an answer. `"handled"` when one of them took the
-   * words; otherwise whether a card waits (`"route"`: the router sees it).
+   * words; otherwise whether a card waits (`"route"`: the router sees it). A
+   * promise only while a post waits for its yes, whose answer is awaited.
    */
-  async function heldBoundary(
+  function heldBoundary(
     boundary: string,
     delegationId: string,
-  ): Promise<"handled" | "route" | "none"> {
+  ): BoundaryHold | Promise<BoundaryHold> {
     const state = store.getState();
     if (state.pendingAction?.kind === "interrupted") {
       holdInterruptedBoundary();
       return "handled";
     }
-    if (
-      (state.pendingAction?.kind === "confirming" || confirming !== null) &&
-      (await answerConfirmation(boundary)) === "handled"
-    ) {
-      return "handled";
+    if (state.pendingAction?.kind === "confirming" || confirming !== null) {
+      return answerConfirmation(boundary).then((answered) =>
+        answered === "handled" ? "handled" : answerCard(boundary, delegationId),
+      );
     }
     return answerCard(boundary, delegationId);
   }
@@ -1194,10 +1197,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
    * posted. `"route"` when the card waits but the words are not its answer
    * (the router then sees the card), `"none"` when no card waits.
    */
-  function answerCard(
-    boundary: string,
-    delegationId: string,
-  ): "handled" | "route" | "none" {
+  function answerCard(boundary: string, delegationId: string): BoundaryHold {
     const state = store.getState();
     const driver = state.cardDriver;
     if (driver === null || !driver.awaitsAnswer()) return "none";
@@ -1239,7 +1239,10 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       const boundary = `${state.engineGeneration}:${delegationId}`;
       if (handledBoundaries.has(boundary)) return;
       handledBoundaries.add(boundary);
-      const cardWaited = await heldBoundary(boundary, delegationId);
+      // Awaited only while a post waits for its yes: on every other path the
+      // words are reserved in the same tick the boundary arrived in.
+      const held = heldBoundary(boundary, delegationId);
+      const cardWaited = typeof held === "string" ? held : await held;
       if (cardWaited === "handled") return;
       const now = store.getState();
       // No destination yet: the words stay open for the request that has one.
