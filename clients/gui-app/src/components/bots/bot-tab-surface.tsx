@@ -868,13 +868,16 @@ function BotTabContent(props: {
                 pane="sidebar"
                 edge="right"
                 label="Resize channels"
-                className="hidden min-h-0 w-(--bot-pane-width) max-w-[40%] shrink-0 flex-col border-r border-border/60 @3xl:flex"
+                className="hidden min-h-0 w-(--bot-pane-width) max-w-[40%] shrink-0 flex-col border-r border-canvas-border/70 @3xl:flex"
                 handleClassName=""
                 testId="bot-channel-sidebar-pane"
               >
                 <BotChannelSidebar activeBotId={botId} hostId={hostId} />
               </BotResizablePane>
-              <div className="relative flex min-h-0 min-w-0 flex-1">
+              <div
+                className="relative flex min-h-0 min-w-0 flex-1 md:bg-canvas"
+                data-testid="bot-tab-content-pane"
+              >
                 {session !== null ? (
                   <BotSessionView
                     key={session.chatId}

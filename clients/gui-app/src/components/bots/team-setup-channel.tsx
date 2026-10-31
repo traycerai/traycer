@@ -101,7 +101,7 @@ export function TeamSetupChannel(props: {
           pane="sidebar"
           edge="right"
           label="Resize channels"
-          className="hidden min-h-0 w-(--bot-pane-width) max-w-[40%] shrink-0 flex-col border-r border-border/60 @3xl:flex"
+          className="hidden min-h-0 w-(--bot-pane-width) max-w-[40%] shrink-0 flex-col border-r border-canvas-border/70 @3xl:flex"
           handleClassName=""
           testId="bot-channel-sidebar-pane"
         >
@@ -110,7 +110,7 @@ export function TeamSetupChannel(props: {
         <section
           aria-label={setup.title}
           data-testid="team-setup-channel"
-          className="flex min-h-0 min-w-0 flex-1 flex-col"
+          className="flex min-h-0 min-w-0 flex-1 flex-col md:bg-canvas"
         >
           <header className="flex shrink-0 items-center gap-2 px-4 pt-3 pb-2">
             <BotAvatar size="sm" />
