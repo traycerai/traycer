@@ -120,8 +120,10 @@ export function useVoiceQueueOwner(input: {
   readonly botList: BotListResponse | undefined;
   readonly appHostId: string | null;
   readonly botTitle: (botId: string) => string;
+  /** A row said through the queue: the focused feed's memory of its chat takes it as said. */
+  readonly noteHeard: (chatId: string, messageId: string) => void;
 }): VoiceQueueOwner {
-  const { ensureSpeech, botList, appHostId, botTitle } = input;
+  const { ensureSpeech, botList, appHostId, botTitle, noteHeard } = input;
   const bots = botList?.bots ?? NO_BOTS;
   const navigate = useNavigate();
   const attention = useVoiceAttention();
@@ -240,13 +242,14 @@ export function useVoiceQueueOwner(input: {
         mark({ epicId: botId, chatId });
       },
       switchTo: (target) => switchRef.current(target),
+      noteHeard,
       isFocused,
       attention: () => attentionRef.current,
     });
     queueRef.current = created;
     setQueue(created);
     return created;
-  }, [ensureSpeech, isFocused]);
+  }, [ensureSpeech, isFocused, noteHeard]);
 
   // `status`: one bot's readings gathered by a reader mounted for the ask,
   // composed once, and appended under the request it answers.

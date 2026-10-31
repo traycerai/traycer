@@ -57,6 +57,12 @@ export interface VoiceQueueDeps {
     readonly chatId: string;
   }) => void;
   /**
+   * A row of a chat was confirmed said through the queue: the focused feed
+   * of that chat, now or later, takes it as said too and never reads it
+   * again.
+   */
+  readonly noteHeard: (chatId: string, messageId: string) => void;
+  /**
    * Opens a bot's tab on a thread (or its channel, `threadId` `null`) and
    * makes that the focus. `hostId` `null`: the bot's tab host, else the
    * app's.
@@ -296,6 +302,9 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
             botId: entry.item.botId,
             chatId: entry.item.chatId,
           });
+        }
+        if (entry.item.messageId !== null) {
+          deps.noteHeard(entry.item.chatId, entry.item.messageId);
         }
       },
       onGivenUp: () => {

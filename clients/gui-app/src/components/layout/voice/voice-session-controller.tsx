@@ -264,11 +264,27 @@ export function VoiceSessionController(): ReactNode {
     [],
   );
 
+  // What each watched chat has shown, for the user session: a feed remount
+  // re-baselines nothing. State, not a ref, because render hands a chat's
+  // memory to its feed; the map itself is mutated in place.
+  const [watchMemories] = useState(() => new Map<string, ReplyWatchMemory>());
+  // A row the queue said is said for the focused feed too: returning to its
+  // chat later never reads it again.
+  const noteHeard = useCallback(
+    (chatId: string, messageId: string) => {
+      const memory = watchMemories.get(chatId);
+      if (memory === undefined) return;
+      memory.seen.add(messageId);
+      memory.scheduled.add(messageId);
+    },
+    [watchMemories],
+  );
   const voiceQueue = useVoiceQueueOwner({
     ensureSpeech,
     botList: bots.data,
     appHostId,
     botTitle,
+    noteHeard,
   });
   const { beginQueue, noteAnnouncement, noteChannel, noteFocused, resetQueue } =
     voiceQueue;
@@ -399,10 +415,6 @@ export function VoiceSessionController(): ReactNode {
   const levelWatchRef = useRef<AudioLevelWatch | null>(null);
   const expiryTimerRef = useRef<number | null>(null);
   const remintWhenClearRef = useRef<(() => void) | null>(null);
-  // What each watched chat has shown, for the user session: a feed remount
-  // re-baselines nothing. State, not a ref, because render hands a chat's
-  // memory to its feed; the map itself is mutated in place.
-  const [watchMemories] = useState(() => new Map<string, ReplyWatchMemory>());
   const watchMemoryFor = useCallback(
     (chatId: string): ReplyWatchMemory => {
       const existing = watchMemories.get(chatId);
