@@ -40,9 +40,15 @@ export function executeDeferredVerb(input: {
     case "read":
     case "later": {
       // A route that names a bot (or thread) and no item means that bot's
-      // newest waiting item; with none, nothing, never another bot's.
+      // newest waiting item; with none, nothing, never another bot's. An
+      // item the route names is checked against the queue as it is now: the
+      // route was made from an earlier snapshot, and the item may have been
+      // heard or set aside since.
       const itemId = input.itemId ?? newestWaitingOf(target);
       if (input.itemId === null && target !== null && itemId === null) {
+        return { kind: "refused", say: NOTHING_WAITING_NOTICE };
+      }
+      if (input.itemId !== null && !isStillWaiting(input.itemId)) {
         return { kind: "refused", say: NOTHING_WAITING_NOTICE };
       }
       const outcome =
@@ -87,6 +93,14 @@ function newestWaitingOf(target: BoundTarget | null): string | null {
       (threadId === null || candidate.threadId === threadId),
   );
   return item?.id ?? null;
+}
+
+/** Whether the queue holds `itemId` now, and it still waits (queued or offered). */
+function isStillWaiting(itemId: string): boolean {
+  const item = useVoiceSessionStore
+    .getState()
+    .queue.find((candidate) => candidate.id === itemId);
+  return item?.state === "queued" || item?.state === "offered";
 }
 
 function outcomeOf(outcome: QueueVerbOutcome, nothing: string): VerbOutcome {
