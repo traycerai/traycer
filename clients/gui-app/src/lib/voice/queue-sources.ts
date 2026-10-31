@@ -250,10 +250,24 @@ export interface Announcement {
 }
 
 /**
+ * Whether a bot row asked the person something, open or since settled: it
+ * carries a question, or a surface pointing at a task's approval or
+ * question. Such a row is never an announcement; once settled it is simply
+ * nothing more to say.
+ */
+function askedThePerson(row: Pick<AssistantRow, "question" | "surface">): boolean {
+  return (
+    row.question !== undefined ||
+    row.surface?.kind === "approval" ||
+    row.surface?.kind === "question"
+  );
+}
+
+/**
  * The bot's rows of a channel that answer nothing and ask nothing: no direct
  * reply's `repliesTo`, no member's request in the channel resolved to them,
- * and no open question or surfaced prompt (`promptOf`), which is a question
- * to the person wherever it sits. Rows at or before `since` are history. In
+ * and no question or surfaced prompt, open or settled (`askedThePerson`),
+ * which is a question to the person wherever it sits. Rows at or before `since` are history. In
  * the store's order, which is oldest first.
  */
 export function announcementsOf(
@@ -270,7 +284,7 @@ export function announcementsOf(
   for (const row of rows) {
     if (row.role !== "assistant" || row.timestamp <= since) continue;
     if (row.repliesTo !== undefined || answers.has(row.messageId)) continue;
-    if (promptOf(row) !== null) continue;
+    if (askedThePerson(row)) continue;
     const content = replyTextOf(row);
     if (content.length === 0) continue;
     found.push({ messageId: row.messageId, content, at: row.timestamp });
