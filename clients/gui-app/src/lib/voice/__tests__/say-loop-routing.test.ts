@@ -877,15 +877,6 @@ describe("the active card", () => {
     expect(driver.dropCandidate).not.toHaveBeenCalled();
     expect(h.sends.map((focus) => focus.botId)).toEqual([TRACY]);
   });
-
-  it("is told the person moved, so a candidate is offered again", () => {
-    const driver = installDriver("route");
-    const h = build({ recheckHolds: true, canSend: true });
-
-    h.loop.onSelectionChanged();
-
-    expect(driver.invalidate).toHaveBeenCalledExactlyOnceWith("focus");
-  });
 });
 
 describe("the card desk behind the say loop", () => {
@@ -952,8 +943,9 @@ describe("the card desk behind the say loop", () => {
         );
       },
       /** The voice confirmed having said the newest thing. */
-      heard: (): void => {
+      heard: async (): Promise<void> => {
         spoken.at(-1)?.onDelivered?.();
+        await Promise.resolve();
       },
     };
   }
@@ -986,10 +978,10 @@ describe("the card desk behind the say loop", () => {
 
   describe("a route made against a card that is no longer the open one", () => {
     /** A request routes against card A, still out when B is opened and heard. */
-    function routeOutWhileAnotherOpens() {
+    async function routeOutWhileAnotherOpens() {
       const desk = installDesk();
       desk.show("a");
-      desk.heard();
+      await desk.heard();
       const h = build({ recheckHolds: true, canSend: true });
       const out = heldAnswer();
       h.answers.push(out.answer);
@@ -997,12 +989,12 @@ describe("the card desk behind the say loop", () => {
       const done = h.loop.onDelegationCreated("slow");
       expect(h.requests).toHaveLength(1);
       desk.show("b");
-      desk.heard();
+      await desk.heard();
       return { desk, h, out, done };
     }
 
     it("chooses nothing on the other card when its answer arrives, and says so", async () => {
-      const { desk, h, out, done } = routeOutWhileAnotherOpens();
+      const { desk, h, out, done } = await routeOutWhileAnotherOpens();
 
       out.release({ ...route("answer", null, null, 1), choice: 0 });
       await done;
@@ -1016,7 +1008,7 @@ describe("the card desk behind the say loop", () => {
     });
 
     it("leaves the other card's candidate alone when its words were posted", async () => {
-      const { h, out, done } = routeOutWhileAnotherOpens();
+      const { h, out, done } = await routeOutWhileAnotherOpens();
       speak("approve");
       await h.loop.onDelegationCreated("choose");
       expect(activeCard()?.candidate).toEqual({

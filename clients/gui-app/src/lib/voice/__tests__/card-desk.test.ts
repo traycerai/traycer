@@ -19,15 +19,18 @@ import {
   CARD_WHICH_TEXT,
   createCardDesk,
   matchCardChoice,
+  type BotAnswerOutcome,
   type CardApi,
   type CardContent,
   type CardDesk,
   type CardFacts,
+  type SurfaceActOutcome,
 } from "../card-desk";
 import {
   OUTPUT_HANGOVER_MS,
   createSpeechScheduler,
   type SpeechItem,
+  type SpeechScheduler,
 } from "../scheduler";
 
 const ITEM = "item-1";
@@ -111,17 +114,34 @@ function settledElsewhere(who: string, verb: string): string {
   return `${who} already ${verb} it, so yours was not sent. Want me to post your answer in the thread instead? Say yes or no.`;
 }
 
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 let wordsCount = 0;
 
 /** The person's words reach the card as the say loop hands them over. */
-function speakTo(cardDesk: CardDesk, text: string): "handled" | "route" {
+function speakTo(
+  cardDesk: CardDesk,
+  text: string,
+  delegationId: string,
+): "handled" | "route" {
   useVoiceSessionStore.getState().appendInputSegment(text, 0);
   wordsCount += 1;
   const words = useVoiceSessionStore
     .getState()
     .reserveOpenSpan(`words:${wordsCount}`);
   if (words === null) throw new Error("no open words");
-  const verdict = cardDesk.answer(words, "d-words");
+  const verdict = cardDesk.answer(words, delegationId);
   // Words the card takes are spent; words routed elsewhere are spent by the request they start.
   useVoiceSessionStore.getState().consumeReservation(words.seqs);
   return verdict;
@@ -192,15 +212,20 @@ interface Harness {
   /** The same, for the card of another item. */
   readonly deliverItem: (itemId: string) => void;
   /** The voice confirmed having said it. */
-  readonly heard: (item: SpeechItem) => void;
+  readonly heard: (item: SpeechItem) => Promise<void>;
   /** The newest thing the voice was given to say. */
   readonly latest: () => SpeechItem;
   /** The person's words reach the card as the say loop hands them over. */
   readonly say: (text: string) => "handled" | "route";
+  /** The same, under the delegation of the utterance. */
+  readonly sayUnder: (
+    text: string,
+    delegationId: string,
+  ) => "handled" | "route";
   /** The card is opened, its list read back and heard: the person's turn. */
-  readonly listen: () => SpeechItem;
+  readonly listen: () => Promise<SpeechItem>;
   /** A choice named and its read-back heard: a yes is next. */
-  readonly candidate: (choiceWords: string) => SpeechItem;
+  readonly candidate: (choiceWords: string) => Promise<SpeechItem>;
   /** The router's answer, routed against the card as it stands now. */
   readonly route: (choice: number | null, text: string) => boolean;
   /** Words routed elsewhere, against the card as it stands now. */
@@ -272,26 +297,31 @@ function setup(content: CardContent): Harness {
   const deliver = (): void => {
     deliverItem(ITEM);
   };
-  const heard = (item: SpeechItem): void => {
+  /** Delivered, and the desk's check of the playback after it has run. */
+  const heard = async (item: SpeechItem): Promise<void> => {
     item.onDelivered?.();
+    await Promise.resolve();
   };
   const latest = (): SpeechItem => {
     const item = spoken.at(-1);
     if (item === undefined) throw new Error("nothing was spoken");
     return item;
   };
-  const say = (text: string): "handled" | "route" => speakTo(cardDesk, text);
-  const listen = (): SpeechItem => {
+  const say = (text: string): "handled" | "route" =>
+    speakTo(cardDesk, text, "d-words");
+  const sayUnder = (text: string, delegationId: string): "handled" | "route" =>
+    speakTo(cardDesk, text, delegationId);
+  const listen = async (): Promise<SpeechItem> => {
     cardDesk.open(ITEM, "d-open");
     deliver();
     const list = latest();
-    heard(list);
+    await heard(list);
     return list;
   };
-  const candidate = (choiceWords: string): SpeechItem => {
+  const candidate = async (choiceWords: string): Promise<SpeechItem> => {
     say(choiceWords);
     const item = latest();
-    heard(item);
+    await heard(item);
     return item;
   };
   const currentKey = (): CardKey => {
@@ -311,6 +341,7 @@ function setup(content: CardContent): Harness {
     heard,
     latest,
     say,
+    sayUnder,
     listen,
     candidate,
     route: (choice, text) =>
@@ -322,13 +353,13 @@ function setup(content: CardContent): Harness {
 }
 
 /** Words said, then handed over only once `before` ran: what a late boundary delivers. */
-function sayLate(
+async function sayLate(
   h: Harness,
   text: string,
-  before: () => void,
-): "handled" | "route" {
+  before: () => Promise<void>,
+): Promise<"handled" | "route"> {
   useVoiceSessionStore.getState().appendInputSegment(text, 0);
-  before();
+  await before();
   const words = useVoiceSessionStore.getState().reserveOpenSpan("late");
   if (words === null) throw new Error("no open words");
   const verdict = h.desk.answer(words, "d-late");
@@ -389,13 +420,13 @@ describe("the read-back of a card", () => {
     expect(h.api.answerBotQuestion).not.toHaveBeenCalled();
   });
 
-  it("chooses nothing from words said while it played but handed over after it was heard", () => {
+  it("chooses nothing from words said while it played but handed over after it was heard", async () => {
     const h = setup(BOT_QUESTION);
     h.desk.open(ITEM, "d-open");
     h.deliver();
     const list = h.latest();
 
-    expect(sayLate(h, "Production", () => h.heard(list))).toBe("handled");
+    expect(await sayLate(h, "Production", () => h.heard(list))).toBe("handled");
 
     expect(h.spoken).toEqual([list]);
     expect(h.card()?.candidate).toBeNull();
@@ -435,9 +466,9 @@ describe("the read-back of a card", () => {
     expect(h.card()).toBeNull();
   });
 
-  it("lapses when the person says nothing for the answer window", () => {
+  it("lapses when the person says nothing for the answer window", async () => {
     const h = setup(BOT_QUESTION);
-    h.listen();
+    await h.listen();
 
     h.advance(CARD_ANSWER_WINDOW_MS);
 
@@ -448,9 +479,9 @@ describe("the read-back of a card", () => {
 });
 
 describe("a yes", () => {
-  it("sends the candidate only once the read-back that offered it was heard", () => {
+  it("sends the candidate only once the read-back that offered it was heard", async () => {
     const h = setup(BOT_QUESTION);
-    h.listen();
+    await h.listen();
     h.say("Production");
     const readBack = h.latest();
     expect(readBack.text).toContain('"Production" as your answer');
@@ -461,16 +492,16 @@ describe("a yes", () => {
     expect(h.api.answerBotQuestion).not.toHaveBeenCalled();
 
     // Said before it was heard but handed over after.
-    expect(sayLate(h, "yes", () => h.heard(readBack))).toBe("handled");
+    expect(await sayLate(h, "yes", () => h.heard(readBack))).toBe("handled");
     expect(h.api.answerBotQuestion).not.toHaveBeenCalled();
 
     h.say("yes");
     expect(h.api.answerBotQuestion).toHaveBeenCalledTimes(1);
   });
 
-  it("sends nothing with no candidate: the voice asks which one", () => {
+  it("sends nothing with no candidate: the voice asks which one", async () => {
     const h = setup(BOT_QUESTION);
-    h.listen();
+    await h.listen();
 
     expect(h.say("yes")).toBe("handled");
 
@@ -479,10 +510,10 @@ describe("a yes", () => {
     expect(h.card()?.state).toBe("proposed");
   });
 
-  it("is declined by a no: the card closes and nothing is sent", () => {
+  it("is declined by a no: the card closes and nothing is sent", async () => {
     const h = setup(BOT_QUESTION);
-    h.listen();
-    h.candidate("Staging");
+    await h.listen();
+    await h.candidate("Staging");
 
     h.say("no");
 
@@ -491,7 +522,7 @@ describe("a yes", () => {
     expect(h.api.answerBotQuestion).not.toHaveBeenCalled();
   });
 
-  it("is the candidate itself when the only choice takes no words of its own", () => {
+  it("is the candidate itself when the only choice takes no words of its own", async () => {
     const h = setup({
       ...BOT_QUESTION,
       questions: [
@@ -503,7 +534,7 @@ describe("a yes", () => {
         },
       ],
     });
-    const list = h.listen();
+    const list = await h.listen();
     expect(list.text).toContain("Say yes to send it, or skip.");
     expect(h.card()?.candidate).toEqual(option(0, "Ship it"));
 
@@ -516,7 +547,7 @@ describe("a yes", () => {
     });
   });
 
-  it("is taken as that choice when an option is literally labelled Yes", () => {
+  it("is taken as that choice when an option is literally labelled Yes", async () => {
     const h = setup({
       ...BOT_QUESTION,
       questions: [
@@ -528,7 +559,7 @@ describe("a yes", () => {
         },
       ],
     });
-    h.listen();
+    await h.listen();
 
     h.say("yes");
     expect(h.api.answerBotQuestion).not.toHaveBeenCalled();
@@ -536,7 +567,7 @@ describe("a yes", () => {
     expect(h.latest().text).toContain('"Yes" as your answer');
 
     // Said again after that read-back, the same choice is its confirmation.
-    h.heard(h.latest());
+    await h.heard(h.latest());
     h.say("yes");
     expect(h.api.answerBotQuestion).toHaveBeenCalledWith({
       text: "Yes",
@@ -552,10 +583,10 @@ describe("a move or an interjection while a candidate waits", () => {
     ["interjection", "Still open:"],
   ] as const)(
     "after %s offers it again, and a yes counts only after the new read-back was heard",
-    (reason, prefix) => {
+    async (reason, prefix) => {
       const h = setup(BOT_QUESTION);
-      h.listen();
-      h.candidate("Staging");
+      await h.listen();
+      await h.candidate("Staging");
 
       h.desk.invalidate(reason);
 
@@ -565,7 +596,7 @@ describe("a move or an interjection while a candidate waits", () => {
       h.say("yes");
       expect(h.api.answerBotQuestion).not.toHaveBeenCalled();
 
-      h.heard(h.latest());
+      await h.heard(h.latest());
       h.say("yes");
       expect(h.api.answerBotQuestion).toHaveBeenCalledWith({
         text: "Staging",
@@ -575,9 +606,9 @@ describe("a move or an interjection while a candidate waits", () => {
     },
   );
 
-  it("takes back a candidate read-back not yet heard when the words went elsewhere", () => {
+  it("takes back a candidate read-back not yet heard when the words went elsewhere", async () => {
     const h = setup(BOT_QUESTION);
-    h.listen();
+    await h.listen();
     h.say("Staging");
     const readBack = h.latest();
 
@@ -591,10 +622,10 @@ describe("a move or an interjection while a candidate waits", () => {
 });
 
 describe("the three families", () => {
-  it("answers a bot's question through the send, with the row's open question index", () => {
+  it("answers a bot's question through the send, with the row's open question index", async () => {
     const h = setup(BOT_QUESTION);
-    h.listen();
-    h.candidate("the second one");
+    await h.listen();
+    await h.candidate("the second one");
 
     h.say("yes");
 
@@ -606,10 +637,10 @@ describe("the three families", () => {
     expect(h.api.actSurface).not.toHaveBeenCalled();
   });
 
-  it("answers a task agent's question through the surface act, never the bot's send", () => {
+  it("answers a task agent's question through the surface act, never the bot's send", async () => {
     const h = setup(AGENT_QUESTION);
-    h.listen();
-    h.candidate("release 2.1");
+    await h.listen();
+    await h.candidate("release 2.1");
 
     h.say("yes");
 
@@ -637,10 +668,10 @@ describe("the three families", () => {
     expect(h.api.answerBotQuestion).not.toHaveBeenCalled();
   });
 
-  it("walks an agent's questions one by one and sends them once, together", () => {
+  it("walks an agent's questions one by one and sends them once, together", async () => {
     const h = setup(TWO_QUESTIONS);
-    h.listen();
-    h.candidate("main");
+    await h.listen();
+    await h.candidate("main");
 
     h.say("yes");
 
@@ -652,8 +683,8 @@ describe("the three families", () => {
       draft: [option(0, "main")],
     });
 
-    h.heard(h.latest());
-    h.candidate("hold off");
+    await h.heard(h.latest());
+    await h.candidate("hold off");
     h.say("yes");
 
     expect(h.api.actSurface).toHaveBeenCalledTimes(1);
@@ -669,10 +700,10 @@ describe("the three families", () => {
     ["deny", false],
   ])(
     "decides an approval with %s through the surface act",
-    (verb, approved) => {
+    async (verb, approved) => {
       const h = setup(APPROVAL);
-      h.listen();
-      h.candidate(verb);
+      await h.listen();
+      await h.candidate(verb);
       expect(h.latest().text).toContain("Bash: rm -rf build");
 
       h.say("yes");
@@ -685,10 +716,10 @@ describe("the three families", () => {
     },
   );
 
-  it("sends a skipped bot question as skipped, with the Skipped text", () => {
+  it("sends a skipped bot question as skipped, with the Skipped text", async () => {
     const h = setup(BOT_QUESTION);
-    h.listen();
-    h.candidate("skip");
+    await h.listen();
+    await h.candidate("skip");
     expect(h.latest().text).toContain("Skip Release bot's question.");
 
     h.say("yes");
@@ -700,13 +731,13 @@ describe("the three families", () => {
     });
   });
 
-  it("sends a skipped agent question as a skip with no draft answers", () => {
+  it("sends a skipped agent question as a skip with no draft answers", async () => {
     const h = setup(TWO_QUESTIONS);
-    h.listen();
-    h.candidate("main");
+    await h.listen();
+    await h.candidate("main");
     h.say("yes");
-    h.heard(h.latest());
-    h.candidate("skip");
+    await h.heard(h.latest());
+    await h.candidate("skip");
 
     h.say("yes");
 
@@ -732,9 +763,9 @@ describe("the router's answer to the card", () => {
     });
   });
 
-  it("is shown an approval as Allow and Deny with no Skip", () => {
+  it("is shown an approval as Allow and Deny with no Skip", async () => {
     const h = setup(APPROVAL);
-    h.listen();
+    await h.listen();
 
     expect(h.desk.routerCard()).toEqual({
       key: { opening: 1, questionIndex: 0 },
@@ -773,9 +804,9 @@ describe("the router's answer to the card", () => {
     ],
   ])(
     "choice %s becomes the candidate and is read back alone",
-    (choice, text, readBack) => {
+    async (choice, text, readBack) => {
       const h = setup(AGENT_QUESTION);
-      h.listen();
+      await h.listen();
 
       expect(h.route(choice, text)).toBe(true);
 
@@ -785,11 +816,11 @@ describe("the router's answer to the card", () => {
     },
   );
 
-  it("sends the person's own words as custom text once confirmed", () => {
+  it("sends the person's own words as custom text once confirmed", async () => {
     const h = setup(AGENT_QUESTION);
-    h.listen();
+    await h.listen();
     h.route(null, "use the hotfix branch");
-    h.heard(h.latest());
+    await h.heard(h.latest());
 
     h.say("yes");
 
@@ -807,9 +838,9 @@ describe("the router's answer to the card", () => {
     ["a skip of an approval", APPROVAL, 2, ""],
     ["no words for a question that takes them", AGENT_QUESTION, null, "  "],
     ["words for a question that takes none", BOT_QUESTION, null, "maybe"],
-  ])("asks which one for %s", (_name, content, choice, text) => {
+  ])("asks which one for %s", async (_name, content, choice, text) => {
     const h = setup(content);
-    h.listen();
+    await h.listen();
 
     expect(h.route(choice, text)).toBe(true);
 
@@ -869,8 +900,8 @@ describe("a card settled first by someone else", () => {
     "on $name is said with who settled it, and a heard yes posts the answer in the thread",
     async ({ content, words, label, verb }) => {
       const h = setup(content);
-      h.listen();
-      h.candidate(words);
+      await h.listen();
+      await h.candidate(words);
       // The records name the settler by the time the refusal lands.
       h.records.settledBy = "Dana";
       refuseAsSettled(h, content.family);
@@ -887,7 +918,7 @@ describe("a card settled first by someone else", () => {
       h.say("yes");
       expect(h.api.postInThread).not.toHaveBeenCalled();
 
-      h.heard(h.latest());
+      await h.heard(h.latest());
       h.say("yes");
 
       expect(h.api.postInThread).toHaveBeenCalledWith(label);
@@ -898,8 +929,8 @@ describe("a card settled first by someone else", () => {
 
   it("is said as Someone when the records name nobody within the wait", async () => {
     const h = setup(AGENT_QUESTION);
-    h.listen();
-    h.candidate("main");
+    await h.listen();
+    await h.candidate("main");
     refuseAsSettled(h, "agent-question");
 
     h.say("yes");
@@ -911,15 +942,15 @@ describe("a card settled first by someone else", () => {
     h.advance(1);
 
     expect(h.latest().text).toBe(settledElsewhere("Someone", "answered"));
-    h.heard(h.latest());
+    await h.heard(h.latest());
     h.say("yes");
     expect(h.api.postInThread).toHaveBeenCalledWith("main");
   });
 
   it("is not claimed for a bot's send that failed while the records show the question still open", async () => {
     const h = setup(BOT_QUESTION);
-    h.listen();
-    h.candidate("Staging");
+    await h.listen();
+    await h.candidate("Staging");
     refuseAsSettled(h, "bot-question");
 
     h.say("yes");
@@ -934,8 +965,8 @@ describe("a card settled first by someone else", () => {
 
   it("is said with the name once the records give it within the wait, and only once", async () => {
     const h = setup(AGENT_QUESTION);
-    h.listen();
-    h.candidate("main");
+    await h.listen();
+    await h.candidate("main");
     refuseAsSettled(h, "agent-question");
 
     h.say("yes");
@@ -949,10 +980,10 @@ describe("a card settled first by someone else", () => {
     ]);
   });
 
-  it("is said when the records show it while the person is still deciding, without sending", () => {
+  it("is said when the records show it while the person is still deciding, without sending", async () => {
     const h = setup(BOT_QUESTION);
-    h.listen();
-    h.candidate("Staging");
+    await h.listen();
+    await h.candidate("Staging");
 
     h.records.settledBy = "Dana";
     h.records.content = null;
@@ -964,8 +995,8 @@ describe("a card settled first by someone else", () => {
 
   it("is offered again when the person moves, and a yes before the new offer is heard posts nothing", async () => {
     const h = setup(BOT_QUESTION);
-    h.listen();
-    h.candidate("Production");
+    await h.listen();
+    await h.candidate("Production");
     h.records.settledBy = "Dana";
     refuseAsSettled(h, "bot-question");
     h.say("yes");
@@ -973,7 +1004,7 @@ describe("a card settled first by someone else", () => {
       expect(h.latest().text).toBe(settledElsewhere("Dana", "answered")),
     );
     const offer = h.latest();
-    h.heard(offer);
+    await h.heard(offer);
 
     h.desk.invalidate("focus");
 
@@ -985,20 +1016,20 @@ describe("a card settled first by someone else", () => {
     expect(h.say("yes")).toBe("handled");
     expect(h.api.postInThread).not.toHaveBeenCalled();
 
-    h.heard(h.latest());
+    await h.heard(h.latest());
     h.say("yes");
     expect(h.api.postInThread).toHaveBeenCalledWith("Production");
   });
 
   it("lets the offer go when the person says no", async () => {
     const h = setup(BOT_QUESTION);
-    h.listen();
-    h.candidate("Staging");
+    await h.listen();
+    await h.candidate("Staging");
     h.records.settledBy = "Dana";
     refuseAsSettled(h, "bot-question");
     h.say("yes");
     await vi.waitFor(() => expect(h.latest().text).toContain("Dana"));
-    h.heard(h.latest());
+    await h.heard(h.latest());
 
     h.say("no");
 
@@ -1011,8 +1042,8 @@ describe("a card settled first by someone else", () => {
 describe("an act forwarded to the task's machine", () => {
   async function forwarded(): Promise<Harness> {
     const h = setup(AGENT_QUESTION);
-    h.listen();
-    h.candidate("main");
+    await h.listen();
+    await h.candidate("main");
     h.api.actSurface.mockResolvedValueOnce({
       kind: "answered",
       response: { outcome: "forwarded", code: null },
@@ -1082,7 +1113,7 @@ describe("an act forwarded to the task's machine", () => {
     h.deliver();
 
     expect(h.latest().text).toBe(settledElsewhere("Dana", "answered"));
-    h.heard(h.latest());
+    await h.heard(h.latest());
     h.say("yes");
     expect(h.api.postInThread).toHaveBeenCalledWith("main");
   });
@@ -1106,11 +1137,11 @@ describe("a card that is gone", () => {
   it.each([
     ["before it was read", false],
     ["after the candidate was read back", true],
-  ])("is said %s and never acted on", (_name, afterCandidate) => {
+  ])("is said %s and never acted on", async (_name, afterCandidate) => {
     const h = setup(BOT_QUESTION);
     if (afterCandidate) {
-      h.listen();
-      h.candidate("Staging");
+      await h.listen();
+      await h.candidate("Staging");
     } else {
       h.desk.open(ITEM, "d-open");
     }
@@ -1128,7 +1159,16 @@ describe("a card that is gone", () => {
 });
 
 describe("a read-back confirmed by its first words", () => {
-  it("counts as heard only once its playback is over: a yes said over the rest of it sends nothing", () => {
+  interface RealScheduled {
+    readonly scheduler: SpeechScheduler;
+    readonly cardDesk: CardDesk;
+    readonly actSurface: Mock<CardApi["actSurface"]>;
+    /** The sound ends and the hangover passes. */
+    readonly endPlayback: () => Promise<void>;
+  }
+
+  /** The real scheduler on a fake clock, with healthy level detection, behind a desk with an approval open. */
+  async function approvalOnRealScheduler(): Promise<RealScheduled> {
     const timers = createTimers();
     const cancels = new Map<number, () => void>();
     let handle = 0;
@@ -1164,13 +1204,11 @@ describe("a read-back confirmed by its first words", () => {
       target: () => ({ family: "approval", ids: IDS }),
       newActionId: () => "act-1",
     });
-    const speak = (words: string): void => {
-      scheduler.noteOutputLevel(true);
-      scheduler.noteOutputTranscript(words);
-    };
-    const endPlayback = (): void => {
+    const endPlayback = async (): Promise<void> => {
       scheduler.noteOutputLevel(false);
       timers.advance(OUTPUT_HANGOVER_MS * 3);
+      await Promise.resolve();
+      expect(scheduler.activity().outputPlaying).toBe(false);
     };
 
     cardDesk.open(ITEM, null);
@@ -1184,38 +1222,58 @@ describe("a read-back confirmed by its first words", () => {
       },
       api,
     );
-    speak("Bash. Allow or deny.");
-    endPlayback();
-    expect(scheduler.activity().outputPlaying).toBe(false);
-
-    speakTo(cardDesk, "approve");
+    // The list plays whole and is heard.
+    scheduler.noteOutputLevel(true);
+    scheduler.noteOutputTranscript("Bash. Allow or deny.");
+    await endPlayback();
+    speakTo(cardDesk, "approve", "d-words");
     expect(useVoiceSessionStore.getState().activeCard?.candidate).toEqual(
       option(0, "Allow"),
     );
+    return { scheduler, cardDesk, actSurface, endPlayback };
+  }
 
-    // The read-back is confirmed by its first word while the rest still plays.
-    speak("Allow");
-    expect(scheduler.activity().outputPlaying).toBe(true);
-    speakTo(cardDesk, "yes");
-    expect(actSurface).not.toHaveBeenCalled();
+  /** The yes said over the rest of the read-back sends nothing; one after it ends sends once. */
+  async function expectYesWaitsForPlayback(h: RealScheduled): Promise<void> {
+    await Promise.resolve();
+    expect(h.scheduler.activity().outputPlaying).toBe(true);
+    speakTo(h.cardDesk, "yes", "d-words");
+    expect(h.actSurface).not.toHaveBeenCalled();
 
-    endPlayback();
-    expect(scheduler.activity().outputPlaying).toBe(false);
-    speakTo(cardDesk, "yes");
-    expect(actSurface).toHaveBeenCalledTimes(1);
-    expect(actSurface).toHaveBeenCalledWith(
+    await h.endPlayback();
+    speakTo(h.cardDesk, "yes", "d-words");
+    expect(h.actSurface).toHaveBeenCalledTimes(1);
+    expect(h.actSurface).toHaveBeenCalledWith(
       { kind: "decide", decision: { approved: true } },
       "act-1",
     );
+  }
+
+  it("counts as heard only once its playback is over: a yes said over the rest of it sends nothing", async () => {
+    const h = await approvalOnRealScheduler();
+
+    h.scheduler.noteOutputLevel(true);
+    h.scheduler.noteOutputTranscript("Allow");
+
+    await expectYesWaitsForPlayback(h);
+  });
+
+  it("is held to the same when its transcript arrives before the sound", async () => {
+    const h = await approvalOnRealScheduler();
+
+    h.scheduler.noteOutputTranscript("Allow");
+    h.scheduler.noteOutputLevel(true);
+
+    await expectYesWaitsForPlayback(h);
   });
 });
 
 describe("a card opened again while its act is out", () => {
   /** An approval of the first item allowed, its act pending; another card opened, then the first again. */
-  function reopenedWhileOut(): {
+  async function reopenedWhileOut(): Promise<{
     readonly h: Harness;
     readonly resolveAct: (response: "settled" | "forwarded") => void;
-  } {
+  }> {
     const h = setup(APPROVAL);
     let resolveAct: (response: "settled" | "forwarded") => void = () =>
       undefined;
@@ -1229,8 +1287,8 @@ describe("a card opened again while its act is out", () => {
             });
         }),
     );
-    h.listen();
-    h.candidate("approve");
+    await h.listen();
+    await h.candidate("approve");
     h.say("yes");
     expect(h.api.actSurface).toHaveBeenCalledTimes(1);
 
@@ -1241,8 +1299,8 @@ describe("a card opened again while its act is out", () => {
     return { h, resolveAct: (response) => resolveAct(response) };
   }
 
-  it("shows that act as sending, says it is on its way, and never sends a second one", () => {
-    const { h } = reopenedWhileOut();
+  it("shows that act as sending, says it is on its way, and never sends a second one", async () => {
+    const { h } = await reopenedWhileOut();
 
     expect(h.card()).toMatchObject({
       state: "sending",
@@ -1268,7 +1326,7 @@ describe("a card opened again while its act is out", () => {
   ] as const)(
     "has its answer said on the current opening when it %s",
     async (_name, outcome, cardState, text) => {
-      const { h, resolveAct } = reopenedWhileOut();
+      const { h, resolveAct } = await reopenedWhileOut();
       const opening = h.card()?.opening;
 
       resolveAct(outcome);
@@ -1283,8 +1341,8 @@ describe("a card opened again while its act is out", () => {
 describe("a forwarded act that lost the race", () => {
   it("is said with who decided first when one reading shows both their resolution and its refusal, and offers the post", async () => {
     const h = setup(APPROVAL);
-    h.listen();
-    h.candidate("deny");
+    await h.listen();
+    await h.candidate("deny");
     h.api.actSurface.mockResolvedValueOnce({
       kind: "answered",
       response: { outcome: "forwarded", code: null },
@@ -1304,7 +1362,7 @@ describe("a forwarded act that lost the race", () => {
 
     expect(h.latest().text).toBe(settledElsewhere("Alice", "decided"));
     expect(h.card()).not.toBeNull();
-    h.heard(h.latest());
+    await h.heard(h.latest());
     h.say("yes");
     expect(h.api.postInThread).toHaveBeenCalledWith("Deny");
   });
@@ -1312,10 +1370,10 @@ describe("a forwarded act that lost the race", () => {
 
 describe("records that already carry the end of an act still out", () => {
   /** Approval denied with its act pending, and the records read meanwhile. */
-  function actOutWhileRecordsRead(
+  async function actOutWhileRecordsRead(
     h: Harness,
     records: Pick<Records, "settledBy" | "forwarded">,
-  ): () => void {
+  ): Promise<() => void> {
     let forward: () => void = () => undefined;
     h.api.actSurface.mockImplementationOnce(
       () =>
@@ -1327,8 +1385,8 @@ describe("records that already carry the end of an act still out", () => {
             });
         }),
     );
-    h.listen();
-    h.candidate("deny");
+    await h.listen();
+    await h.candidate("deny");
     h.say("yes");
     expect(h.card()?.state).toBe("sending");
 
@@ -1342,7 +1400,7 @@ describe("records that already carry the end of an act still out", () => {
 
   it("closes the card when the call turns forwarded after the post already showed its resolution", async () => {
     const h = setup(APPROVAL);
-    const forward = actOutWhileRecordsRead(h, {
+    const forward = await actOutWhileRecordsRead(h, {
       settledBy: "Alice",
       forwarded: null,
     });
@@ -1354,7 +1412,7 @@ describe("records that already carry the end of an act still out", () => {
 
   it("says who decided first and offers the post when the call turns forwarded after its refusal was already recorded", async () => {
     const h = setup(APPROVAL);
-    const forward = actOutWhileRecordsRead(h, {
+    const forward = await actOutWhileRecordsRead(h, {
       settledBy: "Alice",
       forwarded: {
         actionId: "act-1",
@@ -1369,10 +1427,194 @@ describe("records that already carry the end of an act still out", () => {
     await vi.waitFor(() =>
       expect(h.latest().text).toBe(settledElsewhere("Alice", "decided")),
     );
-    h.heard(h.latest());
+    await h.heard(h.latest());
     h.say("yes");
     expect(h.api.postInThread).toHaveBeenCalledWith("Deny");
   });
+});
+
+describe("an act answered after its session ended", () => {
+  it("leaves the new opening of a surfaced card proposed when the old call comes back forwarded", async () => {
+    const old = deferred<SurfaceActOutcome>();
+    const h = setup(APPROVAL);
+    h.api.actSurface.mockImplementationOnce(() => old.promise);
+    await h.listen();
+    await h.candidate("approve");
+    h.say("yes");
+    h.desk.reset();
+    useVoiceSessionStore.getState().sessionEnded(null);
+    useVoiceSessionStore.getState().sessionConnecting();
+    h.desk.open(ITEM, "d-new");
+    h.deliver();
+    const spokenBefore = h.spoken.length;
+
+    old.resolve({
+      kind: "answered",
+      response: { outcome: "forwarded", code: null },
+    });
+    await old.promise;
+
+    expect(h.card()?.state).toBe("proposed");
+    expect(h.spoken).toHaveLength(spokenBefore);
+    expect(h.latest().text).toContain("Bash");
+  });
+
+  it("leaves the new opening of a bot's question untouched when the old send comes back sent", async () => {
+    const old = deferred<BotAnswerOutcome>();
+    const h = setup(BOT_QUESTION);
+    h.api.answerBotQuestion.mockImplementationOnce(() => old.promise);
+    await h.listen();
+    await h.candidate("Staging");
+    h.say("yes");
+    h.desk.reset();
+    useVoiceSessionStore.getState().sessionEnded(null);
+    useVoiceSessionStore.getState().sessionConnecting();
+    h.desk.open(ITEM, "d-new");
+    h.deliver();
+    const spokenBefore = h.spoken.length;
+
+    old.resolve({ kind: "sent", delivery: "written" });
+    await old.promise;
+
+    expect(h.card()).toMatchObject({ state: "proposed", candidate: null });
+    expect(h.spoken).toHaveLength(spokenBefore);
+  });
+});
+
+describe("an old call answered after a new act went out on the same card", () => {
+  interface PendingPath {
+    /** The next call of the card's API stays out until `resolveOld` for the first, never for the second. */
+    readonly callCount: () => number;
+    readonly resolveOld: () => Promise<void>;
+    readonly armNew: () => void;
+  }
+
+  it.each([
+    {
+      name: "a surfaced act settled",
+      content: APPROVAL,
+      words: "approve",
+      arm: (h: Harness): PendingPath => {
+        const old = deferred<SurfaceActOutcome>();
+        h.api.actSurface.mockImplementationOnce(() => old.promise);
+        return {
+          callCount: () => h.api.actSurface.mock.calls.length,
+          resolveOld: async () => {
+            old.resolve({
+              kind: "answered",
+              response: { outcome: "settled", code: null },
+            });
+            await old.promise;
+          },
+          armNew: () => {
+            h.api.actSurface.mockImplementationOnce(
+              () => new Promise<SurfaceActOutcome>(() => undefined),
+            );
+          },
+        };
+      },
+    },
+    {
+      name: "a bot's answer sent",
+      content: BOT_QUESTION,
+      words: "Staging",
+      arm: (h: Harness): PendingPath => {
+        const old = deferred<BotAnswerOutcome>();
+        h.api.answerBotQuestion.mockImplementationOnce(() => old.promise);
+        return {
+          callCount: () => h.api.answerBotQuestion.mock.calls.length,
+          resolveOld: async () => {
+            old.resolve({ kind: "sent", delivery: "written" });
+            await old.promise;
+          },
+          armNew: () => {
+            h.api.answerBotQuestion.mockImplementationOnce(
+              () => new Promise<BotAnswerOutcome>(() => undefined),
+            );
+          },
+        };
+      },
+    },
+  ])(
+    "leaves the new act out when the old call comes back ($name): the card reopens still sending",
+    async ({ content, words, arm }) => {
+      const h = setup(content);
+      const path = arm(h);
+      await h.listen();
+      await h.candidate(words);
+      h.say("yes");
+      h.desk.reset();
+      useVoiceSessionStore.getState().sessionEnded(null);
+      useVoiceSessionStore.getState().sessionConnecting();
+
+      // The same card, answered again in the new session: a new act is out.
+      await h.listen();
+      await h.candidate(words);
+      path.armNew();
+      h.say("yes");
+      expect(path.callCount()).toBe(2);
+
+      await path.resolveOld();
+
+      h.desk.open(OTHER_ITEM, "d-other");
+      h.deliverItem(OTHER_ITEM);
+      h.desk.open(ITEM, "d-again");
+      h.deliver();
+      expect(h.card()?.state).toBe("sending");
+      expect(h.texts().at(-1)).toBe(
+        "Your answer to that is already on its way.",
+      );
+      h.say(words);
+      h.say("yes");
+      expect(path.callCount()).toBe(2);
+    },
+  );
+});
+
+describe("the delegation of a card's words", () => {
+  it("is not left behind by words the card routes: a later notice goes out under none", async () => {
+    const h = setup(BOT_QUESTION);
+    await h.listen();
+
+    expect(h.sayUnder("tell the CI bot hello", "d-routed")).toBe("route");
+    h.records.content = null;
+    h.records.settledBy = "Dana";
+    h.deliver();
+
+    expect(h.latest().text).toBe(
+      "Dana already answered it, so there is nothing to send.",
+    );
+    expect(h.latest().delegationId).toBeNull();
+  });
+
+  it.each([
+    ["the engine lives on", () => undefined, "d-yes"],
+    [
+      "the engine was replaced meanwhile",
+      () => useVoiceSessionStore.getState().engineReplacing(),
+      null,
+    ],
+  ])(
+    "of the yes that sent an act is on the act's answer while %s",
+    async (_name, meanwhile, expected) => {
+      const old = deferred<SurfaceActOutcome>();
+      const h = setup(APPROVAL);
+      h.api.actSurface.mockImplementationOnce(() => old.promise);
+      await h.listen();
+      await h.candidate("approve");
+      h.sayUnder("yes", "d-yes");
+      meanwhile();
+
+      old.resolve({
+        kind: "answered",
+        response: { outcome: "settled", code: null },
+      });
+      await old.promise;
+
+      expect(h.latest().text).toBe("Sent: allowed.");
+      expect(h.latest().delegationId).toBe(expected);
+    },
+  );
 });
 
 describe("matchCardChoice", () => {
