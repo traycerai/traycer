@@ -373,7 +373,8 @@ export const botThreadListUpgradeV11ToV12 = defineUpgradePath<
     ...response,
     threads: response.threads.map((thread) => ({
       ...thread,
-      anchor: thread.anchor === null ? null : { ...thread.anchor, excerpt: null },
+      anchor:
+        thread.anchor === null ? null : { ...thread.anchor, excerpt: null },
     })),
   }),
 });
