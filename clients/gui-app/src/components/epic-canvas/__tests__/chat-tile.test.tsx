@@ -5922,7 +5922,7 @@ describe("<ChatTile />", () => {
     expect(settingsFrame?.settings).toEqual(UPDATED_QUEUE_SETTINGS);
   });
 
-  // Decision 14 save-and-steer routing (mod-enter → after_safe_point →
+  // The save-and-steer routing (mod-enter → after_safe_point →
   // queueEdit + queueSteerNow) lives in chat-tile-queue-edit-steer.test.tsx,
   // which drives the real useChatComposerSubmit + the tile's edit-arm logic
   // without depending on TipTap DOM key events under jsdom. Plain Enter edit

@@ -195,7 +195,7 @@ export interface ChatForkDialogTarget {
    */
   readonly onlyHostIds: ReadonlySet<string> | null;
   /**
-   * A New sandbox the chat host chip picked (sandboxes redesign D9): the
+   * A New sandbox the chat host chip picked (the sandboxes redesign): the
    * dialog opens with it staged, its consequences under the host list, and
    * Fork creates it, waits for the agent there and forks onto it. `null`
    * stages nothing; `initialHostId` and `onlyHostIds` are `null` with it.

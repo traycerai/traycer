@@ -49,7 +49,7 @@ import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 import { resetFocusedComposerControlsForTests } from "@/lib/commands/composer-controls-registry";
 
 /**
- * Decision 14 real ChatTile edit arm:
+ * The real ChatTile edit arm:
  * mount ChatTile → open queue-row edit → drive the actual submitMessage path
  * (queueEdit + queueSteerNow for after_safe_point vs queueEdit +
  * queueSettingsUpdate for auto). Captures the tile's onSubmitMessage so

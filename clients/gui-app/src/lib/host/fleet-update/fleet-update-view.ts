@@ -677,7 +677,7 @@ export function projectFleetUpdateView(
 
   // THE ATTEMPT ARM, in its own function beside the other three
   // (`coarseProgressView`, `legacyFactsView`, `recordObservationView`). It is
-  // the last arm that was still inline, and D-49's terminal fall-back is what
+  // the last arm that was still inline, and the terminal fall-back is what
   // made that worth changing: the rule is a statement about which LEG answers,
   // so it belongs where the legs are chosen from rather than buried in the
   // middle of the longest branch.
@@ -902,7 +902,7 @@ function legacyFactsView(
 
 /**
  * What a REPORTED attempt projects to: the phase, qualified by staleness and
- * by the host's own liveness conclusion — plus D-49's one exception, where a
+ * by the host's own liveness conclusion — plus one exception, where a
  * terminal attempt steps aside for the record-derived parks.
  *
  * Extracted from {@link projectFleetUpdateView} so every arm is a named
@@ -916,10 +916,10 @@ function attemptOperationView(input: {
   readonly connected: boolean;
 }): FleetUpdateView {
   const { operation, observation, stale } = input;
-  // D-49: A TERMINAL attempt that is NOT `failed` does not occupy the
+  // A TERMINAL attempt that is NOT `failed` does not occupy the
   // operation slot for the purpose of the record-derived parks.
   //
-  // The case is D-47's: another actor delivered the requested version and the
+  // The case: another actor delivered the requested version and the
   // host is not running it, so the executor ends the attempt `superseded` - no
   // error, nothing owed on the attempt itself - while `install.json` names X
   // and the runtime names Y. That IS an activation debt, and it is visible in
@@ -1254,11 +1254,11 @@ function phaseKind(
       //     now describes - showing the old one would put a dead target on
       //     screen beside the live one.
       //  2. The executor refused the request as not newer than what is
-      //     already installed (`E_HOST_UPDATE_NOT_NEWER`, D-46). It withdraws
+      //     already installed (`E_HOST_UPDATE_NOT_NEWER`). It withdraws
       //     its own marker rather than failing, because "you asked for a
       //     version you already have" is not a failure to report.
       //  3. Another actor delivered the requested version but the host is not
-      //     RUNNING it (D-47). Nothing failed; the remedy is a restart, and a
+      //     RUNNING it. Nothing failed; the remedy is a restart, and a
       //     record must not carry an `error` for that.
       //
       // `idle` is right for all three as far as THIS projection goes - there
@@ -1270,7 +1270,7 @@ function phaseKind(
       // answer is deliberately NOT here: `install.json` names the delivered
       // version and the runtime does not, which is the activation-debt park,
       // and `legacyFactsView` renders it with its Restart from the RECORDS
-      // alone. Reaching that arm is not left to the host: D-49's terminal
+      // alone. Reaching that arm is not left to the host: the terminal
       // fall-through above consults the parks BEFORE this mapping is ever
       // used, so the debt speaks whether or not the peer is still reporting
       // the terminal attempt. This `idle` is what remains when the records

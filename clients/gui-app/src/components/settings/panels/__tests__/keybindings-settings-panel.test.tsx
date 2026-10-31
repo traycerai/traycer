@@ -330,7 +330,7 @@ describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {
     expect(useKeybindingStore.getState().bindings["epic.new"]).toBe("b");
   });
 
-  // Decision 6: capturing a GLOBAL chord checks against every renderer
+  // Capturing a GLOBAL chord checks against every renderer
   // binding - a global shortcut swallows its chord system-wide before any
   // renderer listener sees it, so any overlap is a real conflict. This never
   // exercised the actual `externalReserved`/`checkConflict` wiring on the
@@ -363,7 +363,7 @@ describe("KeybindingsSettingsPanel - Global shortcuts (T2)", () => {
     ).toBeTruthy();
   });
 
-  // Decision 6 (amended): the global chord is reserved by persisted INTENT,
+  // The global chord is reserved by persisted INTENT,
   // not live OS status - a chord the user intends enabled stays reserved even
   // while the OS currently rejects it (it will register on a later launch).
   // This is the specific regression check for the F2 fix in

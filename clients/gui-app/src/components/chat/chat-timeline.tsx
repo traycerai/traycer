@@ -482,7 +482,7 @@ export const ChatTimeline = memo(function ChatTimeline({
     followLatch.followEndIfPermitted();
   }, [rows, contentInsetEndAdjustment, followLatch]);
 
-  // D20: registers this mounted timeline as a panel-resize
+  // Registers this mounted timeline as a panel-resize
   // participant so a divider drag's capture pass (see
   // `lib/layout/panel-resizing-class.ts`) can mark ITS OWN currently visible
   // rows right before the freeze class lands - see `ChatTimelineRow`'s own
@@ -765,7 +765,7 @@ function useCommittedKeySequenceChanged(
  * pass recorded substantial multi-row churn per pointermove (~22 entries in
  * a typical callback - not literally every mounted row on every event).
  * During a panel-resize drag (`traycer-panel-resizing` on `<html>`),
- * `ChatTimeline`'s capture pass (D20 port, wired through
+ * `ChatTimeline`'s capture pass (wired through
  * `registerPanelResizeParticipant`) marks each row that was on-screen at
  * drag START with `data-panel-resize-visible`; only UNMARKED rows flip to
  * `content-visibility: hidden` below - marked rows stay live and can still
