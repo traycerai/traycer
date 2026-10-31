@@ -114,13 +114,18 @@ const config = {
   mac: {
     ...base.mac,
     executableName: target.mac.bundleName,
-    // The production package keeps the baseline string until voice ships;
-    // staging packages carry both uses.
-    extendInfo: {
-      ...base.mac.extendInfo,
-      NSMicrophoneUsageDescription:
-        "Traycer uses the microphone to dictate into the composer and to talk to your bots.",
-    },
+    // The microphone string follows the release target: a production target
+    // keeps the base string until voice ships; a staging target names both
+    // uses.
+    ...(target.target === "staging"
+      ? {
+          extendInfo: {
+            ...base.mac.extendInfo,
+            NSMicrophoneUsageDescription:
+              "Traycer uses the microphone to dictate into the composer and to talk to your bots.",
+          },
+        }
+      : {}),
   },
   win: {
     ...base.win,

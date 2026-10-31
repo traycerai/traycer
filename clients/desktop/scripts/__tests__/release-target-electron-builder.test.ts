@@ -254,8 +254,8 @@ describe("release-target-electron-builder", () => {
     });
     expect(config.mac).toMatchObject({
       executableName: "Traycer Staging",
-      // Only the staging package names both uses; every other key of the
-      // base `extendInfo` is carried over.
+      // Only a staging target names both uses; every other key of the base
+      // `extendInfo` is carried over.
       extendInfo: {
         NSMicrophoneUsageDescription:
           "Traycer uses the microphone to dictate into the composer and to talk to your bots.",
@@ -297,6 +297,17 @@ describe("release-target-electron-builder", () => {
     expect(nsis).toContain(
       '!define TRAYCER_HOST_LAUNCHER "$PROFILE\\.traycer\\cli\\host-start-hidden.vbs"',
     );
+  });
+
+  it("keeps the base microphone usage description for a production target", () => {
+    const fixture = createProject("production");
+    expect(run(fixture.projectDir).mac).toMatchObject({
+      extendInfo: {
+        NSMicrophoneUsageDescription:
+          "Traycer uses the microphone for voice dictation in the composer.",
+        LSFixtureKey: "kept",
+      },
+    });
   });
 
   it("refuses an unstamped config", () => {
