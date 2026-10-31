@@ -1,8 +1,8 @@
 /**
- * Ticket 21 slice 4: `TabGroupView`'s hosted-chat counterpart to
+ * `TabGroupView`'s hosted-chat counterpart to
  * `ActiveTabBody` - a pure geometry anchor and environment publisher, no
  * chat content of its own. The real `ChatTile`/`ChatMessages` body paints
- * inside `StableTileSurfaceHost`'s fixed plane (slice 3); this slot only
+ * inside `StableTileSurfaceHost`'s fixed plane; this slot only
  * marks WHERE that body should be positioned and publishes the environment
  * it needs to render itself correctly there.
  *
@@ -14,7 +14,7 @@
  * top-level portal host for kept-mounted popovers/composer overlays),
  * captured here via `usePanePortalContainer()` and republished so a hosted
  * chat's bridge can re-provide the genuine context value instead of this
- * slot's own geometry element (design-review slice-4 finding 5).
+ * slot's own geometry element.
  *
  * Cold until the real Epic session handle is available
  * (`useMaybeOpenEpicHandle` returns `null` before `EpicSessionGate` opens):

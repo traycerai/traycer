@@ -569,7 +569,7 @@ function TuiAgentTileLive(
     enabled: agent !== null && prepareLaunch.isIdle,
     // `adoptOnly` rather than `enabled: false` for the sleeping arm, for the
     // reason the replica arm uses it: the create must not fire, but an ATTACH
-    // must still happen. That is what keeps ticket 2's known window harmless -
+    // must still happen. That is what keeps the known window harmless -
     // an agent archived while its PTY was alive reads `sleeping` until that
     // PTY exits, and a tile that refused to attach would show an asleep
     // notice over a session that is running right now.

@@ -110,7 +110,7 @@ import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-
  * row metadata that the notice names. A recovery read addresses that owner
  * without changing the host serving the copy.
  *
- * ## The doc-replica fallback (unreachable-owner view, ticket 34A)
+ * ## The doc-replica fallback (unreachable-owner view)
  *
  * A chat this host neither owns nor has ever published still syncs into the
  * epic Y.Doc through ordinary collaboration, so when the cloud read settles

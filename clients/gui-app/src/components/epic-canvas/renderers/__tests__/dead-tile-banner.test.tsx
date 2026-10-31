@@ -240,7 +240,7 @@ describe("<ChatDeadTileBanner />", () => {
     }
   });
 
-  // ticket 35: a reachable host can still have nothing to serve for this
+  // A reachable host can still have nothing to serve for this
   // chat (`chat.subscribe` terminated CHAT_NOT_VISIBLE) - "is offline" would
   // be false here, so this variant must say something else while keeping
   // the same Clone offer and two-Agents disclosure.

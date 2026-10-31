@@ -320,7 +320,7 @@ describe("<ImageDiffView />", () => {
     expect(screen.queryByText("Conflicted")).toBeNull();
   });
 
-  // Supersedes decision #17's scroll-mirroring interaction (ticket 07): zoom
+  // Supersedes decision #17's scroll-mirroring interaction: zoom
   // + pan are now one continuous transform per side (react-zoom-pan-pinch),
   // linked via `onTransform`-driven `setTransform` on the peer instead of
   // scrollTop/Left mirroring. This pins the SHARED toolbar's own mechanism

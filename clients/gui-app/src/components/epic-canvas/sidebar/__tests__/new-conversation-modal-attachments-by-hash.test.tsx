@@ -1102,7 +1102,7 @@ describe("new-conversation modal: deferWorktreeProvisioning opt-in", () => {
 });
 
 /**
- * Ticket 8's modal unheld mark, pinned in the modal's own suite.
+ * The modal unheld mark, pinned in the modal's own suite.
  *
  * The opt-in describe above pins the WIRE field and the entry's two
  * consumer-facing predicates. What it cannot see is the entry ITSELF: which

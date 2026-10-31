@@ -16,7 +16,7 @@
  * During a drag NO React state changes - `onDragFrame` must mutate the DOM
  * directly; the single store write happens in `onDragCommit`.
  *
- * Ticket 21 wave-2 live pass (row 1): once `onDragStart` succeeds, move/up/
+ * Once `onDragStart` succeeds, move/up/
  * cancel/blur are handled via `window`-level listeners rather than React
  * props on the handle. `setPointerCapture` is supposed to make the handle
  * the sole recipient of subsequent pointer events regardless of what else

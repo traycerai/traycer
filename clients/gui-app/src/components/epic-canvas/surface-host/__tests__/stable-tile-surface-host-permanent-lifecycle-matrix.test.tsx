@@ -89,7 +89,7 @@ import { resetPendingHydrationRestoreForTesting } from "@/stores/chats/chat-tab-
 import type { Message } from "@traycer/protocol/persistence/epic/messages";
 
 /**
- * Ticket 21 slice 5 (jsdom half): the PERMANENT lifecycle-matrix gate for the
+ * The jsdom half of the PERMANENT lifecycle-matrix gate for the
  * REAL `ChatTile -> ChatMessages -> LegendList` chain, routed through the
  * REAL production wiring (`TileCanvas` + a real `StableTileSurfaceHost`
  * sibling using the REAL `renderHostedChatSurfaceBody` renderer), with the
@@ -1206,7 +1206,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 3b - two-pane occupied-target move: the dragged chat survives, the displaced destination chat is retained rather than remounted, and the emptied source pane dissolves", async () => {
-    // Review finding 2: row 3 only drives an empty-target move; row 11 only
+    // Row 3 only drives an empty-target move; row 11 only
     // drives `setActiveTileTab` (a plain in-pane switch), never
     // `moveTabOnTabStrip` across two panes. Neither composes the real drop's
     // three simultaneous consequences a genuine drag-onto-an-occupied-pane
@@ -1318,7 +1318,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     await waitForHostedChatLoaded(container, CHAT_SIBLING.instanceId);
     const trackedBefore = captureRefs(container, CHAT_TRACKED.instanceId);
     // The chat the flat split actually MOVES - this is the row's real
-    // subject. Review finding 1: an earlier version of this row loaded and
+    // subject. An earlier version of this row loaded and
     // asserted only the untouched bystander (tracked), so it never proved
     // content continuity through the same-axis insertion it claims to
     // cover - a `Suspense` boundary keyed by `environment.placement.paneId`

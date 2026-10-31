@@ -450,7 +450,7 @@ vi.mock("@/hooks/host/use-effective-host-id", () => ({
 }));
 
 // The tile's record gate consults `epic.listCloudChats` for a chat with no
-// local doc record (chat-sync-v2 ticket 49 - post-sweep that is the ordinary
+// local doc record (post-sweep that is the ordinary
 // state of a healthy owned chat, so the published row is the only local
 // evidence left that it exists). Driven from test state at the hook boundary
 // so a test can put this suite's chat in or out of the cloud list; `data` is
@@ -1855,8 +1855,8 @@ describe("<ChatTile />", () => {
     // the renderer must not open the epic via `chat.subscribe` before the
     // create has landed. `cloudChatListTestState` is empty here, which is
     // what a create in flight looks like - the owning host publishes long
-    // after `epic.createChat` returns, so no cloud row can vouch for it yet
-    // (chat-sync-v2 ticket 49).
+    // after `epic.createChat` returns, so no cloud row can vouch for it
+    // yet.
     harness.teardown();
     chatHarness.teardown();
     harness.install(null, "editor");
@@ -1882,8 +1882,8 @@ describe("<ChatTile />", () => {
 
   it("opens chat.subscribe for a record-less chat that is still cloud-known (ticket 49)", async () => {
     // The post-migration steady state of a HEALTHY chat: publication proven,
-    // so `ChatDocEntrySweep` deleted the doc entry (ticket 20) and creation
-    // never re-projects one (ticket 19). The record gate used to refuse this
+    // so `ChatDocEntrySweep` deleted the doc entry and creation
+    // never re-projects one. The record gate used to refuse this
     // shape forever, which is why every swept chat opened as the locked
     // published copy on its own connected host.
     harness.teardown();

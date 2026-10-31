@@ -58,7 +58,7 @@ interface CloneProfileRecoveryOffer {
  * `cloneChatOnHostSwitch`. Targets the directory's currently selected
  * host (the user's active default). Tracks the returned cancel in a
  * ref and disposes it on unmount so an aborted clone doesn't leak the
- * projection-wait subscription (ticket 10).
+ * projection-wait subscription.
  */
 export interface ChatCloneOnHostSwitch {
   readonly clone: () => void;
@@ -241,7 +241,7 @@ export function useChatCloneOnHostSwitch(
     args.chatId,
     // The cloud list can resolve AFTER this banner first renders, so the
     // callback must be rebuilt when the owner lands - otherwise a click still
-    // sends the `null` this closed over on the first pass (ticket 37).
+    // sends the `null` this closed over on the first pass.
     args.sourceOwnerUserId,
     args.sourceHostId,
     args.sourceSettings,

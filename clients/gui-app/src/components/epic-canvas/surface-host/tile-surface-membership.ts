@@ -1,5 +1,5 @@
 /**
- * Ticket 21 slice 2: the canvas-wide, transaction-aware set of chat
+ * The canvas-wide, transaction-aware set of chat
  * `instanceId`s a stable tile surface host must keep painted.
  *
  * Three layers, matching the design (`ticket-21-stable-tile-surface-identity`,
@@ -49,14 +49,14 @@
  * `useEpicCanvasStore`, `useTabsStore`, `tabCommandCoordinator`, and
  * `remote-deleted-chat-registry.ts` - deriving from observed state at each
  * checkpoint rather than trusting any one store's change to imply the others
- * are consistent (the same observation-over-claim lesson slice 1's identity
+ * are consistent (the same observation-over-claim lesson the identity
  * machinery learned the hard way).
  *
  * A selected chat also has to pass `isHostedSurfaceEligible` (shared with
- * `surface-owner.ts`'s render-routing decision - design-review slice-4
- * finding 2) - a remote-deleted chat leaves membership the same instant
+ * `surface-owner.ts`'s render-routing decision) - a remote-deleted chat
+ * leaves membership the same instant
  * `ActiveTabBody` reports it, so the registry entry it's holding gets cleared
- * by slice 2's existing membership-loss subscription instead of lingering
+ * by the existing membership-loss subscription instead of lingering
  * alongside the inline `DeletedArtifactBody`.
  */
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";

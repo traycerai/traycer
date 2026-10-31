@@ -1,10 +1,10 @@
 /**
- * Ticket 21 slice 3's "synthetic ready slot/body seam" (design/index.md,
- * slice-3 row): a test-only `ReadyTileSurfaceEnvironment` builder and a
+ * The "synthetic ready slot/body seam" (design/index.md): a test-only
+ * `ReadyTileSurfaceEnvironment` builder and a
  * mount/unmount-counting body component, used to drive `StableTileSurfaceHost`
  * with REAL membership/registry/store state but a fake body - proving the
  * jsdom-expressible half of the lifecycle contract without claiming a real
- * `ChatTile`/`ChatMessages` integration (that's slice 4+).
+ * `ChatTile`/`ChatMessages` integration.
  */
 import { useEffect, type ReactNode } from "react";
 import type {

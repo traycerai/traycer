@@ -1,10 +1,10 @@
 /**
- * Ticket 21 slice 3: the one shared resolver design-review finding 4 asks
- * for, mapping pane/instance ownership across the hosted DOM identity
+ * The one shared resolver, mapping pane/instance ownership across the
+ * hosted DOM identity
  * (`hosted-tile-dom.ts`) instead of physical pane ancestry.
  *
- * Models the two lookup shapes the four broken call sites need once slice 4
- * wires them in:
+ * Models the two lookup shapes the four broken call sites need once they
+ * are wired in:
  *
  * - forward, instanceId -> element (command-to-composer focus, route focus:
  *   "find `[data-group-id]`, then query its selected-tab descendant" becomes

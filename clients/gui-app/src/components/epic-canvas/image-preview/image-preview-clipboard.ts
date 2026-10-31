@@ -31,7 +31,7 @@ export async function copyImageToClipboard(
   if (blob === null) {
     throw new Error("This image could not be encoded to copy it.");
   }
-  // `copyImageBlobToClipboard` (ticket 07) tries the browser Clipboard API
+  // `copyImageBlobToClipboard` tries the browser Clipboard API
   // first, then falls back to the Electron `nativeImage` bridge when the
   // renderer clipboard rejects the write - a real desktop gap a
   // browser-only write would bypass.
