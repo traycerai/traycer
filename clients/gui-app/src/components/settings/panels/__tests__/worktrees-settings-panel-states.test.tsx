@@ -25,8 +25,7 @@ import { hostRpcRegistry, type HostRpcRegistry } from "@/lib/host";
 import { useDesktopDialogStore } from "@/stores/dialogs/desktop-dialog-store";
 
 // `WorktreesSettingsPanel` sits above `WorktreesList` (covered exhaustively by
-// `worktrees-settings-panel.test.tsx`) and owns the host-scoped states from
-// core flows "Enter And Orient" / "Host And Connectivity States": no host
+// `worktrees-settings-panel.test.tsx`) and owns the host-scoped states: no host
 // selected, checking reachability, offline, not signed in, loading, error,
 // and empty. None of those states are reachable through `WorktreesList`
 // directly (it is only ever mounted once a host is reachable and signed in),

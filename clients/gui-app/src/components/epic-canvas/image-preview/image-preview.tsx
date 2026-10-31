@@ -61,7 +61,7 @@ export interface ImagePreviewProps {
   readonly servedFromCache: boolean;
   /** Alt text and the file name copy/report actions would reference. */
   readonly fileName: string;
-  /** Drops this instance's own toolbar (ticket 05) - image-preview decision log, decision #18. Independent of `gesturesEnabled`: `ImageDiffView`'s linked sides pass `compact` but keep gestures on, driven by its own shared toolbar. */
+  /** Drops this instance's own toolbar (ticket 05) - decision #18. Independent of `gesturesEnabled`: `ImageDiffView`'s linked sides pass `compact` but keep gestures on, driven by its own shared toolbar. */
   readonly compact: boolean;
   /** Pan/pinch/wheel-zoom/double-click-toggle on or off. `false` for the bundle diff variant (decision #18's affordance-free intent) - static fit only, no gesture traps inside a virtualized list. */
   readonly gesturesEnabled: boolean;
@@ -136,7 +136,7 @@ const COPY_FEEDBACK_RESET_MS = 1500;
 /**
  * `measuring`: stage not yet laid out - keep the skeleton up rather than
  * flash an unconstrained image (a real, verified video symptom: the huge-
- * image flash this ticket exists to fix). `no-dimensions`: the stage IS
+ * image flash this avoids). `no-dimensions`: the stage IS
  * measured but `meta` never declared width/height (a dimension-less SVG) -
  * there is nothing to compute an initial fit FROM, so this renders a
  * constrained (not unconstrained, not stuck-forever) fallback with no
@@ -191,7 +191,7 @@ export function ImagePreview(props: ImagePreviewProps) {
   // Destructured (not `props.x` inline in JSX below) so the ref-safety
   // linter can see these are plain values, not a live ref read during
   // render - same reasoning as `diff-content-primitive.tsx`'s
-  // `scrollContainerRef` destructure (image-preview decision log, ticket 05).
+  // `scrollContainerRef` destructure (ticket 05).
   const {
     onDecodeError,
     onTransformChange,

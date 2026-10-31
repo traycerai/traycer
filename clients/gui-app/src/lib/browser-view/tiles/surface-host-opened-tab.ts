@@ -1,6 +1,6 @@
 /**
  * Surfacing for a tab the HOST opened - the agent driving a session, or a page
- * inside one spawning a popup (decisions A4, B5, B6, C9, C10; plan §5.3).
+ * inside one spawning a popup (decisions A4, B5, B6, C9, C10).
  *
  * The `tabOpened` frame arrives on the browser-sessions coordinator, which is
  * module-global and outside React, so this file opens through the non-React
@@ -183,7 +183,7 @@ export function isManualPipActive(epicId: string): boolean {
  * The pane already hosting a canvas tile of `sessionId`. The resolver's own
  * affinity groups by CATEGORY, which would drop a popup into whichever browser
  * pane was last active; a tab of this session belongs beside its siblings, so
- * the lookup stays here and travels as an explicit placement (§5.3).
+ * the lookup stays here and travels as an explicit placement.
  */
 function findPaneIdHostingSessionTile(
   canvas: EpicCanvasState,
@@ -283,7 +283,7 @@ export function surfaceHostOpenedTab(input: HostOpenedTabSurfacing): boolean {
           : { kind: "tab", paneId: groupedPaneId, index: null },
       dedupe: true,
       // ponytail: `AnalyticsSource` has no host-push member and `analytics.ts` is
-      // out of this ticket's blast radius; `trackOpenedCanvasTile` emits nothing
+      // out of this change's blast radius; `trackOpenedCanvasTile` emits nothing
       // for `browser-session` tiles anyway, so this value is inert today. Add a
       // real source when the analytics schema is next opened.
       source: "direct_ui",

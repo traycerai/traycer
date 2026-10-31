@@ -279,8 +279,8 @@ function returnStoppedPendingSend(id: string): void {
 const SEND_OWNER_STAYS: HandoffOwnerWatch = () => () => undefined;
 
 /**
- * Drives every pending send of the signed-in account (sandboxes redesign,
- * Flow 1 step 2), whatever tab is in front: the create or wake, the wait for
+ * Drives every pending send of the signed-in account,
+ * whatever tab is in front: the create or wake, the wait for
  * the requested agent, and the message's delivery to it. Mounted once, at the
  * app root, so a send survives its task's tab going to the background and a
  * reload takes it up again.
@@ -2448,7 +2448,7 @@ function PendingDispatchRemedy(props: {
 }
 
 /**
- * The task's pending sends (sandboxes redesign, Flow 1 step 2): each message
+ * The task's pending sends: each message
  * the person sent to a staged sandbox, with the setup line above it, until it
  * is handed to the agent there. A refusal or a failure is said on the line in
  * place, with its remedies; the message is kept on every branch.

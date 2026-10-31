@@ -107,7 +107,7 @@ export function deriveEpicDurabilityPlane(
   // `s5-mirror-first-serving`. Mirror-first paints a usable document before it
   // is known to be up to date, so the two calm arms below can now be reached by
   // an epic that is genuinely durable AND genuinely behind. Freshness is
-  // consulted BEFORE they return null, or the one state this ticket exists to
+  // consulted BEFORE they return null, or the one state this check exists to
   // make visible would be the one state the plane stays silent about.
   const freshness = cloudFreshnessCopy(inputs.freshness);
   // Two silences, and only ONE of them is nothing to say.

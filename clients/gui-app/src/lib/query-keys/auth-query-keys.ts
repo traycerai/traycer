@@ -19,7 +19,7 @@ export const authQueryKeys = {
     "user",
     authService,
   ],
-  // Remote Host Support (§7): the cross-device host registry + live status.
+  // The cross-device host registry + live status.
   // Keyed to the signed-in user like `userSessions`, and for the same reason:
   // an AuthService survives account changes, so without the user id the
   // previous account's cached host list (names, ids, platforms) would be

@@ -15242,7 +15242,7 @@ describe("OfficeScene fixup 8e - the instant-seating gate, and the tile it seats
    * out of `AGENTS_LAYOUT`, is deliberately not what is asserted here - a
    * civic occupant painted at its desk is exactly finding 6.
    *
-   * Two sub-cases, as the brief asks: a reduced-motion FIRST live sync where
+   * Two sub-cases: a reduced-motion FIRST live sync where
    * the agent already wants a civic seat, and a live TRANSITION into one.
    */
   it("paints a civic occupant at its claimed seat, not its desk, the instant it is seated (finding 6)", () => {

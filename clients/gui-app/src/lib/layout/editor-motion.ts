@@ -6,7 +6,7 @@ import type {
 } from "@/stores/layout/layout-editor-store";
 
 /**
- * How the editor arrives and how it leaves (L-29, L-30, 5.2, section 6).
+ * How the editor arrives and how it leaves (L-29, L-30).
  *
  * Nothing here animates a width: the shell reflows beside the inspector in ONE
  * frame, and what glides is a pair of snapshots the browser composites for it,
@@ -84,7 +84,7 @@ export function setLayoutInspectorNode(node: HTMLElement | null): void {
 }
 
 /**
- * Both reduced-motion gates, which the editor honours together (section 6):
+ * Both reduced-motion gates, which the editor honours together:
  * the OS media query, and the app's own "Panel animations" switch, which
  * `theme-applier.ts` mirrors onto `<html data-reduce-panel-motion>`.
  */

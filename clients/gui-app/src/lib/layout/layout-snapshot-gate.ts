@@ -1,8 +1,8 @@
 import { persistKey, STORE_KEYS } from "@/lib/persist";
 
 /**
- * The once-per-24h-per-device gate for `layout_snapshot` (L-54, tech-plan
- * section 7): a synchronous read-compare-write against the `layout-snapshot`
+ * The once-per-24h-per-device gate for `layout_snapshot` (L-54):
+ * a synchronous read-compare-write against the `layout-snapshot`
  * leaf, run BEFORE the caller sends anything, so two renderers launching
  * together cannot both count the same device. A module-level flag (the way
  * `app_opened` guards itself) would be wrong here for that exact reason: two

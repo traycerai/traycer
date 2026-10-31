@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
   useVoiceSessionStore,
+  type QueueItem,
   type VoiceFocus,
 } from "@/stores/voice/voice-session-store";
 import {
@@ -195,7 +196,11 @@ function threadSummary(fixture: ThreadFixture): BotThreadSummary {
 }
 
 /** The directory the real composer builds from the fixture reads. */
-function directoryWith(fixtures: ReadonlyArray<ThreadFixture>): VoiceDirectory {
+function directoryWith(
+  fixtures: ReadonlyArray<ThreadFixture>,
+  queue: ReadonlyArray<QueueItem>,
+  focus: VoiceFocus,
+): VoiceDirectory {
   const threadsByBot = new Map<string, BotThreadSummary[]>();
   for (const fixture of fixtures) {
     const summaries = threadsByBot.get(fixture.botId) ?? [];
@@ -208,8 +213,8 @@ function directoryWith(fixtures: ReadonlyArray<ThreadFixture>): VoiceDirectory {
     threadsByBot,
     followedThreads: new Set(),
     viewerUserId: VIEWER,
-    focus: FOCUS_CHANNEL,
-    queue: [],
+    focus,
+    queue,
     hostOf: (botId) => HOSTS.get(botId) ?? null,
     heldPostText: (botId, messageId) =>
       fixtures.find(
@@ -218,7 +223,7 @@ function directoryWith(fixtures: ReadonlyArray<ThreadFixture>): VoiceDirectory {
   });
 }
 
-const DIRECTORY = directoryWith(THREAD_FIXTURES);
+const DIRECTORY = directoryWith(THREAD_FIXTURES, [], FOCUS_CHANNEL);
 
 type NamedIds = RouterResult["target"];
 
@@ -573,9 +578,9 @@ describe("small talk", () => {
 describe("a verb a later ticket builds", () => {
   it("is refused with a spoken not-yet, posts nothing, and spends the words", async () => {
     const h = harness(DIRECTORY);
-    const chunks = words("What's running right now?");
+    const chunks = words("Open the nightly report.");
     speak(chunks);
-    h.model(recorded(routerResult("status", NOWHERE, 0, chunks.length - 1)));
+    h.model(recorded(routerResult("open", NOWHERE, 0, chunks.length - 1)));
 
     await h.loop.onDelegationCreated("d-1");
 
@@ -583,6 +588,131 @@ describe("a verb a later ticket builds", () => {
     expect(h.notices).toHaveLength(1);
     expect(h.notices[0]).toContain("Not yet");
     expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+});
+
+describe("a routed read of a queue item", () => {
+  function waiting(
+    id: string,
+    botId: string,
+    threadId: string | null,
+  ): QueueItem {
+    return {
+      id,
+      kind: "reply",
+      botId,
+      hostId: HOST_MAIN,
+      threadId,
+      chatId: threadId ?? `chan-${botId}`,
+      messageId: id,
+      surfaceId: null,
+      title: "A title",
+      author: null,
+      line: `A line of ${id}`,
+      at: NOW,
+      state: "queued",
+    };
+  }
+  const QUEUE_DIRECTORY = directoryWith(
+    THREAD_FIXTURES,
+    [
+      waiting("i-ci", CI, null),
+      waiting("i-tracy-thread", TRACY, "thr-safari-scroll"),
+    ],
+    FOCUS_CHANNEL,
+  );
+  const HEARD = "Read the CI bot's reply";
+  const withItem = (named: NamedIds, itemId: string): RouterResult => ({
+    ...routerResult("read", named, 0, words(HEARD).length - 1),
+    target: { ...named, itemId },
+  });
+
+  it.each([
+    [
+      "an item of another bot than the one named",
+      ids(null, CI, null),
+      "i-tracy-thread",
+    ],
+    [
+      "an item of another thread than the one named",
+      ids(null, TRACY, "thr-worktrees"),
+      "i-tracy-thread",
+    ],
+  ])(
+    "naming %s is refused: the voice says so, nothing is posted, and the words are spent",
+    async (_name, named, itemId) => {
+      const h = harness(QUEUE_DIRECTORY);
+      speak(words(HEARD));
+      h.model(recorded(withItem(named, itemId)));
+
+      await h.loop.onDelegationCreated("d-1");
+
+      expect(h.sends).toEqual([]);
+      expect(h.notices).toHaveLength(1);
+      expect(h.notices[0]).toContain("not one the person has");
+      expect(useVoiceSessionStore.getState().segments).toEqual([]);
+    },
+  );
+
+  it("is accepted when the bot and the thread it names are the item's own", () => {
+    const decision = resolveRoute(
+      withItem(ids(null, TRACY, "thr-safari-scroll"), "i-tracy-thread"),
+      QUEUE_DIRECTORY,
+      words(HEARD).length,
+    );
+
+    expect(decision).toMatchObject({
+      kind: "deferred",
+      verb: "read",
+      itemId: "i-tracy-thread",
+      threadNamed: true,
+    });
+  });
+
+  it("binds a switch to a channel item to the bot's channel, though the focus is in one of its threads", () => {
+    const inThread: VoiceFocus = {
+      botId: TRACY,
+      hostId: HOST_MAIN,
+      threadId: "thr-safari-scroll",
+      anchorMessageId: "msg-safari-scroll",
+      anchorThread: null,
+    };
+    const directory = directoryWith(
+      THREAD_FIXTURES,
+      [waiting("i-tracy-channel", TRACY, null)],
+      inThread,
+    );
+
+    const decision = resolveRoute(
+      {
+        ...routerResult("switch", ids(null, null, null), 0, 2),
+        target: { ...ids(null, null, null), itemId: "i-tracy-channel" },
+      },
+      directory,
+      3,
+    );
+
+    expect(decision.kind).toBe("switch");
+    expect(
+      decision.kind === "switch"
+        ? [decision.target.focus.threadId, decision.target.isFocus]
+        : null,
+    ).toEqual([null, false]);
+  });
+
+  it("does not take the thread a bot-only route is bound to for one the person named", () => {
+    const decision = resolveRoute(
+      routerResult("read", ids(null, TRACY, null), 0, 3),
+      QUEUE_DIRECTORY,
+      4,
+    );
+
+    expect(decision).toMatchObject({
+      kind: "deferred",
+      verb: "read",
+      itemId: null,
+      threadNamed: false,
+    });
   });
 });
 
@@ -950,6 +1080,8 @@ describe("the request body", () => {
           ? { ...fixture, text: INJECTION }
           : fixture,
       ),
+      [],
+      FOCUS_CHANNEL,
     );
     const raw = routerRequestBody(
       hostile,

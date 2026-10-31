@@ -52,7 +52,7 @@ export interface SelectionAuthorityBridgeOptions {
 
 /**
  * Mounts this window's `SelectionEvidenceKernel` and wires its verdict into
- * the host directory (selection model §1, redesign P1.2).
+ * the host directory (redesign P1.2).
  *
  * ONE-WAY, and that is the whole design. The authority derives
  * `effectiveHostId` and this bridge publishes it to the selection store,

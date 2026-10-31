@@ -90,8 +90,8 @@ export interface FallbackModelPatternComboboxProps {
  * "pick a model" and "type a pattern".
  *
  * Picking a listed model stores its SLUG, exactly as the select it replaced
- * did. Typing is what the select could not offer, and the Enter rule is the
- * spec's (§Wireframe 2): text that exactly equals a model's ID or name puts
+ * did. Typing is what the select could not offer, and the Enter rule is:
+ * text that exactly equals a model's ID or name puts
  * that model first; otherwise a typed `*` builds a pattern as written, and a
  * plain word of three or more characters becomes "Any model containing …",
  * saved as `*word*`. The catalog lists under it in the provider's order, which
@@ -256,7 +256,7 @@ interface TriggerFace {
   readonly value: string | null;
   readonly pattern: boolean;
   /**
-   * "Any Codex model" for a bare `*` (spec §How patterns work), drawn beside
+   * "Any Codex model" for a bare `*`, drawn beside
    * the mono `*` so the row says it claims the whole provider; `null` for any
    * other value.
    */
@@ -267,7 +267,7 @@ interface TriggerFace {
   readonly invalid: boolean;
   /**
    * "Model or pattern: *opus*, pattern, 2 models" - the match count pill is
-   * part of the name (spec §Accessibility), so a screen-reader user hears what
+   * part of the name, so a screen-reader user hears what
    * a sighted user reads off the cell.
    */
   readonly accessibleName: string;
@@ -846,7 +846,7 @@ function PickerOption(props: {
 
 /**
  * The pattern option's first line: "Any Codex model" beside the mono `*` for
- * a bare `*` (spec §How patterns work - the row claims the whole provider, and
+ * a bare `*` (the row claims the whole provider, and
  * `*` alone does not say so), "Any model containing “luna”" for a typed word,
  * and the pattern itself, in mono, otherwise.
  */

@@ -23,7 +23,7 @@
  * Priorities, highest first: an `ask` (the voice has a question for the
  * person), the `focused` reply they are waiting on, a reply `elsewhere`, the
  * `briefing`. The queue and the interjections that fill the lower tiers are a
- * later ticket's; the interface admits them now.
+ * later work; the interface admits them now.
  */
 
 export type SpeechPriority = "ask" | "focused" | "elsewhere" | "briefing";

@@ -37,7 +37,7 @@ function breakdownKey(harnessId: string, model: string): string {
 
 /**
  * Folds the window's buckets into one row per (harness, model), sorted by
- * cost descending - the harness/model breakdown the ticket asks for,
+ * cost descending - the harness/model breakdown,
  * independent of the day axis.
  */
 export function buildUsageBreakdownRows(

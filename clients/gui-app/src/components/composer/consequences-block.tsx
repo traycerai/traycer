@@ -27,7 +27,7 @@ import {
 
 /**
  * Everything a person must know before the first action creates or wakes a
- * host, under the staged host (sandboxes redesign, Flow 1). The price clause
+ * host, under the staged host. The price clause
  * always shows and never collapses. The full block renders the first time
  * this person stages in a configuration, audience category and wording
  * version, and that render is recorded as SHOWN (never as read or

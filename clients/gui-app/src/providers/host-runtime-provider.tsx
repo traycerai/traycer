@@ -381,7 +381,7 @@ export function createHostRuntime<Registry extends VersionedRpcRegistry>(
         // input devices are served by (`selected-host` in the routing table).
         selectedHostId: () =>
           useSelectionAuthorityStore.getState().effectiveHostId,
-        // The window's connection-registry wiring (connection-registry §1).
+        // The window's connection-registry wiring.
         // Both halves are READ PORTS: the registry keeps no copy of a row or
         // a lease, so there is still exactly one directory and exactly one
         // lease vocabulary in the app. What it adds is the per-host verdict -

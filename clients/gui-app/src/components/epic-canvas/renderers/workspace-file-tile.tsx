@@ -184,7 +184,7 @@ export function WorkspaceFileTile(props: {
 }
 
 /**
- * Extension gate BEFORE any RPC (image-preview decision log, decision #6):
+ * Extension gate BEFORE any RPC (decision #6):
  * a non-image extension takes the untouched text path below unconditionally.
  * `.svg` is the one format with a source view - it defaults to image with a
  * per-tile, non-persisted toggle back to `WorkspaceFileTileLive`'s existing
@@ -270,7 +270,7 @@ function WorkspaceFileTileRouter(props: {
  * Image mode for a workspace file tile: fetches over `useFileAsset` (never
  * `workspace.readFile`) and renders `ImagePreview`, or the shared
  * `BinaryPlaceholder` for a `fallback` status - uniformly, regardless of
- * WHY the fetch fell back (image-preview decision log, decision #14).
+ * WHY the fetch fell back (decision #14).
  * Editing/drafts/markdown/find never mount here.
  */
 function WorkspaceImageFileTile(props: {

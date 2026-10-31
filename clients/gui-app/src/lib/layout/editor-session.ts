@@ -478,8 +478,8 @@ function stopWatchingSession(): void {
 }
 
 /**
- * `layout_editor_session`, fired once per session at the exit (L-46, L-54,
- * tech-plan section 7). Assembled here, the one place a session's whole
+ * `layout_editor_session`, fired once per session at the exit (L-46,
+ * L-54). Assembled here, the one place a session's whole
  * record - the gesture that opened it, its entry and exit snapshots, its
  * undo count - is still in hand; `session.entry`/`.source` are carried on the
  * session itself for exactly this call.

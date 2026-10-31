@@ -10,12 +10,12 @@ import type {
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 
 /**
- * Renderer-side handle onto the shell's credentials-file token store (tech plan
- * §3). The single machine-local `~/.traycer/cli/<env>/credentials` file is owned
+ * Renderer-side handle onto the shell's credentials-file token store.
+ * The single machine-local `~/.traycer/cli/<env>/credentials` file is owned
  * by the shell (desktop main's `FileTokenStore`, reached over IPC); this wrapper
  * only serializes the mutating operations and exposes the typed seam.
  *
- * Post-§3 the store carries the FULL identity (`StoredCredentials`) and every
+ * The store carries the FULL identity (`StoredCredentials`) and every
  * token *spend* happens inside `rotate` (under the file lock, in main) — the
  * renderer never refreshes a token itself. Interactive sign-in is `signIn`; the
  * file is destroyed only by `delete` (reachable from `AuthService.signOut()`).
@@ -29,7 +29,7 @@ export class AuthTokenStore {
   // main-process file lock is the real cross-process guarantee, this just keeps
   // one renderer from racing its own two mutations onto it (e.g. a sign-out's
   // delete overtaking a still-in-flight sign-in). Reads never join the chain —
-  // reads never lock (§3), and a slow in-flight `rotate` must not stall a `get`.
+  // reads never lock, and a slow in-flight `rotate` must not stall a `get`.
   private opChain: Promise<unknown> = Promise.resolve();
 
   constructor(tokenStore: ITokenStore) {
@@ -84,13 +84,13 @@ export class AuthTokenStore {
     return this.enqueue(() => this.tokenStore.deleteIfToken(expectedToken));
   }
 
-  /** Owned-watcher change subscription (source lands in §4). */
+  /** Owned-watcher change subscription. */
   subscribe(listener: (change: TokenStoreChange) => void): Disposable {
     return this.tokenStore.subscribe(listener);
   }
 
   /**
-   * One-time legacy→file migration (§6). A startup one-shot: main single-flights
+   * One-time legacy→file migration. A startup one-shot: main single-flights
    * it and serializes its own store ops under the file lock, so it deliberately
    * does NOT join the mutation chain — it must not stall a sign-in behind its
    * several-second reconcile, and it never mutates through this renderer wrapper.

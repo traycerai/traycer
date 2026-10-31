@@ -2286,7 +2286,7 @@ function ChatNodeShellBody(
       // Names no host, exactly like the panel's own `+`: the modal resolves
       // this Epic's placement memory (last created chat's host, else the
       // session's host) with the picker live. The PARENT row's owner host is
-      // deliberately not passed - naming it would freeze the picker (§55) and
+      // deliberately not passed - naming it would freeze the picker and
       // a child is not required to live on its parent's machine.
       hostId: null,
     });
