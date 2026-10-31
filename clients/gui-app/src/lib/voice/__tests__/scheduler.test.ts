@@ -164,6 +164,8 @@ describe("delivery confirmation", () => {
     ).toEqual(["42", "forty-two", "forty two"]);
 
     scheduler.noteOutputTranscript("The answer is forty two.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(answer.delivered()).toBe(1);
     clock.advance(CONFIRM_WINDOW_MS * MAX_DELIVERY_ATTEMPTS);
 
     expect(answer.delivered()).toBe(1);
@@ -181,6 +183,38 @@ describe("delivery confirmation", () => {
     expect(appended).toHaveLength(2);
 
     scheduler.noteOutputTranscript("It is 42.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(answer.delivered()).toBe(1);
+  });
+
+  it("judges a number only once the utterance is complete: 42 then ,000 confirms nothing at either delta, nor at the quiet", () => {
+    const answer = numericAnswer("42");
+    scheduler.noteOutputTranscript("42");
+    expect(answer.delivered()).toBe(0);
+    scheduler.noteOutputTranscript(",000");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(answer.delivered()).toBe(0);
+
+    const spelled = clock.now();
+    scheduler.noteOutputTranscript(" forty two");
+    scheduler.noteOutputTranscript(" thousand.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(answer.delivered()).toBe(0);
+    expect(clock.now()).toBeGreaterThan(spelled);
+    clock.advance(CONFIRM_WINDOW_MS);
+    expect(appended).toHaveLength(2);
+  });
+
+  it("is not 42 when a symbol makes it another value: 42% and forty-two%", () => {
+    const answer = numericAnswer("42");
+    scheduler.noteOutputTranscript("42%");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    scheduler.noteOutputTranscript(" or forty-two%.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(answer.delivered()).toBe(0);
+
+    scheduler.noteOutputTranscript(" So 42.");
+    clock.advance(OUTPUT_HANGOVER_MS);
     expect(answer.delivered()).toBe(1);
   });
 
@@ -190,8 +224,10 @@ describe("delivery confirmation", () => {
       confirmationWords({ botTitle: null, threadTitle: null, text: "-5" }),
     ).toEqual(["-5", "minus five", "negative five"]);
     scheduler.noteOutputTranscript("Five.");
+    clock.advance(OUTPUT_HANGOVER_MS);
     expect(negative.delivered()).toBe(0);
     scheduler.noteOutputTranscript(" Minus five.");
+    clock.advance(OUTPUT_HANGOVER_MS);
     expect(negative.delivered()).toBe(1);
   });
 
@@ -204,6 +240,7 @@ describe("delivery confirmation", () => {
     expect(appended).toHaveLength(2);
 
     scheduler.noteOutputTranscript("-5.");
+    clock.advance(OUTPUT_HANGOVER_MS);
     expect(negative.delivered()).toBe(1);
     expect(scheduler.pendingCount()).toBe(0);
   });
@@ -211,8 +248,10 @@ describe("delivery confirmation", () => {
   it("keeps the decimal: three point five confirms 3.5, three alone does not", () => {
     const decimal = numericAnswer("3.5");
     scheduler.noteOutputTranscript("Three.");
+    clock.advance(OUTPUT_HANGOVER_MS);
     expect(decimal.delivered()).toBe(0);
     scheduler.noteOutputTranscript(" Three point five.");
+    clock.advance(OUTPUT_HANGOVER_MS);
     expect(decimal.delivered()).toBe(1);
   });
 
@@ -324,15 +363,69 @@ describe("delivery confirmation", () => {
     scheduler.noteOutputTranscript(" Or forty two thousand.");
     expect(answer.delivered()).toBe(0);
     scheduler.noteOutputTranscript(" So, forty two.");
+    clock.advance(OUTPUT_HANGOVER_MS);
     expect(answer.delivered()).toBe(1);
   });
 
   it("does not take a signed number for the unsigned one: minus five is not 5", () => {
     const five = numericAnswer("5");
     scheduler.noteOutputTranscript("Minus five.");
+    clock.advance(OUTPUT_HANGOVER_MS);
     expect(five.delivered()).toBe(0);
     scheduler.noteOutputTranscript(" Just 5.");
+    clock.advance(OUTPUT_HANGOVER_MS);
     expect(five.delivered()).toBe(1);
+  });
+
+  it("waits for trusted playback to stop before taking an output as complete: One under speech is not the answer until quiet, and moment. before quiet rejects it", () => {
+    const first = numericAnswer("1");
+    scheduler.noteOutputLevel(true);
+    scheduler.noteOutputTranscript("One");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    // The transcript fell quiet, the detector still hears speech.
+    expect(first.delivered()).toBe(0);
+    scheduler.noteOutputTranscript(" moment.");
+    scheduler.noteOutputLevel(false);
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(first.delivered()).toBe(0);
+    clock.advance(CONFIRM_WINDOW_MS);
+    expect(appended).toHaveLength(2);
+
+    scheduler.noteOutputLevel(true);
+    scheduler.noteOutputTranscript("One.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(first.delivered()).toBe(0);
+    scheduler.noteOutputLevel(false);
+    expect(first.delivered()).toBe(1);
+  });
+
+  it("takes repetitions of the whole reply as the reply, and nothing else beside them: Yes. Yes. confirms Yes., Yes. Right. does not", () => {
+    const yes = (): { delivered: () => number } => {
+      let delivered = 0;
+      scheduler.enqueue(
+        item("a", {
+          text: "Yes.",
+          confirmWords: confirmationWords({
+            botTitle: null,
+            threadTitle: null,
+            text: "Yes.",
+          }),
+          onDelivered: () => delivered++,
+        }),
+      );
+      return { delivered: () => delivered };
+    };
+    const first = yes();
+    scheduler.noteOutputTranscript("Yes. Right.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(first.delivered()).toBe(0);
+    clock.advance(CONFIRM_WINDOW_MS);
+    expect(appended).toHaveLength(2);
+
+    scheduler.noteOutputTranscript("Yes. Yes!");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(first.delivered()).toBe(1);
+    expect(scheduler.pendingCount()).toBe(0);
   });
 
   it("runs onDelivered once when the transcript holds a confirm word", () => {

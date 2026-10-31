@@ -187,6 +187,8 @@ export function createSpeechScheduler(
   let outputLevelPlaying = false;
   let outputTranscriptUntil: number | null = null;
   let outputTimer: unknown = null;
+  /** The transcript fell quiet while trusted playback went on: the completion check waits for it. */
+  let completionPending = false;
   let ackPending = false;
   let ackHeardSpeech = false;
   let ackTimer: unknown = null;
@@ -257,6 +259,18 @@ export function createSpeechScheduler(
     }
     return null;
   };
+
+  /**
+   * The utterance is complete: a short answer is proven now, by the complete
+   * output being exactly the answer (or repetitions of it), or holding a
+   * complete number of it; nothing read from a streaming prefix.
+   */
+  function completeUtterance(): void {
+    if (inFlight === null) return;
+    if (confirmedAtCompletion(inFlight.transcript, inFlight.queued.item)) {
+      settleInFlight(true);
+    }
+  }
 
   const settleInFlight = (delivered: boolean): void => {
     const current = inFlight;
@@ -342,25 +356,27 @@ export function createSpeechScheduler(
     noteOutputTranscript(text) {
       if (inFlight !== null) {
         inFlight.transcript += text;
+        // Ordinary content, once said, stays said; a short answer (a number,
+        // a word of acknowledgement) is judged only once the utterance is
+        // complete, since "42" may go on to ",000".
         if (confirmedByContent(inFlight.transcript, inFlight.queued.item)) {
           settleInFlight(true);
         }
       }
+      completionPending = false;
       if (ackPending) ackHeardSpeech = true;
       const hangover = outputHangoverMs();
       outputTranscriptUntil = deps.now() + hangover;
       if (outputTimer !== null) deps.clearTimer(outputTimer);
       outputTimer = deps.setTimer(() => {
         outputTimer = null;
-        // The utterance is complete once the voice falls quiet: only now can
-        // an output be known to be EXACTLY the expected short answer ("One."
-        // and not the "One" of "One moment."), so that proof is read here,
-        // never from a streaming prefix.
-        if (
-          inFlight !== null &&
-          isWholeAnswerSaid(inFlight.transcript, inFlight.queued.item)
-        ) {
-          settleInFlight(true);
+        // The utterance is complete once the transcript has fallen quiet AND
+        // trusted playback has stopped: a healthy detector still hearing
+        // speech says the utterance goes on, whatever the transcript's gap.
+        if (levelDetection && outputLevelPlaying) {
+          completionPending = true;
+        } else {
+          completeUtterance();
         }
         // The acknowledgement has been spoken through once the voice falls
         // quiet after speaking.
@@ -374,6 +390,12 @@ export function createSpeechScheduler(
       outputLevelPlaying = playing;
       if (playing && ackPending) ackHeardSpeech = true;
       if (!playing && ackPending && ackHeardSpeech) clearAck();
+      // The transcript fell quiet first; playback stopping completes the
+      // utterance now.
+      if (!playing && completionPending && outputTimer === null) {
+        completionPending = false;
+        completeUtterance();
+      }
       onFactsChanged();
     },
     setLevelDetection(available) {
@@ -688,7 +710,15 @@ const WHOLE_REPLY_MAX_WORDS = 2;
 /** A number as written: an optional sign, digits, an optional decimal part. */
 const NUMERAL_RE = /^-?\d+(?:\.\d+)?$/u;
 const NUMERALS_IN_TEXT_RE =
-  /(?<![\p{L}\p{N}.,-])-?\d+(?:\.\d+)?(?![\p{L}\p{N}])(?![.,]\d)(?!\s*(?:%|percent|hundred|thousand|million|billion|trillion|point)\b)/giu;
+  /(?<![\p{L}\p{N}.,\-$€£¥])-?\d+(?:\.\d+)?(?![\p{L}\p{N}])(?![.,]\d)(?!\s*(?:[%‰°$€£¥]|(?:percent|hundred|thousand|million|billion|trillion|point)\b))/giu;
+
+/** Symbols glued to a number that make it a different value: said, a magnitude word. */
+const MAGNITUDE_SYMBOL_RE = /[%‰°]/gu;
+
+/** The output as said: a magnitude symbol is the word it stands for, so it bounds a number. */
+function spokenOf(said: string): string {
+  return said.replace(MAGNITUDE_SYMBOL_RE, " percent ");
+}
 
 /**
  * The numbers written in `text`, sign and decimal kept, as they stand: a
@@ -786,34 +816,47 @@ export function isBackchannelOnly(transcript: string): boolean {
 }
 
 /**
- * Whether the output so far proves the item by its content: it says one of
- * the item's phrases whole (a numeral as written, a multi-word spelling as
- * adjacent words, neither as part of a different number), and is more than
- * acknowledgement. A phrase that is acknowledgement vocabulary is never
- * proven by being contained ("yes, give me a moment" is not the reply
- * "Yes."). Read on every delta: content, once said, stays said.
+ * Whether the output so far proves the item by ordinary content: it says one
+ * of the item's content phrases whole, and is more than acknowledgement.
+ * Read on every delta: such content, once said, stays said. A number and a
+ * phrase of acknowledgement vocabulary are not read here: a number may still
+ * grow ("42" into "42,000"), and acknowledgement proves nothing by being
+ * contained ("yes, give me a moment" is not the reply "Yes.").
  */
 function confirmedByContent(transcript: string, item: SpeechItem): boolean {
   if (item.confirmWords.length === 0) return false;
   if (isBackchannelOnly(transcript)) return false;
   const said = transcript.toLowerCase();
   return item.confirmWords.some(
-    (phrase) => !isBackchannelOnly(phrase) && holdsPhrase(said, phrase),
+    (phrase) =>
+      !isBackchannelOnly(phrase) &&
+      !isNumberPhrase(phrase) &&
+      holdsPhrase(said, phrase),
   );
 }
 
 /**
- * Whether the complete output IS the expected answer and nothing else, which
- * proves it even where the same words alone would be acknowledgement: "One."
- * for the answer 1, "Yes." for the reply "Yes." (the reply itself ends the
- * item's text, so a seeded acknowledgement word that is not the reply never
- * confirms). Read only once the voice has fallen quiet: a prefix ("One" of
- * "One moment.") proves nothing.
+ * Whether the complete output proves a short answer: it IS the expected
+ * answer and nothing else, or only repetitions of it ("Yes. Yes."), which
+ * proves it even where the same words alone would be acknowledgement ("One."
+ * for the answer 1; the reply itself ends the item's text, so a seeded
+ * acknowledgement word that is not the reply never confirms); or it holds a
+ * complete number of the item, whole ("It is 42.", not "42,000" or "42%").
+ * Read only once the utterance is complete: a prefix proves nothing.
  */
-function isWholeAnswerSaid(transcript: string, item: SpeechItem): boolean {
+function confirmedAtCompletion(transcript: string, item: SpeechItem): boolean {
+  if (item.confirmWords.length === 0) return false;
   const said = transcript.toLowerCase();
+  if (
+    item.confirmWords.some(
+      (phrase) => isWholeAnswer(item, phrase) && isOnly(said, phrase),
+    )
+  ) {
+    return true;
+  }
+  if (isBackchannelOnly(transcript)) return false;
   return item.confirmWords.some(
-    (phrase) => isWholeAnswer(item, phrase) && isExactly(said, phrase),
+    (phrase) => isNumberPhrase(phrase) && holdsPhrase(said, phrase),
   );
 }
 
@@ -859,16 +902,28 @@ function isNumberPhrase(phrase: string): boolean {
   return words.length > 0 && words.every((word) => NUMBER_WORDS.has(word));
 }
 
-/** The lowercased output is the phrase and nothing else, but for the punctuation around it. */
-function isExactly(said: string, phrase: string): boolean {
-  const trimmed = said.replace(/^[\s"'“‘]+|[\s.!?,;:"'”’]+$/gu, "");
+/**
+ * The lowercased output is the phrase and nothing else, or repetitions of
+ * it with punctuation between ("Yes. Yes."), each said whole.
+ */
+function isOnly(said: string, phrase: string): boolean {
   const expected = phrase.toLowerCase();
-  if (NUMERAL_RE.test(expected)) return trimmed === expected;
-  return (
-    wordsOf(trimmed).map(canonicalWord).join(" ") ===
-    wordsOf(expected).map(canonicalWord).join(" ")
+  const parts = spokenOf(said)
+    .split(REPEAT_SPLIT_RE)
+    .map((part) => part.replace(/^[\s"'“‘]+|[\s"'”’]+$/gu, ""))
+    .filter((part) => part.length > 0);
+  if (parts.length === 0) return false;
+  if (NUMERAL_RE.test(expected)) {
+    return parts.every((part) => part === expected);
+  }
+  const words = wordsOf(expected).map(canonicalWord).join(" ");
+  return parts.every(
+    (part) => wordsOf(part).map(canonicalWord).join(" ") === words,
   );
 }
+
+/** Punctuation between repetitions; a dot or comma inside a number is not. */
+const REPEAT_SPLIT_RE = /[!?;:]+|\.(?!\d)|,(?!\d)/u;
 
 /**
  * The lowercased output holds the phrase whole: a numeral as written, words
@@ -887,7 +942,7 @@ function holdsPhrase(said: string, phrase: string): boolean {
   const needle = wordsOf(expected);
   if (needle.length === 0) return false;
   const bounded = isNumberPhrase(expected);
-  return said
+  return spokenOf(said)
     .split(SENTENCE_END_RE)
     .some((sentence) => holdsWords(wordsOf(sentence), needle, bounded));
 }
