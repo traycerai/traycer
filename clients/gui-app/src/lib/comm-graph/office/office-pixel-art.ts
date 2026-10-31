@@ -890,10 +890,6 @@ interface SelectedMap {
   readonly mirror: boolean;
 }
 
-/**
- * `left` is never authored: it is `right` mirrored, which is both half the art
- * to keep consistent and the only way the two stay in sync when one is edited.
- */
 /** Hair, then anything worn over it, at whatever offset this head sits at. */
 function dressHead(
   body: SpriteMap,
@@ -909,6 +905,10 @@ function dressHead(
   return overlayMap(haired, officeAccessoryMap(accessory), headDy);
 }
 
+/**
+ * `left` is never authored: it is `right` mirrored, which is both half the art
+ * to keep consistent and the only way the two stay in sync when one is edited.
+ */
 function selectCharacterMap(ref: OfficeSpriteRef): SelectedMap {
   const pose = ref.pose ?? "stand";
   if (isOfficeSeatedPose(pose)) {

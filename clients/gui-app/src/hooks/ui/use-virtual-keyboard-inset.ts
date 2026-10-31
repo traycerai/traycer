@@ -1,6 +1,14 @@
 import * as React from "react";
 
 /**
+ * Differences below this are not a keyboard: no soft keyboard is this short,
+ * while iOS toolbar expand/collapse can leave the layout and visual viewports
+ * disagreeing by up to ~100px at rest. Without the floor that disagreement
+ * would read as permanent phantom padding.
+ */
+const MIN_KEYBOARD_INSET_PX = 120;
+
+/**
  * Height (CSS px) of the layout viewport currently covered by the on-screen
  * keyboard, or 0 when no keyboard is up (or the browser resizes the layout
  * itself, e.g. Android with `interactive-widget=resizes-content`, which
@@ -17,14 +25,6 @@ import * as React from "react";
  * anchor here - `window.innerHeight` is useless for this on iOS because it
  * tracks the visual viewport and shrinks with the keyboard.
  */
-/**
- * Differences below this are not a keyboard: no soft keyboard is this short,
- * while iOS toolbar expand/collapse can leave the layout and visual viewports
- * disagreeing by up to ~100px at rest. Without the floor that disagreement
- * would read as permanent phantom padding.
- */
-const MIN_KEYBOARD_INSET_PX = 120;
-
 export function readVirtualKeyboardInset(): number {
   const viewport = window.visualViewport ?? null;
   if (viewport === null) return 0;
