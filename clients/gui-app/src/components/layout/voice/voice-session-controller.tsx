@@ -27,6 +27,7 @@ import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
+import { announcementsOf, type Announcement } from "@/lib/voice/queue-sources";
 import {
   useVoiceQueueOwner,
   VOICE_SWITCH_SETTLE_MS,
@@ -264,7 +265,8 @@ export function VoiceSessionController(): ReactNode {
     appHostId,
     botTitle,
   });
-  const { beginQueue, noteChannel, noteFocused, resetQueue } = voiceQueue;
+  const { beginQueue, noteAnnouncement, noteChannel, noteFocused, resetQueue } =
+    voiceQueue;
 
   // ---- Posting ---------------------------------------------------------- //
   const send = useBotConversationSendMutation(focusClient);
@@ -1002,6 +1004,14 @@ export function VoiceSessionController(): ReactNode {
             sayLoopRef.current?.isAwaiting(requestId) ?? false
           }
           onScheduled={noteFocused}
+          onAnnouncement={(announcement) =>
+            noteAnnouncement({
+              botId: focus.botId,
+              hostId: focus.hostId,
+              chatId: channelId,
+              announcement,
+            })
+          }
         />
       ) : null}
     </>
@@ -1101,7 +1111,7 @@ function VoiceSelectionSync(props: {
   useEffect(() => {
     if (activeBotId === null || tab === null) return;
     const selection = focusOf(activeBotId, tab.hostId, thread, listed);
-    if (followsVoiceSwitch(selection, voiceSwitch)) return;
+    if (followsVoiceSwitch(selection, voiceSwitch, listed)) return;
     applySelection(selection, onManualChange, onResolved);
   }, [
     activeBotId,
@@ -1118,44 +1128,61 @@ function VoiceSelectionSync(props: {
 
 /**
  * Whether a selection is the landing of a switch the voice made, not the
- * person's move. The one it lands on is written to the focus and ends the
- * switch. The ones it passes through leave the focus where the switch put
- * it: any of that bot's while its tab has not spent the landing yet (the
- * channel before the thread opens, an earlier rail), and, after, the landed
- * rail's anchor while the thread list resolves it. Anything else (another
- * bot, another thread once the tab has landed, a selection after the wait)
- * ends the switch and is the person's.
+ * person's move. Only what the switch itself causes is the voice's: until
+ * the bot's tab spends the landing, the rail it already held (the same
+ * anchor, or its channel); once it has, the target thread, by its id or by
+ * the anchor the thread list gives it (the rail the landing opens, while it
+ * resolves). The selection it lands on is written to the focus and ends the
+ * switch. Anything else (another bot, another anchor, a selection after the
+ * wait) ends the switch at once and is the person's.
  */
 function followsVoiceSwitch(
   selection: VoiceFocus,
   voiceSwitch: { current: VoiceSwitch | null },
+  listed: ReadonlyArray<BotThreadSummary> | null,
 ): boolean {
   const pending = voiceSwitch.current;
   if (pending === null) return false;
+  voiceSwitch.current = null;
   if (
     selection.botId !== pending.botId ||
     Date.now() - pending.at > VOICE_SWITCH_SETTLE_MS
   ) {
-    voiceSwitch.current = null;
     return false;
   }
-  const landed =
-    pending.threadId === null
-      ? selection.anchorMessageId === null
-      : selection.threadId === pending.threadId;
-  if (landed) {
-    voiceSwitch.current = null;
-    useVoiceSessionStore.getState().setFocus(selection);
+  const store = useVoiceSessionStore.getState();
+  if (pending.threadId === null) {
+    if (selection.anchorMessageId === null) {
+      store.setFocus(selection);
+      return true;
+    }
+  } else if (selection.threadId === pending.threadId) {
+    store.setFocus(selection);
     return true;
+  } else {
+    const targetAnchor =
+      listed?.find((thread) => thread.threadId === pending.threadId)?.anchor
+        ?.messageId ?? null;
+    if (
+      selection.anchorMessageId !== null &&
+      selection.anchorMessageId === targetAnchor
+    ) {
+      store.setFocus({
+        ...selection,
+        threadId: pending.threadId,
+        anchorThread: null,
+      });
+      return true;
+    }
   }
   const landing = Object.hasOwn(
     useBotTabLandingStore.getState().byBotId,
     pending.botId,
   );
-  const resolving =
-    pending.threadId !== null && selection.anchorThread === "resolving";
-  if (landing || resolving) return true;
-  voiceSwitch.current = null;
+  if (landing && selection.anchorMessageId === pending.fromAnchor) {
+    voiceSwitch.current = pending;
+    return true;
+  }
   return false;
 }
 
@@ -1276,6 +1303,8 @@ function VoiceFocusedReplyFeed(props: {
   ) => void;
   /** A row this feed will say: the queue does not offer it too. */
   readonly onScheduled: (messageId: string) => void;
+  /** An announcement that landed on the focused channel: the queue keeps it. */
+  readonly onAnnouncement: (announcement: Announcement) => void;
 }): null {
   const {
     focus,
@@ -1290,6 +1319,7 @@ function VoiceFocusedReplyFeed(props: {
     isAwaiting,
     registerReconcile,
     onScheduled,
+    onAnnouncement,
   } = props;
   const chatId = focus.threadId ?? channelId;
   const handle = useChatSessionHandleForContainer(
@@ -1318,9 +1348,11 @@ function VoiceFocusedReplyFeed(props: {
     registerReconcileRef.current = registerReconcile;
   }, [registerReconcile]);
   const onScheduledRef = useRef(onScheduled);
+  const onAnnouncementRef = useRef(onAnnouncement);
   useEffect(() => {
     onScheduledRef.current = onScheduled;
-  }, [onScheduled]);
+    onAnnouncementRef.current = onAnnouncement;
+  }, [onAnnouncement, onScheduled]);
 
   useEffect(() => {
     if (handle === null || channelHandle === null) return;
@@ -1443,8 +1475,22 @@ function VoiceFocusedReplyFeed(props: {
         for (const reply of awaited) speak(reply, where);
         return;
       }
-      for (const reply of takeNewBotReplies(state.messages, memory)) {
-        speak(reply, where);
+      const fresh = takeNewBotReplies(state.messages, memory);
+      // At a channel's top level, a row of the bot that answers nothing is an
+      // announcement: briefing only (V3), never said as it lands.
+      const announced =
+        threadId === null && fresh.length > 0
+          ? new Map(
+              announcementsOf(state.messages, 0).map((found) => [
+                found.messageId,
+                found,
+              ]),
+            )
+          : null;
+      for (const reply of fresh) {
+        const announcement = announced?.get(reply.messageId);
+        if (announcement === undefined) speak(reply, where);
+        else onAnnouncementRef.current(announcement);
       }
       settle(where);
     };

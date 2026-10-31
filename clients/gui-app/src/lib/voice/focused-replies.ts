@@ -24,7 +24,10 @@ type UserRow = Extract<OpenMessage, { readonly role: "user" }>;
  */
 export type ReplyRow =
   | Pick<UserRow, "role" | "messageId" | "timestamp" | "conversationRequest">
-  | Pick<AssistantRow, "role" | "messageId" | "timestamp" | "blocks">;
+  | Pick<
+      AssistantRow,
+      "role" | "messageId" | "timestamp" | "blocks" | "repliesTo"
+    >;
 
 /**
  * What a watch remembers about one chat for the user session: the rows it

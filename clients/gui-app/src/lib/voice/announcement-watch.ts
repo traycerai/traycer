@@ -9,8 +9,9 @@ import {
  * Bots voice, VT4; V3: spoken only in a briefing). Read lazily: only the
  * channel stores this window already holds are read, and none is opened for
  * the voice. The first reading of a store is history; the bot's rows that
- * land after it and answer nothing are announcements. The focused channel is
- * left out: the focused feed speaks its rows.
+ * land after it and answer nothing are announcements, the focused channel's
+ * included: the focused feed never speaks an announcement, and the queue
+ * keeps one id once whichever of them hands it over first.
  */
 
 /** A channel store as the watch reads it. */
@@ -37,7 +38,6 @@ export function watchAnnouncements<H extends WatchedChannelHandle>(input: {
   readonly source: ChannelHandleSource<H>;
   /** The bot whose channel `chatId` is, or `null` for any other chat. */
   readonly channelBot: (chatId: string) => string | null;
-  readonly isFocused: (botId: string, chatId: string) => boolean;
   readonly onAnnouncement: (found: {
     readonly botId: string;
     readonly hostId: string;
@@ -59,7 +59,7 @@ export function watchAnnouncements<H extends WatchedChannelHandle>(input: {
       return;
     }
     const hostId = input.source.hostIdForHandle(handle);
-    if (hostId === null || input.isFocused(botId, handle.chatId)) {
+    if (hostId === null) {
       watch.since = Math.max(watch.since, newestOf(state.messages));
       return;
     }

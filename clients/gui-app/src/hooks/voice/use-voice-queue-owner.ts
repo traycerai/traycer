@@ -18,6 +18,7 @@ import {
 import type { ReplyRef } from "@/lib/voice/queue-sources";
 import { confirmationWords, type SpeechScheduler } from "@/lib/voice/scheduler";
 import { createVoiceQueue, type VoiceQueue } from "@/lib/voice/voice-queue";
+import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
@@ -45,6 +46,11 @@ export interface VoiceStatusRequest {
 export interface VoiceSwitch {
   readonly botId: string;
   readonly threadId: string | null;
+  /**
+   * The anchor of the thread the bot's rail held when the switch was made
+   * (`null`: its channel): what the tab shows until it spends the landing.
+   */
+  readonly fromAnchor: string | null;
   readonly at: number;
 }
 
@@ -64,7 +70,6 @@ export interface VoiceQueueOwner {
   readonly attention: VoiceAttention;
   readonly hostOf: (ref: ReplyRef) => string;
   readonly bots: ReadonlyArray<BotRecord>;
-  readonly isFocused: (botId: string, chatId: string) => boolean;
   readonly registerMark: (hostId: string, mark: VoiceReadMark | null) => void;
   readonly voiceSwitch: { current: VoiceSwitch | null };
   readonly statusRequest: VoiceStatusRequest | null;
@@ -83,6 +88,8 @@ export interface VoiceQueueOwner {
   readonly noteChannel: (channelId: string | null) => void;
   /** The focused feed will say this row: the queue does not offer it too. */
   readonly noteFocused: (messageId: string) => void;
+  /** The focused feed passed an announcement over: the queue keeps it, unsaid. */
+  readonly noteAnnouncement: VoiceQueue["addAnnouncement"];
 }
 
 /**
@@ -164,9 +171,16 @@ export function useVoiceQueueOwner(input: {
           title: botTitleRef.current(target.botId),
         });
       }
+      const rail = Object.hasOwn(
+        useBotOpenThreadStore.getState().byBotId,
+        target.botId,
+      )
+        ? useBotOpenThreadStore.getState().byBotId[target.botId]
+        : null;
       voiceSwitch.current = {
         botId: target.botId,
         threadId: target.threadId,
+        fromAnchor: rail?.kind === "thread" ? rail.anchorMessageId : null,
         at: Date.now(),
       };
       useVoiceSessionStore.getState().setFocus({
@@ -307,13 +321,16 @@ export function useVoiceQueueOwner(input: {
   const noteFocused = useCallback((messageId: string) => {
     queueRef.current?.noteFocused(messageId);
   }, []);
+  const noteAnnouncement = useCallback<VoiceQueue["addAnnouncement"]>(
+    (found) => queueRef.current?.addAnnouncement(found),
+    [],
+  );
 
   return {
     queue,
     attention,
     hostOf,
     bots,
-    isFocused,
     registerMark,
     voiceSwitch,
     statusRequest,
@@ -322,5 +339,6 @@ export function useVoiceQueueOwner(input: {
     resetQueue,
     noteChannel,
     noteFocused,
+    noteAnnouncement,
   };
 }
