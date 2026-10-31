@@ -325,6 +325,50 @@ function bindBot(
   };
 }
 
+/**
+ * A bot's channel, named explicitly (a queue item that lives at the
+ * channel's top level): unlike a route naming the bot alone, it does not
+ * inherit a focused thread of the bot. It is the focus only when the focus
+ * is that channel itself.
+ */
+export function bindChannel(
+  directory: VoiceDirectory,
+  botId: string,
+): BoundTarget | null {
+  const bot = namedBot(directory, null, botId);
+  if (bot === null) return null;
+  const focus = directory.focus;
+  if (
+    focus !== null &&
+    focus.botId === bot.botId &&
+    focus.hostId === bot.hostId &&
+    focus.threadId === null &&
+    focus.anchorMessageId === null
+  ) {
+    return focusTarget(bot, focus, null);
+  }
+  return {
+    tuple: {
+      environmentId: bot.environmentId,
+      botId: bot.botId,
+      threadId: null,
+      hostId: bot.hostId,
+    },
+    focus: {
+      botId: bot.botId,
+      hostId: bot.hostId,
+      threadId: null,
+      anchorMessageId: null,
+      anchorThread: null,
+    },
+    isFocus: false,
+    botTitle: bot.title,
+    environmentLabel: bot.environmentLabel,
+    environmentKind: bot.environmentKind,
+    anchorExcerpt: null,
+  };
+}
+
 function focusTarget(
   bot: DirectoryBot,
   focus: VoiceFocus,

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  bindChannel,
   bindTarget,
   type BoundTarget,
   type NamedTarget,
@@ -391,11 +392,16 @@ function resolveSwitch(
   if (itemId === null || item === undefined) {
     return { kind: "refused", reason: "unknown-target" };
   }
-  const target = bindTarget(directory, {
-    environmentId: null,
-    botId: item.botId,
-    threadId: item.threadId,
-  });
+  // An item's place is explicit: one with no thread lives in the bot's
+  // channel, which a focused thread of the bot is not.
+  const target =
+    item.threadId === null
+      ? bindChannel(directory, item.botId)
+      : bindTarget(directory, {
+          environmentId: null,
+          botId: item.botId,
+          threadId: item.threadId,
+        });
   if (target === null) return { kind: "refused", reason: "unknown-target" };
   return { kind: "switch", target, itemId };
 }
