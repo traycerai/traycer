@@ -41,7 +41,7 @@ export const useToolOpenStore = create<ToolOpenState>((set) => ({
 export const toolOpenDurableCache =
   createChatDurableCache<ReadonlySet<string>>(200);
 
-// Tracks which tab scopes have actually been
+// Review round 3: tracks which tab scopes have actually been
 // seeded/touched this session - see `chat-scoped-open-store-dual-key.ts`'s
 // doc comment. Distinguishes "genuinely empty, already initialized" from
 // "never touched (e.g. an inactive tab that never mounted)" for BOTH the
@@ -50,7 +50,7 @@ export const toolOpenDurableCache =
 export const toolOpenInitializedScopes = new Set<string>();
 
 /**
- * Promotes this tab's CURRENT scoped ids to
+ * Review round 3: promotes this tab's CURRENT scoped ids to
  * durable - called from the canvas close sweep, BEFORE `reset()` wipes the
  * live scope, for every removed chat tile (active or never-mounted alike).
  * A no-op for a tab that was never initialized (inactive tab closed without

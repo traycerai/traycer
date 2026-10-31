@@ -85,7 +85,7 @@ const pendingSearchFlushes = new Map<string, () => boolean>();
 // `replayRegisteredAdapterSearch` re-runs the search unmodified once a fresh
 // adapter registers.
 //
-// F3: committed explicitly by `evictTileFindUi`
+// Review round (F3): committed explicitly by `evictTileFindUi`
 // (the close point), not mirrored continuously on every mutation. A
 // switch-away remount does not need a durable round-trip at all - the
 // tab-key `uiByTileInstanceId` entry survives it untouched (only a real
@@ -93,7 +93,7 @@ const pendingSearchFlushes = new Map<string, () => boolean>();
 // bought "last-mutation-wins" instead of the literal
 // "last-CLOSED-wins", with no benefit for the case it wasn't needed for.
 //
-// An earlier version also carried `current`/`activeUnitId`
+// Review round 4: round 3 also carried `current`/`activeUnitId`
 // here and restored to that exact occurrence on reopen. Deleted - the real
 // adapter keys a match as `messageId:unitId:occurrenceInUnit`, but the
 // snapshot only ever exposes `unitId`, so "same activeUnitId" silently
@@ -132,7 +132,7 @@ export function evictTileFindUiForEpic(epicId: string): void {
 }
 
 /**
- * Promotes one tile's CURRENT ui state to durable
+ * Review round 3: promotes one tile's CURRENT ui state to durable
  * - called from the canvas close sweep, BEFORE `evictTileFindUi` drops the
  * tab-key entry, for every removed CHAT tile (the sweep already resolved
  * `identity` from the canvas tree, so this no longer depends on
@@ -596,7 +596,7 @@ function getUiState(
   );
 }
 
-// Restores
+// Review round 5 (item 1): restores
 // query + bar state only, everywhere (tab switch AND reopen-after-close) -
 // the replayed search always lands on the adapter's own default match, by
 // design, not a chased occurrence.

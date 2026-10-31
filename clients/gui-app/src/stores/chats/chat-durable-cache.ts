@@ -52,7 +52,7 @@ export function createChatDurableCache<T>(limit: number): ChatDurableCache<T> {
     },
     set: (identity, value) => {
       const key = chatTabPersistenceChatKey(identity);
-      // A terminally deleted chat/epic refuses
+      // Review round 3: a terminally deleted chat/epic refuses
       // every future write regardless of who runs last - the sweep's
       // promotion and the deletion mutation's own eviction race (the sweep
       // fires synchronously on tab close; the deletion's `onSuccess` fires

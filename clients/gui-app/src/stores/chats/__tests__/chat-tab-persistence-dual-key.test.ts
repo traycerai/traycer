@@ -4,7 +4,7 @@
  * stale-anchor nearest-neighbor. Component-level streaming / composer-resize
  * / restore-first pins live in chat-messages.test.tsx.
  *
- * The durable COMMIT
+ * Review round 3 (mandated simplification): the durable COMMIT
  * moved from per-hook/component unmounts to the canvas close sweep's
  * promotion choke point (store.ts - see its own tests in
  * `store-scroll-anchor-eviction.test.ts` for the end-to-end path through
@@ -123,12 +123,12 @@ function createNoopAdapter(tileInstanceId: string): TileFindAdapter {
 // key - the two dedicated eviction/tombstone tests below use their OWN
 // chatId so a tombstone they set never blocks any other test's writes
 // (`evictChatTabPersistenceForChat` tombstones by EXACT chat-key, terminal
-// until something re-opens that exact identity).
+// until something re-opens that exact identity - review round 3).
 const DELETE_SINGLE_CHAT = "chat-t15-delete-single";
 const DELETE_ALL_REGISTRIES_CHAT = "chat-t15-delete-all-registries";
 
 function clearEpicDurableStateForTests(epicId: string): void {
-  // Uses the individual (non-tombstoning) evict
+  // Review round 3: uses the individual (non-tombstoning) evict
   // functions - `evictChatTabPersistenceForEpic` is now a TERMINAL
   // deletion (it tombstones the epic prefix), which would permanently
   // block every other test sharing this epicId if used for mere
@@ -1014,7 +1014,7 @@ describe("ticket 15 review round 3: useChatScopedOpenStoreDualKeySeed (F2)", () 
   });
 });
 
-// An earlier version of this test
+// Review round 4 (finding 5): the round-3 version of this test
 // invoked each registry's `promoteXToDurable` MANUALLY, in the order the
 // sweep is supposed to call them - it proved every registry's own
 // last-write-wins property, but never actually drove the canvas's real

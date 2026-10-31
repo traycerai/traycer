@@ -28,7 +28,7 @@ export function readScopedIds(
  * every open chat tab) from its durable chat-key snapshot, exactly once per
  * tab.
  *
- * This hook now owns
+ * Review round 3 (mandated simplification): this hook now owns
  * ONLY the restore-on-mount half - the durable COMMIT moved entirely to the
  * canvas close sweep's promotion choke point (store.ts), which reads
  * `openIds` directly and works whether or not this hook's owning component

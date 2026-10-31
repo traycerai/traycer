@@ -103,7 +103,7 @@ const ANCHOR: TileScrollAnchor = {
 };
 
 /**
- * The canvas close sweep now resolves a removed
+ * Review round 3: the canvas close sweep now resolves a removed
  * tile's durable identity from the REAL canvas tree (`node.type === "chat"`,
  * `node.id` as chatId, `tabsById[tabId].epicId`) - so these tests use
  * `CHAT_A` (a real chat-kind fixture), not `SPEC_A`, and `epicId` must be
@@ -139,7 +139,7 @@ function seedTicket5PerTabState(epicId: string): void {
     .setOpen("activity-g1", true);
   getOrCreateA2AOpenStore(identity).getState().setSentOpen("a2a-sent", true);
   useToolOpenStore.getState().setOpen(CHAT_A.instanceId, "tool-1", true);
-  // The sweep's promotion is a no-op for a tab
+  // Review round 3: the sweep's promotion is a no-op for a tab
   // scope that was never marked initialized (see
   // `chat-scoped-open-store-dual-key.ts`'s doc comment) - mark it here to
   // simulate a component that actually mounted and seeded this tab this
@@ -222,7 +222,7 @@ function expectTicket5TabKeysEvicted(epicId: string): void {
   expect(
     getOrCreateA2AOpenStore(identity).getState().sentOpenIds.has("a2a-sent"),
   ).toBe(true);
-  // The sweep's promotion for tool/subagent must
+  // Review round 3: the sweep's promotion for tool/subagent must
   // also have re-seeded a fresh mount - simulate one via getOrCreate-style
   // durable read is not directly exposed for these two (global stores), so
   // this is asserted through the dual-key test suite instead; here we only
@@ -230,10 +230,10 @@ function expectTicket5TabKeysEvicted(epicId: string): void {
   // above answer correctly, matching the sweep contract.
 }
 
-// Uses the individual (non-tombstoning) per-epic
+// Review round 3: uses the individual (non-tombstoning) per-epic
 // evict functions directly, NOT the orchestrated
 // `evictChatTabPersistenceForEpic` - that one is a TERMINAL deletion (it
-// tombstones the epic prefix, per the fence), which would
+// tombstones the epic prefix, per the round-3 fence), which would
 // permanently block the sweep's own promotion inside the actual test if
 // used here for mere test-isolation cleanup between runs.
 function clearTicket5PerTabState(instanceId: string, epicId: string): void {

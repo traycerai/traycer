@@ -249,7 +249,7 @@ export function useComposerToolbarStore(
   }, [store, recordingOnSettingsChange]);
   // Re-seed when the seed identity changes (applySeed no-ops on a matching
   // key, so default-value churn never clobbers user edits). A LAYOUT effect,
-  // not a passive one: the transition-window gap - a seed
+  // not a passive one: round 2's transition-window gap - a seed
   // whose `profileId` flips (e.g. `resolveSeededProfileId` clearing a stale
   // pin once `providers.list` settles) must land in the store before the
   // browser paints, so a submit triggered by the very next user interaction
