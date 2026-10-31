@@ -9653,6 +9653,83 @@ describe("ChatMessages scroll policy", () => {
           scrollToOffsetSpy.mockRestore();
         }
       });
+
+      it("an end request while a landing is parked cancels it, and the show does not re-issue the older navigation", async () => {
+        const messages = makeCompletedTranscript(30);
+        const target = messages[10];
+        expect(target).toBeTruthy();
+        const onScrollRequestSettled = vi.fn();
+        const { rerenderWith } = renderChatMessages({
+          messages,
+          scrollStateKey: "landing-suspend-witness-8",
+          onScrollRequestSettled,
+        });
+        await settleLegendList();
+
+        const list = requireList();
+        const held = holdScrollToOffsetWrites(list);
+        try {
+          rerenderWith({
+            scrollRequest: {
+              kind: "message",
+              messageId: target.id,
+              blockId: null,
+              requestId: 801,
+            },
+          });
+          // The loop's own write landed for real before anything conceals
+          // it - the premise this witness needs to mean anything.
+          expect(getScrollNode().scrollTop).toBeGreaterThan(0);
+          expect(held.callCount()).toBe(1);
+
+          await hideWithCollapsedScrollBox(rerenderWith);
+          expect(onScrollRequestSettled).not.toHaveBeenCalled();
+
+          // While still hidden, a cross-tile end request arrives. The
+          // parked message landing has no loop left of its own to report
+          // an outcome - `scrollToEnd`'s own
+          // `activeNavigationSettleCleanupRef.current?.cancel()` is a
+          // no-op here, because the hide already cleared that ref when it
+          // suspended the landing - so without the end branch's own
+          // supersede check this request would survive, unreported, and
+          // the show below would re-issue it on top of the end the reader
+          // asked for more recently.
+          rerenderWith({ scrollRequest: { kind: "end", requestId: 802 } });
+          await settleLegendList();
+          expect(onScrollRequestSettled).toHaveBeenCalledWith(801, "cancelled");
+          // An end request has no landing of its own and settles nothing.
+          expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
+            802,
+            "landed",
+          );
+          expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
+            802,
+            "cancelled",
+          );
+          expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
+            802,
+            "exhausted",
+          );
+
+          // The load-bearing assertion: on show, the OLDER navigation must
+          // not be re-issued over the end the reader already asked for.
+          held.spy.mockRestore();
+          const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+          try {
+            rerenderWith({ visible: true });
+            await settleLegendList();
+            expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+            expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
+              801,
+              "landed",
+            );
+          } finally {
+            scrollToOffsetSpy.mockRestore();
+          }
+        } finally {
+          held.spy.mockRestore();
+        }
+      });
     });
   });
 
