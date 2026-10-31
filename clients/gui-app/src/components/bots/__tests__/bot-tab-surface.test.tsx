@@ -603,6 +603,8 @@ import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
+import { openChatSearchResult } from "@/lib/chat-search/open-chat-search-result";
+import { rowFromHostEntry } from "@/stores/notifications/merged-notifications";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useTeamCloudCreateStore } from "@/stores/bots/team-cloud-create-store";
 
@@ -2551,9 +2553,11 @@ describe("<BotTabSurface /> views", () => {
     await user.click(screen.getByTestId("stub-sidebar-threads"));
 
     act(() =>
-      useBotTabLandingStore
-        .getState()
-        .request(BOT_ID, { threadId: "thread-1", messageId: null }),
+      useBotTabLandingStore.getState().request(BOT_ID, {
+        kind: "thread",
+        threadId: "thread-1",
+        messageId: null,
+      }),
     );
 
     expect(screen.queryByTestId("stub-threads")).toBeNull();
@@ -2804,9 +2808,11 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
 
     it("is closed by a requested landing on a row of the channel", () => {
       mocks.state.threads = [];
-      useBotTabLandingStore
-        .getState()
-        .request(BOT_ID, { threadId: null, messageId: "post-1" });
+      useBotTabLandingStore.getState().request(BOT_ID, {
+        kind: "thread",
+        threadId: null,
+        messageId: "post-1",
+      });
       render(surface());
 
       expect(openThreadBeside()).toBe("none");
@@ -2833,6 +2839,7 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
         }),
       ).toBe(true);
       expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
+        kind: "thread",
         threadId: null,
         messageId: null,
       });
@@ -2844,9 +2851,11 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
 
     it("is closed by a requested landing on a thread the list does not name", () => {
       mocks.state.threads = [];
-      useBotTabLandingStore
-        .getState()
-        .request(BOT_ID, { threadId: "thread-gone", messageId: "reply-3" });
+      useBotTabLandingStore.getState().request(BOT_ID, {
+        kind: "thread",
+        threadId: "thread-gone",
+        messageId: "reply-3",
+      });
       render(surface());
 
       expect(openThreadBeside()).toBe("none");
@@ -2877,9 +2886,11 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
 
     it("opens the listed thread beside the channel on the row, and is spent, so a later render does not land it again", () => {
       mocks.state.threads = [LISTED_THREAD];
-      useBotTabLandingStore
-        .getState()
-        .request(BOT_ID, { threadId: "thread-1", messageId: "reply-3" });
+      useBotTabLandingStore.getState().request(BOT_ID, {
+        kind: "thread",
+        threadId: "thread-1",
+        messageId: "reply-3",
+      });
       const { rerender } = render(surface());
 
       const channel = screen.getByTestId("stub-channel");
@@ -2898,9 +2909,11 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
 
     it("shows the channel when the list does not name the thread", () => {
       mocks.state.threads = [LISTED_THREAD];
-      useBotTabLandingStore
-        .getState()
-        .request(BOT_ID, { threadId: "thread-gone", messageId: "reply-3" });
+      useBotTabLandingStore.getState().request(BOT_ID, {
+        kind: "thread",
+        threadId: "thread-gone",
+        messageId: "reply-3",
+      });
       render(surface());
 
       const channel = screen.getByTestId("stub-channel");
@@ -2908,6 +2921,180 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       expect(channel.getAttribute("data-land-on")).toBe("none");
       expect(useBotTabLandingStore.getState().byBotId).toEqual({});
     });
+  });
+
+  describe("a chat search hit landing in the bot's tab", () => {
+    const LISTED_THREAD: BotThreadSummary = {
+      threadId: "thread-1",
+      conversationId: "conversation-app",
+      sessionChatId: "session-thread-1",
+      anchor: {
+        messageId: "post-7",
+        requestId: "req-7",
+        senderUserId: "user-1",
+        sentAt: 1_000,
+        resolvedAt: 1_001,
+      },
+      replyCount: 1,
+      lastReplyAt: 2_000,
+      openRequestCount: 0,
+      costUsd: null,
+    };
+
+    beforeEach(() => {
+      useBotTabLandingStore.setState({ byBotId: {} });
+      mocks.state.threads = [LISTED_THREAD];
+    });
+
+    function openSearchHit(chatId: string, messageId: string): void {
+      openChatSearchResult(
+        vi.fn(),
+        { epicId: BOT_ID, chatId, hostId: TAB_HOST, messageId },
+        { effectiveHostId: TAB_HOST, now: 1_000 },
+      );
+    }
+
+    function expectNoSession(): void {
+      expect(screen.queryByTestId("stub-session")).toBeNull();
+    }
+
+    it("lands the channel on the row when the hit is in the channel's chat", () => {
+      openSearchHit(BOT.appConversationChatId ?? "", "post-1");
+      render(surface());
+
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-land-on")).toBe("post-1");
+      expect(channel.getAttribute("data-open-thread")).toBe("none");
+      expectNoSession();
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+    });
+
+    it("opens the thread beside the channel on the row when the hit is in a thread's record", () => {
+      openSearchHit("thread-1", "reply-3");
+      render(surface());
+
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-open-thread")).toBe("post-7");
+      expect(channel.getAttribute("data-land-on")).toBe("reply-3");
+      expect(channel.getAttribute("data-land-on-thread")).toBe("thread-1");
+      expectNoSession();
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+    });
+
+    it("opens the thread's session on the row when the hit is in a thread's session", () => {
+      openSearchHit("session-thread-1", "session-row-1");
+      render(surface());
+
+      const session = screen.getByTestId("stub-session");
+      expect(session.getAttribute("data-chat-id")).toBe("session-thread-1");
+      expect(session.getAttribute("data-thread-id")).toBe("thread-1");
+      expect(session.getAttribute("data-land-on")).toBe("session-row-1");
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+    });
+
+    it("opens the trunk session on the row when the hit is in the bot's trunk chat", () => {
+      openSearchHit(BOT.trunkChatId, "turn-1");
+      render(surface());
+
+      const session = screen.getByTestId("stub-session");
+      expect(session.getAttribute("data-chat-id")).toBe(BOT.trunkChatId);
+      expect(session.getAttribute("data-thread-id")).toBe("none");
+      expect(session.getAttribute("data-land-on")).toBe("turn-1");
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+    });
+
+    it("lands nowhere, and is spent, when the hit's chat is none of the bot's", () => {
+      openSearchHit("chat-unknown", "post-1");
+      render(surface());
+
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-land-on")).toBe("none");
+      expect(channel.getAttribute("data-open-thread")).toBe("none");
+      expectNoSession();
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+    });
+
+    it.each([
+      ["the trunk session", "trunk-1"],
+      ["a thread's session", "session-thread-1"],
+    ])(
+      "leaves Threads for %s, with the channel under it for Back",
+      async (_kind, chatId) => {
+        const user = userEvent.setup();
+        render(surface());
+        await user.click(screen.getByTestId("stub-sidebar-threads"));
+        expect(screen.getByTestId("stub-threads")).toBeTruthy();
+
+        act(() => openSearchHit(chatId, "session-row-1"));
+
+        expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+        expect(screen.queryByTestId("stub-threads")).toBeNull();
+        expect(screen.getByTestId("stub-session").dataset.chatId).toBe(chatId);
+
+        await user.click(screen.getByTestId("stub-session-back"));
+
+        expect(screen.queryByTestId("stub-threads")).toBeNull();
+        expect(screen.getByTestId("stub-channel")).toBeTruthy();
+      },
+    );
+
+    // A row can name a host that has since gone; a new bot tab takes the
+    // window's host instead, which routes the bot to wherever it is served.
+    it.each(["a search hit", "a notification"])(
+      "opens the bot's tab on the window's host when %s names a host that is gone",
+      (source) => {
+        // No tab of the bot is open: an open one keeps its own host.
+        useBotTabsStore.setState({ tabs: {} });
+        if (source === "a search hit") {
+          openChatSearchResult(
+            vi.fn(),
+            {
+              epicId: BOT_ID,
+              chatId: BOT.appConversationChatId ?? "",
+              hostId: "host-retired",
+              messageId: "post-1",
+            },
+            { effectiveHostId: TAB_HOST, now: 1_000 },
+          );
+        } else {
+          const { payload } = rowFromHostEntry({
+            id: "old-agent-stop",
+            updatedAt: 10,
+            readAt: null,
+            kind: "agent.stopped",
+            sourceRef: BOT.trunkChatId,
+            severity: "done",
+            outcome: "completed",
+            epicId: BOT_ID,
+            chatId: BOT.trunkChatId,
+            payload: {
+              kind: "chat",
+              epicId: BOT_ID,
+              chatId: BOT.trunkChatId,
+              hostId: "host-retired",
+              agentName: "Tracy",
+              taskTitle: "Tracy",
+              outcome: "completed",
+            },
+          });
+          if (payload === null) throw new Error("the row carried no payload");
+          routeNotificationForHost(vi.fn(), payload, 1_000, {
+            originHostId: null,
+            effectiveHostId: TAB_HOST,
+          });
+        }
+
+        expect(
+          lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID),
+        ).toMatchObject({ hostId: TAB_HOST });
+        render(surface());
+        expect(
+          screen.queryByTestId(
+            source === "a search hit" ? "stub-channel" : "stub-session",
+          ),
+        ).not.toBeNull();
+      },
+    );
   });
 
   it("gives the channel the bot's trunk session", () => {

@@ -141,6 +141,7 @@ function ThreadList(props: {
   const openChannel = useOpenBotChannel(hostId);
   const open = (entry: BotFollowedThread): void => {
     useBotTabLandingStore.getState().request(entry.bot.botId, {
+      kind: "thread",
       threadId: entry.thread.threadId,
       messageId: null,
     });
