@@ -65,6 +65,7 @@ import type {
   VoiceSessionMintFetchResult,
   VoiceSessionMintRequest,
 } from "@traycer-clients/shared/host-client/voice-sessions";
+import type { VoiceRouteFetchResult } from "@traycer-clients/shared/host-client/voice-router";
 import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
@@ -3238,6 +3239,27 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.endVoiceSession(bearer, voiceSessionId);
+  }
+
+  /**
+   * The voice router's one model call, with the cloud bearer, billed to the
+   * person's own account. A shell that cannot reach traycer-server reads as
+   * a transport failure: the voice asks the person to repeat.
+   */
+  async routeVoiceUtterance(
+    requestBody: string,
+  ): Promise<VoiceRouteFetchResult> {
+    if (this.sandboxControlUnavailableReason() !== null) {
+      return {
+        kind: "network-error",
+        detail: "no server for the voice router",
+      };
+    }
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.routeVoiceUtterance(bearer, requestBody);
   }
 
   async createSandbox(
