@@ -1856,6 +1856,23 @@ export function NewConversationModalBody(props: {
     [],
   );
 
+  /**
+   * The staged create carries the message alone, with no sidecar, and the
+   * sandbox's host is not up to ask: a capture would arrive as a bare image
+   * without its card. Asked at Send and again at the handoff, because a
+   * capture can land during the sign-in check without moving the draft's
+   * revision, and the handoff clears the cards.
+   */
+  const refuseStagedCapture = useCallback((): boolean => {
+    if (readNewConversationAnnotations(epicId).length === 0) return false;
+    raiseHostNotice({
+      kind: "refused",
+      message: STAGED_SANDBOX_CAPTURE_UNAVAILABLE,
+      action: null,
+    });
+    return true;
+  }, [epicId, raiseHostNotice]);
+
   const submitStagedSandbox = useCallback(
     (
       stagedKey: string,
@@ -1892,6 +1909,7 @@ export function NewConversationModalBody(props: {
             raiseSendRefusal();
             return;
           }
+          if (refuseStagedCapture()) return;
           const content = buildSubmittedChatJSONContent(
             captured,
             pickerStore.getState().knownSlashCommands,
@@ -1924,6 +1942,7 @@ export function NewConversationModalBody(props: {
       pickerStore,
       placement,
       raiseSendRefusal,
+      refuseStagedCapture,
       stagedSignInCheck,
       toolbarStore,
     ],
@@ -2009,18 +2028,8 @@ export function NewConversationModalBody(props: {
     const stagedKey = stagingSurfaceKey(sandboxStaging);
     const staged = stagedKey === null ? null : readStagedSandbox(stagedKey);
     if (stagedKey !== null && staged !== null && staged.phase !== "handoff") {
-      // The staged create carries the message alone, with no sidecar, and the
-      // sandbox's host is not up to ask: a capture would arrive as a bare
-      // image without its card, so it is refused before anything is handed
-      // over, keeping the draft and its cards.
-      if (browserAnnotations.length > 0) {
-        raiseHostNotice({
-          kind: "refused",
-          message: STAGED_SANDBOX_CAPTURE_UNAVAILABLE,
-          action: null,
-        });
-        return;
-      }
+      // Before the sign-in check wakes anything; asked again at the handoff.
+      if (refuseStagedCapture()) return;
       void submitStagedSandbox(stagedKey, staged, editorContent);
       return;
     }
@@ -2334,6 +2343,7 @@ export function NewConversationModalBody(props: {
     // received.
     submitTarget,
     setSubmitReentryTick,
+    refuseStagedCapture,
     submitStagedSandbox,
     submitPreparedDraft,
     teamSandboxHarnessBlocked,
