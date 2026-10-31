@@ -480,6 +480,10 @@ export function VoiceSessionController(): ReactNode {
         }
       },
       control: (verb) => controlRef.current(verb),
+      schedule: (fn, ms) => {
+        const handle = window.setTimeout(fn, ms);
+        return () => window.clearTimeout(handle);
+      },
       canSend: (target) => {
         const known = channelRef.current;
         return (

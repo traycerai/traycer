@@ -133,6 +133,7 @@ function harness(): Harness {
     think: () => undefined,
     control: () => undefined,
     canSend: () => true,
+    schedule: () => () => undefined,
   });
   return {
     sends,

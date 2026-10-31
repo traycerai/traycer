@@ -13,7 +13,11 @@ import {
   type VoiceDirectory,
 } from "../directory";
 import { resolveRoute, type RouterResult } from "../router";
-import { createSayLoop, type AskOutcome } from "../say-loop";
+import {
+  CONFIRM_ANSWER_WINDOW_MS,
+  createSayLoop,
+  type AskOutcome,
+} from "../say-loop";
 
 const NOW = 1_800_000_000_000;
 const VIEWER = "user-me";
@@ -91,16 +95,20 @@ function route(
   botId: string | null,
   environmentId: string | null,
   segments: number,
-  uncertain: boolean,
 ): RouterResult {
   return {
     action,
     target: { environmentId, botId, threadId: null, itemId: null },
     span: { fromSegment: 0, toSegment: segments - 1 },
-    uncertain,
+    uncertain: false,
     question: null,
     control: null,
   };
+}
+
+/** The same route, marked as the router's guess. */
+function uncertainly(result: RouterResult): RouterResult {
+  return { ...result, uncertain: true };
 }
 
 const SEND_RESPONSE: BotConversationSendResponse = {
@@ -132,6 +140,8 @@ function build(wiring: Wiring) {
   const notices: string[] = [];
   const asks: AskOutcome[] = [];
   const answers: Array<() => Promise<RouterResult>> = [];
+  /** Timers the loop set, by the order it set them; run one with `.run()`. */
+  const timers: Array<{ readonly ms: number; readonly run: () => void }> = [];
   const loop = createSayLoop({
     store: useVoiceSessionStore,
     send: (focus) => {
@@ -155,11 +165,23 @@ function build(wiring: Wiring) {
     think: () => undefined,
     control: () => undefined,
     canSend: () => wiring.canSend,
+    schedule: (fn, ms) => {
+      let live = true;
+      timers.push({
+        ms,
+        run: () => {
+          if (live) fn();
+        },
+      });
+      return () => {
+        live = false;
+      };
+    },
     openThread: () => undefined,
     botTitle: (botId) => botId,
     onAccepted: () => undefined,
   });
-  return { loop, sends, notices, asks, answers };
+  return { loop, sends, notices, asks, answers, timers };
 }
 
 /** A route the test answers when it chooses. */
@@ -184,9 +206,7 @@ describe("a post bound to the focus while a later request navigates", () => {
     const h = build({ recheckHolds: true, canSend: true });
     const first = heldAnswer();
     h.answers.push(first.answer);
-    h.answers.push(() =>
-      Promise.resolve(route("navigate", CI, PERSONAL, 2, false)),
-    );
+    h.answers.push(() => Promise.resolve(route("navigate", CI, PERSONAL, 2)));
 
     speak("tell", " tracy hello");
     const done = h.loop.onDelegationCreated("d-a");
@@ -194,7 +214,7 @@ describe("a post bound to the focus while a later request navigates", () => {
     await h.loop.onDelegationCreated("d-b");
     expect(useVoiceSessionStore.getState().focus?.botId).toBe(CI);
 
-    first.release(route("post", null, null, 2, false));
+    first.release(route("post", null, null, 2));
     await done;
 
     expect(h.sends).toEqual([]);
@@ -206,10 +226,8 @@ describe("a post bound to the focus while a later request navigates", () => {
   it("waiting for its channel, is dropped when the voice navigates elsewhere", async () => {
     const wiring: Wiring = { recheckHolds: true, canSend: false };
     const h = build(wiring);
-    h.answers.push(() => Promise.resolve(route("post", null, null, 2, false)));
-    h.answers.push(() =>
-      Promise.resolve(route("navigate", CI, PERSONAL, 2, false)),
-    );
+    h.answers.push(() => Promise.resolve(route("post", null, null, 2)));
+    h.answers.push(() => Promise.resolve(route("navigate", CI, PERSONAL, 2)));
 
     speak("hello", " tracy");
     await h.loop.onDelegationCreated("d-1");
@@ -226,11 +244,8 @@ describe("a post bound to the focus while a later request navigates", () => {
 
 describe("a confirmation", () => {
   it.each([
-    ["an uncertain post", route("post", CI, PERSONAL, 2, true)],
-    [
-      "a post into another team's channel",
-      route("post", RELEASE, ACME, 2, false),
-    ],
+    ["an uncertain post", uncertainly(route("post", CI, PERSONAL, 2))],
+    ["a post into another team's channel", route("post", RELEASE, ACME, 2)],
   ])(
     "for %s takes no yes said before its question was heard, and posts on one said after",
     async (_name, result) => {
@@ -272,9 +287,9 @@ describe("a confirmation", () => {
     const a = h.loop.onDelegationCreated("d-a");
     speak("tell", " the release bot");
     const b = h.loop.onDelegationCreated("d-b");
-    first.release(route("post", CI, PERSONAL, 2, true));
+    first.release(uncertainly(route("post", CI, PERSONAL, 2)));
     await a;
-    second.release(route("post", RELEASE, ACME, 2, false));
+    second.release(route("post", RELEASE, ACME, 2));
     await b;
 
     expect(h.asks).toHaveLength(1);
@@ -297,7 +312,7 @@ describe("a post that waited for its focus", () => {
   it("is checked again when it resumes, and refused when its target stopped holding", async () => {
     const wiring: Wiring = { recheckHolds: true, canSend: false };
     const h = build(wiring);
-    h.answers.push(() => Promise.resolve(route("post", null, null, 2, false)));
+    h.answers.push(() => Promise.resolve(route("post", null, null, 2)));
 
     speak("hello", " tracy");
     await h.loop.onDelegationCreated("d-1");
@@ -310,5 +325,72 @@ describe("a post that waited for its focus", () => {
     expect(h.sends).toEqual([]);
     expect(h.notices[0]).toMatch(/^Nothing was posted/);
     expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+});
+
+describe("a confirmation whose answer never closes an utterance", () => {
+  it("is not answered by the next request: the held post is dropped and said, and the request routes on its own", async () => {
+    const h = build({ recheckHolds: true, canSend: true });
+    h.answers.push(() =>
+      Promise.resolve(uncertainly(route("post", CI, PERSONAL, 2))),
+    );
+    speak("hello", " ci bot");
+    await h.loop.onDelegationCreated("d-1");
+    h.asks[0]?.onDelivered();
+
+    // "yes" closed no utterance; the next request arrives with it.
+    speak("yes", " tell", " tracy hello");
+    h.answers.push(() =>
+      Promise.resolve({
+        ...route("post", null, null, 3),
+        span: { fromSegment: 1, toSegment: 2 },
+      }),
+    );
+    await h.loop.onDelegationCreated("d-2");
+
+    expect(h.sends.map((focus) => focus.botId)).toEqual([TRACY]);
+    expect(h.notices).toEqual(["Okay, I did not post it."]);
+    const state = useVoiceSessionStore.getState();
+    expect(state.pendingAction).toBeNull();
+    expect(state.segments).toEqual([]);
+  });
+
+  it("is dropped and said once the answer window after the heard question runs out", async () => {
+    const h = build({ recheckHolds: true, canSend: true });
+    h.answers.push(() =>
+      Promise.resolve(uncertainly(route("post", CI, PERSONAL, 2))),
+    );
+    speak("hello", " ci bot");
+    await h.loop.onDelegationCreated("d-1");
+    expect(h.timers).toEqual([]);
+
+    h.asks[0]?.onDelivered();
+    expect(h.timers.map((timer) => timer.ms)).toEqual([
+      CONFIRM_ANSWER_WINDOW_MS,
+    ]);
+    h.timers[0]?.run();
+
+    expect(h.sends).toEqual([]);
+    expect(h.notices).toHaveLength(1);
+    expect(h.notices[0]).toMatch(/^Nothing was posted: no yes came/);
+    const state = useVoiceSessionStore.getState();
+    expect(state.pendingAction).toBeNull();
+    expect(state.segments).toEqual([]);
+  });
+
+  it("answered in time, cancels the window", async () => {
+    const h = build({ recheckHolds: true, canSend: true });
+    h.answers.push(() =>
+      Promise.resolve(uncertainly(route("post", CI, PERSONAL, 2))),
+    );
+    speak("hello", " ci bot");
+    await h.loop.onDelegationCreated("d-1");
+    h.asks[0]?.onDelivered();
+    speak("yes please");
+    await h.loop.onDelegationCreated("d-2");
+    h.timers[0]?.run();
+
+    expect(h.sends.map((focus) => focus.botId)).toEqual([CI]);
+    expect(h.notices).toEqual([]);
   });
 });

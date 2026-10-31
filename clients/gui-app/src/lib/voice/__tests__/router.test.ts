@@ -352,6 +352,7 @@ function harness(directory: VoiceDirectory): Harness {
       controls.push(verb);
     },
     canSend: () => true,
+    schedule: () => () => undefined,
     openThread: () => undefined,
     botTitle: (botId) =>
       directory.bots.find((bot) => bot.botId === botId)?.title ?? botId,

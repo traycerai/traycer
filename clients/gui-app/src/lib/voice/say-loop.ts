@@ -110,6 +110,8 @@ export interface SayLoopDeps {
    * A post that cannot waits, and is sent on {@link SayLoop.onFocusResolved}.
    */
   readonly canSend: (focus: VoiceFocus) => boolean;
+  /** Runs `fn` after `ms`; the returned function cancels it. */
+  readonly schedule: (fn: () => void, ms: number) => () => void;
   /** Opens the rail on the thread a post's answer landed in. */
   readonly openThread: (
     focus: VoiceFocus,
@@ -254,7 +256,16 @@ interface Confirming {
   readonly text: string;
   /** The question was confirmed spoken; only then is a boundary its answer. */
   heard: boolean;
+  /** Cancels the wait for an answer once the question was heard. */
+  cancelWait: () => void;
 }
+
+/**
+ * How long a post waits for its yes or no once the question was heard. A
+ * spoken "yes" may close no utterance of its own, so the wait is bounded:
+ * the post is never left for an unrelated later request to answer.
+ */
+export const CONFIRM_ANSWER_WINDOW_MS = 15_000;
 
 export const MOVED_ASK_TEXT =
   "You moved while you were talking, so I did not post that. When you are ready, say the whole request again.";
@@ -286,6 +297,8 @@ const REFUSAL_TEXT: Record<LoopRefusal, string> = {
 };
 
 const DECLINED_TEXT = "Okay, I did not post it.";
+const UNANSWERED_TEXT =
+  "Nothing was posted: no yes came for it. The person can say it again.";
 
 /** The destination as the voice names it: a channel, or a thread by its post. */
 function placeName(target: BoundTarget): string {
@@ -341,7 +354,13 @@ const AFFIRMATIVE = new Set([
   "definitely",
   "affirmative",
 ]);
-const AFFIRMATIVE_PHRASES = ["go ahead", "do it", "post it", "please do"];
+const AFFIRMATIVE_PHRASES = [
+  "go ahead",
+  "do it",
+  "post it",
+  "please do",
+  "send it",
+];
 const NEGATIVE = new Set([
   "no",
   "nope",
@@ -351,30 +370,65 @@ const NEGATIVE = new Set([
   "not",
   "cancel",
   "stop",
-  "wait",
   "never",
+]);
+/** Words an answer may carry around its yes or no and still be only an answer. */
+const ANSWER_FILLER = new Set([
+  "please",
+  "it",
+  "that",
+  "that's",
+  "thats",
+  "go",
+  "ahead",
+  "do",
+  "post",
+  "send",
+  "thanks",
+  "thank",
+  "you",
+  "oh",
+  "um",
+  "uh",
+  "yes",
+  "is",
+  "fine",
+  "thing",
+  "sounds",
+  "good",
 ]);
 
 /**
- * The person's answer to a confirmation, read locally: a yes posts, anything
- * else (a no, or words that are not an answer) does not. Never posted itself.
+ * The person's words at a confirmation, read locally and exactly: `"yes"` or
+ * `"no"` only when every word is an answer's (a yes or no and the words
+ * around one), so a later request that merely starts with "yes" is never
+ * taken for an answer. Anything else is `"not-an-answer"`: a new request.
+ * Never posted itself.
  */
-export function confirmationAnswer(text: string): "yes" | "no" | "unclear" {
+export function confirmationAnswer(
+  text: string,
+): "yes" | "no" | "not-an-answer" {
   const words = text
     .toLowerCase()
     .replace(/[^a-z' ]+/g, " ")
     .split(/\s+/)
     .filter((word) => word.length > 0);
+  const answerOnly =
+    words.length > 0 &&
+    words.every(
+      (word) =>
+        AFFIRMATIVE.has(word) || NEGATIVE.has(word) || ANSWER_FILLER.has(word),
+    );
+  if (!answerOnly) return "not-an-answer";
   if (words.some((word) => NEGATIVE.has(word))) return "no";
   const joined = words.join(" ");
-  const first = words.at(0);
   if (
-    (first !== undefined && AFFIRMATIVE.has(first)) ||
+    words.some((word) => AFFIRMATIVE.has(word)) ||
     AFFIRMATIVE_PHRASES.some((phrase) => joined.includes(phrase))
   ) {
     return "yes";
   }
-  return "unclear";
+  return "not-an-answer";
 }
 
 export function createSayLoop(deps: SayLoopDeps): SayLoop {
@@ -694,6 +748,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
           target: decision.target,
           text,
           heard: false,
+          cancelWait: () => undefined,
         };
         confirming = held;
         store.getState().setPendingAction({
@@ -709,8 +764,13 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
           delegationOf(entry),
           {
             onDelivered: () => {
-              if (confirming !== held) return;
+              if (confirming !== held || held.heard) return;
               held.heard = true;
+              held.cancelWait = deps.schedule(() => {
+                if (confirming !== held) return;
+                dropConfirmation(held);
+                deps.notify(UNANSWERED_TEXT, delegationOf(held.entry));
+              }, CONFIRM_ANSWER_WINDOW_MS);
               const pending = store.getState().pendingAction;
               if (pending?.kind === "confirming") {
                 store
@@ -733,6 +793,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
 
   /** The held post goes, with its words; nothing is said. */
   function dropConfirmation(held: Confirming): void {
+    held.cancelWait();
     confirming = null;
     const state = store.getState();
     state.consumeReservation(held.entry.seqs);
@@ -742,35 +803,51 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   }
 
   /**
-   * A boundary while a post waits for its yes: the words are the answer,
-   * consumed by the held post and never posted themselves.
+   * A boundary while a post waits for its yes. Words that are only an answer
+   * are consumed by the held post and never posted (and answer nothing when
+   * said before the question was heard). Words that are not an answer are a
+   * new request: the held post is dropped, the voice says so, and they are
+   * routed as usual (`"route"`).
    */
-  async function answerConfirmation(boundary: string): Promise<void> {
+  async function answerConfirmation(
+    boundary: string,
+  ): Promise<"handled" | "route"> {
     const held = confirming;
     const state = store.getState();
-    const answer = state.reserveOpenSpan(`answer:${boundary}`);
     if (held === null) {
-      if (state.pendingAction?.kind === "confirming")
+      if (state.pendingAction?.kind === "confirming") {
         state.setPendingAction(null);
-      if (answer !== null) state.releaseReservation(answer.seqs);
-      return;
+      }
+      return "route";
     }
+    const answer = state.reserveOpenSpan(`answer:${boundary}`);
     // A boundary with no words answers nothing yet.
-    if (answer === null) return;
+    if (answer === null) return "handled";
+    const verdict = confirmationAnswer(answer.text);
+    if (verdict === "not-an-answer") {
+      state.releaseReservation(answer.seqs);
+      dropConfirmation(held);
+      deps.notify(DECLINED_TEXT, delegationOf(held.entry));
+      return "route";
+    }
     state.consumeReservation(answer.seqs);
-    // Words said before the question was heard answer nothing: they are let
-    // go, and the post waits for an answer to the question once it is heard.
-    if (!held.heard) return;
+    // An answer said before the question was heard answers nothing: the
+    // post waits for one to the question once it is heard.
+    if (!held.heard) return "handled";
+    held.cancelWait();
     confirming = null;
     state.setPendingAction(null);
-    if (held.entry.sessionToken !== store.getState().sessionToken) return;
-    if (confirmationAnswer(answer.text) === "yes") {
+    if (held.entry.sessionToken !== store.getState().sessionToken) {
+      return "handled";
+    }
+    if (verdict === "yes") {
       await postRouted(held.entry, held.target, held.text);
-      return;
+      return "handled";
     }
     state.consumeReservation(held.entry.seqs);
     settleDelegation(held.entry.delegationId);
     deps.notify(DECLINED_TEXT, delegationOf(held.entry));
+    return "handled";
   }
 
   /**
@@ -803,16 +880,19 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         holdInterruptedBoundary();
         return;
       }
-      if (state.pendingAction?.kind === "confirming" || confirming !== null) {
-        await answerConfirmation(boundary);
+      if (
+        (state.pendingAction?.kind === "confirming" || confirming !== null) &&
+        (await answerConfirmation(boundary)) === "handled"
+      ) {
         return;
       }
+      const now = store.getState();
       // No destination yet: the words stay open for the request that has one.
-      if (state.focus === null) return;
-      const actionId = `${state.sessionToken}:${boundary}`;
-      const reservation = state.reserveOpenSpan(actionId);
+      if (now.focus === null) return;
+      const actionId = `${now.sessionToken}:${boundary}`;
+      const reservation = now.reserveOpenSpan(actionId);
       if (reservation === null) return;
-      state.setPendingDelegation(delegationId);
+      now.setPendingDelegation(delegationId);
       const entry: RoutingEntry = {
         actionId,
         delegationId,
@@ -820,9 +900,9 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         segments: store
           .getState()
           .segments.filter((segment) => segment.reservedBy === actionId),
-        selectionGeneration: state.selectionGeneration,
-        sessionToken: state.sessionToken,
-        engineGeneration: state.engineGeneration,
+        selectionGeneration: now.selectionGeneration,
+        sessionToken: now.sessionToken,
+        engineGeneration: now.engineGeneration,
       };
       const asked =
         askedQuestion !== null &&
@@ -907,6 +987,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         before.releaseReservation(entry.seqs);
       }
       if (confirming !== null) {
+        confirming.cancelWait();
         before.releaseReservation(confirming.entry.seqs);
         confirming = null;
       }
