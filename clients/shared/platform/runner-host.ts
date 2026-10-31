@@ -40,6 +40,12 @@ import type {
   SandboxVerbFetchResult,
 } from "../host-client/sandbox-control";
 import type {
+  VoiceAvailabilityFetchResult,
+  VoiceSessionEndFetchResult,
+  VoiceSessionMintFetchResult,
+  VoiceSessionMintRequest,
+} from "../host-client/voice-sessions";
+import type {
   SlackAppInstallUrlResult,
   SlackAppManifestResult,
   SlackAppReadResult,
@@ -409,6 +415,34 @@ export interface IRunnerHost {
   ): Promise<SandboxCatalogueFetchResult>;
   /** `GET /api/traycer/models`: the Traycer models every sandbox runs. */
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
+  /**
+   * The voice session routes (traycer-server `/api/voice/sessions`) with the
+   * user bearer: the SDP exchange that opens a session on the person's own
+   * account, and the end that closes it. Same placement as the sandbox
+   * control plane above (Electron main on desktop, native HTTP on mobile, the
+   * shared helpers in `host-client/voice-sessions.ts` elsewhere). Never
+   * throw: failures collapse into the discriminated results.
+   */
+  getVoiceAvailability(
+    bearerToken: string,
+  ): Promise<VoiceAvailabilityFetchResult>;
+  mintVoiceSession(
+    bearerToken: string,
+    request: VoiceSessionMintRequest,
+  ): Promise<VoiceSessionMintFetchResult>;
+  endVoiceSession(
+    bearerToken: string,
+    voiceSessionId: string,
+  ): Promise<VoiceSessionEndFetchResult>;
+  /**
+   * Tells the shell whether this window holds a live voice session. A
+   * desktop window whose voice is live is hidden rather than destroyed when
+   * the person closes it (the microphone and the session live in its
+   * renderer; Tanveer, 2026-10-29: window close keeps the session, lock,
+   * sleep and quit end it). Shells with one window and no close (mobile,
+   * web) take no action.
+   */
+  setVoiceSessionLive(live: boolean): Promise<void>;
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -713,6 +747,16 @@ export interface IRunnerHost {
    * gracefully where no native signal exists.
    */
   onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable;
+
+  /**
+   * Subscribes to the moments the person leaves the machine: the OS is about
+   * to sleep, or the screen locked. An open microphone must not outlive the
+   * person at the machine, so a live voice session ends on this signal.
+   * Desktop bridges Electron `powerMonitor` `suspend`/`lock-screen`; shells
+   * with no such signal (mobile, web, tests) install a no-op whose handler
+   * never fires.
+   */
+  onSystemSuspended(handler: () => void): Disposable;
 
   /**
    * Subscribes to network-path changes the shell can observe natively:

@@ -70,6 +70,7 @@ import {
   useLayoutStore,
 } from "@/stores/layout/layout-store";
 import { useSideTabStripStore } from "@/stores/layout/side-tab-strip-store";
+import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import type { SurfaceNotificationIndicators } from "@/stores/notifications/notification-indicator-state";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -1302,6 +1303,108 @@ describe("the fixed Tracy entry - vertical strip", () => {
     await waitFor(() => {
       expect(view.pathname()).toBe(`/bot/${TRACY}`);
     });
+  });
+
+  it("draws Talk under the entry when voice is available, and as the glyph alone in the collapsed rail", async () => {
+    const initialVoice = useVoiceSessionStore.getInitialState();
+    useVoiceSessionStore.setState({
+      availability: "live",
+      driver: {
+        start: () => undefined,
+        end: () => undefined,
+        setMuted: () => undefined,
+      },
+    });
+    try {
+      openEpicTabs(["Alpha"]);
+      mountSideStrip("/epics/e-alpha/e-alpha");
+
+      const entry = await screen.findByRole("tab", { name: "Tracy" });
+      const talk = screen.getByRole("button", { name: "Talk" });
+      expect(screen.getByTestId("side-strip-top-block").contains(talk)).toBe(
+        true,
+      );
+      expect(
+        entry.compareDocumentPosition(talk) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(talk.textContent).toBe("Talk");
+
+      act(() => {
+        useSideTabStripStore.setState({ collapsed: true });
+      });
+      const tile = await screen.findByRole("button", { name: "Talk" });
+      expect(tile.textContent).toBe("");
+      expect(screen.getByTestId("side-strip-top-block").contains(tile)).toBe(
+        true,
+      );
+    } finally {
+      useVoiceSessionStore.setState(initialVoice, true);
+    }
+  });
+});
+
+describe("Talk without the fixed Tracy entry", () => {
+  const initialVoice = useVoiceSessionStore.getInitialState();
+
+  beforeEach(() => {
+    // Show Tracy off: no fixed entry, the bot stays reachable as a tab.
+    useSettingsStore.setState({ showTracy: false });
+    useVoiceSessionStore.setState({
+      availability: "live",
+      driver: {
+        start: () => undefined,
+        end: () => undefined,
+        setMuted: () => undefined,
+      },
+    });
+  });
+
+  afterEach(() => {
+    useVoiceSessionStore.setState(initialVoice, true);
+  });
+
+  it("is drawn on the header strip", async () => {
+    openEpicTabs(["Alpha"]);
+    mountTopStrip("/epics/e-alpha/e-alpha");
+
+    const talk = await screen.findByRole("button", { name: "Talk" });
+    expect(talk.textContent).toBe("Talk");
+    expect(screen.queryByRole("tab", { name: "Tracy" })).toBeNull();
+  });
+
+  it("is drawn on the empty landing route, where the strip draws no tabs, idle and through a live session", async () => {
+    // Show Tracy off, Home off, no tabs, route "/": the strip's empty landing.
+    setHomeTabEnabled(false);
+    mountTopStrip("/");
+
+    const talk = await screen.findByRole("button", { name: "Talk" });
+    expect(talk.getAttribute("data-state")).toBe("idle");
+    expect(screen.queryByTestId("tab-strip")).toBeNull();
+
+    act(() => {
+      useVoiceSessionStore.setState({ phase: "live" });
+    });
+    const live = screen.getAllByRole("button", { name: "Talk" });
+    expect(live).toHaveLength(1);
+    expect(live[0]?.getAttribute("data-state")).toBe("live");
+    expect(live[0]?.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("is drawn in the vertical strip's top block, expanded and collapsed", async () => {
+    openEpicTabs(["Alpha"]);
+    mountSideStrip("/epics/e-alpha/e-alpha");
+
+    const talk = await screen.findByRole("button", { name: "Talk" });
+    expect(screen.getByTestId("side-strip-top-block").contains(talk)).toBe(
+      true,
+    );
+    expect(screen.queryByRole("tab", { name: "Tracy" })).toBeNull();
+
+    act(() => {
+      useSideTabStripStore.setState({ collapsed: true });
+    });
+    const tile = await screen.findByRole("button", { name: "Talk" });
+    expect(tile.textContent).toBe("");
   });
 });
 

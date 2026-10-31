@@ -172,6 +172,7 @@ export interface HostBridgeSurface {
     handler: Listener<LocalHostUnresponsive | null>,
   ): Disposable;
   onSystemResumed(handler: () => void): Disposable;
+  onSystemSuspended(handler: () => void): Disposable;
   requestHostRespawn(): Promise<HostRestartRequestResult>;
   forceRestartUnresponsiveHost(
     offer: LocalHostUnresponsiveOffer,
@@ -203,6 +204,10 @@ export function buildHostBridge(): HostBridgeSurface {
     // local-host snapshot above).
     onSystemResumed: (handler) =>
       subscribe<void>(RunnerHostEvent.systemResumed, handler),
+
+    // The matching "the person is leaving" pulse: sleep or screen lock.
+    onSystemSuspended: (handler) =>
+      subscribe<void>(RunnerHostEvent.systemSuspended, handler),
 
     requestHostRespawn: () =>
       ipcRenderer.invoke(

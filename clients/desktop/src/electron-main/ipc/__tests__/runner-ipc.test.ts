@@ -805,6 +805,11 @@ describe("RunnerIpcBridge", () => {
           RunnerHostInvoke.runSandboxVerb,
           RunnerHostInvoke.getSandboxAutomation,
           RunnerHostInvoke.openSandboxAutomation,
+          // The voice routes, for the same CORS reason.
+          RunnerHostInvoke.getVoiceAvailability,
+          RunnerHostInvoke.mintVoiceSession,
+          RunnerHostInvoke.endVoiceSession,
+          RunnerHostInvoke.setVoiceSessionLive,
           // A bot's Slack app, on traycer-server too.
           RunnerHostInvoke.readSlackApp,
           RunnerHostInvoke.getSlackAppManifest,

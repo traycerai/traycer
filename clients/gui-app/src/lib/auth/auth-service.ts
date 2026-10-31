@@ -60,6 +60,12 @@ import {
 } from "@traycer-clients/shared/host-client/slack-app";
 import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
 import type {
+  VoiceAvailabilityFetchResult,
+  VoiceSessionEndFetchResult,
+  VoiceSessionMintFetchResult,
+  VoiceSessionMintRequest,
+} from "@traycer-clients/shared/host-client/voice-sessions";
+import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
@@ -3194,6 +3200,47 @@ export class AuthService {
       return { kind: "unauthorized" };
     }
     return this.runnerHost.getTraycerModels(bearer);
+  }
+
+  /**
+   * The voice routes, with the cloud bearer: whether this deployment offers
+   * voice, the SDP exchange that opens a session on the person's own
+   * account, and its end. A shell that cannot reach traycer-server at all
+   * (`sandboxControlUnavailableReason`) reads as not available and as the
+   * dormant mint, so Talk hides there too.
+   */
+  async getVoiceAvailability(): Promise<VoiceAvailabilityFetchResult> {
+    if (this.sandboxControlUnavailableReason() !== null) {
+      return { kind: "ok", available: false };
+    }
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.getVoiceAvailability(bearer);
+  }
+
+  async mintVoiceSession(
+    request: VoiceSessionMintRequest,
+  ): Promise<VoiceSessionMintFetchResult> {
+    if (this.sandboxControlUnavailableReason() !== null) {
+      return { kind: "dormant" };
+    }
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.mintVoiceSession(bearer, request);
+  }
+
+  async endVoiceSession(
+    voiceSessionId: string,
+  ): Promise<VoiceSessionEndFetchResult> {
+    const bearer = this.cloudBearer();
+    if (bearer === null) {
+      return { kind: "unauthorized" };
+    }
+    return this.runnerHost.endVoiceSession(bearer, voiceSessionId);
   }
 
   async createSandbox(

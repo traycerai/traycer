@@ -195,6 +195,12 @@ export interface CloseToTrayDeps {
   readonly windows: CloseToTrayWindows;
   readonly requestQuit: () => void;
   readonly showNoticeOnce: () => void;
+  /**
+   * Whether the window's renderer holds a live voice session. Such a window
+   * is hidden on close, on every platform and whether or not it is the last:
+   * destroying it would end the session. Quit still closes it.
+   */
+  readonly voiceLive: (windowId: string) => boolean;
 }
 
 export class CloseToTray {
@@ -214,9 +220,18 @@ export class CloseToTray {
    * to the existing close handling.
    */
   interceptClose(windowId: string, event: { preventDefault(): void }): boolean {
-    if (this.deps.platform === "darwin") return false;
     if (this.approved.delete(windowId)) return false;
     if (this.deps.isQuitting()) return false;
+    // A window talking by voice is hidden, never destroyed, whatever the
+    // platform or the mode and whether or not it is the last: its renderer
+    // is the session.
+    if (this.deps.voiceLive(windowId)) {
+      event.preventDefault();
+      log.info("[close-to-tray] window hidden", { reason: "voice-live" });
+      this.deps.windows.hide(windowId);
+      return true;
+    }
+    if (this.deps.platform === "darwin") return false;
     if (this.deps.windows.otherOpenWindowCount(windowId) > 0) return false;
     event.preventDefault();
     if (this.pending.has(windowId)) return true;
