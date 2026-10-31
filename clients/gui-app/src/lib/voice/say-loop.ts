@@ -1,6 +1,7 @@
 import type { BotConversationSendResponse } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { StoreApi } from "zustand";
 import { executeDeferredVerb } from "@/lib/voice/deferred-verbs";
+import { noteVoiceQueueSwitch } from "@/lib/voice/queue-verbs";
 import type { BoundTarget } from "@/lib/voice/directory";
 import type {
   ControlVerb,
@@ -913,7 +914,12 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         return;
       }
       case "navigate":
+        await move(entry, decision.target);
+        return;
       case "switch":
+        // The queue's side of the switch, as the Waiting control's Switch
+        // has it: the item's offer is not said once the person goes to it.
+        noteVoiceQueueSwitch(decision.itemId);
         await move(entry, decision.target);
         return;
       case "post": {

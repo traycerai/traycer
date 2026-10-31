@@ -52,3 +52,15 @@ export function runVoiceQueueVerb(verb: QueueVerb): QueueVerbOutcome {
   if (phase !== "live" || queueDriver === null) return "not-live";
   return queueDriver.run(verb);
 }
+
+/**
+ * The queue's side of a switch the router carries out with its own move:
+ * the same effect the Waiting control's Switch has on the queue (the item's
+ * offer is not said), so a spoken switch and a tapped one leave the queue
+ * alike. A no-op with no live session.
+ */
+export function noteVoiceQueueSwitch(itemId: string): void {
+  const { phase, queueDriver } = useVoiceSessionStore.getState();
+  if (phase !== "live" || queueDriver === null) return;
+  queueDriver.noteSwitched(itemId);
+}

@@ -111,6 +111,8 @@ export interface QueueItem {
 /** What the queue's executor runs; the controller that owns the queue installs it. */
 export interface VoiceQueueDriver {
   readonly run: (verb: QueueVerb) => QueueVerbOutcome;
+  /** A switch to the item the router carries out itself: the queue's side of it. */
+  readonly noteSwitched: (itemId: string) => void;
 }
 
 /**

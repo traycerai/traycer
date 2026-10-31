@@ -141,6 +141,13 @@ export interface VoiceQueue {
    * set it aside. The focused feed then never says it.
    */
   keepsFromFocus(itemId: string): boolean;
+  /**
+   * What a switch to the item does to the queue, whoever navigates (the
+   * Waiting control through `run`, or the router's own move): the person
+   * is going to look at it, so its one-line offer is not said. Looking
+   * leaves the item where it is.
+   */
+  noteSwitched(itemId: string): void;
   /** Runs `read`, `switch`, `later` or `brief`; `status` is the controller's. */
   run(verb: Exclude<QueueVerb, { readonly kind: "status" }>): QueueVerbOutcome;
   items(): ReadonlyArray<QueueItem>;
@@ -574,8 +581,6 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
           }
           const entry = target(verb.target.itemId);
           if (entry === null) return "nothing";
-          // The person is going to look at it: the one line about it is not
-          // needed. Looking leaves the item where it is.
           withdrawOffer(entry);
           deps.switchTo({
             botId: entry.item.botId,
@@ -589,6 +594,10 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
     },
     items() {
       return Array.from(entries.values(), (entry) => entry.item);
+    },
+    noteSwitched(itemId) {
+      const entry = entries.get(itemId);
+      if (entry !== undefined) withdrawOffer(entry);
     },
     keepsFromFocus(itemId) {
       const entry = entries.get(itemId);

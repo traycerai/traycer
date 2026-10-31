@@ -303,6 +303,7 @@ export function useVoiceQueueOwner(input: {
   // spoken verbs and the Waiting control's buttons alike.
   useEffect(() => {
     useVoiceSessionStore.getState().setQueueDriver({
+      noteSwitched: (itemId) => ensureQueue().noteSwitched(itemId),
       run: (verb) => {
         if (verb.kind !== "status") return ensureQueue().run(verb);
         const now = useVoiceSessionStore.getState();
