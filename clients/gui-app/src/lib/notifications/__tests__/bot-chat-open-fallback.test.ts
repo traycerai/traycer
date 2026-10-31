@@ -93,8 +93,10 @@ describe("a chat search hit in a bot's chat", () => {
     return navigate.mock.calls.map((call) => call[0]);
   }
 
-  it("opens the bot's tab on the thread, never an epic tab keyed by the bot id", () => {
-    const intents = searchHit("thread-1");
+  // Which of the bot's chats the hit is in (channel, thread, session) is the
+  // tab's to resolve: bot-tab-surface.test.tsx lands each kind.
+  it("opens the bot's tab and hands it the hit's chat and row, never an epic tab keyed by the bot id", () => {
+    const intents = searchHit("chat-1");
 
     expect(epicIntentsKeyedByBotId(intents)).toEqual([]);
     expect(intents).toContainEqual(
@@ -104,23 +106,8 @@ describe("a chat search hit in a bot's chat", () => {
       { hostId: "host-team" },
     );
     expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
-      threadId: "thread-1",
-      messageId: "row-1",
-    });
-  });
-
-  it("opens the bot's tab on the channel chat's row", () => {
-    const intents = searchHit("channel-chat-1");
-
-    expect(epicIntentsKeyedByBotId(intents)).toEqual([]);
-    expect(intents).toContainEqual(
-      expect.objectContaining({ params: { botId: BOT_ID } }),
-    );
-    expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)).toMatchObject(
-      { hostId: "host-team" },
-    );
-    expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
-      threadId: "channel-chat-1",
+      kind: "chat",
+      chatId: "chat-1",
       messageId: "row-1",
     });
   });

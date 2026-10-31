@@ -35,7 +35,10 @@ import { selectWorktreeCleanupView } from "@/stores/settings/worktree-cleanup-vi
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
-import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
+import {
+  useBotTabLandingStore,
+  type BotTabLanding,
+} from "@/stores/bots/bot-tab-landing-store";
 
 export type NotificationPayloadKind =
   | "session"
@@ -861,21 +864,44 @@ function routeChatNotification(
   });
 }
 
+/** A bot's tab to open, and where to land it. */
+interface BotOpenTarget {
+  readonly botId: string;
+  readonly landing: BotTabLanding;
+}
+
 /**
- * The bot a chat row opens: the one the row names, else the bot whose
- * container the chat lives in (a chat search hit), landed on the chat as a
- * thread. The tab lands an id that is not one of its threads, the channel's
- * own chat, on the channel. `null` for an epic's chat.
+ * The bot a chat row opens: the one the row names, landed on its thread or
+ * channel, else the bot whose container the chat lives in (a chat search hit,
+ * a session link), landed on that chat, which the tab resolves to its channel,
+ * a thread or a session. `null` for an epic's chat.
  */
-function botTargetOf(
-  payload: ChatNotificationPayload,
-): BotNotificationTarget | null {
-  if (payload.bot !== undefined) return payload.bot;
+function botTargetOf(payload: ChatNotificationPayload): BotOpenTarget | null {
+  const { bot } = payload;
+  if (bot !== undefined) {
+    return {
+      botId: bot.botId,
+      landing: {
+        kind: "thread",
+        threadId: bot.threadId,
+        messageId: bot.messageId,
+      },
+    };
+  }
   if (!botIdSchema.safeParse(payload.epicId).success) return null;
+  if (payload.chatId === undefined) {
+    return {
+      botId: payload.epicId,
+      landing: { kind: "thread", threadId: null, messageId: null },
+    };
+  }
   return {
     botId: payload.epicId,
-    threadId: payload.chatId ?? null,
-    messageId: payload.messageId ?? null,
+    landing: {
+      kind: "chat",
+      chatId: payload.chatId,
+      messageId: payload.messageId ?? null,
+    },
   };
 }
 
@@ -905,14 +931,13 @@ export function isBotChatWithoutDevice(
 }
 
 /**
- * Opens the bot's tab, landed on the thread beside its channel (or on the
- * channel) once the tab can: the tab already open keeps its host, and a new
- * one is bound to the window's. `false`, with nothing opened, while the
- * window has no host to open it on.
+ * Opens the bot's tab, landed where `target` asks once the tab can: the tab
+ * already open keeps its host, and a new one is bound to the window's.
+ * `false`, with nothing opened, while the window has no host to open it on.
  */
 function routeBotNotification(
   navigate: NotificationNavigate,
-  target: BotNotificationTarget,
+  target: BotOpenTarget,
   effectiveHostId: string | null,
 ): boolean {
   const tabs = useBotTabsStore.getState();
@@ -923,10 +948,7 @@ function routeBotNotification(
   if (existing === null) {
     tabs.openBotTab({ botId: target.botId, hostId, title: "Bot" });
   }
-  useBotTabLandingStore.getState().request(target.botId, {
-    threadId: target.threadId,
-    messageId: target.messageId,
-  });
+  useBotTabLandingStore.getState().request(target.botId, target.landing);
   navigateToTabIntent(navigate, botTabIntent(target.botId), undefined);
   return true;
 }

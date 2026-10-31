@@ -99,6 +99,7 @@ describe("routing a chat payload that names a bot", () => {
       { hostId: "host-effective", title: "Bot" },
     );
     expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
+      kind: "thread",
       threadId: "thread-1",
       messageId: "row-1",
     });
@@ -119,6 +120,7 @@ describe("routing a chat payload that names a bot", () => {
       { hostId: "host-tab", title: "Tracy" },
     );
     expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
+      kind: "thread",
       threadId: "thread-1",
       messageId: "row-1",
     });

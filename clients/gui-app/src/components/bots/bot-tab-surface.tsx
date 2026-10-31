@@ -636,31 +636,68 @@ function useBotTabSession(args: {
 }
 
 /**
- * Lands the tab where it was asked to from outside (a tapped push): the
- * thread beside the channel, or the channel, once the thread list has
+ * Lands the tab where it was asked to from outside, once the thread list has
  * answered, since a thread opens by the post it hangs off. Each request is
  * spent once.
+ *
+ * A `thread` landing (a tapped push) shows the thread beside the channel, or
+ * the channel. A `chat` landing (a chat search hit, a session link) names one
+ * of the bot's chats, which is its channel, a thread, a thread's session or
+ * its trunk session, each shown the way the tab shows it; an id that is none
+ * of these lands nowhere, and the tab stays as it is.
  */
 function useSpendTabLanding(args: {
   readonly botId: string;
+  readonly channelChatId: string | null;
+  readonly trunkChatId: string;
   /** `null` while the list is read. */
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
   readonly landChannel: (messageId: string | null) => void;
   readonly showThread: (threadId: string, messageId: string | null) => void;
+  readonly openSession: BotSessionOpen;
 }): void {
-  const { botId, threads, landChannel, showThread } = args;
+  const { botId, channelChatId, trunkChatId, threads } = args;
+  const { landChannel, showThread, openSession } = args;
   const landing = useBotTabLandingStore((state) =>
     Object.hasOwn(state.byBotId, botId) ? state.byBotId[botId] : null,
   );
   useEffect(() => {
     if (landing === null || threads === null) return;
     useBotTabLandingStore.getState().clear(botId);
-    if (landing.threadId === null) {
-      landChannel(landing.messageId);
-    } else {
-      showThread(landing.threadId, landing.messageId);
+    const { messageId } = landing;
+    if (landing.kind === "thread") {
+      if (landing.threadId === null) landChannel(messageId);
+      else showThread(landing.threadId, messageId);
+      return;
     }
-  }, [botId, landChannel, landing, showThread, threads]);
+    const { chatId } = landing;
+    if (chatId === channelChatId) {
+      landChannel(messageId);
+      return;
+    }
+    if (threads.some((thread) => thread.threadId === chatId)) {
+      showThread(chatId, messageId);
+      return;
+    }
+    const session = threads.find((thread) => thread.sessionChatId === chatId);
+    if (session !== undefined || chatId === trunkChatId) {
+      openSession({
+        chatId,
+        threadId: session?.threadId ?? null,
+        messageId,
+        sendPostId: null,
+      });
+    }
+  }, [
+    botId,
+    channelChatId,
+    landChannel,
+    landing,
+    openSession,
+    showThread,
+    threads,
+    trunkChatId,
+  ]);
 }
 
 /**
@@ -809,7 +846,15 @@ function BotTabContent(props: {
     landChannel,
     showThread,
   } = useBotTabSession({ threads, onViewChange, setOpenThread });
-  useSpendTabLanding({ botId, threads, landChannel, showThread });
+  useSpendTabLanding({
+    botId,
+    channelChatId: snapshot.bot.appConversationChatId,
+    trunkChatId: snapshot.bot.trunkChatId,
+    threads,
+    landChannel,
+    showThread,
+    openSession,
+  });
   // Leaving Threads for the tab's channel shows the channel: a session open
   // when Threads was chosen is not where either way back says it goes.
   const threadsView = useMemo(
