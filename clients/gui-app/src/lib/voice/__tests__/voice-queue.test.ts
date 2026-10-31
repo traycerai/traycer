@@ -1,5 +1,6 @@
 import type { OpenTextBlock } from "@traycer/protocol/persistence/epic/open-harness-records";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { composeBriefing, VOICE_SESSION_INPUT_MAX_CHARS } from "../briefing";
 import type {
   AttentionPrompts,
   HydrationRow,
@@ -680,6 +681,69 @@ describe("an announcement", () => {
     expect(appended[0]?.text).toContain(
       'Release bot posted in its channel: "The nightly build finished"',
     );
+  });
+});
+
+describe("a reply's notification for a row held as an announcement", () => {
+  const announce = (): void =>
+    queue.addAnnouncement({
+      botId: "bot-2",
+      hostId: "host-a",
+      chatId: "chan-2",
+      announcement: { messageId: "a-1", content: REPLY_TEXT, at: 7_000 },
+    });
+  const channelRef = replyRef({
+    messageId: "a-1",
+    threadId: null,
+    chatId: "chan-2",
+    at: 7_000,
+  });
+
+  it("replaces the announcement: one reply item, offered once, and the briefing says it as a reply", () => {
+    queue.begin([], hostOf);
+    announce();
+
+    queue.ingestReplies([channelRef], hostOf);
+    expect(queue.pendingHydrations()).toEqual([
+      { ref: channelRef, hostId: "host-a" },
+    ]);
+    queue.hydrated("a-1", botRow("a-1", REPLY_TEXT), null);
+
+    expect(
+      queue.items().map((item) => [item.id, item.kind, item.state]),
+    ).toEqual([["a-1", "reply", "queued"]]);
+    expect(appended).toEqual([
+      {
+        text: 'Release bot answered in its channel: "The Safari fix landed in build forty". Want it?',
+        delegationId: null,
+      },
+    ]);
+    const briefing = composeBriefing({
+      answers: [channelRef],
+      prompts: { approvals: [], questions: [] },
+      items: queue.items(),
+      botTitle: (botId) => BOT_TITLES[botId] ?? "the bot",
+      maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
+    });
+    expect(briefing).toContain(
+      'Release bot answered in its channel: "The Safari fix landed in build forty".',
+    );
+    expect(briefing).not.toContain("posted in its channel");
+  });
+
+  it("keeps a set-aside announcement set aside, and offers nothing", () => {
+    queue.begin([], hostOf);
+    announce();
+    expect(queue.run({ kind: "later", itemId: "a-1" })).toBe("dismissed");
+
+    queue.ingestReplies([channelRef], hostOf);
+    queue.hydrated("a-1", botRow("a-1", REPLY_TEXT), null);
+    clock.advance(120_000);
+
+    expect(
+      queue.items().map((item) => [item.id, item.kind, item.state]),
+    ).toEqual([["a-1", "reply", "dismissed"]]);
+    expect(appended).toEqual([]);
   });
 });
 
