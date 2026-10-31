@@ -154,6 +154,14 @@ import type {
   SandboxVerbFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
+  VoiceAvailabilityFetchResult,
+  VoiceSessionEndFetchResult,
+  VoiceSessionIndicator,
+  VoiceSessionMintFetchResult,
+  VoiceSessionMintRequest,
+  VoiceTrayAction,
+} from "@traycer-clients/shared/host-client/voice-sessions";
+import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
@@ -245,6 +253,19 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult>;
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
+  getVoiceAvailability(
+    bearerToken: string,
+  ): Promise<VoiceAvailabilityFetchResult>;
+  mintVoiceSession(
+    bearerToken: string,
+    request: VoiceSessionMintRequest,
+  ): Promise<VoiceSessionMintFetchResult>;
+  endVoiceSession(
+    bearerToken: string,
+    voiceSessionId: string,
+  ): Promise<VoiceSessionEndFetchResult>;
+  setVoiceSessionLive(live: boolean): Promise<void>;
+  setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void>;
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -384,6 +405,10 @@ export interface DesktopPreloadBridge {
     handler: (state: LocalHostUnresponsive | null) => void,
   ): { dispose: () => void };
   onSystemResumed(handler: () => void): { dispose: () => void };
+  onSystemSuspended(handler: () => void): { dispose: () => void };
+  onVoiceTrayAction(handler: (action: VoiceTrayAction) => void): {
+    dispose: () => void;
+  };
   requestHostRespawn(): Promise<HostRestartRequestResult>;
   forceRestartUnresponsiveHost(
     offer: LocalHostUnresponsiveOffer,
@@ -1260,6 +1285,34 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.getSandboxCatalogue(bearerToken);
   }
 
+  getVoiceAvailability(
+    bearerToken: string,
+  ): Promise<VoiceAvailabilityFetchResult> {
+    return this.bridge.getVoiceAvailability(bearerToken);
+  }
+
+  mintVoiceSession(
+    bearerToken: string,
+    request: VoiceSessionMintRequest,
+  ): Promise<VoiceSessionMintFetchResult> {
+    return this.bridge.mintVoiceSession(bearerToken, request);
+  }
+
+  endVoiceSession(
+    bearerToken: string,
+    voiceSessionId: string,
+  ): Promise<VoiceSessionEndFetchResult> {
+    return this.bridge.endVoiceSession(bearerToken, voiceSessionId);
+  }
+
+  setVoiceSessionLive(live: boolean): Promise<void> {
+    return this.bridge.setVoiceSessionLive(live);
+  }
+
+  setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void> {
+    return this.bridge.setVoiceSessionIndicator(indicator);
+  }
+
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult> {
     return this.bridge.getTraycerModels(bearerToken);
   }
@@ -1440,6 +1493,17 @@ export class DesktopRunnerHost implements IRunnerHost {
         this.systemResumedHandlers.delete(handler);
       },
     };
+  }
+
+  onSystemSuspended(handler: () => void): Disposable {
+    // A direct per-handler bridge subscription: unlike the resume pulse this
+    // carries no shell-side shaping, so there is nothing to fan out from one
+    // place.
+    return toDisposable(this.bridge.onSystemSuspended(handler));
+  }
+
+  onVoiceTrayAction(handler: (action: VoiceTrayAction) => void): Disposable {
+    return toDisposable(this.bridge.onVoiceTrayAction(handler));
   }
 
   onNetworkPathChanged(handler: () => void): Disposable {

@@ -304,6 +304,18 @@ interface PendingScrollRequestLanding {
   readonly requestId: number;
   readonly messageId: string;
   readonly blockId: string | null;
+  /**
+   * `suspended` while a hide that COLLAPSED the box has parked this landing:
+   * its loop was torn down without reporting an outcome, so the request is
+   * still the live intent and the show re-issues it. The state lives on the
+   * landing rather than beside it so "pending, not suspended, and concealed
+   * with a collapsed box" has no representation.
+   *
+   * A box that survives concealment keeps measuring, so a landing concealed
+   * that way is never suspended: it settles while hidden exactly as it does
+   * without this field.
+   */
+  readonly state: "pending" | "suspended";
 }
 
 export type ChatMessageScrollRequest =
@@ -4166,10 +4178,9 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   //
   // Skips a loop a cross-tile scroll request owns, because cancelling that one
   // reports the request `cancelled` (`landScrollRequestRow` registers it so)
-  // while it is still live. What that loop then does while concealed is a
-  // separate, pre-existing defect: it keeps placing, and can reach a terminal
-  // outcome, against a viewport that cannot answer. Suspending it without
-  // cancelling the request is its own change.
+  // while it is still live. `suspendScrollRequestLandingForCollapse` below is
+  // what a collapsed hide uses for that loop instead: it parks the landing
+  // without reporting any outcome, so the request stays the live intent.
   //
   // The test is the registered OWNER, never whether a request is pending: a
   // request whose row is not in the rendered index yet is pending with no loop
@@ -4186,6 +4197,75 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     active.cancel();
     activeNavigationSettleCleanupRef.current = null;
   }, []);
+  /**
+   * Set by THIS tile's own hide, and only when that hide collapsed the box;
+   * cleared at its show. A request arriving while the tile is concealed reads
+   * it to decide whether its landing may be issued at all.
+   *
+   * Recorded rather than derived. `concealedScrollGeometryRef.current === null`
+   * would read the same for a collapsed hide and for a tile that was simply
+   * MOUNTED hidden - null is also that ref's initial value - and a
+   * mounted-hidden tile has no last visible `scrollTop` for the predicate to
+   * judge against. So a tile that never ran a hide keeps the unsuspended
+   * behaviour, and so does one whose hide left the box measurable.
+   */
+  const concealedWithCollapsedBoxRef = useRef(false);
+  // The counterpart to the suspension below. A named callback rather than a
+  // ternary at its caller, because inlining it puts the visibility effect at
+  // `eslint(complexity)` 17 against a cap of 16 - the same reason
+  // `endNavigationSettleForConcealment` is one.
+  const resumeSuspendedScrollRequestLanding = useCallback(
+    (pending: PendingScrollRequestLanding): PendingScrollRequestLanding => {
+      if (pending.state !== "suspended") return pending;
+      const resumed: PendingScrollRequestLanding = {
+        ...pending,
+        state: "pending",
+      };
+      pendingScrollRequestLandingRef.current = resumed;
+      return resumed;
+    },
+    [],
+  );
+  // Parks a cross-tile scroll request's landing across a hide that COLLAPSED
+  // the box. Only that hide: a box which survives concealment keeps measuring,
+  // so its landing settles while hidden - invisibly, and finished before the
+  // show - and parking it instead would move that placement in front of the
+  // reader on show, where concealment had taken none.
+  //
+  // Left to run against a collapsed box, the loop keeps writing onto a
+  // zero-sized node and, worse, can reach a TERMINAL outcome there: it reports
+  // `landed`, the terminal callback clears the pending landing, and the show's
+  // re-issue branch is then unreachable - the reader's navigation is consumed
+  // by a viewport that could not answer. A truly zero-sized box spends the
+  // retry budget to `exhausted` and consumes it the same way.
+  //
+  // So the loop is torn down WITHOUT reporting an outcome, through the same
+  // `reissuingScrollRequestIdRef` escape the cleanup already honours for a
+  // landing that supersedes itself. The request stays pending, marked
+  // `suspended`, and the show branch re-issues it against geometry that can
+  // answer. `scrollRequestLandingIssuedRef` is cleared with it so that if the
+  // show's own re-issue still cannot find the row, the `listRows` re-attempt
+  // owns it again rather than treating it as already issued.
+  const suspendScrollRequestLandingForCollapse = useCallback((): void => {
+    const pending = pendingScrollRequestLandingRef.current;
+    if (pending === null || pending.state === "suspended") return;
+    pendingScrollRequestLandingRef.current = {
+      ...pending,
+      state: "suspended",
+    };
+    scrollRequestLandingIssuedRef.current = null;
+    // Parking the landing is unconditional; tearing a loop down is not. A
+    // request whose row was never in the rendered index is pending with no
+    // loop of its own, and a loop another owner holds is not this request's to
+    // end - `endNavigationSettleForConcealment` has already dealt with that
+    // one.
+    const active = activeNavigationSettleCleanupRef.current;
+    if (active === null || active.owner !== "request") return;
+    reissuingScrollRequestIdRef.current = pending.requestId;
+    active.cancel();
+    activeNavigationSettleCleanupRef.current = null;
+    reissuingScrollRequestIdRef.current = null;
+  }, []);
   useLayoutEffect(() => {
     const wasVisible = wasSurfaceVisibleRef.current;
     wasSurfaceVisibleRef.current = visible;
@@ -4197,11 +4277,18 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
         lastVisibleScrollTopRef.current,
       );
       concealedScrollGeometryRef.current = concealed;
-      // A null read is already the precondition the call below needs: it says
+      // A null read is already the precondition the calls below need: it says
       // this hide collapsed the box. Ending the loop for a hide that did not
       // left its persistence gate armed into the show, and an armed gate
-      // replays the saved anchor over a list the reader never left.
-      if (concealed === null) endNavigationSettleForConcealment();
+      // replays the saved anchor over a list the reader never left. The
+      // request's landing is the other loop a collapsed box cannot answer, and
+      // it is parked rather than ended, because ending it would report an
+      // outcome for a navigation the reader is still owed.
+      if (concealed === null) {
+        concealedWithCollapsedBoxRef.current = true;
+        endNavigationSettleForConcealment();
+        suspendScrollRequestLandingForCollapse();
+      }
       // Publish the continuously-mirrored snapshot (kept fresh,
       // synchronously, by `captureLastVisibleScrollSnapshot` above - no
       // app-level rAF throttle sits between a scroll event and this ref
@@ -4224,6 +4311,10 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       return;
     }
 
+    // The recorded hide is spent: the box can answer again, so a request
+    // arriving from here on is issued rather than parked.
+    concealedWithCollapsedBoxRef.current = false;
+
     // A scroll request that has not reached a terminal outcome is the newer
     // intent: re-issue it against the now-measurable geometry instead of
     // replaying the saved reading position over it. Its ring stays. The
@@ -4232,8 +4323,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // pending, or it would report that request cancelled and release it.
     const pendingLanding = pendingScrollRequestLandingRef.current;
     if (pendingLanding !== null) {
-      if (landScrollRequestRow(pendingLanding)) {
-        scrollRequestLandingIssuedRef.current = pendingLanding.requestId;
+      // A landing a collapsed hide suspended resumes here: back to `pending`
+      // before it is re-issued, or the `listRows` re-attempt would keep
+      // skipping it if this issue cannot find its row in the index yet.
+      const resumed = resumeSuspendedScrollRequestLanding(pendingLanding);
+      if (landScrollRequestRow(resumed)) {
+        scrollRequestLandingIssuedRef.current = resumed.requestId;
       }
       return;
     }
@@ -4308,6 +4403,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     landScrollRequestRow,
     reconcileInvalidTimelineLanding,
     restorePersistedTimelineLocation,
+    resumeSuspendedScrollRequestLanding,
+    suspendScrollRequestLandingForCollapse,
     visible,
   ]);
 
@@ -4651,6 +4748,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     // view covering it would hide where the jump lands.
     closeSubagentDrillIn();
     if (request.kind === "end") {
+      // A newer navigation supersedes an older one, the same rule the message
+      // branch below applies. Only a SUSPENDED landing needs it here: it has no
+      // loop left to report its own outcome, so without this the show would
+      // re-issue that older message navigation on top of the end the reader
+      // asked for more recently. A live loop still reports its own, unchanged.
+      const superseded = pendingScrollRequestLandingRef.current;
+      if (superseded !== null && superseded.state === "suspended")
+        settleScrollRequest(superseded.requestId, "cancelled");
       scrollToEnd(request.animated ?? true);
       scrollRequestRef.current = null;
       return;
@@ -4686,6 +4791,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       requestId: request.requestId,
       messageId: request.messageId,
       blockId: resolvedScrollBlockId(request.blockId),
+      // A request can arrive at a tile that is already concealed, and nothing
+      // on this path reads `visible`. Issuing it into a box this tile's own
+      // hide collapsed is the same defect the hide-time suspension exists for,
+      // reached by its other entrance, so it starts parked and the show issues
+      // it. Only a RECORDED collapsed hide parks it: a tile merely mounted
+      // hidden has none, and keeps the behaviour it has without this.
+      state: concealedWithCollapsedBoxRef.current ? "suspended" : "pending",
     };
     pendingScrollRequestLandingRef.current = landing;
     // Same prelude as `navigateToMessage`: a cross-tile jump is an explicit
@@ -4718,6 +4830,13 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   useLayoutEffect(() => {
     const pending = pendingScrollRequestLandingRef.current;
     if (pending === null) return;
+    // A collapsed hide parked this landing, so a row hydrating while the tile
+    // is concealed must not re-attempt it into a viewport that cannot answer;
+    // the show resumes it. The test is the suspension, never `visible`: with a
+    // box that survives concealment this retry runs while hidden on purpose,
+    // settles there, and is over before the show - gating it on visibility
+    // would carry that placement into the reader's view instead.
+    if (pending.state === "suspended") return;
     if (scrollRequestLandingIssuedRef.current === pending.requestId) return;
     if (landScrollRequestRow(pending)) {
       scrollRequestLandingIssuedRef.current = pending.requestId;

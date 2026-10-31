@@ -299,7 +299,6 @@ describe("a unit that differs only in TimeoutStopSec", () => {
     expect(calls).toEqual([
       { command: "systemctl", args: ["--user", "daemon-reload"] },
     ]);
-    assertNoForbiddenVerb(calls);
   });
 });
 

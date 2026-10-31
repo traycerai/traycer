@@ -1575,7 +1575,7 @@ describe("runLaunchctlBootout", () => {
     const spawnFn = vi.fn().mockReturnValueOnce(fake.child);
 
     const promise = runLaunchctlBootout("gui/501/test.label", spawnFn);
-    // Advance to the derived `bootout --wait` bound; the child never fires
+    // Advance to the derived bootout-and-drain bound; the child never fires
     // exit or error, so only the setTimeout path can resolve us. Just before
     // it the drain is still being waited on.
     await vi.advanceTimersByTimeAsync(LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS - 1);

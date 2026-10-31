@@ -41,6 +41,11 @@ import type {
   SecretRequestDecision,
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
+  VoiceAvailabilityFetchResult,
+  VoiceSessionEndFetchResult,
+  VoiceSessionIndicator,
+  VoiceSessionMintFetchResult,
+  VoiceSessionMintRequest,
 } from "../ipc-contracts/host-types";
 import type {
   CredentialsMigrationOutcome,
@@ -137,6 +142,19 @@ export interface AuthBridgeSurface {
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult>;
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
+  getVoiceAvailability(
+    bearerToken: string,
+  ): Promise<VoiceAvailabilityFetchResult>;
+  mintVoiceSession(
+    bearerToken: string,
+    request: VoiceSessionMintRequest,
+  ): Promise<VoiceSessionMintFetchResult>;
+  endVoiceSession(
+    bearerToken: string,
+    voiceSessionId: string,
+  ): Promise<VoiceSessionEndFetchResult>;
+  setVoiceSessionLive(live: boolean): Promise<void>;
+  setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void>;
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -304,6 +322,38 @@ export function buildAuthBridge(): AuthBridgeSurface {
         RunnerHostInvoke.getSandboxCatalogue,
         bearerToken,
       ) as Promise<SandboxCatalogueFetchResult>,
+
+    getVoiceAvailability: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getVoiceAvailability,
+        bearerToken,
+      ) as Promise<VoiceAvailabilityFetchResult>,
+
+    mintVoiceSession: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.mintVoiceSession,
+        bearerToken,
+        request,
+      ) as Promise<VoiceSessionMintFetchResult>,
+
+    endVoiceSession: (bearerToken, voiceSessionId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.endVoiceSession,
+        bearerToken,
+        voiceSessionId,
+      ) as Promise<VoiceSessionEndFetchResult>,
+
+    setVoiceSessionLive: (live) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setVoiceSessionLive,
+        live,
+      ) as Promise<void>,
+
+    setVoiceSessionIndicator: (indicator) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setVoiceSessionIndicator,
+        indicator,
+      ) as Promise<void>,
 
     getTraycerModels: (bearerToken) =>
       ipcRenderer.invoke(

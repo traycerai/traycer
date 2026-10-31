@@ -45,6 +45,8 @@ export function MediaArtifactContent(props: {
 
 type MediaSource = "host" | "cloud";
 
+const PROBE_DEADLINE_MS = 1_000;
+
 /**
  * Where this viewing takes its bytes from, settled once so an object that
  * publishes while it plays keeps its mount.
@@ -63,8 +65,6 @@ type MediaSource = "host" | "cloud";
  * does not hold starts the fetch and holds the reply up to 3 s before saying
  * so. An unpublished object exists only on its host.
  */
-const PROBE_DEADLINE_MS = 1_000;
-
 function useMediaSource(
   props: {
     readonly epicId: string;
