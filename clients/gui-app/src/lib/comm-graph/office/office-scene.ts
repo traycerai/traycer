@@ -1201,7 +1201,6 @@ function seatedCharacter(agentId: string, seat: OfficeSeat): OfficeCharacter {
   };
 }
 
-/** An agent and the seat it is actually in - the claim, or the assignment. */
 /** A seat the PAINTER is asked about; `null` where nobody is in it. */
 interface SeatedAgent {
   /** `null` for an unoccupied reserve, which is furniture with nobody in it. */
@@ -3402,11 +3401,6 @@ export class OfficeScene {
   }
 
   /**
-   * Whether this agent is running for its chair: latched while it walks, and
-   * true for a seated one that still has a message in the air or on the desk,
-   * which is what keeps it from wandering off in the middle of a delivery.
-   */
-  /**
    * Parked in the QUIET STACK: seated in a cubby rather than at a desk.
    *
    * A cubby is a waiting slot, not a workstation. Its occupant is cold by
@@ -3421,6 +3415,11 @@ export class OfficeScene {
     return this.seats.effectiveSeat(agentId)?.kind === "cubby";
   }
 
+  /**
+   * Whether this agent is running for its chair: latched while it walks, and
+   * true for a seated one that still has a message in the air or on the desk,
+   * which is what keeps it from wandering off in the middle of a delivery.
+   */
   private isHurrying(agentId: string): boolean {
     const character = this.characters.get(agentId);
     if (character !== undefined && character.hurrying) return true;
@@ -3685,14 +3684,6 @@ export class OfficeScene {
   }
 
   /**
-   * The whole world moved. Everything the scene holds that names a tile or a
-   * point moves with it, so a building that grew a storey does not leave its
-   * people standing where the storey used to be.
-   *
-   * The camera is the renderer's and is left for it to collect, which is what
-   * keeps the office from appearing to jump while nothing in it moved.
-   */
-  /**
    * Carry everybody, and everything they were headed for, by a whole-tile
    * shift. Positions, paths, queue slots and errand targets all name tiles, so
    * all of them move together or the office tears.
@@ -3727,6 +3718,14 @@ export class OfficeScene {
     }
   }
 
+  /**
+   * The whole world moved. Everything the scene holds that names a tile or a
+   * point moves with it, so a building that grew a storey does not leave its
+   * people standing where the storey used to be.
+   *
+   * The camera is the renderer's and is left for it to collect, which is what
+   * keeps the office from appearing to jump while nothing in it moved.
+   */
   private applyShift(
     shift: OfficeTilePos | null,
     before: OfficeProjector | null,
@@ -5834,14 +5833,6 @@ export class OfficeScene {
   }
 
   /**
-   * The floor inside a tile rect, from the painter, remembered.
-   *
-   * A still office asks for the same floor sixty times a second - same plan,
-   * same band, same rectangle - and the floor is the largest thing in a frame
-   * by an order of magnitude. Handing back the SAME array is also what tells
-   * the renderer's bitmap cache it has nothing to repaint.
-   */
-  /**
    * How far this painter's blocks reach past their tiles, on this plan.
    *
    * Keyed on `layoutVersion` exactly as the floor is: the number is a function
@@ -5858,6 +5849,14 @@ export class OfficeScene {
     return px;
   }
 
+  /**
+   * The floor inside a tile rect, from the painter, remembered.
+   *
+   * A still office asks for the same floor sixty times a second - same plan,
+   * same band, same rectangle - and the floor is the largest thing in a frame
+   * by an order of magnitude. Handing back the SAME array is also what tells
+   * the renderer's bitmap cache it has nothing to repaint.
+   */
   private floorIn(
     layout: OfficeLayout,
     tiles: OfficeTileRect,
@@ -6592,22 +6591,6 @@ export class OfficeScene {
   }
 
   /**
-   * The same regions, ordered by the DEPTH the world stream is drawn in.
-   *
-   * A `layered` painter draws every prop and then every actor, so reversing the
-   * two lists is already the front-most-first order and `buildHitRegions` is
-   * exact. A `world` painter does not: it interleaves desks and people by
-   * depth, so on Campus or City the nearer of two overlapping buildings can be
-   * the one with the LOWER row, and an order taken from row/column disagrees
-   * with what the eye sees. Taken from the depths the merge itself sorts by,
-   * the pointer always resolves to whatever was painted last.
-   *
-   * Ties keep emission order - props before actors, and within each the order
-   * the painter produced - which is exactly how `mergeByDepth`'s stable sort
-   * leaves them, so a foreground drawable a painter deliberately emitted late
-   * at the same depth stays in front here too.
-   */
-  /**
    * WHERE A SEAT'S BOX SORTS, or `null` for a seat that gets no region at all.
    *
    * AN ORDINARY SEAT sorts with the art it drew: the shallowest depth of its own
@@ -6643,6 +6626,22 @@ export class OfficeScene {
     return answer(layout, seat);
   }
 
+  /**
+   * The same regions, ordered by the DEPTH the world stream is drawn in.
+   *
+   * A `layered` painter draws every prop and then every actor, so reversing the
+   * two lists is already the front-most-first order and `buildHitRegions` is
+   * exact. A `world` painter does not: it interleaves desks and people by
+   * depth, so on Campus or City the nearer of two overlapping buildings can be
+   * the one with the LOWER row, and an order taken from row/column disagrees
+   * with what the eye sees. Taken from the depths the merge itself sorts by,
+   * the pointer always resolves to whatever was painted last.
+   *
+   * Ties keep emission order - props before actors, and within each the order
+   * the painter produced - which is exactly how `mergeByDepth`'s stable sort
+   * leaves them, so a foreground drawable a painter deliberately emitted late
+   * at the same depth stays in front here too.
+   */
   private worldHitRegions(args: {
     readonly characters: ReadonlyArray<OfficeCharacter>;
     readonly seats: ReadonlyArray<SeatedAgent>;
@@ -6856,20 +6855,6 @@ export class OfficeScene {
   }
 
   /**
-   * WAKING. A cold agent in a cubby whose status turns hot takes the first free
-   * reserve seat it can, and gives it back once it has gone quiet and is home.
-   *
-   * The claim waits for RECEPTION. An attention or failure agent queues at the
-   * counter first, and a desk it is not walking to yet is a desk nobody else
-   * can have: claiming at the moment the wake is decided held a seat empty for
-   * however long the queue took. It is claimed on the sync that ends the
-   * reception stop - which is this one, since `needsReception` is false from
-   * the moment the status stops calling for a person. The cost is real and
-   * accepted: a wake that reaches the counter and finds the office full while
-   * it waited stays where it is and asks the next plan for capacity, exactly
-   * as any other agent that cannot find a seat does.
-   */
-  /**
    * This agent has gone cold: it wants its reserve no longer.
    *
    * Two calls, because a released seat is only FREE once the character is out
@@ -6887,6 +6872,20 @@ export class OfficeScene {
     if (home) this.seats.vacated(agentId);
   }
 
+  /**
+   * WAKING. A cold agent in a cubby whose status turns hot takes the first free
+   * reserve seat it can, and gives it back once it has gone quiet and is home.
+   *
+   * The claim waits for RECEPTION. An attention or failure agent queues at the
+   * counter first, and a desk it is not walking to yet is a desk nobody else
+   * can have: claiming at the moment the wake is decided held a seat empty for
+   * however long the queue took. It is claimed on the sync that ends the
+   * reception stop - which is this one, since `needsReception` is false from
+   * the moment the status stops calling for a person. The cost is real and
+   * accepted: a wake that reaches the counter and finds the office full while
+   * it waited stays where it is and asks the next plan for capacity, exactly
+   * as any other agent that cannot find a seat does.
+   */
   private updateSeatClaims(): void {
     const rehome: string[] = [];
     for (const agentId of this.seats.knownAgentIds()) {
