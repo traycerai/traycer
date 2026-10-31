@@ -253,6 +253,7 @@ import {
   chatRowClassName,
   revealSidebarNode,
   useNodeIconDisplay,
+  useTreeRowMotion,
 } from "./epic-sidebar-tree-shared";
 import { ChatRowLeadingIconSlot, ChatRowView } from "./chat-row-view";
 import { TreeGroupGuide } from "./epic-sidebar-tree-guide";
@@ -2217,7 +2218,7 @@ function ChatNodeShellArchivable(props: ChatNodeShellProps) {
 function ChatNodeShellBody(
   props: ChatNodeShellProps & { readonly decision: ChatRowArchiveDecision },
 ) {
-  const shouldReduceMotion = useReducedMotion() === true;
+  const motion = useTreeRowMotion();
   const {
     epicId,
     tabId,
@@ -2326,9 +2327,9 @@ function ChatNodeShellBody(
 
   return (
     <m.li
-      layout={shouldReduceMotion ? false : "position"}
-      exit={shouldReduceMotion ? undefined : { opacity: 0, x: -8 }}
-      transition={{ duration: 0.16, ease: "easeOut" }}
+      layout={motion.layout}
+      exit={motion.exit}
+      transition={motion.transition}
       role="treeitem"
       aria-selected={isActive}
       aria-expanded={hasChildren ? expanded : undefined}

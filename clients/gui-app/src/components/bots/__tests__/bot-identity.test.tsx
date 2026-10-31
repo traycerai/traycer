@@ -66,8 +66,6 @@ const EMPTY_BACKGROUND_TOOL_BLOCK_IDS: ReadonlySet<string> = new Set();
 
 const PRESENTATION: ChatBotPresentation = {
   botTitle: "Tracy",
-  scrollToMessage: null,
-  replyFollowsPost: null,
   threadLine: null,
   openThread: null,
   openAnnouncementThread: null,
