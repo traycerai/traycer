@@ -9167,5 +9167,53 @@ describe("useChatTimelineFollowLatch", () => {
 
       expect(harness.node.scrollTop).toBe(1600);
     });
+
+    it("Class 1 (the gate): a correction under a standing press retires a command the press's own path could not", () => {
+      const { node, listRef, result } = mountHeldFollowing();
+
+      // A correction before any press leaves the list a held end command.
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      result.current.followEndIfPermitted();
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      expect(node.scrollTop).toBe(1200);
+
+      // The press lands while the surface is unmeasurable - a collapsed or
+      // hidden tile, `clientHeight` 0. `noteReaderGesture`'s own retirement
+      // needs geometry, so this is the one shape in which a press starts with
+      // a held end command still standing behind it.
+      shim.setGeometry(node, { clientHeight: 0 });
+      result.current.noteReaderGesture({
+        direction: "indeterminate",
+        freezeInFlightScroll: true,
+        publishesReaderPosition: true,
+      });
+      expect(listRef.cancelPendingScroll).not.toHaveBeenCalled();
+
+      // Measured again, with room toward the end: the press's arm is replaced
+      // (PressKey's rule) and `continuesFollow` clears it, so a correction can
+      // run. The press itself still stands - a directional intent leaves it as
+      // it was, the button being down through it.
+      shim.setGeometry(node, { clientHeight: 500, scrollHeight: 1900 });
+      result.current.noteReaderGesture({
+        direction: "toward-end",
+        freezeInFlightScroll: true,
+        publishesReaderPosition: true,
+      });
+      expect(listRef.cancelPendingScroll).not.toHaveBeenCalled();
+
+      result.current.followEndIfPermitted();
+      // The immediate write lands this correction's end, no new command is
+      // queued, and the stale one is retired here or nowhere.
+      expect(node.scrollTop).toBe(1400);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      expect(listRef.cancelPendingScroll).toHaveBeenCalled();
+
+      // The drag carries the view away with its report still queued, as a
+      // drag's report always lags. A command that survived the correction
+      // settles over the reader here.
+      shim.setGeometry(node, { scrollTop: 467 });
+      listRef.settle();
+      expect(node.scrollTop).toBe(467);
+    });
   });
 });
