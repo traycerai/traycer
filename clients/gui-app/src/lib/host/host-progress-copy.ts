@@ -5,7 +5,7 @@ import type {
 } from "@traycer-clients/shared/platform/runner-host";
 
 /**
- * THE host-progress copy table (F19). One wording per event, shared by the
+ * THE host-progress copy table. One wording per event, shared by the
  * window narrator and Settings ▸ Host.
  *
  * These two surfaces described the same mutation lane in two different
@@ -119,7 +119,7 @@ export function hostProgressShortLabel(
 }
 
 /**
- * User-facing byte sizes (F19's unit half).
+ * User-facing byte sizes.
  *
  * MB/GB, not MiB/GiB: the divisor stays binary because that is what every
  * transfer actually counts, but the LABEL is the one people read on a download

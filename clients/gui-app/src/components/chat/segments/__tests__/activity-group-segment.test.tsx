@@ -1085,7 +1085,7 @@ const REASONING_ONLY_GROUP: ActivityGroupModel = {
   activeStartedAt: null,
 };
 
-// Chat display settings (audit R1, R3): an untouched group's default open
+// Chat display settings: an untouched group's default open
 // state follows Layout > Chat > Tool activity (or Thinking, for a
 // reasoning-only run) rather than always starting collapsed.
 describe("<ActivityGroupSegment /> default open follows the Chat display settings", () => {

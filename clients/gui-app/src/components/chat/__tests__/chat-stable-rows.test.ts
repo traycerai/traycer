@@ -291,7 +291,7 @@ describe("computeStableChatTimelineRows", () => {
   });
 
   /**
-   * F14: the `turnId` comparator (`CHAT_MESSAGE_FIELD_UNCHANGED.turnId`) was
+   * The `turnId` comparator (`CHAT_MESSAGE_FIELD_UNCHANGED.turnId`) was
    * untested - zero occurrences of `turnId` anywhere in this file before this
    * block. It is the field that decides whether a row whose ONLY change is
    * turn identity gets a fresh reference handed to LegendList.
@@ -339,7 +339,7 @@ describe("computeStableChatTimelineRows", () => {
     expect(afterSameTurn).toBe(state);
   });
 
-  // F11's projection seam (`withManualRungAnchor`) writes this field on the
+  // The projection seam (`withManualRungAnchor`) writes this field on the
   // ROW, so it needs the same positive/control pair `turnId` above got - the
   // compile-exhaustive field table forced its addition, but nothing had
   // exercised it as a comparator yet.

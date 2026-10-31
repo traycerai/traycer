@@ -1,5 +1,5 @@
 /**
- * A bot's Activity page (Tracy Bots T86, decision 115). The real page runs
+ * A bot's Activity page (Tracy Bots, decision 115). The real page runs
  * over the real summary hook and the real agent-activity store, driven by its
  * test setters, so what is asserted is the membership rule end to end: which
  * of the working agents on screen are the bot's. Only the external boundaries

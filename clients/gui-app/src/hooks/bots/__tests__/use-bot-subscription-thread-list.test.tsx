@@ -1,5 +1,5 @@
 /**
- * A reply in a thread moves the channel without a poll (Tracy Bots T43b):
+ * A reply in a thread moves the channel without a poll:
  * the bot's `bot.subscribe` snapshot carries `conversationsRevision`, and a
  * changed value reads the bot's `bot.thread.list` again, even while an
  * earlier read of the same key is still in flight. The real subscription

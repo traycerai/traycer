@@ -35,7 +35,7 @@ afterEach(() => {
   useSettingsEnvironmentPickStore.setState({ pick: null });
 });
 
-// The header's subtitle on a team's page names the team (copy ruling T4-c).
+// The header's subtitle on a team's page names the team.
 const TEAM_SUBTITLE =
   "Values and logins Acme's agents use, on its sandboxes without being seen.";
 

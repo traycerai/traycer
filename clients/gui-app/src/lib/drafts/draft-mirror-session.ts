@@ -255,8 +255,8 @@ export class DraftMirrorSession {
     }
     await this.upsertDirty(ids);
     // Host treats `draftIds: []` as "publish every dirty draft". Never send
-    // that sentinel from a client with nothing pending (T6 is making the host
-    // half a no-op; both sides stay defensive).
+    // that sentinel from a client with nothing pending (the host half is being
+    // made a no-op too; both sides stay defensive).
     if (ids.length === 0) return;
     this.sendFlushFrame(ids);
   }

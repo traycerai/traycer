@@ -1,5 +1,5 @@
 /**
- * The absolute property T2 requires of the board text ladder: it
+ * The absolute property required of the board text ladder: it
  * never emits a rung wider than the board it names, at ANY supported width
  * or zoom. `office-signs.test.ts` pins the three specific reproductions
  * found; this file is the general property run over every real

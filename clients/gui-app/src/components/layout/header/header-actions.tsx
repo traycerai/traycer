@@ -74,7 +74,7 @@ export function HeaderBarCluster(): ReactNode {
  *
  * `display: contents` generates no box, so `getBoundingClientRect()` answers
  * 0,0,0,0 and the travelling ring collapsed to a 6px dot at the top-left of
- * the window while the hover outline had nothing to paint on (C-06). A session
+ * the window while the hover outline had nothing to paint on. A session
  * needs a real box here and the header needs none of its own, so this is the
  * mic slot's pattern: the region's children keep laying out in the header's
  * own cluster at rest, and become a box of their own exactly while the editor

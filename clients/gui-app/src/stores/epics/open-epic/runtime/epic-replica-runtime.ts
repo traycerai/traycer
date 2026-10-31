@@ -141,7 +141,7 @@ export interface EpicReplicaRuntimeOptions {
   /**
    * Where this runtime's bytes are reported.
    *
-   * Supplied, never reached for. T5's accountant is a module-scoped singleton
+   * Supplied, never reached for. The accountant is a module-scoped singleton
    * whose app-wideness comes from MODULE IDENTITY, so a worker that imported
    * it would silently keep a second copy of the books — invisible in-process,
    * where there is only ever one. Taking the port as an option is what moves

@@ -56,8 +56,8 @@ const hostBindingRef = vi.hoisted(
 /**
  * The rows `useHostClientForHostId` resolves against, keyed by host id.
  *
- * The provider reads its owner-identity discriminator off THE SESSION'S client
- * (redesign P4.2), so a rotation is now expressed the way production expresses
+ * The provider reads its owner-identity discriminator off THE SESSION'S client,
+ * so a rotation is now expressed the way production expresses
  * it - the host's directory row changes - rather than by binding a new entry
  * into a slot that no longer exists.
  */
@@ -73,7 +73,7 @@ interface StubSessionHostClient {
   /**
    * The host this client addresses.
    *
-   * Absent from this stub since T11 gave the store a memory book keyed by host
+   * Absent from this stub since the store gained a memory book keyed by host
    * (`store.ts` reads it at construction), which made every test in this file
    * throw `getActiveHostId is not a function` before the store was built. The
    * stub is already one object per host id, so the honest answer is the id it
@@ -2370,8 +2370,8 @@ describe("<TestEpicSessionTab />", () => {
 
   it("(R-1, PINNED) keys owner identity on the SESSION's host, not the effective one", async () => {
     // THE DISCRIMINATOR for reading `ownerIdentityKey` off
-    // `resolvedSessionHostClient` instead of the app-wide client (redesign
-    // P4.2). Every other R-1 case leaves the session UNPINNED, where the two
+    // `resolvedSessionHostClient` instead of the app-wide client.
+    // Every other R-1 case leaves the session UNPINNED, where the two
     // hosts coincide and both readings pass - so this is the only case that
     // can tell them apart, and without it the change would be uncovered.
     //
@@ -3871,7 +3871,7 @@ describe("<TestEpicSessionTab />", () => {
       expect(__getOpenEpicRegistryForTests().size()).toBe(1);
 
       // Same remount, host unmoved: adoption must stay a silent no-op. This
-      // arm passes before AND after the F1 fix - it pins the fix against
+      // arm passes before AND after the fix - it pins the fix against
       // over-widening (an adoption that rebuilds or re-points here would
       // churn every tab reopen).
       const remountHandles: OpenEpicStoreHandle[] = [];
@@ -4576,7 +4576,7 @@ describe("<TestEpicSessionTab />", () => {
     expect(streams[1].closeCount).toBe(1);
   });
 
-  // ── Renderer parking (plan C, decision C1) ─────────────────────────────
+  // ── Renderer parking ─────────────────────────────
   //
   // Pin: "showing a parked tab re-acquires the session ... with a NEW fence
   // identity" (`epics/.../tickets/renderer-parking`). The session-identity
@@ -4684,8 +4684,7 @@ describe("<TestEpicSessionTab />", () => {
     expect(isEpicParked(EPIC_ID)).toBe(false);
 
     // Re-acquisition is the provider's own acquire effect reacting to
-    // `parked` flipping back - a cold open, exactly as decision C5 asks a
-    // shown parked tab to look like.
+    // `parked` flipping back - a cold open when a parked tab is shown again.
     await waitFor(() => {
       expect(streams).toHaveLength(2);
     });

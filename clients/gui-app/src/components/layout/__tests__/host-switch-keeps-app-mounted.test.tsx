@@ -294,7 +294,7 @@ afterEach(() => {
 });
 
 /**
- * TITLES CORRECTED TO WHAT THIS SUITE MEASURES (redesign P4.2).
+ * TITLES CORRECTED TO WHAT THIS SUITE MEASURES.
  *
  * It was called "switching hosts keeps the app mounted", and it does not
  * measure that: the harness supplies `HostReadinessControllerContext` from a

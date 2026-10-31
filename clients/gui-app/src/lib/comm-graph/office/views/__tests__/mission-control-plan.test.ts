@@ -2402,7 +2402,7 @@ describe("mission-control cold review: one hall for every host", () => {
     const ward = infirmaryOf(planned.layout);
     for (const id of first) expect(scene.whereabouts(id)).toBe(ward.name);
 
-    // HOST B ASKS SECOND, into a ward with nothing left. C2: capacity is the
+    // HOST B ASKS SECOND, into a ward with nothing left. Capacity is the
     // cap, and an agent that finds it full keeps its console.
     scene.sync({
       ...base,
@@ -2487,7 +2487,7 @@ describe("mission-control cold review: one hall for every host", () => {
     }
 
     // FOUR ARRIVALS, ONE PER SYNC, alternating hosts. Each one finds the ward
-    // full and keeps its console, which is the queue forming (C2, C3).
+    // full and keeps its console, which is the queue forming.
     const order = [waitersB[0], waitersA[0], waitersB[1], waitersA[1]];
     for (const waiter of order) {
       syncWith(waiter.id);

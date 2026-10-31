@@ -7,7 +7,7 @@ import type { StoreApi } from "zustand/vanilla";
  * sets because either one can be the choice that differs from the default:
  * Layout > Chat > Tool activity (and Thinking, for a group that is only
  * reasoning) decides how an UNTOUCHED group opens, and a hand choice always
- * wins over it - including after the default changes (audit R1).
+ * wins over it - including after the default changes.
  */
 export interface ActivityGroupOpenChoices {
   readonly openIds: ReadonlySet<string>;

@@ -279,7 +279,7 @@ interface EpicRegistrySession {
   /**
    * Whether the teardown about to happen is a PARK - the epic went unwatched
    * for the park window and is releasing its subscriptions with its tabs still
-   * open (plan C, decision C1).
+   * open.
    *
    * Recorded on the session for the same reason `pendingRetention` is: the fact
    * lives at the call that knows it, and `onBeforeDispose` sees only the shared
@@ -518,7 +518,7 @@ export function setEpicChatWorkProbe(probe: EpicChatWorkProbe | null): void {
 
 /**
  * Per-Epic unsynced-edits summary, aggregated across every live session
- * in the registry. T8 (desktop app-quit intercept) subscribes to this so
+ * in the registry. The desktop app-quit intercept subscribes to this so
  * it can render the "these tabs have unsynced edits" confirmation sheet
  * without knowing which browser hooks live in which provider.
  */
@@ -1266,9 +1266,8 @@ export class OpenEpicSessionRegistry {
    *
    * Re-acquisition on show is the provider's, through `acquireMounted`, which
    * builds a fresh handle because this one is gone. Nothing here has to arrange
-   * that: a park is indistinguishable from a cold open on the way back, which
-   * is decision C5 ("the existing establishing presentation, as after a host
-   * reconnect").
+   * that: a park is indistinguishable from a cold open on the way back, with
+   * the existing establishing presentation used after a host reconnect.
    */
   park(epicId: string): boolean {
     return this.sessions.transact(() => {

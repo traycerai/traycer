@@ -1203,7 +1203,7 @@ describe("Terminals opener sub-page", () => {
     runById(remoteWorkspaces, remoteWorkspace?.id ?? "missing");
 
     expect(spies.openTileIntoTargetGroup).not.toHaveBeenCalled();
-    // F20: the refusal used to be silent - the row just did nothing.
+    // The refusal used to be silent - the row just did nothing.
     expect(spies.toast).toHaveBeenCalledTimes(1);
     expect(spies.toast.mock.calls[0]?.[0]).toContain("Remote Terminal Mac");
   });

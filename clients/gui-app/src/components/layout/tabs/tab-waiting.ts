@@ -40,7 +40,7 @@ export function withWaitingIndicator(
   return indicator;
 }
 
-/** The waiting chip's one word (S-26). */
+/** The waiting chip's one word. */
 export function sideTabWaitingLabel(
   reason: EpicWaitingReason | null,
 ): "Approve" | "Reply" | null {

@@ -522,7 +522,7 @@ vi.mock("@/hooks/providers/use-providers-delete-env-override-mutation", () => ({
 
 // Both the plain and `*ForClient` names are exported: the inline profile
 // re-auth panel calls the plain hooks (host-runtime-context-
-// scoped, unchanged by S8), while `AddProviderProfileDialog` calls the
+// scoped), while `AddProviderProfileDialog` calls the
 // `*ForClient` variants with an explicit client (also Settings' own host in
 // this tree - see the `@/lib/host` mock below). Both resolve to the same
 // recorded mock so assertions don't care which path fired.
@@ -800,7 +800,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
     // wrapper and the selected-host refresh lands on the ambient host.
     useHostBinding: () => providerMocks.ambientBinding,
     useHostClient: () => null,
-    // The SPINE, a separate export since redesign P2.1.
+    // The SPINE, a separate export.
     useHostRuntimeClient: () => null,
   };
 });
@@ -1176,7 +1176,7 @@ const FULL_TABS: ProviderNativeCapabilities = {
   plugins: {
     addModes: ["cli-source"],
     marketplaceBrowse: false,
-    // Both scopes so the F5 scope picker renders (global-only contracts get a
+    // Both scopes so the scope picker renders (global-only contracts get a
     // plain "every workspace" line instead of a trigger with locationLabel).
     actionScopes: {
       list: [...BOTH_SCOPES],

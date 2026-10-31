@@ -624,7 +624,7 @@ describe("createSharedClock subscribe cost", () => {
 });
 
 /**
- * F13 batching/coalescing contract pins: one immediate correction per batch,
+ * Batching/coalescing contract pins: one immediate correction per batch,
  * one bounded trailing sweep for the rest, generation invalidation on idle.
  */
 describe("createSharedClock batching contract", () => {
@@ -927,7 +927,7 @@ describe("createSharedClock batching contract", () => {
 });
 
 /**
- * F13: the sample-capture-before-`startIfNeeded` ordering, pinned across an
+ * The sample-capture-before-`startIfNeeded` ordering, pinned across an
  * idle -> restart cycle on the SAME clock instance. A fresh instance is
  * sampled at construction and can never exercise the stale case; only an
  * instance aged WHILE idle, before being resubscribed, can.
@@ -1058,7 +1058,7 @@ describe("createSharedClock resample", () => {
 });
 
 /**
- * F13: minute/second clock separation and interval lifecycle. `useGraceCountdown`
+ * Minute/second clock separation and interval lifecycle. `useGraceCountdown`
  * is the only consumer of the second clock; every other hook here shares the
  * minute clock.
  */

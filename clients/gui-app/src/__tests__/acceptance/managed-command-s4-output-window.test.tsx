@@ -1,5 +1,5 @@
 /**
- * Independent acceptance suite — seam S4: the managed-command output window.
+ * Independent acceptance suite — the managed-command output window.
  *
  * Expected behavior comes from the records, never from the
  * component code. The tile, its session hook, its zustand store and the epic

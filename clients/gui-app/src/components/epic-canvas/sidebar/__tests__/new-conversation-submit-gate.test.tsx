@@ -301,7 +301,7 @@ vi.mock("@/lib/host/runtime", () => ({
   }),
 }));
 
-// P1.2: the body resolves its placement through this hook and refuses to
+// The body resolves its placement through this hook and refuses to
 // create when it is unusable. This suite is about the SUBMIT GATE, not
 // placement, so it presents a usable one addressing the stub client's host.
 vi.mock("@/hooks/host/use-composer-placement", () => {

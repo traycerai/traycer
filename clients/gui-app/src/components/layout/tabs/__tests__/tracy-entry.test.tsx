@@ -1,5 +1,5 @@
 /**
- * The fixed Tracy entry (Tracy Bots T58), through the REAL
+ * The fixed Tracy entry, through the REAL
  * `TracyEntryController`, the real top and vertical strips, the real
  * keybinding dispatch and the real General settings panel, over the real
  * settings, bot-tabs, tabs and layout stores. Only host boundaries are

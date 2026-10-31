@@ -148,7 +148,7 @@ vi.mock("@/lib/host", () => ({
   useOptionalHostClient: () => null,
 }));
 
-/** The composer's resolved placement (P1.2), pointed at the mocked host. */
+/** The composer's resolved placement, pointed at the mocked host. */
 function useTestPlacementTarget(): LandingPlacementTarget {
   return {
     resolvedHostId: homeMocks.getActiveHostId(),

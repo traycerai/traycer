@@ -1104,7 +1104,7 @@ describe("<BotChannelView /> channel", () => {
 
   it("gates a direct reply's thread opened from a task row as the reply's own row gates it: no send after a claim the binding does not say, and the box kept while the list drops the thread", () => {
     // The bot's direct reply, as the channel's session holds it: a task row
-    // opens the thread rooted on it as the row's kind says (Tracy Bots T82).
+    // opens the thread rooted on it as the row's kind says.
     const reply: Message = {
       role: "assistant",
       messageId: "answer-1",

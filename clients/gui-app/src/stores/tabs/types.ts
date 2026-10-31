@@ -268,7 +268,7 @@ export interface TabKindDescriptor<K extends HeaderTabKind> {
    * calling it. The close operation is a PARAMETER, supplied by the caller
    * (`useTabCloseCommand`), because the coordinator that performs it imports
    * this registry; a kind that imported the coordinator itself closed an
-   * import cycle through the registry (G1-G2 follow-up).
+   * import cycle through the registry.
    */
   readonly requestClose: (
     tab: Extract<HeaderTab, { kind: K }>,

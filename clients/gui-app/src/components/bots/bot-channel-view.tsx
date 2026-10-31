@@ -236,7 +236,7 @@ function useThreadPanelLanding(
  * The rail beside the channel is one slot: a thread, or the bot's memory,
  * which takes the thread's place and brings it back from its header. A
  * reply's receipt, in the channel or in the thread (Tracy Bots T86), opens
- * the turn's session in place of the channel (T93). The trunk's routing card sits above the channel's
+ * the turn's session in place of the channel. The trunk's routing card sits above the channel's
  * box, as the agent chat's sits above its composer.
  */
 export function BotChannelView(props: {
@@ -1207,7 +1207,7 @@ function useDisplayed(element: HTMLElement | null): boolean {
 /**
  * Marks the channel read while the person can see it: a direct reply that
  * answered their post lights the channel's unread mark, as a verdict lights
- * its thread's (T52), and the channel transcript presented in the pane on
+ * its thread's, and the channel transcript presented in the pane on
  * screen, in a window they are in, has been read.
  */
 function useReadChannelWhilePresented(args: {

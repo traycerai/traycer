@@ -448,7 +448,7 @@ function assistantTextSegment(
   return { id, kind: "text", markdown, isStreaming: false };
 }
 
-/** P4: a pure agent-to-agent child chat - every `role: "user"` row carries
+/** A pure agent-to-agent child chat - every `role: "user"` row carries
  *  `agentSenderInfo`, so ZERO rows pass `isHumanUserMessage`. Models the
  *  transcript shape `selectActiveUserMessageId`'s human-only gate
  *  previously starved of any candidate. */
@@ -5435,7 +5435,7 @@ describe("ChatMessages scroll policy", () => {
   // Settle/re-issue generalization + item-type split.
   // ANIMATED undershoot itself is jsdom-blind (no real animation timing);
   // pins exercise the settle/validate/re-issue LOGIC by driving geometry
-  // between issue and settle (F2-style).
+  // between issue and settle.
   // -------------------------------------------------------------------------
   describe("ticket 10: settle/re-issue navigation + item-type split", () => {
     it("navigateToMessage settle detects a short landing and re-issues to the exact viewOffset", async () => {
@@ -6908,7 +6908,7 @@ describe("ChatMessages scroll policy", () => {
 
   describe("review-corrections: restoration-state regressions", () => {
     it("strict-bottom pointerdown does not persist free-reading; reopen follows newest after growth", async () => {
-      // P1-a: cancelTimelineLiveFollowForUserNavigation used to force
+      // cancelTimelineLiveFollowForUserNavigation used to force
       // free-scrolling even when geometry stayed at end. Persistence reads
       // timelineScrollModeRef - a tab switch/close would save free-scrolling
       // and reopen at a row-offset instead of newest content.
@@ -6960,7 +6960,7 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("partial-hydration end land + real scroll event still restores original row when full data arrives", async () => {
-      // P1-b: setFollowingEndFromTimelinePosition used to clear
+      // setFollowingEndFromTimelinePosition used to clear
       // pendingHydrationRestoreAnchorIdRef on any isAtEnd=true. A temporary
       // clamped restore on a short partial snapshot reports isAtEnd=true via
       // the browser scroll event; that must not erase the unresolved coordinate.
@@ -7026,7 +7026,7 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("close-before-hydration under temporary end keeps durable row for a new instance reopen", async () => {
-      // P1: a temporary isAtEnd=true report on a
+      // A temporary isAtEnd=true report on a
       // partial tail-only snapshot must not release the persistence gate. A
       // genuine close before the original row appears would otherwise commit
       // following-end to the durable chat key; the instance-keyed session
@@ -7325,7 +7325,7 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("failed hydration landing retains the coordinate for a later messages-change retry", async () => {
-      // P1: the late-hydration catch-up must not
+      // The late-hydration catch-up must not
       // clear the pending id / session fallback before a validated landing.
       // A first bounded restore that exhausts without validating leaves the
       // coordinate armed so a later `messages` reference change can retry.
@@ -7425,7 +7425,7 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("explicit gesture while hydration is pending supersedes and survives later full transcript", async () => {
-      // P1: a real recognized gesture must clear
+      // A real recognized gesture must clear
       // the pending hydration coordinate immediately. When the transcript
       // later grows to include the original raw anchor, the viewport must
       // not jump back to it - reader intent already superseded it.
@@ -7514,7 +7514,7 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("browser-event partial-failure hydration still retries original row after messages change", async () => {
-      // remove-passive-supersession P1 #1: onIsAtEndChange(false) must not
+      // remove-passive-supersession #1: onIsAtEndChange(false) must not
       // clear the pending hydration coordinate when the catch-up's own
       // programmatic scroll reports isAtEnd=false before bounded validation.
       // A partial/invalid first landing that exhausts must still leave the
@@ -7646,7 +7646,7 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("bare pointerdown then passive scroll before hydration keeps durable row for new-instance reopen", async () => {
-      // remove-passive-supersession P1 #2: a non-publishing transcript
+      // remove-passive-supersession #2: a non-publishing transcript
       // pointerdown bumps anchorUserScrollGenerationRef; a later passive/
       // programmatic scroll must not release restorePersistencePendingRef via
       // the deleted generation-mismatch heuristic. Permanent close before the
@@ -9092,7 +9092,7 @@ describe("ChatMessages scroll policy", () => {
       // gate and issues a NEW restore (`restorePersistencePendingRef.current
       // = true` right before issuing, same as mount). The mock lands every
       // command at a position far from the saved anchor's own (wrong on
-      // purpose, like the P3 settle-position mock above): replaying the SAME
+      // purpose, like the settle-position mock above): replaying the SAME
       // semantic target would otherwise always land at the SAME scrollTop
       // the frozen pre-restore snapshot already names, so a released gate's
       // live capture and an armed gate's re-commit would read identically by

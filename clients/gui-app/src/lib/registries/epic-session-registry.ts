@@ -137,7 +137,7 @@ export const EpicSessionHostClientContext = createStableDevContext(
 );
 
 export const handleHostIds = new WeakMap<OpenEpicStoreHandle, string | null>();
-// The R-1 rotation rationale that used to live here now lives at the acquire
+// The rotation rationale that used to live here now lives at the acquire
 // effect's comparison in `epic-session-provider.tsx` (`readOwnerIdentityVerdict`)
 // - the mechanism that actually enforces it. The `handleOwnerIdentityKeys` map
 // that used to sit here was written twice, read never, and exported: a future
@@ -276,8 +276,8 @@ export function __getOpenEpicRegistryForTests(): OpenEpicSessionRegistry {
 }
 
 /**
- * Accessor for the module-scoped live-Epic registry. T8 (desktop
- * app-quit intercept) subscribes to this so it can read the aggregated
+ * Accessor for the module-scoped live-Epic registry. The desktop
+ * app-quit intercept subscribes to this so it can read the aggregated
  * unsynced-edits map without reaching into provider-local state.
  */
 export function getOpenEpicRegistry(): OpenEpicSessionRegistry {

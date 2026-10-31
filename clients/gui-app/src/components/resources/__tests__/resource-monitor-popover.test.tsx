@@ -5375,7 +5375,7 @@ describe("ResourceMonitorPopover · custom trigger", () => {
 });
 
 /**
- * `readingButtonLook` (G6): what the header-button trigger draws in each
+ * `readingButtonLook`: what the header-button trigger draws in each
  * form. `glyph` stays the icon-only button every other form used to be;
  * `readout` and `inline` draw the segment's own metrics, at the strip
  * tile's width for `readout` and at their natural width for `inline` -

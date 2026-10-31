@@ -1,5 +1,5 @@
 /**
- * A channel opened onto one post, again and again (Tracy Bots T87): each
+ * A channel opened onto one post, again and again: each
  * visit lands the list on the post, the same post's second visit included.
  * Drives the REAL `BotChatTranscript` over a session store's messages into the
  * REAL `ChatMessages` and its list, and reads where a landing went the way a

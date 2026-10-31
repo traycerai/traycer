@@ -2032,7 +2032,7 @@ function drawSignLabels(args: {
     const screenY = anchorY + (box.top - offered.top);
     drawSignPlate(ctx, { text: plateText, screenX, screenY, palette });
     // THE WARD'S BEACON, where a ward has one: Mission control's medbay, which
-    // has no street for an ambulance to come down (C6). Which frame is up is
+    // has no street for an ambulance to come down. Which frame is up is
     // the resolver's answer - it is the one place the room's occupancy and the
     // clock meet - and a sign that carries no beacon says `null`.
     //

@@ -49,7 +49,7 @@ export type TerminalReattachMode = "fresh" | "live";
 /**
  * `"lost"` - the stream closed for an unknown/recoverable reason (transport
  * drop, host restart, etc.) - the session MAY still be alive server-side
- * (within its detach-linger window, T13); auto-recovery
+ * (within its detach-linger window); auto-recovery
  * (`useTerminalSessionRecovery`) is worth attempting.
  * `"reaped"` - the host explicitly confirmed via `TERMINAL_NOT_FOUND` that
  * the PTY addressed by this handle no longer exists (linger expired + reaped,
@@ -813,7 +813,7 @@ export function createTerminalSessionStore(
           // If the stream drops before a snapshot, "creating" would otherwise
           // survive forever and leave the tile stuck on its loading state.
           // Exited sessions remain exited. A closed stream otherwise splits on
-          // WHY (T13): the host's `TERMINAL_NOT_FOUND` fatal definitively ends
+          // WHY: the host's `TERMINAL_NOT_FOUND` fatal definitively ends
           // this handle's PTY incarnation ("reaped"). The durable session id
           // may already point at a replacement; anything else is a recoverable
           // "lost" renderer attachment worth auto-retrying.

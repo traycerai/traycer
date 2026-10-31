@@ -305,7 +305,7 @@ vi.mock("@/lib/host", () => ({
     findById: () => null,
     onChange: () => ({ dispose: () => undefined }),
   }),
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => null,
 }));
 
@@ -361,7 +361,7 @@ vi.mock("@/hooks/epic/use-epic-create-mutation", () => ({
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
   useCreateTuiAgentForClient: () => ({ isPending: false }),
 }));
-// P1.2: the composer resolves its placement (pin ?? effective) through this
+// The composer resolves its placement (pin ?? effective) through this
 // one hook. These suites are about paste/gating/banner behaviour, not
 // selection derivation, so it is stubbed at that single boundary - the same
 // treatment the other host-backed hooks above get.

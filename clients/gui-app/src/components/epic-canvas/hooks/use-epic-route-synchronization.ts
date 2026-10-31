@@ -442,7 +442,7 @@ export function useEpicRouteSynchronization(
     if (activeArtifactId === target.id) {
       return;
     }
-    // Route landing uses the same gesture mapping as a link click (C11), but
+    // Route landing uses the same gesture mapping as a link click, but
     // it is the LANDING itself: the focus params it derives belong on the
     // entry the user already navigated to, so the commit REPLACES rather than
     // pushing a second entry they would have to press Back through twice.

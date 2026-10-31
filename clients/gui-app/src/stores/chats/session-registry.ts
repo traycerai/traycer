@@ -342,7 +342,7 @@ export class ChatSessionRegistry {
   /**
    * End every live session of one epic - leased, warm, on any host.
    *
-   * Renderer parking's half of this plane (plan C, decision C1). A chat session
+   * Renderer parking's half of this plane. A chat session
    * claims a VISIBLE lease on its epic through the host's chat session, so one
    * surviving `chat.subscribe` keeps the epic pinned and the whole park buys
    * nothing. Dropping the tiles' leases is not enough on its own: this plane's

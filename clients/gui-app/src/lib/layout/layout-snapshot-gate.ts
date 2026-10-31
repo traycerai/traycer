@@ -61,7 +61,7 @@ export function claimLayoutSnapshotWindow(now: number): boolean {
 }
 
 /**
- * Gives a claimed window back, for a send that did not go out (L-83, G3-04).
+ * Gives a claimed window back, for a send that did not go out (L-83).
  *
  * The claim has to come first - two renderers launching together must not
  * both count the same device - so the only way a rejected payload, a failed

@@ -13,7 +13,7 @@
  *  - a pending acknowledgement: a delegation was created and the model's
  *    automatic acknowledgement has not yet been spoken through.
  *
- * An item is appended only when all three are clear (probe P1: an append
+ * An item is appended only when all three are clear (probe: an append
  * while the person speaks is backchannelled and never spoken). Delivery is
  * confirmed by CONTENT: the output transcript after the append must contain
  * a word of the item's own (the bot's name, the thread's title, a key noun);
@@ -164,14 +164,14 @@ export const INPUT_ACTIVE_WINDOW_MS = 1_200;
 export const OUTPUT_HANGOVER_MS = 700;
 /**
  * The same hangover with no detector: the transcript runs ahead of the
- * sound (probe P5: text 0.64 s after the append, speech 0.94 s, nine seconds
+ * sound (probe: text 0.64 s after the append, speech 0.94 s, nine seconds
  * of it for 33 words), so a short item's whole audio fits inside this wait.
  */
 export const OUTPUT_HANGOVER_WITHOUT_LEVEL_MS = 4_000;
 /**
  * How long an appended item is taken to be playing when no trusted detector
  * can say: a lead for the model to begin, then a budget per word. The probe
- * (P5) heard 33 words in about nine seconds; this allows eleven. Until it
+ * heard 33 words in about nine seconds; this allows eleven. Until it
  * has run, nothing else is appended: an append during that audio is the one
  * the probe says is never spoken.
  */
@@ -192,7 +192,7 @@ export const ACK_TIMEOUT_MS = 4_000;
 export const CONFIRM_WINDOW_MS = 8_000;
 export const MAX_DELIVERY_ATTEMPTS = 3;
 /**
- * Appends are chunked at about 500 tokens (probe P5 found one chunk of that
+ * Appends are chunked at about 500 tokens (the probe found one chunk of that
  * size listenable); four characters a token is the usual estimate.
  */
 export const CHUNK_MAX_CHARS = 2_000;
@@ -689,7 +689,7 @@ const STOP_WORDS: ReadonlySet<string> = new Set([
 /**
  * What the voice says to hold the floor or acknowledge without saying
  * anything: never proof that an item was spoken, and never a confirmation
- * word of one, however the item's own text begins (probe P1: "Mm-hmm" was
+ * word of one, however the item's own text begins (probe: "Mm-hmm" was
  * the whole output of an append that was never spoken).
  */
 const BACKCHANNEL_WORDS: ReadonlySet<string> = new Set([

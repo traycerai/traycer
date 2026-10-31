@@ -1,5 +1,5 @@
 /**
- * A bot's creature mark (Tracy Bots, T111): a pure function of the bot's id,
+ * A bot's creature mark: a pure function of the bot's id,
  * mirrored, with both eyes, never a degenerate mask, and drawn in whole
  * pixels at every avatar size.
  */

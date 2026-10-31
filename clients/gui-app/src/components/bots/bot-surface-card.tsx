@@ -229,7 +229,7 @@ function SurfaceStateLine(props: {
 }
 
 /**
- * The task agent's questions on T91's question card, the person's answers
+ * The task agent's questions on the question card, the person's answers
  * kept under the bot (`useBotDraftsStore`). Each question is answered or
  * skipped on its own; the task's agent takes them together, so they are sent
  * once every question has one. Skipping all of them skips the question.

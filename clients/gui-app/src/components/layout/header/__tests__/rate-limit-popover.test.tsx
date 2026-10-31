@@ -1721,7 +1721,7 @@ describe("<RateLimitPopover /> rail", () => {
   });
 
   // The eye governs a segment wherever the reading currently draws - the
-  // status bar, the tab strip, or the phone header - since G6 every
+  // status bar, the tab strip, or the phone header - every
   // placement reads through the same selector. What used to gate the eye on
   // "is the physical status-bar strip on screen" (`useStatusBarShown`) now
   // gates it on the usageLimits region's own Shown

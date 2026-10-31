@@ -119,7 +119,7 @@ export interface HostStreamClientBinding {
    * `hostTransportKey` - a caller comparing this across renders to decide
    * "is this still the same owned session" must see a remote public-key
    * rotation as a distinct value, or it would silently misuse a stale
-   * session the same way the S1-era owners did.
+   * session.
    */
   readonly transportKey: string;
   /**

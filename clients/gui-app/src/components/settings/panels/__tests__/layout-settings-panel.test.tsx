@@ -209,7 +209,7 @@ async function goToSurfaceTab(user: UserEvent, id: string): Promise<void> {
 }
 
 /**
- * The full-width host of the one layout form (L-03), after G6.
+ * The full-width host of the one layout form (L-03).
  *
  * What is pinned here is the SHAPE the owner asked for: one tab per surface,
  * the region as a row inside it, and each shared group control drawn exactly
@@ -600,8 +600,8 @@ describe("Settings - Layout", () => {
       renderPanel();
       await goToSurfaceTab(user, "sidebar");
       // `railComments` still carries a presence hint ("Auto - appears when an
-      // artifact is open"), which is what earns it the three-way control
-      // (G6): most rail panels have no rule of their own any more and only
+      // artifact is open"), which is what earns it the three-way control:
+      // most rail panels have no rule of their own any more and only
       // offer Shown/Hidden, whose "on" writes `auto` (see the other test in
       // this block, which exercises exactly that two-option row).
       const comments = within(row("railComments"));
@@ -780,7 +780,7 @@ describe("Settings - Layout", () => {
     it("sits after the presets block on its own tab, toned danger, and inoperable on an untouched layout", () => {
       renderPanel();
 
-      // Reset Everything merged into the Presets tab (G6): the floor is no
+      // Reset Everything merged into the Presets tab: the floor is no
       // longer the last card on a single scrolling page, it is the last thing
       // in the tab that opens by default.
       const presets = screen.getByTestId("layout-presets-group");
@@ -837,7 +837,7 @@ describe("Settings - Layout", () => {
     });
     renderPanel();
     // The page opens on Presets, and `contextUsage` lives on Chat - the
-    // landing has to switch tabs itself (G6), not just open a disclosure.
+    // landing has to switch tabs itself, not just open a disclosure.
     expect(
       screen
         .getByRole("tab", { name: "Presets" })

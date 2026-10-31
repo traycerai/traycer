@@ -219,7 +219,7 @@ function mountSubmit(args: {
       onSideChat: null,
       targetHostId: args.targetHostId ?? null,
       queueEditTargetId: null,
-      // T5's gate is off by default in these fixtures: most predate it and
+      // The gate is off by default in these fixtures: most predate it and
       // assert the inline behaviour, which is what `false` preserves exactly.
       getDraftBlobBridgeSupported: () => args.draftBlobBridgeSupported ?? false,
     }),
@@ -459,7 +459,7 @@ describe("useChatComposerSubmit draft images", () => {
   });
 });
 
-// ─── T5's send gate, through the real submit hook ─────────────────────────
+// ─── The send gate, through the real submit hook ─────────────────────────
 
 const GATE_HOST = "host-gate-submit";
 const GATE_OWNER = "owner-gate-submit";

@@ -355,7 +355,7 @@ describe("MobileAppHeader", () => {
     ).not.toBeNull();
   });
 
-  // G6: the phone header drew the usage glyph whatever the switch said, the
+  // The phone header drew the usage glyph whatever the switch said, the
   // same bug class the resource-monitor gate never had.
   it.each([
     ["resourceMonitor", "Resource monitor"],

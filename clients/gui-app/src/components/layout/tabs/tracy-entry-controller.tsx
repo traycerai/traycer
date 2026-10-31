@@ -26,7 +26,7 @@ const UNKNOWN: TracyResolution = { kind: "unknown" };
 const NONE: TracyResolution = { kind: "none" };
 
 /**
- * Keeps the fixed Tracy entry (T58) in step with "Show Tracy" and the bot
+ * Keeps the fixed Tracy entry in step with "Show Tracy" and the bot
  * list, once per window. On: the personal environment's main bot gets its
  * tab, bound to this window's host as Home's row opens it, marked as the
  * entry and kept first in the strip. Off, or with no main bot: the entry is

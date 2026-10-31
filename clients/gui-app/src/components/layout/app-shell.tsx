@@ -122,7 +122,7 @@ function AppShellBody(props: AppShellProps) {
           shell: a side dock is the inspector taking its share of this row, so
           the app reflows beside it in one frame and is never scaled (L-02).
           No new wrapper - `aria-hidden` and the firewall go on the column
-          below, which must never be an ancestor of the inspector (C-06). */}
+          below, which must never be an ancestor of the inspector. */}
         <div className="flex min-h-safe-dvh bg-canvas text-canvas-foreground">
           <RootDndProvider>
             <AppColumnFrame

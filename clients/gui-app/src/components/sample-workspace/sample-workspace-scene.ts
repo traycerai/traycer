@@ -24,7 +24,7 @@ import type {
 } from "@/components/layout/tabs/side-strip/strip-task-agents";
 
 /**
- * One sample data set for the canvas and every picture of it (C12): the
+ * One sample data set for the canvas and every picture of it: the
  * sample status bar, the depictions and the Style examples all read these, so
  * the form and the canvas can never print two different readings.
  */
@@ -572,7 +572,7 @@ export const SAMPLE_COMMENT_THREADS: ReadonlyArray<CommentThreadWire> = [
 /**
  * Whether the sample task has what each Auto panel waits for, read off the
  * fixtures themselves, so a panel is present exactly when it has rows to
- * show (C2, C3).
+ * show.
  */
 export const SAMPLE_RAIL_PRESENCE: Omit<
   LeftPanelAvailabilityContext,

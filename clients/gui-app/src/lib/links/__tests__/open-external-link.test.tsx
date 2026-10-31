@@ -86,7 +86,7 @@ describe("useOpenExternalLink", () => {
     expect(toastFromRunnerError).not.toHaveBeenCalled();
   });
 
-  // The pending flag is what the link surfaces disable on (R10), so it has to
+  // The pending flag is what the link surfaces disable on, so it has to
   // be true for the whole handoff and false again once it settles.
   it("reports isPending while the handoff is outstanding", async () => {
     let release = (): void => undefined;

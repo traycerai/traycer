@@ -19,7 +19,7 @@ import { busyWorkPhrase } from "@/components/host/host-restart-copy";
  *
  * It used to be a second vocabulary in fact as well as in shape — a
  * `HostPresenceTone` rendered beside a `HostHealthState` derived from it —
- * and P3.4's vocabulary census recorded the pair as the unfinished half of
+ * and the redesign's vocabulary census recorded the pair as the unfinished half of
  * its sweep. The pair is gone: the only caller is `deriveHostHealth`, and the
  * only escape hatch (`formatHostMeta`) had no production reader left and went
  * with it.
@@ -102,7 +102,7 @@ export function deriveHostPresence(
   }
   switch (status.connectivity) {
     // The host's own leg is up - AS OF THE LAST LEASE REFRESH, which is the
-    // entire content of the claim and, until F26, not what it said.
+    // entire content of the claim; the previous wording said more.
     //
     // This arm returned `Online` with `showLiveDot: true`, and the dot is the
     // part that mattered: the lease TTL is 15 minutes, so a host that died
@@ -122,7 +122,7 @@ export function deriveHostPresence(
     // lights it, from the arm above, where the evidence actually is.
     //
     // There was a second arm here - "reachable, but THIS viewer's path to it
-    // is failing" - keyed on a per-viewer probe that was never built (F9): the
+    // is failing" - keyed on a per-viewer probe that was never built: the
     // store behind it had a getter and no writer, so the arm was unreachable
     // code and the pill it drew had never once rendered. Deleted with that
     // machinery in P3.4; if a real viewer-path probe is ever built, it comes
@@ -158,8 +158,7 @@ export interface HostUpdatePill {
 
 /**
  * Maps the update lifecycle to a pill. `current` shows
- * nothing. S1 populates `current`/`pending`/`required`; the remaining states
- * are rendered for completeness once the S3 reconciler emits them.
+ * nothing; the remaining states are rendered for completeness.
  */
 export function deriveUpdatePill(
   updateState: HostUpdateState,

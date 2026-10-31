@@ -45,7 +45,7 @@ export function EpicRouteSessionBody(props: EpicRouteSessionBodyProps) {
 function EpicRouteSessionEffects(props: EpicRouteSessionBodyProps) {
   useInitialChatHandoff(props.epicId, props.tabId);
   // The PARKED gate, beside the deliberate placement outside `props.active`
-  // below (plan C, decision C1). The two are different questions and both
+  // below. The two are different questions and both
   // answers are load-bearing:
   //
   //  - hidden-but-not-parked still polls, for the reason stated on

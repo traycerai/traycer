@@ -87,7 +87,7 @@ let useStatusBarRateLimitSegmentsCalled = false;
 /**
  * The `mode` the icon last asked the selector for - `live` for every form,
  * the phone header's glyph included: each one owns its own fetching the way
- * the status bar's cluster does (G6). See `LiveRateLimitGlyph`.
+ * the status bar's cluster does. See `LiveRateLimitGlyph`.
  */
 let lastMode: StatusBarRateLimitMode | null = null;
 /** The `sample` flag `LiveRateLimitGlyph` last asked the selector for. */
@@ -1089,7 +1089,7 @@ describe("<RateLimitIconButton />", () => {
   // Every form, the phone header's glyph included, owns its own fetching the
   // way the status bar's cluster does: HTTP providers are not in the
   // background poll, and the phone footer is opt-in and off by default, so a
-  // glyph that left fetching to the footer read a cold cache (G6).
+  // glyph that left fetching to the footer read a cold cache.
   // The glyph's own fetch is proven over the real selector in
   // `rate-limit-icon-glyph-fetch.test.tsx`.
   it.each(["tile", "readout", "inline"] as const)(
@@ -1100,7 +1100,7 @@ describe("<RateLimitIconButton />", () => {
     },
   );
 
-  // The header glyph reads `useSampleScene()` itself (C12) - the same wiring
+  // The header glyph reads `useSampleScene()` itself - the same wiring
   // `StatusBarRateLimitCluster` gets from its caller - rather than the
   // sample scene routing through it another way.
   it.each([true, false])(

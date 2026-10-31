@@ -629,7 +629,7 @@ function ChatTileForChat(props: ChatTileProps) {
       (chat) => chat.identity.chatId === node.id && cloudRowIsViewersOwn(chat),
     ) ??
       false);
-  // Renderer parking (plan C, decision C1): a parked epic holds no
+  // Renderer parking: a parked epic holds no
   // `chat.subscribe`, because that subscription claims a VISIBLE lease on the
   // epic through the host's chat session and one survivor pins the slot.
   //
@@ -695,9 +695,9 @@ function ChatTileForChat(props: ChatTileProps) {
   // The chat's own bounded load (invariant 6), for both halves of the wait:
   // while `handle === null`, and after it until the first snapshot. The
   // handle-pending half has THREE causes that look identical from here: the
-  // tab's host client is null so every `useHostQuery` disabled itself (audit
-  // S3), the subscription is live but nothing has arrived (S4), or the
-  // directory has not answered at all (S5's `checking`). The reader cannot act
+  // tab's host client is null so every `useHostQuery` disabled itself,
+  // the subscription is live but nothing has arrived, or the
+  // directory has not answered at all (`checking`). The reader cannot act
   // on the difference, so all three get one sentence naming the host - and an
   // end. The wait is recorded here, above the branch, so the handle arriving
   // restarts none of its deadlines.

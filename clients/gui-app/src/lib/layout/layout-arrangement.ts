@@ -43,7 +43,7 @@ export type EdgeSide = "left" | "right";
 
 /**
  * Where the header task tabs draw: horizontal at the top (today's layout), or
- * a vertical strip at either edge (S-01, S-02).
+ * a vertical strip at either edge.
  */
 export type TabStripPlacement = "top" | EdgeSide;
 
@@ -150,7 +150,7 @@ const CANVAS_ORDER_GROUP_IDS: ReadonlyArray<CanvasOrderGroupId> = [
  * different window from one reading to the next. The two modes are exclusive
  * by construction, so there is one field and not two: a stored `automatic`
  * boolean beside the list was a second representation of `limitKeys.length
- * === 0`, which is how two fields for one fact come to disagree (R1-15).
+ * === 0`, which is how two fields for one fact come to disagree.
  * Nothing draws nothing - a provider the user wants gone has its own Shown
  * switch.
  */
@@ -227,7 +227,7 @@ export interface LayoutArrangement {
   /** Only ever increases, so a divider id is never reused. */
   readonly dividerSeq: number;
   /**
-   * Where the header task tabs draw, on every desktop window at once (S-11):
+   * Where the header task tabs draw, on every desktop window at once:
    * top, or a vertical strip at the left or right edge.
    *
    * The EFFECTIVE placement this window draws with also depends on whether
@@ -238,7 +238,7 @@ export interface LayoutArrangement {
   readonly tabStripPlacement: TabStripPlacement;
   /**
    * Which side of the epic canvas the per-epic sidebar draws on, independent
-   * of the tab strip's own placement (S-06).
+   * of the tab strip's own placement.
    */
   readonly sidebarSide: EdgeSide;
   /** What the vertical strip shows; ignored while the tabs are at the top. */
@@ -522,7 +522,7 @@ export function barClusterRegions(
  * fields rather than the arrangement.
  *
  * The strip and the header subscribe field by field through the override seam
- * (there is deliberately no whole-arrangement hook, G1-14), so they arrive
+ * (there is deliberately no whole-arrangement hook), so they arrive
  * with placements in hand; the order and the membership rule are still this
  * module's.
  */
@@ -607,7 +607,7 @@ export function statusBarHostsAnyRegion(
   );
 }
 
-// ── The tab strip's placement (S-01, S-02, S-05, S-25) ──────────────────────
+// ── The tab strip's placement ──────────────────────
 
 /**
  * The edge a vertical strip draws at, or `null` for the horizontal `top`
@@ -633,8 +633,8 @@ export function liveAgentsInStrip(
 }
 
 /**
- * The palette's "Toggle vertical tabs" command (S-25): `top` becomes `left`,
- * the default side for a vertical strip (S-05); either side becomes `top`.
+ * The palette's "Toggle vertical tabs" command: `top` becomes `left`,
+ * the default side for a vertical strip; either side becomes `top`.
  */
 export function toggleVerticalTabs(
   placement: TabStripPlacement,
@@ -668,8 +668,8 @@ export function movedWithin<T>(
  *
  * Stated as "`fromId` lands on this side of `toId`" rather than as a pair of
  * indices, because the canvas shows only the members that are currently drawn
- * and an index into what it showed is not an index into what is stored
- * (G3-01). Placing by id needs no correspondence between the two orders at
+ * and an index into what it showed is not an index into what is stored.
+ * Placing by id needs no correspondence between the two orders at
  * all: the member the user had hold of is the one that moves, and every other
  * member - drawn or not - keeps its place relative to its neighbours.
  *
@@ -731,7 +731,7 @@ interface CanvasOrderDrop {
  *
  * The ids arrive as strings off the DOM and are only ever used to SELECT from
  * the stored list, never to build one, so an id this build does not know moves
- * nothing rather than narrowing something away (G1-23).
+ * nothing rather than narrowing something away.
  */
 function placedBeside<Id extends string>(
   full: ReadonlyArray<Id>,
@@ -957,8 +957,8 @@ export function removeRailDivider(
  * One rail icon's stack, or one panel, placed beside another panel, for the
  * app's own sidebar drag.
  *
- * The same mover the editor's canvas drop uses, reached the same way
- * (R5R-06): the drag at rest and the drag in a session differ in what the
+ * The same mover the editor's canvas drop uses, reached the same way:
+ * the drag at rest and the drag in a session differ in what the
  * user grabs, not in what a drop means, and two copies of "take it out and
  * put it back beside that one" would drift the first time either is fixed.
  * The sidebar speaks panel ids, so what is added here is the bijection onto

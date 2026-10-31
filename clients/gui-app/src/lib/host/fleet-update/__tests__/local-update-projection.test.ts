@@ -135,7 +135,7 @@ describe("projectLocalUpdate — the wire leg is NOT aged by the record leg's ti
   });
 
   it("the SAME wire read demoted by its OWN instant still decays — this is a clock split, not an exemption", () => {
-    // The other half of the pin, so nobody "fixes" F3 by making the wire leg
+    // The other half of the pin, so nobody "fixes" this by making the wire leg
     // unconditionally fresh. Health is what demotes a wire read, and
     // `observationFromCanonicalRead` expresses that by stamping an unhealthy
     // read's `freshUntilMs` in the past — which this models directly.

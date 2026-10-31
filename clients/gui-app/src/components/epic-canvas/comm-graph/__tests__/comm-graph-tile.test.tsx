@@ -78,7 +78,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 
 // The Epic session resolves its host through the selection authority's derived
 // pointer, not the active-host projection above - seed the
-// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+// decider at its own name (the convention in epic-shell-usage-entry-point).
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-a",
 }));
@@ -724,7 +724,7 @@ function caughtUp(): void {
  * A real 2d context (recording nothing usable, but not throwing) plus a
  * controllable `requestAnimationFrame`, so the frame loop actually RUNS in
  * jsdom instead of being gated off by `get2dContext`'s null. Ported from
- * `comm-graph-office-canvas.test.tsx`'s helper of the same purpose: the R1
+ * `comm-graph-office-canvas.test.tsx`'s helper of the same purpose: the
  * regression is about what the RUNTIME actually framed on its first frame,
  * not merely what the store says, so the loop has to run for real.
  */
@@ -742,7 +742,7 @@ function installCanvas(): { readonly step: () => void } {
         // A CONSTANT, and deliberately so: `set` discards every write, so
         // nothing here carries state and `save`/`restore` have nothing to
         // unwind. That is what keeps this double clear of the defect the
-        // canvas suite's two doubles had (T2), where a persisted
+        // canvas suite's two doubles had, where a persisted
         // `font` / `letterSpacing` made every measurement after the first
         // sign plate model a browser that does not exist.
         //
@@ -891,7 +891,7 @@ function lastCanvasReady(
 
 /**
  * The most recent real frame the runtime drew, and the bounds of the view it
- * drew - both from the ACTUAL scene, not the store. R1 is exactly the gap
+ * drew - both from the ACTUAL scene, not the store. The regression is exactly the gap
  * between what the store says and what the runtime already framed on its
  * first frame, so this is the reading that can tell the two apart.
  */
@@ -922,7 +922,7 @@ function lastFrameAndBounds(
 /**
  * Gates the tile behind the epic's own agent load, so a mount that should
  * witness a Settings change actually has agents by the time its effects
- * run. A cold mount (agents still empty on the first render) can mask R1's
+ * run. A cold mount (agents still empty on the first render) can mask the
  * "unmounted" reproduction entirely - the effect that resets the camera
  * closes over an empty `node.view` update cycle no differently, but the
  * render-time decision this change added reads `agents.length` nowhere, so
@@ -2190,7 +2190,7 @@ describe("CommGraphTile", () => {
       });
       setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
-      // F3 asserted the planner had NOT run here; H1 is exactly the
+      // The previous test asserted the planner had NOT run here; H1 is exactly the
       // reversal of that gate for an explicit view - the caught-up feed is
       // no longer an input to the first plan, only to what gets classified
       // and committed as the settled partition (proven below via
@@ -2255,7 +2255,7 @@ describe("CommGraphTile", () => {
      * The floor an explicit view draws while the feed is behind is planned
      * from statuses that are still arriving, so nobody is busy and the woken
      * agent's desk does not exist yet. The case above proves the PARTITION
-     * settles - that is F3's half, and it passed all along - while this one
+     * settles - and it passed all along - while this one
      * proves the drawn floor does too, which it did not: the agent set does
      * not change when a status finally arrives, and a status flip alone
      * deliberately never re-plans, so the rendered plan stayed the draft for

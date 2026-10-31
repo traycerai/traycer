@@ -331,7 +331,7 @@ function useResumeOauthPolling(
 }
 
 /**
- * Action affordances for the currently selected scope. R04 advertises
+ * Action affordances for the currently selected scope. Capabilities advertise
  * per-action scope tables — a verb supported only for global must not appear
  * when the user is viewing project (and vice versa).
  */

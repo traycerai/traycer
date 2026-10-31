@@ -1,5 +1,5 @@
 /**
- * The lane arm: T10's adapters wired to T12's replicas.
+ * The lane arm: the adapters wired to the replicas.
  *
  * Everything here is composition. The adapters decode, the replicas decide what
  * may be applied, and this module is the ORDER and the ROUTING between them -

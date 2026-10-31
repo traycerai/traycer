@@ -19,7 +19,7 @@ import {
  *
  * Every rejection here is a UI-visible, attach-time decision (count, type,
  * per-image size, running-total budget) - never a silent drop at submit
- * time (guardrail G5).
+ * time.
  */
 
 export interface ReportIssueAttachmentImage {

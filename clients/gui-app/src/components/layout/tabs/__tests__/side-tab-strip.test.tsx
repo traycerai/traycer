@@ -403,7 +403,7 @@ function buildRouter(
     path: "/elsewhere",
     component: () => null,
   });
-  // New Task (F7) navigates to a fresh draft; this route is what its
+  // New Task navigates to a fresh draft; this route is what its
   // navigation resolves to, mirroring `tab-strip.test.tsx`'s own draft route.
   const draftRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -1742,7 +1742,7 @@ describe("<SideTabStrip />", () => {
     expect(titleRow.className).toContain(
       "wco:pl-[var(--window-leading-inset)]",
     );
-    // The collapse toggle lives in the title row; New Task moved out of it (F7).
+    // The collapse toggle lives in the title row; New Task moved out of it.
     expect(
       titleRow.contains(screen.getByTestId("side-tab-strip-collapse")),
     ).toBe(true);
@@ -1865,7 +1865,7 @@ describe("<SideTabStrip />", () => {
     // A member's own colour is kept but not drawn while it is grouped.
     seedTabColor({ kind: "epic", id: "e-one" }, "#ff0000");
     // Two flagged members, so the folded badge has to pick the worst:
-    // waiting outranks a failure (S-17).
+    // waiting outranks a failure.
     indicatorState.value = {
       epics: {
         "e-one": {

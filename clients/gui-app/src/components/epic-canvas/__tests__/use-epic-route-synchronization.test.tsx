@@ -139,7 +139,7 @@ const testState = vi.hoisted<TestState>(() => ({
 
 const tileNavigationMocks = vi.hoisted(() => ({
   openTile: vi.fn(),
-  /** The navigation seam each open was committed through (C6). */
+  /** The navigation seam each open was committed through. */
   navigationSeams: [] as Array<
     (
       epicId: string,
@@ -1645,7 +1645,7 @@ describe("useEpicRouteSynchronization", () => {
     );
   });
 
-  // T17: an `unverified` session's cloud-chat list is disabled for want of
+  // An `unverified` session's cloud-chat list is disabled for want of
   // AUTHORIZATION, not because there is nothing left to ask - the cloud rows
   // exist and this session simply may not look. `cloudChatListAuthorizesRecordSweep`
   // must fail closed on that ignorance, so a restored record-less chat tab
@@ -2217,7 +2217,7 @@ describe("useEpicRouteSynchronization", () => {
 
     // No hosted record anywhere - mirrors the switch-off / non-chat-tile
     // shape, where `findHostedTileElement` always misses and the ORIGINAL
-    // physical lookup must still resolve exactly as it did before F4.
+    // physical lookup must still resolve as before.
     const selectedWrapperEl = document.createElement("div");
     selectedWrapperEl.setAttribute("data-tab-instance-id", "tile-unhosted");
     selectedWrapperEl.setAttribute("data-selected", "true");

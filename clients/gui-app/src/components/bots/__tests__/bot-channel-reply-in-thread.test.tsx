@@ -1,5 +1,5 @@
 /**
- * "Reply in thread" on every row of a bot's channel (Tracy Bots T68,
+ * "Reply in thread" on every row of a bot's channel (Tracy Bots,
  * decision 79), through the REAL `BotChannelView`, transcript and
  * `ChatBotMessage`: a member's post, the bot's direct answer, a plain
  * announcement and an announcement carrying a surface each offer it, on

@@ -491,7 +491,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     node.chatId,
   ]);
 
-  // Audit S3, at the surface the catalog names: this tile's reads go through
+  // At the surface the catalog names: this tile's reads go through
   // the TAB's client, and when that client is null every `useHostQuery` under
   // it disables itself, leaving `isPending` true, `data` undefined and `error`
   // null - forever. `useCloudChatTranscript` faithfully reports that as

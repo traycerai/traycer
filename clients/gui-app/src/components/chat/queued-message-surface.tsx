@@ -876,7 +876,7 @@ const QueuedMessageRow = memo(function QueuedMessageRow(props: {
         CHAT_DOCK_PANEL_ROW,
         // The four sibling panels all reveal the row under the pointer; this
         // one is the only list of PROSE, so it needs the fill most and had
-        // none (R6H-01).
+        // none.
         // muted-fill-ok: row inside the canvas-surface panel above; --canvas never equals --muted
         "hover:bg-muted/40",
         // The hairline `divide-y` used to draw, moved OUT of flow into the
@@ -1037,7 +1037,7 @@ function QueuedMessageRowContent(props: {
 /** A row's text at its usual three-line cap. */
 const CONTENT_SCROLL_FULL = "max-h-[calc(3lh+--spacing(1))] overflow-y-auto";
 /**
- * A folded agent row's box. NOT clipped (#2441 F1): the sender chip
+ * A folded agent row's box. NOT clipped (#2441): the sender chip
  * and the status toolbar float in this box and are taller than a text line,
  * so a one-line cap here cropped them, and at a narrow width wrapped them out
  * of sight altogether. `flow-root` contains the floats instead, and the one
@@ -1268,7 +1268,7 @@ function QueuedMessageProvenanceChip(props: {
     <span
       // `max-w-full`: a sender's name is a chat title and can be wider than a
       // narrow row, so the chip is held to the row and its name truncates
-      // rather than scrolling the whole list sideways (#2441 F2).
+      // rather than scrolling the whole list sideways (#2441).
       className="float-left mr-1 inline-flex max-w-full"
       data-testid="queued-message-provenance-chip"
     >
@@ -1585,7 +1585,7 @@ function QueuedMessageFloatingChrome(props: {
         // `gap-1` rather than `gap-0.5`: the buttons are `size-6`, which is
         // 22.5px at this root, so 3.75px between them puts their centres
         // 26.25px apart and the undersized-target spacing exception is not
-        // decided by a third of a pixel (R6H-05).
+        // decided by a third of a pixel.
         //
         // `-my-0.5` pays for `p-0.5` out of the row's own padding: the frame's
         // border box is 28.25px and its MARGIN box is what the float
@@ -1867,7 +1867,7 @@ function QueuedMessageStatusBadge(props: {
           // `min-w-0` with the label's `truncate`: in a pane narrower than
           // the label ("Queued for next turn" is about 127px, a 239px pane
           // leaves the row about 117px) the pill ellipsizes inside the row
-          // instead of running past its edge (#2441 F1).
+          // instead of running past its edge (#2441).
           "inline-flex min-w-0 items-center gap-1 rounded-sm px-1.5 py-0.5 text-ui-xs font-medium text-muted-foreground",
           props.embedded ? null : "border border-border/60 bg-background/70",
         )}

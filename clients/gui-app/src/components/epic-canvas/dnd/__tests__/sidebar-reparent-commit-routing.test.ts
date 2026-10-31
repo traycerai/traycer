@@ -88,7 +88,7 @@ const seam = vi.hoisted(() => {
      */
     docHomedChatIds: [] as readonly string[],
     /**
-     * T11's write-command queue, absent from this fake since it landed. Three
+     * The write-command queue, absent from this fake since it landed. Three
      * ARTIFACT tests in this file were failing on `enqueueWriteCommand is not a
      * function` before the chat gate existed - a stale fake, not a defect in
      * the code under test.
@@ -533,7 +533,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
   });
 
   it("enqueues an artifact drop as a write command, with no direct doc write", async () => {
-    // RETARGETED, not patched. T11 moved the artifact reparent off the
+    // RETARGETED, not patched. The artifact reparent moved off the
     // dual-write (a local `reparentArtifact` Y write PLUS an
     // `epic.reparentArtifact` RPC) onto the write-command queue, which owns
     // ordering, idempotency and the rejected/superseded lifecycle. The
@@ -573,7 +573,7 @@ describe("commitSidebarReparentDrop routes by which plane owns the pointer", () 
     // Unlike a record-backed agent (silent cancel), an artifact drop is always
     // accepted locally: the queue holds it and sends it when a transport comes
     // back, which is the whole point of an offline-tolerant write path. Before
-    // T11 this branch asserted the doc write survived a missing client; the
+    // this branch asserted the doc write survived a missing client; the
     // command queue is now what survives it.
     seam.tree = treeOf([
       node("spec-1", "spec", null),

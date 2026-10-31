@@ -279,7 +279,7 @@ describe("/epics/$epicId/$tabId route", () => {
 });
 
 /**
- * T3: the `/epics/$epicId/$tabId` loader's History first-page prefetch moved
+ * The `/epics/$epicId/$tabId` loader's History first-page prefetch moved
  * from `auth.status !== "signed-in"` to `!admitsLocalPlane(auth.status)`, on
  * the same reading as the `/epics` loader (`epics-route.test.tsx`) - this
  * warms the History overlay so it opens populated from inside an epic tab,

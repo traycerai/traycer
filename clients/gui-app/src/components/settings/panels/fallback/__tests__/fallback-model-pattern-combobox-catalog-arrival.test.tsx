@@ -61,7 +61,7 @@ function props(
 }
 
 /**
- * R7: the provider's catalog ANSWERS while the picker is
+ * The provider's catalog ANSWERS while the picker is
  * already open on an exact-pick row.
  *
  * Opened cold, the picker cannot tell `gpt-5.6-terra` is a model - there is

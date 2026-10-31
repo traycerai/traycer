@@ -109,7 +109,7 @@ const NO_CATALOG: FallbackCatalogOptions = {
  * `undoGroupsChange`): it reads the LATEST groups AND the latest policy off
  * refs, never off values closed over at the render that raised the toast, and
  * projects through the same `withTierGroups` the editor's own `toPolicy` uses -
- * one wire projection, not a second hand-rolled one. This file's own F18b test
+ * one wire projection, not a second hand-rolled one. The tier-group-only test
  * below is what a stale-`policy` closure would NOT catch (only `tierGroups`
  * differs there), which is why the ref exists even though this suite never
  * edits a field outside `tierGroups` - the cross-field case is pinned at the

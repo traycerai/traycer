@@ -62,7 +62,7 @@ export interface SeedFixtureSpec {
   readonly targetTiles: number;
   /** Split into two pane groups. */
   readonly twoGroups: boolean;
-  /** Fail unless some strip overflows by >= 2x its widest tile (S1.6). */
+  /** Fail unless some strip overflows by >= 2x its widest tile. */
   readonly requireAutoScrollOverflow: boolean;
 }
 
@@ -172,7 +172,7 @@ let seededTabId: string | null = null;
  * `EpicCanvasState` is `{ root, activePaneId, tilesByInstanceId, sizesByGroupId }`
  * - scroll position is NOT in it. It is DOM state on the strip element. So
  * restoring the state object alone leaves a strip scrolled wherever the last
- * gesture left it, and S1.3's fingerprint check cannot see that: the
+ * gesture left it, and the fingerprint check cannot see that: the
  * fingerprint is STRUCTURAL, so it reads identically whether scroll was
  * restored or not. Same reading, two worlds.
  *
@@ -262,7 +262,7 @@ function paneReports(tabId: string): readonly SeededPaneReport[] {
  *
  * Pane ids are freshly generated uuids on every split, so a fingerprint that
  * includes them differs between two builds of the SAME spec with the SAME
- * tiles - which makes S1.1 ("same fingerprint from any starting state")
+ * tiles - which makes "same fingerprint from any starting state"
  * unsatisfiable by construction rather than by defect. Sorting by pane id makes
  * the pane ORDER arbitrary for the same reason.
  *
@@ -326,7 +326,7 @@ export function seedCanvasFixture(
   // Reset to an empty canvas FIRST, so the result depends on the spec and not
   // on what happened to be there. Seeding on top of residue is why an earlier
   // run produced four panes squeezed to 118px each: the tiles were right and
-  // the strip was too narrow to overflow, which is S1.1's whole point - the
+  // the strip was too narrow to overflow, missing the point - the
   // same spec must yield the same fingerprint from any starting state.
   // Safe because `preSeedSnapshot` above is what teardown restores.
   useEpicCanvasStore.setState((state) => ({
@@ -399,8 +399,9 @@ export function seedCanvasFixture(
   // NOTE: overflow is deliberately NOT measured here. `seed()` mutates the
   // store synchronously, so a DOM read on this tick sees the strip as it was
   // BEFORE React re-rendered - stale widths that read exactly like real ones.
-  // The driver calls `measure()` after the render settles; S1.6's gate lives
-  // there, applied to geometry that exists.
+  // The driver calls `measure()` after the render settles; when overflow is
+  // required, it checks that some strip overflows by at least twice its
+  // widest tile, using geometry that exists.
   const overflow: readonly StripOverflowReport[] = [];
 
   return {
@@ -517,7 +518,7 @@ export function restoreSeededScroll(): ScrollRestoreReport {
  * This exists because E7.1 cannot otherwise be a REGRESSION test: Sprint 01
  * certified on 4 tabs at 191px and 5 plain tabs at 185.9px, and the live header
  * is 180.8 / 400.4 / 180.8. Grading the Sprint 01 matrix on that shape would be
- * a new measurement against an old baseline - refused by our own S4.2 rule.
+ * a new measurement against an old baseline.
  */
 export interface HeaderSeedReport {
   readonly ok: boolean;
@@ -727,7 +728,8 @@ export interface SeedMeasurement {
 }
 
 /**
- * Live geometry after the render settles, and S1.6's gate.
+ * Live geometry after the render settles. When overflow is required, fail
+ * unless some strip overflows by at least twice its widest tile.
  *
  * Separate from `seed()` because `seed()` returns on the same tick it mutates
  * the store: any DOM measured there is the PREVIOUS layout, which reads exactly

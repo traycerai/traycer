@@ -23,7 +23,7 @@ export interface BotSendQuestion {
 }
 
 /**
- * What one of the bot's sends posted (Tracy Bots T93), read off the tool
+ * What one of the bot's sends posted, read off the tool
  * call's persisted input: a reply, a question, or an announcement.
  * `conversationId` is where the call named it went - the channel, or the
  * session's thread - and `repliesTo` the channel post a trunk's reply or

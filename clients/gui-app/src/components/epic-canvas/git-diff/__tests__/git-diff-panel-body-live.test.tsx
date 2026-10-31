@@ -181,8 +181,8 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
   useAddressableHostId: () => pinTestState.activeHostId,
 }));
 
-// The surface pin (`useSurfaceHostPin` -> `useEffectiveHostId`, redesign
-// P1.2) resolves and latches against the effective host, not the directory's
+// The surface pin (`useSurfaceHostPin` -> `useEffectiveHostId`)
+// resolves and latches against the effective host, not the directory's
 // active-host hook - drive it off the same fixture state.
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => pinTestState.activeHostId,

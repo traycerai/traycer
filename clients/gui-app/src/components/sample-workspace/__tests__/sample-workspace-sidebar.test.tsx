@@ -31,7 +31,7 @@ import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 import { usePrPanelStore } from "@/stores/epics/pr-panel-store";
 
 /**
- * The surface a session's rail drag happens on (L-115), plus - since F3 -
+ * The surface a session's rail drag happens on (L-115), plus
  * the sidebar's own body, drawn from the same real components the epic
  * sidebar renders. The rail is `arrangement.rail`, entry for entry, inside
  * one toolbar cluster; the body follows the canvas selection like the real

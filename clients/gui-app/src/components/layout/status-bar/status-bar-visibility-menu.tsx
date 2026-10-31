@@ -95,7 +95,7 @@ export function StatusBarVisibilityMenu(
       checked={!hiddenProviders.includes(provider.providerId)}
       onCheckedChange={() => {
         // The whole arrangement is read at write time rather than
-        // subscribed: this menu needs it only to spread it (G1-14).
+        // subscribed: this menu needs it only to spread it.
         setArrangement({
           ...useLayoutStore.getState().arrangement,
           hiddenProviders: hiddenProviders.includes(provider.providerId)

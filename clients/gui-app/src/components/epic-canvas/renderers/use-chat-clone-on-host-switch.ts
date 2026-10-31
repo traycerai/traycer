@@ -21,7 +21,7 @@ import {
 } from "@/hooks/agent/use-host-reachability";
 
 /**
- * Lifted out of `chat-tile.tsx` (P1.2, F5) so the host it targets is
+ * Lifted out of `chat-tile.tsx` so the host it targets is
  * reachable by a test. The defect this module exists to keep fixed is a
  * TIMING one - the clone resolves settings asynchronously before it creates -
  * and it is only observable by driving the hook across that window, which is

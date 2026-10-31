@@ -178,7 +178,7 @@ vi.mock("@/lib/host", () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),
   useHostClient: () => MOCK_HOST_CLIENT,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => MOCK_HOST_CLIENT,
 }));
 
@@ -190,7 +190,7 @@ vi.mock("@/lib/host/runtime", () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),
   useHostClient: () => MOCK_HOST_CLIENT,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => MOCK_HOST_CLIENT,
 }));
 
@@ -234,7 +234,7 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 
 // The Epic session resolves its host through the selection authority's derived
 // pointer, not the active-host projection above - seed the
-// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+// decider at its own name (the convention in epic-shell-usage-entry-point).
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-test",
 }));
@@ -1607,7 +1607,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 11b - the retained record is genuinely unpainted, through the REAL store -> slot -> publish path", async () => {
-    // F3: the presentation guard's only other coverage builds
+    // The presentation guard's only other coverage builds
     // `canvasActivity: { tabSelected: false }` by hand, so a regression in
     // `ActiveTabBody`'s `tabSelected={props.selected}` wiring - the thing that
     // actually produces that field in production - would ship green. This row
@@ -1969,7 +1969,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 16 - internal-tab-bottom-follow: reaching true bottom past an in-flight clamped free-scrolling restore releases persistence", async () => {
-    // Regression for the live-Electron identity-pinned P1: a saved
+    // The live-Electron identity-pinned regression: a saved
     // free-scrolling anchor that is missing from `messages` at mount
     // (branch edit / suffix removal) arms a mount-time clamped restore
     // convergence AND `pendingHydrationRestoreAnchorIdRef`. If the reader

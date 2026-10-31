@@ -212,7 +212,7 @@ const CITY_FOOT_RING_ROWS = 3;
  * `Bus stop` and `Warehouse` are bands for a weaker reason than the hospital's -
  * nothing is promised about either position - and one strong one, the plates.
  *
- * `Warehouse` IS A BAND TOO, and it started out packed. C5 makes it a door with
+ * `Warehouse` IS A BAND TOO, and it started out packed. It is a door with
  * a counter, nothing drives to it, and nothing about its position is promised -
  * so the shelf looked like the right place for it, and the plan said so. What
  * the shelf cannot promise is the ROW its plate hangs on. Measured at a thousand
@@ -230,11 +230,11 @@ const CITY_FOOT_RING_ROWS = 3;
  *
  * IT IS AT THE STREET BUT CARRIES NO KERB. `kerbTile` is where a vehicle stops
  * FOR THAT ROOM - the ambulance at the ward, the van at the counter - and no view
- * gives its waiting room one (C6): nobody is collected from a waiting room. The
+ * gives its waiting room one: nobody is collected from a waiting room. The
  * band standing beside the lane is the plan's "road side", not a promise that
  * something pulls up.
  *
- * `Police station` is the district's RECEPTION, re-signed (C7). Not a second
+ * `Police station` is the district's RECEPTION, re-signed. Not a second
  * counter beside it - the help desk is the counter that was already there.
  */
 const HOSPITAL_ROWS = 2;
@@ -681,7 +681,7 @@ function placeDistrict(args: PlaceDistrictArgs): PlacedDistrict {
     // preference. The district's entrance hangs on the courtyard's lobby tile,
     // `districtLane` promises that entrance stands ON the lane, and the kerb
     // contract asks for a road tile ONE STEP from the help desk's own door -
-    // which IS that lobby tile, because C7 makes the police station the
+    // which IS that lobby tile, because the police station is the
     // reception that was already there.
     //
     // Measured before this line existed: the tallest-first order below put the
@@ -1127,7 +1127,7 @@ interface CityCivic {
  *
  * `Hospital` is a ward with a cross over every bed, `Bus stop` a shelter with its
  * seats on the pavement, `Warehouse` the archive's door, and `Police station` the
- * reception that was already there - C7, which makes the help desk the counter
+ * reception that was already there - the help desk is that counter
  * rather than a second one beside it. The first three are bands at the district's
  * foot, in that order; the fourth is up in the park. See the geometry block above
  * for why each is where it is.
@@ -1232,7 +1232,7 @@ function buildCityCivic(args: CityCivicArgs): CityCivic {
   };
   props.push({ sprite: { name: "warehouse-door-iso" }, tile: recordsDoor });
 
-  // ---- Police station: the reception, re-read as a civic room (C7) ------ //
+  // ---- Police station: the reception, re-read as a civic room ------ //
   const deskId = civicRoomIdOf(hostId, "help-desk");
   const counter = args.courtyard.receptionTile;
   // ONE STEP OFF THE ENTRANCE, the way Campus's is: the district's entrance
@@ -1288,7 +1288,7 @@ function buildCityCivic(args: CityCivicArgs): CityCivic {
       // OPEN: a shelter and a row of chairs on a pavement. Nothing here is a
       // building, and the tiles the seats stand on are walkable street.
       enclosure: "open",
-      // Nobody is collected from a bus stop (C6).
+      // Nobody is collected from a bus stop.
       kerbTile: null,
     },
     {
@@ -1321,7 +1321,7 @@ function buildCityCivic(args: CityCivicArgs): CityCivic {
       hostScope: "host",
       // WALLED: a shed is a building, and its bounds carry its own back wall.
       enclosure: "walled",
-      // Nothing drives to the archive (C6).
+      // Nothing drives to the archive.
       kerbTile: null,
     },
   ];

@@ -365,7 +365,7 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => ({ getActiveHostId: () => "host-1" }),
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => ({ getActiveHostId: () => "host-1" }),
 }));
 
@@ -571,7 +571,7 @@ vi.mock("@/stores/epics/epic-sidebar-expansion-store", () => ({
 }));
 
 // The rail's shape and its per-panel Hide/Show live beside the bijection
-// now, not on the panel store (G1-09), so the sidebar's two reads are
+// now, not on the panel store, so the sidebar's two reads are
 // stubbed where they are actually imported from.
 vi.mock("@/lib/layout/rail-view", () => ({
   useLayoutRail: () => [{ kind: "panel", id: "railArtifacts" }],

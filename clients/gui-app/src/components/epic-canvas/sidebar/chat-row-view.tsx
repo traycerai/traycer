@@ -8,7 +8,7 @@ import type { ReactNode } from "react";
  * status glyph, session and role badges, resource chip, idle time) as slots and
  * keeps every data and dnd concern, and the sample workspace's sidebar draws
  * the same row from sample data, so the two pictures of an agent row cannot
- * drift (F3).
+ * drift.
  */
 export function ChatRowView(props: {
   readonly chevron: ReactNode;

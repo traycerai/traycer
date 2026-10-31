@@ -170,7 +170,7 @@ vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
 }));
 
 /**
- * The composer's resolved placement (redesign P1.2). These tests exercise the
+ * The composer's resolved placement. These tests exercise the
  * READY arm - `resolveLandingPlacement`'s own refusals have their own unit
  * suite - so the target names the same host the mocked client addresses.
  */
@@ -2186,7 +2186,7 @@ describe("useLandingComposerActions", () => {
         landingMocks.request.mock.calls.some((c) => c[0] === "epic.create"),
       ).toBe(true);
     });
-    // T6 does not materialize a tab before the one-shot create succeeds, so a
+    // The create flow does not materialize a tab before the one-shot create succeeds, so a
     // rejected request leaves no optimistic result to clean up.
     expect(useEpicCanvasStore.getState().openTabOrder).toEqual([]);
     expect(
@@ -4553,8 +4553,7 @@ function jsonContentForPrompt(prompt: string): JsonContent {
 }
 
 // A hash-only image draft (an `imageAttachment` node carrying a `hash`, never
-// `b64content`) plus a line of text — the shape the live landing editor produces
-// after T4.
+// `b64content`) plus a line of text — the shape the live landing editor produces.
 function editorHandleForHashImage(
   hash: string,
   prompt: string,

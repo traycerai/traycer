@@ -94,7 +94,7 @@ function watchConversationMessages(
 }
 
 /**
- * A bot's session, readable whole (Tracy Bots T93, decision 129): its trunk
+ * A bot's session, readable whole (Tracy Bots, decision 129): its trunk
  * or a thread's session as the agent chat renders it - every turn with its
  * activity, model and cost, and everything between turns (check-ins and
  * their results, model fallbacks and routing, background work, messages to

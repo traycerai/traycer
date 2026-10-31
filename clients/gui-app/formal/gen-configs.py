@@ -91,7 +91,7 @@ CONFIGS = {
                  dict(Jumps=1, Wheels=1, Grows=1)),
     "teleport_pill": ("The same with the pill after the wheel: an end request releases the hold.",
                       dict(Jumps=1, Wheels=1, Pills=1, Grows=1)),
-    # chat-scroll-matrix-stream F2: a new turn's row is laid out at the
+    # chat-scroll-matrix-stream: a new turn's row is laid out at the
     # jumped estimate, and the reader wheels up within the last screenful.
     "stream_f2": ("A new turn after the average jumped, a wheel up, the reply's tokens, its end.",
                   dict(R=4, Jumps=1, Appends=1, Wheels=1, Grows=1, TurnEnds=1)),

@@ -7,8 +7,8 @@ import {
 import { useHostDirectory } from "@/lib/host";
 
 /**
- * Re-exported from the connection registry, which OWNS this predicate now
- * (redesign P4.1): it is the rule the registry uses to decide whether a
+ * Re-exported from the connection registry, which OWNS this predicate now:
+ * it is the rule the registry uses to decide whether a
  * host's row actually moved, and a second copy here would let the hook and
  * the registry disagree about what "changed" means for the same row. Kept as
  * a named export from this module because `useReactiveLocalHostEntry` imports

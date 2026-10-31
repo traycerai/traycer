@@ -21,7 +21,7 @@ export const VIEWER_CONTROL_PLANE_DEADLINES = {
    * that this press triggered; the host also awaits its input dispatcher's
    * activation inside that window, so a second round trip of headroom plus
    * jitter is what keeps the click. Below it, the click is silently discarded
-   * and the user has to click twice (F3).
+   * and the user has to click twice.
    */
   armBuffer: { floorMs: 1_000, roundTrips: 2.5 },
   /**

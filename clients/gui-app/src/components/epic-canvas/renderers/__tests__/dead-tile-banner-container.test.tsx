@@ -251,7 +251,7 @@ function seedChatOwnedBy(ownerUserId: string): (doc: Y.Doc) => void {
 }
 
 // One epic id (and harness) PER TEST: the session registry retains the most
-// recent session per epic id across acquires (the R-1 rotation), so a second
+// recent session per epic id across acquires, so a second
 // test reusing the id can be handed the previous test's session - whose
 // snapshot generation has moved on - and its installed role never lands.
 // Distinct ids make every test's session its own.

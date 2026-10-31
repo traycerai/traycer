@@ -269,7 +269,7 @@ vi.mock("@/lib/host", () => ({
   // The staged sandbox runner's binding; the run itself is stubbed below.
   useHostBinding: () => ({ auth: {}, directory: {} }),
   useHostClient: () => mocks.defaultClient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => mocks.defaultClient,
   useHostDirectory: () => ({
     findById: (hostId: string) => ({ hostId, websocketUrl: "ws://test" }),

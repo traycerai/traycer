@@ -45,8 +45,8 @@ export interface ComposerPlacement {
 }
 
 /**
- * One resolution of "where would this composer place new work" (redesign
- * P1.2), so the chip, the RPCs the composer makes, its creates, and its
+ * One resolution of "where would this composer place new work",
+ * so the chip, the RPCs the composer makes, its creates, and its
  * submit-time refusal can never be derived independently and disagree.
  *
  * `overrideHostId` is a caller-supplied host that outranks the pin: the
@@ -99,8 +99,8 @@ export interface EpicConversationPlacementInput {
 }
 
 /**
- * The in-Epic new-conversation modal's placement (redesign follow-up to
- * P1.2, user ruling 2026-08-18): the SAME chip and pin pattern as the
+ * The in-Epic new-conversation modal's placement (redesign follow-up,
+ * user ruling 2026-08-18): the SAME chip and pin pattern as the
  * landing composer, resolved per EPIC with a memory tier -
  *
  *     override ?? pin(epic) ?? Epic session's host ?? effective

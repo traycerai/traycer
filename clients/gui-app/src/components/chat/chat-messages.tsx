@@ -3330,7 +3330,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     useCallback(
       (atBottom: boolean): void => {
         if (atBottom) {
-          // P4: same zero-human-row fallback as `viewportActiveUserMessageId`
+          // Same zero-human-row fallback as `viewportActiveUserMessageId`
           // (see its own doc comment) - an A2A-only transcript has no
           // candidate for the human-only gate, so at the tail the natural
           // role-agnostic anchor is simply the last row, any role.
@@ -4063,7 +4063,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           // eventual unmount save would silently no-op forever
           // (`captureLiveChatTabScrollSnapshot`'s own gate check), leaving
           // a stale free-scrolling cache entry across the next same-pane
-          // remount. But hydration-transaction P1 (chat-messages.test.tsx
+          // remount. But hydration-transaction (chat-messages.test.tsx
           // "close-before-hydration"/"bare pointerdown... before
           // hydration") needs the OPPOSITE outcome for a tail-only partial
           // snapshot, whose clamped restore target IS the current tail -
@@ -4910,7 +4910,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     <ChatOpenStoreScopeProvider value={instanceId}>
       <ActivityGroupOpenStoreProvider store={activityGroupOpenStore}>
         {/* One menu for the whole transcript, naming the region under the
-            pointer (G3-10): timestamps, activity rows and reasoning blocks
+            pointer: timestamps, activity rows and reasoning blocks
             repeat on every message, and a root per item was a Radix menu per
             row of a long chat. The minimap is inside it too (L-144). */}
         <OpenSubagentAsChatContext.Provider value={subagentDrillIn.open}>

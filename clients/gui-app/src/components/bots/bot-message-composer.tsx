@@ -347,8 +347,8 @@ export function BotMessageComposer(props: {
 }
 
 /**
- * The message box of a channel that cannot take a message yet (Tracy Bots
- * T67, a team's main bot before the team has a host): drawn as the box is,
+ * The message box of a channel that cannot take a message yet (
+ * a team's main bot before the team has a host): drawn as the box is,
  * with nothing to type into and nothing to send, and `reason` under it. No
  * message is kept for later.
  */

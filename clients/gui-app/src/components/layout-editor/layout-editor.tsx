@@ -136,7 +136,7 @@ export function LayoutEditor(props: LayoutEditorProps): ReactNode {
   // Escape's one owner while a session is live, for the same reason as the
   // chord above: the ladder is a fact about the SESSION, not about what has
   // focus. Cancel a drag, close the open rows, step back to All settings, then
-  // stop: Escape never closes the editor (audit F5, narrowing L-31). Done and
+  // stop: Escape never closes the editor (narrowing L-31). Done and
   // Cmd+W do. The filter's clear and the sortable list's grab-cancel stop the
   // native event below this node, and a layer that took focus answers for
   // itself (see `ownsItsOwnEscape`).

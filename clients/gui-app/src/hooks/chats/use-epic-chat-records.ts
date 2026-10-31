@@ -185,7 +185,7 @@ export function useEpicSyncChatRecords(epicId: string): void {
   //
   // Without it a cached answer outlives the store it was read for and is
   // served to the NEXT one, which is not a hypothetical: renderer parking
-  // (plan C, C1) unmounts this hook, releases the session, and remounts it
+  // unmounts this hook, releases the session, and remounts it
   // against a fresh store the moment the tab is shown again. Inside
   // `staleTime` that remount is served entirely from cache - no request, and
   // a chat deleted at the host while the epic was parked reappears as though

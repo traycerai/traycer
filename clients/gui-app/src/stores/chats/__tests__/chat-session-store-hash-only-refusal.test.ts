@@ -1,5 +1,5 @@
 /**
- * T5's refusal path: a `MISSING_ATTACHMENT_BYTES` rejection of a send whose
+ * The refusal path: a `MISSING_ATTACHMENT_BYTES` rejection of a send whose
  * `restore.content` carries a hash-only image node forks in
  * `onActionAck` (`chat-session-store.ts`). Covers the silent `not-on-host`
  * retry, the loud `unsupported-format` mark, `too-large`, and the retry's
@@ -92,7 +92,7 @@ vi.mock("@/lib/drafts/draft-mirror-coordinator", () => ({
   draftMirrorClientForHost: () => null,
 }));
 
-// R4F1/R4F2: the durable-handoff tests assert on exactly what a disposing
+// The durable-handoff tests assert on exactly what a disposing
 // store hands to the prompt stash. Going through the REAL repository would
 // hit the same permanently-poisoned `dbPromise` the comment above describes
 // (its module-load-time `hydrate()` opens the DB before this file's
@@ -490,7 +490,7 @@ function sendHashOnlyMessage(
 
 /** Sends `wireContent` while freezing `restoreContent` as the hand-back
  * document, mirroring how `use-chat-composer-submit.ts` can send content the
- * restore document never carried (T5's F3). */
+ * restore document never carried (F3). */
 function sendMessageWithContent(
   harness: Harness,
   wireContent: JsonContent,
@@ -1882,7 +1882,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
     );
   });
 
-  // ─── T5 follow-ups (RR1-RR7) ─────────────────────────────────────────────
+  // ─── Follow-ups (RR1-RR7) ─────────────────────────────────────────────
 
   it("RR1 (DRIVE RED): a chat with a pending hash-only recovery is not evicted by warm-pool overflow, and a reacquire finds it intact", async () => {
     // The guard is `hasActiveWork`, NOT `isEvictable`. That correction is

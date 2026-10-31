@@ -117,7 +117,7 @@ export function LayoutSettingsPanel(): ReactNode {
     >
       {/* Every row below reads its density and its "where does a deeper level
         open" from here, once, rather than from a prop threaded through each
-        list (P-4, L-89). */}
+        list (L-89). */}
       <LayoutUsageProvider>
         <LayoutFormHostContext value="page">
           <TabsPrimitive.Root

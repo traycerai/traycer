@@ -90,7 +90,7 @@ import { TextSegment } from "./segments/text-segment";
  * In the channel, "Reply in thread" is among the row's hover actions, as
  * Slack offers it on every message, and a thread roots on the row it is
  * opened from (decision 114): a member's post, a question or proposal, a
- * direct reply and any other row of the bot (T68) each open their own
+ * direct reply and any other row of the bot each open their own
  * thread, the reply's apart from the post's, and each carries its own
  * thread line. Where the bot's host does not say it takes replies under
  * such a row (`threadAnchorKinds`), a direct reply opens the thread under
@@ -215,8 +215,8 @@ function MemberRow(props: {
 }
 
 /**
- * A post the app draws in the bot's voice where the bot has written none (Tracy
- * Bots T67, a team's channel before the team has a host): the bot's picture
+ * A post the app draws in the bot's voice where the bot has written none (
+ * in a team's channel before the team has a host): the bot's picture
  * and name, with no time and no actions, over `children`. It is not a message
  * of the channel: no member wrote it and nothing stores it.
  */
@@ -581,7 +581,7 @@ function memberReplyInThread(
  * The thread a bot's row opens from its hover actions, and the line of it
  * the row carries: every row of the bot roots its own thread - a question,
  * a proposal and a row that asks without waiting on any host, a direct
- * reply and any other row (T68) where the bot's host names that row among
+ * reply and any other row where the bot's host names that row among
  * its thread anchors. A direct reply whose host does not opens the thread
  * under the post it answers, with no line here; any other row then takes
  * none.

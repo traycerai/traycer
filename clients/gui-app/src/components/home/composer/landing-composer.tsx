@@ -197,7 +197,7 @@ export function LandingComposer(props: LandingComposerProps) {
   const editorRef = useRef<ComposerPromptEditorHandle | null>(null);
   const createdUnboundDraftIdRef = useRef<string | null>(null);
   const [pickerStore] = useState(() => createComposerPickerStore());
-  // The composer's PLACEMENT (redesign P1.2): its own
+  // The composer's PLACEMENT: its own
   // window-keyed surface pin, or the effective host while it follows. Not the
   // app-wide selection - the picker no longer moves that - so every RPC this
   // surface makes, and every create it performs, resolves through here.
@@ -390,7 +390,7 @@ export function LandingComposer(props: LandingComposerProps) {
   // profile must be corrected to ambient here rather than silently submitted as the
   // new chat's initial settings. The catalog reads through the same
   // `hostClient` - the composer's pinned/followed host, NOT the app-wide
-  // default (P1.2 retired the picker's rebind of that default).
+  // default (the picker's rebind of that default was retired).
   const ultracodeCarried = useUltracodeCarrierSupported(
     activeHostId,
     "epic.create",
@@ -467,7 +467,7 @@ export function LandingComposer(props: LandingComposerProps) {
   // Keeps the banner's `providers.list` read converging with a turn's
   // passive rate-limit capture from ANY running epic on this host -
   // mirrors `useRefreshProvidersListOnTurn` in `chat-composer.tsx`, scoped to
-  // the composer's resolved host. (It used the app-wide default before P1.2;
+  // the composer's resolved host. (It used the app-wide default before the redesign;
   // a pinned composer would then invalidate a cache entry keyed to a host it
   // never reads, and never the one whose banner it feeds.)
   useRefreshProvidersListOnTurn(harnessId, resolvedHostId);
@@ -1221,7 +1221,7 @@ export function LandingComposer(props: LandingComposerProps) {
         ingestPastedComposerImages={ingestPastedComposerImages}
         onEditorReady={reingestPendingImages}
         // No tab yet, but a placement all the same: the composer creates on its
-        // window-keyed surface pin's resolved host (P1.2). `null` reaches here
+        // window-keyed surface pin's resolved host. `null` reaches here
         // only in the ∅ case - nothing usable to create on - which submit
         // re-validation refuses before any create runs.
         hostId={resolvedHostId}

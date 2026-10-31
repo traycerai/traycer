@@ -120,7 +120,7 @@ export function taskRequestPost(
  * own row's "Reply in thread" does: a member's post opens its own thread,
  * and a direct post the box whose first reply starts one; a question or a
  * proposal opens its thread through that box too, and every other row of
- * the bot as well (T68), marked with the thread anchor its thread takes a
+ * the bot as well, marked with the thread anchor its thread takes a
  * send under only while the bot's binding names it: `"answer"` for a
  * direct reply, `"message"` for the rest.
  */

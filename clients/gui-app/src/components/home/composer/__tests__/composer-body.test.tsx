@@ -61,7 +61,7 @@ vi.mock("@/components/home/composer/composer-workspace-mode-row", () => ({
 }));
 
 const bodyMocks = vi.hoisted(() => ({
-  // S11 coverage (see "forwards a non-null hostId..." below): `ComposerBody`
+  // Coverage (see "forwards a non-null hostId..." below): `ComposerBody`
   // forwards its `hostId` prop to the terminal panel's `hostId` and the
   // toolbar's `createProfileHostId`/`runTargetHostId` - both children are
   // mocked wholesale here, so a test can only see that forwarding by
@@ -382,7 +382,7 @@ describe("ComposerBody overlay utility visibility", () => {
   });
 });
 
-// S11 coverage: `ComposerBody` forwards its single `hostId` prop to the
+// Coverage: `ComposerBody` forwards its single `hostId` prop to the
 // terminal panel and the toolbar - a regression back to reading the app-wide
 // default anywhere along that path would leave one (or both) of these
 // children pinned to `null` regardless of what the composer is bound to.

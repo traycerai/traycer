@@ -4,7 +4,7 @@
  * Everything here styles the app's OWN elements through data attributes that
  * `use-layout-region.ts` writes onto them, plus the two overlay elements the
  * canvas controllers create. There is no scrim, no proxy layer and no
- * duplicate of the app: what the user points at is the real thing (P3, P4).
+ * duplicate of the app: what the user points at is the real thing.
  *
  * The motion values are frozen and only `transform`,
  * `opacity` and `filter` animate (L-29). Both reduced-motion gates are
@@ -86,7 +86,7 @@
 
    `right` and `left` are flex children of the shell row, so the app column
    reflows beside them in a single frame - deliberately with no width
-   transition, because an app whose text reflows over 220ms is the thing P2
+   transition, because text reflowing over 220ms is what this requirement
    forbids. What animates is the panel arriving over its own slot.
 
    380px is the plan's one frozen inspector width: this is an instrument
@@ -139,7 +139,7 @@
 }
 
 /* The one mode allowed to overlap the canvas, because the user chose it and
-   can move it again (scoped exception to P3). Positioned by `transform` so a
+   can move it again (scoped exception to the no-overlap rule). Positioned by `transform` so a
    drag and a snap animate the only property L-29 allows. */
 [data-layout-inspector][data-dock-mode="float"] {
   position: fixed;
@@ -265,7 +265,7 @@
    same picture (L-66). Naming a group permanently would enrol the app column in
    every later transition, including the ones L-30 guards off.
 
-   The reduced-motion gate is here as well as in JS (C-14): a preference that
+   The reduced-motion gate is here as well as in JS: a preference that
    turns on between the guard and the capture still has no groups to animate,
    and the transition degrades to the plain cross-fade the browser does for
    the page as a whole.
@@ -296,9 +296,9 @@
 
 /* The prototype fills the group with `height: 100%` alone, which squashes a
    full-width bitmap into a 380px-narrower box and visibly compresses the app's
-   own text - the one thing P2 forbids. `cover` with equal heights scales by
+   own text - which the motion rule forbids. `cover` with equal heights scales by
    1 and crops instead, so every glyph keeps its size and the right edge slides
-   under the arriving inspector (C-14). */
+   under the arriving inspector. */
 ::view-transition-old(layout-shell),
 ::view-transition-new(layout-shell) {
   height: 100%;
@@ -339,7 +339,7 @@
    gave every marked leaf a permanent 200ms opacity/filter transition for the
    whole life of the app - which outside a session was the only runtime effect
    this whole marker set had, and it changed how the send and stop buttons
-   fade in ordinary use (G1-19). */
+   fade in ordinary use. */
 /* `data-layout-lit` is the guide's lit MOMENT (L-50): the same dim with no
    session behind it, so the last step of the "Appearance and layout" guide can
    show what customizing looks like without entering. It joins the dim rules and
@@ -475,8 +475,8 @@
   cursor: grab;
 }
 
-/* A row in hand, written HERE and nowhere else. The rows are flat now (L-114,
-   the redesign's T1): their only edge is the hairline to the next row, so the
+/* A row in hand, written HERE and nowhere else. The rows are flat now (L-114):
+   their only edge is the hairline to the next row, so the
    old `border-color: var(--ring)` tinted that one hairline blue and said
    nothing, while out-ranking the lift the row's own classes were asking for.
    One rule, and the same `--layout-editor-lift-shadow` a region in hand takes
@@ -492,8 +492,8 @@
 /* A focused row, written HERE for the same reason the lift above is: this file
    owns the row's states, and the alternative was one arbitrary variant chained
    five times on a single `className` - `has-[[data-row-grab]:focus-visible]:` in
-   front of every declaration, a shape that appears nowhere else in this app
-   (R3-18). The indicator belongs to the ROW rather than to the grab inside it,
+   front of every declaration, a shape that appears nowhere else in this app.
+   The indicator belongs to the ROW rather than to the grab inside it,
    because the row is what the keyboard operates.
 
    INSET, because the settings card clips its content
@@ -862,7 +862,7 @@
    column (`app-shell.tsx` writes `data-layout-column`, `layout-canvas.ts`
    writes `data-layout-editing`). The column holds the header, the WHOLE tab
    strip and the screen, and it is deliberately NOT an ancestor of the
-   inspector (C-06) - so framing it draws one box around the app the editor
+   inspector - so framing it draws one box around the app the editor
    is decorating and leaves the instrument panel outside it. The box is around
    every open tab, not around the sample one: which tab is being customized is
    said by that tab's own treatment (filled while it is active, a cap along its
@@ -881,7 +881,7 @@
    Inside the column's box, because an outset frame on a `h-safe-dvh` column is
    clipped by the window edge on three sides and reads as a stray hairline -
    the same trap the full-bleed rows above document. `pointer-events: none`,
-   because the canvas under it is what the user points at (P3, L-131).
+   because the canvas under it is what the user points at (L-131).
 
    INSET AND ROUNDED (L-137), which is the whole of the third live pass's other
    finding. At `inset: 0` with square corners the frame ran into the window's

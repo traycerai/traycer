@@ -1,5 +1,5 @@
 /**
- * Where a bot channel says an error (Tracy Bots T61): in the channel or the
+ * Where a bot channel says an error: in the channel or the
  * thread, never on the tab. The REAL `BotChannelView`, its thread panel, the
  * message box and its send-failure notice run over real stores; only the
  * host hooks are scripted. `bot.conversation.send` is a mutation each case

@@ -27,7 +27,7 @@ import { useProvidersWorkspaceSelectionStore } from "@/stores/settings/providers
 import { useWorkspaceFoldersStore } from "@/stores/workspace/workspace-folders-store";
 
 /**
- * F5: Skills tab reuses `useProviderNativeScope` + `McpScopePicker` with
+ * Skills tab reuses `useProviderNativeScope` + `McpScopePicker` with
  * locationLabel "Skills location". Global/project is WHERE skill files live;
  * composer's "Available to" / providerScoped is a different axis and must not
  * be conflated here.

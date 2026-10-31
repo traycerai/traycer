@@ -565,7 +565,7 @@ export type MessageSegment =
       id: string;
       kind: "setup-card";
       /**
-       * Consolidated worktree-setup view-model (T2 deriver output). The segment
+       * Consolidated worktree-setup view-model (deriver output). The segment
        * is synthesized in `rendered-messages` for a `role: "system"` row and is
        * never persisted, so it carries the tab-scoped `viewTabId` the card needs
        * for its focus-terminal path rather than threading a per-row prop.

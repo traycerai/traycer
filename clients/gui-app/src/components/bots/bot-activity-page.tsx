@@ -66,7 +66,7 @@ const noop = (): void => undefined;
 const noStop = (): string | null => null;
 
 /**
- * A bot's Activity page (Tracy Bots T86, decision 115): one page for the
+ * A bot's Activity page (Tracy Bots, decision 115): one page for the
  * bot, across its trunk and every thread, live and of this week. A row is
  * here when the bot started the thing or owns it (`bot-activity-model.ts`),
  * in four sections: what runs now, a stopped answer first; its tasks and

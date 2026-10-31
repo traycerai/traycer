@@ -65,11 +65,11 @@ import { useBotMemory } from "@/hooks/bots/use-bot-memory";
 const BOT_TITLE_MAX = 500;
 
 /**
- * A bot channel's settings (Tracy Bots, T63), behind the channel header's ⋮,
+ * A bot channel's settings, behind the channel header's ⋮,
  * in a side panel beside the channel (over it on a narrow pane), which Escape
  * closes. Grouped as Slack's channel details are:
  * - Details: the bot's name, who manages it and who may message it, how a
- *   personal bot answers posts (T52), and a team's members;
+ *   personal bot answers posts, and a team's members;
  * - Model: the harness, model, effort and profile the bot runs on;
  * - Notifications: what the bell raises for this channel;
  * - Bots in this channel: the team's bots;
@@ -659,7 +659,7 @@ const REPLY_MODE_OPTIONS: ReadonlyArray<{
 ];
 
 /**
- * How the bot answers a post (T52): drawn for a personal environment's bot
+ * How the bot answers a post: drawn for a personal environment's bot
  * only, where the tab's host can write it. A pick applies to the next post.
  */
 function BotReplyModeSection(props: { readonly bot: BotRecord }): ReactNode {

@@ -13,7 +13,7 @@ import {
  * replacement at MODULE LOAD TIME (before any test body runs, so it is in
  * place before the coordinator's lazily-constructed singleton observer is
  * ever created) lets this suite prove a ResizeObserver callback never fires
- * for a sidebar-side flip - the real-world condition Staging F2 pins.
+ * for a sidebar-side flip - the condition this suite pins.
  * Mirrors `tile-canvas-remeasures-hosted-geometry.test.tsx`.
  */
 class ControllableResizeObserver implements ResizeObserver {
@@ -86,7 +86,7 @@ function stubRect(
  * other side moves the content sheet - and every hosted chat body painted
  * inside it - without resizing it. A `ResizeObserver` reports SIZE changes
  * only, so nothing about a side flip reaches the coordinator on its own
- * (Staging F2: the chat body stayed drawn over the flipped panel). This
+ * (the chat body stayed drawn over the flipped panel). This
  * suite never mounts `StableTileSurfaceHost`: it registers the geometry
  * host/slot directly (the same seam `StableTileSurfaceHost` uses in
  * production) and asserts the registered listener is re-invoked with the

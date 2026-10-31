@@ -30,7 +30,7 @@ export interface ArtifactRowViewProps {
  * Presentational on purpose: the artifact tree wraps it in its draggable
  * button (or its selection label) and keeps every data and dnd concern, and
  * the sample workspace's sidebar draws the same row from sample data, so the
- * two pictures of an artifact row cannot drift (F3).
+ * two pictures of an artifact row cannot drift.
  */
 export function ArtifactRowView(props: ArtifactRowViewProps): ReactNode {
   return (

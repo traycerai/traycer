@@ -269,7 +269,7 @@ function useResubscribeOnNextSend(input: {
  * A channel or thread draws, under each reply of the bot and under a post it
  * failed to answer, the receipt of the turn behind it (Tracy Bots T86), as
  * the bound host names the turns (`bot.turn.locate`); the receipt opens the
- * turn's session, read-only and landed on the turn (T93), through the
+ * turn's session, read-only and landed on the turn, through the
  * surface. A post its session failed on, where that session
  * names the post's turn as its last failed attempt, says so with the agent
  * chat's reason and actions.
