@@ -445,6 +445,7 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
               onOpenTurn={vi.fn()}
               onOpenSession={vi.fn()}
               landOn={panelLanding}
+              quote={null}
             />
           </ChatExpansionTestProviders>
         </TooltipProvider>

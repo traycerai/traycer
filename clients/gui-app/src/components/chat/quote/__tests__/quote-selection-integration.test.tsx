@@ -6,7 +6,15 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 
 import { QuoteSelectionPopover } from "../quote-selection-popover";
-import { useQuoteSelection } from "../use-quote-selection";
+import { quoteSnapshotIntoDraft } from "../quote-snapshot-into-draft";
+import {
+  useQuoteSelection,
+  type QuoteSelectionSnapshot,
+} from "../use-quote-selection";
+
+function quoteIntoTaskDraft(snapshot: QuoteSelectionSnapshot): void {
+  quoteSnapshotIntoDraft("task-1", snapshot);
+}
 
 // These tests isolate the stale-snapshot behaviour, not viewport clipping, so
 // they use no transcript boundary (first-line anchoring, never clipped).
@@ -57,7 +65,7 @@ function QuoteHarness(props: { readonly enabled: boolean }) {
       </div>
       {snapshot !== null ? (
         <QuoteSelectionPopover
-          taskId="task-1"
+          onQuote={quoteIntoTaskDraft}
           snapshot={snapshot}
           onDismiss={dismiss}
           onQuoted={() => undefined}

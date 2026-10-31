@@ -1,5 +1,5 @@
 import { QuoteSelectionPopover } from "@/components/chat/quote/quote-selection-popover";
-import { quoteSnapshotIntoDraft } from "@/components/chat/quote/quote-snapshot-into-draft";
+import { QuoteSinkContext } from "@/components/chat/quote/quote-sink-context";
 import { useNativeQuoteRequest } from "@/components/chat/quote/use-native-quote-request";
 import { useQuoteSelection } from "@/components/chat/quote/use-quote-selection";
 import { useChatFindController } from "@/components/chat/use-chat-find-controller";
@@ -3244,10 +3244,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
 
   // Quote-to-composer: track selections inside the transcript wrapper below and
   // surface the floating quote button. The hook attaches no listeners while the
-  // setting is off, so a disabled affordance costs nothing.
+  // setting is off, so a disabled affordance costs nothing. Where a quote goes
+  // is the surface's (`QuoteSinkContext`): this chat's draft unless a bot's
+  // view says otherwise, and nowhere - no quote offered - in a view without a
+  // box.
   const quoteReplyEnabled = useSettingsStore(
     (state) => state.quoteReplyEnabled,
   );
+  const quoteSink = use(QuoteSinkContext);
   const minimapSide = useArrangementValue("minimapSide");
   const isMobileViewport = useIsMobileViewport();
   // This tile's `minimap` region, registered here because this is the
@@ -3268,7 +3272,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const minimapShown = useRegionShown("minimap") || minimapGhost;
   // A bot channel draws no rail (`shouldMountChatTurnMinimap`); the region
   // stays registered so the layout editor still lists it for agent chats.
-  const quoteEnabled = quoteReplyEnabled && visible && !systemOverlayActive;
+  const quoteEnabled =
+    quoteReplyEnabled && visible && !systemOverlayActive && quoteSink !== null;
   const quoteSelection = useQuoteSelection({
     containerRef: transcriptContainerRef,
     enabled: quoteEnabled,
@@ -3280,7 +3285,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     containerRef: transcriptContainerRef,
     enabled: quoteEnabled,
     onQuote: (snapshot) => {
-      quoteSnapshotIntoDraft(taskId, snapshot);
+      if (quoteSink === null) return;
+      quoteSink(taskId, snapshot);
       subagentDrillIn.close();
       quoteSelection.dismiss();
     },
@@ -4995,12 +5001,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
                   />
                 ) : null}
               </div>
-              {quoteSelection.snapshot !== null ? (
+              {quoteSink !== null && quoteSelection.snapshot !== null ? (
                 <QuoteSelectionPopover
-                  taskId={taskId}
                   snapshot={quoteSelection.snapshot}
+                  onQuote={(snapshot) => quoteSink(taskId, snapshot)}
                   onDismiss={quoteSelection.dismiss}
-                  // A quote goes into THIS chat's draft, and under an
+                  // A task chat's quote goes into its draft, and under an
                   // open-as-chat view the composer holding it is hidden. So a
                   // quote taken there returns to the chat, as a terminal quote
                   // reveals the chat it was added to.
