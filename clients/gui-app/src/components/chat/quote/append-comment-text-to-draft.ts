@@ -67,7 +67,8 @@ export function appendCommentTextToDraft(
   if (paragraphs.length === 0) return;
   const draft = readComposerDraftSnapshot(chatId);
   const existing = (draft.content.content ?? []).filter(
-    (block) => !(block.type === "paragraph" && (block.content ?? []).length === 0),
+    (block) =>
+      !(block.type === "paragraph" && (block.content ?? []).length === 0),
   );
   const separator: ReadonlyArray<JsonContent> =
     existing.length === 0 ? [] : [{ type: "paragraph" }];
