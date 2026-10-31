@@ -17,6 +17,7 @@ import type { StreamMethodSupport } from "@traycer-clients/shared/host-transport
 import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
 import type { VoiceEngineEvents } from "@/lib/voice/engine";
 import type { ReplyRow } from "@/lib/voice/focused-replies";
+import { runVoiceQueueVerb } from "@/lib/voice/queue-verbs";
 import { MOVED_ASK_TEXT } from "@/lib/voice/say-loop";
 import { voiceMutationKeys } from "@/lib/query-keys";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
@@ -1664,5 +1665,90 @@ describe("a replacement asked for before its session started", () => {
     expect(state.endReason).toBe("connection");
     expect(fake.engines).toHaveLength(3);
     expect(fake.endVoiceSession).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("a reply elsewhere", () => {
+  const ANSWER = {
+    messageId: "r-2",
+    botId: "bot-2",
+    threadId: "thread-x",
+    chatId: "thread-x",
+    originHostId: "host-a",
+    at: Date.now(),
+  };
+  const NO_PROMPTS = { approvals: 0, questions: 0 };
+
+  it("waiting before Talk is briefed in the mint's input and queued without an offer", async () => {
+    addChat("thread-x", {
+      snapshotLoaded: true,
+      messages: [botRow("r-2", "The Safari fix landed in build forty.")],
+    });
+    act(() => fake.attention.set({ answers: [ANSWER], prompts: NO_PROMPTS }));
+
+    await bringLive();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+
+    const mints = queryClient
+      .getMutationCache()
+      .findAll({ mutationKey: voiceMutationKeys.mint() });
+    expect(mints[0]?.state.variables).toEqual({
+      offerSdp: "offer",
+      input: "Here is what needs your attention. The bot answered in a thread.",
+    });
+    expect(
+      useVoiceSessionStore.getState().queue.map((item) => item.id),
+    ).toEqual(["r-2"]);
+    expect(fake.engines[0]?.appendCommentary).not.toHaveBeenCalled();
+  });
+
+  it("that arrives while live is offered once, read on request, and marks its thread read once said", async () => {
+    await bringLive();
+    addChat("thread-x", {
+      snapshotLoaded: true,
+      messages: [botRow("r-2", "The Safari fix landed in build forty.")],
+    });
+    act(() => fake.attention.set({ answers: [ANSWER], prompts: NO_PROMPTS }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+
+    const commentary = fake.engines[0]?.appendCommentary;
+    expect(commentary).toHaveBeenCalledTimes(1);
+    expect(commentary).toHaveBeenCalledWith(
+      expect.stringContaining("Want it?"),
+      null,
+    );
+
+    // The voice says the offer; only then can the read go ahead of anything.
+    act(() =>
+      eventsOf(0).onOutputTranscriptDelta(
+        "The bot answered in a thread, the Safari fix landed.",
+      ),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    act(() => {
+      runVoiceQueueVerb({ kind: "read", itemId: "r-2", delegationId: null });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(commentary).toHaveBeenCalledTimes(2);
+    expect(commentary).toHaveBeenLastCalledWith(
+      expect.stringContaining("Safari"),
+      null,
+    );
+    expect(fake.markRead).not.toHaveBeenCalled();
+
+    act(() => eventsOf(0).onOutputTranscriptDelta("The Safari fix landed"));
+    await settle();
+
+    expect(fake.markRead.mock.calls).toEqual([
+      [{ epicId: "bot-2", chatId: "thread-x" }],
+    ]);
   });
 });

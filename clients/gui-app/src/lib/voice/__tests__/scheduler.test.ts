@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ACK_TIMEOUT_MS,
   CHUNK_MAX_CHARS,
@@ -733,6 +733,56 @@ describe("relabel", () => {
       { text: "reply a", delegationId: "d-a" },
       { text: "reply a", delegationId: "d-a" },
     ]);
+  });
+});
+
+describe("withdraw", () => {
+  it("never appends a queued item", () => {
+    scheduler.noteInputTranscript();
+    scheduler.enqueue(item("a", {}));
+    scheduler.enqueue(item("b", {}));
+
+    scheduler.withdraw("a");
+    clock.advance(INPUT_ACTIVE_WINDOW_MS);
+
+    expect(appended).toEqual([{ text: "reply b", delegationId: "d-b" }]);
+  });
+
+  it("never re-appends an item in flight after its confirm window, and runs neither callback", () => {
+    const onDelivered = vi.fn();
+    const onGivenUp = vi.fn();
+    scheduler.enqueue(item("a", { onDelivered, onGivenUp }));
+    expect(appended).toHaveLength(1);
+
+    scheduler.withdraw("a");
+    clock.advance(CONFIRM_WINDOW_MS * (MAX_DELIVERY_ATTEMPTS + 1));
+    // Even the words it was waiting for prove nothing now.
+    scheduler.noteOutputTranscript("Tracy says hello");
+
+    expect(appended).toHaveLength(1);
+    expect(onDelivered).not.toHaveBeenCalled();
+    expect(onGivenUp).not.toHaveBeenCalled();
+    expect(scheduler.pendingCount()).toBe(0);
+  });
+
+  it("lets the next item go once the playback facts are clear, without waiting out the confirm window", () => {
+    scheduler.enqueue(item("a", {}));
+    scheduler.enqueue(item("b", {}));
+    scheduler.noteOutputLevel(true);
+    scheduler.noteOutputTranscript("Working on it.");
+
+    scheduler.withdraw("a");
+    expect(appended).toHaveLength(1);
+
+    scheduler.noteOutputLevel(false);
+    expect(appended).toHaveLength(1);
+    clock.advance(OUTPUT_HANGOVER_MS);
+
+    expect(appended).toEqual([
+      { text: "reply a", delegationId: "d-a" },
+      { text: "reply b", delegationId: "d-b" },
+    ]);
+    expect(OUTPUT_HANGOVER_MS).toBeLessThan(CONFIRM_WINDOW_MS);
   });
 });
 
