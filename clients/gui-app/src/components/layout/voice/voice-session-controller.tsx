@@ -55,7 +55,7 @@ import {
   createReplyWatchMemory,
   replySpeechText,
   requestIdAnsweredIn,
-  replyTextOf,
+  spokenReplyOf,
   takeNewBotReplies,
   type FocusedReply,
   type ReplyRecords,
@@ -1520,7 +1520,7 @@ function VoiceFocusedReplyFeed(props: {
         if (requestId === null || !placeRef.current.isAwaiting(requestId)) {
           continue;
         }
-        const text = replyTextOf(row);
+        const text = spokenReplyOf(row);
         if (text.length > 0) speak({ messageId: row.messageId, text }, where);
       }
     };

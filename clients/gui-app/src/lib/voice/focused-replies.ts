@@ -26,7 +26,13 @@ export type ReplyRow =
   | Pick<UserRow, "role" | "messageId" | "timestamp" | "conversationRequest">
   | Pick<
       AssistantRow,
-      "role" | "messageId" | "timestamp" | "blocks" | "repliesTo"
+      | "role"
+      | "messageId"
+      | "timestamp"
+      | "blocks"
+      | "repliesTo"
+      | "question"
+      | "surface"
     >;
 
 /**
@@ -125,7 +131,7 @@ export function baselineReplyWatchExcept(
   for (const row of rows) {
     memory.seen.add(row.messageId);
     if (row.role === "assistant" && isAwaited(row)) {
-      const text = replyTextOf(row);
+      const text = spokenReplyOf(row);
       if (text.length > 0) awaited.push({ messageId: row.messageId, text });
       continue;
     }
@@ -151,11 +157,46 @@ export function takeNewBotReplies(
     memory.seen.add(message.messageId);
     if (message.role !== "assistant") continue;
     if (message.timestamp <= memory.since) continue;
-    const text = replyTextOf(message);
+    const text = spokenReplyOf(message);
     if (text.length === 0) continue;
     fresh.push({ messageId: message.messageId, text });
   }
   return fresh;
+}
+
+/**
+ * The choices of a bot row's first open question, `null` when none of its
+ * questions is open. The one reading of a row's question the voice makes.
+ */
+export function openQuestionOf(
+  row: Pick<AssistantRow, "question">,
+): { readonly options: ReadonlyArray<string> } | null {
+  const open = row.question?.questions.find(
+    (question) => question.settlement === null,
+  );
+  return open === undefined ? null : { options: open.options };
+}
+
+/** An open question's choices, said as an explicit list (VT5's rule); `""` with none. */
+export function choicesSentence(options: ReadonlyArray<string>): string {
+  if (options.length === 0) return "";
+  const list = options
+    .map((option, index) => `${index + 1}. ${option}`)
+    .join("; ");
+  return `The choices are: ${list}.`;
+}
+
+/**
+ * What the voice is given of a bot row on the focused chat: its prose, and
+ * an open question's choices as a list, so none is lost to a paraphrase.
+ */
+export function spokenReplyOf(
+  row: Pick<AssistantRow, "blocks" | "question">,
+): string {
+  const text = replyTextOf(row);
+  if (text.length === 0) return text;
+  const choices = choicesSentence(openQuestionOf(row)?.options ?? []);
+  return choices.length === 0 ? text : `${text} ${choices}`;
 }
 
 /** The prose of an assistant row: its text blocks, less the provider notices. */

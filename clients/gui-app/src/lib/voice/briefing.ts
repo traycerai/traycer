@@ -1,3 +1,4 @@
+import { choicesSentence } from "@/lib/voice/focused-replies";
 import type { AttentionPrompts, ReplyRef } from "@/lib/voice/queue-sources";
 import type { QueueItem } from "@/stores/voice/voice-session-store";
 
@@ -83,11 +84,8 @@ export function readTextOf(input: {
   readonly options: ReadonlyArray<string>;
 }): string {
   const said = `${input.speaker} said: ${input.content.trim()}`;
-  if (input.options.length === 0) return said;
-  const list = input.options
-    .map((option, index) => `${index + 1}. ${option}`)
-    .join("; ");
-  return `${said} The choices are: ${list}.`;
+  const choices = choicesSentence(input.options);
+  return choices.length === 0 ? said : `${said} ${choices}`;
 }
 
 export const NOTHING_WAITING_TEXT = "Nothing needs your attention right now.";

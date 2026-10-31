@@ -5,7 +5,7 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import { composerDisplayPlainText } from "@/lib/composer/composer-clipboard";
 import { classifyNotificationLifecycle } from "@/lib/notifications/notification-lifecycle";
-import { replyTextOf } from "@/lib/voice/focused-replies";
+import { openQuestionOf, replyTextOf } from "@/lib/voice/focused-replies";
 import type { MergedNotificationRow } from "@/stores/notifications/merged-notifications";
 import type { QueueItemKind } from "@/stores/voice/voice-session-store";
 
@@ -160,6 +160,36 @@ export type HydrationRow =
   | Pick<UserRow, "role" | "messageId" | "sender" | "message">;
 
 /**
+ * What a bot row asks of the person, read from the row's own metadata: an
+ * open question (its choices kept for the read), or an open approval or
+ * question of a task the row's surface points at. `null` for a row that
+ * asks nothing. The one classification the hydration and the announcement
+ * fallback share, so a question is never taken for an announcement.
+ */
+export function promptOf(
+  row: Pick<AssistantRow, "question" | "surface">,
+): Pick<HydratedEntry, "kind" | "options" | "surfaceId"> | null {
+  const open = openQuestionOf(row);
+  if (open !== null) {
+    return { kind: "question", options: open.options, surfaceId: null };
+  }
+  const surface = row.surface;
+  if (
+    surface !== undefined &&
+    surface.resolution === null &&
+    (surface.kind === "approval" || surface.kind === "question")
+  ) {
+    return {
+      kind: "surface",
+      options: [],
+      surfaceId:
+        surface.kind === "approval" ? surface.approvalId : surface.blockId,
+    };
+  }
+  return null;
+}
+
+/**
  * The row behind a reference, as the records hold it: a question while one
  * of its questions is open (its choices kept for the read); a task agent's
  * question or approval while the surface it points at is open; else a reply.
@@ -182,32 +212,9 @@ export function hydratedEntryOf(row: HydrationRow): HydratedEntry | null {
   }
   const content = replyTextOf(row);
   if (content.length === 0) return null;
-  const open = row.question?.questions.find(
-    (question) => question.settlement === null,
-  );
-  if (open !== undefined) {
-    return {
-      kind: "question",
-      content,
-      authorUserId: null,
-      options: open.options,
-      surfaceId: null,
-    };
-  }
-  const surface = row.surface;
-  if (
-    surface !== undefined &&
-    surface.resolution === null &&
-    (surface.kind === "approval" || surface.kind === "question")
-  ) {
-    return {
-      kind: "surface",
-      content,
-      authorUserId: null,
-      options: [],
-      surfaceId:
-        surface.kind === "approval" ? surface.approvalId : surface.blockId,
-    };
+  const prompt = promptOf(row);
+  if (prompt !== null) {
+    return { ...prompt, content, authorUserId: null };
   }
   return {
     kind: "reply",
@@ -226,7 +233,13 @@ export type AnnouncementRow =
     >
   | Pick<
       AssistantRow,
-      "role" | "messageId" | "timestamp" | "blocks" | "repliesTo"
+      | "role"
+      | "messageId"
+      | "timestamp"
+      | "blocks"
+      | "repliesTo"
+      | "question"
+      | "surface"
     >;
 
 /** An announcement at a channel's top level, read from the row. */
@@ -237,10 +250,11 @@ export interface Announcement {
 }
 
 /**
- * The bot's rows of a channel that answer nothing: no direct reply's
- * `repliesTo`, and no member's request in the channel resolved to them. Rows
- * at or before `since` are history. In the store's order, which is oldest
- * first.
+ * The bot's rows of a channel that answer nothing and ask nothing: no direct
+ * reply's `repliesTo`, no member's request in the channel resolved to them,
+ * and no open question or surfaced prompt (`promptOf`), which is a question
+ * to the person wherever it sits. Rows at or before `since` are history. In
+ * the store's order, which is oldest first.
  */
 export function announcementsOf(
   rows: ReadonlyArray<AnnouncementRow>,
@@ -256,6 +270,7 @@ export function announcementsOf(
   for (const row of rows) {
     if (row.role !== "assistant" || row.timestamp <= since) continue;
     if (row.repliesTo !== undefined || answers.has(row.messageId)) continue;
+    if (promptOf(row) !== null) continue;
     const content = replyTextOf(row);
     if (content.length === 0) continue;
     found.push({ messageId: row.messageId, content, at: row.timestamp });
