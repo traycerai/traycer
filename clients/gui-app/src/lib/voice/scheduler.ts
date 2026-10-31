@@ -342,7 +342,7 @@ export function createSpeechScheduler(
     noteOutputTranscript(text) {
       if (inFlight !== null) {
         inFlight.transcript += text;
-        if (containsConfirmWord(inFlight.transcript, inFlight.queued.item)) {
+        if (confirmedByContent(inFlight.transcript, inFlight.queued.item)) {
           settleInFlight(true);
         }
       }
@@ -352,6 +352,16 @@ export function createSpeechScheduler(
       if (outputTimer !== null) deps.clearTimer(outputTimer);
       outputTimer = deps.setTimer(() => {
         outputTimer = null;
+        // The utterance is complete once the voice falls quiet: only now can
+        // an output be known to be EXACTLY the expected short answer ("One."
+        // and not the "One" of "One moment."), so that proof is read here,
+        // never from a streaming prefix.
+        if (
+          inFlight !== null &&
+          isWholeAnswerSaid(inFlight.transcript, inFlight.queued.item)
+        ) {
+          settleInFlight(true);
+        }
         // The acknowledgement has been spoken through once the voice falls
         // quiet after speaking.
         if (ackPending && ackHeardSpeech && !outputLevelPlaying) clearAck();
@@ -637,7 +647,10 @@ export function confirmationWords(input: {
 
 /**
  * What proves a short answer: each number in it as a complete value, as
- * written and as said, then its other short words that are not filler.
+ * written and as said, its other short words that are not filler, and, for
+ * a reply of one or two words, the reply whole: a "Yes." or an "OK." is all
+ * acknowledgement vocabulary and would otherwise have no proof at all; it is
+ * proven only by an output that is exactly it (see `containsConfirmWord`).
  */
 function shortAnswerPhrases(
   text: string,
@@ -650,15 +663,25 @@ function shortAnswerPhrases(
   for (const word of content) {
     if (!NUMERAL_RE.test(word) && isDiscriminative(word)) phrases.push(word);
   }
+  if (content.length >= 1 && content.length <= WHOLE_REPLY_MAX_WORDS) {
+    phrases.push(content.join(" "));
+  }
   return phrases;
 }
+
+/** A reply this short is proven by being said whole; longer ones by their words. */
+const WHOLE_REPLY_MAX_WORDS = 2;
 
 /** A number as written: an optional sign, digits, an optional decimal part. */
 const NUMERAL_RE = /^-?\d+(?:\.\d+)?$/u;
 const NUMERALS_IN_TEXT_RE =
-  /(?<![\p{L}\p{N}.-])-?\d+(?:\.\d+)?(?![\p{L}\p{N}])(?!\.\d)/gu;
+  /(?<![\p{L}\p{N}.,-])-?\d+(?:\.\d+)?(?![\p{L}\p{N}])(?![.,]\d)(?!\s*(?:%|percent|hundred|thousand|million|billion|trillion|point)\b)/giu;
 
-/** The numbers written in `text`, sign and decimal kept, as they stand. */
+/**
+ * The numbers written in `text`, sign and decimal kept, as they stand: a
+ * complete numeral, never the prefix of a grouped ("42,000"), decimal
+ * ("42.000") or magnified ("42 thousand", "42%") one.
+ */
 function numeralsOf(text: string): ReadonlyArray<string> {
   return Array.from(text.matchAll(NUMERALS_IN_TEXT_RE), (match) => match[0]);
 }
@@ -750,24 +773,61 @@ export function isBackchannelOnly(transcript: string): boolean {
 }
 
 /**
- * Whether the output so far proves the item: it says one of the item's
- * phrases whole (a numeral as written, a multi-word spelling as adjacent
- * words), and is more than acknowledgement. An output that is EXACTLY the
- * expected answer confirms even where the same words alone would be
- * acknowledgement ("One." for the answer 1); "one moment" is not the answer.
+ * Whether the output so far proves the item by its content: it says one of
+ * the item's phrases whole (a numeral as written, a multi-word spelling as
+ * adjacent words, neither as part of a different number), and is more than
+ * acknowledgement. A phrase that is acknowledgement vocabulary is never
+ * proven by being contained ("yes, give me a moment" is not the reply
+ * "Yes."). Read on every delta: content, once said, stays said.
  */
-function containsConfirmWord(transcript: string, item: SpeechItem): boolean {
+function confirmedByContent(transcript: string, item: SpeechItem): boolean {
   if (item.confirmWords.length === 0) return false;
-  const said = transcript.toLowerCase();
-  if (
-    item.confirmWords.some(
-      (phrase) => isNumberPhrase(phrase) && isExactly(said, phrase),
-    )
-  ) {
-    return true;
-  }
   if (isBackchannelOnly(transcript)) return false;
-  return item.confirmWords.some((phrase) => holdsPhrase(said, phrase));
+  const said = transcript.toLowerCase();
+  return item.confirmWords.some(
+    (phrase) => !isBackchannelOnly(phrase) && holdsPhrase(said, phrase),
+  );
+}
+
+/**
+ * Whether the complete output IS the expected answer and nothing else, which
+ * proves it even where the same words alone would be acknowledgement: "One."
+ * for the answer 1, "Yes." for the reply "Yes." (the reply itself ends the
+ * item's text, so a seeded acknowledgement word that is not the reply never
+ * confirms). Read only once the voice has fallen quiet: a prefix ("One" of
+ * "One moment.") proves nothing.
+ */
+function isWholeAnswerSaid(transcript: string, item: SpeechItem): boolean {
+  const said = transcript.toLowerCase();
+  return item.confirmWords.some(
+    (phrase) => isWholeAnswer(item, phrase) && isExactly(said, phrase),
+  );
+}
+
+/**
+ * A phrase an output must be exactly to prove the item: a complete number,
+ * or the item's own reply when that reply is acknowledgement vocabulary
+ * ("Yes.", "OK."), which the item's text ends with.
+ */
+function isWholeAnswer(item: SpeechItem, phrase: string): boolean {
+  if (isNumberPhrase(phrase)) return true;
+  if (!isBackchannelOnly(phrase)) return false;
+  const text = wordsOf(item.text).map(canonicalWord);
+  const reply = wordsOf(phrase).map(canonicalWord);
+  return (
+    reply.length > 0 &&
+    reply.length <= text.length &&
+    reply.every(
+      (word, index) => text[text.length - reply.length + index] === word,
+    )
+  );
+}
+
+/** Spellings the transcriber chooses between for one word. */
+const WORD_ALIASES: ReadonlyMap<string, string> = new Map([["ok", "okay"]]);
+
+function canonicalWord(word: string): string {
+  return WORD_ALIASES.get(word) ?? word;
 }
 
 const NUMBER_WORDS: ReadonlySet<string> = new Set([
@@ -791,10 +851,18 @@ function isExactly(said: string, phrase: string): boolean {
   const trimmed = said.replace(/^[\s"'“‘]+|[\s.!?,;:"'”’]+$/gu, "");
   const expected = phrase.toLowerCase();
   if (NUMERAL_RE.test(expected)) return trimmed === expected;
-  return wordsOf(trimmed).join(" ") === wordsOf(expected).join(" ");
+  return (
+    wordsOf(trimmed).map(canonicalWord).join(" ") ===
+    wordsOf(expected).map(canonicalWord).join(" ")
+  );
 }
 
-/** The lowercased output holds the phrase whole: a numeral as written, words adjacent. */
+/**
+ * The lowercased output holds the phrase whole: a numeral as written, words
+ * adjacent within one sentence. A spoken number is whole only with no number
+ * word beside it in its sentence: not "forty two" inside "forty two
+ * thousand", nor "five" inside "minus five" or "three point five".
+ */
 function holdsPhrase(said: string, phrase: string): boolean {
   const expected = phrase.toLowerCase();
   if (NUMERAL_RE.test(expected)) {
@@ -805,14 +873,48 @@ function holdsPhrase(said: string, phrase: string): boolean {
   }
   const needle = wordsOf(expected);
   if (needle.length === 0) return false;
-  const spoken = wordsOf(said);
+  const bounded = isNumberPhrase(expected);
+  return said
+    .split(SENTENCE_END_RE)
+    .some((sentence) => holdsWords(wordsOf(sentence), needle, bounded));
+}
+
+const SENTENCE_END_RE = /[.!?;:]+/u;
+
+/** `needle` stands in `spoken` as adjacent words; `bounded`: with no number word beside it. */
+function holdsWords(
+  spoken: ReadonlyArray<string>,
+  needle: ReadonlyArray<string>,
+  bounded: boolean,
+): boolean {
   outer: for (let start = 0; start + needle.length <= spoken.length; start++) {
     for (let offset = 0; offset < needle.length; offset++) {
       if (spoken[start + offset] !== needle[offset]) continue outer;
     }
-    return true;
+    if (!bounded) return true;
+    const before = spoken[start - 1];
+    const after = spoken[start + needle.length];
+    if (!continuesNumber(before) && !continuesNumber(after)) return true;
   }
   return false;
+}
+
+/** Words that make a number beside them part of a different, larger one. */
+const NUMBER_CONTEXT_WORDS: ReadonlySet<string> = new Set([
+  "hundred",
+  "thousand",
+  "million",
+  "billion",
+  "trillion",
+  "percent",
+  "and",
+]);
+
+/** Whether `word` (or any word, `undefined` for none) continues a number it stands beside. */
+function continuesNumber(word: string | undefined): boolean {
+  if (word === undefined) return false;
+  if (NUMBER_CONTEXT_WORDS.has(word)) return true;
+  return word.split("-").every((part) => NUMBER_WORDS.has(part));
 }
 
 /**

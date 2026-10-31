@@ -200,6 +200,77 @@ describe("delivery confirmation", () => {
     expect(decimal.delivered()).toBe(1);
   });
 
+  it("confirms a reply that is acknowledgement vocabulary by an output that is exactly it, never by one that merely holds it", () => {
+    let delivered = 0;
+    // Tracy speaking as herself: her name is proof the voice never says.
+    const words = confirmationWords({
+      botTitle: "Tracy",
+      threadTitle: null,
+      text: "Yes.",
+    });
+    expect(words).toEqual(["tracy", "yes"]);
+    scheduler.enqueue(
+      item("a", {
+        text: "Yes.",
+        confirmWords: words,
+        onDelivered: () => delivered++,
+      }),
+    );
+    expect(appended).toHaveLength(1);
+
+    scheduler.noteOutputTranscript("Yes, give me a moment.");
+    expect(delivered).toBe(0);
+    clock.advance(CONFIRM_WINDOW_MS);
+    expect(appended).toHaveLength(2);
+
+    scheduler.noteOutputTranscript("Yes.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(delivered).toBe(1);
+    expect(scheduler.pendingCount()).toBe(0);
+  });
+
+  it("reads the whole utterance before taking it as exactly the reply: Yes, one moment. streamed in two deltas confirms nothing", () => {
+    let delivered = 0;
+    scheduler.enqueue(
+      item("a", {
+        text: "Yes.",
+        confirmWords: confirmationWords({
+          botTitle: null,
+          threadTitle: null,
+          text: "Yes.",
+        }),
+        onDelivered: () => delivered++,
+      }),
+    );
+
+    scheduler.noteOutputTranscript("Yes");
+    clock.advance(OUTPUT_HANGOVER_MS - 1);
+    scheduler.noteOutputTranscript(", one moment.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(delivered).toBe(0);
+    clock.advance(CONFIRM_WINDOW_MS);
+    expect(appended).toHaveLength(2);
+  });
+
+  it("confirms OK. by Okay., the spelling the transcriber chooses", () => {
+    let delivered = 0;
+    scheduler.enqueue(
+      item("a", {
+        text: "OK.",
+        confirmWords: confirmationWords({
+          botTitle: null,
+          threadTitle: null,
+          text: "OK.",
+        }),
+        onDelivered: () => delivered++,
+      }),
+    );
+
+    scheduler.noteOutputTranscript("Okay.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(delivered).toBe(1);
+  });
+
   it("confirms the answer 1 by an output that is exactly it, and not by the acknowledgement one moment", () => {
     const first = numericAnswer("1");
     scheduler.noteOutputTranscript("One moment");
@@ -208,8 +279,44 @@ describe("delivery confirmation", () => {
     expect(appended).toHaveLength(2);
 
     scheduler.noteOutputTranscript("One.");
+    clock.advance(OUTPUT_HANGOVER_MS);
     expect(first.delivered()).toBe(1);
     expect(scheduler.pendingCount()).toBe(0);
+  });
+
+  it("does not take a streamed One as the answer 1 before the utterance is complete: One + moment. confirms nothing, One + . does at the quiet", () => {
+    const first = numericAnswer("1");
+    scheduler.noteOutputTranscript("One");
+    clock.advance(OUTPUT_HANGOVER_MS - 1);
+    scheduler.noteOutputTranscript(" moment.");
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(first.delivered()).toBe(0);
+    clock.advance(CONFIRM_WINDOW_MS);
+    expect(appended).toHaveLength(2);
+
+    scheduler.noteOutputTranscript("One");
+    expect(first.delivered()).toBe(0);
+    scheduler.noteOutputTranscript(".");
+    expect(first.delivered()).toBe(0);
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(first.delivered()).toBe(1);
+  });
+
+  it("matches a complete number only, never the start of a larger one: 42,000 and forty two thousand are not 42", () => {
+    const answer = numericAnswer("42");
+    scheduler.noteOutputTranscript("About 42,000.");
+    scheduler.noteOutputTranscript(" Or forty two thousand.");
+    expect(answer.delivered()).toBe(0);
+    scheduler.noteOutputTranscript(" So, forty two.");
+    expect(answer.delivered()).toBe(1);
+  });
+
+  it("does not take a signed number for the unsigned one: minus five is not 5", () => {
+    const five = numericAnswer("5");
+    scheduler.noteOutputTranscript("Minus five.");
+    expect(five.delivered()).toBe(0);
+    scheduler.noteOutputTranscript(" Just 5.");
+    expect(five.delivered()).toBe(1);
   });
 
   it("runs onDelivered once when the transcript holds a confirm word", () => {
