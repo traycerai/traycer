@@ -147,6 +147,20 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
+    getVoiceAvailability: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    mintVoiceSession: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    endVoiceSession: async () => ({
+      kind: "network-error" as const,
+      detail: "test",
+    }),
+    setVoiceSessionLive: async () => undefined,
+    setVoiceSessionIndicator: async () => undefined,
     createSandbox: async () => ({
       kind: "network-error" as const,
       detail: "test",
@@ -195,20 +209,6 @@ function buildFakeBridge(
       kind: "network-error" as const,
       detail: "test",
     }),
-    getVoiceAvailability: async () => ({
-      kind: "network-error" as const,
-      detail: "test",
-    }),
-    mintVoiceSession: async () => ({
-      kind: "network-error" as const,
-      detail: "test",
-    }),
-    endVoiceSession: async () => ({
-      kind: "network-error" as const,
-      detail: "test",
-    }),
-    setVoiceSessionLive: async () => undefined,
-    setVoiceSessionIndicator: async () => undefined,
     getSandboxGrants: async () => ({
       kind: "network-error" as const,
       detail: "test",
