@@ -4372,10 +4372,10 @@ describe("ChatMessages scroll policy", () => {
       const wrongRowTop = wrongScrollTop - LEGEND_LIST_HEADER_PX + viewOffset;
 
       const originalScrollToIndex = list.scrollToIndex.bind(list);
-      // `positionAtIndex` is typed `number` but - per `expectedTimelineScrollTop`'s
-      // own guard at the top of this file, and CodeRabbit's finding on this
-      // exact predicate - does not always answer one: an unmeasured row can
-      // report `undefined`. "unmeasured" models that row; "wrong" is a
+      // `positionAtIndex` answers `number | undefined`, and withholds the
+      // reading for a row the layout pass has not laid out -
+      // `expectedTimelineScrollTop` guards the same call at the top of this
+      // file. "unmeasured" models that row; "wrong" is a
       // distinct, otherwise-plausible finite reading the row moves to next
       // (not its real one); "settled" is the real, final position.
       let measurementPhase: "unmeasured" | "wrong" | "settled" = "unmeasured";
@@ -4403,14 +4403,17 @@ describe("ChatMessages scroll policy", () => {
           positionAtIndex: (index: number) => {
             if (index !== targetIndex) return state.positionAtIndex(index);
             if (measurementPhase === "unmeasured") {
-              // `NaN` rather than `undefined`, which the real implementation
-              // can also answer despite this signature's declared `number`
-              // (`expectedTimelineScrollTop` guards the same call for exactly
-              // that). Both reach the predicate's one non-finite branch, and
-              // `NaN` IS a number, so modelling the unmeasured row with it
-              // needs no cast and no suppressed error - the signature stays
-              // honest about what this mock returns.
-              return Number.NaN;
+              // What the real implementation answers for a row it has not
+              // laid out: `positions[index]` on an index the layout pass has
+              // not reached, which is nothing at all. `NaN` reaches the same
+              // non-finite branch of the predicate below, but it is not the
+              // value production produces, and the difference is load-bearing
+              // one predicate away: a guard that compares two readings for
+              // equality accepts `undefined === undefined` while
+              // `NaN === NaN` is false, so a fixture built on `NaN` cannot
+              // fail on a reading that is equal to itself for want of any
+              // reading at all.
+              return undefined;
             }
             if (measurementPhase === "wrong") return wrongRowTop;
             return state.positionAtIndex(index);
