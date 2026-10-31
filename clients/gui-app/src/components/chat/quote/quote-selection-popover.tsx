@@ -12,14 +12,14 @@ import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { chatBottomOverlayClampedRect } from "@/components/chat/chat-scroll-region-geometry";
 import { cn } from "@/lib/utils";
 import { firstLineRect, firstVisibleLineRect } from "./quote-anchor-rect";
-import { quoteSnapshotIntoDraft } from "./quote-snapshot-into-draft";
 import type { QuoteSelectionSnapshot } from "./use-quote-selection";
 
 interface QuoteSelectionPopoverProps {
-  readonly taskId: string;
   readonly snapshot: QuoteSelectionSnapshot;
+  /** Puts the snapshot where this transcript's quotes go (`QuoteSinkContext`). */
+  readonly onQuote: (snapshot: QuoteSelectionSnapshot) => void;
   readonly onDismiss: () => void;
-  /** Called once the quote is in the chat's draft, before the dismissal. */
+  /** Called once the quote is placed, before the dismissal. */
   readonly onQuoted: () => void;
   /** The scrollable transcript container: the popover is clipped to its bounds
    *  and rides the visible portion of a selection that scrolls past its start. */
@@ -45,8 +45,8 @@ interface QuoteSelectionPopoverProps {
  */
 export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
   const {
-    taskId,
     snapshot,
+    onQuote,
     onDismiss,
     onQuoted,
     boundaryRef,
@@ -131,7 +131,7 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
 
   const handleQuote = (): void => {
     // Consume the mouseup snapshot; NEVER read the live Selection here.
-    quoteSnapshotIntoDraft(taskId, snapshot);
+    onQuote(snapshot);
     onQuoted();
     onDismiss();
   };

@@ -197,6 +197,7 @@ export function Pane(): ReactElement {
                   onOpenTurn={noop}
                   onOpenSession={noop}
                   landOn={null}
+                  quote={null}
                 />
               </ChatFindForceStoreProvider>
             </A2AOpenStoreProvider>
