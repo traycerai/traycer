@@ -268,6 +268,11 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
     });
   };
 
+  /** The queue's side of a switch to an item, whoever navigates: its offer is not said. */
+  const switchedTo = (entry: Entry): void => {
+    withdrawOffer(entry);
+  };
+
   /** Whether a queued item already points at this surface. */
   const surfaceTaken = (surfaceId: string | null): boolean =>
     surfaceId !== null &&
@@ -581,7 +586,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
           }
           const entry = target(verb.target.itemId);
           if (entry === null) return "nothing";
-          withdrawOffer(entry);
+          switchedTo(entry);
           deps.switchTo({
             botId: entry.item.botId,
             hostId: entry.item.hostId,
@@ -597,7 +602,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
     },
     noteSwitched(itemId) {
       const entry = entries.get(itemId);
-      if (entry !== undefined) withdrawOffer(entry);
+      if (entry !== undefined) switchedTo(entry);
     },
     keepsFromFocus(itemId) {
       const entry = entries.get(itemId);
