@@ -100,7 +100,11 @@ export function composeBriefing(input: {
   /** Unread answers in the attention tier, as references. */
   readonly answers: ReadonlyArray<ReplyRef>;
   readonly prompts: AttentionPrompts;
-  /** The queue as it stands; heard and dismissed items are left out here. */
+  /**
+   * The queue as it stands. Only waiting items get a line; every item, heard
+   * and dismissed included, keeps its answer out of the attention tier's
+   * counts, since `later` leaves the notification unread on purpose.
+   */
   readonly items: ReadonlyArray<QueueItem>;
   readonly botTitle: (botId: string) => string;
   readonly maxChars: number;
@@ -110,7 +114,7 @@ export function composeBriefing(input: {
     (item) => item.state === "queued" || item.state === "offered",
   );
   const itemized = new Set(
-    waiting.flatMap((item) =>
+    input.items.flatMap((item) =>
       item.messageId === null ? [] : [item.messageId],
     ),
   );
