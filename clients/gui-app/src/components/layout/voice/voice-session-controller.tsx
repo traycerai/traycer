@@ -1109,10 +1109,23 @@ function VoiceFocusedReplyFeed(props: {
     };
     // Records that arrived, or an acceptance that came back, after a reply
     // was scheduled may place it now: the item is re-labelled while it still
-    // waits to be appended. One the loop still cannot place stays here.
+    // waits to be appended. Only by the EXACT request the records name: the
+    // fallbacks (the thread a post opened, the sole request awaiting at the
+    // channel's top level) describe what was awaited when the row ARRIVED and
+    // ran then; an older retained row must never take a later request's
+    // binding because that request happens to be the only one awaiting now
+    // (a channel announcement answers no request at all). One the records
+    // still do not name stays here.
     const placeLater = (where: ReplyRecords): void => {
       for (const [replyMessageId, itemId] of unplaced) {
-        const placement = place(replyMessageId, where);
+        const requestId = requestIdAnsweredIn(where, replyMessageId);
+        if (requestId === null) continue;
+        const placement = placeRef.current.placementFor({
+          botId: focus.botId,
+          hostId: focus.hostId,
+          threadId,
+          requestId,
+        });
         if (placement.kind === "pending") continue;
         unplaced.delete(replyMessageId);
         if (placement.delegationId !== null) {

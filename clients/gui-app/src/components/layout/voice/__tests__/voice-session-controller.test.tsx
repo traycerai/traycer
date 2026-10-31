@@ -865,3 +865,62 @@ describe("a reply and its acknowledgement in a warm existing thread", () => {
     await expectOneAnswerUnderDelegation();
   });
 });
+
+describe("a channel announcement queued before a later top-level request", () => {
+  it("stays unlabelled, and the request's actual answer takes its delegation", async () => {
+    const channel = addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    await settle();
+    // Playback holds the scheduler, so the announcement is queued, not
+    // appended; it answers no request (the host's announce path).
+    act(() => eventsOf(0).onOutputTranscriptDelta("Working on it."));
+    const announcement = botRow("ann", "The earlier task finished.");
+    act(() => {
+      channel.setState({ snapshotLoaded: true, messages: [announcement] });
+    });
+    await say("Start another build.", "d1");
+    await act(async () => {
+      fake.send.resolve({
+        messageId: "m1",
+        requestId: "r1",
+        delivery: "written",
+        threadId: null,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => {
+      channel.setState({
+        snapshotLoaded: true,
+        messages: [
+          announcement,
+          requestRow("u1", "r1", "a2"),
+          botRow("a2", "The new build is complete."),
+        ],
+      });
+    });
+    const commentary = fake.engines[0]?.appendCommentary;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(commentary).toHaveBeenCalledTimes(1);
+    expect(commentary).toHaveBeenCalledWith(
+      expect.stringContaining("earlier task finished"),
+      null,
+    );
+    act(() => eventsOf(0).onOutputTranscriptDelta("the earlier task finished"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(commentary).toHaveBeenLastCalledWith(
+      expect.stringContaining("new build is complete"),
+      "d1",
+    );
+    act(() => eventsOf(0).onOutputTranscriptDelta("the new build is complete"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(commentary).toHaveBeenCalledTimes(2);
+  });
+});
