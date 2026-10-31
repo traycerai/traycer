@@ -1508,8 +1508,7 @@ function VoiceSelectionSync(props: {
   readonly onResolved: () => void;
   readonly voiceSwitch: { current: VoiceSwitch | null };
 }): null {
-  const { voiceNavigationRef, onManualChange, onResolved, voiceSwitch } =
-    props;
+  const { voiceNavigationRef, onManualChange, onResolved, voiceSwitch } = props;
   const focusedRef = useTabsStore(selectHostFocusedRef);
   const activeBotId = focusedRef?.kind === "bot" ? focusedRef.id : null;
   const tab = useBotTabsStore((state) =>

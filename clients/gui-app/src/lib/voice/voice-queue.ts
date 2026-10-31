@@ -269,7 +269,10 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
    */
   const takeOverAnnouncement = (
     messageId: string,
-  ): { readonly state: QueueItem["state"]; readonly readId: string | null } | null => {
+  ): {
+    readonly state: QueueItem["state"];
+    readonly readId: string | null;
+  } | null => {
     const held = entries.get(messageId);
     if (held?.item.kind !== "announcement") return null;
     withdrawOffer(held);

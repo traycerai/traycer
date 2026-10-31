@@ -2223,7 +2223,8 @@ describe("a reply elsewhere", () => {
       .findAll({ mutationKey: voiceMutationKeys.mint() });
     expect(mints[0]?.state.variables).toEqual({
       offerSdp: "offer",
-      input: "Here is what needs your attention. Release bot answered in a thread.",
+      input:
+        "Here is what needs your attention. Release bot answered in a thread.",
     });
     expect(
       useVoiceSessionStore.getState().queue.map((item) => item.id),
