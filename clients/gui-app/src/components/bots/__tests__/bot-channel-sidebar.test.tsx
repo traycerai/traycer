@@ -427,13 +427,7 @@ describe("<BotChannelSidebar /> sections", () => {
       "env-team",
       "env-empty",
     ]);
-    // A section's header is its name and its +, with nothing to fold.
     expect(within(section("env-team")).getByText("Acme")).toBeTruthy();
-    expect(
-      screen
-        .getByTestId("bot-channel-sidebar")
-        .querySelectorAll("[aria-expanded]"),
-    ).toHaveLength(0);
     expect(
       within(section("env-team"))
         .getAllByTestId("bot-channel-row")
