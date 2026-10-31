@@ -345,7 +345,10 @@ function setup(content: CardContent): Harness {
     listen,
     candidate,
     route: (choice, text) =>
-      cardDesk.answerRouted(choice, text, "d-routed", currentKey()),
+      cardDesk.answerRouted(
+        { choice, text, key: currentKey(), seqs: [] },
+        "d-routed",
+      ),
     drop: () => cardDesk.dropCandidate(currentKey()),
     card: () => useVoiceSessionStore.getState().activeCard,
     texts: () => spoken.map((item) => item.text),
@@ -852,7 +855,15 @@ describe("the router's answer to the card", () => {
     const h = setup(BOT_QUESTION);
 
     expect(
-      h.desk.answerRouted(0, "", "d-routed", { opening: 1, questionIndex: 0 }),
+      h.desk.answerRouted(
+        {
+          choice: 0,
+          text: "",
+          key: { opening: 1, questionIndex: 0 },
+          seqs: [],
+        },
+        "d-routed",
+      ),
     ).toBe(false);
     expect(h.spoken).toEqual([]);
   });

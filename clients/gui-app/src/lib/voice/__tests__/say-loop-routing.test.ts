@@ -824,12 +824,11 @@ describe("the active card", () => {
     speak("hold", " it");
     await h.loop.onDelegationCreated("d-1");
 
-    expect(driver.answerRouted).toHaveBeenCalledWith(
-      1,
-      "hold it",
-      "d-1",
-      CARD.key,
-    );
+    expect(driver.answerRouted).toHaveBeenCalledTimes(1);
+    const [routed, delegationId] = vi.mocked(driver.answerRouted).mock.calls[0];
+    expect(routed).toMatchObject({ choice: 1, text: "hold it", key: CARD.key });
+    expect(routed.seqs).toHaveLength(2);
+    expect(delegationId).toBe("d-1");
     expect(driver.dropCandidate).not.toHaveBeenCalled();
     expect(h.sends).toEqual([]);
     expect(h.notices).toEqual([]);
@@ -974,6 +973,51 @@ describe("the card desk behind the say loop", () => {
       choices: ["Allow", "Deny"],
     });
     expect(h.sends.map((focus) => focus.botId)).toEqual([TRACY]);
+  });
+
+  describe("a routed answer to words said around the list being heard", () => {
+    /** The words are routed with the card shown; `heardFirst` says whether its list was heard before they were said. */
+    async function routedAnswerForWords(heardFirst: boolean) {
+      const desk = installDesk();
+      desk.show("a");
+      if (heardFirst) await desk.heard();
+      const h = build({ recheckHolds: true, canSend: true });
+      const out = heldAnswer();
+      h.answers.push(out.answer);
+      speak("please permit that operation");
+      const done = h.loop.onDelegationCreated("slow");
+      expect(h.requests[0]?.card).toMatchObject({
+        question: "Allow or deny Bash?",
+      });
+      if (!heardFirst) await desk.heard();
+      const spokenBefore = desk.spoken.length;
+
+      out.release({ ...route("answer", null, null, 1), choice: 0 });
+      await done;
+      return { desk, h, spokenBefore };
+    }
+
+    it("chooses nothing when the words were said while the list still played", async () => {
+      const { desk, h, spokenBefore } = await routedAnswerForWords(false);
+
+      expect(activeCard()?.candidate).toBeNull();
+      expect(desk.spoken).toHaveLength(spokenBefore);
+      expect(h.sends).toEqual([]);
+      expect(h.notices).toEqual([]);
+    });
+
+    it("chooses the routed choice when the words were said after the list was heard", async () => {
+      const { desk, h, spokenBefore } = await routedAnswerForWords(true);
+
+      expect(activeCard()?.candidate).toEqual({
+        kind: "option",
+        index: 0,
+        label: "Allow",
+      });
+      expect(desk.spoken).toHaveLength(spokenBefore + 1);
+      expect(desk.spoken.at(-1)?.text).toContain("Allow Bash");
+      expect(h.sends).toEqual([]);
+    });
   });
 
   describe("a route made against a card that is no longer the open one", () => {
