@@ -440,15 +440,22 @@ describe("a routed read", () => {
     return { queue, enqueued };
   }
 
-  function readOf(itemId: string | null): RouterResult {
+  function routedItem(
+    action: "read" | "later",
+    itemId: string | null,
+  ): RouterResult {
     return {
-      ...route("read", null, null, 2),
+      ...route(action, null, null, 2),
       target: { environmentId: null, botId: null, threadId: null, itemId },
     };
   }
 
-  it("reads the item it names, under the request's delegation, and posts nothing", async () => {
-    const { queue, enqueued } = liveQueue();
+  const readOf = (itemId: string | null): RouterResult =>
+    routedItem("read", itemId);
+
+  /** The live queue holding one waiting reply, `r-1` of the CI bot, and the directory that lists it. */
+  function withWaitingItem() {
+    const live = liveQueue();
     const text: OpenTextBlock = {
       blockId: "block-1",
       status: "completed",
@@ -458,7 +465,7 @@ describe("a routed read", () => {
       text: "The Safari fix landed in build forty.",
       providerNotice: null,
     };
-    queue.begin(
+    live.queue.begin(
       [
         {
           messageId: "r-1",
@@ -472,15 +479,20 @@ describe("a routed read", () => {
       ],
       () => "host-1",
     );
-    queue.hydrated(
+    live.queue.hydrated(
       "r-1",
       { role: "assistant", messageId: "r-1", blocks: [text] },
       null,
     );
     const directory = composeVoiceDirectory({
       ...SOURCES,
-      queue: queue.items(),
+      queue: live.queue.items(),
     });
+    return { ...live, directory };
+  }
+
+  it("reads the item it names, under the request's delegation, and posts nothing", async () => {
+    const { enqueued, directory } = withWaitingItem();
     const h = buildFor({ recheckHolds: true, canSend: true }, directory);
     h.answers.push(() => Promise.resolve(readOf("r-1")));
 
@@ -493,6 +505,43 @@ describe("a routed read", () => {
     expect(h.sends).toEqual([]);
     expect(h.notices).toEqual([]);
     expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+
+  it("does not read an item the person set aside while the route was being made", async () => {
+    const { queue, enqueued, directory } = withWaitingItem();
+    const h = buildFor({ recheckHolds: true, canSend: true }, directory);
+    const held = heldAnswer();
+    h.answers.push(held.answer);
+
+    speak("read", " it");
+    const done = h.loop.onDelegationCreated("d-1");
+    queue.run({ kind: "later", itemId: "r-1" });
+    held.release(readOf("r-1"));
+    await done;
+
+    expect(enqueued).toEqual([]);
+    expect(h.notices).toEqual([NOTHING_WAITING_NOTICE]);
+    expect(h.noticeDelegations).toEqual(["d-1"]);
+    expect(h.sends).toEqual([]);
+  });
+
+  it("does not set aside an item that was heard while the route was being made", async () => {
+    const { queue, enqueued, directory } = withWaitingItem();
+    const h = buildFor({ recheckHolds: true, canSend: true }, directory);
+    const held = heldAnswer();
+    h.answers.push(held.answer);
+
+    speak("put", " it off");
+    const done = h.loop.onDelegationCreated("d-1");
+    queue.run({ kind: "read", itemId: "r-1", delegationId: null });
+    enqueued[0]?.onDelivered?.();
+    expect(queue.items().map((item) => item.state)).toEqual(["heard"]);
+    held.release(routedItem("later", "r-1"));
+    await done;
+
+    expect(queue.items().map((item) => item.state)).toEqual(["heard"]);
+    expect(h.notices).toEqual([NOTHING_WAITING_NOTICE]);
+    expect(h.noticeDelegations).toEqual(["d-1"]);
   });
 
   it("says that nothing is waiting, under the request's delegation, when there is nothing to read", async () => {
