@@ -106,10 +106,27 @@ export function AnchoredDraftPopover(props: {
     event.preventDefault();
     dismiss();
   });
+  // The Send to chat picker is a Radix menu portalled to the body, so a click
+  // in it lands outside the dialog element. It belongs to the box when its
+  // trigger does: dismissing on that click would both prompt to discard the
+  // draft and break Radix's pointer tracking, which then selects the item
+  // twice.
+  const insideOwnMenu = (target: Node): boolean => {
+    if (!(target instanceof Element)) return false;
+    const triggerId = target
+      .closest("[data-slot=dropdown-menu-content]")
+      ?.getAttribute("aria-labelledby");
+    const trigger =
+      triggerId === null || triggerId === undefined
+        ? null
+        : document.getElementById(triggerId);
+    return trigger !== null && (floatingRef.current?.contains(trigger) ?? false);
+  };
   const outside = useEffectEvent((event: PointerEvent) => {
     if (
       !(event.target instanceof Node) ||
       floatingRef.current?.contains(event.target) ||
+      insideOwnMenu(event.target) ||
       event
         .composedPath()
         .some(
