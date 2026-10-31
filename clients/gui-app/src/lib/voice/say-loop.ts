@@ -115,6 +115,12 @@ export interface SayLoop {
   /** The person selected another channel or thread by hand. */
   onSelectionChanged(): void;
   /**
+   * The thread list resolved the focused anchor (to its thread, or to none
+   * yet): requests closed while it was unresolved post now, in order, each
+   * under its own delegation, to the focus as it stands.
+   */
+  onFocusResolved(): Promise<void>;
+  /**
    * Where a reply belongs: `placed` with the delegation of the request this
    * session accepted and still awaits an answer to (named by its id when the
    * records name it; else, for a thread that an accepted post OPENED, that
@@ -163,7 +169,11 @@ interface RequestBinding {
   readonly hostId: string;
   /** The thread the post is in, or `null` for a top-level post the bot answers in the channel. */
   readonly threadId: string | null;
-  /** The post opened `threadId`: the thread has no row older than it. */
+  /**
+   * A top-level post opened `threadId`, so the thread has no row older than
+   * it. `false` for a post into a thread, and for a reply under an anchor,
+   * whose thread may have existed before the list showed it.
+   */
   readonly openedThread: boolean;
 }
 
@@ -177,6 +187,13 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   const handledBoundaries = new Set<string>();
   /** Accepted requests awaiting a reply, by request id. */
   const awaiting = new Map<string, RequestBinding>();
+  /**
+   * Requests closed while the focused anchor's thread was unresolved, in
+   * the order they were said: posted once the list resolves it (see
+   * {@link SayLoop.onFocusResolved}), released into the interruption when
+   * the person moves first.
+   */
+  const unresolved: Action[] = [];
 
   const delegationOf = (
     binding: Pick<RequestBinding, "engineGeneration" | "delegationId">,
@@ -184,6 +201,36 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     binding.engineGeneration === store.getState().engineGeneration
       ? binding.delegationId
       : null;
+
+  /**
+   * The focus follows where the post landed. A post into a thread keeps its
+   * thread's anchor and the rail is left where it is; one under an anchor
+   * follows the thread it landed in by that anchor; one from the channel
+   * opens the rail on the thread it opened.
+   */
+  function adoptDestination(
+    action: Action,
+    response: BotConversationSendResponse,
+  ): void {
+    const { focus } = action;
+    if (focus.threadId !== null || response.threadId === null) return;
+    const state = store.getState();
+    if (focus.anchorMessageId !== null) {
+      state.setFocus({
+        ...focus,
+        threadId: response.threadId,
+        anchorThread: null,
+      });
+      return;
+    }
+    state.setFocus({
+      ...focus,
+      threadId: response.threadId,
+      anchorMessageId: response.messageId,
+      anchorThread: null,
+    });
+    deps.openThread(focus, response, action.text);
+  }
 
   /** Sends one action and settles it: its words are spent either way. */
   async function post(action: Action): Promise<void> {
@@ -216,10 +263,14 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     if (after.pendingDelegationId === delegationId) {
       after.setPendingDelegation(null);
     }
-    // The post opened a thread only when it went where none was: a post into
-    // a thread, or under an anchor the rail already opens on, keeps its
-    // thread's anchor, and the rail is left where it is.
-    const openedThread = focus.threadId === null && response.threadId !== null;
+    // Only a top-level post proves the thread it landed in is new: the host
+    // keys that thread by the post. A reply under an anchor the list had no
+    // thread for may have joined one the list was behind on, so its thread
+    // is joined, and its first snapshot is history but for the exact answer.
+    const openedThread =
+      focus.threadId === null &&
+      focus.anchorMessageId === null &&
+      response.threadId !== null;
     awaiting.set(response.requestId, {
       requestId: response.requestId,
       delegationId,
@@ -236,23 +287,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       response.threadId === null
         ? `${deps.botTitle(focus.botId)}'s channel`
         : `a thread with ${deps.botTitle(focus.botId)}`;
-    if (!moved && openedThread && response.threadId !== null) {
-      if (focus.anchorThread === "unopened") {
-        after.setFocus({
-          ...focus,
-          threadId: response.threadId,
-          anchorThread: null,
-        });
-      } else {
-        after.setFocus({
-          ...focus,
-          threadId: response.threadId,
-          anchorMessageId: response.messageId,
-          anchorThread: null,
-        });
-        deps.openThread(focus, response, action.text);
-      }
-    }
+    if (!moved) adoptDestination(action, response);
     // One notice covers both facts: the voice says nothing about an ordinary
     // post beyond the reply itself.
     const notice = [
@@ -302,9 +337,8 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         return;
       }
       const focus = state.focus;
-      // No destination yet (no focus, or a thread the list has not resolved):
-      // the words stay open for the request that has one.
-      if (focus === null || focus.anchorThread === "resolving") return;
+      // No destination yet: the words stay open for the request that has one.
+      if (focus === null) return;
       const actionId = `${state.sessionToken}:${boundary}`;
       const reservation = state.reserveOpenSpan(actionId);
       if (reservation === null) return;
@@ -320,8 +354,36 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         engineGeneration: state.engineGeneration,
         movedWhileSending: false,
       };
+      // The anchor's thread is not known yet: the request is complete, its
+      // words are its own, and it posts under this delegation once the list
+      // says where. A later utterance reserves only its own words.
+      if (focus.anchorThread === "resolving") {
+        unresolved.push(action);
+        return;
+      }
       inFlight.set(actionId, action);
       await post(action);
+    },
+
+    async onFocusResolved() {
+      const state = store.getState();
+      const focus = state.focus;
+      if (focus === null || focus.anchorThread === "resolving") return;
+      for (const action of unresolved.splice(0)) {
+        // Its session ended, or the person moved (which released its words
+        // into the interruption): nothing left to post.
+        if (
+          action.sessionToken !== state.sessionToken ||
+          action.selectionGeneration !== state.selectionGeneration ||
+          action.focus.botId !== focus.botId ||
+          action.focus.anchorMessageId !== focus.anchorMessageId
+        ) {
+          continue;
+        }
+        const resumed: Action = { ...action, focus };
+        inFlight.set(resumed.actionId, resumed);
+        await post(resumed);
+      }
     },
 
     onSelectionChanged() {
@@ -329,6 +391,13 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       for (const action of inFlight.values()) {
         if (action.sessionToken === state.sessionToken) {
           action.movedWhileSending = true;
+        }
+      }
+      // A request held for an unresolved destination is interrupted like
+      // the open words: they are released into them, and go with them.
+      for (const action of unresolved.splice(0)) {
+        if (action.sessionToken === state.sessionToken) {
+          state.releaseReservation(action.seqs);
         }
       }
       // A move during an interruption already pending adds nothing: the

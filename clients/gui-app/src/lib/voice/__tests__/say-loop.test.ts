@@ -160,7 +160,7 @@ describe("a delegation", () => {
     expect(h.opened.map((answer) => answer.threadId)).toEqual(["thread-7"]);
   });
 
-  it("under a row nobody has replied under follows the thread the reply opened, keeping the row as its anchor and the rail where it is", async () => {
+  it("under a row nobody has replied under follows the thread the reply landed in by that row, rail untouched, as a thread joined, not proven new", async () => {
     const h = harness();
     const unopened: VoiceFocus = {
       ...FOCUS,
@@ -182,24 +182,91 @@ describe("a delegation", () => {
       anchorThread: null,
     });
     expect(h.opened).toEqual([]);
-    expect(h.loop.awaitedIn("thread-q")).toBe("opened");
+    // The list may have been behind on a thread under the row: its history
+    // is not this request's answer.
+    expect(h.loop.awaitedIn("thread-q")).toBe("joined");
+    expect(h.loop.isAwaiting("r-1")).toBe(true);
+  });
+});
+
+describe("a request closed while the anchor's thread is unresolved", () => {
+  const RESOLVING: VoiceFocus = {
+    ...FOCUS,
+    threadId: null,
+    anchorMessageId: "q-1",
+    anchorThread: "resolving",
+  };
+
+  it("holds its words as its own and posts them under its delegation once the list says where; a later request keeps its own", async () => {
+    const h = harness();
+    const store = useVoiceSessionStore.getState();
+    store.setFocus(RESOLVING);
+    await h.loop.onDelegationCreated("d-1");
+    expect(h.sends).toEqual([]);
+    expect(store.openSpan()).toBe("");
+    expect(useVoiceSessionStore.getState().pendingDelegationId).toBe("d-1");
+    store.appendInputSegment(" and the tests", 3);
+    await h.loop.onDelegationCreated("d-2");
+    expect(h.sends).toEqual([]);
+
+    const resolved: VoiceFocus = {
+      ...RESOLVING,
+      threadId: "thread-q",
+      anchorThread: null,
+    };
+    store.setFocus(resolved);
+    const resumed = h.loop.onFocusResolved();
+    expect(h.sends).toEqual([
+      { focus: resolved, text: "please check the build" },
+    ]);
+    h.resolve(response({ threadId: "thread-q" }), 0);
+    await new Promise((settle) => setTimeout(settle, 0));
+    expect(h.sends.map((send) => send.text)).toEqual([
+      "please check the build",
+      "and the tests",
+    ]);
+    h.resolve(
+      response({ messageId: "m-2", requestId: "r-2", threadId: "thread-q" }),
+      1,
+    );
+    await resumed;
+
+    const after = useVoiceSessionStore.getState();
+    expect(after.segments).toEqual([]);
+    expect(after.pendingDelegationId).toBeNull();
+    expect(after.focus).toEqual(resolved);
+    expect(h.loop.placementFor(placeOf("thread-q", "r-1"))).toEqual({
+      kind: "placed",
+      delegationId: "d-1",
+    });
+    expect(h.loop.placementFor(placeOf("thread-q", "r-2"))).toEqual({
+      kind: "placed",
+      delegationId: "d-2",
+    });
+    expect(await h.loop.onFocusResolved()).toBeUndefined();
+    expect(h.sends).toHaveLength(2);
   });
 
-  it("holds the words while the thread behind the anchor is unresolved", async () => {
+  it("is interrupted by a move like open words, and the resolution afterwards posts nothing", async () => {
     const h = harness();
-    useVoiceSessionStore.getState().setFocus({
-      ...FOCUS,
-      threadId: null,
-      anchorMessageId: "q-1",
-      anchorThread: "resolving",
-    });
+    const store = useVoiceSessionStore.getState();
+    store.setFocus(RESOLVING);
     await h.loop.onDelegationCreated("d-1");
 
+    store.selectionChanged(OTHER_FOCUS);
+    h.loop.onSelectionChanged();
+
+    expect(h.asks).toEqual([MOVED_ASK_TEXT]);
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "interrupted",
+      text: "please check the build",
+      delegationId: "d-1",
+    });
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+
+    store.setFocus({ ...RESOLVING, threadId: "thread-q", anchorThread: null });
+    await h.loop.onFocusResolved();
     expect(h.sends).toEqual([]);
-    expect(useVoiceSessionStore.getState().openSpan()).toBe(
-      "please check the build",
-    );
-    expect(useVoiceSessionStore.getState().pendingDelegationId).toBeNull();
   });
 
   it("says a queued delivery as queued, never paused", async () => {
@@ -471,7 +538,9 @@ describe("placementFor", () => {
 
   it("finds the delegation by the thread an accepted post opened, once, before the records name the request", async () => {
     const h = harness();
-    useVoiceSessionStore.getState().setFocus({ ...FOCUS, threadId: null });
+    useVoiceSessionStore
+      .getState()
+      .setFocus({ ...FOCUS, threadId: null, anchorMessageId: null });
     const done = h.loop.onDelegationCreated("d-1");
     h.resolve(response({ threadId: "t1" }), 0);
     await done;
@@ -573,7 +642,9 @@ describe("an engine replacement during a send", () => {
   it("completes the acceptance as pending work: clears the delegation, opens the thread, notifies under none, and binds no delegation to the reply", async () => {
     const h = harness();
     useVoiceSessionStore.getState().sessionConnecting();
-    useVoiceSessionStore.getState().setFocus({ ...FOCUS, threadId: null });
+    useVoiceSessionStore
+      .getState()
+      .setFocus({ ...FOCUS, threadId: null, anchorMessageId: null });
     useVoiceSessionStore.getState().appendInputSegment("merge it", 1);
     const done = h.loop.onDelegationCreated("d-1");
     expect(useVoiceSessionStore.getState().pendingDelegationId).toBe("d-1");

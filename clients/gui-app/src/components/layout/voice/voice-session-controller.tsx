@@ -411,10 +411,20 @@ export function VoiceSessionController(): ReactNode {
         });
       }
       if (attempt.sessionId === null) return;
-      const result = await endAsync(attempt.sessionId);
-      if (result.kind !== "ok") {
-        appLogger.warn("[voice] end route did not answer", {
-          kind: result.kind,
+      // Best effort: the session is over for the person either way, and the
+      // server finalizes an unended row from its sideband. A refusal is
+      // the result's kind; a shell whose bridge throws (the desktop's main
+      // handler failing) rejects, and is logged the same way.
+      try {
+        const result = await endAsync(attempt.sessionId);
+        if (result.kind !== "ok") {
+          appLogger.warn("[voice] end route did not answer", {
+            kind: result.kind,
+          });
+        }
+      } catch (error) {
+        appLogger.warn("[voice] end route failed", {
+          error: describeLogError(error),
         });
       }
     },
@@ -499,7 +509,13 @@ export function VoiceSessionController(): ReactNode {
                 attempt.sessionId = result.session.voiceSessionId;
                 attempt.expiresAt = result.session.expiresAt;
                 if (!owns()) {
-                  void endAsync(result.session.voiceSessionId);
+                  void endAsync(result.session.voiceSessionId).catch(
+                    (error: unknown) => {
+                      appLogger.warn("[voice] end route failed", {
+                        error: describeLogError(error),
+                      });
+                    },
+                  );
                   throw closedBeforeStart();
                 }
                 return result.session.answerSdp;
@@ -575,7 +591,12 @@ export function VoiceSessionController(): ReactNode {
               void sayLoop().onDelegationCreated(delegationId);
             },
             onUsage: (usage) => {
-              if (!owns()) return;
+              // Usage before the session started replaces nothing: a
+              // replacement must retire a session that ran, or the
+              // short-session budget cannot count it. The next report after
+              // the start is read as usual, and the expiry timer bounds the
+              // session regardless.
+              if (!owns() || !attempt.started) return;
               if (
                 usage.contextUsageRatio !== null &&
                 usage.contextUsageRatio >= REMINT_CONTEXT_USAGE_RATIO
@@ -676,11 +697,12 @@ export function VoiceSessionController(): ReactNode {
       // Every path here (the vendor's close, the expiry timer, the usage
       // threshold) counts the session it replaces: one that did not outlive
       // its own handshake ceiling gave the person nothing, and a run of them
-      // is a vendor or server that is not coming back for now.
+      // is a vendor or server that is not coming back for now. Only a
+      // session that ran longer resets the count; one that never started
+      // ran not at all.
+      const ran = old.started ? Date.now() - old.startedAt : 0;
       shortSessionsRef.current =
-        Date.now() - old.startedAt < SHORT_SESSION_MS
-          ? shortSessionsRef.current + 1
-          : 0;
+        ran < SHORT_SESSION_MS ? shortSessionsRef.current + 1 : 0;
       if (shortSessionsRef.current >= MAX_SHORT_SESSIONS) {
         finishLocal("connection");
         void settleAttempt(old);
@@ -861,6 +883,7 @@ export function VoiceSessionController(): ReactNode {
       {running ? (
         <VoiceSelectionSync
           onManualChange={() => sayLoop().onSelectionChanged()}
+          onResolved={() => void sayLoopRef.current?.onFocusResolved()}
         />
       ) : null}
       {running && focus !== null && channelId !== null && speech !== null ? (
@@ -939,8 +962,10 @@ function readSelection(): VoiceFocus | null {
  */
 function VoiceSelectionSync(props: {
   readonly onManualChange: () => void;
+  /** The thread list resolved the anchor the focus already names. */
+  readonly onResolved: () => void;
 }): null {
-  const { onManualChange } = props;
+  const { onManualChange, onResolved } = props;
   const focusedRef = useTabsStore(selectHostFocusedRef);
   const activeBotId = focusedRef?.kind === "bot" ? focusedRef.id : null;
   const tab = useBotTabsStore((state) =>
@@ -959,8 +984,9 @@ function VoiceSelectionSync(props: {
     applySelection(
       focusOf(activeBotId, tab.hostId, thread, listed),
       onManualChange,
+      onResolved,
     );
-  }, [activeBotId, listed, onManualChange, tab, thread]);
+  }, [activeBotId, listed, onManualChange, onResolved, tab, thread]);
 
   return null;
 }
@@ -1015,6 +1041,7 @@ function focusOf(
 function applySelection(
   selection: VoiceFocus,
   onManualChange: () => void,
+  onResolved: () => void,
 ): void {
   const store = useVoiceSessionStore.getState();
   const current = store.focus;
@@ -1028,6 +1055,7 @@ function applySelection(
   if (sameAnchor) {
     if (current.threadId === null || selection.threadId !== null) {
       store.setFocus(selection);
+      if (selection.anchorThread !== "resolving") onResolved();
     }
     return;
   }
@@ -1194,6 +1222,29 @@ function VoiceFocusedReplyFeed(props: {
         }
       }
     };
+    // The records now tie a row of the bot to a request this session awaits:
+    // it is its answer, wherever it came from. A row the baseline took for
+    // history (its request row loaded with no resolution yet, or the
+    // acceptance naming the request not back yet) is spoken the moment the
+    // request records resolve to it, once; one already scheduled is not.
+    const speakAwaited = (where: ReplyRecords): void => {
+      for (const row of handle.store.getState().messages) {
+        if (row.role !== "assistant" || memory.scheduled.has(row.messageId)) {
+          continue;
+        }
+        const requestId = requestIdAnsweredIn(where, row.messageId);
+        if (requestId === null || !placeRef.current.isAwaiting(requestId)) {
+          continue;
+        }
+        const text = replyTextOf(row);
+        if (text.length > 0) speak({ messageId: row.messageId, text }, where);
+      }
+    };
+    /** The records changed: place what waits, and speak what they now answer. */
+    const settle = (where: ReplyRecords): void => {
+      speakAwaited(where);
+      placeLater(where);
+    };
     // A watch that already has a baseline carries on; a fresh one takes the
     // first loaded snapshot as history, less the answers awaited here.
     const watch = (state: ReplyWatchState): void => {
@@ -1219,26 +1270,17 @@ function VoiceFocusedReplyFeed(props: {
       for (const reply of takeNewBotReplies(state.messages, memory)) {
         speak(reply, where);
       }
-      placeLater(where);
+      settle(where);
     };
     // An acceptance came back: a row already loaded (and baselined, or seen
-    // while the send was out) that answers exactly this request is spoken.
+    // while the send was out) that the records tie to a request now awaited
+    // is spoken.
     const reconcile = (request: AcceptedRequest): void => {
       if (request.botId !== focus.botId || request.hostId !== focus.hostId) {
         return;
       }
       if (request.threadId !== threadId) return;
-      const where = records();
-      const rows = handle.store.getState().messages;
-      for (const row of rows) {
-        if (row.role !== "assistant") continue;
-        if (requestIdAnsweredIn(where, row.messageId) !== request.requestId) {
-          continue;
-        }
-        const text = replyTextOf(row);
-        if (text.length > 0) speak({ messageId: row.messageId, text }, where);
-      }
-      placeLater(where);
+      settle(records());
     };
     registerReconcileRef.current(reconcile);
     watch(handle.store.getState());
@@ -1246,7 +1288,7 @@ function VoiceFocusedReplyFeed(props: {
     const unsubscribeChannel =
       threadId === null
         ? () => undefined
-        : channelHandle.store.subscribe(() => placeLater(records()));
+        : channelHandle.store.subscribe(() => settle(records()));
     return () => {
       unsubscribeFocused();
       unsubscribeChannel();

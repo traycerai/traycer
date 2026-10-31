@@ -271,6 +271,20 @@ function requestRow(
   };
 }
 
+/** A member row whose request `requestId` is still open: nothing has resolved it. */
+function openRequestRow(messageId: string, requestId: string): ReplyRow {
+  return {
+    role: "user",
+    messageId,
+    timestamp: Date.now(),
+    conversationRequest: {
+      requestId,
+      resolvedAt: null,
+      resolvedByMessageId: null,
+    },
+  };
+}
+
 /** The person picks `botId`'s tab: the real tab stores the selection sync reads. */
 function selectBotTab(botId: string): void {
   act(() => {
@@ -747,6 +761,59 @@ describe("a fast answer in a cold existing thread", () => {
 
     await expectOneAnswer();
   });
+
+  it("is spoken once when the first snapshot holds the answer before the request resolves to it", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    const thread = addChat("t1", { snapshotLoaded: false, messages: [] });
+    await bringLive();
+    focusOn(THREAD_FOCUS);
+    await say("Update it.", "d1");
+    await act(async () => {
+      fake.send.resolve(FOLLOW_UP);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // The answer is in the snapshot, but nothing ties it to r1 yet: the
+    // baseline takes it for history.
+    act(() => {
+      thread.setState({
+        snapshotLoaded: true,
+        messages: [
+          botRow("h0", "Old news about the release."),
+          openRequestRow("u1", "r1"),
+          botRow("a1", "Merged."),
+        ],
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(fake.engines[0]?.appendCommentary).not.toHaveBeenCalled();
+
+    // The request records resolve r1 to that row.
+    act(() => {
+      thread.setState({ snapshotLoaded: true, messages: coldSnapshot() });
+    });
+
+    await expectOneAnswer();
+  });
+});
+
+describe("an end route that throws", () => {
+  it("during a re-mint is logged, and the replacement engine still starts", async () => {
+    await bringLive();
+    fake.endVoiceSession.mockImplementation(() =>
+      Promise.reject(new Error("bridge failed")),
+    );
+
+    act(() => eventsOf(0).onClosed("vendor"));
+    await settle();
+
+    expect(fake.endVoiceSession).toHaveBeenCalledWith("vs1");
+    expect(fake.engines).toHaveLength(2);
+    await startEngine(1);
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+  });
 });
 
 describe("a follow-up accepted in an existing thread", () => {
@@ -1021,8 +1088,7 @@ describe("a run of sessions that die at once", () => {
 });
 
 describe("a question nobody has replied under", () => {
-  it("holds the words until the thread list answers, then posts under the question as the reply that opens its thread, and follows that thread by the question", async () => {
-    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+  function openQuestionRail(): void {
     selectBotTab(BOT_ID);
     act(() =>
       useBotOpenThreadStore.getState().setRail(BOT_ID, {
@@ -1033,32 +1099,32 @@ describe("a question nobody has replied under", () => {
         sent: null,
       }),
     );
+  }
+  const RESOLVING: VoiceFocus = {
+    ...CHANNEL_FOCUS,
+    anchorMessageId: "q1",
+    anchorThread: "resolving",
+  };
+
+  it("holds a closed request until the thread list answers, then posts it under the question as the reply that opens its thread, follows that thread by the question, and posts the next request into it", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    openQuestionRail();
     await bringLive();
-    const unresolved: VoiceFocus = {
-      ...CHANNEL_FOCUS,
-      anchorMessageId: "q1",
-      anchorThread: "resolving",
-    };
-    expect(useVoiceSessionStore.getState().focus).toEqual(unresolved);
+    expect(useVoiceSessionStore.getState().focus).toEqual(RESOLVING);
     const generation = useVoiceSessionStore.getState().selectionGeneration;
 
-    await say("Yes,", "d1");
+    await say("Yes, merge it.", "d1");
     expect(fake.sendMock).not.toHaveBeenCalled();
-    expect(useVoiceSessionStore.getState().openSpan()).toBe("Yes,");
 
     act(() => {
       fake.threadList.set({ threads: [] });
     });
-    expect(useVoiceSessionStore.getState().focus).toEqual({
-      ...unresolved,
-      anchorThread: "unopened",
-    });
-    // The list resolving the anchor is not the person moving.
+    // The list resolving the anchor is not the person moving, and the
+    // request closed while it was unresolved posts now, under its own
+    // delegation.
     expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
       generation,
     );
-
-    await say(" merge it.", "d2");
     expect(fake.sendMock).toHaveBeenCalledTimes(1);
     expect(fake.sendMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1077,7 +1143,7 @@ describe("a question nobody has replied under", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(useVoiceSessionStore.getState().focus).toEqual({
-      ...unresolved,
+      ...RESOLVING,
       threadId: "tq",
       anchorThread: null,
     });
@@ -1086,5 +1152,149 @@ describe("a question nobody has replied under", () => {
       anchorMessageId: "q1",
       sent: null,
     });
+
+    await say("Then deploy it.", "d2");
+    expect(fake.sendMock).toHaveBeenCalledTimes(2);
+    expect(fake.sendMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        text: "Then deploy it.",
+        threadId: "tq",
+        announcementId: null,
+      }),
+    );
+  });
+
+  it("posts a request closed while unresolved into the thread the list then names, once, and a later request on its own", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    addChat("t1", { snapshotLoaded: true, messages: [] });
+    openQuestionRail();
+    await bringLive();
+
+    await say("Check the build.", "d1");
+    expect(fake.sendMock).not.toHaveBeenCalled();
+    act(() => eventsOf(0).onDelegationCreated("d1"));
+    expect(fake.sendMock).not.toHaveBeenCalled();
+
+    act(() => {
+      fake.threadList.set({
+        threads: [{ threadId: "t1", anchor: { messageId: "q1" } }],
+      });
+    });
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    expect(fake.sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Check the build.",
+        threadId: "t1",
+        announcementId: null,
+      }),
+    );
+    await act(async () => {
+      fake.send.resolve({
+        messageId: "m1",
+        requestId: "r1",
+        delivery: "written",
+        threadId: "t1",
+      });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    await say("What failed?", "d2");
+    expect(fake.sendMock).toHaveBeenCalledTimes(2);
+    expect(fake.sendMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: "What failed?", threadId: "t1" }),
+    );
+  });
+
+  it("whose reply joined a thread the list had not shown speaks that thread's history to nobody, and the actual answer under the delegation", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    const thread = addChat("t-existing", {
+      snapshotLoaded: false,
+      messages: [],
+    });
+    openQuestionRail();
+    act(() => {
+      fake.threadList.set({ threads: [] });
+    });
+    await bringLive();
+    expect(useVoiceSessionStore.getState().focus).toEqual({
+      ...RESOLVING,
+      anchorThread: "unopened",
+    });
+
+    await say("Rebuild it.", "d1");
+    await act(async () => {
+      fake.send.resolve({
+        messageId: "m1",
+        requestId: "r1",
+        delivery: "written",
+        threadId: "t-existing",
+      });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(useVoiceSessionStore.getState().focus?.threadId).toBe("t-existing");
+
+    // The thread existed: its first snapshot is history.
+    const old = botRow("old", "Yesterday branch alpha was deleted.");
+    act(() => {
+      thread.setState({ snapshotLoaded: true, messages: [old] });
+    });
+    const commentary = fake.engines[0]?.appendCommentary;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(commentary).not.toHaveBeenCalled();
+
+    act(() => {
+      thread.setState({
+        snapshotLoaded: true,
+        messages: [
+          old,
+          requestRow("u1", "r1", "a2"),
+          botRow("a2", "The new build passed."),
+        ],
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(commentary.mock.calls).toEqual([
+      [expect.stringContaining("The new build passed."), "d1"],
+    ]);
+    act(() => eventsOf(0).onOutputTranscriptDelta("the new build passed"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(commentary).toHaveBeenCalledTimes(1);
+    expect(fake.markRead.mock.calls).toEqual([
+      [{ epicId: BOT_ID, chatId: "t-existing" }],
+    ]);
+  });
+});
+
+describe("a replacement asked for before its session started", () => {
+  it("is not taken, and does not reset the short-session budget", async () => {
+    await bringLive();
+
+    act(() => eventsOf(0).onClosed("vendor"));
+    await settle();
+    expect(fake.engines).toHaveLength(2);
+    // The new session reports high usage before it has started.
+    act(() => eventsOf(1).onUsage({ seconds: 1, contextUsageRatio: 0.95 }));
+    await settle();
+    expect(fake.engines).toHaveLength(2);
+    await startEngine(1);
+    expect(useVoiceSessionStore.getState().phase).toBe("live");
+
+    act(() => eventsOf(1).onClosed("vendor"));
+    await settle();
+    await startEngine(2);
+    act(() => eventsOf(2).onClosed("vendor"));
+    await settle();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.phase).toBe("idle");
+    expect(state.endReason).toBe("connection");
+    expect(fake.engines).toHaveLength(3);
+    expect(fake.endVoiceSession).toHaveBeenCalledTimes(3);
   });
 });
