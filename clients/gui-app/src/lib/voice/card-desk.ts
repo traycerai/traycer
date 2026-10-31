@@ -35,7 +35,7 @@ import type {
  * The rules, in order:
  *  - `open` (or `read` on a card) appends the question and its choices, or
  *    the approval's summary and Allow and Deny, as a short list under its
- *    own append (probe P5: a paraphrase drops choices). Nothing the person
+ *    own append (a paraphrase drops choices). Nothing the person
  *    says counts until that list was confirmed spoken by its content.
  *  - The person names a choice (here, matched exactly; else by the router,
  *    which sees the card). The choice becomes the candidate and is read back
@@ -49,11 +49,11 @@ import type {
  *    `forwarded` act keeps the draft until the task's machine answers.
  *  - Settled by someone else, before or as the act lands, is said with who
  *    settled it, and the voice offers to post the answer in the thread
- *    instead (decision 122). A card no longer there is said, never sent.
+ *    instead. A card no longer there is said, never sent.
  *
  * The decision is always the person's: the voice reads, the person chooses,
- * the person confirms (decision 124). Every tier the person may decide on
- * the card is allowed (V4).
+ * the person confirms. Every tier the person may decide on the card is
+ * allowed.
  */
 
 /** One question of a card, as its records give it. */
@@ -438,7 +438,7 @@ interface Desk {
   cancelSettlerWait: () => void;
   /** The surfaced act out, by id. */
   actionId: string | null;
-  /** Decision 122: the answer the voice offers to post, once settled by someone else. */
+  /** The answer the voice offers to post, once settled by someone else. */
   offer: { readonly text: string; say: Spoken } | null;
   /** A refusal waiting for the records to name who settled the card. */
   awaitingSettler: boolean;
@@ -742,7 +742,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
         return;
       case "forwarded":
         // Not settled: the draft is kept until the task's machine records it
-        // (the post shows the resolution) or refuses it (decision 123).
+        // (the post shows the resolution) or refuses it.
         setCard({ state: "forwarded" });
         notify(held, "Sent. It is on its way to the task's machine.");
         return;
