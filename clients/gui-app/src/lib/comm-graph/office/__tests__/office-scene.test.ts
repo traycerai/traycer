@@ -11692,7 +11692,7 @@ describe("OfficeScene leads audience", () => {
   });
 });
 
-// ---- Cold-review findings F1-F9 ------------------------------------- //
+// ---- T2: cold-review findings F1-F9 --------------------------------- //
 
 /** A projector whose x axis is offset far from the identity mapping. */
 const SHIFTED_PROJECTOR: OfficeProjector = {
@@ -13102,7 +13102,7 @@ describe("OfficeScene fixup 1 - F17 isometric growth reports a projected shift",
   });
 });
 
-// ---- The reviewer's residuals ---------------------------------------- //
+// ---- T2: the reviewer's residuals ------------------------------------ //
 
 describe("OfficeScene fixup 2 - F2 a remembered errand tile follows the shift", () => {
   /**

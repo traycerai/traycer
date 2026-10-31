@@ -742,7 +742,7 @@ function installCanvas(): { readonly step: () => void } {
         // A CONSTANT, and deliberately so: `set` discards every write, so
         // nothing here carries state and `save`/`restore` have nothing to
         // unwind. That is what keeps this double clear of the defect the
-        // canvas suite's two doubles had, where a persisted
+        // canvas suite's two doubles had (T2), where a persisted
         // `font` / `letterSpacing` made every measurement after the first
         // sign plate model a browser that does not exist.
         //

@@ -361,7 +361,7 @@ function deriveGateFlags(input: {
     input.form.type === "bug" && input.form.locationChanged;
   const intentSatisfiesGate = input.form.intent.trim().length > 0;
   // The evidence gate: a sentence, an image, or (bug-only) an
-  // actively-changed location - any one satisfies it.
+  // actively-changed location - any one satisfies it (T4/T5).
   const gateSatisfied =
     !gateApplies ||
     intentSatisfiesGate ||
@@ -445,7 +445,7 @@ export function ReportIssueDialog(
 
   // Flow 1 (error-triggered) vs Flow 2 (manual): an error envelope is either
   // a structured cause or a fingerprint captured at catch time. The evidence
-  // gate and the type-chip row are both keyed off this.
+  // gate (T4) and the type-chip row are both keyed off this.
   const { cause, fingerprint, hasErrorEnvelope } =
     errorEnvelopeFromContext(draftContext);
 

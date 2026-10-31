@@ -5682,7 +5682,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
   });
 
   /**
-   * The block map's new `quad` drawable actually reaches the
+   * T5: the block map's new `quad` drawable actually reaches the
    * canvas as a filled path.
    *
    * A rewrite changed what a lod-0 region emits - four PROJECTED corners
