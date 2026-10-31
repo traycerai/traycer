@@ -842,19 +842,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
       case "forwarded": {
         setCard({ state: "forwarded" });
         notify(current, "Sent. It is on its way to the task's machine.");
-        // The records may already say how it ended (its refusal, or the
-        // post's resolution) while the call was out: nothing re-reads them
-        // for a change of state alone, so they are read now.
-        const now = card();
-        const facts = current.facts;
-        if (now !== null && facts !== null) {
-          observeForwarded(
-            current,
-            now,
-            facts,
-            facts.settledBy(now.questionIndex),
-          );
-        }
+        reconcileForwarded(current);
         return;
       }
       case "refused":
@@ -1010,6 +998,19 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
       speech.withdraw(held.candidateSay.id);
     }
     speakSettled(held, active.candidate, by);
+  };
+
+  /**
+   * The records may already say how a forwarded act ended (its refusal, or
+   * the post's resolution) from while the call was out: nothing re-reads
+   * them for a change of state alone, so they are read as it turns
+   * forwarded.
+   */
+  const reconcileForwarded = (held: Desk): void => {
+    const now = card();
+    const facts = held.facts;
+    if (now === null || facts === null) return;
+    observeForwarded(held, now, facts, facts.settledBy(now.questionIndex));
   };
 
   /** The records while a forwarded act waits for the task's machine: recorded, refused, or gone. */
