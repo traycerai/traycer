@@ -4,6 +4,11 @@
  */
 
 import type { CSSProperties } from "react";
+import {
+  useReducedMotion,
+  type TargetAndTransition,
+  type Transition,
+} from "motion/react";
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
 import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings/settings-store";
@@ -11,6 +16,26 @@ import { SIDEBAR_NODE_REVEAL_VISIBILITY_MS } from "@/stores/epics/sidebar-node-r
 
 export const INDENT_PX = 16;
 export const BASE_PAD_LEFT = 8;
+
+/**
+ * The motion props of one chat-tree row, local or cloud: a position-only
+ * layout animation so the row slides when rows around it come and go, a short
+ * exit, and one shared timing. Every row in the tree takes these, because a
+ * row that snaps to its new place while its neighbours slide is drawn through
+ * by them for the length of the transition.
+ */
+export function useTreeRowMotion(): {
+  readonly layout: "position" | false;
+  readonly exit: TargetAndTransition | undefined;
+  readonly transition: Transition;
+} {
+  const shouldReduceMotion = useReducedMotion() === true;
+  return {
+    layout: shouldReduceMotion ? false : "position",
+    exit: shouldReduceMotion ? undefined : { opacity: 0, x: -8 },
+    transition: { duration: 0.16, ease: "easeOut" },
+  };
+}
 
 /** Same visual treatment and lifetime as a communication-graph transcript jump. */
 export const SIDEBAR_REVEAL_HIGHLIGHT_CLASS =
