@@ -155,6 +155,12 @@ export interface VoiceQueue {
    */
   noteSwitched(itemId: string): void;
   /**
+   * The item is read as a card (VT5): its saying is the card's from now on.
+   * Its one-line offer and a Read of it queued here are taken back, so
+   * neither is said over or after the card, and the focused feed leaves it.
+   */
+  claimForCard(itemId: string): void;
+  /**
    * A queued question or surfaced prompt was settled by someone else (its
    * row no longer asks anything open): it no longer waits on the person, so
    * it leaves the queue unsaid, its offer and any Read withdrawn, and is not
@@ -191,6 +197,8 @@ interface Entry {
   offerId: string | null;
   /** The scheduler item reading it, while it is in flight. */
   readId: string | null;
+  /** Read as a card: the card says it, never the queue or the focused feed. */
+  claimed: boolean;
 }
 
 interface Pending {
@@ -487,6 +495,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
         surface: surfaceOfRow(row),
         offerId: null,
         readId: carried?.readId ?? null,
+        claimed: false,
       };
       created.item = {
         ...created.item,
@@ -540,6 +549,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
         surface: null,
         offerId: null,
         readId: null,
+        claimed: false,
       });
       publish();
     },
@@ -584,6 +594,7 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
           surface: null,
           offerId: null,
           readId: null,
+          claimed: false,
         });
         changed = true;
       }
@@ -656,10 +667,18 @@ export function createVoiceQueue(deps: VoiceQueueDeps): VoiceQueue {
       const entry = entries.get(itemId);
       if (entry !== undefined) switchedTo(entry);
     },
+    claimForCard(itemId) {
+      const entry = entries.get(itemId);
+      if (entry === undefined) return;
+      withdrawOffer(entry);
+      withdrawRead(entry);
+      entry.claimed = true;
+    },
     keepsFromFocus(itemId) {
       const entry = entries.get(itemId);
       if (entry === undefined) return false;
       return (
+        entry.claimed ||
         entry.readId !== null ||
         entry.item.state === "heard" ||
         entry.item.state === "dismissed"

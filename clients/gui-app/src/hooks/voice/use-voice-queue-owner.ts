@@ -409,6 +409,20 @@ export function useVoiceQueueOwner(input: {
     [appendStatus],
   );
 
+  // The card takes the item's saying before it opens: an offer of it still
+  // queued, or a Read of it, is never said over or after the card.
+  const openCard = useCallback(
+    (
+      queue: VoiceQueue,
+      itemId: string,
+      delegationId: string | null,
+    ): QueueVerbOutcome => {
+      queue.claimForCard(itemId);
+      return ensureDesk().open(itemId, delegationId);
+    },
+    [ensureDesk],
+  );
+
   // A card is read back as the active card, by voice or by button, so the
   // person's answer has something to bind to; any other item as VT4 reads it.
   const readItem = useCallback(
@@ -418,11 +432,11 @@ export function useVoiceQueueOwner(input: {
     ): QueueVerbOutcome => {
       const itemId = verb.itemId ?? newestWaiting(queue);
       if (itemId !== null && cardTargetOf(queue, itemId) !== null) {
-        return ensureDesk().open(itemId, verb.delegationId);
+        return openCard(queue, itemId, verb.delegationId);
       }
       return queue.run(verb);
     },
-    [ensureDesk],
+    [openCard],
   );
   // `open`: a card is read back; a page or an artifact a bot's post points
   // at is opened by its own opener, which says where; anything else is
@@ -433,7 +447,7 @@ export function useVoiceQueueOwner(input: {
       verb: Extract<QueueVerb, { readonly kind: "open" }>,
     ): QueueVerbOutcome => {
       if (cardTargetOf(queue, verb.itemId) !== null) {
-        return ensureDesk().open(verb.itemId, verb.delegationId);
+        return openCard(queue, verb.itemId, verb.delegationId);
       }
       const item = queue
         .items()
@@ -463,7 +477,7 @@ export function useVoiceQueueOwner(input: {
       setSurfaceOpens((current) => [...current, request]);
       return "navigated";
     },
-    [ensureDesk],
+    [openCard],
   );
 
   // `later`: the item is set aside in the queue, and a card of it still

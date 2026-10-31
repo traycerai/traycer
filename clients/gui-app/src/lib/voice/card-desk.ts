@@ -417,6 +417,51 @@ function sentText(content: CardContent, choice: CardChoice): string {
   return choice.kind === "skip" ? "Sent: skipped." : "Sent your answer.";
 }
 
+/** The content words of a text, as the scheduler proves a saying of it by. */
+function wordsOfText(text: string): ReadonlyArray<string> {
+  return confirmationWords({ botTitle: null, threadTitle: null, text });
+}
+
+/**
+ * What proves a card's list was read to its end: the words of its last part
+ * (the final choice and the "or skip" of a question, Allow and Deny of an
+ * approval) that the part before it did not already say, so the question's
+ * own words, said first, prove nothing. Not every word of every choice: a
+ * paraphrase may drop some, and the end, said after the rest, is enough.
+ */
+function listEndWords(
+  content: CardContent,
+  question: CardQuestion | null,
+): ReadonlyArray<string> {
+  const approval = content.family === "approval" ? content.approval : null;
+  const end =
+    approval === null
+      ? `${question?.options.at(-1) ?? ""} skip`
+      : APPROVAL_CHOICES.join(" ");
+  const before = new Set(
+    wordsOfText(
+      approval === null
+        ? `${content.botTitle} ${content.place} ${question?.text ?? ""}`
+        : `${content.botTitle} ${content.place} ${approval.tool} ${approval.summary}`,
+    ),
+  );
+  const fresh = wordsOfText(end).filter((word) => !before.has(word));
+  return fresh.length > 0 ? fresh : wordsOfText(end);
+}
+
+/**
+ * What proves a candidate was read back: its own label's words. A label too
+ * short to prove anything by its words alone ("No", "Go") is proven by the
+ * read-back's words instead.
+ */
+function candidateWords(
+  choice: CardChoice,
+  readBack: string,
+): ReadonlyArray<string> {
+  const label = wordsOfText(choiceText(choice));
+  return label.some((word) => word.length >= 4) ? label : wordsOfText(readBack);
+}
+
 /** One speech item's say, kept for its withdrawal and its heard mark. */
 interface Spoken {
   readonly id: string;
@@ -429,8 +474,8 @@ interface Spoken {
 interface Line {
   readonly text: string;
   readonly priority: SpeechPriority;
-  /** The words whose saying proves it was heard. */
-  readonly confirmText: string;
+  /** The words whose saying proves it was heard (see `confirmationWords`). */
+  readonly confirmWords: ReadonlyArray<string>;
   readonly onHeard: ((spoken: Spoken) => void) | null;
   readonly onGivenUp: (() => void) | null;
 }
@@ -502,7 +547,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     store.getState().segments.at(-1)?.seq ?? Number.NEGATIVE_INFINITY;
 
   const say = (held: Desk, line: Line): Spoken => {
-    const { text, priority, confirmText, onHeard, onGivenUp } = line;
+    const { text, priority, confirmWords, onHeard, onGivenUp } = line;
     speechSeq += 1;
     const spoken: Spoken = {
       id: `card:${held.serial}:${speechSeq}`,
@@ -514,11 +559,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
       priority,
       text,
       delegationId: held.delegationId,
-      confirmWords: confirmationWords({
-        botTitle: null,
-        threadTitle: null,
-        text: confirmText,
-      }),
+      confirmWords,
       // Confirmed by its content, which can be its first words: it counts as
       // heard, and the fence for what answers it is set, only once its
       // playback is over, so a yes answers what was heard whole.
@@ -567,17 +608,17 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     say(held, {
       text,
       priority: "focused",
-      confirmText: text,
+      confirmWords: wordsOfText(text),
       onHeard: null,
       onGivenUp: null,
     });
   };
   /** A question the voice asks about the card: heard, it opens the answer window. */
-  const ask = (held: Desk, text: string, confirmText: string): Spoken =>
+  const ask = (held: Desk, text: string): Spoken =>
     say(held, {
       text,
       priority: "ask",
-      confirmText,
+      confirmWords: wordsOfText(text),
       onHeard: () => startWindow(held),
       onGivenUp: () => close(held),
     });
@@ -632,7 +673,6 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     if (content === null) return;
     const index = listIndex(held);
     const question = currentQuestion(held);
-    const choices = choicesOf(content, question);
     const text = cardListText(content, index);
     // A single choice that takes no words of its own is its own candidate.
     const single =
@@ -647,14 +687,14 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
           } satisfies CardChoice)
         : null;
     setCard({ candidate: single, state: "proposed" });
-    const confirmText = [
-      question?.text ?? content.approval?.tool ?? content.postText,
-      ...choices,
-    ].join(" ");
     held.list = say(held, {
       text,
       priority: "ask",
-      confirmText,
+      // Only the list's end proves it was read whole: a read-back cut off
+      // after its question, or with its choices left out, arms nothing.
+      confirmWords: content.actable
+        ? listEndWords(content, question)
+        : wordsOfText(text),
       onHeard: (spoken) => {
         if (!content.actable) {
           close(held);
@@ -683,7 +723,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     held.candidateSay = say(held, {
       text: prefix.length > 0 ? `${prefix} ${text}` : text,
       priority: "ask",
-      confirmText: [choiceText(choice), content.approval?.tool ?? ""].join(" "),
+      confirmWords: candidateWords(choice, text),
       onHeard: () => startWindow(held),
       onGivenUp: () => {
         held.candidateSay = null;
@@ -748,7 +788,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
       return;
     }
     held.cancelWindow();
-    held.offer = { text: choiceText(choice), say: ask(held, text, text) };
+    held.offer = { text: choiceText(choice), say: ask(held, text) };
   };
 
   const refused = (
@@ -1409,7 +1449,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
         const again =
           reason === "focus" ? "You moved, so nothing was posted." : prefix;
         const text = `${again} ${OFFER_TEXT}`;
-        offer.say = ask(held, text, text);
+        offer.say = ask(held, text);
         return;
       }
       if (active.state !== "proposed" || active.candidate === null) return;
