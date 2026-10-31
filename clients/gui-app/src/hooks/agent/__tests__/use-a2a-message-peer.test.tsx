@@ -42,7 +42,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/epic-selectors", () => ({
-  useOpenEpicId: () => "epic-current",
+  useMaybeOpenEpicId: () => "epic-current",
   useEpicAgentReference: () => mocks.local,
   useRegisteredEpicLiveAgents: (refs: readonly unknown[]) => {
     mocks.liveRefs.push(refs);
@@ -56,6 +56,10 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
 
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
+}));
+
+vi.mock("@/components/chat/chat-container-context", () => ({
+  useChatContainerId: () => "epic-current",
 }));
 
 vi.mock("@/components/chat/chat-transcript-context", () => ({
