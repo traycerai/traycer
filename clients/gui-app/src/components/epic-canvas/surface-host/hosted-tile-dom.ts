@@ -1,6 +1,6 @@
 /**
  * Dedicated physical DOM identity for hosted tile
- * surface records.
+ * surface records, per design-review finding 4.
  *
  * Portal events follow the React tree, not the physical pane tree, so a
  * hosted record needs its own attributes rather than reusing

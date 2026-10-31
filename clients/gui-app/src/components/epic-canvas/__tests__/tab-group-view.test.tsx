@@ -639,7 +639,8 @@ function hostedGroupView(
 }
 
 /**
- * The four-way ownership shape, resampled on demand.
+ * Design-review slice-4 F2 residual: the four-way ownership shape the
+ * reviewer's own probe used, resampled on demand.
  */
 interface OwnershipSnapshot {
   readonly deleted: boolean;
@@ -662,7 +663,7 @@ function ownershipSnapshot(instanceId: string): OwnershipSnapshot {
 }
 
 /**
- * A genuine sibling `useLayoutEffect`
+ * Design-review slice-4 F2 residual: a genuine sibling `useLayoutEffect`
  * (no deps array - it re-samples on EVERY commit that touches this tree)
  * captures the four-way ownership shape.
  * Rendered as the LAST sibling after `TabGroupView` and

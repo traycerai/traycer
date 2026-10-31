@@ -38,7 +38,7 @@
  * publishing or updating pane B's environment must not notify pane A's
  * subscribers.
  *
- * ## The transfer-gap contract
+ * ## The transfer-gap contract (design-review finding 4)
  *
  * "Retained" is a continuity guarantee, not a current-readiness guarantee.
  * During the gap between a source slot going quiet and a destination slot's
@@ -120,7 +120,7 @@ export interface TileSurfaceServices {
    * module doc's "transfer-gap contract") this can be a disconnected node
    * left behind by a since-unmounted source slot - verify current attachment
    * before relying on its geometry. Distinct from `panePortalContainer`
-   * below: this element exists purely to
+   * below (design-review slice-4 finding 5): this element exists purely to
    * be measured, never to host portaled content.
    */
   readonly geometryAnchorElement: HTMLElement;

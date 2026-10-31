@@ -96,7 +96,7 @@ describe("useHostNegotiatedMethodVersion", () => {
   });
 
   /**
-   * A fresh legacy (name-only) recording of a PRESENT
+   * Cold-review finding 3: a fresh legacy (name-only) recording of a PRESENT
    * method must not read as `false` ("negotiated absent") - the method is
    * present, only its version is unknown, which stays `null`.
    */
@@ -111,7 +111,7 @@ describe("useHostNegotiatedMethodVersion", () => {
   });
 
   /**
-   * Second ablation: a full-manifest version must not
+   * Cold-review finding 3, second ablation: a full-manifest version must not
    * outlive a later legacy name-only recording for the same host. Once the
    * name-only writer has run, the stale `{major, minor}` must not resurface -
    * the read stays `null` (present, version unknown), not the old version.

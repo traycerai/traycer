@@ -52,8 +52,8 @@
  * machinery learned the hard way).
  *
  * A selected chat also has to pass `isHostedSurfaceEligible` (shared with
- * `surface-owner.ts`'s render-routing decision) - a remote-deleted chat
- * leaves membership the same instant
+ * `surface-owner.ts`'s render-routing decision - design-review slice-4
+ * finding 2) - a remote-deleted chat leaves membership the same instant
  * `ActiveTabBody` reports it, so the registry entry it's holding gets cleared
  * by the existing membership-loss subscription instead of lingering
  * alongside the inline `DeletedArtifactBody`.

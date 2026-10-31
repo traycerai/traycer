@@ -13,7 +13,7 @@ import type {
 import { hostQueryKeys } from "@/lib/query-keys";
 
 /**
- * A menu-open retry can put an `epic.getTaskContexts`
+ * PR 2150 cold-review fix: a menu-open retry can put an `epic.getTaskContexts`
  * refetch in flight BEFORE a sibling tab's pin write, and that refetch can
  * still be running when the write's own RPC comes back - so without
  * intervention its stale response lands AFTER the commit and puts the

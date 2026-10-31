@@ -14,8 +14,8 @@
  * the permanent jsdom lifecycle suite - and a future dev-desktop
  * synthetic-body check - ever supply a real renderer.
  *
- * Layer contract for the permanent surface plane and geometry: the plane
- * is `pointer-events:none` at the root
+ * Layer contract (the permanent surface plane and geometry,
+ * design-review finding 9): the plane is `pointer-events:none` at the root
  * auto/zero stacking layer; each record is `pointer-events:auto`,
  * `overflow:hidden`, and gets NO positive z-index of its own, so pane
  * drag shields/drop previews and document portals (which DO carry positive
@@ -34,7 +34,7 @@
  * `height` - intact while hidden, so a later re-show needs no re-measure or
  * reflow; `display:none` would collapse the box out of layout entirely and
  * force one on re-show. The explicit focus-relinquishment protocol
- * (`runPresentationLossBlur`) is the
+ * (`runPresentationLossBlur`, design-review finding 5) is the
  * "presentation-loss blur" - `inert` alone does not reliably force a browser
  * to blur a focused descendant, so this module does not claim it does.
  */
@@ -194,7 +194,7 @@ function TileSurfaceRecord(props: {
   // `SurfacePresentationBoundary`'s own portal container, so that
   // boundary's own presentation-loss blur (scoped to ITS container) never
   // reaches a focused descendant here. Reuse the same protocol directly
-  // rather than reimplementing it.
+  // rather than reimplementing it - see design-review finding 5.
   useEffect(() => {
     if (visible) return;
     const element = elementRef.current;

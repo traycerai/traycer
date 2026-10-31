@@ -960,7 +960,7 @@ describe("design-review F2: shared eligibility discriminator (remote-deletion)",
       // Mirrors what `TileSurfaceSlot` does once mounted for a real hosted
       // chat - a published environment is the thing that would otherwise
       // linger as a second, orphaned owner alongside the inline
-      // `DeletedArtifactBody`.
+      // `DeletedArtifactBody` (design-review slice-4 finding 2).
       publishTileSurfaceEnvironment(
         buildSyntheticTileSurfaceEnvironment("chat-1", {
           placement: {

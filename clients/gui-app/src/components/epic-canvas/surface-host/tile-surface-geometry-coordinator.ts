@@ -1,6 +1,6 @@
 /**
- * The direct-flush geometry coordinator used in place of
- * `ResizeObserver -> requestAnimationFrame`.
+ * The direct-flush geometry coordinator design-review
+ * finding 2 requires in place of `ResizeObserver -> requestAnimationFrame`.
  *
  * ONE shared `ResizeObserver` for the host root and every registered slot.
  * Its callback applies every registered rect DIRECTLY - synchronously, in

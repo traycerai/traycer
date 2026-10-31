@@ -14,7 +14,7 @@
  * top-level portal host for kept-mounted popovers/composer overlays),
  * captured here via `usePanePortalContainer()` and republished so a hosted
  * chat's bridge can re-provide the genuine context value instead of this
- * slot's own geometry element.
+ * slot's own geometry element (design-review slice-4 finding 5).
  *
  * Cold until the real Epic session handle is available
  * (`useMaybeOpenEpicHandle` returns `null` before `EpicSessionGate` opens):
