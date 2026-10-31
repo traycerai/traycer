@@ -642,14 +642,15 @@ function useBotTabSession(args: {
 }
 
 /**
- * Where the tab is: its view, Threads in its place, the session shown, and
- * the channel's state.
+ * Where the tab is: its view, Threads in its place, the session shown, what
+ * the rail beside the channel holds, and the channel's landing.
  */
 type BotTabPlace = {
   readonly view: BotTabView;
   readonly threadsShown: boolean;
   readonly session: BotOpenSession | null;
   readonly openThread: BotOpenThread | null;
+  readonly openMemory: BotOpenMemory | null;
   readonly channelLanding: BotChannelLanding | null;
 };
 
@@ -662,14 +663,17 @@ type WaitingLanding = {
 /**
  * A `sender` landing: the thread whose session sent beside the channel, or
  * the channel, once no read of the list is in flight that may bring the
- * thread. A move of the tab while it waits spends it unlanded.
+ * thread; a failed first read brings none, so the channel shows. A move of
+ * the tab while it waits spends it unlanded.
  */
 function spendSenderLanding(input: {
   readonly botId: string;
   readonly landing: Extract<BotTabLanding, { kind: "sender" }>;
-  /** `null` while the list is first read. */
+  /** `null` while the list is first read, or when that read failed. */
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
   readonly threadsFetching: boolean;
+  /** The last read of the list failed: no answer is coming without a new one. */
+  readonly threadsFailed: boolean;
   readonly place: BotTabPlace;
   readonly waiting: { current: WaitingLanding | null };
   readonly landChannel: (messageId: string | null) => void;
@@ -679,7 +683,8 @@ function spendSenderLanding(input: {
   const held = waiting.current?.landing === landing ? waiting.current : null;
   const thread = threads?.find((t) => t.sessionChatId === landing.chatId);
   const moved = held !== null && held.place !== place;
-  const reading = threads === null || input.threadsFetching;
+  const reading =
+    input.threadsFetching || (threads === null && !input.threadsFailed);
   if (!moved && thread === undefined && reading) {
     waiting.current = held ?? { landing, place };
     return;
@@ -714,6 +719,8 @@ function useSpendTabLanding(args: {
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
   /** A read of the list is in flight, over `threads` when they are held. */
   readonly threadsFetching: boolean;
+  /** The last read of the list failed. */
+  readonly threadsFailed: boolean;
   /** Where the tab is; a new value is a move, the person's or a landing's. */
   readonly place: BotTabPlace;
   readonly landChannel: (messageId: string | null) => void;
@@ -722,7 +729,8 @@ function useSpendTabLanding(args: {
   /** Shows one of the tab's views: it also leaves Threads. */
   readonly onViewChange: (view: BotTabView) => void;
 }): void {
-  const { botId, channelChatId, trunkChatId, threads, threadsFetching } = args;
+  const { botId, channelChatId, trunkChatId, threads } = args;
+  const { threadsFetching, threadsFailed } = args;
   const { landChannel, showThread, openSession, onViewChange, place } = args;
   const landing = useBotTabLandingStore((state) =>
     Object.hasOwn(state.byBotId, botId) ? state.byBotId[botId] : null,
@@ -737,6 +745,7 @@ function useSpendTabLanding(args: {
         landing,
         threads,
         threadsFetching,
+        threadsFailed,
         place,
         waiting,
         landChannel,
@@ -784,6 +793,7 @@ function useSpendTabLanding(args: {
     place,
     showThread,
     threads,
+    threadsFailed,
     threadsFetching,
     trunkChatId,
   ]);
@@ -942,9 +952,10 @@ function BotTabContent(props: {
       threadsShown,
       session,
       openThread,
+      openMemory,
       channelLanding,
     }),
-    [channelLanding, openThread, session, threadsShown, view],
+    [channelLanding, openMemory, openThread, session, threadsShown, view],
   );
   useSpendTabLanding({
     botId,
@@ -952,6 +963,7 @@ function BotTabContent(props: {
     trunkChatId: snapshot.bot.trunkChatId,
     threads,
     threadsFetching: threadList.isFetching,
+    threadsFailed: threadList.isError,
     place,
     landChannel,
     showThread,
