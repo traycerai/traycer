@@ -580,7 +580,7 @@ function HandleProbe(props: {
 
 /**
  * Records the handle at every render commit, in the render body itself
- * rather than an effect. Fixup 2, item 4's pin needs this: an effect only
+ * rather than an effect. The pin needs this: an effect only
  * runs AFTER a commit, and a spy checked once after an `await` would miss a
  * handle that was published for exactly one render and then corrected -
  * which is precisely the shape of the bug it pins.

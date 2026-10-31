@@ -80,7 +80,7 @@ const NEUTRAL_CAMERA: CommGraphTileCamera = {
  * view since long before the move (a tile saved under a Settings default of
  * Building, reopened while the default is Floor, carries
  * `officeCameraView: "building"` over a camera nothing has touched). That was
- * fixup 12's defect, and no cleverer key fixes it: a camera-object key leaks
+ * the defect, and no cleverer key fixes it: a camera-object key leaks
  * on the two the reviewer named - `officeCamera: null` is a legitimate armed
  * value, so `null` cannot also be the unarmed sentinel, and a write the store
  * collapses by value produces no new reference to notice.

@@ -742,7 +742,7 @@ function installCanvas(): { readonly step: () => void } {
         // A CONSTANT, and deliberately so: `set` discards every write, so
         // nothing here carries state and `save`/`restore` have nothing to
         // unwind. That is what keeps this double clear of the defect the
-        // canvas suite's two doubles had (T2 fixup 8), where a persisted
+        // canvas suite's two doubles had, where a persisted
         // `font` / `letterSpacing` made every measurement after the first
         // sign plate model a browser that does not exist.
         //
@@ -858,7 +858,7 @@ function lastCanvasCamera(spy: SpiedCalls): TileCamera | null {
 
 /**
  * The `ready` prop most recently handed to a spied-on canvas component - the
- * fixup 8 fact under test, read the same way `lastCanvasCamera` reads `view`:
+ * fact under test, read the same way `lastCanvasCamera` reads `view`:
  * off what the canvas was actually GIVEN, not off a side effect of what it
  * did with it. Typed directly against `CommGraphOfficeCanvasProps` through
  * the spy's own `MockInstance` generic, rather than the untyped-call-args
@@ -2190,7 +2190,7 @@ describe("CommGraphTile", () => {
       });
       setOfficeCanvasSize(OFFICE_CANVAS);
       setIntersecting(true);
-      // F3 asserted the planner had NOT run here; fixup 8/H1 is exactly the
+      // F3 asserted the planner had NOT run here; H1 is exactly the
       // reversal of that gate for an explicit view - the caught-up feed is
       // no longer an input to the first plan, only to what gets classified
       // and committed as the settled partition (proven below via
@@ -2376,7 +2376,7 @@ describe("CommGraphTile", () => {
       // This is a standalone assertion on purpose, reachable only through
       // the prop the canvas was actually HANDED - a suite that only checked
       // the planner ran (below) could still be fooled by a `ready` wired to
-      // something other than what fixup 8 changed.
+      // something other than what changed.
       expect(lastCanvasReady(office)).toBe(true);
       // And the canvas acted on it for real: the actual Building planner ran
       // against the loaded snapshot, not merely a prop nobody consumed.

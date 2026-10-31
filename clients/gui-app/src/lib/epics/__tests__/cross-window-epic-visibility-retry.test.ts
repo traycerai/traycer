@@ -10,7 +10,7 @@ import type {
 } from "@/lib/windows/types";
 
 /**
- * Fixup 2, item 2: `installCrossWindowEpicVisibility`'s retry on a failed
+ * `installCrossWindowEpicVisibility`'s retry on a failed
  * report (`clients/gui-app/src/lib/epics/cross-window-epic-visibility.ts`).
  *
  * A separate file from `epic-parking.test.ts` on purpose. Pinning "the retry

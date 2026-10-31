@@ -457,7 +457,7 @@ function lastHitRegions(spy: SpiedResults): ReadonlyArray<OfficeHitRegion> {
  * available box shrinks by `FIT_PADDING` (24px) on every side, the zoom that
  * fits what is left is capped at `MAX_FIT_ZOOM` (6x), and the camera centres
  * the floor inside the padded box. Both constants come straight off the
- * fixup 10 ticket's citation of the source, not a guess.
+ * cited source, not a guess.
  */
 function fitCameraLike(
   floor: { readonly width: number; readonly height: number },
@@ -2739,7 +2739,7 @@ describe("CommGraphOfficeCanvas", () => {
 
       // The zoom lands AFTER the Fit this time, so it is what takes manual
       // control last - auto-fit stays off from here on, exactly as it always
-      // has, fixup 10 or not. This is the guard: nothing about re-arming Fit
+      // has, re-armed or not. This is the guard: nothing about re-arming Fit
       // is supposed to touch a camera a person deliberately moved afterward.
       fireEvent.click(screen.getByTestId("comm-graph-office-zoom-in"));
       step();
@@ -5462,7 +5462,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
   });
 
   it("F11 fixup 7: names all five of a wide HQ board's hottest, spelt out rather than lettered to initials", () => {
-    // The reviewer's own fixture: ordinary two-word names. Fixup 7 removes
+    // The reviewer's own fixture: ordinary two-word names. Gone now is
     // the initials rung this case used to land on ("AB BQ GS DA ED" at eight
     // tiles) - below the first-names rung the HQ board now counts instead of
     // lettering, so pinning "all five named, none dropped" needs a board
@@ -5681,7 +5681,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
   });
 
   /**
-   * T5 fixup 5: the block map's new `quad` drawable actually reaches the
+   * The block map's new `quad` drawable actually reaches the
    * canvas as a filled path.
    *
    * A rewrite changed what a lod-0 region emits - four PROJECTED corners
@@ -7062,7 +7062,7 @@ describe("CommGraphOfficeCanvas fixup 2 - real Towers semantic zoom", () => {
   });
 
   it("draws a qualified real Towers name when Find matches it", async () => {
-    // PASSES FOR A DIFFERENT REASON since fixup 8: at zoom 1 Orchestrator's
+    // PASSES FOR A DIFFERENT REASON now: at zoom 1 Orchestrator's
     // own tag is fitted to its two-tile seat and finds nothing readable to
     // keep (not even initials - "Orchestrator" is one word), so the tag is
     // DROPPED here and it is Find's own untruncated copy that names the
@@ -7281,8 +7281,8 @@ describe("CommGraphOfficeCanvas fixup 8 - the caught-up feed is not an input to 
     // `officeElement`'s own defaults already carry `ready` and an
     // uncaught-up feed (`initialHistoryCaughtUp={false}`) - passed
     // explicitly here so the case reads as the fact under test rather than
-    // an accident of the helper's defaults. Before fixup 8 the canvas
-    // itself gated its first plan on `ready`, which the TILE computed from
+    // an accident of the helper's defaults. The canvas used to gate its
+    // own first plan on `ready`, which the TILE computed from
     // `inputsReady` (feed included); this seam proves the canvas's own plan
     // no longer needs the feed at all, only `ready` and eligibility.
     const plan = vi.spyOn(OFFICE_VIEWS.floor, "plan");

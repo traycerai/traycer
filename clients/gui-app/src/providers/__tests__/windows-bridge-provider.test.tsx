@@ -1178,7 +1178,7 @@ describe("<WindowsBridgeProvider /> - renderer parking's cross-window channel", 
   });
 });
 
-// ── Renderer parking's WINDOW-level input (fixup 5) ──────────────────────────
+// ── Renderer parking's WINDOW-level input ────────────────────────────────────
 //
 // The Page Visibility API is inert in a desktop window that a browser tile's
 // video plane keeps rendering unseen (`backgroundThrottling` off), which keeps
@@ -1190,7 +1190,7 @@ describe("<WindowsBridgeProvider /> - renderer parking's cross-window channel", 
 // observe the two things the signal exists for: the park clock and the
 // cross-window claim. Manually overwriting `document.visibilityState` (the
 // other parking pins) cannot see this configuration mismatch, which is how the
-// first cut of fixup 5 shipped inert on the desktop.
+// first cut shipped inert on the desktop.
 
 interface FakeWindowVisibilityChannel {
   readonly channel: NonNullable<DesktopWindowsBridge["windowVisibility"]>;

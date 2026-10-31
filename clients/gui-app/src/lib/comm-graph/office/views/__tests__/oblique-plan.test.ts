@@ -2236,7 +2236,7 @@ describe("plaza civic rooms", () => {
  * plate keeps the tile. The pods that gave way the other way round were the
  * two-tile ones, where a one-tile plate resolved `A-ROOT` to `AR`: manufactured
  * initials, which read as a different agent rather than as a short name, and are
- * the rung T3 fixup 6 removed from the HQ board's ladder for that reason.
+ * the rung T3 removed from the HQ board's ladder for that reason.
  *
  * The negative half is the point of this case: a WIDE pod must still letter its
  * count. A rule that suppressed every board would pass an overlap sweep too.
