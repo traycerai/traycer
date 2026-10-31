@@ -192,8 +192,8 @@ function expectTicket5TabKeysEvicted(epicId: string): void {
   const identity = identityFor(epicId);
   // Tab-key half is gone (canvas close sweep). Durable chat-key half of the
   // dual-key registries still has the scroll/A2A/activity-group/
-  // tool/subagent entries (ticket 15) - the SWEEP ITSELF promoted them
-  //, not a separate component/hook commit - so a reopen via
+  // tool/subagent entries (ticket 15) - the SWEEP ITSELF promoted them,
+  // not a separate component/hook commit - so a reopen via
   // getOrCreate re-seeds from durable.
   expect(
     useToolOpenStore
@@ -233,7 +233,7 @@ function expectTicket5TabKeysEvicted(epicId: string): void {
 // Ticket 15: uses the individual (non-tombstoning) per-epic
 // evict functions directly, NOT the orchestrated
 // `evictChatTabPersistenceForEpic` - that one is a TERMINAL deletion (it
-// tombstones the epic prefix, per the round-3 fence), which would
+// tombstones the epic prefix), which would
 // permanently block the sweep's own promotion inside the actual test if
 // used here for mere test-isolation cleanup between runs.
 function clearTicket5PerTabState(instanceId: string, epicId: string): void {

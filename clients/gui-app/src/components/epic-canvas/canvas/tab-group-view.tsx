@@ -1083,7 +1083,7 @@ export function ActiveTabBody(props: ActiveTabBodyProps) {
     // Without it, membership keeps the instance, the environment registry
     // ("removal only by membership") retains a stale visible/anchored
     // snapshot from the unmounted slot, and the hosted live body paints over
-    // the copy - the exact two-owners drift this
+    // the copy - the exact two-owners drift this fallback
     // exists to prevent. Reported through the deletion registry rather than a
     // parallel one so membership has ONE inline-takeover input.
     reportChatRemoteDeletionState(

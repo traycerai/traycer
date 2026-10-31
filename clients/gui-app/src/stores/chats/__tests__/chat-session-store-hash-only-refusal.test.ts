@@ -1563,7 +1563,7 @@ describe("chat session store - hash-only refusal (T5)", () => {
     // A is not silently destroyed - and "not destroyed" has to mean A's TEXT
     // is still recoverable, not that a sentence about A was shown. The first
     // version of this test asserted only the reason and a generic phrase, so
-    // it passed with A's content gone: exactly the failure this
+    // it passed with A's content gone: exactly the failure this test
     // reproduced. The assertion that matters is the prompt itself.
     const aNotice = finalState.errorNotices.find(
       (notice) => notice.clientActionId === a.clientActionId,
