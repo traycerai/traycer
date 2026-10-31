@@ -3,6 +3,7 @@ import {
   deriveHostNotificationStoppedReason,
   HOST_NOTIFICATION_STOPPED_REASONS,
   HOST_OPERATION_MANAGED_COMMAND_DELIVERY,
+  isBotConversationAttention,
   parseKnownHostNotificationPayload,
   parseKnownHostNotificationPayloadForKind,
 } from "@traycer/protocol/host/notifications/payloads";
@@ -394,5 +395,61 @@ describe("parseKnownHostNotificationPayloadForKind", () => {
         legacy,
       ),
     ).toBeNull();
+  });
+});
+
+describe("isBotConversationAttention", () => {
+  const FINISHED = "host.operation.finished";
+
+  function conversation(operation: string, mention: boolean): unknown {
+    return { kind: "bot_conversation", operation, mention };
+  }
+
+  it("is true for a reply in a bot's thread, mention or not", () => {
+    expect(
+      isBotConversationAttention({
+        kind: FINISHED,
+        payload: conversation("bot.reply", false),
+      }),
+    ).toBe(true);
+  });
+
+  it("is true for a row that mentions the person", () => {
+    expect(
+      isBotConversationAttention({
+        kind: FINISHED,
+        payload: conversation("bot.post", true),
+      }),
+    ).toBe(true);
+  });
+
+  it("is false for a post that mentions no one", () => {
+    expect(
+      isBotConversationAttention({
+        kind: FINISHED,
+        payload: conversation("bot.post", false),
+      }),
+    ).toBe(false);
+  });
+
+  it("is false for another payload kind that carries a mention, another entry kind, or no payload", () => {
+    expect(
+      isBotConversationAttention({
+        kind: FINISHED,
+        payload: { kind: "bot_thread_verdict", operation: "x", mention: true },
+      }),
+    ).toBe(false);
+    expect(
+      isBotConversationAttention({
+        kind: "chat.stopped",
+        payload: conversation("bot.reply", true),
+      }),
+    ).toBe(false);
+    expect(isBotConversationAttention({ kind: FINISHED, payload: null })).toBe(
+      false,
+    );
+    expect(
+      isBotConversationAttention({ kind: FINISHED, payload: "bot.reply" }),
+    ).toBe(false);
   });
 });

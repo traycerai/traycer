@@ -355,6 +355,47 @@ export function isBotThreadVerdictNotification(entry: {
   );
 }
 
+/** The `operation` of a reply in a bot's thread. */
+export const HOST_OPERATION_BOT_REPLY = "bot.reply";
+
+/** The payload `kind` of a row a bot's conversation wrote to a person's mailbox. */
+export const BOT_CONVERSATION_NOTIFICATION_PAYLOAD_KIND = "bot_conversation";
+
+/**
+ * The rest of a bot's rows that need the person's attention (decision 138):
+ * a reply in a bot's thread they follow, and a row that mentions them,
+ * whatever its level. Both are minted `done`, so no severity admits them;
+ * they count in the bell's number and list with the bot's answers. A post or
+ * announcement that names no one does not count. Reads the payload as the
+ * open record it is on the wire, as {@link isBotThreadVerdictNotification}
+ * does; whether the row is unread is the caller's, as it is there.
+ */
+export function isBotConversationAttention(entry: {
+  readonly kind: string;
+  readonly payload: unknown;
+}): boolean {
+  const payload = entry.payload;
+  if (
+    entry.kind !== "host.operation.finished" ||
+    typeof payload !== "object" ||
+    payload === null
+  ) {
+    return false;
+  }
+  if (
+    "operation" in payload &&
+    payload.operation === HOST_OPERATION_BOT_REPLY
+  ) {
+    return true;
+  }
+  return (
+    "kind" in payload &&
+    payload.kind === BOT_CONVERSATION_NOTIFICATION_PAYLOAD_KIND &&
+    "mention" in payload &&
+    payload.mention === true
+  );
+}
+
 export const HOST_NOTIFICATION_WORKTREE_DELETION_FAILURE_KINDS = [
   "busy",
   "not_managed",

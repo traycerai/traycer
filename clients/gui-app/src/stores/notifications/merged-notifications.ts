@@ -86,6 +86,7 @@ import {
 } from "@/stores/notifications/notifications-store";
 import {
   formatHostNotificationPresentation,
+  isBotConversationAttention,
   isBotThreadVerdictNotification,
   parseKnownHostNotificationPayloadForKind,
   type HostNotificationChatStoppedPayload,
@@ -134,8 +135,9 @@ export interface MergedNotificationRow {
    * expiry), read from its typed payload. Absent or `null` on every other
    * row, and on a secrets row whose payload this build cannot read. */
   readonly secrets?: SecretsNotificationDetail | null;
-  /** A bot's answer to the person: Attention's last class while unread.
-   * Absent or `false` on every other row. */
+  /** A bot's answer to the person, a reply in a thread they follow or a
+   * row that mentions them: Attention's last class while unread. Absent or
+   * `false` on every other row. */
   readonly botAnswer?: boolean;
   readonly hostKind: HostNotificationFeedEntry["kind"] | null;
   readonly appLocalKind: AppLocalNotificationEntry["kind"] | null;
@@ -2096,7 +2098,7 @@ function rowFromHostEntryForOrigin(
     payload: payloadFromHostEntry(entry),
     agentSurface: agentSurfaceFromHostEntry(entry),
     secrets: secretsNotificationDetail(entry.kind, entry.payload),
-    botAnswer: isBotThreadVerdictNotification(entry),
+    botAnswer: isBotAttention(entry),
     hostKind: entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -2177,7 +2179,7 @@ export function rowFromCloudFeedRow(
     payload: payloadFromHostEntry(row.entry),
     agentSurface: agentSurfaceFromHostEntry(row.entry),
     secrets: secretsNotificationDetail(row.entry.kind, row.entry.payload),
-    botAnswer: isBotThreadVerdictNotification(row.entry),
+    botAnswer: isBotAttention(row.entry),
     hostKind: row.entry.kind,
     appLocalKind: null,
     globalEntry: null,
@@ -2456,3 +2458,17 @@ function navigationPayloadForChatStopped(
 }
 
 const HOST_PAGE_LIMIT = 50;
+
+/**
+ * Whether a row is one of a bot's that needs the person: its answer, a reply
+ * in a thread they follow, or a row that mentions them, as the hosts'
+ * summaries count them.
+ */
+function isBotAttention(entry: {
+  readonly kind: string;
+  readonly payload: unknown;
+}): boolean {
+  return (
+    isBotThreadVerdictNotification(entry) || isBotConversationAttention(entry)
+  );
+}

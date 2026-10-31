@@ -919,6 +919,92 @@ describe("merged notifications feed", () => {
     });
   });
 
+  describe("a bot's conversation row", () => {
+    function conversationEntry(
+      readAt: number | null,
+      operation: string,
+      mention: boolean,
+    ): HostNotificationFeedEntry {
+      return {
+        id: `${operation}:row-1`,
+        updatedAt: 10,
+        readAt,
+        kind: "host.operation.finished",
+        sourceRef: "row-1",
+        severity: "done",
+        outcome: "completed",
+        epicId: "bot-1",
+        chatId: "thread-1",
+        payload: {
+          kind: "bot_conversation",
+          operation,
+          title: "Tracy",
+          message: "Something in the thread",
+          botId: "bot-1",
+          threadId: "thread-1",
+          messageId: "row-1",
+          mention,
+        },
+      };
+    }
+
+    const planes = [
+      {
+        plane: "host feed",
+        rowOf: (entry: HostNotificationFeedEntry) => rowFromHostEntry(entry),
+      },
+      {
+        plane: "cloud feed",
+        rowOf: (entry: HostNotificationFeedEntry) =>
+          rowFromCloudFeedRow({
+            entryId: entry.id,
+            originHostId: "host-a",
+            coalesceKey: entry.id,
+            entry,
+            presentation: { epicTitle: null, chatTitle: null },
+          }),
+      },
+    ];
+
+    it.each(planes)(
+      "files an unread reply in a followed thread under Attention's answer class, and Recent once read, from the $plane",
+      ({ rowOf }) => {
+        const unread = rowOf(conversationEntry(null, "bot.reply", false));
+        const read = rowOf(conversationEntry(5, "bot.reply", false));
+
+        expect(classifyNotificationLifecycle(unread)).toEqual({
+          section: "attention",
+          tier: "answer",
+        });
+        expect(classifyNotificationLifecycle(read)).toEqual({
+          section: "recent",
+        });
+      },
+    );
+
+    it.each(planes)(
+      "files an unread row that mentions the person under Attention's answer class, from the $plane",
+      ({ rowOf }) => {
+        expect(
+          classifyNotificationLifecycle(
+            rowOf(conversationEntry(null, "bot.post", true)),
+          ),
+        ).toEqual({ section: "attention", tier: "answer" });
+      },
+    );
+
+    it.each(planes)(
+      "leaves a post that mentions no one under Recent, from the $plane",
+      ({ rowOf }) => {
+        expect(
+          classifyNotificationLifecycle(
+            rowOf(conversationEntry(null, "bot.post", false)),
+          ),
+        ).toEqual({ section: "recent" });
+      },
+    );
+  });
+
   describe("secrets rows", () => {
     const grantEntry: HostNotificationEntryV23 = {
       id: "secret-entry-1",
