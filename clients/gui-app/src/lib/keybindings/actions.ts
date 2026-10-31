@@ -1021,6 +1021,33 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     desktopOnly: false,
   },
 };
+/**
+ * Actions that belong to features this build does not ship
+ * (`UNRELEASED_FEATURES_ENABLED`): the voice layer's Talk.
+ */
+const UNRELEASED_ACTION_IDS: ReadonlySet<ActionId> = new Set([
+  "voice.talk.toggle",
+]);
+
+/**
+ * Whether `id` exists in this build. One that does not is bound to nothing,
+ * whatever a profile saved by another build stored for it: it matches no key,
+ * reserves no chord, is forwarded from no browser tile, conflicts with no
+ * rebind and has no Settings row. The stored chord itself is kept, so a build
+ * that has the action again finds it where the person left it.
+ */
+export function isActionInBuild(id: ActionId): boolean {
+  return UNRELEASED_FEATURES_ENABLED || !UNRELEASED_ACTION_IDS.has(id);
+}
+
+/** The chord `id` is bound to in this build: the stored one, or none. */
+export function effectiveBinding(
+  bindings: Readonly<Record<ActionId, ChordString | null>>,
+  id: ActionId,
+): ChordString | null {
+  return isActionInBuild(id) ? (bindings[id] ?? null) : null;
+}
+
 export function getDefaultBindings(): Readonly<
   Record<ActionId, ChordString | null>
 > {

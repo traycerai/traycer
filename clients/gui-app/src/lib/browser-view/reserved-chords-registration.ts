@@ -4,7 +4,11 @@ import {
 } from "@traycer-clients/shared/keybindings/chord-core";
 import type { BrowserViewReservedChord } from "@traycer-clients/shared/platform/browser-view";
 import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
-import { ACTION_META, type ActionId } from "@/lib/keybindings/actions";
+import {
+  ACTION_META,
+  effectiveBinding,
+  type ActionId,
+} from "@/lib/keybindings/actions";
 import { parseModifierChord } from "@/lib/keybindings/chord";
 import { ignoreError } from "./ignore-error";
 import { DESKTOP_MENU_ITEMS } from "@/lib/windows/desktop-menu-items";
@@ -244,7 +248,9 @@ function deriveReservedBrowserChords(
     ? [...sharedActions, ...NATIVE_ONLY_FORWARDED_ACTIONS]
     : sharedActions;
   const forwarded = actions.flatMap((action): BrowserViewReservedChord[] => {
-    const chord = bindings[action];
+    // An action this build does not have reserves nothing, whatever a
+    // profile from another build stored for it.
+    const chord = effectiveBinding(bindings, action);
     if (chord === null) return [];
     // Filtered per TOKEN rather than per action, which only matters once an
     // action reserves more than one: a leader whose ⌘3 collides with a
