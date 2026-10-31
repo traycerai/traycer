@@ -1598,7 +1598,7 @@ describe("officeSignsToDraw - fixup 6 rule 3: bullpen and solo plates come down 
 });
 
 /**
- * FEEDBACK ROUND 1: fixture lettering ("SOLO DESKS", "CAFETERIA", a
+ * Fixture lettering ("SOLO DESKS", "CAFETERIA", a
  * counterless "FRONT DESK") waits for close-up now; lettering that reports
  * something - a count, a name, which machine this is - still shows at office
  * zoom. `officeSignLetteredAt` is the rule alone, with no camera or resolver
@@ -1699,7 +1699,7 @@ describe("officeSignLetteredAt - fixture lettering waits for close-up", () => {
         }),
       ).toBe(true);
       // No owner: the plan's own written summary ("Solo desks", "Bullpen ·
-      // N live solos") is the repetition feedback round 1 pointed at, and
+      // N live solos") is the repetition at issue, and
       // the BOARD beside it still carries the count at this band.
       expect(
         officeSignLetteredAt({
@@ -1856,7 +1856,7 @@ describe("officeCivicSignText - the civic counter ladder", () => {
   });
 
   it("says the counter rung at lod 1 too, now that a civic sign reports at office zoom (OFFICE_SIGN_COUNTER_LOD)", () => {
-    // Feedback round 1 named a ward's counter-less reading ("FRONT DESK")
+    // A ward's counter-less reading ("FRONT DESK") was named
     // as prominent and not adding value - the counter is what makes the
     // sign worth its pixels, so the band that draws the sign and the band
     // that draws its number are the same band by construction now. This

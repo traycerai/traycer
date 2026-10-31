@@ -1488,8 +1488,8 @@ function drawSignPlate(
   }
   // A WASH, NOT A PANEL - and no outline at all. The plate used to be an
   // opaque `ink` fill inside a 1px `bright` stroke, which is a hard-edged
-  // rectangle sitting ON the art rather than lettering ON THE FLOOR: feedback
-  // round 1 called it "too prominent" in three views and "the labels
+  // rectangle sitting ON the art rather than lettering ON THE FLOOR. It was
+  // called "too prominent" in three views and "the labels
   // completely cover the artwork" in a fourth. The stroke was the worst of it,
   // because an outline reads as a separate object however quiet its fill.
   //
@@ -2885,7 +2885,7 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
 
   // THE BAND IS NOT MIRRORED INTO REACT. It used to be, for the chip that
   // named it ("Overview" / "Office" / "Close-up"); with that chip gone
-  // (feedback round 1) nothing outside the frame loop asks which band the
+  // nothing outside the frame loop asks which band the
   // camera is in, and the loop reads it off the live camera every frame
   // (`officeLodForZoom(camera.zoom)`). A second copy in state would be a
   // re-render of this whole component with no reader on the other end.
@@ -4617,10 +4617,10 @@ export function CommGraphOfficeCanvas(props: CommGraphOfficeCanvasProps) {
         {/*
           NOTHING BUT THE BUTTONS SITS HERE ANY MORE. Three chips have stood in
           this corner and all three are gone: Auto's measurement and the zoom
-          band went in feedback round 1 ("the text at the bottom left is too
+          band went first ("the text at the bottom left is too
           verbose - is it even needed", and a read-only band label stacked on
-          the buttons read as a fourth button), and the catching-up line went in
-          round 2, asked for by name. It said the feed was still replaying and
+          the buttons read as a fourth button), and the catching-up line went
+          next, asked for by name. It said the feed was still replaying and
           the statuses on screen might lag - true, and transient, and still a
           sentence of chrome on a drawing whose whole point is that it is a
           drawing. Nothing replaces it: a floor that is already drawn and

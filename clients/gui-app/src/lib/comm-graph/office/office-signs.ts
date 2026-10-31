@@ -606,7 +606,7 @@ export function officeBoardText(args: {
  *
  * That trade has to go this way round rather than the other. A civic sign with
  * no counter on it says `FRONT DESK` - a fact about the floor plan that was
- * equally true last week - and feedback round 1 named exactly that reading
+ * equally true last week - and exactly that reading was named
  * twice: "too prominent and not adding value". The counter is the whole of
  * what a ward's sign is worth at a glance, so the band that draws the sign and
  * the band that draws its number are now the same band by construction.
@@ -626,7 +626,7 @@ const OFFICE_FIXTURE_LETTERING_LOD: OfficeLod = 2;
  * the beds that are taken. `CAFETERIA`, `SOLO DESKS` and `FRONT DESK` say the
  * same thing they said on the first frame and will say on the last.
  *
- * This is feedback round 1, and it is four complaints rather than one: the
+ * This is four complaints rather than one: the
  * amenity plates were "too prominent", "repetitive" ( `SOLO DESKS` once per
  * storey down a tower), "not adding value", and - the one that settles it -
  * "the labels completely cover the artwork". A plate is drawn at a fixed face

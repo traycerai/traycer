@@ -138,8 +138,8 @@ const BUDGET_RUNS = 3;
  * CITY'S IS CONTENT RATHER THAN SLACK, and it is not a small amount of
  * content. A City building is `citySeatProps` (iso-painter.ts) drawing four
  * sprites a storey - two wall slabs and a window on each face - plus one roof,
- * so a seat's cost is linear in how tall its building stands. Feedback round 1
- * moved that range from 1..7 storeys to 3..14, and the number that matters is
+ * so a seat's cost is linear in how tall its building stands. That range
+ * moved from 1..7 storeys to 3..14, and the number that matters is
  * the FLOOR, not the ceiling: at a thousand agents almost every agent is a
  * quiet one sitting at the minimum, so a quiet building went from 5 sprites to
  * 13 and the common case roughly doubled. City now costs about TWICE the next

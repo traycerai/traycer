@@ -102,7 +102,7 @@ export function HistoryPruneProvider(
  * transition, or otherwise pending. Reading all three flags (rather than just
  * `status`) keeps the scheduler conservative: over-reporting in-flight only
  * defers a prune by a frame, while under-reporting would let a prune interleave
- * with an in-flight navigation (critique Blocker 1 / High 3).
+ * with an in-flight navigation.
  */
 function isRouterLoadInFlight(router: AppRouter): boolean {
   const state = router.state;

@@ -104,10 +104,10 @@ export interface MissionControlFrozen {
    *
    * The oblique views have said this per STOREY since they shipped
    * (`obliqueReserveLabelSeatId`), and this view did not: it lettered every
-   * free console, which on one bank of the screenshot in feedback round 1 was
+   * free console, which on one bank of the screenshot was
    * seven identical greyed words in a row. That was camouflaged while the word
-   * sat on the console art - it was unreadable, which is what the round
-   * actually complained about - and moving it onto the floor where it CAN be
+   * sat on the console art - it was unreadable, which is what the complaint
+   * was actually about - and moving it onto the floor where it CAN be
    * read is what makes the repetition worth fixing at the same time.
    *
    * The seat nearest the centre of its tier, so the label lands where the eye

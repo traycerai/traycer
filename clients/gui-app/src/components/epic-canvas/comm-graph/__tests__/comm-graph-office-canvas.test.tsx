@@ -7302,8 +7302,8 @@ describe("CommGraphOfficeCanvas fixup 8 - the caught-up feed is not an input to 
 
   it("puts nothing but the three zoom buttons in the bottom-left corner", () => {
     // THREE CHIPS HAVE STOOD HERE AND ALL THREE ARE GONE. Auto's measurement
-    // and the zoom band went in feedback round 1; the catching-up line - "the
-    // feed is still replaying, statuses may lag" - went in round 2, asked for
+    // and the zoom band went first; the catching-up line - "the
+    // feed is still replaying, statuses may lag" - went next, asked for
     // by name ("why do we still have this Catching up label above the zoom
     // buttons? We were supposed to remove all those labels!").
     //
@@ -8098,7 +8098,7 @@ describe("CommGraphOfficeCanvas - Mission control ward beacon", () => {
 /**
  * NO TWO READINGS ON THE SAME PIXELS, whichever channel drew them.
  *
- * Round 2's screenshot has an agent's tag printed through a board sign, and a
+ * A screenshot has an agent's tag printed through a board sign, and a
  * census over every view, four epic shapes, four populations, two seeds and
  * four zooms found the same defect in 129 of 768 cases and in seven distinct
  * pairs - `HOSPITAL` on `BUS STOP` and `LOUNGE` on `FRONT DESK` (two plates),

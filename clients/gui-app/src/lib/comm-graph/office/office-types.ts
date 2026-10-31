@@ -56,8 +56,8 @@ export const OFFICE_LABEL_GAP = 8;
  * Every view's civic rooms are `enclosure: "open"` unless the plan says
  * otherwise - a waiting room IS a row of chairs on the walk row, a front desk
  * IS a counter and the tile in front of it - so with nothing under them the
- * only thing saying where one ended was its sign. Feedback round 1 asked
- * exactly that, of Building: "some agents are working from the waiting room?".
+ * only thing saying where one ended was its sign. That was asked
+ * of Building: "some agents are working from the waiting room?".
  * They were not; they were at cubbies a row below it.
  *
  * ONE NUMBER FOR ALL SIX VIEWS, because it is one decision. Each painter still

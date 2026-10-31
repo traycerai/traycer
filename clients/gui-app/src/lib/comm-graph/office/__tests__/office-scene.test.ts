@@ -5348,8 +5348,8 @@ describe.each(OFFICE_VIEW_IDS)("%s view behaviour", (viewId) => {
       if (front === undefined || front.drawable.kind !== "sprite") {
         throw new Error(`expected reserve desk front at lod ${lod}`);
       }
-      // EMPTY_FURNITURE_ALPHA (oblique-painter.ts), raised 0.45 -> 0.72 in the
-      // office feedback-round-1 pass so an empty desk reads closer to a live
+      // EMPTY_FURNITURE_ALPHA (oblique-painter.ts), raised 0.45 -> 0.72
+      // so an empty desk reads closer to a live
       // one instead of near-invisible.
       expect(front.drawable.alpha).toBe(0.72);
       if (lod === 2) {

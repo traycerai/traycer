@@ -329,7 +329,7 @@ function ComposerDraftsControlImpl(props: ComposerDraftsControlProps) {
       aria-label={draftsTriggerLabel(currentCount)}
       className="rounded-full shadow-sm"
       // Desktop keeps the editor focused behind the open list; vaul needs the
-      // pointer sequence it would otherwise lose (critique G6).
+      // pointer sequence it would otherwise lose (G6).
       onPointerDown={mobile ? undefined : (event) => event.preventDefault()}
     >
       <LayersPlus className="size-3.5" aria-hidden />
@@ -431,7 +431,7 @@ function isPlainPrintableKeydown(event: KeyboardEvent): boolean {
  * printable closes the list and reaches the still-focused editor, which is how
  * the prompt stash behaved and why typing never got trapped behind it.
  * `useBareKeyClaimer` arbitrates WHO answers a claimed letter; this predicate
- * is what stops the close-on-printable branch from firing first (critique D6),
+ * is what stops the close-on-printable branch from firing first (D6),
  * which is precisely the bug a hardcoded `d` left in the stash.
  *
  * Read from `key`, not `code`, on purpose: these are accelerators on the

@@ -2384,8 +2384,8 @@ describe("CommGraphTile", () => {
     });
 
     it("letters a drawn office that is still behind its feed with no status line at all", async () => {
-      // THE CHIP THIS USED TO PIN IS GONE, asked for by name in feedback
-      // round 2: "why do we still have this Catching up label above the zoom
+      // THE CHIP THIS USED TO PIN IS GONE, asked for by name:
+      // "why do we still have this Catching up label above the zoom
       // buttons? We were supposed to remove all those labels!". The wait it
       // described is real - the floor draws from the agent list and fills in
       // who is BUSY as the feed replays - and the ruling is that it is not
