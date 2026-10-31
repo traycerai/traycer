@@ -1840,6 +1840,30 @@ function VoiceFocusedReplyFeed(props: {
      * can still re-label a queued item.
      */
     const unplaced = new Map<string, string>();
+    /**
+     * Rows taken for announcements as they landed, still open to
+     * reconsideration: an answer to a typed post can land before the post's
+     * request names it, and is the post's answer once it does. Read then,
+     * once, as a focused reply.
+     */
+    const provisional = new Set<string>();
+    const reconsider = (
+      rows: ReadonlyArray<ReplyRow>,
+      where: ReplyRecords,
+    ): void => {
+      if (provisional.size === 0) return;
+      const stillAnnounced = new Set(
+        announcementsOf(rows, 0).map((found) => found.messageId),
+      );
+      for (const messageId of provisional) {
+        if (stillAnnounced.has(messageId)) continue;
+        provisional.delete(messageId);
+        const row = rows.find((candidate) => candidate.messageId === messageId);
+        if (row?.role !== "assistant") continue;
+        const text = spokenReplyOf(row);
+        if (text.length > 0) speak({ messageId, text }, where);
+      }
+    };
     const place = (
       replyMessageId: string,
       where: ReplyRecords,
@@ -1961,9 +1985,14 @@ function VoiceFocusedReplyFeed(props: {
           : null;
       for (const reply of fresh) {
         const announcement = announced?.get(reply.messageId);
-        if (announcement === undefined) speak(reply, where);
-        else onAnnouncementRef.current(announcement);
+        if (announcement === undefined) {
+          speak(reply, where);
+        } else {
+          provisional.add(reply.messageId);
+          onAnnouncementRef.current(announcement);
+        }
       }
+      reconsider(state.messages, where);
       settle(where);
     };
     // An acceptance came back: a row already loaded (and baselined, or seen
