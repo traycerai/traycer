@@ -1,5 +1,5 @@
 /**
- * F1 (batch-1 review, P1): canceling a queue edit during byte resolution could
+ * F1: canceling a queue edit during byte resolution could
  * submit into the WRONG destination and clear the restored draft. The
  * incarnation guard alone cannot catch this - `restoreQueuedEditDraft` swaps
  * the document via `replaceDraft` (which bumps `resetEpoch`), NOT by

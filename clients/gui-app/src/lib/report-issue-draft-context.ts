@@ -46,7 +46,7 @@ export interface ReportIssuePrivateDiagnostics {
   /**
    * Normalized stack frame family (see `normalizeStackFamily`), for
    * maintainer-side sub-clustering ONLY - deliberately NOT part of
-   * `fingerprint`'s identity (critique C8): a one-frame refactor must not
+   * `fingerprint`'s identity (C8): a one-frame refactor must not
    * re-identify a defect.
    */
   readonly stackFamily: string | null;

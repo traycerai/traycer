@@ -13,7 +13,7 @@ import {
 import { observationFromStatus } from "@/lib/host/fleet-update/borrowed-status-read";
 import { projectFleetUpdateView } from "@/lib/host/fleet-update/fleet-update-view";
 
-// This is the F1/F2 shared fix (independent cold review, finding 1): a
+// This is the F1/F2 shared fix: a
 // canonical `host.status` read must carry its own freshness rather than being
 // asserted as permanently current. `canonicalReadIsLive` is the health
 // predicate; `observationFromCanonicalRead` is what stamps an already-expired
@@ -185,7 +185,7 @@ describe("observationFromCanonicalRead", () => {
   });
 
   it("THE RETAINED-ACTIVE DEFECT ITSELF: an active downloading read that goes unhealthy must NOT present as current", () => {
-    // This is the exact scenario the independent cold review's finding 1
+    // This is the exact scenario the defect
     // describes: a host reports an active downloading attempt and then the
     // read becomes unhealthy (error, paused, or aged past its own staleness
     // window) while the retained response still says "downloading". Before

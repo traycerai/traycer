@@ -426,7 +426,7 @@ function mountBell(options: {
   // Same shell as notifications-bell.test.tsx: no router. Nested-dismissal
   // only needs the real Popover + DropdownMenu layering; settings navigation
   // is not exercised here (useRouter may warn if the overflow item is opened).
-  // Optional underlying page control reproduces the review's bleed-through
+  // Optional underlying page control reproduces the bleed-through
   // repro (click reaches a non-popover button while a nested menu is open).
   render(
     <QueryClientProvider client={createTestQueryClient()}>

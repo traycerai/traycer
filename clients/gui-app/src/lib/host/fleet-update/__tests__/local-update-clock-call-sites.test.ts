@@ -17,7 +17,7 @@ import { describe, expect, it } from "vitest";
  * so no pin on the PROJECTOR can see either one — the mistake is made at the
  * call site, and only a mounted mirror at that call site catches it.
  *
- * This seam has needed a new mirror in two consecutive review rounds. So the
+ * This seam has needed a new mirror twice running. So the
  * count is pinned: a THIRD call site is fine, but it arrives with its own two
  * mounted mirrors, and updating this list is where that gets noticed.
  *

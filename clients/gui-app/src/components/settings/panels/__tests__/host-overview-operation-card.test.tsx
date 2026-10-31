@@ -2986,7 +2986,7 @@ describe("HostOverviewOperationCard — terminal acknowledgement (Settings)", ()
     },
   );
 
-  // PR2069 (CodeRabbit): disconnecting demotes a live view to
+  // Disconnecting demotes a live view to
   // `unknown`/`lastKnownKind` with the same attemptId, and the completion
   // hook used to resolve an id only off `view.kind` — so a retained success
   // lost its dismiss/timer, and a fresh dismissal stopped matching once the

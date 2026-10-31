@@ -1,5 +1,5 @@
 /**
- * F5 (batch-1 review, P2): an IndexedDB failure escaped the draft resolver
+ * F5: an IndexedDB failure escaped the draft resolver
  * BEFORE the host fallback ran. `readLocalDraftImageBytes` catches the first
  * `getImageBytes` rejection correctly, but `readDraftBlobs` (inside the host
  * leg) repeats that same local read a SECOND time, outside its own transport

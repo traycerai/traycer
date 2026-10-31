@@ -23,7 +23,7 @@
  * ## Why the pane's own `activationHistory`
  *
  * Two independent layers have to agree on this set or they drift into the
- * two-owners failure design-review slice-4 finding 2 already cost us once:
+ * two-owners failure already cost us once:
  *
  * - `tile-surface-membership.ts` decides which hosted records EXIST. It runs
  *   outside React, from a raw `canvasByTabId` snapshot.
@@ -40,7 +40,7 @@
  * pruned to live tabs by `reconcileCanvasInvariants`, and persisted with the
  * canvas.
  *
- * ## Sharing this function is NOT by itself enough (cold review F1)
+ * ## Sharing this function is NOT by itself enough (F1)
  *
  * The window is CAPPED, and the selection skips-and-keeps-filling when it
  * rejects an id. So two callers passing DIFFERENT predicates do not produce a

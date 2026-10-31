@@ -32,7 +32,7 @@ export function staleField<T>(value: T): CapturedField<T> {
  * something a user is actively doing (route, host, epic/tab/artifact,
  * harness/model, provider) so a report opened after a crash can still say
  * what the user was doing right before it - the highest-value capture case,
- * per the redesign's critique (D5).
+ * per the redesign (D5).
  */
 export interface SupportContextSnapshot {
   /** Route template, e.g. `/epics/$epicId/$tabId` - never a full URL/path. */

@@ -52,7 +52,7 @@ function pictogram(label: string): HTMLElement {
   return screen.getByRole("radio", { name: label });
 }
 
-/** The bar's own DOM marker: `role="toolbar"` is gone (finding 3), so
+/** The bar's own DOM marker: `role="toolbar"` is gone, so
  * presence/absence is asserted on this attribute instead. */
 function placementBar(): HTMLElement | null {
   return document.querySelector("[data-layout-placement-bar]");
@@ -116,7 +116,7 @@ describe("<SurfacePlacementBar />", () => {
     expect(placementBar()).toBeNull();
   });
 
-  // Finding 3: unlike the no-selection case above, the bar now MOUNTS as
+  // Unlike the no-selection case above, the bar now MOUNTS as
   // soon as a surface is selected, even before its node is registered - it
   // only stays hidden (`opacity-0`, no `data-placed`) until `followNode`'s
   // first rAF tick places it. Losing this radiogroup here would drop a
@@ -226,7 +226,7 @@ describe("<SurfacePlacementBar />", () => {
     },
   );
 
-  // Finding 3: the pictogram row is a real Radix radio group now, not a
+  // The pictogram row is a real Radix radio group now, not a
   // set of separate Tab stops with no arrow behavior.
   describe("keyboard navigation on the pictogram row", () => {
     it("is one Tab stop: entering the group focuses the checked pictogram, and the others are not tabbable", () => {
@@ -289,7 +289,7 @@ describe("<SurfacePlacementBar />", () => {
     });
   });
 
-  // Finding 3: the bar used to unmount for the commit where the strip's old
+  // The bar used to unmount for the commit where the strip's old
   // node has unregistered and the new one has not registered yet, dropping a
   // keyboard user's focus. It is now held mounted across that gap
   // (`PlacementBarBody` is keyed by `surface`, not by `node`).

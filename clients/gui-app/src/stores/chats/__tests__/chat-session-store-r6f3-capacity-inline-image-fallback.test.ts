@@ -1,5 +1,5 @@
 /**
- * R6F3 (P1): the image-failure fallback used a null resolver to try to induce
+ * R6F3: the image-failure fallback used a null resolver to try to induce
  * the "strip images" path - which does not work for an INLINE (`b64content`)
  * image, whose bytes ride in the node and are never asked of a resolver at
  * all. So the null-resolver rebuild put the same oversized bytes right back

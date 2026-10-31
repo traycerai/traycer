@@ -220,7 +220,7 @@ describe("comm-graph tile schema", () => {
   });
 
   it("clears a degraded officeView's dormant Auto outcome too, not just the choice (Finding 20)", () => {
-    // Codex: an explicit office view this build cannot honour degrades to
+    // An explicit office view this build cannot honour degrades to
     // null - "inherit the Settings default". The Auto outcome recorded under
     // that now-unknown pick is dormant, but if the inherited default is Auto
     // at the same generation the renderer trusts it and skips measurement,
@@ -399,7 +399,7 @@ describe("comm-graph tile schema", () => {
   });
 
   it("stamps a MIGRATED camera's framed view as Floor, so a Settings default that has since moved on can neutralise it", () => {
-    // Codex: a pre-split record's shared x/y/zoom were always the OFFICE's
+    // A pre-split record's shared x/y/zoom were always the OFFICE's
     // and only ever addressed the Floor (the only office that existed then).
     // Leaving `officeCameraView` null on migration read as "nobody framed
     // this" and let the numbers ride through unchallenged under whatever
@@ -624,7 +624,7 @@ describe("comm-graph tile schema", () => {
       // numbers were the office's under the old one-camera model, and D68
       // hands them to the field that now owns them.
       //
-      // Codex (Finding 2): `officeCameraView: "building"` here is a shape no
+      // `officeCameraView: "building"` here is a shape no
       // real persisted record can carry - every writer sets `officeCamera`
       // and `officeCameraView` together in the same write (see the two
       // `updateCommGraphTileOfficeCamera*` call sites), and `officeCameraView`
@@ -758,8 +758,8 @@ describe("comm-graph tile schema", () => {
       // The case above seeds GRAPH-NEUTRAL coordinates (`x: 0, y: 0, zoom:
       // 1`) alongside its stale id, so it cannot see this defect at all:
       // zeroing a camera that already reads as zero is invisible. This one
-      // seeds the Graph's own NON-NEUTRAL framing instead - the reviewer's
-      // own reproduction - so the zeroing actually shows up as a lost pan
+      // seeds the Graph's own NON-NEUTRAL framing instead
+      // - so the zeroing actually shows up as a lost pan
       // rather than a no-op.
       //
       // `stale` here degrades from an unknown `officeView` ("atrium" ships
@@ -1072,7 +1072,7 @@ describe("updateCommGraphTileView", () => {
   }
 
   it("stores a write that changes only officeAutoGeneration (a stamp-only refresh)", () => {
-    // Finding 5: a re-measurement that lands on the same view and camera but
+    // A re-measurement that lands on the same view and camera but
     // under a newer default generation is a STAMP-ONLY write - every other
     // field is unchanged, so an eight-field comparison sees nothing different
     // and drops it, leaving the stored generation stale and the tile

@@ -194,8 +194,8 @@ describe("hostOptionKindLabel — unchanged, and deliberately route-side", () =>
 });
 
 // G4: the selector row's update badge, decorated from `FleetUpdateView` alone.
-// The `unknown`-with-`lastKnownKind` case is the one the independent cold
-// review's finding 4 named directly: a pre-`@1.3` peer (`unknown`, no
+// The `unknown`-with-`lastKnownKind` case is named directly:
+// a pre-`@1.3` peer (`unknown`, no
 // retained phase) must render NOTHING — the noise case a blank badge exists
 // to avoid claiming.
 describe("hostOptionUpdateBadge", () => {

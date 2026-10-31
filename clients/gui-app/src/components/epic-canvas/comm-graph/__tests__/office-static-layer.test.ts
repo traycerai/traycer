@@ -398,7 +398,7 @@ describe("OfficeStaticLayer", () => {
       });
     }
 
-    // Anti-vacuity: the review's own fixture, which is what makes 24 a
+    // Anti-vacuity: the original fixture, which is what makes 24 a
     // ceiling actually under pressure rather than one no view here reaches.
     expect(plannedCounts).toEqual([12, 12, 24]);
     expect(peak).toBeLessThanOrEqual(
@@ -660,7 +660,7 @@ describe("OfficeStaticLayer", () => {
 
 // ---- The planner ------------------------------------------------------- //
 
-/** The review's largest world: a thousand independent roots, in sprite px. */
+/** The largest world: a thousand independent roots, in sprite px. */
 const BIG_WORLD: OfficeSize = { width: 3456, height: 7696 };
 
 function viewAt(args: {

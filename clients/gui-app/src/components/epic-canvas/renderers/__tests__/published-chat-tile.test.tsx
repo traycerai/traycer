@@ -1100,7 +1100,7 @@ describe("PublishedChatTile - dead-tile clone banner", () => {
   // The canvas no longer draws a banner over this tile for an unreachable
   // owner, so the tile's own has to be there on every branch - a reader
   // stuck on the load state or a refused read still needs the host sentence
-  // and the Clone way out (PR #1818 review). Neither branch has a copy on
+  // and the Clone way out (PR #1818). Neither branch has a copy on
   // screen, so neither may claim one.
   it("keeps the banner above the load state before the first copy", () => {
     mockUseCloudChatTranscript.mockReturnValue(refusedUnpublished());

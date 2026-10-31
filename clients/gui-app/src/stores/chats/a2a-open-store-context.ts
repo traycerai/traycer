@@ -64,7 +64,7 @@ const a2aOpenStoreRegistry = new Map<string, StoreApi<A2AOpenState>>();
 // reopened chat's A2A cards start expanded again. Last-writer-wins across
 // multiple open views of the same chat.
 //
-// Ticket 15 review round 3: promoted explicitly from the canvas close
+// Ticket 15: promoted explicitly from the canvas close
 // sweep's choke point (store.ts), not mirrored continuously and not owned
 // by a per-component unmount - the sweep can read this registry directly
 // whether or not the owning component ever mounted (an inactive/
@@ -90,7 +90,7 @@ export function evictA2AOpenStores(
 }
 
 /**
- * Ticket 15 review round 3: promotes this tab's CURRENT state to durable -
+ * Ticket 15: promotes this tab's CURRENT state to durable -
  * called from the canvas close sweep for every removed chat tile, BEFORE
  * `evictA2AOpenStores` drops the registry entry. A no-op if no store was
  * ever created for this tab (never mounted) - nothing of this session's to

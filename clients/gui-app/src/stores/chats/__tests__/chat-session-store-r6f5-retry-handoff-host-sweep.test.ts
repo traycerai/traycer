@@ -1,5 +1,5 @@
 /**
- * R6F5(b) (P2): `retryHandoffAccountFor` - the account builder for a
+ * R6F5(b): `retryHandoffAccountFor` - the account builder for a
  * dispatched-retry action still in flight at disposal - reads the HOST-LEVEL
  * swept set (`sweepAccountForIntent` / `sessionSweptRefsForHost`), not the
  * old per-slot `worktreePartition`.

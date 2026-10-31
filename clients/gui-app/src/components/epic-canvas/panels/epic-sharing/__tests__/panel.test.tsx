@@ -426,7 +426,7 @@ describe("<SharingPanel />", () => {
   });
 
   it("reads the collaborator list on the EPIC SESSION's client, not the app-wide one", () => {
-    // Codex #1243 sweep: the panel's grant/revoke/role mutations were moved
+    // The panel's grant/revoke/role mutations were moved
     // onto the Epic session's client, and the list must agree with the host
     // those writes land on. The controller's own comment recorded this as
     // deferred ("would have to move the mutation hooks with it"); this pins

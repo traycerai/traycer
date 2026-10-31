@@ -32,7 +32,7 @@ import {
  * IT USED TO STOP AT 4x, which is one row every 175ms: a session with a couple
  * of thousand rows in it - an ordinary afternoon for a busy epic - took six
  * minutes to replay at the fastest setting the control offered, which is the
- * "even at 4x, the graph is filling super slow" of round 2's feedback. All
+ * "even at 4x, the graph is filling super slow" complaint. All
  * THREE rungs added here sit past the renderer's floor - 8x is already a row
  * every 87.5ms - and they are worth having only because the tick stops
  * shortening there and buys rows instead (`commGraphPlaybackPace`). Without

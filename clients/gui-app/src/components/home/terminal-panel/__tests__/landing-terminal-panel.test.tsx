@@ -7138,7 +7138,7 @@ describe("<LandingTerminalPanel />", () => {
       expect(coverageFor(TEST_LANDING_PAGE_ID)).toBeUndefined();
     });
 
-    // The reviewer's case: the layout is open and maximized, and the target
+    // The layout is open and maximized, and the target
     // cannot serve a terminal, so no panel is rendered at all.
     it("publishes nothing when the layout is open and maximized but no host is selected", async () => {
       selectNoHost();

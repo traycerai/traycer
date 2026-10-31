@@ -342,7 +342,7 @@ const EMPTY_ROW_SKELETON: readonly (RowSkeletonEntry | undefined)[] = [];
  *  hardcoding a copy of this number. Used only by the DOM-event-based
  *  `scrollToEnd`/`navigateToMessage` settle paths - the anchor engine's
  *  Promise-based settle uses its own, longer, `CHAT_TIMELINE_ANCHOR_SCROLL_
- *  PROMISE_TIMEOUT_MS` below (review finding: this shorter window is unsafe
+ *  PROMISE_TIMEOUT_MS` below (this shorter window is unsafe
  *  as a validate-and-settle deadline for an animated anchor scroll). */
 export const CHAT_ANCHOR_SETTLE_FALLBACK_MS = 750;
 /** The full library contract this must clear is TWO
@@ -1125,7 +1125,7 @@ export function ChatMessages(props: ChatMessagesProps) {
   // genuinely recreated it, which mints a fresh chatId in practice - this
   // clear is a no-op then, but cheap and correct either way). An effect,
   // not inline in the identity's own useState initializer above - no store
-  // writes during render (round-3 finding: render-phase purity).
+  // writes during render (render-phase purity).
   //
   // Also clears the EPIC-level tombstone: `handleEpicAccessLoss` tombstones
   // by epic PREFIX (not an exact chat key - see chat-tab-persistence-
@@ -3028,7 +3028,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // `restoreChatTabState` render-time state initializer BEFORE this
   // component's own unmount cleanup ever runs - render happens before ANY
   // commit-phase effect, including a removed fiber's layout-effect cleanup
-  // (painted-chat lifecycle audit finding 1: a disposable probe recorded
+  // (a disposable probe recorded
   // `initialize:stale` then `cleanup:fresh`). One function backs both call
   // sites so the coherent-snapshot invariant below can never drift into two
   // independently maintained copies.
@@ -3302,7 +3302,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // Decision #29: dual-keys the global tool/subagent open
   // stores for this tab - seeds this tab's expanded cards from the durable
   // chat-key snapshot on a genuinely fresh (never-initialized) scope only.
-  // Round 3: the durable commit moved to the canvas sweep's promotion
+  // The durable commit moved to the canvas sweep's promotion
   // choke point - see the hook's own doc comment.
   useChatScopedOpenStoreDualKeySeed(
     useToolOpenStore,

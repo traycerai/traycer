@@ -13,7 +13,7 @@
  * whatever `hasActiveWork` says. An unread hand-back going unread for an hour
  * is not an exotic case; it is a user who opened another tab.
  *
- * Raising the cap would not fix it either, and the reviewer's phrasing is the
+ * Raising the cap would not fix it either, and this phrasing is the
  * right one to keep: **a longer timer is not a handoff.** Something has to take
  * ownership of the text before the session goes.
  *

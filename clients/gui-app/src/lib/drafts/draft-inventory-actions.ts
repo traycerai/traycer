@@ -57,7 +57,7 @@ import {
  * `newChatHostByEpicId`). Those maps are written only by a MOUNTED composer or
  * modal, and this list exists precisely to act on rows whose surface is not
  * mounted - so the implicit route resolves nothing and the delete stops at the
- * local row while the host goes on listing it (critique C1, C2). It is the same
+ * local row while the host goes on listing it (C1, C2). It is the same
  * problem, and the same remedy, as `deleteLandingDraftThroughHost`.
  *
  * Deliberately React-free: navigation, clipboard, toasts and client resolution
@@ -122,7 +122,7 @@ export function openChatDraftRow(
       preparation: {
         kind: "open-tile",
         gesture: "explicit",
-        // The plain LIVE ref (critique D4): `makeChatOpenTileRef`'s
+        // The plain LIVE ref (D4): `makeChatOpenTileRef`'s
         // published-copy branch needs `ownerUserId` / reachability from the
         // open-epic projector, which by construction does not exist for the
         // closed epics this list names. Consequence accepted in the plan: an
@@ -147,7 +147,7 @@ export function openChatDraftRow(
  * Open the epic and re-open its new-agent modal on the draft.
  *
  * The tab is resolved (or created) FIRST, then navigated to, then the request
- * is set - critique D5. `NewConversationModalHost` reads `request` through a
+ * is set - D5. `NewConversationModalHost` reads `request` through a
  * selector, so a request set before that host mounts is consumed on its first
  * render; what it cannot do is invent the `tabId` the request must name, which
  * is why the create happens here rather than being left to the navigation.
@@ -438,7 +438,7 @@ function settleComposerDelete(answer: Promise<unknown>, draftId: string): void {
  * `clearDraft` notifies the coordinator before it removes the entry, but that
  * routed delete resolves its host through `newChatHostByEpicId`, which only a
  * MOUNTED modal writes - so for the rows this list is made of it reaches
- * nothing and the host goes on listing the draft (critique C2). Hence the
+ * nothing and the host goes on listing the draft (C2). Hence the
  * explicit request here, skipped only when the routed one has genuinely been
  * sent: the epic is bound AND that host's session is up. Deferring to the
  * session there is not just tidiness - a bare request cannot be ordered

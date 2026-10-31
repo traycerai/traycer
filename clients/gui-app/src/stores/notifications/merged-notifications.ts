@@ -837,7 +837,7 @@ export function useNotificationCenterHostState(): NotificationCenterHostState {
  * The retained local-host connection carries no renderer verdict, so a cloud
  * write dispatched in that window goes out on the still-valid bearer after
  * authorization was withdrawn. Every cloud-feed mutation below re-reads the
- * store here instead of trusting its closure. Found in review.
+ * store here instead of trusting its closure.
  */
 function cloudAuthorizedNow(): boolean {
   return authorizesCloudCapability(useAuthStore.getState().status);
@@ -1861,7 +1861,7 @@ export function useMergedNotificationsActions(): MergedNotificationsActions {
         // whole-origin clear, defeating the sixth floor at the one moment the
         // floor cannot see. Mark-all's version of this reaches cloud-home rows;
         // this one DELETES them. The whole gesture waits rather than half of it
-        // landing. Found by review.
+        // landing.
         if (liveFeedModeSettling.current) return;
         // The confirmation this sits behind promises "every notification
         // currently visible in this feed", and in mixed mode the feed renders
