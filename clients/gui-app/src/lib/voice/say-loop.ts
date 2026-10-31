@@ -194,6 +194,8 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
    * the person moves first.
    */
   const unresolved: Action[] = [];
+  /** A resume is posting them, one at a time. */
+  let resuming = false;
 
   const delegationOf = (
     binding: Pick<RequestBinding, "engineGeneration" | "delegationId">,
@@ -366,23 +368,45 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     },
 
     async onFocusResolved() {
-      const state = store.getState();
-      const focus = state.focus;
-      if (focus === null || focus.anchorThread === "resolving") return;
-      for (const action of unresolved.splice(0)) {
-        // Its session ended, or the person moved (which released its words
-        // into the interruption): nothing left to post.
-        if (
-          action.sessionToken !== state.sessionToken ||
-          action.selectionGeneration !== state.selectionGeneration ||
-          action.focus.botId !== focus.botId ||
-          action.focus.anchorMessageId !== focus.anchorMessageId
-        ) {
-          continue;
+      // One resume at a time keeps the posts in the order they were said.
+      if (resuming) return;
+      resuming = true;
+      try {
+        // Each request is taken against the store as it stands when its turn
+        // comes: an End or a move while an earlier resumed send is out is
+        // seen here, and a request not taken yet stays in the list, where
+        // the move releases its words into the interruption.
+        for (;;) {
+          const action = unresolved.at(0);
+          if (action === undefined) return;
+          const state = store.getState();
+          if (
+            action.sessionToken !== state.sessionToken ||
+            action.selectionGeneration !== state.selectionGeneration
+          ) {
+            // Its session ended (its words went with it), or the person
+            // moved (the move released them): nothing left to post.
+            unresolved.shift();
+            continue;
+          }
+          const focus = state.focus;
+          // Not resolved yet, or not the anchor it was said under (the
+          // anchor changes only with the generation): it waits.
+          if (
+            focus === null ||
+            focus.anchorThread === "resolving" ||
+            focus.botId !== action.focus.botId ||
+            focus.anchorMessageId !== action.focus.anchorMessageId
+          ) {
+            return;
+          }
+          unresolved.shift();
+          const resumed: Action = { ...action, focus };
+          inFlight.set(resumed.actionId, resumed);
+          await post(resumed);
         }
-        const resumed: Action = { ...action, focus };
-        inFlight.set(resumed.actionId, resumed);
-        await post(resumed);
+      } finally {
+        resuming = false;
       }
     },
 

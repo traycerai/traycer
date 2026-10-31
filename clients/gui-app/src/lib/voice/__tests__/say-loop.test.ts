@@ -35,6 +35,7 @@ interface Harness {
   readonly accepted: AcceptedRequest[];
   readonly opened: BotConversationSendResponse[];
   readonly loop: SayLoop;
+  inFlightCountIsZero(): boolean;
   /** Settles the send at `index` (the oldest by default). */
   resolve(response: BotConversationSendResponse, index: number): void;
   reject(index: number): void;
@@ -105,6 +106,7 @@ function harness(): Harness {
     accepted,
     opened,
     loop,
+    inFlightCountIsZero: () => loop.inFlightCount() === 0,
     resolve: (value, index) => settles[index]?.resolve(value),
     reject: (index) => settles[index]?.reject(new Error("refused")),
   };
@@ -245,6 +247,68 @@ describe("a request closed while the anchor's thread is unresolved", () => {
     });
     expect(await h.loop.onFocusResolved()).toBeUndefined();
     expect(h.sends).toHaveLength(2);
+  });
+
+  /** Two requests held, the focus resolved, the first resumed send out; `resumed` settles with the resume. */
+  async function holdTwoAndResumeFirst(
+    h: Harness,
+  ): Promise<{ readonly resumed: Promise<void> }> {
+    const store = useVoiceSessionStore.getState();
+    store.setFocus(RESOLVING);
+    await h.loop.onDelegationCreated("d-1");
+    store.appendInputSegment(" and the tests", 3);
+    await h.loop.onDelegationCreated("d-2");
+    store.setFocus({ ...RESOLVING, threadId: "thread-q", anchorThread: null });
+    const resumed = h.loop.onFocusResolved();
+    expect(h.sends.map((send) => send.text)).toEqual([
+      "please check the build",
+    ]);
+    return { resumed };
+  }
+
+  it("while the first resumed send is out, a move keeps the second from posting and takes its words into the interruption", async () => {
+    const h = harness();
+    const { resumed } = await holdTwoAndResumeFirst(h);
+
+    useVoiceSessionStore.getState().selectionChanged(OTHER_FOCUS);
+    h.loop.onSelectionChanged();
+    h.resolve(response({ threadId: "thread-q" }), 0);
+    await resumed;
+
+    expect(h.sends.map((send) => send.text)).toEqual([
+      "please check the build",
+    ]);
+    expect(h.asks).toEqual([MOVED_ASK_TEXT]);
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "interrupted",
+      text: "and the tests",
+    });
+    expect(h.notices).toEqual([
+      "Posted in a thread with Tracy before the person moved on.",
+    ]);
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+
+  it("while the first resumed send is out, End keeps the second from posting", async () => {
+    const h = harness();
+    const { resumed } = await holdTwoAndResumeFirst(h);
+
+    useVoiceSessionStore.getState().sessionEnded(null);
+    h.resolve(response({ threadId: "thread-q" }), 0);
+    await resumed;
+
+    expect(h.sends.map((send) => send.text)).toEqual([
+      "please check the build",
+    ]);
+    expect(h.notices).toEqual([]);
+    expect(h.inFlightCountIsZero()).toBe(true);
+    // Talk again: the ended session's held request does not post then either.
+    useVoiceSessionStore.getState().sessionConnecting();
+    useVoiceSessionStore
+      .getState()
+      .setFocus({ ...RESOLVING, threadId: "thread-q", anchorThread: null });
+    await h.loop.onFocusResolved();
+    expect(h.sends).toHaveLength(1);
   });
 
   it("is interrupted by a move like open words, and the resolution afterwards posts nothing", async () => {
