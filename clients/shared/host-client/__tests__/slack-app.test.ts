@@ -291,6 +291,11 @@ describe("Slack app transport results", () => {
 });
 
 describe("Slack app transport on a fetch that ignores its signal", () => {
+  const TIMED_OUT = {
+    kind: "network-error",
+    detail: "the request never completed (TimeoutError)",
+  };
+
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -298,7 +303,7 @@ describe("Slack app transport on a fetch that ignores its signal", () => {
     vi.useRealTimers();
   });
 
-  it("settles a read at the deadline as a network error, and a late answer does not change it", async () => {
+  it("settles a read at the deadline as a network error, and a late answer is never read", async () => {
     // Like CapacitorHttp's patched fetch: the signal is dropped, so only the
     // test can settle the request.
     let answer: (response: Response) => void = () => undefined;
@@ -321,14 +326,37 @@ describe("Slack app transport on a fetch that ignores its signal", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(settled).toBe(true);
-    const timedOut = {
-      kind: "network-error",
-      detail: "the request never completed (TimeoutError)",
-    };
-    expect(await pending).toEqual(timedOut);
+    expect(await pending).toEqual(TIMED_OUT);
 
-    answer(jsonResponse(200, { app: APP }));
+    const late = jsonResponse(200, { app: APP });
+    const lateText = vi.spyOn(late, "text");
+    answer(late);
     await vi.advanceTimersByTimeAsync(0);
-    expect(await pending).toEqual(timedOut);
+    expect(lateText).not.toHaveBeenCalled();
+  });
+
+  it("settles a read whose 200 body never arrives at the deadline as a network error", async () => {
+    const response = new Response(null, { status: 200 });
+    const text = vi
+      .spyOn(response, "text")
+      .mockImplementation(() => new Promise<string>(() => undefined));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => response),
+    );
+    let settled = false;
+
+    const pending = readSlackAppViaHttp(BASE, BEARER, null, BOT_ID);
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(READ_TIMEOUT_MS - 1);
+    expect(text).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    expect(await pending).toEqual(TIMED_OUT);
   });
 });

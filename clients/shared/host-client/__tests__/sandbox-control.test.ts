@@ -559,7 +559,7 @@ describe("on a WebView without AbortSignal.timeout or AbortSignal.any (iOS 15.5)
   });
 });
 
-describe("listSandboxesViaHttp on a fetch that ignores its signal", () => {
+describe("sandbox control calls on a fetch that ignores its signal", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -567,7 +567,19 @@ describe("listSandboxesViaHttp on a fetch that ignores its signal", () => {
     vi.useRealTimers();
   });
 
-  it("settles at the deadline as a network error, and a late answer does not change it", async () => {
+  /** A 200 whose body read never settles, with the read observable. */
+  function stalledBodyResponse(): {
+    readonly response: Response;
+    readonly text: Mock<() => Promise<string>>;
+  } {
+    const response = new Response(null, { status: 200 });
+    const text = vi
+      .spyOn(response, "text")
+      .mockImplementation(() => new Promise<string>(() => undefined));
+    return { response, text };
+  }
+
+  it("settles at the deadline as a network error, and a late answer is never read", async () => {
     // Like CapacitorHttp's patched fetch: the signal is dropped, so only the
     // test can settle the request.
     let answer: (response: Response) => void = () => undefined;
@@ -590,16 +602,72 @@ describe("listSandboxesViaHttp on a fetch that ignores its signal", () => {
 
     await vi.advanceTimersByTimeAsync(1);
     expect(settled).toBe(true);
-    const timedOut = {
+    expect(await pending).toEqual({
       kind: "network-error",
       detail: "the request never completed (TimeoutError)",
-    };
-    expect(await pending).toEqual(timedOut);
+    });
 
-    answer(jsonResponse(200, { sandboxes: [SUMMARY] }));
+    const late = stalledBodyResponse();
+    answer(late.response);
     await vi.advanceTimersByTimeAsync(0);
-    expect(await pending).toEqual(timedOut);
+    expect(late.text).not.toHaveBeenCalled();
   });
+
+  // A body read that fails leaves `body = null` and the status alone decides
+  // the answer, so a stalled 200 reads as an empty success rather than as the
+  // network error a stalled fetch is.
+  it.each([
+    {
+      name: "listSandboxesViaHttp",
+      call: () => listSandboxesViaHttp(BASE, BEARER, null),
+      expected: {
+        kind: "network-error",
+        detail: "the sandbox list did not match the contract",
+      },
+    },
+    {
+      name: "runSandboxVerbViaHttp",
+      call: () =>
+        runSandboxVerbViaHttp(
+          BASE,
+          BEARER,
+          null,
+          "sbx_1",
+          "resume",
+          null,
+          LIST_TIMEOUT_MS,
+        ),
+      expected: { kind: "ok", settled: true, state: null },
+    },
+    {
+      name: "keepSandboxViaHttp",
+      call: () => keepSandboxViaHttp(BASE, BEARER, null, "sbx_1"),
+      expected: { kind: "ok", settled: true },
+    },
+  ])(
+    "$name: a 200 whose body never arrives settles at the deadline by its status",
+    async ({ call, expected }) => {
+      const stalled = stalledBodyResponse();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>(async () => stalled.response),
+      );
+      let settled = false;
+
+      const pending = call();
+      void pending.then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(LIST_TIMEOUT_MS - 1);
+      expect(stalled.text).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      expect(await pending).toEqual(expected);
+    },
+  );
 });
 
 describe("destroySandboxViaHttp", () => {
