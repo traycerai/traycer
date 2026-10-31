@@ -41,9 +41,23 @@ export function TalkShortcutBridge(): ReactNode {
 }
 
 /**
+ * How Talk is drawn: the glyph with its name (`label`), the glyph alone in
+ * a strip's box (`glyph`), or the glyph alone in a box a finger can find
+ * (`touch`, the phone's channel header).
+ */
+export type TalkControlForm = "label" | "glyph" | "touch";
+
+const TALK_CONTROL_SIZE = {
+  label: "xs",
+  glyph: "icon-xs",
+  touch: "icon-sm",
+} as const satisfies Record<TalkControlForm, string>;
+
+/**
  * The "Talk" control beside the fixed Tracy entry in the tab strip (V6),
  * wherever the strip is: beside the entry in the header strip, under it in
- * the vertical strip, the glyph alone (`compact`) in the collapsed rail.
+ * the vertical strip, the glyph alone in the collapsed rail; on the phone,
+ * in every bot channel's header, the Tracy tab's included (V5).
  * Starts a voice session over the bot surface, and ends it while one is
  * live. Never in the composer, whose microphone stays "Dictate". Hidden
  * until the server says this deployment offers voice (and again when a mint
@@ -51,8 +65,8 @@ export function TalkShortcutBridge(): ReactNode {
  * mounted.
  */
 export function TalkControl(props: {
-  /** The glyph alone, for the rail; the label stays its name. */
-  readonly compact: boolean;
+  /** The glyph alone outside `label`; the label stays its name. */
+  readonly form: TalkControlForm;
 }): ReactNode {
   const availability = useVoiceSessionStore((state) => state.availability);
   const phase = useVoiceSessionStore((state) => state.phase);
@@ -80,7 +94,7 @@ export function TalkControl(props: {
       <Button
         type="button"
         variant={live ? "success-ghost" : "ghost"}
-        size={props.compact ? "icon-xs" : "xs"}
+        size={TALK_CONTROL_SIZE[props.form]}
         aria-label={TALK_CONTROL_LABEL}
         aria-pressed={live}
         data-testid="voice-talk-control"
@@ -90,7 +104,7 @@ export function TalkControl(props: {
         className="shrink-0 self-center [-webkit-app-region:no-drag]"
       >
         <AudioLines aria-hidden="true" />
-        {props.compact ? null : TALK_CONTROL_LABEL}
+        {props.form === "label" ? TALK_CONTROL_LABEL : null}
       </Button>
     </TooltipWrapper>
   );

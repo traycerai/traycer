@@ -21,7 +21,7 @@ function makeDriver() {
 function renderControl(): void {
   render(
     <TooltipProvider>
-      <TalkControl compact={false} />
+      <TalkControl form="label" />
     </TooltipProvider>,
   );
 }
@@ -50,12 +50,12 @@ describe("TalkControl", () => {
     expect(screen.queryByRole("button", { name: "Talk" })).toBeNull();
   });
 
-  it("compact draws the glyph alone, named and working as before", async () => {
+  it("the glyph form draws the glyph alone, named and working as before", async () => {
     const driver = makeDriver();
     useVoiceSessionStore.setState({ driver, availability: "live" });
     render(
       <TooltipProvider>
-        <TalkControl compact />
+        <TalkControl form="glyph" />
       </TooltipProvider>,
     );
 

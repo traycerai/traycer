@@ -1,28 +1,19 @@
 import type { ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { Captions, Mic, MicOff, X } from "lucide-react";
+import { Captions, Mic, MicOff } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
-import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
-import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
-import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
-import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useVoiceFocusLabel } from "@/hooks/voice/use-voice-focus-label";
+import { VoiceEndedLine } from "@/components/layout/voice/voice-ended-line";
 import { VoiceWaitingControl } from "@/components/layout/voice/voice-waiting-control";
-import { useHostClient } from "@/lib/host";
 import { navigateToTabIntent } from "@/lib/tab-navigation";
 import { botTabIntent } from "@/lib/tab-navigation/intents";
 import { cn } from "@/lib/utils";
-import { useBotRail, type BotRail } from "@/stores/bots/bot-open-thread-store";
-import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import {
   useVoiceSessionStore,
-  type VoiceEndReason,
   type VoiceFocus,
   type VoicePhase,
 } from "@/stores/voice/voice-session-store";
-
-/** How much of a thread's opening post the focus line shows. */
-const THREAD_LABEL_MAX_CHARS = 48;
 
 /**
  * The session strip (V6): one row in the app chrome beneath the tab strip,
@@ -54,25 +45,7 @@ export function VoiceSessionStrip(): ReactNode {
   if (state.phase === "idle") {
     if (state.endReason === null) return null;
     return (
-      <output
-        data-testid="voice-session-strip"
-        data-state="ended"
-        className="flex w-full items-center gap-2 border-b border-border bg-background px-3 py-1.5 text-ui-xs text-muted-foreground"
-      >
-        <span className="min-w-0 flex-1" data-testid="voice-strip-state">
-          {endedLine(state.endReason)}
-        </span>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Dismiss"
-          data-testid="voice-strip-dismiss"
-          onClick={clearEndReason}
-        >
-          <X aria-hidden="true" />
-        </Button>
-      </output>
+      <VoiceEndedLine reason={state.endReason} onDismiss={clearEndReason} />
     );
   }
 
@@ -182,7 +155,7 @@ export function VoiceSessionStrip(): ReactNode {
  * ending never resumes the voice. Disabled while dictation still holds the
  * microphone.
  */
-function ResumeAfterDictation(): ReactNode {
+export function ResumeAfterDictation(): ReactNode {
   const paused = useVoiceSessionStore((s) => s.pausedForDictation);
   const dictating = useVoiceSessionStore((s) => s.dictationHolds.size > 0);
   const resume = useVoiceSessionStore((s) => s.resumeFromDictation);
@@ -212,25 +185,6 @@ function stateLabel(
   return muted ? "Muted" : "Listening";
 }
 
-function endedLine(reason: VoiceEndReason): string {
-  switch (reason) {
-    case "credits":
-      return "Voice ended: credits.";
-    case "connection":
-      return "Voice ended: connection lost.";
-    case "locked":
-      return "Voice ended: the screen locked.";
-    case "microphone":
-      return "Voice did not start: the microphone is not available.";
-    case "playback":
-      return "Voice ended: the sound could not be played.";
-    case "unavailable":
-      return "Voice did not start. Try again in a moment.";
-    case "ended":
-      return "Voice ended.";
-  }
-}
-
 /**
  * Where the next post goes: environment › bot › thread, with Change, which
  * opens the bot's tab so the person can pick another channel or thread.
@@ -238,24 +192,7 @@ function endedLine(reason: VoiceEndReason): string {
 function FocusLine(props: { readonly focus: VoiceFocus }): ReactNode {
   const { focus } = props;
   const navigate = useNavigate();
-  const appHostId = useEffectiveHostId();
-  const appClient = useHostClient();
-  const botsSupported = useHostMethodSupport(appHostId, "bot.list") === true;
-  const bots = useBotListQuery(appClient, botsSupported);
-  const environments = useEnvironmentListQuery(appClient, botsSupported);
-  const tabTitle = useBotTabsStore(
-    (state) => lookupBotTab(state.tabs, focus.botId)?.title ?? null,
-  );
-  const rail = useBotRail(focus.botId);
-  const bot = bots.data?.bots.find((row) => row.botId === focus.botId) ?? null;
-  const environmentLabel =
-    bot === null
-      ? null
-      : (environments.data?.environments.find(
-          (row) => row.environmentId === bot.environmentId,
-        )?.label ?? null);
-  const botTitle = bot?.title ?? tabTitle ?? "Bot";
-  const threadLabel = threadLabelOf(focus, rail);
+  const { environmentLabel, botTitle, threadLabel } = useVoiceFocusLabel(focus);
   return (
     <span
       data-testid="voice-strip-focus"
@@ -287,21 +224,4 @@ function FocusLine(props: { readonly focus: VoiceFocus }): ReactNode {
       </Button>
     </span>
   );
-}
-
-/**
- * The thread's label: its opening post while the rail remembers the send
- * that opened it, else "Thread"; nothing at the channel's top level.
- */
-function threadLabelOf(focus: VoiceFocus, rail: BotRail | null): string | null {
-  if (focus.threadId === null) return null;
-  if (rail !== null && rail.kind === "thread" && rail.sent !== null) {
-    return truncate(rail.sent.text, THREAD_LABEL_MAX_CHARS);
-  }
-  return "Thread";
-}
-
-function truncate(text: string, maxChars: number): string {
-  const line = text.replace(/\s+/g, " ").trim();
-  return line.length <= maxChars ? line : `${line.slice(0, maxChars - 1)}…`;
 }

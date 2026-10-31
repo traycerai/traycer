@@ -65,6 +65,81 @@ describe("sessionEnded", () => {
   });
 });
 
+describe("the phone's talk mode and view", () => {
+  it("switching push-to-talk either way starts the new mode listening, and a repeat switch changes nothing", () => {
+    const store = useVoiceSessionStore.getState();
+    store.setPushToTalk(true);
+    store.setTalkHeld(true);
+    store.setMuted(true);
+
+    store.setPushToTalk(true);
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      pushToTalk: true,
+      talkHeld: true,
+      muted: true,
+    });
+
+    store.setPushToTalk(false);
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      pushToTalk: false,
+      talkHeld: false,
+      muted: false,
+    });
+
+    store.setMuted(true);
+    store.setPushToTalk(true);
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      pushToTalk: true,
+      talkHeld: false,
+      muted: false,
+    });
+  });
+
+  it("opens the phone view when a session connects, and a session's end clears it with push-to-talk and the held button", () => {
+    const store = useVoiceSessionStore.getState();
+    expect(useVoiceSessionStore.getState().phoneViewOpen).toBe(false);
+
+    store.sessionConnecting();
+    expect(useVoiceSessionStore.getState().phoneViewOpen).toBe(true);
+
+    store.setPhoneViewOpen(false);
+    store.setPushToTalk(true);
+    store.setTalkHeld(true);
+    store.setPhoneViewOpen(true);
+    store.sessionEnded("background");
+
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      endReason: "background",
+      pushToTalk: false,
+      talkHeld: false,
+      phoneViewOpen: false,
+    });
+  });
+});
+
+describe("the phone view and a held talk button", () => {
+  it("putting the view down lets go of the hold but nothing else, and bringing it back holds nothing", () => {
+    const store = useVoiceSessionStore.getState();
+    store.sessionConnecting();
+    store.setPushToTalk(true);
+    store.setTalkHeld(true);
+
+    store.setPhoneViewOpen(false);
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      phoneViewOpen: false,
+      talkHeld: false,
+      pushToTalk: true,
+    });
+
+    store.setTalkHeld(true);
+    store.setPhoneViewOpen(true);
+    expect(useVoiceSessionStore.getState()).toMatchObject({
+      phoneViewOpen: true,
+      talkHeld: true,
+    });
+  });
+});
+
 describe("the dictation pause", () => {
   it("is held per owner: it outlives the session, and ends only when every owner has released its own hold", () => {
     const store = useVoiceSessionStore.getState();

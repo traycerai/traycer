@@ -68,6 +68,7 @@ import type {
   MigrationRunningSnapshot,
   RegisteredHostsChange,
   SystemResumeEvent,
+  SystemSuspendCause,
   TrayEpic,
   TrayIndicatorState,
   TraycerHostStatusSnapshot,
@@ -1508,11 +1509,11 @@ export class DesktopRunnerHost implements IRunnerHost {
     };
   }
 
-  onSystemSuspended(handler: () => void): Disposable {
+  onSystemSuspended(handler: (cause: SystemSuspendCause) => void): Disposable {
     // A direct per-handler bridge subscription: unlike the resume pulse this
     // carries no shell-side shaping, so there is nothing to fan out from one
-    // place.
-    return toDisposable(this.bridge.onSystemSuspended(handler));
+    // place. Sleep and the screen lock are the desktop's only causes.
+    return toDisposable(this.bridge.onSystemSuspended(() => handler("locked")));
   }
 
   onVoiceTrayAction(handler: (action: VoiceTrayAction) => void): Disposable {
