@@ -672,7 +672,7 @@ function completeChatRestore(
   });
 }
 
-// ── Chat-plane fixtures for the P1/P2 regression pins (transcript-record-
+// ── Chat-plane fixtures for the regression pins (transcript-record-
 // fingerprint-memo) ─────────────────────────────────────────────────────────
 //
 // These drive `pruneAcceptedActions`, `acceptedActionIsUnsettled` and the
@@ -911,7 +911,7 @@ function queuedManagedCommandItemFixture(
 
 /**
  * Send, accept and transcript-confirm a filler message - a settled `send`
- * accepted action with nothing left for P1/P2 to hold. Used only to push the
+ * accepted action with nothing left for the pins to hold. Used only to push the
  * 64-record cap past its limit with same-rank (`send`) competition, so
  * eviction has to choose by recency rather than by kind.
  */
@@ -2566,7 +2566,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
   // `restoreCompleted` frame. `completed` persists in the slot for toast/dialog
   // consumers, so it must read as finished, not merely "an entry exists".
   //
-  // Extended (transcript-record-fingerprint-memo, P2): the original version of
+  // Extended (transcript-record-fingerprint-memo): the original version of
   // this pin only drove `restoreStarted`/`restoreCompleted` frames - it never
   // dispatched a real `restoreCheckpoint` action, so it never had the
   // ACCEPTED record `acceptedActionIsUnsettled`'s `restoreCheckpoint` arm is
@@ -2595,7 +2595,7 @@ describe("epic-parking - fine-grained chat settlement states (pins 6-9)", () => 
     emitOwnerChatSnapshot(chat.callbacks, EPIC, CHAT_ID, HOST_ID);
 
     // A REAL `restoreCheckpoint` action, dispatched and ACKed - the accepted
-    // record P2 is about.
+    // record this pin is about.
     const restoreClientActionId = chat.handle.store
       .getState()
       .restoreCheckpoint("checkpoint-pin8b", false);
@@ -3987,7 +3987,7 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
     vi.useRealTimers();
   });
 
-  // Pin 10a, positive (P1 - age eviction). An unconfirmed accepted send
+  // Pin 10a, positive (age eviction). An unconfirmed accepted send
   // survives past the 5-minute retention window once a frame actually RUNS
   // pruning - an empty same-connection `queueChanged`, the reviewer's exact
   // repro. `acceptedActionHoldsUnrecoveredSend` is what keeps it out of the
@@ -4110,7 +4110,7 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
     }
   });
 
-  // Pin 11a, positive (P1 - count eviction). Push more than the 64-record cap
+  // Pin 11a, positive (count eviction). Push more than the 64-record cap
   // through with same-rank ("send"), strictly more recent, CONFIRMED filler
   // actions - an unlocked scan would sort the unconfirmed target out as the
   // oldest same-rank entry, so its survival here is the lock, not luck of the
@@ -4222,7 +4222,7 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
     }
   });
 
-  // Pin 12a, positive (P2 - pauseQueue is not a send fact). Accepted, but the
+  // Pin 12a, positive (pauseQueue is not a send fact). Accepted, but the
   // authoritative queue has not reached `paused` yet - `confirmedByHost` for
   // this record is `false` and never becomes anything else, so only reading
   // the LIVE queue can tell held from settled.
@@ -4569,7 +4569,7 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
     }
   });
 
-  // Pin 13a, positive (P2 - queueCancel is not a send fact either). Accepted,
+  // Pin 13a, positive (queueCancel is not a send fact either). Accepted,
   // and a live `queueChanged` still carries the target row - the cancel has
   // not actually landed yet.
   it("does not park while an accepted queueCancel's target row is still in the authoritative queue, and the chat survives (pin 13a)", () => {
@@ -4677,7 +4677,7 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
     }
   });
 
-  // Pin 14, both arms (P2 - the reconnect door): the same accepted
+  // Pin 14, both arms (the reconnect door): the same accepted
   // queueCancel, held while a live `queueChanged` still shows its target, then
   // settled by a RECONNECT SNAPSHOT - not a `queueChanged` - whose queue no
   // longer holds the row. Before this round's fix a cancel accepted just
@@ -4745,7 +4745,7 @@ describe("epic-parking - P1/P2 regression pins: history pruning is not settlemen
     }
   });
 
-  // Pin 15 (P1 - consumed send restoration). An accepted send's content is
+  // Pin 15 (consumed send restoration). An accepted send's content is
   // consumed by `takeSetupFailedRestoration` (what a setup-failed replay
   // calls once the composer takes the content back), nulling `restore` while
   // `confirmedByHost` stays `false` forever. This is the case

@@ -588,7 +588,7 @@ describe("renderer parking draft-guard pins", () => {
   });
 });
 
-// ── transcript-record-fingerprint-memo P1: emptying a SAVED comment must not
+// ── transcript-record-fingerprint-memo: emptying a SAVED comment must not
 // be treated as "nothing to lose" ───────────────────────────────────────────
 //
 // `CommentComposer` distinguishes a NEW composer (`initialContent === null`)

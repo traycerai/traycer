@@ -3324,7 +3324,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     useCallback(
       (atBottom: boolean): void => {
         if (atBottom) {
-          // P4: same zero-human-row fallback as `viewportActiveUserMessageId`
+          // Same zero-human-row fallback as `viewportActiveUserMessageId`
           // (see its own doc comment) - an A2A-only transcript has no
           // candidate for the human-only gate, so at the tail the natural
           // role-agnostic anchor is simply the last row, any role.
@@ -4057,7 +4057,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
           // eventual unmount save would silently no-op forever
           // (`captureLiveChatTabScrollSnapshot`'s own gate check), leaving
           // a stale free-scrolling cache entry across the next same-pane
-          // remount. But hydration-transaction P1 (chat-messages.test.tsx
+          // remount. But the hydration transaction (chat-messages.test.tsx
           // "close-before-hydration"/"bare pointerdown... before
           // hydration") needs the OPPOSITE outcome for a tail-only partial
           // snapshot, whose clamped restore target IS the current tail -

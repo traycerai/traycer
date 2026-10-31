@@ -3676,7 +3676,7 @@ describe("ChatMessages fallback announcer (real store, real observer, real ident
       // Deferring instead carries the event PAST that window: the hold outlives
       // every absorbing frame and the deadline then waits for a speaking one,
       // which is exactly the frame the filter is down. Falsification: gate only
-      // the deferred exits on `canSpeak` (the P1 fix alone) - the hold is taken
+      // the deferred exits on `canSpeak` alone - the hold is taken
       // while not ready, survives the restore, and the last block below speaks
       // a switch the user already lived through.
       vi.useFakeTimers();
