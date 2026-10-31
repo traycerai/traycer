@@ -255,7 +255,9 @@ export interface Announcement {
  * question. Such a row is never an announcement; once settled it is simply
  * nothing more to say.
  */
-function askedThePerson(row: Pick<AssistantRow, "question" | "surface">): boolean {
+function askedThePerson(
+  row: Pick<AssistantRow, "question" | "surface">,
+): boolean {
   return (
     row.question !== undefined ||
     row.surface?.kind === "approval" ||

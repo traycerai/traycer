@@ -37,7 +37,10 @@ function textBlock(text: string): OpenTextBlock {
   };
 }
 
-function post(messageId: string, timestamp: number): AnnouncementRow {
+/** A bot's row of the channel, the branch of `AnnouncementRow` a question rides on. */
+type BotPost = Extract<AnnouncementRow, { readonly role: "assistant" }>;
+
+function post(messageId: string, timestamp: number): BotPost {
   return {
     role: "assistant",
     messageId,
@@ -50,7 +53,7 @@ function questionPost(
   messageId: string,
   timestamp: number,
   settlement: BotQuestionSettlement | null,
-): AnnouncementRow {
+): BotPost {
   return {
     ...post(messageId, timestamp),
     question: {
