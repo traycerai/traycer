@@ -1118,7 +1118,7 @@ describe("composer paste core - drag-and-drop", () => {
     ).toBe(true);
   });
 
-  // Round-3: drag-enter can only see type names, so an ordinary HTTPS URI
+  // Drag-enter can only see type names, so an ordinary HTTPS URI
   // lights the overlay; drop must clear it and refuse both resolvers.
   it("clears the drag overlay on an https uri-list drop without calling either resolver", async () => {
     const resolveDroppedFilePaths = vi.fn(() => Promise.resolve([]));

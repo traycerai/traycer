@@ -284,7 +284,7 @@ InitPass(x) ==
     [kind |-> "init", mvcp |-> ~ListAtEnd(x), anchored |-> ~ListAtEnd(x), endReq |-> TRUE]
 
 \* Whether the pass keeps the cached estimate of an unmeasured row at `top`.
-\* "hold-init" (shipped, #3019 round 2): every pass that anchors nothing keeps
+\* "hold-init" (shipped, #3019): every pass that anchors nothing keeps
 \* each row whose top, as that pass lays it out, is above the bottom of the
 \* view; estimates refresh in a pass that anchors, and in one that does not:
 \* the settled re-layout of the initial scroll to the end, with the live
