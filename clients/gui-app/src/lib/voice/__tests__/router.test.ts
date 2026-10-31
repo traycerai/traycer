@@ -573,9 +573,9 @@ describe("small talk", () => {
 describe("a verb a later ticket builds", () => {
   it("is refused with a spoken not-yet, posts nothing, and spends the words", async () => {
     const h = harness(DIRECTORY);
-    const chunks = words("What's running right now?");
+    const chunks = words("Open the nightly report.");
     speak(chunks);
-    h.model(recorded(routerResult("status", NOWHERE, 0, chunks.length - 1)));
+    h.model(recorded(routerResult("open", NOWHERE, 0, chunks.length - 1)));
 
     await h.loop.onDelegationCreated("d-1");
 

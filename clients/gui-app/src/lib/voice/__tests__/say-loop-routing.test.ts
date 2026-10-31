@@ -1,6 +1,7 @@
 import type { BotConversationSendResponse } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
+import type { OpenTextBlock } from "@traycer/protocol/persistence/epic/open-harness-records";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   useVoiceSessionStore,
@@ -9,10 +10,14 @@ import {
 import {
   composeVoiceDirectory,
   tupleHolds,
+  type DirectorySources,
   type BoundTarget,
   type VoiceDirectory,
 } from "../directory";
+import { NOTHING_WAITING_NOTICE } from "../deferred-verbs";
 import { resolveRoute, type RouterResult } from "../router";
+import type { SpeechItem } from "../scheduler";
+import { createVoiceQueue } from "../voice-queue";
 import {
   CONFIRM_ANSWER_WINDOW_MS,
   createSayLoop,
@@ -78,7 +83,7 @@ const FOCUS_TRACY: VoiceFocus = {
   anchorThread: null,
 };
 
-const DIRECTORY: VoiceDirectory = composeVoiceDirectory({
+const SOURCES: DirectorySources = {
   environments: [environment(PERSONAL, "personal"), environment(ACME, "team")],
   bots: [bot(TRACY, PERSONAL), bot(CI, PERSONAL), bot(RELEASE, ACME)],
   threadsByBot: new Map(),
@@ -88,7 +93,9 @@ const DIRECTORY: VoiceDirectory = composeVoiceDirectory({
   queue: [],
   hostOf: (botId) => HOSTS.get(botId) ?? null,
   heldPostText: () => null,
-});
+};
+
+const DIRECTORY: VoiceDirectory = composeVoiceDirectory(SOURCES);
 
 function route(
   action: RouterResult["action"],
@@ -136,8 +143,14 @@ interface Wiring {
  * model's answers are queued by hand, so two routes can be out at once.
  */
 function build(wiring: Wiring) {
+  return buildFor(wiring, DIRECTORY);
+}
+
+/** {@link build} over a directory the test composed. */
+function buildFor(wiring: Wiring, directory: VoiceDirectory) {
   const sends: VoiceFocus[] = [];
   const notices: string[] = [];
+  const noticeDelegations: Array<string | null> = [];
   const asks: AskOutcome[] = [];
   const answers: Array<() => Promise<RouterResult>> = [];
   /** Timers the loop set, by the order it set them; run one with `.run()`. */
@@ -148,8 +161,9 @@ function build(wiring: Wiring) {
       sends.push(focus);
       return Promise.resolve(SEND_RESPONSE);
     },
-    notify: (text) => {
+    notify: (text, delegationId) => {
       notices.push(text);
+      noticeDelegations.push(delegationId);
     },
     ask: (_text, _delegationId, outcome) => {
       asks.push(outcome);
@@ -159,9 +173,9 @@ function build(wiring: Wiring) {
       const next = answers.shift();
       if (next === undefined) throw new Error("no answer queued");
       // The directory is read when the route is made, as the real one does.
-      return resolveRoute(await next(), DIRECTORY, request.segments.length);
+      return resolveRoute(await next(), directory, request.segments.length);
     },
-    recheck: (tuple) => wiring.recheckHolds && tupleHolds(DIRECTORY, tuple),
+    recheck: (tuple) => wiring.recheckHolds && tupleHolds(directory, tuple),
     navigate: (_target: BoundTarget) => Promise.resolve(true),
     think: () => undefined,
     control: () => undefined,
@@ -182,7 +196,7 @@ function build(wiring: Wiring) {
     botTitle: (botId) => botId,
     onAccepted: () => undefined,
   });
-  return { loop, sends, notices, asks, answers, timers };
+  return { loop, sends, notices, noticeDelegations, asks, answers, timers };
 }
 
 /** A route the test answers when it chooses. */
@@ -394,5 +408,105 @@ describe("a confirmation whose answer never closes an utterance", () => {
 
     expect(h.sends.map((focus) => focus.botId)).toEqual([CI]);
     expect(h.notices).toEqual([]);
+  });
+});
+
+describe("a routed read", () => {
+  /** The real voice queue under the store's driver, over a scheduler that records what it is given. */
+  function liveQueue() {
+    const enqueued: SpeechItem[] = [];
+    const queue = createVoiceQueue({
+      scheduler: {
+        enqueue: (item) => {
+          enqueued.push(item);
+        },
+        withdraw: () => undefined,
+      },
+      publish: (items) => useVoiceSessionStore.getState().setQueue(items),
+      botTitle: (botId) => botId,
+      markRead: () => undefined,
+      noteHeard: () => undefined,
+      switchTo: () => undefined,
+      isFocused: () => false,
+      attention: () => ({
+        answers: [],
+        prompts: { approvals: [], questions: [] },
+      }),
+    });
+    useVoiceSessionStore.setState({ phase: "live" });
+    useVoiceSessionStore.getState().setQueueDriver({
+      run: (verb) => (verb.kind === "status" ? "nothing" : queue.run(verb)),
+    });
+    return { queue, enqueued };
+  }
+
+  function readOf(itemId: string | null): RouterResult {
+    return {
+      ...route("read", null, null, 2),
+      target: { environmentId: null, botId: null, threadId: null, itemId },
+    };
+  }
+
+  it("reads the item it names, under the request's delegation, and posts nothing", async () => {
+    const { queue, enqueued } = liveQueue();
+    const text: OpenTextBlock = {
+      blockId: "block-1",
+      status: "completed",
+      timestamp: 1,
+      parentBlockId: null,
+      type: "text",
+      text: "The Safari fix landed in build forty.",
+      providerNotice: null,
+    };
+    queue.begin(
+      [
+        {
+          messageId: "r-1",
+          botId: CI,
+          threadId: null,
+          chatId: "chan-ci",
+          originHostId: "host-1",
+          at: NOW,
+          blocking: false,
+        },
+      ],
+      () => "host-1",
+    );
+    queue.hydrated(
+      "r-1",
+      { role: "assistant", messageId: "r-1", blocks: [text] },
+      null,
+    );
+    const directory = composeVoiceDirectory({
+      ...SOURCES,
+      queue: queue.items(),
+    });
+    const h = buildFor({ recheckHolds: true, canSend: true }, directory);
+    h.answers.push(() => Promise.resolve(readOf("r-1")));
+
+    speak("read", " it");
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(enqueued.map((item) => [item.text, item.delegationId])).toEqual([
+      ["bot_ci said: The Safari fix landed in build forty.", "d-1"],
+    ]);
+    expect(h.sends).toEqual([]);
+    expect(h.notices).toEqual([]);
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
+  });
+
+  it("says that nothing is waiting, under the request's delegation, when there is nothing to read", async () => {
+    const { enqueued } = liveQueue();
+    const h = build({ recheckHolds: true, canSend: true });
+    h.answers.push(() => Promise.resolve(readOf(null)));
+
+    speak("read", " it");
+    await h.loop.onDelegationCreated("d-1");
+
+    expect(h.notices).toEqual([NOTHING_WAITING_NOTICE]);
+    expect(h.noticeDelegations).toEqual(["d-1"]);
+    expect(h.sends).toEqual([]);
+    expect(enqueued).toEqual([]);
+    expect(useVoiceSessionStore.getState().segments).toEqual([]);
   });
 });
