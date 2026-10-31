@@ -2226,3 +2226,39 @@ describe("a routed post to another thread of the active bot", () => {
     ).toEqual([]);
   });
 });
+
+describe("a held voice navigation to another bot", () => {
+  it("a rail change by the person in the tab the voice is opening, while its navigation is out, is a move", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    await bringLive();
+    fake.routeAnswer = (body) => fake.routeToBot("bot-2", body);
+    act(() => fake.conversationLists.answer("bot-2", true));
+    let land: () => void = () => undefined;
+    fake.navigateOutcome = () =>
+      new Promise<void>((resolve) => {
+        land = resolve;
+      });
+    const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+    await say("Ask the release bot when the train leaves.", "d1");
+    // bot-2's tab is already the active one; its navigation is still out.
+    act(() =>
+      useBotOpenThreadStore.getState().setRail("bot-2", {
+        kind: "thread",
+        anchorMessageId: "q1",
+        announcement: true,
+        anchorKind: null,
+        sent: null,
+      }),
+    );
+    await settle();
+
+    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
+      generation + 1,
+    );
+    land();
+    await settle();
+    expect(fake.sendMock).not.toHaveBeenCalled();
+  });
+});
