@@ -127,6 +127,10 @@ export function useBotMentionCompletion(args: {
     mention === null || candidates.length === 0
       ? NO_CANDIDATES
       : matchMentionCandidates(candidates, mention.query).slice(0, MATCHES_MAX);
+  // A dismissal holds only while its `@` is the one being typed.
+  if (dismissedAt !== null && mention?.start !== dismissedAt) {
+    setDismissedAt(null);
+  }
   const open =
     mention !== null && matches.length > 0 && dismissedAt !== mention.start;
   const active = Math.min(highlight, Math.max(matches.length - 1, 0));

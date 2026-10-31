@@ -738,3 +738,90 @@ describe("<BotMessageComposer /> @ mentions", () => {
     expect(mocks.send.mock.calls[0][0].text).toBe("@an");
   });
 });
+
+describe("the member list after Escape", () => {
+  const TEAM: BotOwner = {
+    kind: "team",
+    name: "Acme",
+    members: [
+      { userId: "u-viewer", displayName: "Andy Viewer", avatarUrl: null },
+      { userId: "u-ann", displayName: "Ann Lee", avatarUrl: null },
+      { userId: "u-anders", displayName: "Anders", avatarUrl: null },
+      { userId: "u-bob", displayName: "Bob", avatarUrl: null },
+    ],
+  };
+
+  beforeEach(() => {
+    useAuthStore.setState({
+      profile: {
+        userId: "u-viewer",
+        userName: "Andy Viewer",
+        email: "andy@example.com",
+        avatarUrl: null,
+      },
+    });
+    render(
+      <BotIdentityContext
+        value={{ botId: "bot-1", title: "Tracy", owner: TEAM }}
+      >
+        {composer(null)}
+      </BotIdentityContext>,
+    );
+  });
+
+  afterEach(() => {
+    useAuthStore.setState({ profile: null });
+  });
+
+  it("shows again for an @ at the same offset once the box was cleared", async () => {
+    const user = userEvent.setup();
+    await user.type(box(), "@an");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByTestId("bot-mention-list")).toBeNull();
+
+    await user.clear(box());
+    await user.type(box(), "@an");
+
+    expect(screen.getByTestId("bot-mention-list")).toBeTruthy();
+  });
+
+  it("shows again for an @ at the same offset after a send", async () => {
+    const user = userEvent.setup();
+    await user.type(box(), "@an");
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByTestId("bot-channel-composer-send"));
+    await settleSend(lastSend(), (callbacks) =>
+      callbacks.onSuccess?.(RESPONSE),
+    );
+    expect(box().value).toBe("");
+
+    await user.type(box(), "@an");
+
+    expect(screen.getByTestId("bot-mention-list")).toBeTruthy();
+  });
+
+  it("shows for a new @ at the offset it was closed on, after a pick at another @", async () => {
+    const user = userEvent.setup();
+    await user.type(box(), "@an");
+    await user.keyboard("{Escape}");
+    await user.type(box(), " @bo");
+    await user.keyboard("{Enter}");
+    expect(box().value).toBe("@an @Bob ");
+    expect(screen.queryByTestId("bot-mention-list")).toBeNull();
+
+    act(() => box().setSelectionRange(0, 3));
+    await user.keyboard("@an");
+
+    expect(screen.getByTestId("bot-mention-list")).toBeTruthy();
+  });
+
+  it("stays closed while the same @ is still being typed", async () => {
+    const user = userEvent.setup();
+    await user.type(box(), "@a");
+    await user.keyboard("{Escape}");
+    await user.keyboard("n");
+
+    expect(box().value).toBe("@an");
+    expect(screen.queryByTestId("bot-mention-list")).toBeNull();
+  });
+});
