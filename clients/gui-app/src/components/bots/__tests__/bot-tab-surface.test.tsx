@@ -604,6 +604,7 @@ import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
 import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { openChatSearchResult } from "@/lib/chat-search/open-chat-search-result";
+import { rowFromHostEntry } from "@/stores/notifications/merged-notifications";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 import { useTeamCloudCreateStore } from "@/stores/bots/team-cloud-create-store";
 
@@ -3034,6 +3035,64 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
 
         expect(screen.queryByTestId("stub-threads")).toBeNull();
         expect(screen.getByTestId("stub-channel")).toBeTruthy();
+      },
+    );
+
+    // A row can name a host that has since gone; a new bot tab takes the
+    // window's host instead, which routes the bot to wherever it is served.
+    it.each(["a search hit", "a notification"])(
+      "opens the bot's tab on the window's host when %s names a host that is gone",
+      (source) => {
+        // No tab of the bot is open: an open one keeps its own host.
+        useBotTabsStore.setState({ tabs: {} });
+        if (source === "a search hit") {
+          openChatSearchResult(
+            vi.fn(),
+            {
+              epicId: BOT_ID,
+              chatId: BOT.appConversationChatId ?? "",
+              hostId: "host-retired",
+              messageId: "post-1",
+            },
+            { effectiveHostId: TAB_HOST, now: 1_000 },
+          );
+        } else {
+          const { payload } = rowFromHostEntry({
+            id: "old-agent-stop",
+            updatedAt: 10,
+            readAt: null,
+            kind: "agent.stopped",
+            sourceRef: BOT.trunkChatId,
+            severity: "done",
+            outcome: "completed",
+            epicId: BOT_ID,
+            chatId: BOT.trunkChatId,
+            payload: {
+              kind: "chat",
+              epicId: BOT_ID,
+              chatId: BOT.trunkChatId,
+              hostId: "host-retired",
+              agentName: "Tracy",
+              taskTitle: "Tracy",
+              outcome: "completed",
+            },
+          });
+          if (payload === null) throw new Error("the row carried no payload");
+          routeNotificationForHost(vi.fn(), payload, 1_000, {
+            originHostId: null,
+            effectiveHostId: TAB_HOST,
+          });
+        }
+
+        expect(
+          lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID),
+        ).toMatchObject({ hostId: TAB_HOST });
+        render(surface());
+        expect(
+          screen.queryByTestId(
+            source === "a search hit" ? "stub-channel" : "stub-session",
+          ),
+        ).not.toBeNull();
       },
     );
   });

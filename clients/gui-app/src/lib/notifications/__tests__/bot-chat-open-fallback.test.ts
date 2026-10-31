@@ -81,17 +81,14 @@ beforeEach(async () => {
 });
 
 describe("a chat search hit in a bot's chat", () => {
-  function searchHit(
-    chatId: string,
-    effectiveHostId: string | null,
-  ): ReadonlyArray<unknown> {
+  function searchHit(chatId: string): ReadonlyArray<unknown> {
     const navigate = vi.fn<(options: unknown) => Promise<void>>(() =>
       Promise.resolve(),
     );
     openChatSearchResult(
       navigate,
       { hostId: "host-team", epicId: BOT_ID, chatId, messageId: "row-1" },
-      { effectiveHostId, now: 1_000 },
+      { effectiveHostId: "host-team", now: 1_000 },
     );
     return navigate.mock.calls.map((call) => call[0]);
   }
@@ -99,7 +96,7 @@ describe("a chat search hit in a bot's chat", () => {
   // Which of the bot's chats the hit is in (channel, thread, session) is the
   // tab's to resolve: bot-tab-surface.test.tsx lands each kind.
   it("opens the bot's tab and hands it the hit's chat and row, never an epic tab keyed by the bot id", () => {
-    const intents = searchHit("chat-1", "host-team");
+    const intents = searchHit("chat-1");
 
     expect(epicIntentsKeyedByBotId(intents)).toEqual([]);
     expect(intents).toContainEqual(
@@ -114,25 +111,6 @@ describe("a chat search hit in a bot's chat", () => {
       messageId: "row-1",
     });
   });
-
-  // The hit came from the host that answered the search, so a new bot tab is
-  // bound there, whichever host the window has, or with none.
-  it.each([
-    ["another host", "host-effective"],
-    ["no host", null],
-  ])(
-    "opens the bot's tab on the host that answered the search while the window has %s",
-    (_window, effectiveHostId) => {
-      const intents = searchHit("chat-1", effectiveHostId);
-
-      expect(intents).toContainEqual(
-        expect.objectContaining({ params: { botId: BOT_ID } }),
-      );
-      expect(
-        lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID),
-      ).toMatchObject({ hostId: "host-team" });
-    },
-  );
 });
 
 describe("a bot row activated with no device", () => {
@@ -191,31 +169,5 @@ describe("a bot row activated with no device", () => {
     expect(onResult).toHaveBeenCalledTimes(1);
     expect(onResult).toHaveBeenCalledWith("failure");
     expect(toast.error).toHaveBeenCalledExactlyOnceWith(NO_DEVICE_AVAILABLE);
-  });
-
-  it("opens the bot's tab on the host a row names, with no toast, though the window has none", () => {
-    const { payload } = row;
-    if (payload?.kind !== "chat") throw new Error("the bot row is not a chat");
-    const onResult = vi.fn();
-    const hook = renderHook(() => useNotificationActivation(), { wrapper });
-
-    act(() => {
-      hook.result.current.activate({
-        payload: { ...payload, hostId: "host-named" },
-        receivedAt: 2_000,
-        feedId: row.feedId,
-        originHostId: null,
-        onResult,
-      });
-    });
-
-    expect(lookupBotTab(useBotTabsStore.getState().tabs, BOT_ID)).toMatchObject(
-      { hostId: "host-named" },
-    );
-    expect(navigateSpy).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ params: { botId: BOT_ID } }),
-    );
-    expect(onResult).toHaveBeenCalledExactlyOnceWith("success");
-    expect(toast.error).not.toHaveBeenCalled();
   });
 });
