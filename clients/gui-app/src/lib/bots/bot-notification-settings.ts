@@ -20,6 +20,22 @@ export function channelNotificationLevel(
   return personal ? "all" : "mentions";
 }
 
+/**
+ * Whether the person set a channel to Nothing (decision 138): nothing in it,
+ * its threads included, rings or bolds. No default is Nothing, so a channel
+ * with no level set, or levels not read yet, is not muted.
+ */
+export function channelMuted(
+  levels: Readonly<Record<string, BotNotificationLevel>> | undefined,
+  channelId: string,
+): boolean {
+  return (
+    levels !== undefined &&
+    Object.hasOwn(levels, channelId) &&
+    levels[channelId] === "off"
+  );
+}
+
 /** The person's follow of a thread, `null` where they do not follow it. */
 export function followingOf(
   follows: Readonly<Record<string, BotThreadFollow>> | undefined,

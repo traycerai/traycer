@@ -18,6 +18,7 @@ import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
 import { isReadCursorReadOf } from "@/hooks/bots/use-bot-read-cursor";
+import { isFollowReadOf } from "@/hooks/bots/use-bot-thread-follow";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -350,9 +351,13 @@ function createSharedSubscription(
       void queryClient
         .cancelQueries({ queryKey })
         .then(() => queryClient.invalidateQueries({ queryKey }));
-      // The conversations' newest rows moved with it (decision 139).
+      // The conversations' newest rows moved with it (decision 139), and a
+      // row may have followed the person to a thread (posted, replied,
+      // mentioned: decision 137).
       void queryClient.invalidateQueries({
-        predicate: (query) => isReadCursorReadOf(query.queryKey, args.botId),
+        predicate: (query) =>
+          isReadCursorReadOf(query.queryKey, args.botId) ||
+          isFollowReadOf(query.queryKey, args.botId),
       });
     }
   });

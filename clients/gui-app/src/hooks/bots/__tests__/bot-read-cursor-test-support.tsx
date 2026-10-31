@@ -10,6 +10,7 @@ import {
 } from "@traycer/protocol/host/index";
 import type {
   BotReadCursorAdvanceRequest,
+  BotReadCursorReadResponse,
   BotReadPosition,
   BotThreadFollow,
 } from "@traycer/protocol/host/bot/schemas";
@@ -20,7 +21,8 @@ import type {
  * QueryClient. `cursors` and `latest` are what the next read answers; tests
  * change them to play another device or a row landing. `advanceAnswers`
  * overrides what an advance answers, to play a host that lags the cache.
- * `follows` is what `bot.threadFollow.read` answers.
+ * `follows` is what `bot.threadFollow.read` answers. While `heldRead.promise`
+ * is set, a read is counted and answered by it, to play a read in flight.
  */
 export interface ReadCursorHostFixture {
   readonly client: HostClient<HostRpcRegistry>;
@@ -32,6 +34,7 @@ export interface ReadCursorHostFixture {
   readonly advances: BotReadCursorAdvanceRequest[];
   readonly advanceAnswers: Map<string, BotReadPosition>;
   readonly follows: Record<string, BotThreadFollow>;
+  readonly heldRead: { promise: Promise<BotReadCursorReadResponse> | null };
 }
 
 export function createReadCursorHostFixture(initial: {
@@ -42,6 +45,7 @@ export function createReadCursorHostFixture(initial: {
   const cursors: Record<string, BotReadPosition> = { ...initial.cursors };
   const latest: Record<string, BotReadPosition> = { ...initial.latest };
   const follows: Record<string, BotThreadFollow> = { ...initial.follows };
+  const heldRead: ReadCursorHostFixture["heldRead"] = { promise: null };
   const reads = { count: 0 };
   const advances: BotReadCursorAdvanceRequest[] = [];
   const advanceAnswers = new Map<string, BotReadPosition>();
@@ -62,6 +66,7 @@ export function createReadCursorHostFixture(initial: {
       handlers: {
         "bot.readCursor.read": () => {
           reads.count += 1;
+          if (heldRead.promise !== null) return heldRead.promise;
           return { cursors: { ...cursors }, latest: { ...latest } };
         },
         "bot.threadFollow.read": () => ({ follows: { ...follows } }),
@@ -98,5 +103,6 @@ export function createReadCursorHostFixture(initial: {
     advances,
     advanceAnswers,
     follows,
+    heldRead,
   };
 }

@@ -25,7 +25,13 @@ import {
   type SettingsSegmentedOption,
 } from "@/components/settings/controls/settings-segmented-control";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
-import { followingOf } from "@/lib/bots/bot-notification-settings";
+import {
+  channelMuted,
+  followingOf,
+} from "@/lib/bots/bot-notification-settings";
+import { useBotNotificationLevelsQuery } from "@/hooks/bots/use-bot-notification-level";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { threadHasNewReplies } from "@/lib/bots/bot-read-cursor";
 import { firstLineOf, threadOpenOf } from "@/lib/bots/bot-trunk-model";
 import { postTextOf } from "@/lib/bots/reply-row";
@@ -175,8 +181,14 @@ function FollowedThreads(props: {
 }): ReactNode {
   const { botId, hostId, threads, follows, onOpenPost } = props;
   const readCursors = useBotReadCursors(botId, hostId)?.data;
+  const levels = useBotNotificationLevelsQuery(
+    useTabHostClient(),
+    botId,
+    useHostMethodSupport(hostId, "bot.notificationLevel.read") === true,
+  ).data?.levels;
   // Threads with new replies first (decision 139), each group by last
-  // activity, as the list comes.
+  // activity, as the list comes. A muted channel's threads never have new
+  // replies to show (decision 138).
   const followed = useMemo(() => {
     const newReplies = new Set<string>();
     const listed = threads.filter((thread) => {
@@ -188,7 +200,7 @@ function FollowedThreads(props: {
           readCursors,
           thread.threadId,
           thread.lastReplyAt,
-          true,
+          !channelMuted(levels, thread.conversationId),
         )
       ) {
         newReplies.add(thread.threadId);
@@ -202,7 +214,7 @@ function FollowedThreads(props: {
       ],
       newReplies,
     };
-  }, [follows.data, readCursors, threads]);
+  }, [follows.data, levels, readCursors, threads]);
   const threadIds = useMemo(
     () => followed.threads.map((thread) => thread.threadId),
     [followed],

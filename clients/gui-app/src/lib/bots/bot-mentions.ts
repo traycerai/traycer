@@ -23,20 +23,33 @@ export function botMentionToken(userId: string): string {
 const NAME_BOUNDARY = /[\s.,;:!?()[\]{}'"]/;
 
 /**
- * The text as sent: each `@Name` of a member whose name no other member
- * shares becomes that member's token. Longer names are matched first, so
- * "@Ann Lee" is not read as "@Ann".
+ * The text as sent: each `@Name` of a member becomes that member's token.
+ * A name two members share is the one the person picked: `picks` are the
+ * members picked from the list, in the order they were, and each such
+ * `@Name` takes the next pick that names one of them; with none left it
+ * stays as typed. Longer names are matched first, so "@Ann Lee" is not
+ * read as "@Ann".
  */
 export function mentionsToWire(
   text: string,
   members: ReadonlyArray<BotMentionCandidate>,
+  picks: ReadonlyArray<string>,
 ): string {
-  const byName = new Map<string, string | null>();
+  const byName = new Map<string, string[]>();
   for (const member of members) {
     const name = member.name.trim();
     if (name.length === 0) continue;
-    byName.set(name, byName.has(name) ? null : member.userId);
+    byName.set(name, [...(byName.get(name) ?? []), member.userId]);
   }
+  const unspent = [...picks];
+  const userIdOf = (name: string): string | null => {
+    const userIds = byName.get(name) ?? [];
+    if (userIds.length === 1) return userIds[0];
+    const index = unspent.findIndex((userId) => userIds.includes(userId));
+    if (index === -1) return null;
+    const [picked] = unspent.splice(index, 1);
+    return picked;
+  };
   const names = [...byName.keys()].sort((a, b) => b.length - a.length);
   let out = "";
   let index = 0;
@@ -53,7 +66,7 @@ export function mentionsToWire(
             return after === "" || NAME_BOUNDARY.test(after);
           })
         : undefined;
-    const userId = name === undefined ? null : (byName.get(name) ?? null);
+    const userId = name === undefined ? null : userIdOf(name);
     if (name === undefined || userId === null) {
       out += "@";
       index = at + 1;

@@ -30,6 +30,7 @@ import {
   useBotSubscriptionForClient,
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
+import { useBotThreadFollowsQuery } from "@/hooks/bots/use-bot-thread-follow";
 import { useBotReadCursorQuery } from "@/hooks/bots/use-bot-read-cursor";
 import { StubHostStreamClient, StubSession } from "./bot-subscribe-stub-stream";
 
@@ -94,6 +95,7 @@ function claimed(
 function fixture(watchReadCursors: boolean): {
   readonly session: StubSession;
   readonly cursorReads: { value: number };
+  readonly followReads: { value: number };
   readonly listReads: { value: number };
   readonly pendingReads: Array<(response: BotThreadListResponse) => void>;
   readonly queryClient: QueryClient;
@@ -105,6 +107,7 @@ function fixture(watchReadCursors: boolean): {
   });
   const listReads = { value: 0 };
   const cursorReads = { value: 0 };
+  const followReads = { value: 0 };
   // Each `bot.thread.list` dispatch parks here instead of answering inline,
   // so the test controls exactly when (and with what body) it resolves.
   const pendingReads: Array<(response: BotThreadListResponse) => void> = [];
@@ -115,6 +118,10 @@ function fixture(watchReadCursors: boolean): {
       "bot.readCursor.read": () => {
         cursorReads.value += 1;
         return { cursors: {}, latest: {} };
+      },
+      "bot.threadFollow.read": () => {
+        followReads.value += 1;
+        return { follows: {} };
       },
       "bot.thread.list": () => {
         listReads.value += 1;
@@ -145,6 +152,7 @@ function fixture(watchReadCursors: boolean): {
 
   function ReadCursors(): ReactNode {
     useBotReadCursorQuery(requester, BOT_ID, true);
+    useBotThreadFollowsQuery(requester, BOT_ID, true);
     return null;
   }
 
@@ -170,6 +178,7 @@ function fixture(watchReadCursors: boolean): {
   return {
     session,
     cursorReads,
+    followReads,
     listReads,
     pendingReads,
     queryClient,
@@ -329,17 +338,20 @@ describe("the bot's thread listing follows its subscription", () => {
   });
 });
 
-describe("the person's read cursors follow the bot's subscription", () => {
+describe("the person's read cursors and follows follow the bot's subscription", () => {
   it("reads them again when the conversations' revision moves, and not for a snapshot that leaves it", async () => {
     const world = fixture(true);
     world.render();
     act(() => world.session.emit(snapshot(3, 0)));
     await waitFor(() => expect(world.cursorReads.value).toBe(1));
+    await waitFor(() => expect(world.followReads.value).toBe(1));
 
     act(() => world.session.emit(snapshot(3, 1)));
     expect(world.cursorReads.value).toBe(1);
+    expect(world.followReads.value).toBe(1);
 
     act(() => world.session.emit(snapshot(4, 1)));
     await waitFor(() => expect(world.cursorReads.value).toBe(2));
+    await waitFor(() => expect(world.followReads.value).toBe(2));
   });
 });

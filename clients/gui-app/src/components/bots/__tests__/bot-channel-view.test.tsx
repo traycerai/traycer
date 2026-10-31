@@ -27,6 +27,7 @@ import type {
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   BotReadCursorAdvanceRequest,
+  BotNotificationLevel,
   BotReadCursorReadResponse,
   BotThreadFollow,
 } from "@traycer/protocol/host/bot/schemas";
@@ -108,6 +109,12 @@ const mocks = vi.hoisted(() => {
       follows: undefined as Record<string, BotThreadFollow> | undefined,
       // The person's read cursors and the newest rows; `undefined` = not read.
       readCursors: undefined as BotReadCursorReadResponse | undefined,
+      // Whether the host keeps read cursors at all.
+      readCursorsKept: true,
+      // The next advance fails, as one to an offline host does.
+      failNextAdvance: false,
+      // The person's notification levels by channel id; `undefined` = not read.
+      levels: undefined as Record<string, BotNotificationLevel> | undefined,
       chats,
     },
   };
@@ -206,8 +213,28 @@ vi.mock("@/hooks/bots/use-bot-read-cursor", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("@/hooks/bots/use-bot-read-cursor")
   >()),
-  useBotReadCursors: () => ({ data: mocks.state.readCursors }),
-  useBotReadCursorAdvanceMutation: () => ({ mutate: mocks.advance }),
+  useBotReadCursors: () =>
+    mocks.state.readCursorsKept ? { data: mocks.state.readCursors } : null,
+  useBotReadCursorAdvanceMutation: () => ({
+    mutateAsync: (request: BotReadCursorAdvanceRequest): Promise<void> => {
+      mocks.advance(request);
+      if (!mocks.state.failNextAdvance) return Promise.resolve();
+      mocks.state.failNextAdvance = false;
+      return Promise.reject(new Error("the host is offline"));
+    },
+  }),
+}));
+// The person's notification levels, by channel id.
+vi.mock("@/hooks/bots/use-bot-notification-level", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/bots/use-bot-notification-level")
+  >()),
+  useBotNotificationLevelsQuery: () => ({
+    data:
+      mocks.state.levels === undefined
+        ? undefined
+        : { levels: mocks.state.levels },
+  }),
 }));
 vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
@@ -539,6 +566,9 @@ beforeEach(() => {
   mocks.state.chats = {};
   mocks.state.follows = undefined;
   mocks.state.readCursors = undefined;
+  mocks.state.readCursorsKept = true;
+  mocks.state.failNextAdvance = false;
+  mocks.state.levels = undefined;
   mocks.postIds = [];
   mocks.sendResponse = {
     messageId: "post-new",
@@ -1474,6 +1504,65 @@ describe("<BotChannelView /> read cursor", () => {
       conversationId: "conversation-channel",
       ...landed,
     });
+  });
+
+  it("advances again to the same row when an advance failed and the channel is presented again", async () => {
+    mocks.state.failNextAdvance = true;
+    mocks.state.readCursors = {
+      cursors: { "conversation-channel": OLD_ROW },
+      latest: { "conversation-channel": NEW_ROW },
+    };
+    const { rerender } = mount({ openThreadPostId: null });
+    expect(mocks.advance).toHaveBeenCalledTimes(1);
+    // Let the rejected advance settle, so the view has forgotten it.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    mocks.state.paneVisible = false;
+    rerender();
+    mocks.state.paneVisible = true;
+    rerender();
+
+    expect(mocks.advance).toHaveBeenCalledTimes(2);
+    expect(mocks.advance).toHaveBeenLastCalledWith({
+      botId: BOT_ID,
+      conversationId: "conversation-channel",
+      ...NEW_ROW,
+    });
+  });
+
+  it("says no new replies on a followed thread of a channel set to Nothing", () => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", { replyCount: 2, lastReplyAt: 2_000 }),
+    ];
+    mocks.state.follows = {
+      "thread-a": { state: "following", reason: "manual" },
+    };
+    mocks.state.readCursors = {
+      cursors: { "thread-a": OLD_ROW },
+      latest: { "thread-a": NEW_ROW },
+    };
+    mocks.state.levels = { "conversation-channel": "off" };
+    mocks.postIds = ["post-a"];
+    mount({ openThreadPostId: null });
+
+    expect(
+      screen.getByTestId("stub-line-post-a").getAttribute("data-new-replies"),
+    ).toBe("false");
+  });
+
+  it("gives a thread line no new-replies answer at all where the host keeps no read cursors", () => {
+    mocks.state.readCursorsKept = false;
+    mocks.state.threads = [
+      thread("thread-a", "post-a", { replyCount: 2, lastReplyAt: 2_000 }),
+    ];
+    mocks.postIds = ["post-a"];
+    mount({ openThreadPostId: null });
+
+    expect(
+      screen.getByTestId("stub-line-post-a").getAttribute("data-new-replies"),
+    ).toBe("null");
   });
 
   it("says a followed thread has new replies past the cursor, and not a thread the person does not follow", () => {

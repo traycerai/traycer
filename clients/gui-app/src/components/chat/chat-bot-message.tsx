@@ -1298,7 +1298,7 @@ function ThreadLine(props: {
       type="button"
       data-testid="bot-thread-line"
       data-unread={unread ? "true" : "false"}
-      data-new-replies={line.newReplies ? "true" : "false"}
+      data-new-replies={line.newReplies === true ? "true" : "false"}
       onClick={onOpen}
       className="group/thread -ml-1 flex w-fit max-w-full items-center gap-2 rounded-md border border-transparent px-1 py-0.5 text-left text-ui-xs transition-colors hover:border-border/60 hover:bg-background focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
     >
@@ -1312,10 +1312,10 @@ function ThreadLine(props: {
       <ThreadLineCount
         replies={replies}
         unread={unread}
-        bold={unread || line.newReplies}
+        bold={line.newReplies ?? unread}
         unreadCount={line.unreadCount}
       />
-      {line.newReplies ? (
+      {line.newReplies === true ? (
         <span
           className="shrink-0 font-semibold text-foreground"
           data-testid="bot-thread-new-replies"
@@ -1343,7 +1343,8 @@ function ThreadLine(props: {
 /**
  * "N replies" behind the unread count while one is unread (a 2 badge before
  * "5 replies" reads two unread of five), or behind a dot where the host does
- * not count; bold while unread, or while a followed thread has new replies.
+ * not count; bold while a followed thread has new replies, or, where the
+ * host keeps no read cursors, while unread.
  */
 function ThreadLineCount(props: {
   readonly replies: number;

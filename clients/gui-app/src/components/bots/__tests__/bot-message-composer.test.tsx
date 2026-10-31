@@ -6,7 +6,7 @@
  */
 import type { ReactNode } from "react";
 import { act, cleanup, render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BotConversationSendRequest,
@@ -301,6 +301,69 @@ describe("<BotMessageComposer /> @ mentions", () => {
 
     expect(mocks.send).toHaveBeenCalledTimes(1);
     expect(mocks.send.mock.calls[0][0].text).toBe("hey <@u-anders> look");
+  });
+
+  describe("two members with the same name", () => {
+    const SHARED: BotOwner = {
+      kind: "team",
+      name: "Acme",
+      members: [
+        { userId: "u-viewer", displayName: "Andy Viewer", avatarUrl: null },
+        { userId: "u-ann", displayName: "Ann Lee", avatarUrl: null },
+        { userId: "u-ann-2", displayName: "Ann Lee", avatarUrl: null },
+      ],
+    };
+
+    async function sentText(user: UserEvent): Promise<string> {
+      await user.click(screen.getByTestId("bot-channel-composer-send"));
+      return mocks.send.mock.calls.at(-1)?.[0].text ?? "";
+    }
+
+    it("sends the one picked from the list", async () => {
+      const user = userEvent.setup();
+      mountIn(SHARED);
+      await user.type(box(), "@ann");
+      await user.keyboard("{Enter}");
+      expect(box().value).toBe("@Ann Lee ");
+
+      expect(await sentText(user)).toBe("<@u-ann>");
+    });
+
+    it("sends the second member when the second was picked", async () => {
+      const user = userEvent.setup();
+      mountIn(SHARED);
+      await user.type(box(), "@ann");
+      await user.keyboard("{ArrowDown}{Enter}");
+
+      expect(await sentText(user)).toBe("<@u-ann-2>");
+    });
+
+    it("forgets the picks of a box that was emptied", async () => {
+      const user = userEvent.setup();
+      mountIn(SHARED);
+      await user.type(box(), "@ann");
+      await user.keyboard("{ArrowDown}{Enter}");
+      await user.clear(box());
+
+      await user.type(box(), "@ann");
+      await user.keyboard("{Enter}");
+
+      expect(await sentText(user)).toBe("<@u-ann>");
+    });
+
+    it("sends an edited message's mention to the member it named", async () => {
+      const user = userEvent.setup();
+      render(
+        <BotIdentityContext
+          value={{ botId: "bot-1", title: "Tracy", owner: SHARED }}
+        >
+          {composer({ requestId: "request-failed", text: "hi <@u-ann-2>" })}
+        </BotIdentityContext>,
+      );
+      expect(box().value).toBe("hi @Ann Lee");
+
+      expect(await sentText(user)).toBe("hi <@u-ann-2>");
+    });
   });
 
   it("closes the list on Escape and keeps the text", async () => {

@@ -10,6 +10,7 @@ import {
 import { MemberAvatar } from "@/components/bots/bot-avatars";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
 import {
+  BOT_MENTION_TOKEN,
   activeMentionQuery,
   matchMentionCandidates,
   mentionsToDisplay,
@@ -42,7 +43,8 @@ export interface BotMentionCompletion {
  * of a team's environment other than the viewer, by name and picture, as the
  * team's member directory lists them. A personal environment's bot has no
  * one else to name, and a member with no name cannot be named. Picking one
- * writes `@Name` in the box, which the send turns into the member's token.
+ * writes `@Name` in the box, which the send turns into that member's token,
+ * even where another member has the same name.
  */
 export function useBotMentionCompletion(args: {
   readonly text: string;
@@ -78,6 +80,12 @@ export function useBotMentionCompletion(args: {
   const [dismissedAt, setDismissedAt] = useState<number | null>(null);
   // Where the caret goes once a pick is in the box.
   const placeCaret = useRef<number | null>(null);
+  // The members picked into the box, in order: a name two members share is
+  // sent as the one picked (`mentionsToWire`). An emptied box has none.
+  const picks = useRef<string[]>([]);
+  useEffect(() => {
+    if (text.length === 0) picks.current = [];
+  }, [text]);
   const mention = activeMentionQuery(text, Math.min(caret, text.length));
   const matches =
     mention === null || candidates.length === 0
@@ -101,6 +109,7 @@ export function useBotMentionCompletion(args: {
     const before = text.slice(0, mention.start);
     const after = text.slice(Math.min(caret, text.length));
     const inserted = `@${candidate.name} `;
+    picks.current = [...picks.current, candidate.userId];
     setText(before + inserted + after);
     const next = before.length + inserted.length;
     setCaret(next);
@@ -179,7 +188,15 @@ export function useBotMentionCompletion(args: {
       setCaret(next);
       setHighlight(0);
     },
-    toWire: (sent) => mentionsToWire(sent, everyone),
-    toDisplay: (sent) => mentionsToDisplay(sent, nameOf),
+    toWire: (sent) => mentionsToWire(sent, everyone, picks.current),
+    // A sent text's tokens are its picks again, so an edit sends each
+    // mention to the member it named.
+    toDisplay: (sent) => {
+      picks.current = Array.from(
+        sent.matchAll(BOT_MENTION_TOKEN),
+        (match) => match[1],
+      );
+      return mentionsToDisplay(sent, nameOf);
+    },
   };
 }

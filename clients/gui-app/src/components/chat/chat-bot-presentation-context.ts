@@ -24,9 +24,10 @@ export interface ChatBotThreadLine {
   /**
    * The viewer follows the thread and a reply has landed past their read
    * cursor (decision 139): the line is bold and says "new replies", with
-   * or without a count.
+   * or without a count. `null` where the host keeps no read cursors, and
+   * the line is bold while `unread`.
    */
-  readonly newReplies: boolean;
+  readonly newReplies: boolean | null;
 }
 
 /**

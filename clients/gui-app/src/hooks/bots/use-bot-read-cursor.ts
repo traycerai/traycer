@@ -70,8 +70,9 @@ export function isReadCursorReadOf(queryKey: QueryKey, botId: string): boolean {
 
 /**
  * Moves the person's cursor on one conversation forward. Every cached read
- * of the bot takes the cursor the cloud kept, so the bold clears at once;
- * the cloud never moves a cursor back, and neither does the cache.
+ * of the bot takes the cursor the cloud kept, so the bold clears at once,
+ * and a read in flight is cancelled first, so its older answer cannot land
+ * over it; the cloud never moves a cursor back, and neither does the cache.
  */
 export function useBotReadCursorAdvanceMutation(
   client: HostClient<HostRpcRegistry> | null,
@@ -87,12 +88,16 @@ export function useBotReadCursorAdvanceMutation(
     mapVariables: (variables) => variables,
     options: {
       mutationKey: botMutationKeys.advanceReadCursor(),
-      onSuccess: ({ cursor }, variables) => {
+      onSuccess: async ({ cursor }, variables) => {
+        const filter = {
+          predicate: (query: { readonly queryKey: QueryKey }) =>
+            isReadCursorReadOf(query.queryKey, variables.botId),
+        };
+        // A read already in flight may have been answered before this
+        // advance landed, and would put the cursor back where it was.
+        await queryClient.cancelQueries(filter);
         queryClient.setQueriesData<BotReadCursorReadResponse>(
-          {
-            predicate: (query) =>
-              isReadCursorReadOf(query.queryKey, variables.botId),
-          },
+          filter,
           (cached) => {
             if (cached === undefined) return cached;
             const held = Object.hasOwn(cached.cursors, variables.conversationId)

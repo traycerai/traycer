@@ -5,6 +5,7 @@ import {
   useBotReadCursorAdvanceMutation,
   useBotReadCursorQuery,
 } from "@/hooks/bots/use-bot-read-cursor";
+import type { BotReadCursorReadResponse } from "@traycer/protocol/host/bot/schemas";
 import {
   createReadCursorHostFixture,
   type ReadCursorHostFixture,
@@ -142,6 +143,60 @@ describe("useBotReadCursorAdvanceMutation", () => {
       expect(result.current.advance.isSuccess).toBe(true);
     });
     expect(result.current.read.data?.cursors[CHANNEL]).toEqual(position(5_000));
+  });
+
+  it("keeps the cursor an advance wrote when a read answered before it lands afterwards", async () => {
+    const fixture = createReadCursorHostFixture({
+      cursors: { [CHANNEL]: position(1_000) },
+      latest: { [CHANNEL]: position(3_000) },
+      follows: {},
+    });
+    const { result } = renderHook(
+      () => ({
+        read: useBotReadCursorQuery(fixture.client, BOT_ID, true),
+        advance: useBotReadCursorAdvanceMutation(fixture.client),
+      }),
+      { wrapper: fixture.Wrapper },
+    );
+    await waitFor(() => {
+      expect(result.current.read.data).toBeDefined();
+    });
+    // A read begins and is answered, by the host, before the advance.
+    const held = Promise.withResolvers<BotReadCursorReadResponse>();
+    fixture.heldRead.promise = held.promise;
+    const readsBefore = fixture.reads.count;
+    let refetched: Promise<unknown> = Promise.resolve();
+    act(() => {
+      refetched = result.current.read.refetch();
+    });
+    await waitFor(() => {
+      expect(fixture.reads.count).toBe(readsBefore + 1);
+    });
+
+    await act(async () => {
+      await result.current.advance.mutateAsync({
+        botId: BOT_ID,
+        conversationId: CHANNEL,
+        ...position(3_000),
+      });
+    });
+    await waitFor(() => {
+      expect(result.current.read.data?.cursors[CHANNEL]).toEqual(
+        position(3_000),
+      );
+    });
+    await act(async () => {
+      held.resolve({
+        cursors: { [CHANNEL]: position(1_000) },
+        latest: { [CHANNEL]: position(3_000) },
+      });
+      await refetched;
+    });
+    await waitFor(() => {
+      expect(result.current.read.isFetching).toBe(false);
+    });
+
+    expect(result.current.read.data?.cursors[CHANNEL]).toEqual(position(3_000));
   });
 
   it("leaves another bot's cached read alone", async () => {

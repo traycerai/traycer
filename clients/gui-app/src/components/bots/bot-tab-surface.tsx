@@ -533,14 +533,18 @@ function useBotTabSession(args: {
     },
     [onViewChange],
   );
+  // A row of the channel shows with nothing beside it: a thread left open
+  // there is not what was asked for. Back to the channel (`null`) keeps it.
   const showChannel = useCallback(
-    (messageId: string | null) =>
-      showLanded(
-        messageId === null
-          ? null
-          : { messageId, sendPostId: null, threadId: null },
-      ),
-    [showLanded],
+    (messageId: string | null) => {
+      if (messageId === null) {
+        showLanded(null);
+        return;
+      }
+      setOpenThread(null);
+      showLanded({ messageId, sendPostId: null, threadId: null });
+    },
+    [setOpenThread, showLanded],
   );
   // Leaving Messages spends the channel's landing: the channel mounts again
   // when Messages shows, and must not land on that post a second time.
@@ -558,7 +562,8 @@ function useBotTabSession(args: {
     [onViewChange],
   );
   // A thread the list does not name has no post to open it by: the channel
-  // shows instead. One it names opens on `messageId` where one is named.
+  // shows instead, with no other thread beside it. One it names opens on
+  // `messageId` where one is named.
   const showThread = useCallback(
     (threadId: string, messageId: string | null) => {
       const anchor =
@@ -568,14 +573,16 @@ function useBotTabSession(args: {
           ? null
           : { messageId, sendPostId: null, threadId },
       );
-      if (anchor !== null) {
-        setOpenThread({
-          anchorMessageId: anchor.messageId,
-          announcement: false,
-          anchorKind: null,
-          sent: null,
-        });
-      }
+      setOpenThread(
+        anchor === null
+          ? null
+          : {
+              anchorMessageId: anchor.messageId,
+              announcement: false,
+              anchorKind: null,
+              sent: null,
+            },
+      );
     },
     [setOpenThread, showLanded, threads],
   );

@@ -50,7 +50,7 @@ export function useBotThreadFollowsQuery(
 }
 
 /** Whether `queryKey` is a follow read of `botId`, on any host scope. */
-function isFollowReadOf(queryKey: QueryKey, botId: string): boolean {
+export function isFollowReadOf(queryKey: QueryKey, botId: string): boolean {
   return (
     hostQueryKeys.matchesMethodOnAnyHost(queryKey, READ_METHOD) &&
     queryKey.some(

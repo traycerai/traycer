@@ -2095,6 +2095,72 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
     expect(channel.getAttribute("data-land-on-thread")).toBe("thread-1");
   });
 
+  describe("an unrelated thread open beside the channel", () => {
+    const OTHER_THREAD_RAIL = {
+      kind: "thread",
+      anchorMessageId: "post-other",
+      announcement: false,
+      anchorKind: null,
+      sent: null,
+    } as const;
+
+    beforeEach(() => {
+      useBotOpenThreadStore.getState().setRail(BOT_ID, OTHER_THREAD_RAIL);
+      useBotTabLandingStore.setState({ byBotId: {} });
+    });
+
+    function openThreadBeside(): string | null {
+      return screen
+        .getByTestId("stub-channel")
+        .getAttribute("data-open-thread");
+    }
+
+    it("is closed when a session opens a row of the channel, and kept when it goes back to the channel", async () => {
+      const user = userEvent.setup();
+      render(surface());
+      expect(openThreadBeside()).toBe("post-other");
+
+      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+      await user.click(screen.getByTestId("stub-session-channel"));
+      expect(openThreadBeside()).toBe("post-other");
+
+      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+      await user.click(screen.getByTestId("stub-session-post"));
+      expect(openThreadBeside()).toBe("none");
+    });
+
+    it("is closed when a session opens a thread the list does not name", async () => {
+      const user = userEvent.setup();
+      mocks.state.threads = [];
+      render(surface());
+
+      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+      await user.click(screen.getByTestId("stub-session-thread"));
+
+      expect(openThreadBeside()).toBe("none");
+    });
+
+    it("is closed by a requested landing on a row of the channel", () => {
+      mocks.state.threads = [];
+      useBotTabLandingStore
+        .getState()
+        .request(BOT_ID, { threadId: null, messageId: "post-1" });
+      render(surface());
+
+      expect(openThreadBeside()).toBe("none");
+    });
+
+    it("is closed by a requested landing on a thread the list does not name", () => {
+      mocks.state.threads = [];
+      useBotTabLandingStore
+        .getState()
+        .request(BOT_ID, { threadId: "thread-gone", messageId: "reply-3" });
+      render(surface());
+
+      expect(openThreadBeside()).toBe("none");
+    });
+  });
+
   describe("a landing requested from outside, as a tapped push does", () => {
     const LISTED_THREAD: BotThreadSummary = {
       threadId: "thread-1",

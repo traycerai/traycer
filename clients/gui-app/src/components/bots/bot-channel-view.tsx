@@ -35,7 +35,11 @@ import {
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
 import { threadOpenOf } from "@/lib/bots/bot-trunk-model";
-import { followingOf } from "@/lib/bots/bot-notification-settings";
+import {
+  channelMuted,
+  followingOf,
+} from "@/lib/bots/bot-notification-settings";
+import { useBotNotificationLevelsQuery } from "@/hooks/bots/use-bot-notification-level";
 import { useBotThreadFollows } from "@/hooks/bots/use-bot-thread-follow";
 import {
   useBotReadCursorAdvanceMutation,
@@ -338,6 +342,7 @@ export function BotChannelView(props: {
     threadAnchorKinds,
     follows,
     readCursors,
+    newRepliesOf,
   } = useChannelThreads({
     client,
     botId,
@@ -537,12 +542,7 @@ export function BotChannelView(props: {
             postMessageId !== openThreadPostId &&
             activity?.threads[thread.threadId]?.state === "replying",
           followedUnwritten: followedUnwritten(follows, thread.threadId),
-          newReplies: threadHasNewReplies(
-            readCursors,
-            thread.threadId,
-            thread.lastReplyAt,
-            followingOf(follows, thread.threadId) !== null,
-          ),
+          newReplies: newRepliesOf(thread),
         };
       },
       // A host without the thread list has no thread to open.
@@ -579,7 +579,7 @@ export function BotChannelView(props: {
       failedRequest,
       follows,
       isUnread,
-      readCursors,
+      newRepliesOf,
       unreadCountOf,
       onOpenThread,
       openAnnouncementThread,
@@ -997,6 +997,8 @@ function useChannelThreads(args: {
   readonly follows: Readonly<Record<string, BotThreadFollow>> | undefined;
   /** The person's read cursors on the bot; `undefined` until read, or where the host keeps none. */
   readonly readCursors: BotReadCursorReadResponse | undefined;
+  /** A thread line's `newReplies`: `null` where the host keeps no read cursors. */
+  readonly newRepliesOf: (thread: BotThreadSummary) => boolean | null;
 } {
   const { client, botId, hostId, boundHostId, boundHostEpoch } = args;
   const supported = useHostMethodSupport(hostId, "bot.thread.list") === true;
@@ -1056,7 +1058,29 @@ function useChannelThreads(args: {
     [anchors, boundHostEpoch, boundHostId, supported],
   );
   const follows = useBotThreadFollows(botId, hostId)?.data?.follows;
-  const readCursors = useBotReadCursors(botId, hostId)?.data;
+  const readCursorQuery = useBotReadCursors(botId, hostId);
+  const cursorsKept = readCursorQuery !== null;
+  const readCursors = readCursorQuery?.data;
+  const levels = useBotNotificationLevelsQuery(
+    client,
+    botId,
+    useHostMethodSupport(hostId, "bot.notificationLevel.read") === true,
+  ).data?.levels;
+  // A followed thread of a muted channel never has new replies to show
+  // (decision 138).
+  const newRepliesOf = useCallback(
+    (thread: BotThreadSummary): boolean | null =>
+      cursorsKept
+        ? threadHasNewReplies(
+            readCursors,
+            thread.threadId,
+            thread.lastReplyAt,
+            followingOf(follows, thread.threadId) !== null &&
+              !channelMuted(levels, thread.conversationId),
+          )
+        : null,
+    [cursorsKept, follows, levels, readCursors],
+  );
   return {
     supported,
     threadList,
@@ -1066,6 +1090,7 @@ function useChannelThreads(args: {
     threadAnchorKinds,
     follows,
     readCursors,
+    newRepliesOf,
   };
 }
 
@@ -1271,13 +1296,14 @@ function useAdvanceWhilePresented(args: {
   readonly presented: boolean;
 }): void {
   const { client, botId, conversationId, readCursors, presented } = args;
-  const { mutate: advance } = useBotReadCursorAdvanceMutation(client);
+  const { mutateAsync: advance } = useBotReadCursorAdvanceMutation(client);
   const target =
     !presented || conversationId === null || readCursors === undefined
       ? null
       : advanceTarget(readCursors, conversationId);
-  // The newest row already advanced to, per conversation: a read that has
-  // not caught up with the advance yet asks for the same row again.
+  // The newest row advanced to, or being advanced to, per conversation: a
+  // read that has not caught up with the advance yet asks for the same row
+  // again. A failed advance is forgotten, so the row is asked for again.
   const advanced = useRef(new Map<string, number>());
   const targetMessageId = target?.messageId ?? null;
   const targetSeq = target?.seq ?? null;
@@ -1297,6 +1323,10 @@ function useAdvanceWhilePresented(args: {
       conversationId,
       messageId: targetMessageId,
       seq: targetSeq,
+    }).catch(() => {
+      if (advanced.current.get(conversationId) === targetSeq) {
+        advanced.current.delete(conversationId);
+      }
     });
   }, [advance, botId, conversationId, targetMessageId, targetSeq]);
 }
