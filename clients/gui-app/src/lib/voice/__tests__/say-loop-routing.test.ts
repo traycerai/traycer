@@ -1091,6 +1091,75 @@ describe("the card desk behind the say loop", () => {
     });
   });
 
+  describe("routes made while the card waited, coming back out of order", () => {
+    /** The list is heard; the card's answer to "use the first" is routed first and stays out. */
+    async function olderAnswerOut(chooseExactlyFirst: boolean) {
+      const desk = installDesk();
+      desk.show("a");
+      await desk.heard();
+      const h = build({ recheckHolds: true, canSend: true });
+      if (chooseExactlyFirst) {
+        speak("approve");
+        await h.loop.onDelegationCreated("choose");
+        expect(activeCard()?.candidate).toMatchObject({ label: "Allow" });
+      }
+      const older = heldAnswer();
+      const newer = heldAnswer();
+      h.answers.push(older.answer, newer.answer);
+      speak("use the first");
+      const olderDone = h.loop.onDelegationCreated("older");
+      speak("tell tracy hello");
+      const newerDone = h.loop.onDelegationCreated("newer");
+      return { desk, h, older, newer, olderDone, newerDone };
+    }
+
+    it("never lets an older card answer choose after a newer request was routed elsewhere", async () => {
+      const { desk, older, newer, olderDone, newerDone } =
+        await olderAnswerOut(false);
+      newer.release(route("post", null, null, 1));
+      await newerDone;
+      const spokenBefore = desk.spoken.length;
+
+      older.release({ ...route("answer", null, null, 1), choice: 0 });
+      await olderDone;
+
+      expect(activeCard()?.candidate).toBeNull();
+      expect(desk.spoken).toHaveLength(spokenBefore);
+    });
+
+    it("does so when the newer request dropped a candidate chosen before the older words", async () => {
+      const { desk, older, newer, olderDone, newerDone } =
+        await olderAnswerOut(true);
+      newer.release(route("post", null, null, 1));
+      await newerDone;
+      expect(activeCard()?.candidate).toBeNull();
+      const spokenBefore = desk.spoken.length;
+
+      older.release({ ...route("answer", null, null, 1), choice: 1 });
+      await olderDone;
+
+      expect(activeCard()?.candidate).toBeNull();
+      expect(desk.spoken).toHaveLength(spokenBefore);
+    });
+
+    it("still installs the candidate of a card answer made of words newer than the drop", async () => {
+      const { desk, h, newer, newerDone } = await olderAnswerOut(false);
+      newer.release(route("post", null, null, 1));
+      await newerDone;
+      const spokenBefore = desk.spoken.length;
+      const latest = heldAnswer();
+      h.answers.push(latest.answer);
+      speak("use the first");
+      const latestDone = h.loop.onDelegationCreated("latest");
+
+      latest.release({ ...route("answer", null, null, 1), choice: 0 });
+      await latestDone;
+
+      expect(activeCard()?.candidate).toMatchObject({ label: "Allow" });
+      expect(desk.spoken).toHaveLength(spokenBefore + 1);
+    });
+  });
+
   describe("a route made against a card that is no longer the open one", () => {
     /** A request routes against card A, still out when B is opened and heard. */
     async function routeOutWhileAnotherOpens() {
