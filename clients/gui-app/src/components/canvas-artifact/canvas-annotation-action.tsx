@@ -146,14 +146,19 @@ export function CanvasAnnotationAction(props: {
       // only once the picker has left the screen and with the selection chrome
       // hidden: the crop is cut from the app window as composited.
       const annotation = props.record();
-      const rect = props.captureRect();
       const bridge = canvasWindowCaptureBridge();
+      // Whether there is anything on screen to photograph is decided now; the
+      // rectangle itself is measured again right before the capture.
+      const capturable = bridge !== null && props.captureRect() !== null;
       let crop: ArrayBuffer | null = null;
-      if (rect !== null && bridge !== null) {
+      if (capturable) {
         await awaitMenuGone();
-        crop = await captureCanvasRegionWithoutChrome(bridge, rect);
+        crop = await captureCanvasRegionWithoutChrome(
+          bridge,
+          props.captureRect,
+        );
       }
-      if (rect !== null && bridge !== null && crop === null)
+      if (capturable && crop === null)
         throw new Error(
           "The selected region could not be captured. Try again.",
         );

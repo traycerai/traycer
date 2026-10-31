@@ -475,6 +475,24 @@ describe("attaching a selected range to a chat", () => {
     ).toBe(false);
   });
 
+  it("does not wait on animation frames the window will never paint while hidden", async () => {
+    // A hidden window stops requestAnimationFrame entirely (background
+    // throttling), so a capture that waited for a frame would hang with the
+    // chrome hidden until the window came back.
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 0);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    outside.capture.current = {
+      captureRegion: vi.fn(() => Promise.resolve(new Uint8Array([1]).buffer)),
+    };
+    mountOverlay();
+    select(LITERAL);
+    await screen.findByRole("button", { name: "Send to chat" });
+    await addToChat();
+
+    expect(outside.capture.current.captureRegion).toHaveBeenCalledOnce();
+    expect(useCanvasSelectionStore.getState().capturing).toBe(false);
+  });
+
   it("waits for the source of a range in source text rather than attaching a guess", async () => {
     outside.source.current = null;
     mountOverlay();
