@@ -17,7 +17,8 @@ import {
   shiftMentionPicks,
   spliceMentionPicks,
   type BotMentionCandidate,
-  type BotMentionEditSelection,
+  type BotMentionEdit,
+  type BotMentionTextRange,
   type BotMentionPick,
 } from "@/lib/bots/bot-mentions";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -99,19 +100,20 @@ export function useBotMentionCompletion(args: {
       picks: shiftMentionPicks(anchored.text, text, anchored.picks, null),
     });
   }
-  // The box's selection as the edit under way was about to change it, read
-  // as the box announces the edit: where repeated text leaves the texts
-  // more than one way to have changed, it is the one the edit replaced
+  // The edit under way, as the box announces it: its kind, and the box's
+  // selection as it began, which says what a typed edit replaced
   // (`shiftMentionPicks`). Spent by the edit.
-  const editing = useRef<BotMentionEditSelection | null>(null);
+  const editing = useRef<{
+    readonly inputType: string;
+    readonly before: BotMentionTextRange;
+  } | null>(null);
   useEffect(() => {
     const input = inputRef.current;
     if (input === null) return;
     const record = (event: InputEvent): void => {
       editing.current = {
-        start: input.selectionStart,
-        end: input.selectionEnd,
         inputType: event.inputType,
+        before: { start: input.selectionStart, end: input.selectionEnd },
       };
     };
     input.addEventListener("beforeinput", record);
@@ -238,11 +240,18 @@ export function useBotMentionCompletion(args: {
     },
     onInput: (input) => {
       const next = input.value;
-      const known = editing.current;
+      const announced = editing.current;
       editing.current = null;
+      const edit: BotMentionEdit | null =
+        announced === null
+          ? null
+          : {
+              ...announced,
+              after: { start: input.selectionStart, end: input.selectionEnd },
+            };
       setAnchored((current) => ({
         text: next,
-        picks: shiftMentionPicks(current.text, next, current.picks, known),
+        picks: shiftMentionPicks(current.text, next, current.picks, edit),
       }));
       setCaret(input.selectionStart);
       setHighlight(0);

@@ -606,6 +606,73 @@ describe("<BotMessageComposer /> @ mentions", () => {
       expect(await sentText(user)).toBe("@Ann Leo");
     });
 
+    /** One input event, as a browser makes it: `beforeinput`, then `input`. */
+    function inputEvent(
+      value: string,
+      selection: { start: number; end: number },
+      inputType: string,
+    ): void {
+      act(() => {
+        box().dispatchEvent(
+          new InputEvent("beforeinput", {
+            bubbles: true,
+            cancelable: true,
+            inputType,
+            data: null,
+          }),
+        );
+        fireEvent.input(box(), {
+          target: {
+            value,
+            selectionStart: selection.start,
+            selectionEnd: selection.end,
+          },
+          inputType,
+          data: null,
+        });
+      });
+    }
+
+    it("keeps the first recipient when the deletion of the second mention is undone", async () => {
+      const user = userEvent.setup();
+      mountEdit("<@u-ann> <@u-ann-2> ");
+      await user.click(box());
+      act(() => box().setSelectionRange(9, 18));
+      await user.keyboard("{Backspace}");
+      expect(box().value).toBe("@Ann Lee ");
+
+      inputEvent("@Ann Lee @Ann Lee ", { start: 9, end: 18 }, "historyUndo");
+
+      expect(box().value).toBe("@Ann Lee @Ann Lee ");
+      expect(await sentText(user)).toBe("<@u-ann> @Ann Lee");
+    });
+
+    it("drops a picked shared name that a paste over the whole text replaced, though the new text repeats it", async () => {
+      const user = userEvent.setup();
+      mountEdit("<@u-ann> ok");
+      await user.click(box());
+      act(() => box().setSelectionRange(0, 11));
+
+      await user.paste("@Ann Lee OK");
+
+      expect(box().value).toBe("@Ann Lee OK");
+      expect(await sentText(user)).toBe("@Ann Lee OK");
+    });
+
+    it("keeps a mention's member when the typing after it is undone, with the caret at its end", async () => {
+      const user = userEvent.setup();
+      mountIn(SHARED);
+      await user.type(box(), "@ann");
+      await user.keyboard("{ArrowDown}{Enter}");
+      await user.keyboard("later");
+      expect(box().value).toBe("@Ann Lee later");
+
+      inputEvent("@Ann Lee ", { start: 9, end: 9 }, "historyUndo");
+
+      expect(box().value).toBe("@Ann Lee ");
+      expect(await sentText(user)).toBe("<@u-ann-2>");
+    });
+
     it("sends a unique member's name typed plainly, with no pick, as their token", async () => {
       const user = userEvent.setup();
       mountIn(TEAM);

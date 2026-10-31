@@ -199,19 +199,20 @@ describe("moving picks with the text", () => {
     ).toEqual([pick(4, 12, "u-ann")]);
   });
 
-  describe("where the box's selection is known", () => {
+  describe("where the edit is known", () => {
     // Two picks of the same `@Name`: the texts alone cannot say which of the
     // two a deletion took.
     const TWO = [pick(0, 8, "u-ann"), pick(9, 17, "u-ann-2")];
     const BOTH = "@Ann Lee @Ann Lee ";
     const FIRST_ONLY = "@Ann Lee ";
+    const at = (start: number, end: number) => ({ start, end });
 
-    it("drops the second of two identical mentions when the selection deleted it", () => {
+    it("drops the second of two identical mentions when the edit deleted it", () => {
       expect(
         shiftMentionPicks(BOTH, FIRST_ONLY, TWO, {
-          start: 9,
-          end: 18,
           inputType: "deleteContentBackward",
+          before: at(9, 18),
+          after: at(9, 9),
         }),
       ).toEqual([pick(0, 8, "u-ann")]);
       // Read from the texts alone, it is the first that goes.
@@ -229,9 +230,9 @@ describe("moving picks with the text", () => {
     it("takes a Backspace at a collapsed caret as a deletion behind it", () => {
       expect(
         shiftMentionPicks(BEFORE, AFTER, PICKED, {
-          start: 8,
-          end: 8,
           inputType: "deleteContentBackward",
+          before: at(8, 8),
+          after: at(7, 7),
         }),
       ).toEqual([]);
     });
@@ -239,9 +240,9 @@ describe("moving picks with the text", () => {
     it("takes a forward Delete at a collapsed caret as a deletion ahead of it", () => {
       expect(
         shiftMentionPicks(BEFORE, AFTER, PICKED, {
-          start: 8,
-          end: 8,
           inputType: "deleteContentForward",
+          before: at(8, 8),
+          after: at(8, 8),
         }),
       ).toEqual(PICKED);
     });
@@ -249,32 +250,42 @@ describe("moving picks with the text", () => {
     it("reads the texts alone when the selection did not make the edit", () => {
       expect(
         shiftMentionPicks(BOTH, FIRST_ONLY, TWO, {
-          start: 5,
-          end: 5,
           inputType: "deleteContentBackward",
+          before: at(5, 5),
+          after: at(4, 4),
         }),
       ).toEqual([pick(0, 8, "u-ann-2")]);
     });
 
-    it("leaves an undo or redo to the texts, though a selection is known", () => {
-      expect(
-        shiftMentionPicks(BOTH, FIRST_ONLY, TWO, {
-          start: 9,
-          end: 18,
-          inputType: "historyUndo",
-        }),
-      ).toEqual([pick(0, 8, "u-ann-2")]);
-    });
-
-    it("ignores a selection that agrees with the texts but covers more than their one span, where the texts leave no doubt", () => {
-      // Only "ok" became "OK"; the selection spanned the whole text.
+    it("takes a selected range as what a paste replaced, whatever text it shares with the new one", () => {
+      // Only "ok" became "OK", but the paste replaced the whole text.
       expect(
         shiftMentionPicks("@Ann Lee ok", "@Ann Lee OK", PICKED, {
-          start: 0,
-          end: 11,
-          inputType: "insertReplacementText",
+          inputType: "insertFromPaste",
+          before: at(0, 11),
+          after: at(11, 11),
+        }),
+      ).toEqual([]);
+    });
+
+    it("inserts what an undo restored where it left it selected, and keeps a pick before it", () => {
+      expect(
+        shiftMentionPicks(FIRST_ONLY, BOTH, PICKED, {
+          inputType: "historyUndo",
+          before: at(9, 9),
+          after: at(9, 18),
         }),
       ).toEqual(PICKED);
+    });
+
+    it("counts every span the texts allow as changed when an undo's selection does not hold, so no pick is kept on a guess", () => {
+      expect(
+        shiftMentionPicks(FIRST_ONLY, BOTH, PICKED, {
+          inputType: "historyUndo",
+          before: at(0, 0),
+          after: at(3, 3),
+        }),
+      ).toEqual([]);
     });
   });
 });

@@ -53,14 +53,20 @@ export function spliceMentionPicks(
   });
 }
 
-/**
- * The box's selection as an edit was about to change it, `[start, end)`,
- * and the edit's kind (an input event's `inputType`).
- */
-export interface BotMentionEditSelection {
+/** A range of the box's text, `[start, end)`; a caret where they meet. */
+export interface BotMentionTextRange {
   readonly start: number;
   readonly end: number;
+}
+
+/**
+ * An edit the person made in the box: its kind (an input event's
+ * `inputType`), and the box's selection as it began and once it was made.
+ */
+export interface BotMentionEdit {
   readonly inputType: string;
+  readonly before: BotMentionTextRange;
+  readonly after: BotMentionTextRange;
 }
 
 interface EditedSpan {
@@ -70,15 +76,16 @@ interface EditedSpan {
 }
 
 /**
- * The edit a selection makes that changes the text's length by `delta`: a
- * selected range is replaced; at a caret, text is inserted there, or
- * deleted behind it for a backward deletion and ahead of it otherwise.
+ * The span a typed or deleted edit changed, by the selection it began at:
+ * a selected range is what it replaced, whatever the texts share inside it;
+ * at a caret, text is inserted there, or deleted behind it for a backward
+ * deletion and ahead of it otherwise.
  */
 function editAtSelection(
-  selection: BotMentionEditSelection,
+  { start, end }: BotMentionTextRange,
+  inputType: string,
   delta: number,
 ): EditedSpan {
-  const { start, end, inputType } = selection;
   if (start < end) return { start, end, insertedLength: delta + end - start };
   if (delta >= 0) return { start, end: start, insertedLength: delta };
   if (inputType.endsWith("Backward")) {
@@ -88,17 +95,31 @@ function editAtSelection(
 }
 
 /**
- * The edit from `previous` to `next` that the selection made; `null` when
- * the texts do not agree with it, so the selection did not make it.
+ * The span an undo or redo changed, by the selection it leaves: the text it
+ * restored is selected, and where it took text away the caret is where it
+ * was. `null` where the selection says neither.
  */
-function selectionEdit(
+function editAtRestoredSelection(
+  { start, end }: BotMentionTextRange,
+  delta: number,
+): EditedSpan | null {
+  if (start < end) {
+    return { start, end: end - delta, insertedLength: end - start };
+  }
+  if (delta < 0) return { start, end: start - delta, insertedLength: 0 };
+  return null;
+}
+
+/** `span` where it turns `previous` into `next`, else `null`. */
+function agreeing(
   previous: string,
   next: string,
-  selection: BotMentionEditSelection,
+  span: EditedSpan | null,
 ): EditedSpan | null {
-  const span = editAtSelection(selection, next.length - previous.length);
+  if (span === null) return null;
   const agrees =
     span.start >= 0 &&
+    span.end >= span.start &&
     span.end <= previous.length &&
     span.insertedLength >= 0 &&
     previous.slice(0, span.start) === next.slice(0, span.start) &&
@@ -106,16 +127,15 @@ function selectionEdit(
   return agrees ? span : null;
 }
 
-/**
- * The one span between `previous` and `next`'s common start and end. The
- * common end is taken first, so typing just before a pick moves it rather
- * than touching it. `ambiguous` when the two overlap, so repeated text lets
- * more than one span make the change.
- */
-function diffEdit(
+/** How long a start and an end `previous` and `next` share, each alone. */
+function commonEnds(
   previous: string,
   next: string,
-): EditedSpan & { readonly ambiguous: boolean } {
+): {
+  readonly prefix: number;
+  readonly suffix: number;
+  readonly shorter: number;
+} {
   const shorter = Math.min(previous.length, next.length);
   let suffix = 0;
   while (
@@ -128,45 +148,77 @@ function diffEdit(
   while (prefix < shorter && previous[prefix] === next[prefix]) {
     prefix += 1;
   }
+  return { prefix, suffix, shorter };
+}
+
+/**
+ * The one span between `previous` and `next`'s common start and end, the
+ * common end taken first, so typing just before a pick moves it rather than
+ * touching it.
+ */
+function diffEdit(previous: string, next: string): EditedSpan {
+  const { prefix, suffix, shorter } = commonEnds(previous, next);
   const start = Math.min(prefix, shorter - suffix);
   return {
     start,
     end: previous.length - suffix,
     insertedLength: next.length - suffix - start,
-    ambiguous: prefix > start,
   };
 }
 
 /**
- * `picks` across the change from `previous` to `next`. The texts decide the
- * edit where they leave one span to make it. Where repeated text leaves
- * several, the selection the edit replaced decides among them, which tells
- * two of the same `@Name` apart; an undo or redo, which does not edit at the
- * selection, or an edit with no selection known (a text the app set) keeps
- * the span that leaves an untouched pick on its text.
+ * Every span that could have turned `previous` into `next`, as one: where
+ * repeated text leaves several, from the earliest start to the latest end,
+ * so no pick is kept on a guess between two of the same text.
+ */
+function everyDiffEdit(previous: string, next: string): EditedSpan {
+  const { prefix, suffix, shorter } = commonEnds(previous, next);
+  const start = Math.min(prefix, shorter - suffix);
+  const kept = Math.min(suffix, shorter - prefix);
+  return {
+    start,
+    end: previous.length - kept,
+    insertedLength: next.length - kept - start,
+  };
+}
+
+/** Whether the edit is typed or deleted at the selection, unlike an undo. */
+function editsAtSelection(inputType: string): boolean {
+  return inputType.startsWith("insert") || inputType.startsWith("delete");
+}
+
+/**
+ * `picks` across the change from `previous` to `next`. A typed or deleted
+ * edit changed the span its selection says: a selected range, all of it,
+ * or the text at a caret. An undo or redo changed the span the selection it
+ * leaves says; where that does not hold, every span the texts allow counts
+ * as changed. A change with no edit known (a text the app set) is read from
+ * the texts alone.
  */
 export function shiftMentionPicks(
   previous: string,
   next: string,
   picks: ReadonlyArray<BotMentionPick>,
-  selection: BotMentionEditSelection | null,
+  edit: BotMentionEdit | null,
 ): ReadonlyArray<BotMentionPick> {
   if (previous === next || picks.length === 0) return picks;
-  const diff = diffEdit(previous, next);
-  const atSelection =
-    diff.ambiguous && selection !== null && editsAtSelection(selection)
-      ? selectionEdit(previous, next, selection)
-      : null;
-  const span = atSelection ?? diff;
+  const delta = next.length - previous.length;
+  let span: EditedSpan;
+  if (edit === null) {
+    span = diffEdit(previous, next);
+  } else if (editsAtSelection(edit.inputType)) {
+    span =
+      agreeing(
+        previous,
+        next,
+        editAtSelection(edit.before, edit.inputType, delta),
+      ) ?? diffEdit(previous, next);
+  } else {
+    span =
+      agreeing(previous, next, editAtRestoredSelection(edit.after, delta)) ??
+      everyDiffEdit(previous, next);
+  }
   return spliceMentionPicks(picks, span.start, span.end, span.insertedLength);
-}
-
-/** Whether the edit is typed or deleted at the selection, unlike an undo. */
-function editsAtSelection(selection: BotMentionEditSelection): boolean {
-  return (
-    selection.inputType.startsWith("insert") ||
-    selection.inputType.startsWith("delete")
-  );
 }
 
 function endsNameAt(text: string, at: number): boolean {
