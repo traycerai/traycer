@@ -407,6 +407,10 @@ describe("<BotChannelSidebar /> sections", () => {
     expect(row("bot-release").getAttribute("aria-current")).toBe("page");
     expect(row("bot-triage").getAttribute("aria-current")).toBeNull();
     expect(row("bot-notes").getAttribute("aria-current")).toBeNull();
+    // The task panel's quiet highlight, never the accent pill.
+    expect(row("bot-release").classList.contains("bg-accent")).toBe(true);
+    expect(row("bot-release").classList.contains("bg-primary")).toBe(false);
+    expect(row("bot-triage").classList.contains("bg-accent")).toBe(false);
   });
 
   it("counts a channel's unread notifications at the end of its row, and draws nothing at zero or where the host does not count", () => {
@@ -469,9 +473,12 @@ describe("<BotChannelSidebar /> muted channels", () => {
     };
     mount("bot-release");
 
-    expect(
-      within(row("bot-release")).getByTestId("bot-channel-row-muted"),
-    ).toBeTruthy();
+    // The channel in view: the glyph takes the quiet row's foreground.
+    const glyph = within(row("bot-release")).getByTestId(
+      "bot-channel-row-muted",
+    );
+    expect(glyph.classList.contains("text-accent-foreground")).toBe(true);
+    expect(glyph.classList.contains("text-primary-foreground")).toBe(false);
     for (const botId of ["bot-triage", "bot-notes", "bot-bare"]) {
       expect(
         within(row(botId)).queryByTestId("bot-channel-row-muted"),
@@ -608,7 +615,7 @@ describe("<BotChannelSidebar /> main bot", () => {
       name: "Main bot",
     });
     expect(row("bot-triage").getAttribute("class")).toContain(
-      "text-primary-foreground",
+      "text-accent-foreground",
     );
     expect(star.getAttribute("class")).toContain("text-current");
     expect(star.getAttribute("class")).not.toContain("text-muted-foreground");
@@ -902,6 +909,8 @@ describe("<BotChannelSidebar /> a team still to be set up", () => {
 
     const setup = screen.getByTestId("bot-channel-setup-row");
     expect(setup.getAttribute("aria-current")).toBe("page");
+    expect(setup.classList.contains("bg-accent")).toBe(true);
+    expect(setup.classList.contains("bg-primary")).toBe(false);
     await user.click(setup);
 
     expect(useBotTabsStore.getState().tabs).toEqual({});
