@@ -15,6 +15,7 @@ import {
  */
 export interface TeamSetup {
   readonly environmentId: string;
+  /** The team's name, as the environment list labels it. */
   readonly teamName: string;
   readonly botId: string;
   readonly title: string;

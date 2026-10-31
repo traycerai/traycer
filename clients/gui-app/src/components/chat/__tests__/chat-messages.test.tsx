@@ -1894,6 +1894,88 @@ describe("ChatMessages scroll policy", () => {
         expect(isJumpPillVisible()).toBe(false);
       });
     });
+
+    // Class 1 (fix witness: RED on main, GREEN on the fix).
+    //
+    // A standing scrollbar press (pointerdown with the scroll node itself
+    // as target - the scrollbar-interaction shape `handleTranscriptPointerDown`
+    // reads) at the strict bottom, then a toward-end key that moves nothing
+    // there, then the press's own drag away from the end. On main, the
+    // no-op key wipes the press's arm (`readerGestureArm` returns null
+    // while `continuesFollow` holds), so the drag that follows has no arm
+    // and reads as layout-owned: it gets corrected straight back to the
+    // end. The fix preserves the press's arm through a key that cannot
+    // move the view, so the drag is read as the press's own departure.
+    describe("a standing scrollbar press survives a toward-end key that moves nothing", () => {
+      async function pressHeldAtStrictBottom(
+        scrollStateKey: string,
+      ): Promise<HTMLElement> {
+        const messages = makeCompletedTranscript(20);
+        setLegendListScrollContainerScrollHeightOverride(
+          LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+        );
+        renderChatMessages({ messages, scrollStateKey });
+        await settleLegendList();
+        assertTrueBottomGeometry();
+        const scrollNode = getScrollNode();
+        act(() => {
+          fireEvent.pointerDown(scrollNode);
+        });
+        return scrollNode;
+      }
+
+      function dispatchCommandArrowDown(scrollNode: HTMLElement): void {
+        act(() => {
+          scrollNode.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: "ArrowDown",
+              metaKey: true,
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        });
+      }
+
+      it.each([
+        { name: "End", dispatch: () => dispatchKeyInScope("End") },
+        { name: "PageDown", dispatch: () => dispatchKeyInScope("PageDown") },
+        { name: "ArrowDown", dispatch: () => dispatchKeyInScope("ArrowDown") },
+        {
+          name: "Cmd+ArrowDown",
+          dispatch: () => dispatchCommandArrowDown(getScrollNode()),
+        },
+      ])(
+        "$name at the strict bottom leaves the press's arm standing, so the drag that follows detaches instead of correcting back",
+        async ({ name, dispatch }) => {
+          const scrollNode = await pressHeldAtStrictBottom(
+            `press-key-drag-${name}`,
+          );
+          const atEnd = scrollNode.scrollTop;
+
+          act(() => {
+            dispatch();
+          });
+          // At the strict bottom a toward-end key has no room: the view is
+          // unchanged. The claim under test is whether the press's arm
+          // survived this no-op, not anything about the key's own scroll.
+          expect(scrollNode.scrollTop).toBe(atEnd);
+
+          // The press continues: a scrollbar drag away from the end,
+          // reported as a native scroll with no announced write - exactly
+          // what a real drag produces.
+          const dragged = atEnd - 120;
+          act(() => {
+            scrollNode.scrollTop = dragged;
+            fireEvent.scroll(scrollNode);
+          });
+
+          expect(scrollNode.scrollTop).toBe(dragged);
+          expect(scrollNode.dataset.scrollMode).toBe("free-scrolling");
+          expect(isJumpPillVisible()).toBe(true);
+        },
+      );
+    });
   });
 
   describe("aria-live turn completion", () => {

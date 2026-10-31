@@ -1,10 +1,11 @@
 /**
  * A team's setup channel re-reads `bot.onboarding.read` on the shared
  * on-screen cadence while it is on screen and the setup still needs a host
- * (Tracy Bots T67b): a bot the team's host creates under its own context rings
- * no other host's bot list, so this read is how a member watching the setup
- * sees it go live. Through the real query client, `HostClient` and policy
- * table; only the host's answer is scripted.
+ * (Tracy Bots T67b): the team's host creating the bot rings the team's room,
+ * which reaches a member's bot list only while their host listens to that
+ * room, so this read is the backstop for a missed ring. Through the real
+ * query client, `HostClient` and policy table; only the host's answer is
+ * scripted.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
@@ -30,6 +31,11 @@ import { TeamSetupChannel } from "@/components/bots/team-setup-channel";
 // is not what this file is about.
 vi.mock("@/components/bots/bot-channel-sidebar", () => ({
   BotChannelSidebar: () => null,
+}));
+// Nor is Enable cloud's read of the team's sandbox defaults, which goes
+// through the app's host runtime.
+vi.mock("@/hooks/sandboxes/use-sandbox-defaults", () => ({
+  useSandboxDefaults: () => new Map(),
 }));
 
 const MAIN_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAX";

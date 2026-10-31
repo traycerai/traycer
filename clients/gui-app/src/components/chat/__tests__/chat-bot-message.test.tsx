@@ -216,6 +216,8 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: 0,
           replying: false,
+          followedUnwritten: false,
+          newReplies: false,
         }),
         openThread,
       ),
@@ -232,6 +234,119 @@ describe("<ChatMessage /> in a bot channel", () => {
     expect(openThread).toHaveBeenCalledWith(POST_ID);
   });
 
+  it.each([
+    [true, 1],
+    [false, 0],
+  ])(
+    "marks the thread line as followed when followedUnwritten is %s",
+    (followedUnwritten, count) => {
+      renderRow(
+        memberPost(undefined),
+        channelPresentation(
+          () => ({
+            participants: [],
+            replyCount: 2,
+            lastReplyAt: Date.now() - 5 * 60_000,
+            unread: false,
+            unreadCount: 0,
+            replying: false,
+            followedUnwritten,
+            newReplies: false,
+          }),
+          vi.fn(),
+        ),
+      );
+
+      const line = screen.getByTestId("bot-thread-line");
+      expect(
+        within(line).queryAllByTestId("bot-thread-following-mark"),
+      ).toHaveLength(count);
+      if (count === 1) {
+        expect(
+          within(line).getByTestId("bot-thread-following-mark").textContent,
+        ).toBe("following");
+      }
+    },
+  );
+
+  it.each([
+    [true, 1, "true"],
+    [false, 0, "false"],
+  ])(
+    "says new replies on the thread line when newReplies is %s",
+    (newReplies, count, attribute) => {
+      renderRow(
+        memberPost(undefined),
+        channelPresentation(
+          () => ({
+            participants: [],
+            replyCount: 2,
+            lastReplyAt: Date.now() - 5 * 60_000,
+            unread: false,
+            unreadCount: 0,
+            replying: false,
+            followedUnwritten: false,
+            newReplies,
+          }),
+          vi.fn(),
+        ),
+      );
+
+      const line = screen.getByTestId("bot-thread-line");
+      expect(line.getAttribute("data-new-replies")).toBe(attribute);
+      expect(
+        within(line).queryAllByTestId("bot-thread-new-replies"),
+      ).toHaveLength(count);
+    },
+  );
+
+  it.each([
+    { label: "a caught-up line", unread: true, newReplies: false, bold: false },
+    {
+      label: "an unread line where the host keeps no cursor",
+      unread: true,
+      newReplies: null,
+      bold: true,
+    },
+    {
+      label: "a line with new replies",
+      unread: false,
+      newReplies: true,
+      bold: true,
+    },
+    {
+      label: "a read line where the host keeps no cursor",
+      unread: false,
+      newReplies: null,
+      bold: false,
+    },
+  ])(
+    "draws the reply count of $label bold: $bold",
+    ({ unread, newReplies, bold }) => {
+      renderRow(
+        memberPost(undefined),
+        channelPresentation(
+          () => ({
+            participants: [],
+            replyCount: 2,
+            lastReplyAt: Date.now() - 5 * 60_000,
+            unread,
+            unreadCount: unread ? 1 : 0,
+            replying: false,
+            followedUnwritten: false,
+            newReplies,
+          }),
+          vi.fn(),
+        ),
+      );
+
+      const count = within(screen.getByTestId("bot-thread-line")).getByText(
+        "2 replies",
+      );
+      expect(count.className.includes("font-bold")).toBe(bold);
+    },
+  );
+
   it("offers Reply in thread among a member post's hover actions, with no thread line until the thread has a reply", async () => {
     const user = userEvent.setup();
     const openThread = vi.fn<(postMessageId: string) => void>();
@@ -245,6 +360,8 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: 0,
           replying: false,
+          followedUnwritten: false,
+          newReplies: false,
         }),
         openThread,
       ),
@@ -283,6 +400,8 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: 0,
           replying: true,
+          followedUnwritten: false,
+          newReplies: false,
         }),
         vi.fn(),
       ),
@@ -310,6 +429,8 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: 0,
           replying: false,
+          followedUnwritten: false,
+          newReplies: false,
         }),
         vi.fn(),
       ),
@@ -347,6 +468,8 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: 0,
           replying: false,
+          followedUnwritten: false,
+          newReplies: false,
         }),
         vi.fn(),
       ),
@@ -378,6 +501,8 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: true,
           unreadCount: null,
           replying: false,
+          followedUnwritten: false,
+          newReplies: null,
         }),
         vi.fn(),
       ),
@@ -398,6 +523,8 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: null,
           replying: false,
+          followedUnwritten: false,
+          newReplies: false,
         }),
         vi.fn(),
       ),
@@ -419,6 +546,8 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: true,
           unreadCount: 2,
           replying: false,
+          followedUnwritten: false,
+          newReplies: null,
         }),
         vi.fn(),
       ),
@@ -443,6 +572,8 @@ describe("<ChatMessage /> in a bot channel", () => {
           unread: false,
           unreadCount: 0,
           replying: false,
+          followedUnwritten: false,
+          newReplies: false,
         }),
         vi.fn(),
       ),
@@ -1025,6 +1156,8 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
         unread: false,
         unreadCount: 0,
         replying: false,
+        followedUnwritten: false,
+        newReplies: false,
       }));
       const openAnnouncementThread = vi.fn<(announcementId: string) => void>();
       renderRow(
@@ -1087,6 +1220,8 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
         unread: false,
         unreadCount: 0,
         replying: false,
+        followedUnwritten: false,
+        newReplies: false,
       }));
       renderRow(announcementRow(kind), {
         ...withActions({
@@ -1266,6 +1401,8 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
       unread: false,
       unreadCount: 0,
       replying: false,
+      followedUnwritten: false,
+      newReplies: false,
     }));
     renderRow(
       {
@@ -1298,6 +1435,8 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
             unread: false,
             unreadCount: 0,
             replying: false,
+            followedUnwritten: false,
+            newReplies: false,
           }
         : null,
     );

@@ -967,6 +967,15 @@ export const environmentConfigurationSkillsStateV10 = defineRpcContract({
 export const ENVIRONMENT_SKILL_IMPORT_MAX_SKILLS = 64;
 
 /**
+ * The inspect token the `inspected` answer hands out and the `install` step
+ * hands back: one schema on both ends, so a token the host issues always
+ * round-trips.
+ */
+const environmentSkillImportTokenSchema = lazySchema(() =>
+  z.string().min(1).max(128),
+);
+
+/**
  * `environment.configuration.skills.import@1.0`: skills from a public source
  * installed into the environment, on the host that serves it, in two steps.
  * `inspect` reads the source (GitHub's `owner/repo`, or an `https` URL of a
@@ -976,15 +985,6 @@ export const ENVIRONMENT_SKILL_IMPORT_MAX_SKILLS = 64;
  * environment's skills, each following its source (`auto-update`), together
  * or not at all.
  */
-/**
- * The inspect token the `inspected` answer hands out and the `install` step
- * hands back: one schema on both ends, so a token the host issues always
- * round-trips.
- */
-const environmentSkillImportTokenSchema = lazySchema(() =>
-  z.string().min(1).max(128),
-);
-
 export const environmentConfigurationSkillImportRequestSchema = lazySchema(() =>
   z.discriminatedUnion("step", [
     z.object({

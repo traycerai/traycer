@@ -9,8 +9,10 @@ const SHARED_TAG = "all";
 
 /**
  * The bot's memory as its pane lists it (Tracy Bots T87): its own entries,
- * then the shared ones it did not also tag for itself, each newest-confirmed
- * first, and only the entries whose text holds `query` (any case).
+ * then the shared ones, each newest-confirmed first, and only the entries
+ * whose text holds `query` (any case). An entry is shared or its own, never
+ * both (decision 148): one that also carries the bot's tag beside the shared
+ * one, written before that, is shared, as the host reads it.
  */
 export function memorySections(
   memory: BotMemory,
@@ -28,10 +30,10 @@ export function memorySections(
     )
     .sort(newestConfirmedFirst);
   return {
-    own: found.filter((entry) => entry.tags.includes(botId)),
-    shared: found.filter(
-      (entry) => !entry.tags.includes(botId) && entry.tags.includes(SHARED_TAG),
+    own: found.filter(
+      (entry) => entry.tags.includes(botId) && !entry.tags.includes(SHARED_TAG),
     ),
+    shared: found.filter((entry) => entry.tags.includes(SHARED_TAG)),
   };
 }
 
@@ -63,11 +65,6 @@ export function confirmedSinceWritten(entry: BotMemoryEntry): boolean {
     entry.at !== null &&
     entry.confirmedAt > entry.at
   );
-}
-
-/** How full the tag is, from 0 to 1. */
-export function fillOf(usage: BotMemoryTagUsage): number {
-  return Math.min(1, usage.chars / usage.ceiling);
 }
 
 /**

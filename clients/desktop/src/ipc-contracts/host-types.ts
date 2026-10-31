@@ -110,6 +110,12 @@ export type {
   TraycerModelsFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 export type {
+  VoiceAvailabilityFetchResult,
+  VoiceSessionEndFetchResult,
+  VoiceSessionMintFetchResult,
+  VoiceSessionMintRequest,
+} from "@traycer-clients/shared/host-client/voice-sessions";
+export type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,

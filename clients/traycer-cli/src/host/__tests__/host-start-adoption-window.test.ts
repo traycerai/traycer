@@ -138,7 +138,7 @@ describe("host-start adoption window — composition", () => {
   });
 
   it("the macOS install bound is two bootout waits, four launchctl-call timeouts and the install kickstart", () => {
-    // bootout --wait, bootstrap (edge 1), print, bootout --wait, bootstrap
+    // bootout-and-drain wait, bootstrap (edge 1), print, bootout-and-drain wait, bootstrap
     // (edge 2), print: two LAUNCHCTL_BOOTOUT_WAIT_TIMEOUT_MS and four
     // LAUNCHCTL_CALL_TIMEOUT_MS, then the install kickstart itself (edge 3).
     expect(LAUNCHCTL_INSTALL_SPAWN_EDGE_BOUND_MS).toBe(
@@ -218,7 +218,7 @@ describe("host-start adoption window — the lease-end invariant", () => {
   //     expired and takes ordinary admission), which is exactly why the
   //     timer model deliberately does not widen a row to cover it.
   //   - The macOS install row reaches the cap exactly - it is the bound that
-  //     sizes the window, since its `bootout --wait` can run to the job's
+  //     sizes the window, since its bootout-and-drain wait can run to the job's
   //     whole `ExitTimeOut` (twice, on the reload race). Untimed local work
   //     (file writes, each child's exit after its timeout fires) is outside
   //     every row, so that call ends at <= 234s plus that fs/exit latency - a
@@ -237,7 +237,7 @@ describe("host-start adoption window — the lease-end invariant", () => {
     // `WINDOWS_SCHTASKS_QUERY_TIMEOUT_MS`), on top of the create-budget-gated
     // spawn-edge bound - `WINDOWS_INSTALL_CONTROLLER_RETURN_BOUND_MS` names
     // that sum directly. Lease end = that bound + ACK_WAIT_MS. It sized the
-    // window until the macOS install's `bootout --wait` outgrew it.
+    // window until the macOS install's bootout-and-drain wait outgrew it.
     const windowsInstallLeaseEndMs =
       WINDOWS_INSTALL_CONTROLLER_RETURN_BOUND_MS +
       HOST_START_ADOPTION_ACK_WAIT_MS;

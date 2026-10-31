@@ -16,6 +16,18 @@ export interface ChatBotThreadLine {
   /** The viewer's unread notifications of the thread; `null` where the host does not count, and the line draws a dot. */
   readonly unreadCount: number | null;
   readonly replying: boolean;
+  /**
+   * The viewer follows the thread without having written in it (mentioned,
+   * or by choice), which the line says.
+   */
+  readonly followedUnwritten: boolean;
+  /**
+   * The viewer follows the thread and a reply has landed past their read
+   * cursor (decision 139): the line is bold and says "new replies", with
+   * or without a count. `null` where the host keeps no read cursors, and
+   * the line is bold while `unread`.
+   */
+  readonly newReplies: boolean | null;
 }
 
 /**

@@ -1,4 +1,5 @@
 import {
+  useContext,
   useEffect,
   useId,
   useMemo,
@@ -7,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { useStore } from "zustand";
-import { ChevronRight, X } from "lucide-react";
+import { X } from "lucide-react";
 import type {
   BotNotificationLevel,
   BotRecord,
@@ -18,11 +19,6 @@ import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
 import { ConfirmDestructiveDialog } from "@/components/ui/confirm-destructive-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -36,7 +32,6 @@ import { useTabHostId } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useUsageSummarySupported } from "@/hooks/usage-analytics/use-usage-summary-support";
 import { EpicUsageDialog } from "@/components/epic-canvas/panels/epic-usage-dialog";
-import { useEnvironmentSetMainBotMutation } from "@/hooks/bots/use-environment-set-main-bot-mutation";
 import {
   useBotDeleteMutation,
   useBotUpdateReplyModeMutation,
@@ -48,6 +43,7 @@ import {
   useBotNotificationLevelsQuery,
 } from "@/hooks/bots/use-bot-notification-level";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { channelNotificationLevel } from "@/lib/bots/bot-notification-settings";
 import { AvatarStack, BotAvatar } from "@/components/bots/bot-avatars";
 import {
   BotIdentityContext,
@@ -60,6 +56,11 @@ import {
   SettingsGroup,
 } from "@/components/bots/bot-settings-group";
 import { BotSlackSettings } from "@/components/bots/bot-slack-settings";
+import {
+  BotMemoryContext,
+  type BotMemoryAccess,
+} from "@/components/bots/bot-memory-context";
+import { useBotMemory } from "@/hooks/bots/use-bot-memory";
 
 const BOT_TITLE_MAX = 500;
 
@@ -69,14 +70,14 @@ const BOT_TITLE_MAX = 500;
  * closes. Grouped as Slack's channel details are:
  * - Details: the bot's name, who manages it and who may message it, how a
  *   personal bot answers posts (T52), and a team's members;
+ * - Model: the harness, model, effort and profile the bot runs on;
  * - Notifications: what the bell raises for this channel;
  * - Bots in this channel: the team's bots;
  * - Slack: the bot's own Slack app, from its manifest to its install, on
  *   traycer-server with the person's own session rather than the tab host;
  * - Usage: what the bot's chats have cost, in the usage graph (decision 118),
- *   where the tab's host can read it;
- * - Advanced, collapsed: the model the bot runs on and whether it is its
- *   environment's main bot;
+ *   where the tab's host can read it, and what it knows, which opens the
+ *   pane the bot's card opens (decision 148);
  * - deleting the bot, behind a confirmation.
  *
  * Every write goes through the tab host's client - the host `bot.open` chose
@@ -87,8 +88,6 @@ const BOT_TITLE_MAX = 500;
  */
 export function BotChannelSettingsPanel(props: {
   readonly bot: BotRecord;
-  /** Whether the bot is its environment's main bot; `null` when not known. */
-  readonly isMain: boolean | null;
   /** Whether the bot is a personal environment's; a team's always answers in threads. */
   readonly personal: boolean;
   /** The bot's channel, whose notification level the panel sets; `null` from a host that names none. */
@@ -97,7 +96,7 @@ export function BotChannelSettingsPanel(props: {
   readonly environmentBots: ReadonlyArray<BotRecord> | null;
   readonly onClose: () => void;
 }): ReactNode {
-  const { bot, isMain, personal, channelId, environmentBots, onClose } = props;
+  const { bot, personal, channelId, environmentBots, onClose } = props;
   const panelRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
   // Opening the panel takes focus into it, and Escape inside it closes it.
@@ -151,6 +150,7 @@ export function BotChannelSettingsPanel(props: {
           {personal ? <BotReplyModeSection bot={bot} /> : null}
           {personal ? null : <BotTeamMembers />}
         </SettingsGroup>
+        <BotRunSettingsForm bot={bot} />
         {channelId === null ? null : (
           <BotNotificationsSection botId={bot.botId} channelId={channelId} />
         )}
@@ -158,8 +158,7 @@ export function BotChannelSettingsPanel(props: {
           <BotsInChannel bots={environmentBots} />
         )}
         <BotSlackSettings botId={bot.botId} />
-        <BotUsageSection botId={bot.botId} />
-        <BotAdvancedSettings bot={bot} isMain={isMain} />
+        <BotUsageSection botId={bot.botId} onClose={onClose} />
         <BotDeleteSection bot={bot} />
       </div>
     </aside>
@@ -168,34 +167,113 @@ export function BotChannelSettingsPanel(props: {
 
 /**
  * What the bot has cost, behind a button: the usage graph of everything its
- * chats ran, opened on demand. Nothing where the tab's host cannot read it.
+ * chats ran, opened on demand, where the tab's host can read it. Beside it,
+ * inside a bot tab, what the bot knows.
  */
-function BotUsageSection(props: { readonly botId: string }): ReactNode {
+function BotUsageSection(props: {
+  readonly botId: string;
+  /** Closes the settings, which the memory pane opens in place of. */
+  readonly onClose: () => void;
+}): ReactNode {
+  const memory = useContext(BotMemoryContext);
+  if (memory === null)
+    return <BotUsageGroup botId={props.botId} memoryEntry={null} />;
+  return (
+    <BotUsageWithMemory
+      botId={props.botId}
+      access={memory}
+      onClose={props.onClose}
+    />
+  );
+}
+
+/** The Usage group with the memory entry, where the host serves the memory. */
+function BotUsageWithMemory(props: {
+  readonly botId: string;
+  readonly access: BotMemoryAccess;
+  readonly onClose: () => void;
+}): ReactNode {
+  const { access, onClose } = props;
+  const reading = useBotMemory({ ...access, enabled: true });
+  const count = reading.kind === "ready" ? reading.memory.entries.length : null;
+  return (
+    <BotUsageGroup
+      botId={props.botId}
+      memoryEntry={
+        reading.kind === "unsupported" ? null : (
+          <BotMemoryEntry
+            count={count}
+            onOpen={() => {
+              onClose();
+              access.open();
+            }}
+          />
+        )
+      }
+    />
+  );
+}
+
+/** The group, drawn only when it holds a button. */
+function BotUsageGroup(props: {
+  readonly botId: string;
+  readonly memoryEntry: ReactNode;
+}): ReactNode {
   const client = useTabHostClient();
   const hostId = useTabHostId();
   const supported = useUsageSummarySupported(hostId);
   const [open, setOpen] = useState(false);
-  if (!supported) return null;
+  if (!supported && props.memoryEntry === null) return null;
   return (
     <SettingsGroup title="Usage" testId="bot-settings-usage">
-      <div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          data-testid="bot-settings-usage-open"
-          onClick={() => setOpen(true)}
-        >
-          View usage
-        </Button>
+      <div className="flex flex-wrap items-center gap-2">
+        {supported ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-testid="bot-settings-usage-open"
+            onClick={() => setOpen(true)}
+          >
+            View usage
+          </Button>
+        ) : null}
+        {props.memoryEntry}
       </div>
-      <EpicUsageDialog
-        epicId={props.botId}
-        client={client}
-        open={open}
-        onOpenChange={setOpen}
-      />
+      {supported ? (
+        <EpicUsageDialog
+          epicId={props.botId}
+          client={client}
+          open={open}
+          onOpenChange={setOpen}
+        />
+      ) : null}
     </SettingsGroup>
+  );
+}
+
+/**
+ * "What it knows · 9 memories": how many entries the bot reads before every
+ * reply (`null` while unread), opening them beside the channel as the bot's
+ * card does.
+ */
+function BotMemoryEntry(props: {
+  readonly count: number | null;
+  readonly onOpen: () => void;
+}): ReactNode {
+  const { count } = props;
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      data-testid="bot-settings-memory-open"
+      onClick={props.onOpen}
+    >
+      {count === null
+        ? "What it knows"
+        : `What it knows · ${count} ${count === 1 ? "memory" : "memories"}`}
+    </Button>
   );
 }
 
@@ -268,28 +346,36 @@ const NOTIFICATION_LEVEL_OPTIONS: ReadonlyArray<{
   readonly description: string;
 }> = [
   {
+    level: "all",
+    label: "All new messages",
+    description: "Every post, announcement and reply rings the bell.",
+  },
+  {
     level: "mentions",
     label: "Mentions and answers to me",
     description:
-      "The bell tells you when the bot answers your posts and threads you wrote in.",
+      "Replies to what you asked, threads you follow, and mentions of you.",
   },
   {
     level: "off",
-    label: "Off",
-    description: "Nothing from this channel reaches the bell.",
+    label: "Nothing",
+    description:
+      "Muted: no ring and no bold. A mention of you or a question to you still counts.",
   },
 ];
 
 /**
  * What the bell raises for this channel and its threads, the same on every
  * device the person uses. Drawn where the tab's host can read and write it;
- * a channel with no level set reads "Mentions and answers to me".
+ * a channel with no level set reads its bot's default: All new messages for
+ * a personal environment's bot, Mentions and answers for a team's.
  */
 function BotNotificationsSection(props: {
   readonly botId: string;
   readonly channelId: string;
 }): ReactNode {
   const { botId, channelId } = props;
+  const owner = useBotIdentity()?.owner ?? null;
   const client = useTabHostClient();
   const hostId = useTabHostId();
   const readSupported =
@@ -301,7 +387,11 @@ function BotNotificationsSection(props: {
   const update = useBotNotificationLevelSetMutation(client);
   const groupId = useId();
   if (!supported) return null;
-  const level = channelLevel(levels.data?.levels, channelId);
+  const level = channelNotificationLevel(
+    levels.data?.levels,
+    channelId,
+    owner === null ? null : owner.kind === "person",
+  );
   return (
     <SettingsGroup title="Notifications" testId="bot-settings-notifications">
       <RadioGroup
@@ -336,18 +426,6 @@ function BotNotificationsSection(props: {
       />
     </SettingsGroup>
   );
-}
-
-/**
- * The channel's level as the cloud has it: `mentions` for a channel with
- * none set, `null` until the levels are read.
- */
-function channelLevel(
-  levels: Readonly<Record<string, BotNotificationLevel>> | undefined,
-  channelId: string,
-): BotNotificationLevel | null {
-  if (levels === undefined) return null;
-  return Object.hasOwn(levels, channelId) ? levels[channelId] : "mentions";
 }
 
 /** Why the notifications control cannot show or change the level now. */
@@ -394,36 +472,6 @@ function BotsInChannelRow(props: { readonly bot: BotRecord }): ReactNode {
       </BotIdentityContext>
       <span className="truncate">{bot.title}</span>
     </li>
-  );
-}
-
-/**
- * What changes how the bot runs rather than how the channel reads: its model
- * and whether it is its environment's main bot. Collapsed until opened.
- */
-function BotAdvancedSettings(props: {
-  readonly bot: BotRecord;
-  readonly isMain: boolean | null;
-}): ReactNode {
-  const { bot, isMain } = props;
-  return (
-    <Collapsible data-testid="bot-settings-advanced">
-      <CollapsibleTrigger
-        variant="quiet"
-        className="group flex w-full items-center text-left"
-        data-testid="bot-settings-advanced-toggle"
-      >
-        <ChevronRight
-          className="me-1 size-4 transition-transform group-data-[state=open]:rotate-90"
-          aria-hidden="true"
-        />
-        <span className="text-ui-sm font-semibold">Advanced</span>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="flex flex-col gap-6 pt-4">
-        <BotRunSettingsForm bot={bot} />
-        {isMain === null ? null : <BotMainSection bot={bot} isMain={isMain} />}
-      </CollapsibleContent>
-    </Collapsible>
   );
 }
 
@@ -539,12 +587,7 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
   const canApply =
     !unchanged && selection.modelSlug.length > 0 && !update.isPending;
   return (
-    <section
-      className="flex flex-col gap-2"
-      aria-label="Model"
-      data-testid="bot-settings-model"
-    >
-      <span className="text-ui-sm font-medium text-foreground">Model</span>
+    <SettingsGroup title="Model" testId="bot-settings-model">
       <p className="text-ui-xs text-muted-foreground">
         The next turn uses what you apply here.
       </p>
@@ -594,7 +637,7 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
       <BotSettingsRefusal
         message={update.error === null ? null : update.error.message}
       />
-    </section>
+    </SettingsGroup>
   );
 }
 
@@ -693,67 +736,6 @@ function ChoiceOption(props: {
         </p>
       </div>
     </div>
-  );
-}
-
-/**
- * Making the bot its environment's main bot: one click, no confirmation,
- * since another bot is made main the same way. Drawn only where the main bot
- * is known and the tab's host can write it.
- */
-function BotMainSection(props: {
-  readonly bot: BotRecord;
-  readonly isMain: boolean;
-}): ReactNode {
-  const { bot, isMain } = props;
-  const client = useTabHostClient();
-  const hostId = useTabHostId();
-  const supported =
-    useHostMethodSupport(hostId, "environment.setMainBot") === true;
-  const setMain = useEnvironmentSetMainBotMutation(client);
-  if (!supported) return null;
-  return (
-    <section
-      className="flex flex-col gap-2"
-      aria-label="Main bot"
-      data-testid="bot-settings-main"
-    >
-      <span className="text-ui-sm font-medium text-foreground">Main bot</span>
-      <p className="text-ui-xs text-muted-foreground">
-        {isMain
-          ? "This is the main bot: it tidies the shared memory when it runs over its limit. To hand that over, make another bot main."
-          : "The main bot tidies the shared memory when it runs over its limit."}
-      </p>
-      {isMain ? null : (
-        <div>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            disabled={setMain.isPending}
-            data-testid="bot-settings-make-main"
-            onClick={() =>
-              setMain.mutate({
-                environmentId: bot.environmentId,
-                botId: bot.botId,
-              })
-            }
-          >
-            Make main
-            {setMain.isPending ? (
-              <AgentSpinningDots
-                className="ml-1"
-                testId={undefined}
-                variant={undefined}
-              />
-            ) : null}
-          </Button>
-        </div>
-      )}
-      <BotSettingsRefusal
-        message={setMain.error === null ? null : setMain.error.message}
-      />
-    </section>
   );
 }
 

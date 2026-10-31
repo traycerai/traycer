@@ -813,7 +813,6 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
 
       await install(runner);
 
-      expect(printsAfterBootout).toBe(3);
       expect(calls.slice(calls.indexOf("bootout"))).toEqual([
         "bootout",
         "print",

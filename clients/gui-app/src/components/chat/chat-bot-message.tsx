@@ -16,10 +16,7 @@ import type {
   BotAnnouncementKind,
   BotQuestion,
 } from "@traycer/protocol/persistence/epic/messages";
-import {
-  BOT_THREAD_ANCHOR_ANSWER,
-  BOT_THREAD_ANCHOR_MESSAGE,
-} from "@traycer/protocol/host/bot/conversation-schemas";
+import { BOT_THREAD_ANCHOR_ANSWER } from "@traycer/protocol/host/bot/conversation-schemas";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -36,7 +33,10 @@ import { SHARED_BY_EARLIER_VERSION_LINE } from "@/components/settings/move/overv
 import { useOpenLink } from "@/lib/links/open-link";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { formatClockDuration } from "@/lib/format-duration";
-import { firstLineOf } from "@/lib/bots/bot-trunk-model";
+import {
+  botRowThreadAnchorKind,
+  firstLineOf,
+} from "@/lib/bots/bot-trunk-model";
 import { turnReceiptLabel } from "@/lib/bots/bot-turn-receipt";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { useLongPress, type LongPress } from "@/hooks/ui/use-long-press";
@@ -593,7 +593,11 @@ function botRowThread(
   readonly replyInThread: (() => void) | null;
   readonly threadLine: ChatBotThreadLine | null;
 } {
-  const anchorKind = botRowAnchorKind(message);
+  const anchorKind = botRowThreadAnchorKind({
+    announcementKind: message.announcement?.kind ?? null,
+    asksQuestion: message.question !== undefined,
+    repliesToPost: message.repliesTo !== undefined,
+  });
   const ownThread =
     anchorKind === null || presentation.threadAnchorKinds.includes(anchorKind);
   let anchorId: string | null = message.persistentMessageId;
@@ -614,23 +618,6 @@ function botRowThread(
         ? null
         : presentation.threadLine(anchorId),
   };
-}
-
-/**
- * The thread anchor a bot's row needs its host to name to root its own
- * thread: none for a question, a proposal or a row that asks (a row that
- * asks roots its own thread whatever post it follows, as a question
- * announcement does), `"answer"` for a direct reply, `"message"` for any
- * other row.
- */
-function botRowAnchorKind(message: ChatMessageModel): string | null {
-  const kind = message.announcement?.kind ?? null;
-  if (kind === "question" || kind === "proposal") return null;
-  if (message.question !== undefined) return null;
-  if (kind === null && message.repliesTo !== undefined) {
-    return BOT_THREAD_ANCHOR_ANSWER;
-  }
-  return BOT_THREAD_ANCHOR_MESSAGE;
 }
 
 /**
@@ -1235,6 +1222,7 @@ function ThreadLine(props: {
       type="button"
       data-testid="bot-thread-line"
       data-unread={unread ? "true" : "false"}
+      data-new-replies={line.newReplies === true ? "true" : "false"}
       onClick={onOpen}
       className="group/thread -ml-1 flex w-fit max-w-full items-center gap-2 rounded-md border border-transparent px-1 py-0.5 text-left text-ui-xs transition-colors hover:border-border/60 hover:bg-background focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
     >
@@ -1248,8 +1236,25 @@ function ThreadLine(props: {
       <ThreadLineCount
         replies={replies}
         unread={unread}
+        bold={line.newReplies ?? unread}
         unreadCount={line.unreadCount}
       />
+      {line.newReplies === true ? (
+        <span
+          className="shrink-0 font-semibold text-foreground"
+          data-testid="bot-thread-new-replies"
+        >
+          new replies
+        </span>
+      ) : null}
+      {line.followedUnwritten ? (
+        <span
+          className="shrink-0 text-muted-foreground"
+          data-testid="bot-thread-following-mark"
+        >
+          following
+        </span>
+      ) : null}
       <ThreadLineStatus
         lastReplyAt={line.lastReplyAt}
         replying={replying}
@@ -1260,16 +1265,18 @@ function ThreadLine(props: {
 }
 
 /**
- * "N replies", bold behind the unread count while one is unread (a 2 badge
- * before "5 replies" reads two unread of five), or behind a dot where the
- * host does not count.
+ * "N replies" behind the unread count while one is unread (a 2 badge before
+ * "5 replies" reads two unread of five), or behind a dot where the host does
+ * not count; bold while a followed thread has new replies, or, where the
+ * host keeps no read cursors, while unread.
  */
 function ThreadLineCount(props: {
   readonly replies: number;
   readonly unread: boolean;
+  readonly bold: boolean;
   readonly unreadCount: number | null;
 }): ReactNode {
-  const { replies, unread, unreadCount } = props;
+  const { replies, unread, bold, unreadCount } = props;
   return (
     <>
       {unreadCount === null ? (
@@ -1290,7 +1297,7 @@ function ThreadLineCount(props: {
       )}
       {replies === 0 ? null : (
         <span
-          className={cn("text-primary", unread ? "font-bold" : "font-semibold")}
+          className={cn("text-primary", bold ? "font-bold" : "font-semibold")}
         >
           {replies === 1 ? "1 reply" : `${replies} replies`}
         </span>

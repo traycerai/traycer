@@ -1,17 +1,36 @@
 import { useMemo, useState, type MouseEvent, type ReactNode } from "react";
-import { useNavigate } from "@tanstack/react-router";
-import { ExternalLink, Plus } from "lucide-react";
+import {
+  EllipsisVertical,
+  ExternalLink,
+  MessagesSquare,
+  Plus,
+} from "lucide-react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import { NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
+import { BotSettingsRefusal } from "@/components/bots/bot-settings-group";
 import {
   NewBotDialog,
   type NewBotTarget,
 } from "@/components/bots/new-bot-dialog";
 import { Badge } from "@/components/ui/badge";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useDashboardPageOpener } from "@/components/settings/host-scope/use-dashboard-page-opener";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
+import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
+import { useEnvironmentSetMainBotMutation } from "@/hooks/bots/use-environment-set-main-bot-mutation";
 import { useTeamSetups, type TeamSetup } from "@/hooks/bots/use-team-setups";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
@@ -19,6 +38,11 @@ import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query
 import { useRereadEnvironmentListOnFocus } from "@/hooks/bots/use-reread-environment-list-on-focus";
 import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
+import { useBotChannelMuted } from "@/hooks/bots/use-bot-notification-level";
+import { useBotChannelBold } from "@/hooks/bots/use-bot-read-cursor";
+import { useBotFollowedThreads } from "@/hooks/bots/use-bot-followed-threads";
+import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
+import { BotMutedGlyph } from "@/components/bots/bot-muted-glyph";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { indicatorHasUnread } from "@/stores/notifications/notification-indicator-state";
 import {
@@ -29,12 +53,6 @@ import {
   createTeamDashboardUrl,
   hasNoTeamEnvironment,
 } from "@/lib/home-bots/create-team-dashboard";
-import { botTabIntent } from "@/lib/tab-navigation/intents";
-import { navigateToTabIntent } from "@/lib/tab-navigation";
-import {
-  rebindUnreachableBotTab,
-  useBotTabsStore,
-} from "@/stores/bots/bot-tabs-store";
 import { cn } from "@/lib/utils";
 
 const EMPTY_ENVIRONMENTS: ReadonlyArray<EnvironmentDescriptor> = [];
@@ -57,7 +75,16 @@ const SIDEBAR_ACTION_ROW_CLASS =
  * create form for one more bot there (`NewBotDialog`), which an empty
  * personal section offers once too. With no team at all, "Create a team"
  * stands where a team's section would, opening the dashboard page where a
- * team is made.
+ * team is made. The row of a bot that is not its environment's main bot,
+ * where the environment has one and the tab's host can write it, has a menu
+ * (its ⋮ and its context menu) whose "Make main" hands the star over, with no
+ * confirmation since making another bot main hands it back; a refusal is
+ * stated under the row.
+ *
+ * Above the sections, where Slack puts it, "Threads" shows the threads the
+ * person follows across every bot in place of the channel (decision 149),
+ * counting those with new replies; it is the current row while they show,
+ * and the tab's own channel row goes back to the channel.
  *
  * Read through the tab's host: the lists are cloud-backed, so any host gives
  * the same answer. A channel opens that bot's tab, through this tab's host,
@@ -66,8 +93,10 @@ const SIDEBAR_ACTION_ROW_CLASS =
 export function BotChannelSidebar(props: {
   readonly activeBotId: string;
   readonly hostId: string;
+  /** The tab's Threads view; `null` where the tab has no channel to swap it for. */
+  readonly threadsView: BotThreadsViewState | null;
 }): ReactNode {
-  const { activeBotId, hostId } = props;
+  const { activeBotId, hostId, threadsView } = props;
   const client = useTabHostClient();
   const environments = useEnvironmentListQuery(client, true);
   useRereadEnvironmentListOnFocus(true);
@@ -78,6 +107,8 @@ export function BotChannelSidebar(props: {
   const noTeam = hasNoTeamEnvironment(environments.data?.environments);
   const botList = bots.data?.bots ?? EMPTY_BOTS;
   const mainBotIds = bots.data?.mainBotIds ?? null;
+  const canSetMainBot =
+    useHostMethodSupport(hostId, "environment.setMainBot") === true;
   const model = useMemo(
     () =>
       buildHomeBotsModel({
@@ -119,19 +150,17 @@ export function BotChannelSidebar(props: {
         : model.groups,
   });
 
-  const navigate = useNavigate();
-  const openBotTab = useBotTabsStore((s) => s.openBotTab);
+  const openBotChannel = useOpenBotChannel(hostId);
   const [newBot, setNewBot] = useState<NewBotTarget | null>(null);
   const openChannel = (channel: SidebarChannel): void => {
-    if (channel.botId === activeBotId) return;
-    rebindUnreachableBotTab(
-      channel.botId,
-      hostId,
-      connectable.resolved ? (id) => connectable.hostIds.includes(id) : null,
-    );
-    openBotTab({ botId: channel.botId, hostId, title: channel.title });
-    navigateToTabIntent(navigate, botTabIntent(channel.botId), undefined);
+    if (channel.botId === activeBotId) {
+      threadsView?.onLeave();
+      return;
+    }
+    openBotChannel(channel);
   };
+  // The tab's channel is the current row unless Threads shows in its place.
+  const currentBotId = threadsView?.shown === true ? null : activeBotId;
 
   return (
     <nav
@@ -139,17 +168,22 @@ export function BotChannelSidebar(props: {
       data-testid="bot-channel-sidebar"
       className="flex min-h-0 flex-col gap-3 overflow-y-auto px-2 py-3"
     >
+      {threadsView === null ? null : (
+        <ThreadsRow hostId={hostId} bots={botList} view={threadsView} />
+      )}
       {model.groups.map((group) => (
         <SidebarSection
           key={group.environmentId}
           group={group}
-          activeBotId={activeBotId}
+          activeBotId={currentBotId}
           unreadByBotId={unreadByBotId}
+          canSetMainBot={canSetMainBot}
           setup={
             teamSetups.setups.find(
               (setup) => setup.environmentId === group.environmentId,
             ) ?? null
           }
+          hostId={hostId}
           onOpenChannel={openChannel}
           onNewBot={setNewBot}
         />
@@ -168,16 +202,71 @@ export function BotChannelSidebar(props: {
 /** A channel the sidebar opens: a listed bot, or a team's main bot still to be set up. */
 type SidebarChannel = { readonly botId: string; readonly title: string };
 
+/** Whether the tab shows Threads in place of its channel, and the ways in and out. */
+export type BotThreadsViewState = {
+  readonly shown: boolean;
+  readonly onShow: () => void;
+  /** Back to the tab's channel, where it was. */
+  readonly onLeave: () => void;
+};
+
+/**
+ * "Threads": the threads the person follows across every bot, with how many
+ * have new replies, nothing at zero or where the host cannot list them.
+ */
+function ThreadsRow(props: {
+  readonly hostId: string;
+  readonly bots: ReadonlyArray<BotRecord>;
+  readonly view: BotThreadsViewState;
+}): ReactNode {
+  const { hostId, bots, view } = props;
+  const followed = useBotFollowedThreads(useTabHostClient(), hostId, bots);
+  const count = followed.kind === "listed" ? followed.newReplyCount : 0;
+  return (
+    <button
+      type="button"
+      data-testid="bot-channel-threads-row"
+      aria-current={view.shown ? "page" : undefined}
+      onClick={view.onShow}
+      className={cn(
+        "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui-sm transition-colors focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
+        view.shown
+          ? "bg-accent text-accent-foreground"
+          : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
+      )}
+    >
+      <MessagesSquare className="size-4 shrink-0" aria-hidden="true" />
+      <span className="min-w-0 flex-1 truncate">Threads</span>
+      {count === 0 ? null : (
+        <Badge
+          variant="secondary"
+          size="sm"
+          data-testid="bot-channel-threads-count"
+        >
+          <span className="tabular-nums">{count}</span>
+          <span className="sr-only"> with new replies</span>
+        </Badge>
+      )}
+    </button>
+  );
+}
+
 function SidebarSection(props: {
   readonly group: HomeBotsGroup;
-  readonly activeBotId: string;
+  /** The current channel's bot; `null` while Threads shows in its place. */
+  readonly activeBotId: string | null;
   readonly unreadByBotId: ReadonlyMap<string, number | null>;
+  /** Whether the tab's host can make another bot main. */
+  readonly canSetMainBot: boolean;
   /** The team's main bot while it is still to be set up; `null` otherwise. */
   readonly setup: TeamSetup | null;
+  /** The tab's host, which reads each channel's level. */
+  readonly hostId: string;
   readonly onOpenChannel: (channel: SidebarChannel) => void;
   readonly onNewBot: (target: NewBotTarget) => void;
 }): ReactNode {
-  const { group, activeBotId, unreadByBotId, setup, onOpenChannel } = props;
+  const { group, activeBotId, unreadByBotId, setup, hostId, onOpenChannel } =
+    props;
   const isTeam = group.canCreate && group.ownerKind === "organization";
   const isPersonal = group.canCreate && group.ownerKind === "user";
   const newBot = (event: MouseEvent<HTMLButtonElement>): void =>
@@ -228,18 +317,32 @@ function SidebarSection(props: {
         </button>
       )}
       <ul className="flex flex-col gap-0.5">
-        {group.bots.map((bot) => (
-          <li key={bot.botId}>
+        {group.bots.map((bot) => {
+          const row = (
             <ChannelRow
               bot={bot}
               isMain={bot.botId === group.mainBotId}
               active={bot.botId === activeBotId}
               unread={unreadByBotId.has(bot.botId)}
               unreadCount={unreadByBotId.get(bot.botId) ?? null}
+              hostId={hostId}
               onOpen={() => onOpenChannel(bot)}
             />
-          </li>
-        ))}
+          );
+          const canMakeMain =
+            props.canSetMainBot &&
+            group.mainBotId !== null &&
+            bot.botId !== group.mainBotId;
+          return (
+            <li key={bot.botId}>
+              {canMakeMain ? (
+                <MakeMainChannelRow bot={bot}>{row}</MakeMainChannelRow>
+              ) : (
+                row
+              )}
+            </li>
+          );
+        })}
         {setup === null ? null : (
           <li>
             <SetupChannelRow
@@ -290,10 +393,10 @@ function SetupChannelRow(props: {
       aria-current={active ? "page" : undefined}
       onClick={props.onOpen}
       className={cn(
-        "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui-sm transition-colors focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2",
+        "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui-sm transition-colors focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
         active
-          ? "bg-primary text-primary-foreground"
-          : "text-muted-foreground hover:bg-foreground/6",
+          ? "bg-accent text-accent-foreground"
+          : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
       )}
     >
       <NamedBotAvatar botId={setup.botId} title={setup.title} size="sm" />
@@ -322,23 +425,38 @@ function ChannelRow(props: {
   readonly unread: boolean;
   /** Drawn right-aligned; `null` where the host does not count. */
   readonly unreadCount: number | null;
+  readonly hostId: string;
   readonly onOpen: () => void;
 }): ReactNode {
-  const { bot, isMain, active, unread, unreadCount, onOpen } = props;
+  const { bot, isMain, active, unread, unreadCount, hostId, onOpen } = props;
+  const client = useTabHostClient();
+  const muted = useBotChannelMuted(
+    client,
+    hostId,
+    bot.botId,
+    bot.appConversationChatId,
+  );
+  // Bold is the read cursor's where the host keeps one (decision 139): a
+  // channel with new posts at Mentions level is bold with no count.
+  const bold =
+    useBotChannelBold(client, hostId, bot.botId, bot.appConversationChatId) ??
+    unread;
   return (
     <button
       type="button"
       data-testid="bot-channel-row"
       data-bot-id={bot.botId}
-      data-unread={unread ? "true" : "false"}
+      data-unread={bold ? "true" : "false"}
       aria-current={active ? "page" : undefined}
       onClick={onOpen}
       className={cn(
-        "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui-sm transition-colors focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2",
+        "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-ui-sm transition-colors focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2",
+        // The task panel's row arms (`chatRowClassName`), so the selected
+        // channel is the same quiet highlight as the selected agent.
         active
-          ? "bg-primary text-primary-foreground"
-          : "text-muted-foreground hover:bg-foreground/6",
-        unread && !active && "font-semibold text-foreground",
+          ? "bg-accent text-accent-foreground"
+          : "text-foreground/75 hover:bg-accent/70 hover:text-accent-foreground",
+        bold && !active && "font-semibold text-foreground",
       )}
     >
       <NamedBotAvatar botId={bot.botId} title={bot.title} size="sm" />
@@ -351,6 +469,12 @@ function ChannelRow(props: {
             tone={active ? "current" : "muted"}
           />
         ) : null}
+        {muted ? (
+          <BotMutedGlyph
+            className={active ? "text-accent-foreground" : undefined}
+            testId="bot-channel-row-muted"
+          />
+        ) : null}
       </span>
       {unreadCount === null ? null : (
         <UnreadCountBadge
@@ -360,6 +484,61 @@ function ChannelRow(props: {
         />
       )}
     </button>
+  );
+}
+
+/**
+ * A bot's row with the menu that makes it its environment's main bot, from
+ * the row's ⋮ (drawn on hover and keyboard focus, always on a touch screen)
+ * or its context menu. The refusal of the write is stated under the row.
+ */
+function MakeMainChannelRow(props: {
+  readonly bot: BotRecord;
+  readonly children: ReactNode;
+}): ReactNode {
+  const { bot } = props;
+  const client = useTabHostClient();
+  const setMain = useEnvironmentSetMainBotMutation(client);
+  const makeMain = (): void =>
+    setMain.mutate({ environmentId: bot.environmentId, botId: bot.botId });
+  return (
+    <div className="flex flex-col gap-0.5">
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div className="group/row flex min-w-0 items-center gap-0.5">
+            <div className="min-w-0 flex-1">{props.children}</div>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  aria-label={`Actions for ${bot.title}`}
+                  data-testid="bot-channel-row-menu"
+                  className="flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-foreground/6 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2 group-hover/row:opacity-100 data-[state=open]:opacity-100 pointer-coarse:opacity-100"
+                >
+                  <EllipsisVertical className="size-3.5" aria-hidden="true" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  disabled={setMain.isPending}
+                  onSelect={makeMain}
+                >
+                  Make main
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem disabled={setMain.isPending} onSelect={makeMain}>
+            Make main
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      <BotSettingsRefusal
+        message={setMain.error === null ? null : setMain.error.message}
+      />
+    </div>
   );
 }
 

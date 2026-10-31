@@ -6,6 +6,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Mock } from "vitest";
 import type { Chat } from "@traycer/protocol/persistence/epic/schemas";
 import type { PendingFallback } from "@traycer/protocol/host/agent/gui/subscribe";
@@ -339,7 +340,12 @@ function ChooserHarness({
 }
 
 function renderChooser(handle: ChatSessionStoreHandle) {
-  return render(<ChooserHarness handle={handle} />);
+  // The chooser's bot write is a Query mutation, built on every chooser.
+  return render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ChooserHarness handle={handle} />
+    </QueryClientProvider>,
+  );
 }
 
 /** The trigger toggles the popover: the same click opens and closes it. */

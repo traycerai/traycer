@@ -355,6 +355,96 @@ export function isBotThreadVerdictNotification(entry: {
   );
 }
 
+/** The `operation` of a reply in a bot's thread. */
+export const HOST_OPERATION_BOT_REPLY = "bot.reply";
+
+/** The payload `kind` of a row a bot's conversation wrote to a person's mailbox. */
+export const BOT_CONVERSATION_NOTIFICATION_PAYLOAD_KIND = "bot_conversation";
+
+/**
+ * The rest of a bot's rows that need the person's attention (decision 138):
+ * a reply in a bot's thread they follow, and a row that mentions them,
+ * whatever its level. Both are minted `done`, so no severity admits them;
+ * they count in the bell's number and list with the bot's answers. A post or
+ * announcement that names no one does not count. Reads the payload as the
+ * open record it is on the wire, as {@link isBotThreadVerdictNotification}
+ * does; whether the row is unread is the caller's, as it is there.
+ */
+export function isBotConversationAttention(entry: {
+  readonly kind: string;
+  readonly payload: unknown;
+}): boolean {
+  const payload = entry.payload;
+  if (
+    entry.kind !== "host.operation.finished" ||
+    typeof payload !== "object" ||
+    payload === null
+  ) {
+    return false;
+  }
+  if (
+    "operation" in payload &&
+    payload.operation === HOST_OPERATION_BOT_REPLY
+  ) {
+    return true;
+  }
+  return (
+    "kind" in payload &&
+    payload.kind === BOT_CONVERSATION_NOTIFICATION_PAYLOAD_KIND &&
+    "mention" in payload &&
+    payload.mention === true
+  );
+}
+
+/**
+ * `host.operation.finished` payload of a bot's answer as a host writes it
+ * to each participant (T78): opens the bot's thread on the answer. Its copy
+ * is the common `title`/`message`, which the bell already reads.
+ */
+export const hostNotificationBotThreadVerdictPayloadSchema = lazySchema(() =>
+  z
+    .object({
+      kind: z.literal("bot_thread_verdict"),
+      operation: z.literal(HOST_OPERATION_BOT_THREAD_VERDICT),
+      title: z.string(),
+      message: z.string(),
+      botId: idSchema,
+      threadId: idSchema,
+      replyMessageId: idSchema,
+    })
+    .catchall(z.unknown()),
+);
+export type HostNotificationBotThreadVerdictPayload = z.infer<
+  typeof hostNotificationBotThreadVerdictPayloadSchema
+>;
+
+/**
+ * `host.operation.finished` payload of a row a bot's conversation wrote to
+ * a person's mailbox (decision 136): a post, reply, answer, question or
+ * mention, which opens the bot's channel or thread on that row. Its copy is
+ * the common `title`/`message`.
+ */
+export const hostNotificationBotConversationPayloadSchema = lazySchema(() =>
+  z
+    .object({
+      kind: z.literal(BOT_CONVERSATION_NOTIFICATION_PAYLOAD_KIND),
+      event: z.string().min(1),
+      operation: z.string().min(1),
+      title: z.string(),
+      message: z.string(),
+      botId: idSchema,
+      conversationId: idSchema,
+      threadId: idSchema.nullable(),
+      messageId: idSchema,
+      authorUserId: idSchema.nullable(),
+      mention: z.boolean(),
+    })
+    .catchall(z.unknown()),
+);
+export type HostNotificationBotConversationPayload = z.infer<
+  typeof hostNotificationBotConversationPayloadSchema
+>;
+
 export const HOST_NOTIFICATION_WORKTREE_DELETION_FAILURE_KINDS = [
   "busy",
   "not_managed",
@@ -1021,6 +1111,8 @@ export const hostNotificationKnownPayloadSchema = lazySchema(() =>
     hostNotificationWorktreeDeletionPayloadSchema,
     hostNotificationWorktreeAutoCleanupPayloadSchema,
     hostNotificationManagedCommandDeliveryParkedPayloadSchema,
+    hostNotificationBotThreadVerdictPayloadSchema,
+    hostNotificationBotConversationPayloadSchema,
     hostNotificationBrowserHumanNeededPayloadSchema,
     hostNotificationSecretGrantRequestPayloadSchema,
     hostNotificationSecretExportMintedPayloadSchema,
@@ -1103,7 +1195,9 @@ function payloadKindMatchesNotificationKind(
       return (
         payloadKind === "worktree_deletion" ||
         payloadKind === "worktree_auto_cleanup" ||
-        payloadKind === "managed_command_delivery_parked"
+        payloadKind === "managed_command_delivery_parked" ||
+        payloadKind === "bot_thread_verdict" ||
+        payloadKind === "bot_conversation"
       );
     case "browser.human.needed":
       return payloadKind === "browser_human_needed";

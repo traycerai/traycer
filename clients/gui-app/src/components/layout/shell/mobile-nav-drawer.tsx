@@ -390,7 +390,11 @@ function MobileNavTracyButton(props: {
         props.onOpen(props.botId);
       }}
     >
-      <TracyEntryIcon className={undefined} unreadCount={signals.unreadCount} />
+      <TracyEntryIcon
+        className={undefined}
+        unreadCount={signals.unreadCount}
+        muted={signals.muted}
+      />
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-left",

@@ -14,7 +14,6 @@ import { StrictMode, useState, type ReactNode } from "react";
 import {
   act,
   cleanup,
-  fireEvent,
   render,
   screen,
   waitFor,
@@ -31,7 +30,10 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotMemoryEntry,
+  BotRecord,
+} from "@traycer/protocol/host/bot/schemas";
 import {
   SLACK_APP_REFUSAL_BOT_NOT_FOUND,
   SLACK_APP_REFUSAL_NOT_CONFIGURED,
@@ -49,6 +51,15 @@ import {
   type BotIdentity,
   type BotOwner,
 } from "@/components/bots/bot-identity-context";
+import {
+  BotMemoryContext,
+  type BotMemoryAccess,
+} from "@/components/bots/bot-memory-context";
+import type { BotMemoryReading } from "@/hooks/bots/use-bot-memory";
+import {
+  memoryRailOver,
+  useBotOpenThreadStore,
+} from "@/stores/bots/bot-open-thread-store";
 import type { ComposerSeedSource } from "@/lib/composer/composer-seed-source";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { ModelOption } from "@/components/home/data/landing-options";
@@ -56,6 +67,17 @@ import {
   maxModeListedFor,
   type MaxModeContext,
 } from "@/components/home/data/model-max-mode";
+
+function memoryEntry(index: number): BotMemoryEntry {
+  return {
+    id: `memory-${index}`,
+    text: `Memory ${index}`,
+    tags: ["bot_01ARZ3NDEKTSV4RRFFQ69G5FAV"],
+    writtenBy: { botId: null, chatId: "trunk-1", requestId: null },
+    at: 1_000,
+    confirmedAt: 1_000,
+  };
+}
 
 const mocks = vi.hoisted(() => ({
   hostClient: { stub: "tab-host-client" },
@@ -68,7 +90,6 @@ const mocks = vi.hoisted(() => ({
   runSettingsClients: [] as Array<object | null>,
   updateTitle: vi.fn<(variables: object) => void>(),
   deleteBot: vi.fn<(variables: object) => void>(),
-  setMainBot: vi.fn<(variables: object) => void>(),
   updateReplyMode: vi.fn<(variables: object) => void>(),
   setNotificationLevel: vi.fn<(variables: object) => void>(),
   // The levels `bot.notificationLevel.read` answers; `undefined` = unread.
@@ -80,8 +101,6 @@ const mocks = vi.hoisted(() => ({
   notificationWriteError: null as string | null,
   // Whether the level write is in flight.
   notificationPending: false,
-  // What `useHostMethodSupport` answers for `environment.setMainBot`.
-  setMainBotSupport: true as boolean | null,
   // What it answers for `bot.updateReplyMode`.
   replyModeSupport: true as boolean | null,
   // Whether the reply-mode write is in flight.
@@ -91,6 +110,8 @@ const mocks = vi.hoisted(() => ({
   usageSupported: false,
   // The host each read of that support asked about.
   usageSupportHosts: [] as Array<string | null>,
+  // What the bot's memory reads as (`useBotMemory`); `null` = unsupported.
+  memoryEntries: null as number | "loading" | null,
   // The binding `useHostBinding` answers: its `auth` is the Slack adapter.
   binding: null as { readonly auth: object } | null,
   // What each write's mutation reports as its error; `null` = no refusal.
@@ -98,7 +119,6 @@ const mocks = vi.hoisted(() => ({
     title: null as string | null,
     runSettings: null as string | null,
     remove: null as string | null,
-    setMainBot: null as string | null,
     replyMode: null as string | null,
   },
 }));
@@ -125,9 +145,7 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
     if (method.startsWith("bot.notificationLevel.")) {
       return mocks.notificationSupport;
     }
-    return method === "bot.updateReplyMode"
-      ? mocks.replyModeSupport
-      : mocks.setMainBotSupport;
+    return method === "bot.updateReplyMode" ? mocks.replyModeSupport : null;
   },
 }));
 vi.mock("@/hooks/usage-analytics/use-usage-summary-support", () => ({
@@ -136,19 +154,30 @@ vi.mock("@/hooks/usage-analytics/use-usage-summary-support", () => ({
     return mocks.usageSupported;
   },
 }));
+// The memory pane has its own suite (`bot-memory-pane.test.tsx`); here the
+// entry only counts what the stream reads.
+vi.mock("@/hooks/bots/use-bot-memory", () => ({
+  useBotMemory: (): BotMemoryReading => {
+    if (mocks.memoryEntries === null) return { kind: "unsupported" };
+    if (mocks.memoryEntries === "loading") return { kind: "loading" };
+    return {
+      kind: "ready",
+      memory: {
+        entries: Array.from({ length: mocks.memoryEntries }, (_, index) =>
+          memoryEntry(index),
+        ),
+        own: { entries: mocks.memoryEntries, chars: 0, ceiling: 8_000 },
+        shared: { entries: 0, chars: 0, ceiling: 8_000 },
+      },
+    };
+  },
+}));
 // The usage dialog has its own suite; here it only shows which epic it reads.
 vi.mock("@/components/epic-canvas/panels/epic-usage-dialog", () => ({
   EpicUsageDialog: (props: { epicId: string; open: boolean }) =>
     props.open ? (
       <div data-testid="stub-usage-dialog" data-epic-id={props.epicId} />
     ) : null,
-}));
-vi.mock("@/hooks/bots/use-environment-set-main-bot-mutation", () => ({
-  useEnvironmentSetMainBotMutation: () => ({
-    isPending: false,
-    error: refusalOf(mocks.refusal.setMainBot),
-    mutate: mocks.setMainBot,
-  }),
 }));
 vi.mock("@/components/home/pickers/harness-model-picker", () => ({
   HarnessModelPicker: (props: { maxModeContext: MaxModeContext }) => {
@@ -317,21 +346,13 @@ function inProviders(children: ReactNode): ReactNode {
   );
 }
 
-/**
- * The channel settings panel (T63), its Advanced group opened: the model and
- * the main bot live there, collapsed until the person opens it.
- */
-function mountPanel(
-  bot: BotRecord,
-  isMain: boolean | null,
-  personal: boolean,
-): void {
+/** The channel settings panel (T63), as it first opens: nothing folded. */
+function mountPanel(bot: BotRecord, personal: boolean): void {
   render(
     inProviders(
       <StrictMode>
         <BotChannelSettingsPanel
           bot={bot}
-          isMain={isMain}
           personal={personal}
           channelId={null}
           environmentBots={null}
@@ -340,7 +361,6 @@ function mountPanel(
       </StrictMode>,
     ),
   );
-  fireEvent.click(screen.getByTestId("bot-settings-advanced-toggle"));
 }
 
 function applyButton(): HTMLButtonElement {
@@ -377,14 +397,13 @@ beforeEach(() => {
   mocks.refusal.title = null;
   mocks.refusal.runSettings = null;
   mocks.refusal.remove = null;
-  mocks.refusal.setMainBot = null;
   mocks.refusal.replyMode = null;
-  mocks.setMainBotSupport = true;
   mocks.replyModeSupport = true;
   mocks.replyModePending = false;
   mocks.supportQueries.length = 0;
   mocks.usageSupported = false;
   mocks.usageSupportHosts.length = 0;
+  mocks.memoryEntries = null;
   mocks.notificationLevels = {};
   mocks.notificationSupport = true;
   mocks.notificationReadError = null;
@@ -404,7 +423,7 @@ afterEach(() => {
 
 describe("<BotChannelSettingsPanel /> model", () => {
   it("seeds the picker with what the bot runs and leaves Apply disabled", () => {
-    mountPanel(BOT, null, false);
+    mountPanel(BOT, false);
 
     const seed = mocks.seeds.at(-1);
     expect(seed).toEqual({
@@ -425,7 +444,7 @@ describe("<BotChannelSettingsPanel /> model", () => {
   });
 
   it("says only that the next turn uses what is applied, not what the bot runs on", () => {
-    mountPanel(BOT, null, false);
+    mountPanel(BOT, false);
 
     expect(
       screen.getByText("The next turn uses what you apply here."),
@@ -436,7 +455,7 @@ describe("<BotChannelSettingsPanel /> model", () => {
 
   it("enables Apply once the person picks another model, and applies exactly that", async () => {
     const user = userEvent.setup();
-    mountPanel(BOT, null, false);
+    mountPanel(BOT, false);
     expect(applyButton().disabled).toBe(true);
 
     act(() => {
@@ -461,7 +480,7 @@ describe("<BotChannelSettingsPanel /> model", () => {
   });
 
   it("disables Apply again when the person picks the bot's own model back", () => {
-    mountPanel(BOT, null, false);
+    mountPanel(BOT, false);
 
     act(() => {
       liveStore().getState().setSelection({
@@ -483,7 +502,7 @@ describe("<BotChannelSettingsPanel /> model", () => {
   });
 
   it("seeds nothing when the bot's harness is not one this client can pick", () => {
-    mountPanel({ ...BOT, harness: "not-a-harness" }, null, false);
+    mountPanel({ ...BOT, harness: "not-a-harness" }, false);
 
     expect(mocks.seeds.at(-1)).toEqual({ kind: "none" });
   });
@@ -492,7 +511,7 @@ describe("<BotChannelSettingsPanel /> model", () => {
 describe("<BotChannelSettingsPanel /> controls", () => {
   it("renames through the tab host with the trimmed name", async () => {
     const user = userEvent.setup();
-    mountPanel(BOT, null, false);
+    mountPanel(BOT, false);
 
     const name = screen.getByRole("textbox", { name: "Name" });
     await user.clear(name);
@@ -509,14 +528,14 @@ describe("<BotChannelSettingsPanel /> controls", () => {
 
 describe("<BotChannelSettingsPanel /> refusals", () => {
   it("shows no refusal line while every write is accepted", () => {
-    mountPanel(BOT, null, false);
+    mountPanel(BOT, false);
 
     expect(screen.queryByTestId("bot-settings-refusal")).toBeNull();
   });
 
   it("states a rename refusal under the name field, and nowhere else", () => {
     mocks.refusal.title = "Only the bot's owner can rename it";
-    mountPanel(BOT, null, false);
+    mountPanel(BOT, false);
 
     const refusals = screen.getAllByTestId("bot-settings-refusal");
     expect(refusals).toHaveLength(1);
@@ -529,7 +548,7 @@ describe("<BotChannelSettingsPanel /> refusals", () => {
 
   it("states a model refusal inside the model section, and nowhere else", () => {
     mocks.refusal.runSettings = "This machine cannot change the model";
-    mountPanel(BOT, null, false);
+    mountPanel(BOT, false);
 
     const refusals = screen.getAllByTestId("bot-settings-refusal");
     expect(refusals).toHaveLength(1);
@@ -544,7 +563,7 @@ describe("<BotChannelSettingsPanel /> refusals", () => {
   it("states a delete refusal inside the confirm dialog, not on the panel", async () => {
     const user = userEvent.setup();
     mocks.refusal.remove = "Only the bot's owner can delete it";
-    mountPanel(BOT, null, false);
+    mountPanel(BOT, false);
     // Closed: the refusal lives in the dialog, which is not rendered yet.
     expect(screen.queryByTestId("bot-settings-refusal")).toBeNull();
 
@@ -559,7 +578,7 @@ describe("<BotChannelSettingsPanel /> refusals", () => {
 
   it("deletes the bot when the confirm dialog is confirmed", async () => {
     const user = userEvent.setup();
-    mountPanel(BOT, null, false);
+    mountPanel(BOT, false);
 
     await user.click(screen.getByRole("button", { name: "Delete bot" }));
     const dialog = await screen.findByRole("dialog");
@@ -572,78 +591,13 @@ describe("<BotChannelSettingsPanel /> refusals", () => {
   });
 });
 
-describe("<BotChannelSettingsPanel /> main bot", () => {
-  it("offers Make main on a bot that is not main, asking the tab's host whether it can write it", () => {
-    mountPanel(BOT, false, false);
-
-    expect(screen.getByTestId("bot-settings-main")).toBeTruthy();
-    expect(screen.getByTestId("bot-settings-make-main").textContent).toContain(
-      "Make main",
-    );
-    expect(mocks.supportQueries).toContainEqual({
-      hostId: "host-1",
-      method: "environment.setMainBot",
-    });
-  });
-
-  it("makes the bot main in one click, with its environment and id, and no confirmation", async () => {
-    const user = userEvent.setup();
-    mountPanel(BOT, false, false);
-
-    await user.click(screen.getByTestId("bot-settings-make-main"));
-
-    expect(screen.queryByRole("dialog")).toBeNull();
-    expect(mocks.setMainBot).toHaveBeenCalledTimes(1);
-    expect(mocks.setMainBot.mock.calls[0][0]).toEqual({
-      environmentId: BOT.environmentId,
-      botId: BOT.botId,
-    });
-  });
-
-  it("states that the bot is main and offers no button to a bot that already is", () => {
-    mountPanel(BOT, true, false);
-
-    expect(screen.getByTestId("bot-settings-main")).toBeTruthy();
-    expect(screen.queryByTestId("bot-settings-make-main")).toBeNull();
-  });
-
-  it.each([false, null])(
-    "draws nothing for a host whose support for environment.setMainBot is %s",
-    (support) => {
-      mocks.setMainBotSupport = support;
-      mountPanel(BOT, false, false);
-
-      expect(screen.queryByTestId("bot-settings-main")).toBeNull();
-      expect(screen.queryByTestId("bot-settings-make-main")).toBeNull();
-    },
-  );
-
-  it("draws nothing while the main bot is not known", () => {
-    mountPanel(BOT, null, false);
-
-    expect(screen.queryByTestId("bot-settings-main")).toBeNull();
-  });
-
-  it("states a refusal inside the main bot section, and nowhere else", () => {
-    mocks.refusal.setMainBot = "That bot is not in this environment";
-    mountPanel(BOT, false, false);
-
-    const refusals = screen.getAllByTestId("bot-settings-refusal");
-    expect(refusals).toHaveLength(1);
-    expect(refusals[0].textContent).toBe("That bot is not in this environment");
-    expect(screen.getByTestId("bot-settings-main").contains(refusals[0])).toBe(
-      true,
-    );
-  });
-});
-
 describe("<BotChannelSettingsPanel /> reply mode", () => {
   function radio(name: string): HTMLElement {
     return screen.getByRole("radio", { name });
   }
 
   it("offers both ways of answering, checked on the bot's own reply mode", () => {
-    mountPanel({ ...BOT, replyMode: "direct" }, null, true);
+    mountPanel({ ...BOT, replyMode: "direct" }, true);
 
     const section = screen.getByTestId("bot-settings-reply-mode");
     expect(
@@ -658,7 +612,7 @@ describe("<BotChannelSettingsPanel /> reply mode", () => {
   });
 
   it("checks the thread option for a bot that answers in threads", () => {
-    mountPanel(BOT, null, true);
+    mountPanel(BOT, true);
 
     expect(radio("In a thread").getAttribute("aria-checked")).toBe("true");
     expect(radio("In the channel").getAttribute("aria-checked")).toBe("false");
@@ -666,7 +620,7 @@ describe("<BotChannelSettingsPanel /> reply mode", () => {
 
   it("writes the other reply mode with the bot's id when the person picks it", async () => {
     const user = userEvent.setup();
-    mountPanel(BOT, null, true);
+    mountPanel(BOT, true);
 
     await user.click(radio("In the channel"));
 
@@ -679,7 +633,7 @@ describe("<BotChannelSettingsPanel /> reply mode", () => {
 
   it("writes nothing when the person picks the mode the bot already has", async () => {
     const user = userEvent.setup();
-    mountPanel(BOT, null, true);
+    mountPanel(BOT, true);
 
     await user.click(radio("In a thread"));
 
@@ -688,7 +642,7 @@ describe("<BotChannelSettingsPanel /> reply mode", () => {
 
   it("states a refusal inside the reply mode section, and nowhere else", () => {
     mocks.refusal.replyMode = "A team's bot always answers in threads";
-    mountPanel(BOT, null, true);
+    mountPanel(BOT, true);
 
     const refusals = screen.getAllByTestId("bot-settings-refusal");
     expect(refusals).toHaveLength(1);
@@ -702,14 +656,14 @@ describe("<BotChannelSettingsPanel /> reply mode", () => {
 
   it("locks the choice while a write is in flight", () => {
     mocks.replyModePending = true;
-    mountPanel(BOT, null, true);
+    mountPanel(BOT, true);
 
     expect(radio("In the channel").hasAttribute("disabled")).toBe(true);
     expect(radio("In a thread").hasAttribute("disabled")).toBe(true);
   });
 
   it("draws no reply mode section for a team environment's bot", () => {
-    mountPanel(BOT, null, false);
+    mountPanel(BOT, false);
 
     expect(screen.queryByTestId("bot-settings-reply-mode")).toBeNull();
   });
@@ -718,7 +672,7 @@ describe("<BotChannelSettingsPanel /> reply mode", () => {
     "draws no reply mode section for a host whose support for bot.updateReplyMode is %s",
     (support) => {
       mocks.replyModeSupport = support;
-      mountPanel(BOT, null, true);
+      mountPanel(BOT, true);
 
       expect(screen.queryByTestId("bot-settings-reply-mode")).toBeNull();
     },
@@ -768,7 +722,7 @@ describe("<BotChannelSettingsPanel /> Max Mode label", () => {
   }
 
   it("hands the picker the bot's own tuple: its effort and Fast off, never the none context", () => {
-    mountPanel(CURSOR_BOT, null, false);
+    mountPanel(CURSOR_BOT, false);
 
     expect(lastContext()).toEqual({
       kind: "chat",
@@ -777,7 +731,7 @@ describe("<BotChannelSettingsPanel /> Max Mode label", () => {
   });
 
   it("lists Max at the bot's selected effort with Fast off", () => {
-    mountPanel(CURSOR_BOT, null, false);
+    mountPanel(CURSOR_BOT, false);
 
     expect(
       maxModeListedFor(
@@ -788,7 +742,7 @@ describe("<BotChannelSettingsPanel /> Max Mode label", () => {
   });
 
   it("does not list Max when only another effort is Max-only", () => {
-    mountPanel(CURSOR_BOT, null, false);
+    mountPanel(CURSOR_BOT, false);
 
     expect(
       maxModeListedFor(
@@ -799,7 +753,7 @@ describe("<BotChannelSettingsPanel /> Max Mode label", () => {
   });
 
   it("does not list Max when only the Fast-on selection is Max-only", () => {
-    mountPanel(CURSOR_BOT, null, false);
+    mountPanel(CURSOR_BOT, false);
 
     expect(
       maxModeListedFor(
@@ -810,7 +764,7 @@ describe("<BotChannelSettingsPanel /> Max Mode label", () => {
   });
 
   it("does not re-render the owner (and so the picker) when only the catalog moves", () => {
-    mountPanel(CURSOR_BOT, null, false);
+    mountPanel(CURSOR_BOT, false);
     const apply = () =>
       act(() => {
         liveStore().getState().setCatalog({
@@ -870,7 +824,6 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
         <BotIdentityContext value={identity}>
           <BotChannelSettingsPanel
             bot={BOT}
-            isMain={false}
             personal={input.personal}
             channelId={CHANNEL}
             environmentBots={input.environmentBots}
@@ -888,7 +841,23 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
       .map((heading) => heading.textContent);
   }
 
-  it("groups a team bot's channel: details with its members, notifications, its bots, Advanced collapsed and delete", () => {
+  /**
+   * Nothing in the panel is folded, and nothing in it is about the main bot:
+   * the sidebar's star says which bot is main, and its row's menu hands it
+   * over.
+   */
+  function expectNothingFoldedAndNoMainBot(): void {
+    const panel = screen.getByTestId("bot-channel-settings");
+    expect(
+      within(panel).queryByRole("button", { name: "Advanced" }),
+    ).toBeNull();
+    expect(within(panel).queryByText(/main bot/i)).toBeNull();
+    expect(
+      within(panel).queryByRole("button", { name: "Make main" }),
+    ).toBeNull();
+  }
+
+  it("groups a team bot's channel: details with its members, the model, notifications, its bots and delete", () => {
     mountChannelPanel({
       personal: false,
       owner: TEAM_OWNER,
@@ -901,6 +870,7 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
 
     expect(groupTitles()).toEqual([
       "Details",
+      "Model",
       "Notifications",
       "Bots in this channel",
       "Slack",
@@ -924,14 +894,14 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
     ).toEqual(["RBRelease Bot", "TBTriage Bot"]);
     // A team bot always answers in threads: no reply mode here.
     expect(screen.queryByTestId("bot-settings-reply-mode")).toBeNull();
-    // Advanced is collapsed until opened: no model picker, no main bot.
-    expect(screen.queryByTestId("bot-settings-model")).toBeNull();
-    expect(screen.queryByTestId("bot-settings-main")).toBeNull();
+    // The model picker is drawn without a click.
+    expect(
+      within(screen.getByTestId("bot-settings-model")).getByTestId(
+        "stub-harness-model-picker",
+      ),
+    ).toBeTruthy();
+    expectNothingFoldedAndNoMainBot();
     expect(screen.getByTestId("bot-settings-delete")).toBeTruthy();
-
-    fireEvent.click(screen.getByTestId("bot-settings-advanced-toggle"));
-    expect(screen.getByTestId("bot-settings-model")).toBeTruthy();
-    expect(screen.getByTestId("bot-settings-main")).toBeTruthy();
   });
 
   it("opens the bot's usage from View usage, as the bot's own epic, where the host can read it", async () => {
@@ -958,7 +928,96 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
     expect(new Set(mocks.usageSupportHosts)).toEqual(new Set(["host-1"]));
   });
 
-  it("groups a personal bot's channel with its reply mode, and no members or bots", () => {
+  describe("what it knows", () => {
+    function mountKnowingPanel(): Mock<() => void> {
+      const onClose = vi.fn<() => void>();
+      const access: BotMemoryAccess = {
+        hostId: "host-1",
+        botId: BOT.botId,
+        environmentId: BOT.environmentId,
+        open: () =>
+          useBotOpenThreadStore
+            .getState()
+            .setRail(
+              BOT.botId,
+              memoryRailOver(
+                useBotOpenThreadStore.getState().byBotId[BOT.botId] ?? null,
+              ),
+            ),
+      };
+      render(
+        inProviders(
+          <BotMemoryContext value={access}>
+            <BotChannelSettingsPanel
+              bot={BOT}
+              personal
+              channelId={CHANNEL}
+              environmentBots={null}
+              onClose={onClose}
+            />
+          </BotMemoryContext>,
+        ),
+      );
+      return onClose;
+    }
+
+    beforeEach(() => {
+      useBotOpenThreadStore.setState({ byBotId: {} });
+    });
+
+    it("counts the memories and opens them where the bot's card opens them, closing the settings", async () => {
+      const user = userEvent.setup();
+      mocks.memoryEntries = 3;
+      const onClose = mountKnowingPanel();
+
+      const usage = screen.getByTestId("bot-settings-usage");
+      expect(
+        within(usage).queryByRole("button", { name: "View usage" }),
+      ).toBeNull();
+      const entry = within(usage).getByTestId("bot-settings-memory-open");
+      expect(entry.textContent).toBe("What it knows · 3 memories");
+      await user.click(entry);
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(useBotOpenThreadStore.getState().byBotId[BOT.botId]).toEqual({
+        kind: "memory",
+        back: null,
+      });
+    });
+
+    it("sits beside View usage where the host can read usage", () => {
+      mocks.usageSupported = true;
+      mocks.memoryEntries = 2;
+      mountKnowingPanel();
+
+      expect(
+        within(screen.getByTestId("bot-settings-usage"))
+          .getAllByRole("button")
+          .map((button) => button.textContent),
+      ).toEqual(["View usage", "What it knows · 2 memories"]);
+    });
+
+    it.each([
+      [1, "What it knows · 1 memory"],
+      ["loading" as const, "What it knows"],
+    ])("reads %s as %s", (entries, label) => {
+      mocks.memoryEntries = entries;
+      mountKnowingPanel();
+
+      expect(screen.getByTestId("bot-settings-memory-open").textContent).toBe(
+        label,
+      );
+    });
+
+    it("offers nothing on a host that cannot serve the memory, and no empty Usage group", () => {
+      mountKnowingPanel();
+
+      expect(screen.queryByTestId("bot-settings-memory-open")).toBeNull();
+      expect(groupTitles()).not.toContain("Usage");
+    });
+  });
+
+  it("groups a personal bot's channel with its reply mode and the model after it, and no members or bots", () => {
     mountChannelPanel({
       personal: true,
       owner: {
@@ -970,11 +1029,27 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
       environmentBots: [BOT],
     });
 
-    expect(groupTitles()).toEqual(["Details", "Notifications", "Slack"]);
+    expect(groupTitles()).toEqual([
+      "Details",
+      "Model",
+      "Notifications",
+      "Slack",
+    ]);
     expect(screen.getByTestId("bot-settings-owner").textContent).toBe(
       "Managed byOlive OwnerWho can message itOnly you",
     );
-    expect(screen.getByTestId("bot-settings-reply-mode")).toBeTruthy();
+    // Replies ends Details, so the Model group follows it.
+    expect(
+      within(screen.getByTestId("bot-settings-details")).getByTestId(
+        "bot-settings-reply-mode",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("bot-settings-model")).getByTestId(
+        "stub-harness-model-picker",
+      ),
+    ).toBeTruthy();
+    expectNothingFoldedAndNoMainBot();
     expect(screen.queryByTestId("bot-settings-members")).toBeNull();
   });
 
@@ -995,47 +1070,109 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(onClose).not.toHaveBeenCalled();
 
-    within(panel).getByTestId("bot-settings-advanced-toggle").focus();
+    within(screen.getByTestId("bot-settings-title"))
+      .getByRole("textbox")
+      .focus();
     await user.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("reads a channel with no level set as mentions and answers, and sets Off for this channel", async () => {
-    const user = userEvent.setup();
+  const PERSON_OWNER: BotOwner = {
+    kind: "person",
+    userId: "user-1",
+    name: "Olive Owner",
+    avatarUrl: null,
+  };
+
+  function checkedLevels(): ReadonlyArray<string> {
+    const group = screen.getByRole("radiogroup", { name: "Notifications" });
+    return ["All new messages", "Mentions and answers to me", "Nothing"].filter(
+      (name) =>
+        within(group)
+          .getByRole("radio", { name })
+          .getAttribute("aria-checked") === "true",
+    );
+  }
+
+  it("reads a channel with no level set as All for a personal bot", () => {
+    mountChannelPanel({
+      personal: true,
+      owner: PERSON_OWNER,
+      environmentBots: null,
+    });
+
+    const checked = checkedLevels();
+    expect(checked).toEqual(["All new messages"]);
+  });
+
+  it("reads a channel with no level set as Mentions for a team bot", () => {
+    mountChannelPanel({
+      personal: false,
+      owner: TEAM_OWNER,
+      environmentBots: null,
+    });
+
+    const checked = checkedLevels();
+    expect(checked).toEqual(["Mentions and answers to me"]);
+  });
+
+  it("checks nothing while the owner is unknown", () => {
     mountChannelPanel({ personal: true, owner: null, environmentBots: null });
 
-    const group = screen.getByRole("radiogroup", { name: "Notifications" });
-    const mentions = within(group).getByRole("radio", {
-      name: "Mentions and answers to me",
-    });
-    const off = within(group).getByRole("radio", { name: "Off" });
-    expect(mentions.getAttribute("aria-checked")).toBe("true");
-    expect(off.getAttribute("aria-checked")).toBe("false");
+    expect(checkedLevels()).toEqual([]);
+  });
 
-    await user.click(off);
+  it.each([
+    ["All new messages", "all"],
+    ["Mentions and answers to me", "mentions"],
+    ["Nothing", "off"],
+  ])("choosing %s writes %s for this channel", async (name, level) => {
+    const user = userEvent.setup();
+    // The other two levels are the ones not currently set.
+    mocks.notificationLevels = {
+      [CHANNEL]: level === "off" ? "all" : "off",
+    };
+    mountChannelPanel({
+      personal: true,
+      owner: PERSON_OWNER,
+      environmentBots: null,
+    });
+
+    const group = screen.getByRole("radiogroup", { name: "Notifications" });
+    await user.click(within(group).getByRole("radio", { name }));
     expect(mocks.setNotificationLevel).toHaveBeenCalledTimes(1);
     expect(mocks.setNotificationLevel.mock.calls[0][0]).toEqual({
       botId: BOT.botId,
       conversationId: CHANNEL,
-      level: "off",
+      level,
     });
   });
 
-  it("checks Off for a channel set off, whatever another conversation is set to", () => {
+  it("checks Nothing for a channel set off, whatever another conversation is set to", () => {
     mocks.notificationLevels = { [CHANNEL]: "off", "other-channel": "all" };
-    mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+    mountChannelPanel({
+      personal: true,
+      owner: PERSON_OWNER,
+      environmentBots: null,
+    });
 
     expect(
-      screen.getByRole("radio", { name: "Off" }).getAttribute("aria-checked"),
+      screen
+        .getByRole("radio", { name: "Nothing" })
+        .getAttribute("aria-checked"),
     ).toBe("true");
   });
 
   it("locks the choice until the levels are read", () => {
     mocks.notificationLevels = undefined;
-    mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+    mountChannelPanel({
+      personal: true,
+      owner: PERSON_OWNER,
+      environmentBots: null,
+    });
 
     for (const radio of screen.getAllByRole("radio", {
-      name: /Mentions and answers to me|Off/,
+      name: /All new messages|Mentions and answers to me|Nothing/,
     })) {
       expect(radio.getAttribute("aria-checked")).toBe("false");
       expect(radio.hasAttribute("disabled")).toBe(true);
@@ -1044,13 +1181,17 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
 
   it("keeps the choice locked while a level is being written", () => {
     mocks.notificationPending = true;
-    mountChannelPanel({ personal: true, owner: null, environmentBots: null });
+    mountChannelPanel({
+      personal: true,
+      owner: PERSON_OWNER,
+      environmentBots: null,
+    });
 
-    const off = screen.getByRole("radio", { name: "Off" });
-    expect(off.hasAttribute("disabled")).toBe(true);
+    const nothing = screen.getByRole("radio", { name: "Nothing" });
+    expect(nothing.hasAttribute("disabled")).toBe(true);
     expect(
       screen
-        .getByRole("radio", { name: "Mentions and answers to me" })
+        .getByRole("radio", { name: "All new messages" })
         .getAttribute("aria-checked"),
     ).toBe("true");
   });
@@ -1102,7 +1243,6 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
       inProviders(
         <BotChannelSettingsPanel
           bot={BOT}
-          isMain={false}
           personal
           channelId={null}
           environmentBots={null}
