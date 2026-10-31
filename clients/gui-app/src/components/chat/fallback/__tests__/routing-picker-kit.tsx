@@ -306,6 +306,8 @@ export const kit = {
     } | null;
   },
   mutationFails: false,
+  // The host's sentence refusing a bot-row write; `null` takes the write.
+  botWriteRefusal: null as string | null,
   deferResponses: false,
   pendingResponses: [] as Array<() => void>,
   // What the two publishers received.
@@ -341,6 +343,7 @@ export function resetKit(): void {
   kit.mutations = [];
   kit.mutationResult = { outcome: "applied", detail: null };
   kit.mutationFails = false;
+  kit.botWriteRefusal = null;
   kit.deferResponses = false;
   kit.pendingResponses = [];
   kit.confirmed = [];
@@ -792,6 +795,52 @@ export function hostScopedMutationModule() {
             if (opts !== undefined && opts.onSuccess !== undefined) {
               opts.onSuccess(result, variables);
             }
+          };
+          if (kit.deferResponses) {
+            kit.pendingResponses.push(deliver);
+            return;
+          }
+          deliver();
+        },
+        isPending: pending,
+      };
+    },
+  };
+}
+
+/**
+ * `@/hooks/bots/use-bot-mutations`: the bot-row write a bot's chat sends
+ * before its retry, recorded into the same `mutations` as the verbs so a
+ * suite reads the order, and answered with `botWriteRefusal` as the error's
+ * message when set. `deferResponses` holds its answer like theirs.
+ */
+export function botMutationsModule<T extends object>(actual: T) {
+  return {
+    ...actual,
+    useBotUpdateRunSettingsMutation: (client: KitClient | null) => {
+      const [pending, setPending] = useState(false);
+      return {
+        mutate: (
+          variables: Record<string, unknown>,
+          opts: {
+            readonly onSuccess: (() => void) | undefined;
+            readonly onError: ((error: Error) => void) | undefined;
+          },
+        ) => {
+          kit.mutations.push({
+            clientId: idOf(client),
+            method: "bot.updateRunSettings",
+            variables,
+          });
+          setPending(true);
+          const deliver = (): void => {
+            setPending(false);
+            const refusal = kit.botWriteRefusal;
+            if (refusal !== null) {
+              opts.onError?.(new Error(refusal));
+              return;
+            }
+            opts.onSuccess?.();
           };
           if (kit.deferResponses) {
             kit.pendingResponses.push(deliver);
