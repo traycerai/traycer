@@ -1110,6 +1110,7 @@ describe("the request body", () => {
 
 describe("the card the voice read", () => {
   const CARD: RouterCard = {
+    key: { opening: 1, questionIndex: 0 },
     question: "Which environment?",
     choices: ["Staging", "Production", "Skip"],
     takesText: true,

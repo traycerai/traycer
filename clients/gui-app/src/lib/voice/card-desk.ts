@@ -918,7 +918,8 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     questionIndex: active.questionIndex,
   });
   const sameKey = (active: ActiveCard, key: CardKey): boolean =>
-    active.opening === key.opening && active.questionIndex === key.questionIndex;
+    active.opening === key.opening &&
+    active.questionIndex === key.questionIndex;
 
   /** A boundary's words while an offer to post waits: yes posts, anything else lets it go. */
   const answerOffer = (
@@ -1354,8 +1355,7 @@ function prematureChoices(
   if (content === null) {
     return active.family === "approval" ? APPROVAL_CHOICES : [];
   }
-  const index =
-    content.family === "agent-question" ? active.questionIndex : 0;
+  const index = content.family === "agent-question" ? active.questionIndex : 0;
   return choicesOf(content, content.questions.at(index) ?? null);
 }
 
