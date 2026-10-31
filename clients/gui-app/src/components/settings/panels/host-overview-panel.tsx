@@ -829,7 +829,7 @@ export function HostOverviewPanel(props: {
   // ATTEMPT-AWARE, with the coarse field as the fallback — and the difference
   // is a lockout bug, not a refinement.
   //
-  // Ticket 04's coarse derivation maps a PARKED attempt
+  // The coarse derivation maps a PARKED attempt
   // (`waiting-for-work`/`waiting-to-activate`) to `{state:"updating"}`, which is
   // right for what that field means. But this gate reads "updating" as "a
   // mutation is in flight, lock the page", and `waiting-to-activate` is designed

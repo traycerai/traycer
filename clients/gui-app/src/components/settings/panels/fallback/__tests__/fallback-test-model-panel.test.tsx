@@ -28,7 +28,7 @@ import type { FallbackPolicyTestTierGroupsRequest } from "@/hooks/providers/use-
 import type { FallbackTestModelPanelProps } from "@/components/settings/panels/fallback/fallback-test-model-panel";
 
 /**
- * Panel-level coverage for the Test a model panel (ticket 05, clauses 2-6):
+ * Panel-level coverage for the Test a model panel:
  * the request built from defaults, the wireframe 4 fixture's rendering, the
  * three footers, the older-host fallback, and the announced verdict.
  *

@@ -1564,7 +1564,7 @@ describe("FallbackTierGroupsEditor - R5: a get@1.0 host keeps the released popul
  * The ticket's Done-when lines, end to end, against the real seeded policy
  * (`fallback-tier-seed.ts`'s literals) and the real `fallbackTierConflicts` -
  * not a hand-built `TierConflict`, so this cannot silently drift from what
- * the protocol actually computes. Every test here fails on the pre-ticket
+ * the protocol actually computes. Every test here fails on the previous
  * editor: it has no combobox at all (the Model cell was a bare `Select`), no
  * `role="status"` announcement span, and "group"/"family" copy instead of
  * "tier"/"pattern".
@@ -1905,7 +1905,7 @@ describe("FallbackTierGroupsEditor - seeded three-tier policy, end to end", () =
 });
 
 /**
- * Ticket 05, clause 7: the `testPanel` render-prop slot (`TestPanelSlot`) and
+ * The `testPanel` render-prop slot (`TestPanelSlot`) and
  * the `headerAction` slot beside it. `TestPanelSlot` exists because the render
  * function needs `goToRow` as a PROP rather than called inline mid-render (see
  * that component's own doc comment) - moved there after the React compiler

@@ -1,4 +1,4 @@
-// Ticket 06 D8/D17: the bound update dispatches (`host.update.activate` /
+// D8/D17: the bound update dispatches (`host.update.activate` /
 // `host.update.continue`), dispatch OWNERSHIP (the per-host `updateDispatch`
 // slot), and the one-shot activation dialog auto-open.
 //
@@ -1692,7 +1692,7 @@ describe("HostOverviewPanel — the bound methods' cli-failed and dispatch-indet
 });
 
 /**
- * The bound control behind the page's OWN gates (ticket 08).
+ * The bound control behind the page's OWN gates.
  *
  * `main` gave the card's three legacy controls a live status read plus the
  * two page-wide gates the header's Restart and the region's Update now take
@@ -1859,10 +1859,10 @@ describe("HostOverviewPanel — the bound control takes the page's gates (ticket
 });
 
 /**
- * WHAT DEFER PROMISES, by park (ticket 08, coordinator item 2).
+ * WHAT DEFER PROMISES, by park.
  *
- * Round 11 rewrote the staged-wait force's Defer because a stage on disk has
- * nobody scheduled to install it. The rule it established is about EVIDENCE,
+ * The staged-wait force's Defer was rewritten because a stage on disk has
+ * nobody scheduled to install it. The rule that established is about EVIDENCE,
  * not phrasing, so the three dialogs land differently and nothing pinned that:
  * the `waiting-for-work` park is resumed by the reconciler and keeps the
  * promise; the `waiting-to-activate` park is resumed by nobody and must not.

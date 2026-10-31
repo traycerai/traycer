@@ -836,8 +836,7 @@ export function AddProfileWaitingStep({
   /** True only once the flow has reached `waiting` (a live profileId/child
    *  exists). The paste field renders only then - during `starting` there
    *  is nothing yet for a submit to reach, and rendering it anyway would
-   *  let a user's paste silently lock the field without ever being sent
-   *  (fixup review finding 2). */
+   *  let a user's paste silently lock the field without ever being sent. */
   readonly waiting: boolean;
   readonly codePaste: ProviderProfileLoginFlowCodePaste;
   readonly onOpenExternalLink: (url: string) => void;

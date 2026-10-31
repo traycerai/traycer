@@ -1130,8 +1130,8 @@ export type FallbackPolicyValidation =
  *
  * Validating locally at all (rather than letting the host refuse) is what keeps
  * the draft: a rejected save reverts the control, and reverting someone's
- * half-typed family name because it is half-typed is the behaviour the ticket
- * separates the two failure kinds to prevent.
+ * half-typed family name because it is half-typed is the behaviour the two
+ * failure kinds are separated to prevent.
  *
  * A model in two tiers is NOT a validation failure - see
  * {@link fallbackTierConflicts}.
