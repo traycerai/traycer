@@ -15,6 +15,7 @@ import {
 import { resolveRoute, type RouterResult } from "../router";
 import {
   CONFIRM_ANSWER_WINDOW_MS,
+  confirmationAnswer,
   createSayLoop,
   type AskOutcome,
 } from "../say-loop";
@@ -140,6 +141,8 @@ function build() {
   const timers: Array<{ readonly ms: number; readonly run: () => void }> = [];
   const sendGates: Array<(response: BotConversationSendResponse) => void> = [];
   let deferSends = false;
+  const wiring = { recheck: true, holdNavigation: false };
+  const navGates: Array<(landed: boolean) => void> = [];
   const loop = createSayLoop({
     store: useVoiceSessionStore,
     send: (focus, text) => {
@@ -160,8 +163,13 @@ function build() {
       if (next === undefined) throw new Error("no answer queued");
       return resolveRoute(await next(), DIRECTORY, request.segments.length);
     },
-    recheck: (tuple) => tupleHolds(DIRECTORY, tuple),
-    navigate: (_target: BoundTarget) => Promise.resolve(true),
+    recheck: (tuple) => wiring.recheck && tupleHolds(DIRECTORY, tuple),
+    navigate: (_target: BoundTarget) => {
+      if (!wiring.holdNavigation) return Promise.resolve(true);
+      return new Promise<boolean>((resolve) => {
+        navGates.push(resolve);
+      });
+    },
     think: () => undefined,
     control: () => undefined,
     canSend: () => true,
@@ -192,6 +200,8 @@ function build() {
     answers,
     timers,
     sendGates,
+    wiring,
+    navGates,
     deferSends: () => {
       deferSends = true;
     },
@@ -308,5 +318,90 @@ describe("a confirmation and a send, against the moments around them", () => {
       kind: "confirming",
     });
     expect(old.notices).toEqual([]);
+  });
+});
+
+describe("a held post and a reply, against the words around the question", () => {
+  it("a post whose navigation was held is not sent when its target stopped holding before the navigation landed", async () => {
+    const h = build();
+    h.wiring.holdNavigation = true;
+    h.answers.push(() => Promise.resolve(route("post", CI, PERSONAL, 2)));
+    speak("hello", " ci bot");
+    const done = h.loop.onDelegationCreated("d-1");
+    await tick();
+    expect(h.navGates).toHaveLength(1);
+
+    h.wiring.recheck = false;
+    h.navGates[0]?.(true);
+    await done;
+
+    expect(h.sends).toEqual([]);
+  });
+
+  it("a genuine new request said before the question was heard drops the old held post and routes on its own", async () => {
+    const h = build();
+    h.answers.push(() =>
+      Promise.resolve(uncertainly(route("post", CI, PERSONAL, 2))),
+    );
+    h.answers.push(() => Promise.resolve(route("post", null, null, 2)));
+    speak("hello", " there bot");
+    await h.loop.onDelegationCreated("d-1");
+    speak("tell", " tracy hello");
+    await h.loop.onDelegationCreated("d-2");
+
+    expect(h.sends.map((send) => send.text)).toEqual(["tell tracy hello"]);
+  });
+
+  it("a don't said before the question was heard, with 'send it' after, does not approve the held post", async () => {
+    const h = build();
+    h.answers.push(() =>
+      Promise.resolve(uncertainly(route("post", CI, PERSONAL, 2))),
+    );
+    speak("hello", " there bot");
+    await h.loop.onDelegationCreated("d-1");
+    speak("don't ");
+    h.asks[0]?.onDelivered();
+    speak("send it");
+    await h.loop.onDelegationCreated("d-2");
+
+    expect(h.sends).toEqual([]);
+  });
+
+  it("'do you post it' (no question mark) to a heard question does not approve the held post", async () => {
+    const h = build();
+    h.answers.push(() =>
+      Promise.resolve(uncertainly(route("post", CI, PERSONAL, 2))),
+    );
+    speak("hello", " there bot");
+    await h.loop.onDelegationCreated("d-1");
+    h.asks[0]?.onDelivered();
+    speak("do you post it");
+    await h.loop.onDelegationCreated("d-2");
+
+    expect(h.sends).toEqual([]);
+  });
+});
+
+describe("confirmationAnswer", () => {
+  it.each([
+    ["Yes.", "yes"],
+    ["yes please", "yes"],
+    ["Okay, go ahead.", "yes"],
+    ["do it", "yes"],
+    ["thank you, post it", "yes"],
+    ["that's right", "yes"],
+    ["No.", "no"],
+    ["no, don't post it", "no"],
+    ["don't send it", "no"],
+    ["cancel", "no"],
+    ["is that okay?", "not-an-answer"],
+    ["is that okay", "not-an-answer"],
+    ["do you post it", "not-an-answer"],
+    ["should I send it", "not-an-answer"],
+    ["yes tell tracy hello", "not-an-answer"],
+    ["post it to the release bot", "not-an-answer"],
+    ["please", "not-an-answer"],
+  ])("reads %j as %s, whole", (text, verdict) => {
+    expect(confirmationAnswer(text)).toBe(verdict);
   });
 });

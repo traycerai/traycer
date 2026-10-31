@@ -406,7 +406,8 @@ function stillDestination(now: VoiceFocus, bound: VoiceFocus): boolean {
   );
 }
 
-const AFFIRMATIVE = new Set([
+/** The words of a whole yes on their own. */
+const AFFIRMATIVE_WORDS = [
   "yes",
   "yeah",
   "yep",
@@ -419,14 +420,27 @@ const AFFIRMATIVE = new Set([
   "absolutely",
   "definitely",
   "affirmative",
-]);
-const AFFIRMATIVE_PHRASES = [
-  "go ahead",
-  "do it",
-  "post it",
-  "please do",
-  "send it",
 ];
+/** What a yes may say it does. */
+const AFFIRMATIVE_ACTIONS = ["go ahead", "do it", "post it", "send it"];
+/**
+ * Every whole utterance that is a yes, after padding is taken off: a yes
+ * word, an action, or a yes word then an action. Matched whole, never as a
+ * part of a longer sentence ("do you post it" is none of them).
+ */
+const AFFIRMATIVE_FORMS: ReadonlySet<string> = new Set([
+  ...AFFIRMATIVE_WORDS,
+  ...AFFIRMATIVE_ACTIONS,
+  ...AFFIRMATIVE_WORDS.flatMap((word) =>
+    AFFIRMATIVE_ACTIONS.map((action) => `${word} ${action}`),
+  ),
+  "do",
+  "that's right",
+  "thats right",
+  "that's fine",
+  "thats fine",
+  "sounds good",
+]);
 const NEGATIVE = new Set([
   "no",
   "nope",
@@ -438,21 +452,28 @@ const NEGATIVE = new Set([
   "stop",
   "never",
 ]);
-/** Words that open a question; an utterance starting with one is never an answer. */
-const QUESTION_STARTS = new Set([
+/** Words a no may carry with its negative ("no, don't post it"). */
+const NEGATIVE_COMPANIONS = new Set([
+  "do",
+  "post",
+  "send",
+  "it",
+  "that",
+  "go",
+  "ahead",
+  "yet",
+  "thanks",
+]);
+/** Padding an answer may carry at either end, taken off before matching. */
+const PADDING = new Set(["please", "oh", "um", "uh", "well", "thanks"]);
+/** Words that make a question wherever they stand in the utterance. */
+const QUESTION_WORDS = new Set([
   "is",
   "are",
   "was",
   "were",
   "am",
   "does",
-  "did",
-  "can",
-  "could",
-  "should",
-  "would",
-  "will",
-  "shall",
   "what",
   "which",
   "who",
@@ -461,67 +482,72 @@ const QUESTION_STARTS = new Set([
   "where",
   "when",
 ]);
-
-/** Words an answer may carry around its yes or no and still be only an answer. */
-const ANSWER_FILLER = new Set([
-  "please",
-  "it",
-  "that's",
-  "thats",
-  "go",
-  "ahead",
+/** Auxiliaries that ask a question when a person follows them ("do you ..."). */
+const QUESTION_AUXILIARIES = new Set([
   "do",
-  "post",
-  "send",
-  "thanks",
-  "thank",
-  "you",
-  "oh",
-  "um",
-  "uh",
-  "yes",
-  "fine",
-  "thing",
-  "sounds",
-  "good",
+  "did",
+  "can",
+  "could",
+  "should",
+  "would",
+  "will",
+  "shall",
 ]);
+const PRONOUNS = new Set(["you", "i", "we", "they", "he", "she"]);
+
+function isQuestion(text: string, words: ReadonlyArray<string>): boolean {
+  if (text.includes("?")) return true;
+  return words.some(
+    (word, index) =>
+      QUESTION_WORDS.has(word) ||
+      (QUESTION_AUXILIARIES.has(word) &&
+        PRONOUNS.has(words.at(index + 1) ?? "")),
+  );
+}
+
+/** The utterance without its padding at either end ("thank you" included). */
+function unpadded(words: ReadonlyArray<string>): ReadonlyArray<string> {
+  const core = [...words];
+  const padAt = (index: number): number => {
+    const word = core.at(index);
+    if (word === undefined) return 0;
+    if (PADDING.has(word)) return 1;
+    if (word === "thank" && core.at(index + 1) === "you") return 2;
+    if (word === "you" && core.at(index - 1) === "thank") return 2;
+    return 0;
+  };
+  for (let cut = padAt(0); cut > 0; cut = padAt(0)) core.splice(0, cut);
+  for (let cut = padAt(-1); cut > 0; cut = padAt(-1)) {
+    core.splice(core.length - cut, cut);
+  }
+  return core;
+}
 
 /**
- * The person's words at a confirmation, read locally and exactly: `"yes"` or
- * `"no"` only when every word is an answer's (a yes or no and the words
- * around one), so a later request that merely starts with "yes" is never
- * taken for an answer. Anything else is `"not-an-answer"`: a new request.
- * Never posted itself.
+ * The person's whole reply to a confirmation, read locally and exactly.
+ * `"yes"` only for a whole utterance that is a yes (with padding at its
+ * ends); `"no"` for one made of a negative and the words a no carries; a
+ * question, or anything else, is `"not-an-answer"`: a new request. Never
+ * posted itself.
  */
 export function confirmationAnswer(
   text: string,
 ): "yes" | "no" | "not-an-answer" {
-  // A question is not an answer, whatever words it uses ("is that okay?").
-  if (text.includes("?")) return "not-an-answer";
   const words = text
     .toLowerCase()
     .replace(/[^a-z' ]+/g, " ")
     .split(/\s+/)
     .filter((word) => word.length > 0);
-  const answerOnly =
-    words.length > 0 &&
-    words.every(
-      (word) =>
-        AFFIRMATIVE.has(word) || NEGATIVE.has(word) || ANSWER_FILLER.has(word),
-    );
-  const first = words.at(0);
-  if (!answerOnly || (first !== undefined && QUESTION_STARTS.has(first))) {
-    return "not-an-answer";
-  }
-  if (words.some((word) => NEGATIVE.has(word))) return "no";
-  const joined = words.join(" ");
+  if (words.length === 0 || isQuestion(text, words)) return "not-an-answer";
+  const core = unpadded(words);
+  if (core.length === 0) return "not-an-answer";
   if (
-    words.some((word) => AFFIRMATIVE.has(word)) ||
-    AFFIRMATIVE_PHRASES.some((phrase) => joined.includes(phrase))
+    core.some((word) => NEGATIVE.has(word)) &&
+    core.every((word) => NEGATIVE.has(word) || NEGATIVE_COMPANIONS.has(word))
   ) {
-    return "yes";
+    return "no";
   }
-  return "not-an-answer";
+  return AFFIRMATIVE_FORMS.has(core.join(" ")) ? "yes" : "not-an-answer";
 }
 
 export function createSayLoop(deps: SayLoopDeps): SayLoop {
@@ -688,6 +714,8 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
    * Opens the target and, once its navigation landed, makes it the focus;
    * the selection follows, so the generation does not move. `"failed"` when
    * the navigation was refused or undone: the focus stays where it was.
+   * `"gone"` when it landed but the destination stopped holding meanwhile:
+   * the focus is not written either.
    * `"stale"` when a manual move or an End took the action meanwhile. A post
    * still waiting for a destination the voice is leaving can no longer be
    * sent there: it is dropped, and the voice says so.
@@ -695,13 +723,16 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   async function goTo(
     entry: RoutingEntry,
     target: BoundTarget,
-  ): Promise<"landed" | "failed" | "stale"> {
+  ): Promise<"landed" | "failed" | "gone" | "stale"> {
     navigating.set(entry.actionId, entry);
     const landed = await deps.navigate(target);
     if (!navigating.delete(entry.actionId)) return "stale";
     const state = store.getState();
     if (state.sessionToken !== entry.sessionToken) return "stale";
     if (!landed) return "failed";
+    // Checked again once the navigation is over: the destination may have
+    // stopped holding while it was out. The focus is not written then.
+    if (!deps.recheck(target.tuple)) return "gone";
     for (const waiting of unresolved.splice(0)) {
       if (
         waiting.sessionToken === entry.sessionToken &&
@@ -727,6 +758,7 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
   ): Promise<boolean> {
     const outcome = await goTo(entry, target);
     if (outcome === "failed") refuse(entry, "move-failed");
+    if (outcome === "gone") refuse(entry, "gone");
     return outcome === "landed";
   }
 
@@ -1002,28 +1034,24 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
     const answer = state.reserveOpenSpan(answerId);
     // A boundary with no words answers nothing yet.
     if (answer === null) return "handled";
-    // Only words said after the question was heard can answer it, however
-    // late their boundary came: earlier ones are spent and answer nothing.
-    const heardAfter = held.heardAfterSeq;
-    const eligible =
-      heardAfter === null
-        ? []
-        : store
-            .getState()
-            .segments.filter(
-              (segment) =>
-                segment.reservedBy === answerId && segment.seq > heardAfter,
-            );
-    if (eligible.length === 0) {
-      state.consumeReservation(answer.seqs);
-      return "handled";
-    }
-    const verdict = confirmationAnswer(joinSegments(eligible));
+    // The whole reply is classified, whenever its words were said: a new
+    // request routes as one, and a no vetoes. A yes approves only when every
+    // word of it came after the question was heard, however late its
+    // boundary landed; an earlier one is spent and answers nothing.
+    const verdict = confirmationAnswer(answer.text);
     if (verdict === "not-an-answer") {
       state.releaseReservation(answer.seqs);
       dropConfirmation(held);
       deps.notify(DECLINED_TEXT, delegationOf(held.entry));
       return "route";
+    }
+    const heardAfter = held.heardAfterSeq;
+    if (
+      verdict === "yes" &&
+      (heardAfter === null || answer.seqs.some((seq) => seq <= heardAfter))
+    ) {
+      state.consumeReservation(answer.seqs);
+      return "handled";
     }
     state.consumeReservation(answer.seqs);
     held.cancelWait();
