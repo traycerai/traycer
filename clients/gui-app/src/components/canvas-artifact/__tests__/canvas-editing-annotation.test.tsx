@@ -68,12 +68,19 @@ interface Outside {
       captureRegion: Mock<(rect: CanvasBox) => Promise<ArrayBuffer | null>>;
     } | null;
   };
+  /**
+   * The mocked roster's exit animation. With `hold` set, a closed menu stays
+   * mounted and `onClosed` waits until `release` is called, the way Radix
+   * keeps the content until its exit animation ends.
+   */
+  readonly menuExit: { hold: boolean; release: (() => void) | null };
 }
 const outside = vi.hoisted((): Outside => ({
   attach: vi.fn(),
   reveal: vi.fn(),
   source: { current: null },
   capture: { current: null },
+  menuExit: { hold: false, release: null },
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
@@ -109,11 +116,12 @@ vi.mock(
 vi.mock(
   "@/components/epic-canvas/renderers/chat-target-menu/chat-target-menu",
   async () => {
-    const { useEffect, useRef } = await import("react");
+    const { useEffect, useRef, useState } = await import("react");
     // The roster is Radix's; what matters here is that it lists the chats only
     // once the trigger has opened it, and that it reports the menu gone the
     // way Radix does: from the unmount that follows a close, not from the
-    // close itself.
+    // close itself. With `outside.menuExit.hold` the closed menu stays on
+    // screen until the test releases it, standing in for the exit animation.
     function ChatTargetMenu(props: {
       readonly trigger: ReactNode;
       readonly targets: readonly QuoteChatTarget[];
@@ -123,9 +131,18 @@ vi.mock(
       readonly onSelectChat: (chatId: string) => void;
     }) {
       const wasOpen = useRef(false);
+      const [exiting, setExiting] = useState(false);
       const { open, onClosed } = props;
       useEffect(() => {
-        if (wasOpen.current && !open && onClosed !== null) onClosed();
+        if (wasOpen.current && !open) {
+          if (outside.menuExit.hold) {
+            setExiting(true);
+            outside.menuExit.release = () => {
+              setExiting(false);
+              if (onClosed !== null) onClosed();
+            };
+          } else if (onClosed !== null) onClosed();
+        }
         wasOpen.current = open;
       }, [open, onClosed]);
       return (
@@ -139,7 +156,7 @@ vi.mock(
           >
             {props.trigger}
           </div>
-          {props.open ? (
+          {props.open || exiting ? (
             <div role="menu">
               {props.targets.map((target) => (
                 <button
@@ -281,6 +298,8 @@ beforeEach(() => {
   outside.reveal.mockReset();
   outside.source.current = { kind: "text", text: HTML };
   outside.capture.current = null;
+  outside.menuExit.hold = false;
+  outside.menuExit.release = null;
   useCanvasSelectionStore.getState().clear();
 });
 
@@ -451,13 +470,24 @@ describe("attaching a selected range to a chat", () => {
         return Promise.resolve(png.buffer.slice(0));
       }),
     };
+    // The picker keeps painting through its exit animation after the pick;
+    // nothing may be photographed until it reports itself gone.
+    outside.menuExit.hold = true;
     mountOverlay();
     select(LITERAL);
     await screen.findByRole("button", { name: "Send to chat" });
     expect(
       document.querySelector("[data-canvas-selection-outline]"),
     ).not.toBeNull();
-    await addToChat();
+    chooseChatOne();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 60)));
+    expect(screen.queryByRole("menu")).not.toBeNull();
+    expect(outside.capture.current.captureRegion).not.toHaveBeenCalled();
+    act(() => outside.menuExit.release?.());
+    await waitFor(() => {
+      expect(outside.reveal).toHaveBeenCalledWith("chat-1");
+      expect(screen.queryByRole("menuitem", { name: "Chat one" })).toBeNull();
+    });
 
     expect(outside.capture.current.captureRegion).toHaveBeenCalledOnce();
     expect(seen).toEqual({
