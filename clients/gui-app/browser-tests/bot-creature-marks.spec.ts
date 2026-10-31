@@ -7,8 +7,8 @@ import {
 } from "../src/lib/bots/creature-mark.ts";
 import { fixture, nextFrames } from "./support/fixtures.ts";
 
-// A bot's creature mark (Tracy Bots, T111) is drawn on whole CSS pixels at
-// every avatar size, so at a device pixel ratio of 1 each pixel inside the
+// A bot's creature mark is drawn on whole CSS pixels at every avatar size,
+// so at a device pixel ratio of 1 each pixel inside the
 // creature's frame is either the swatch or the ink: no edge is anti-aliased,
 // no cell is smeared across two pixels, and the squircle's clip cuts none of
 // it. Which colour a browser paints at a pixel is what jsdom cannot decide.

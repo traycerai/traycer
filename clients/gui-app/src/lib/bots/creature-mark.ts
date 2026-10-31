@@ -1,5 +1,5 @@
 /**
- * A bot's creature mark (Tracy Bots, T111): a 5×5 pixel creature, mirrored
+ * A bot's creature mark: a 5×5 pixel creature, mirrored
  * left to right, with two eyes, drawn in the swatch's ink on the bot's
  * swatch. A pure function of the bot's id: the title never enters, so a
  * rename changes neither the creature nor its colour.

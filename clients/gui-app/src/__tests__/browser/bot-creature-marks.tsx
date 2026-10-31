@@ -5,8 +5,8 @@ import { cn } from "@/lib/utils";
 import "@/index.css";
 
 /**
- * THE CREATURE MARKS' CONTACT SHEET (Tracy Bots, T111): bots by real-shaped
- * ids at every avatar size, beside people in their circles, in colour and
+ * THE CREATURE MARKS' CONTACT SHEET: bots by real-shaped ids at every
+ * avatar size, beside people in their circles, in colour and
  * in grayscale, under the light theme or with `?theme=dark` the dark one.
  * Every picture is the production `NamedBotAvatar` or `MemberAvatar`.
  *
