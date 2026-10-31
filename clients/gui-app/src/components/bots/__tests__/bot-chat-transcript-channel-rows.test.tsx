@@ -461,6 +461,8 @@ describe("<BotChatTranscript /> a bot that answers posts in the channel", () => 
       unread: false,
       unreadCount: null,
       replying: false,
+      followedUnwritten: false,
+      newReplies: null,
     };
     mountTranscript(
       [directPost(DIRECT_REQUEST), otherUserMessage(), directReply(null)],

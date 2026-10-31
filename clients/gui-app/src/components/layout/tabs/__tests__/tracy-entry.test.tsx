@@ -35,6 +35,7 @@ import {
 import type { ReactNode } from "react";
 import type {
   BotListResponse,
+  BotReadCursorReadResponse,
   BotRecord,
 } from "@traycer/protocol/host/bot/schemas";
 import type { StreamFrameEnvelope } from "@traycer-clients/shared/host-transport/i-stream-session";
@@ -100,12 +101,17 @@ const scripted = vi.hoisted(
     activity: BotActivity | null;
     indicators: SurfaceNotificationIndicators;
     connectable: ConnectableHosts;
+    levels: Record<string, "all" | "mentions" | "off">;
+    /** The person's read cursors by bot id; a bot not listed is unread. */
+    readCursors: Record<string, BotReadCursorReadResponse>;
     stream: MockWsStreamClient<StreamFrameEnvelope> | null;
   } => ({
     list: undefined,
     activity: null,
     indicators: { epics: {}, chats: {} },
     connectable: { hostIds: [], resolved: true },
+    levels: {},
+    readCursors: {},
     stream: null,
   }),
 );
@@ -135,6 +141,41 @@ vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => ({
   useStreamHostId: () => "host-a",
   useWsStreamClient: () => scripted.stream,
 }));
+// The person's notification levels, as the host answers them.
+vi.mock("@/hooks/host/use-host-query", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("@/hooks/host/use-host-query")>();
+  return {
+    ...original,
+    useHostQuery: (args: { method: string }) =>
+      args.method === "bot.notificationLevel.read"
+        ? { data: { levels: scripted.levels } }
+        : original.useHostQuery(args as never),
+  };
+});
+// The person's read cursors, one read per listed bot, as the host answers them.
+vi.mock("@/hooks/host/use-host-queries", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("@/hooks/host/use-host-queries")>();
+  return {
+    ...original,
+    useHostQueries: (args: {
+      requests: ReadonlyArray<{ method: string; params: { botId: string } }>;
+    }) =>
+      args.requests.every(
+        (request) =>
+          request.method === "bot.readCursor.read" ||
+          request.method === "bot.notificationLevel.read",
+      )
+        ? args.requests.map((request) => ({
+            data:
+              request.method === "bot.readCursor.read"
+                ? scripted.readCursors[request.params.botId]
+                : { levels: scripted.levels },
+          }))
+        : original.useHostQueries(args as never),
+  };
+});
 vi.mock("@/hooks/host/use-connectable-host-ids", () => ({
   useConnectableHostIds: () => scripted.connectable,
 }));
@@ -343,6 +384,8 @@ function resetStores(): void {
   tabCommandCoordinator.resetReconciliationForTesting();
   __resetBotListChangedSessionsForTesting();
   scripted.list = undefined;
+  scripted.levels = {};
+  scripted.readCursors = {};
   scripted.activity = null;
   scripted.indicators = { epics: {}, chats: {} };
   scripted.connectable = { hostIds: ["host-a"], resolved: true };
@@ -937,6 +980,46 @@ describe("the fixed Tracy entry - signals", () => {
     },
   );
 
+  it("bolds the entry for a row past the cursor in another bot's channel, though Tracy's indicator holds nothing", async () => {
+    tracyIsMainBot();
+    scripted.readCursors = {
+      [TRACY]: {
+        cursors: { [`app-${TRACY}`]: { messageId: "m-1", seq: 1_000 } },
+        latest: { [`app-${TRACY}`]: { messageId: "m-1", seq: 1_000 } },
+      },
+      [TEAM_BOT]: {
+        cursors: { [`app-${TEAM_BOT}`]: { messageId: "m-1", seq: 1_000 } },
+        latest: { [`app-${TEAM_BOT}`]: { messageId: "m-2", seq: 2_000 } },
+      },
+    };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    await waitFor(() => expect(entry.hasAttribute("data-unread")).toBe(true));
+  });
+
+  it("leaves the entry unmarked when every channel's cursor has caught up, whatever Tracy's indicator says", async () => {
+    tracyIsMainBot();
+    scripted.indicators = {
+      epics: { [TRACY]: { ...NO_FLAGS, unreadDone: true } },
+      chats: {},
+    };
+    scripted.readCursors = {
+      [TRACY]: {
+        cursors: { [`app-${TRACY}`]: { messageId: "m-1", seq: 1_000 } },
+        latest: { [`app-${TRACY}`]: { messageId: "m-1", seq: 1_000 } },
+      },
+      [TEAM_BOT]: {
+        cursors: { [`app-${TEAM_BOT}`]: { messageId: "m-2", seq: 2_000 } },
+        latest: { [`app-${TEAM_BOT}`]: { messageId: "m-2", seq: 2_000 } },
+      },
+    };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(entry.hasAttribute("data-unread")).toBe(false);
+  });
+
   it("leaves the entry unmarked with nothing unread", async () => {
     scripted.indicators = {
       epics: { [TRACY]: { ...NO_FLAGS } },
@@ -1061,6 +1144,47 @@ describe("the fixed Tracy entry - signals", () => {
         }
       },
     );
+  });
+});
+
+describe("the fixed Tracy entry - muted", () => {
+  const PLACEMENTS = [
+    { placement: "top strip", mountEntry: () => mountTopStrip("/") },
+    { placement: "vertical strip", mountEntry: () => mountSideStrip("/") },
+  ];
+
+  beforeEach(() => {
+    tracyIsMainBot();
+  });
+
+  it.each(PLACEMENTS)(
+    "carries the muted mark in the $placement while Tracy's channel is set to Nothing",
+    async ({ mountEntry }) => {
+      scripted.levels = { [`app-${TRACY}`]: "off" };
+      mountEntry();
+
+      const entry = await screen.findByTestId("tab-tracy");
+      expect(within(entry).getByTestId("tracy-entry-muted")).toBeTruthy();
+    },
+  );
+
+  it.each(["all", "mentions", null] as const)(
+    "carries no muted mark for the level %s",
+    async (level) => {
+      scripted.levels = level === null ? {} : { [`app-${TRACY}`]: level };
+      mountTopStrip("/");
+
+      const entry = await screen.findByTestId("tab-tracy");
+      expect(within(entry).queryByTestId("tracy-entry-muted")).toBeNull();
+    },
+  );
+
+  it("is not muted by another bot's channel being set to Nothing", async () => {
+    scripted.levels = { [`app-${TEAM_BOT}`]: "off" };
+    mountTopStrip("/");
+
+    const entry = await screen.findByTestId("tab-tracy");
+    expect(within(entry).queryByTestId("tracy-entry-muted")).toBeNull();
   });
 });
 
