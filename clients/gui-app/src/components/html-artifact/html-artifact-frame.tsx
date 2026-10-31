@@ -22,6 +22,7 @@ export function HtmlArtifactFrame(props: {
       onTextSelection={null}
       onFrame={null}
       renderOverlay={null}
+      sourceEquivalent={undefined}
       toolbarControls={props.toolbarControls}
     />
   );

@@ -72,6 +72,14 @@ export function ArtifactPagesFrame(props: {
    * entry page's bytes, so they are told when another page is showing.
    */
   readonly renderOverlay: ((onEntryPage: boolean) => ReactNode) | null;
+  /**
+   * Keeps the mounted document through a source change it already carries,
+   * such as the entry page's own first-comment id; `null` reloads on every
+   * change. See the frame's own `sourceEquivalent`.
+   */
+  readonly sourceEquivalent:
+    | ((previous: SandboxSource, next: SandboxSource) => boolean)
+    | undefined;
   readonly toolbarControls?: ReactNode;
 }) {
   const {
@@ -86,6 +94,7 @@ export function ArtifactPagesFrame(props: {
     onTextSelection,
     onFrame,
     renderOverlay,
+    sourceEquivalent,
   } = props;
   const entryPath = source.entryPath === "" ? "index.html" : source.entryPath;
   const bridgeRef = useRef<SandboxBridgeHost | null>(null);
@@ -240,6 +249,7 @@ export function ArtifactPagesFrame(props: {
           }}
           onTextSelection={(selection) => onTextSelection?.(selection)}
           pageNavigation={pageNavigation}
+          sourceEquivalent={sourceEquivalent}
           ref={onFrame}
         />
         {renderOverlay?.(currentPath === entryPath && !missing)}

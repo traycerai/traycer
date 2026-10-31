@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -13,19 +14,71 @@ import type { SandboxSource } from "@/components/sandbox/sandbox-frame";
 import { ArtifactPagesFrame } from "./artifact-pages-frame";
 
 const noop = (): void => undefined;
+
 type ArtifactSource = Extract<SandboxSource, { kind: "artifact" }>;
 
+function samePageSourceIdentity(
+  previous: ArtifactSource,
+  next: ArtifactSource,
+  entryPath: string,
+): boolean {
+  return (
+    previous.artifactId === next.artifactId &&
+    previous.treePath === next.treePath &&
+    previous.entryPath === next.entryPath &&
+    previous.canvas === next.canvas &&
+    previous.canvasLinks === next.canvasLinks &&
+    previous.readSpan === next.readSpan &&
+    previous.resolveOutsideReference === next.resolveOutsideReference &&
+    Object.hasOwn(previous.manifest.files, entryPath) &&
+    Object.hasOwn(next.manifest.files, entryPath)
+  );
+}
+
+/** A page can read any file in its folder, so every other file must match. */
+function otherFilesUnchanged(
+  previous: ArtifactSource,
+  next: ArtifactSource,
+  entryPath: string,
+): boolean {
+  const shaOf = (source: ArtifactSource, file: string): string | null =>
+    Object.hasOwn(source.manifest.files, file)
+      ? source.manifest.files[file].sha256
+      : null;
+  for (const file of new Set([
+    ...Object.keys(previous.manifest.files),
+    ...Object.keys(next.manifest.files),
+  ])) {
+    if (file !== entryPath && shaOf(previous, file) !== shaOf(next, file))
+      return false;
+  }
+  return true;
+}
+
 /**
- * The HTML artifact tile with its Comments toggle. The page is one board to
- * the comment machinery: the selection provider that serves canvas boards
- * serves it too, keyed by the entry page, so a click in comment mode opens
- * the same draft box with Comment and Send to chat.
- *
- * Comment mode swaps the served document for one carrying the element bridge
- * (hit testing, element descriptions, the text-selection target) the plain
- * page viewer does not have. That is a reload of the frame, so the toggle is
- * the moment page state is lost, not the first click.
+ * Whether a replacement source can keep the mounted page: the entry's own
+ * bytes may change only when the live document adopted that revision in
+ * place (a first comment's stamped id), which is what the provider's
+ * `sourceAdopted` answers. Anything else is a reload.
  */
+function pageSourceEquivalent(
+  previous: SandboxSource,
+  next: SandboxSource,
+  entryPath: string,
+  sourceAdopted: (beforeSha256: string, afterSha256: string) => boolean,
+): boolean {
+  if (
+    previous.kind !== "artifact" ||
+    next.kind !== "artifact" ||
+    !samePageSourceIdentity(previous, next, entryPath) ||
+    !otherFilesUnchanged(previous, next, entryPath)
+  )
+    return false;
+  const before = previous.manifest.files[entryPath].sha256;
+  const after = next.manifest.files[entryPath].sha256;
+  return before === after || sourceAdopted(before, after);
+}
+
 export function HtmlArtifactCommentSurface(props: {
   readonly epicId: string;
   readonly artifactId: string;
@@ -69,11 +122,15 @@ function HtmlArtifactCommentFrame(
   props: CommentFrameProps & { readonly events: CanvasFrameEvents },
 ) {
   const { source, events } = props;
-  const [commenting, setCommenting] = useState(false);
+  const [commentingRequested, setCommenting] = useState(false);
+  const commentsEnabled = events.commentsEnabled === true;
+  // Derived, not reset: should the host stop serving comments while the mode
+  // is on, the toggle goes and the shield must go with it, or the page would
+  // stay blocked with nothing on screen to unblock it.
+  const commenting = commentingRequested && commentsEnabled;
   const path = source.entryPath === "" ? "index.html" : source.entryPath;
   const files = source.manifest.files;
   const servedSha256 = Object.hasOwn(files, path) ? files[path].sha256 : null;
-  const commentsEnabled = events.commentsEnabled === true;
   const served = useMemo<ArtifactSource>(
     () =>
       commenting
@@ -96,6 +153,16 @@ function HtmlArtifactCommentFrame(
       clearNodeSelection: noop,
     }),
     [commenting, path, served],
+  );
+  const sourceEquivalent = useCallback(
+    (previous: SandboxSource, next: SandboxSource): boolean =>
+      pageSourceEquivalent(
+        previous,
+        next,
+        path,
+        (before, after) => events.sourceAdopted?.(path, before, after) === true,
+      ),
+    [events, path],
   );
   useEffect(() => {
     events.onCanvasView?.(view);
@@ -130,6 +197,7 @@ function HtmlArtifactCommentFrame(
             ? events.renderOverlay?.(path, true)
             : null
         }
+        sourceEquivalent={sourceEquivalent}
         toolbarControls={
           <>
             {props.toolbarControls}
