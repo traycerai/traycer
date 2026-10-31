@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 import type { AgentMessagePeer } from "@traycer/protocol/host/agent/message-peer";
 import { useEpicTileNavigation } from "@/hooks/epic/use-epic-tile-navigation";
 import { tileIntent } from "@/lib/canvas/tile-open/intent";
-import { useOpenEpicId } from "@/lib/epic-selectors";
+import { useMaybeOpenEpicId } from "@/lib/epic-selectors";
 import { activateTabIntent, resourceEpicTabIntent } from "@/lib/tab-navigation";
 import type { EpicArtifactRef } from "@/stores/epics/canvas/types";
 
@@ -12,7 +12,7 @@ export function useOpenA2AMessagePeer(): (
   peer: AgentMessagePeer,
   name: string,
 ) => void {
-  const epicId = useOpenEpicId();
+  const epicId = useMaybeOpenEpicId();
   const { openTile } = useEpicTileNavigation();
   const navigate = useNavigate();
   return useCallback(
