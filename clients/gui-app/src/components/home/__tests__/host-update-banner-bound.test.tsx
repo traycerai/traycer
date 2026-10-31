@@ -491,7 +491,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       renderBanner(undefined);
       const text = await findPhaseText();
       expect(text).toMatch(expectedPhrase);
-      // Never the generic fallback the experience doc forbids.
+      // Never the generic fallback.
       expect(text).not.toMatch(/^Updating this host/i);
     },
   );

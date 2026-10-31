@@ -27,7 +27,7 @@ export function writeBatchedDiffResponses(args: {
   //
   // Key construction uses request-side identity plus response-side OIDs. The
   // path/stage must match subscribers, while OIDs must reflect host state to
-  // defeat the invalidate-then-overwrite race documented in Q20 + ADR-0004.
+  // defeat the invalidate-then-overwrite race.
 
   for (const [index, diff] of args.diffs.entries()) {
     if (index >= args.requestFiles.length) {

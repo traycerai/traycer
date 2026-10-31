@@ -306,7 +306,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
 
   // An attempt that is doing something is NOT snoozable and does not wait for
   // the controller lane to agree — "active, parked, or reconnecting operations
-  // cannot be snoozed away" (experience doc), and a parked
+  // cannot be snoozed away", and a parked
   // `waiting-to-activate` is precisely the state a person needs to see.
   //
   // Failures can be dismissed here, and the dismissal is shared with the
@@ -437,7 +437,7 @@ function HostUpdateBannerInner(props: HostUpdateBannerInnerProps) {
         aria-label={bannerAriaLabel}
         data-testid="host-update-banner"
         // Polite for ordinary phase changes, assertive for a failure — the
-        // experience doc's accessibility rule. `aria-live` on the same element
+        // accessibility rule. `aria-live` on the same element
         // as `aria-label` is what makes each phase transition announce itself
         // rather than only being readable on focus.
         //

@@ -239,7 +239,7 @@ export function useWorkspaceFileListSubscription(args: {
       shared.refCount -= 1;
       shared.pruneListeners.delete(consumerId);
       shared.watchRequests.delete(consumerId);
-      // No grace period (ADR-0003): tear down as soon as the last consumer goes.
+      // No grace period: tear down as soon as the last consumer goes.
       if (shared.refCount === 0) {
         shared.unsubscribeFromStream();
         subscriptions.delete(key);

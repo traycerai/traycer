@@ -30,7 +30,7 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
  * Which side of which surface an image asset came from - the routing part of
- * the blob-cache key (image-preview decision log, decision #11).
+ * the blob-cache key (decision #11).
  */
 type FileAssetSource = "workspace" | "git-old" | "git-new";
 
@@ -128,7 +128,7 @@ export type FileAssetRenderKind = "image" | DocumentAssetKind;
 
 /**
  * Every `AssetStreamFailureReason` maps to the SAME uniform fallback UI
- * (image-preview decision log, decision #14) - this is only the one-line
+ * (decision #14) - this is only the one-line
  * message shown alongside it, per render kind so a document failure never
  * reads as an image bug ("not one of the supported image formats" next to a
  * PDF that the app usually previews would read as broken, not as a limit).
@@ -245,7 +245,7 @@ function locationFor(request: FileAssetRequest): string {
 
 /**
  * Composite key for `imageBlobCache`: `hostScopeKey`/`source`/location/`filePath`/
- * `contentIdentity` (image-preview decision log, decision #11), as a JSON
+ * `contentIdentity` (decision #11), as a JSON
  * array - not delimiter-joined, since any of those fields can legally
  * contain the delimiter and alias two different files onto the same key.
  * Git object sides are immutable by OID, so their key never changes for the

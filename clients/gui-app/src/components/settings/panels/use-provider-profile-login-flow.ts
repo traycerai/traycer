@@ -120,8 +120,8 @@ export type ProviderProfileLoginFlowState =
   | { readonly kind: "cancelled" };
 
 /**
- * Bounded auto-restart on a rejected/expired code-paste attempt (code-paste
- * decision log's "Bad-code recovery" row): 2 fresh-login retries per flow,
+ * Bounded auto-restart on a rejected/expired code-paste attempt:
+ * 2 fresh-login retries per flow,
  * then land on `failed`. `codeRejected` comes from `awaitLogin`'s own flag;
  * `sessionExpired` comes from the two-sided join in `settleAttempt` between
  * `awaitLogin` not authenticating and `submitLoginCode` reporting
@@ -141,7 +141,7 @@ const CODE_PASTE_RESTART_LIMIT_MESSAGES: Record<CodePasteRestartCause, string> =
   };
 /** Keeps `providers.touchLogin` calls well under the host's 3-minute
  *  rolling kill timer while still bounding call frequency during sustained
- *  typing (code-paste decision log's "Timeouts" row). */
+ *  typing. */
 const CODE_PASTE_TOUCH_THROTTLE_MS = 45_000;
 const CODE_PASTE_KEEPALIVE_INTERVAL_MS = 60_000;
 

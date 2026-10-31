@@ -14,7 +14,7 @@ import { HOST_STORE_FORMAT_FLOOR_CODE } from "@traycer/protocol/config/host-upda
  * differently — which is the whole reason the projection is a single function
  * one layer down.
  *
- * The governing rule from the experience doc: **"Updating this host…" is not**
+ * The governing rule: **"Updating this host…" is not**
  * **sufficient. Every active operation names its phase.** So there is no generic
  * fallback string here; each arm says what is actually happening.
  */
