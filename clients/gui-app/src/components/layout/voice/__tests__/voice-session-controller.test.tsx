@@ -155,22 +155,36 @@ const fake = vi.hoisted(() => {
       attentionValue = noAttention;
     },
   };
-  // Each bot's activity as `useBotActivity` answers it: none unless a test
-  // sets it; `set` and `remove` re-render the readers.
-  const activityByBot = new Map<string, BotActivity>();
+  // Each bot's activity reading: a live activity, closed for good, or (no
+  // entry) not come yet. `set`, `close` and `remove` re-render the readers.
+  type ActivityReading =
+    | { readonly kind: "live"; readonly activity: BotActivity }
+    | { readonly kind: "pending" }
+    | { readonly kind: "closed" };
+  const PENDING: ActivityReading = { kind: "pending" };
+  const CLOSED: ActivityReading = { kind: "closed" };
+  const activityByBot = new Map<string, ActivityReading>();
   const activityListeners = new Set<() => void>();
   const notifyActivity = (): void => {
     for (const listener of activityListeners) listener();
   };
   const activity = {
-    get: (botId: string): BotActivity | null =>
-      activityByBot.get(botId) ?? null,
+    reading: (botId: string): ActivityReading =>
+      activityByBot.get(botId) ?? PENDING,
+    get: (botId: string): BotActivity | null => {
+      const reading = activityByBot.get(botId);
+      return reading?.kind === "live" ? reading.activity : null;
+    },
     subscribe: (listener: () => void): (() => void) => {
       activityListeners.add(listener);
       return () => activityListeners.delete(listener);
     },
     set: (botId: string, value: BotActivity): void => {
-      activityByBot.set(botId, value);
+      activityByBot.set(botId, { kind: "live", activity: value });
+      notifyActivity();
+    },
+    close: (botId: string): void => {
+      activityByBot.set(botId, CLOSED);
       notifyActivity();
     },
     remove: (botId: string): void => {
@@ -566,6 +580,10 @@ vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => {
     useBotActivity: (botId: string) =>
       useSyncExternalStore(fake.activity.subscribe, () =>
         fake.activity.get(botId),
+      ),
+    useBotActivityReading: (botId: string) =>
+      useSyncExternalStore(fake.activity.subscribe, () =>
+        fake.activity.reading(botId),
       ),
   };
 });
@@ -2620,7 +2638,7 @@ describe("a bot whose stream is gone before Talk", () => {
     focusOn(CHANNEL_FOCUS);
     await settle();
 
-    act(() => fake.activity.remove(BOT_ID));
+    act(() => fake.activity.close(BOT_ID));
     await settle();
     await bringLive();
 
@@ -3447,7 +3465,7 @@ describe("a bot whose stream ends for good under a live session", () => {
     });
     expect(commentary).not.toHaveBeenCalled();
 
-    act(() => fake.activity.remove(BOT_ID));
+    act(() => fake.activity.close(BOT_ID));
     await settle();
     expect(useVoiceSessionStore.getState().queue).toEqual([]);
 
@@ -3455,5 +3473,87 @@ describe("a bot whose stream ends for good under a live session", () => {
       await vi.advanceTimersByTimeAsync(30_000);
     });
     expect(commentary).not.toHaveBeenCalled();
+  });
+});
+
+describe("a bot's tab closed and reopened under a live session", () => {
+  const PARKED: BotActivity = {
+    trunk: {
+      state: "parked",
+      startedAt: null,
+      step: null,
+      requestId: "req-7",
+      reason: null,
+    },
+    threads: {},
+  };
+  const FAILED_ID = "stopped:bot-1:req-7";
+
+  /** A seeded failed item with a Read of it waiting for the voice, and the bot's tab reopened with no reading yet. */
+  async function reopenedWithPendingRead() {
+    fake.activity.set(BOT_ID, PARKED);
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    focusOn(CHANNEL_FOCUS);
+    await bringLive();
+    expect(
+      useVoiceSessionStore.getState().queue.map((item) => item.id),
+    ).toEqual([FAILED_ID]);
+    const commentary = fake.engines[0]?.appendCommentary;
+    act(() => eventsOf(0).onOutputTranscriptDelta("Working on it."));
+    act(() => {
+      runVoiceQueueVerb({
+        kind: "read",
+        itemId: FAILED_ID,
+        delegationId: "d-read",
+      });
+    });
+    expect(commentary).not.toHaveBeenCalled();
+
+    act(() => useBotTabsStore.getState().closeBotTab(BOT_ID));
+    await settle();
+    // It reopens with no snapshot yet: the reading has not come.
+    act(() => fake.activity.remove(BOT_ID));
+    act(() =>
+      useBotTabsStore
+        .getState()
+        .openBotTab({ botId: BOT_ID, hostId: "host-a", title: BOT_ID }),
+    );
+    await settle();
+    return commentary;
+  }
+
+  it("keeps the failed item while the reopened tab's reading has not come", async () => {
+    await reopenedWithPendingRead();
+
+    expect(
+      useVoiceSessionStore
+        .getState()
+        .queue.map((item) => [item.id, item.state]),
+    ).toEqual([[FAILED_ID, "queued"]]);
+  });
+
+  it("still says the waiting Read once, and a reading that returns adds neither an item nor a second saying", async () => {
+    const commentary = await reopenedWithPendingRead();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(commentary.mock.calls).toEqual([
+      ["CI bot stopped before answering in its channel.", "d-read"],
+    ]);
+    act(() =>
+      eventsOf(0).onOutputTranscriptDelta("CI bot stopped before answering"),
+    );
+
+    act(() => fake.activity.set(BOT_ID, PARKED));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(commentary).toHaveBeenCalledTimes(1);
+    expect(
+      useVoiceSessionStore.getState().queue.map((item) => item.id),
+    ).toEqual([FAILED_ID]);
   });
 });
