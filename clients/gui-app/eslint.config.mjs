@@ -345,9 +345,9 @@ const fontSizeTokens = [
   "text-overline",
 ];
 
-// ── The inline, in-flow primitives (ticket 05) ──────────────────────────────
+// ── The inline, in-flow primitives ──────────────────────────────────────────
 //
-// Every family the ticket-05 block used to hold, now on `layout` plus what it
+// Every family the earlier block used to hold, now on `layout` plus what it
 // names. A family that is NOT here came out of that block with nothing left to
 // allow - Checkbox, Switch, ButtonGroup, TreeChevron, ShortcutHint,
 // LeaderDigitBadge, LivePulse, PingRing and ProgressToastIcon are all on the
@@ -527,7 +527,7 @@ const inlinePrimitiveContracts = [
     // side truncation) and nothing about the text itself. The type and the
     // colour belong to the sentence the component is rendering, which is the
     // site's. `--shimmer-text-color` is the sanctioned custom-property form
-    // (ticket 02) and the `group-*` spellings of it are a fact about which row
+    // and the `group-*` spellings of it are a fact about which row
     // is hovered.
     pattern: "^Shimmer$|^WorkingShimmerText$",
     allow: [
@@ -555,7 +555,7 @@ const inlinePrimitiveContracts = [
   },
 ];
 
-// ── Dialog, tightened in ticket 06 ──────────────────────────────────────────
+// ── Dialog ──────────────────────────────────────────────────────────────────
 //
 // The family had 377 findings, and 330 of them were one composition written
 // out by hand: a header band, a body and a footer band, assembled from `p-0
@@ -657,7 +657,7 @@ const dialogContracts = [
   },
 ];
 
-// ── DropdownMenu, tightened in ticket 06 ────────────────────────────────────
+// ── DropdownMenu ────────────────────────────────────────────────────────────
 //
 // Only the parts that allow MORE than `layout` need an entry: the rule's
 // default is already `allow: ["layout"]`, so deleting `^DropdownMenu` from
@@ -714,7 +714,7 @@ const dropdownMenuContracts = [
   },
 ];
 
-// ── Popover, tightened in ticket 06 ────────────────────────────────────────
+// ── Popover ────────────────────────────────────────────────────────────────
 //
 // The same story as Dialog's, one surface down: 34 of the family's 83 findings
 // were `p-0` (19) and `gap-0` (15) - a popover whose CONTENT draws its own
@@ -759,7 +759,7 @@ const popoverContracts = [
   },
 ];
 
-// ── Tabs, tightened in ticket 06 ───────────────────────────────────────────
+// ── Tabs ───────────────────────────────────────────────────────────────────
 //
 // The family already had the two styles it needed - a filled track
 // (`variant="default"`) and a strip of underlined tabs (`variant="line"`) -
@@ -773,8 +773,8 @@ const popoverContracts = [
 // `size` on the LIST - read by the triggers through `group-data-[size=sm]` -
 // so a tab bar cannot be half one size and half the other.
 //
-// `Tabs` and `TabsContent` allow `spacing` outright, for the reason ticket 05
-// gives `CollapsibleContent`: they are pure containers with no box of their
+// `Tabs` and `TabsContent` allow `spacing` outright, for the reason
+// `CollapsibleContent` does: they are pure containers with no box of their
 // own, and the inset that lines a pane up with the surface it opens inside - a
 // settings panel's gutter, a dialog's - is that surface's fact. There is
 // nothing there for a contract to protect.
@@ -820,7 +820,7 @@ const tabsContracts = [
   },
 ];
 
-// ── Command, tightened in ticket 06 ────────────────────────────────────────
+// ── Command ────────────────────────────────────────────────────────────────
 //
 // Two props carry what the family's 43 findings were writing by hand.
 //
@@ -865,7 +865,7 @@ const commandContracts = [
   },
 ];
 
-// ── Sheet and Drawer, tightened in ticket 06 ───────────────────────────────
+// ── Sheet and Drawer ───────────────────────────────────────────────────────
 //
 // These two ARE the exception the Dialog contract records: they name their
 // safe-area classes, and they pay a warning per entry for it on every lint run
@@ -925,7 +925,7 @@ const sheetContracts = [
   },
 ];
 
-// ── The last six families, tightened in ticket 06 ──────────────────────────
+// ── The last six families ──────────────────────────────────────────────────
 //
 // Small enough to read together, and each is one idea.
 //
@@ -1148,7 +1148,7 @@ const tightenedContracts = [
  * contract to widen (`"^Button$"`, `"^Badge$"`, …).
  *
  * Deliberately not `"shadcn/no-restyle": "off"` for those files, which is the
- * shape ticket 03's overrides took: turning the rule off would also stop
+ * shape the earlier overrides took: turning the rule off would also stop
  * checking their spacing, their sizes and every component added to them later,
  * to let one class through. A widened contract keeps everything else enforced
  * and says in the override exactly which door is open.
@@ -1196,7 +1196,7 @@ function noRestyle(extras) {
 //
 // One entry per file, and `allow` names exactly which categories it opens, so
 // everything else about Button stays enforced there. Deliberately NOT
-// `"shadcn/no-restyle": "off"` the way ticket 03's overrides are shaped:
+// `"shadcn/no-restyle": "off"` the way the earlier overrides were shaped:
 // turning the rule off would also stop checking that file's sizes and every
 // Button added to it later, to let one class through.
 //
@@ -1349,7 +1349,7 @@ const restyleExemptions = [
     contracts: [{ pattern: "^SheetContent$", allow: ["color"] }],
   },
 
-  // ── ticket 05: the inline primitives' tail ────────────────────────────────
+  // ── The inline primitives' tail ───────────────────────────────────────────
   {
     // A badge that floats OVER something rather than sitting in the flow, so
     // it needs an opaque plate the ambient variants deliberately do not have:
@@ -1534,7 +1534,7 @@ const restyleExemptions = [
     // it and hear why, and a control that looks unavailable must not light up
     // under the pointer. Its four surface presentations - rail, panel header,
     // field, inline - come from a record in the file, which is the class-site
-    // blind spot ticket 09 owns rather than a door opened here.
+    // blind spot rather than a door opened here.
     files: ["src/components/settings/host-scope/host-switcher.tsx"],
     contracts: [
       {
@@ -1618,7 +1618,7 @@ const restyleExemptions = [
     contracts: [{ pattern: "^Label$", allow: ["after:text-destructive"] }],
   },
   {
-    // A hashed profile accent carried as a CSS custom property - ticket 02's
+    // A hashed profile accent carried as a CSS custom property - the
     // sanctioned form for a colour that is DATA - with the one fixed near-black
     // that is legible on every hue it can produce.
     files: [
@@ -3096,7 +3096,7 @@ export default tseslint.config(
     // the allow list above already permits - `useEpicNodeIconTone` builds the
     // `--swatch` custom property and nothing else - and the rule simply cannot
     // follow a function call, the same single-file limit that keeps
-    // `require-static-classes` off (ticket 09).
+    // `require-static-classes` off.
     // Inlining these helpers at 34 call sites to satisfy it would be a worse
     // codebase, so the rule is off where the helper is used and stays on
     // everywhere else in those files' directories.
