@@ -11,6 +11,12 @@ import { EllipsisVertical } from "lucide-react";
 import type { BotOpenResponse } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
@@ -24,6 +30,7 @@ import {
   type BotSubscriptionSnapshot,
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
+import { useBotMarkChannelRead } from "@/hooks/bots/use-bot-read-cursor";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -38,6 +45,7 @@ import {
 import { useTeamSetupHistory } from "@/hooks/bots/use-team-setup-history";
 import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import {
   BotChannelView,
   type BotChannelLanding,
@@ -80,7 +88,12 @@ import {
 import { BotAvatar } from "@/components/bots/bot-avatars";
 import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
 import { MainBotBadge } from "@/components/bots/main-bot-badge";
+import { botMemberName } from "@/lib/bots/bot-member-names";
 import { useAuthStore } from "@/stores/auth/auth-store";
+import {
+  BotMentionsContext,
+  type BotMentioned,
+} from "@/components/bots/bot-mentions-context";
 import { isMainBot, type MainBotIds } from "@/lib/bots/bot-main";
 import {
   botPausedCopy,
@@ -468,6 +481,7 @@ function useBotTabSession(args: {
   readonly closeSession: () => void;
   readonly changeView: (view: BotTabView) => void;
   readonly showChannel: (messageId: string | null) => void;
+  readonly landChannel: (messageId: string | null) => void;
   readonly showThread: (threadId: string, messageId: string | null) => void;
 } {
   const { threads, onViewChange, setOpenThread } = args;
@@ -520,14 +534,32 @@ function useBotTabSession(args: {
     },
     [onViewChange],
   );
+  // A row of the channel shows with nothing beside it: a thread left open
+  // there is not what was asked for. Back to the channel (`null`) keeps it.
   const showChannel = useCallback(
-    (messageId: string | null) =>
+    (messageId: string | null) => {
+      if (messageId === null) {
+        showLanded(null);
+        return;
+      }
+      setOpenThread(null);
+      showLanded({ messageId, sendPostId: null, threadId: null });
+    },
+    [setOpenThread, showLanded],
+  );
+  // A landing asked of the tab from outside it (a tapped push) shows the
+  // channel with nothing beside it, on its row where one is named. Unlike
+  // Back to the channel, it is never a return to a thread left open.
+  const landChannel = useCallback(
+    (messageId: string | null) => {
+      setOpenThread(null);
       showLanded(
         messageId === null
           ? null
           : { messageId, sendPostId: null, threadId: null },
-      ),
-    [showLanded],
+      );
+    },
+    [setOpenThread, showLanded],
   );
   // Leaving Messages spends the channel's landing: the channel mounts again
   // when Messages shows, and must not land on that post a second time.
@@ -545,7 +577,8 @@ function useBotTabSession(args: {
     [onViewChange],
   );
   // A thread the list does not name has no post to open it by: the channel
-  // shows instead. One it names opens on `messageId` where one is named.
+  // shows instead, with no other thread beside it. One it names opens on
+  // `messageId` where one is named.
   const showThread = useCallback(
     (threadId: string, messageId: string | null) => {
       const anchor =
@@ -555,14 +588,16 @@ function useBotTabSession(args: {
           ? null
           : { messageId, sendPostId: null, threadId },
       );
-      if (anchor !== null) {
-        setOpenThread({
-          anchorMessageId: anchor.messageId,
-          announcement: false,
-          anchorKind: null,
-          sent: null,
-        });
-      }
+      setOpenThread(
+        anchor === null
+          ? null
+          : {
+              anchorMessageId: anchor.messageId,
+              announcement: false,
+              anchorKind: null,
+              sent: null,
+            },
+      );
     },
     [setOpenThread, showLanded, threads],
   );
@@ -574,8 +609,37 @@ function useBotTabSession(args: {
     closeSession,
     changeView,
     showChannel,
+    landChannel,
     showThread,
   };
+}
+
+/**
+ * Lands the tab where it was asked to from outside (a tapped push): the
+ * thread beside the channel, or the channel, once the thread list has
+ * answered, since a thread opens by the post it hangs off. Each request is
+ * spent once.
+ */
+function useSpendTabLanding(args: {
+  readonly botId: string;
+  /** `null` while the list is read. */
+  readonly threads: ReadonlyArray<BotThreadSummary> | null;
+  readonly landChannel: (messageId: string | null) => void;
+  readonly showThread: (threadId: string, messageId: string | null) => void;
+}): void {
+  const { botId, threads, landChannel, showThread } = args;
+  const landing = useBotTabLandingStore((state) =>
+    Object.hasOwn(state.byBotId, botId) ? state.byBotId[botId] : null,
+  );
+  useEffect(() => {
+    if (landing === null || threads === null) return;
+    useBotTabLandingStore.getState().clear(botId);
+    if (landing.threadId === null) {
+      landChannel(landing.messageId);
+    } else {
+      showThread(landing.threadId, landing.messageId);
+    }
+  }, [botId, landChannel, landing, showThread, threads]);
 }
 
 /**
@@ -719,8 +783,10 @@ function BotTabContent(props: {
     closeSession,
     changeView,
     showChannel,
+    landChannel,
     showThread,
   } = useBotTabSession({ threads, onViewChange, setOpenThread });
+  useSpendTabLanding({ botId, threads, landChannel, showThread });
   const openActivity = useCallback(() => changeView("activity"), [changeView]);
   const activitySummary = useBotActivitySummary({
     botId,
@@ -736,6 +802,11 @@ function BotTabContent(props: {
     [],
   );
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const markRead = useBotMarkChannelRead(
+    botId,
+    hostId,
+    snapshot.bot.appConversationChatId,
+  );
   const viewer = useAuthStore((s) => s.profile);
   const owner = useMemo((): BotOwner | null => {
     if (environment === null) return null;
@@ -764,155 +835,174 @@ function BotTabContent(props: {
     }),
     [botId, owner, snapshot.bot.title],
   );
+  // A mention names the viewer, or a member the directory lists; anyone
+  // else's token stays as written.
+  const mentioned = useCallback(
+    (userId: string): BotMentioned | null => {
+      if (viewer !== null && viewer.userId === userId) {
+        return {
+          name: botMemberName(userId, viewer, resolveMember),
+          self: true,
+        };
+      }
+      const member = resolveMember(userId);
+      if (member === null) return null;
+      return { name: member.displayName ?? "member", self: false };
+    },
+    [resolveMember, viewer],
+  );
 
   return (
-    <BotIdentityContext value={identity}>
-      <BotMemoryContext value={memoryAccess}>
-        <div className="@container flex h-full min-h-0" data-testid="bot-tab">
-          <BotResizablePane
-            pane="sidebar"
-            edge="right"
-            label="Resize channels"
-            className="hidden min-h-0 w-(--bot-pane-width) max-w-[40%] shrink-0 flex-col border-r border-border/60 @3xl:flex"
-            handleClassName=""
-            testId="bot-channel-sidebar-pane"
-          >
-            <BotChannelSidebar activeBotId={botId} hostId={hostId} />
-          </BotResizablePane>
-          <div className="relative flex min-h-0 min-w-0 flex-1">
-            {session !== null ? (
-              <BotSessionView
-                key={session.chatId}
-                botId={botId}
-                hostId={hostId}
-                botTitle={snapshot.bot.title}
-                session={session}
-                threads={threads}
-                resolveMember={resolveMember}
-                onClose={closeSession}
-                onOpenChannel={showChannel}
-                onOpenThread={showThread}
-              />
-            ) : (
-              <Tabs
-                value={view}
-                onValueChange={(next) => {
-                  if (isBotTabView(next)) changeView(next);
-                }}
-                className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
-              >
-                <BotChannelHeader
-                  title={snapshot.bot.title}
-                  isMain={isMain === true}
-                  settingsOpen={settingsOpen}
-                  onToggleSettings={toggleSettings}
-                  activityLabel={activityLabelParts({
-                    stopped: activitySummary.stopped.length,
-                    running: activitySummary.running.length,
-                    tasks: activitySummary.tasks,
-                  })}
+    <BotMentionsContext value={mentioned}>
+      <BotIdentityContext value={identity}>
+        <BotMemoryContext value={memoryAccess}>
+          <div className="@container flex h-full min-h-0" data-testid="bot-tab">
+            <BotResizablePane
+              pane="sidebar"
+              edge="right"
+              label="Resize channels"
+              className="hidden min-h-0 w-(--bot-pane-width) max-w-[40%] shrink-0 flex-col border-r border-border/60 @3xl:flex"
+              handleClassName=""
+              testId="bot-channel-sidebar-pane"
+            >
+              <BotChannelSidebar activeBotId={botId} hostId={hostId} />
+            </BotResizablePane>
+            <div className="relative flex min-h-0 min-w-0 flex-1">
+              {session !== null ? (
+                <BotSessionView
+                  key={session.chatId}
+                  botId={botId}
+                  hostId={hostId}
+                  botTitle={snapshot.bot.title}
+                  session={session}
+                  threads={threads}
+                  resolveMember={resolveMember}
+                  onClose={closeSession}
+                  onOpenChannel={showChannel}
+                  onOpenThread={showThread}
                 />
-                {streamError === null ? null : (
-                  // A fatal close AFTER a snapshot: the last reading stays on
-                  // screen, marked as such, and the retry sits on top of it.
-                  <ErrorNotice
-                    text={`Couldn't reach this bot: ${streamError}`}
-                    onRetry={onRetry}
-                    className="mx-4 mt-2"
-                  />
-                )}
-                {reopenError === null ? null : (
-                  <ErrorNotice
-                    text={`Couldn't open this bot: ${reopenError}`}
-                    onRetry={onReopen}
-                    className="mx-4 mt-2"
-                  />
-                )}
-                {pausedReason === null ? null : (
-                  <PausedBanner
-                    reason={pausedReason}
-                    environmentLabel={environmentLabel}
-                    onRetry={onReopen}
-                  />
-                )}
-                <TabsContent
-                  value="messages"
-                  className="flex min-h-0 flex-1 flex-col"
+              ) : (
+                <Tabs
+                  value={view}
+                  onValueChange={(next) => {
+                    if (isBotTabView(next)) changeView(next);
+                  }}
+                  className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
                 >
-                  <BotChannelView
-                    botId={botId}
-                    hostId={hostId}
-                    boundHostId={snapshot.boundHost.hostId}
-                    boundHostEpoch={snapshot.boundHost.epoch}
-                    botTitle={snapshot.bot.title}
-                    directive={snapshot.bot.directive}
-                    appConversationChatId={snapshot.bot.appConversationChatId}
-                    trunkChatId={snapshot.bot.trunkChatId}
-                    resolveMember={resolveMember}
-                    tasks={snapshot.tasks}
-                    surfaceActions={snapshot.surfaceActions}
-                    openThread={openThread}
-                    onOpenThread={setOpenThread}
-                    onOpenTurn={openTurn}
-                    onOpenSession={openSession}
-                    landOn={channelLanding}
-                    openMemory={openMemory}
-                    onOpenMemory={setOpenMemory}
-                    environmentId={snapshot.bot.environmentId}
-                    botNameOf={botNameOf}
-                    onOpenActivity={openActivity}
-                    setupHistory={setupHistory}
+                  <BotChannelHeader
+                    title={snapshot.bot.title}
+                    isMain={isMain === true}
+                    settingsOpen={settingsOpen}
+                    onToggleSettings={toggleSettings}
+                    onMarkRead={markRead}
+                    activityLabel={activityLabelParts({
+                      stopped: activitySummary.stopped.length,
+                      running: activitySummary.running.length,
+                      tasks: activitySummary.tasks,
+                    })}
                   />
-                </TabsContent>
-                <TabsContent
-                  value="activity"
-                  className="flex min-h-0 flex-1 flex-col"
-                >
-                  <BotActivityPage
-                    botId={botId}
-                    hostId={hostId}
-                    boundHost={snapshot.boundHost}
-                    channelId={snapshot.bot.appConversationChatId}
-                    tasks={snapshot.tasks}
-                    notificationSubscriptions={
-                      snapshot.notificationSubscriptions
-                    }
-                    stoppedNotificationWatches={
-                      snapshot.stoppedNotificationWatches
-                    }
-                    resolveMember={resolveMember}
-                    summary={activitySummary}
-                    threads={threads}
-                    onOpenPost={openPostInChannel}
-                    onOpenTurn={openTurn}
-                  />
-                </TabsContent>
-                <TabsContent
-                  value="threads"
-                  className="flex min-h-0 flex-1 flex-col"
-                >
-                  <BotThreadsPage
-                    botId={botId}
-                    hostId={hostId}
-                    threadList={threadListSupported ? threadList : null}
-                    onOpenPost={openPostInChannel}
-                  />
-                </TabsContent>
-              </Tabs>
-            )}
-            {settingsOpen ? (
-              <BotChannelSettingsPanel
-                bot={snapshot.bot}
-                personal={personal}
-                channelId={snapshot.bot.appConversationChatId}
-                environmentBots={environmentBots}
-                onClose={closeSettings}
-              />
-            ) : null}
+                  {streamError === null ? null : (
+                    // A fatal close AFTER a snapshot: the last reading stays on
+                    // screen, marked as such, and the retry sits on top of it.
+                    <ErrorNotice
+                      text={`Couldn't reach this bot: ${streamError}`}
+                      onRetry={onRetry}
+                      className="mx-4 mt-2"
+                    />
+                  )}
+                  {reopenError === null ? null : (
+                    <ErrorNotice
+                      text={`Couldn't open this bot: ${reopenError}`}
+                      onRetry={onReopen}
+                      className="mx-4 mt-2"
+                    />
+                  )}
+                  {pausedReason === null ? null : (
+                    <PausedBanner
+                      reason={pausedReason}
+                      environmentLabel={environmentLabel}
+                      onRetry={onReopen}
+                    />
+                  )}
+                  <TabsContent
+                    value="messages"
+                    className="flex min-h-0 flex-1 flex-col"
+                  >
+                    <BotChannelView
+                      botId={botId}
+                      hostId={hostId}
+                      boundHostId={snapshot.boundHost.hostId}
+                      boundHostEpoch={snapshot.boundHost.epoch}
+                      botTitle={snapshot.bot.title}
+                      directive={snapshot.bot.directive}
+                      appConversationChatId={snapshot.bot.appConversationChatId}
+                      trunkChatId={snapshot.bot.trunkChatId}
+                      resolveMember={resolveMember}
+                      tasks={snapshot.tasks}
+                      surfaceActions={snapshot.surfaceActions}
+                      openThread={openThread}
+                      onOpenThread={setOpenThread}
+                      onOpenTurn={openTurn}
+                      onOpenSession={openSession}
+                      landOn={channelLanding}
+                      openMemory={openMemory}
+                      onOpenMemory={setOpenMemory}
+                      environmentId={snapshot.bot.environmentId}
+                      botNameOf={botNameOf}
+                      onOpenActivity={openActivity}
+                      setupHistory={setupHistory}
+                    />
+                  </TabsContent>
+                  <TabsContent
+                    value="activity"
+                    className="flex min-h-0 flex-1 flex-col"
+                  >
+                    <BotActivityPage
+                      botId={botId}
+                      hostId={hostId}
+                      boundHost={snapshot.boundHost}
+                      channelId={snapshot.bot.appConversationChatId}
+                      tasks={snapshot.tasks}
+                      notificationSubscriptions={
+                        snapshot.notificationSubscriptions
+                      }
+                      stoppedNotificationWatches={
+                        snapshot.stoppedNotificationWatches
+                      }
+                      resolveMember={resolveMember}
+                      summary={activitySummary}
+                      threads={threads}
+                      onOpenPost={openPostInChannel}
+                      onOpenTurn={openTurn}
+                    />
+                  </TabsContent>
+                  <TabsContent
+                    value="threads"
+                    className="flex min-h-0 flex-1 flex-col"
+                  >
+                    <BotThreadsPage
+                      botId={botId}
+                      hostId={hostId}
+                      threadList={threadListSupported ? threadList : null}
+                      onOpenPost={openPostInChannel}
+                    />
+                  </TabsContent>
+                </Tabs>
+              )}
+              {settingsOpen ? (
+                <BotChannelSettingsPanel
+                  bot={snapshot.bot}
+                  personal={personal}
+                  channelId={snapshot.bot.appConversationChatId}
+                  environmentBots={environmentBots}
+                  onClose={closeSettings}
+                />
+              ) : null}
+            </div>
           </div>
-        </div>
-      </BotMemoryContext>
-    </BotIdentityContext>
+        </BotMemoryContext>
+      </BotIdentityContext>
+    </BotMentionsContext>
   );
 }
 
@@ -991,7 +1081,8 @@ function ErrorNotice(props: {
 
 /**
  * Slack's channel header: the bot's picture (its card on hover and click),
- * its name with the main bot's star, the ⋮ that opens the channel's settings, and the channel's views
+ * its name with the main bot's star, the ⋮ that opens the channel's settings
+ * (and marks it read, where the host keeps read cursors), and the channel's views
  * under it. What the bot is for is the top of its channel; nothing else
  * sits here. Activity's label is the bot's indicator: what stopped, in red
  * and first, what runs and the tasks it tracks.
@@ -1001,6 +1092,8 @@ function BotChannelHeader(props: {
   readonly isMain: boolean;
   readonly settingsOpen: boolean;
   readonly onToggleSettings: () => void;
+  /** Clears the channel's bold; `null` where the host keeps no read cursors, and the ⋮ opens the settings directly. */
+  readonly onMarkRead: (() => void) | null;
   readonly activityLabel: ReadonlyArray<BotActivityLabelPart>;
 }): ReactNode {
   const { settingsOpen } = props;
@@ -1033,19 +1126,51 @@ function BotChannelHeader(props: {
         {props.isMain ? (
           <MainBotBadge testId="bot-tab-main" tone="muted" />
         ) : null}
-        <Button
-          ref={settingsButtonRef}
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Channel settings"
-          aria-expanded={settingsOpen}
-          data-testid="bot-channel-settings-open"
-          className="ml-auto"
-          onClick={props.onToggleSettings}
-        >
-          <EllipsisVertical aria-hidden="true" />
-        </Button>
+        {props.onMarkRead === null ? (
+          <Button
+            ref={settingsButtonRef}
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Channel settings"
+            aria-expanded={settingsOpen}
+            data-testid="bot-channel-settings-open"
+            className="ml-auto"
+            onClick={props.onToggleSettings}
+          >
+            <EllipsisVertical aria-hidden="true" />
+          </Button>
+        ) : (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                ref={settingsButtonRef}
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Channel actions"
+                data-testid="bot-channel-settings-open"
+                className="ml-auto"
+              >
+                <EllipsisVertical aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                data-testid="bot-channel-mark-read"
+                onSelect={props.onMarkRead}
+              >
+                Mark as read
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                data-testid="bot-channel-settings-item"
+                onSelect={props.onToggleSettings}
+              >
+                {settingsOpen ? "Close channel settings" : "Channel settings"}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
       <TabsList variant="line" aria-label="Channel view">
         <TabsTrigger value="messages" data-testid="bot-tab-view-messages">

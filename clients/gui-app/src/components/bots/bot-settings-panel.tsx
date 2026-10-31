@@ -42,6 +42,7 @@ import {
   useBotNotificationLevelsQuery,
 } from "@/hooks/bots/use-bot-notification-level";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { channelNotificationLevel } from "@/lib/bots/bot-notification-settings";
 import { AvatarStack, BotAvatar } from "@/components/bots/bot-avatars";
 import {
   BotIdentityContext,
@@ -259,28 +260,36 @@ const NOTIFICATION_LEVEL_OPTIONS: ReadonlyArray<{
   readonly description: string;
 }> = [
   {
+    level: "all",
+    label: "All new messages",
+    description: "Every post, announcement and reply rings the bell.",
+  },
+  {
     level: "mentions",
     label: "Mentions and answers to me",
     description:
-      "The bell tells you when the bot answers your posts and threads you wrote in.",
+      "Replies to what you asked, threads you follow, and mentions of you.",
   },
   {
     level: "off",
-    label: "Off",
-    description: "Nothing from this channel reaches the bell.",
+    label: "Nothing",
+    description:
+      "Muted: no ring and no bold. A mention of you or a question to you still counts.",
   },
 ];
 
 /**
  * What the bell raises for this channel and its threads, the same on every
  * device the person uses. Drawn where the tab's host can read and write it;
- * a channel with no level set reads "Mentions and answers to me".
+ * a channel with no level set reads its bot's default: All new messages for
+ * a personal environment's bot, Mentions and answers for a team's.
  */
 function BotNotificationsSection(props: {
   readonly botId: string;
   readonly channelId: string;
 }): ReactNode {
   const { botId, channelId } = props;
+  const owner = useBotIdentity()?.owner ?? null;
   const client = useTabHostClient();
   const hostId = useTabHostId();
   const readSupported =
@@ -292,7 +301,11 @@ function BotNotificationsSection(props: {
   const update = useBotNotificationLevelSetMutation(client);
   const groupId = useId();
   if (!supported) return null;
-  const level = channelLevel(levels.data?.levels, channelId);
+  const level = channelNotificationLevel(
+    levels.data?.levels,
+    channelId,
+    owner === null ? null : owner.kind === "person",
+  );
   return (
     <SettingsGroup title="Notifications" testId="bot-settings-notifications">
       <RadioGroup
@@ -327,18 +340,6 @@ function BotNotificationsSection(props: {
       />
     </SettingsGroup>
   );
-}
-
-/**
- * The channel's level as the cloud has it: `mentions` for a channel with
- * none set, `null` until the levels are read.
- */
-function channelLevel(
-  levels: Readonly<Record<string, BotNotificationLevel>> | undefined,
-  channelId: string,
-): BotNotificationLevel | null {
-  if (levels === undefined) return null;
-  return Object.hasOwn(levels, channelId) ? levels[channelId] : "mentions";
 }
 
 /** Why the notifications control cannot show or change the level now. */

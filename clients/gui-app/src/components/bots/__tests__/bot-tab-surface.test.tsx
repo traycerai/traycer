@@ -14,7 +14,7 @@
  */
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { StrictMode, type ReactNode } from "react";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -83,7 +83,10 @@ const mocks = vi.hoisted(() => ({
   }>,
   useBotListChangedSubscriptionForHost:
     vi.fn<(hostId: string, enabled: boolean) => void>(),
+  /** Mark as read, where the host keeps read cursors; `null` where it does not. */
+  markRead: vi.fn<() => void>(),
   state: {
+    markReadAvailable: false,
     snapshot: null as BotSubscriptionSnapshot | null,
     deleted: false,
     error: null as string | null,
@@ -222,6 +225,12 @@ vi.mock(
   }),
 );
 // The card's memory row is driven in `bot-memory-pane.test.tsx`.
+// "Mark as read" sends its advances through the host (decision 139); what
+// the surface decides is whether the ⋮ offers it.
+vi.mock("@/hooks/bots/use-bot-read-cursor", () => ({
+  useBotMarkChannelRead: () =>
+    mocks.state.markReadAvailable ? mocks.markRead : null,
+}));
 vi.mock("@/hooks/bots/use-bot-memory", () => ({
   useBotMemory: () => ({ kind: "unsupported" }),
 }));
@@ -494,9 +503,14 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
   ),
 }));
 
+import {
+  parseNotificationPayload,
+  routeNotificationForHost,
+} from "@/lib/notifications/payload";
 import { BotTabSurface } from "@/components/bots/bot-tab-surface";
 import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
+import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -618,6 +632,7 @@ beforeEach(() => {
   mocks.membersQueries.length = 0;
   mocks.state.membersSupport = true;
   mocks.state.snapshot = snapshot();
+  mocks.state.markReadAvailable = false;
   mocks.state.deleted = false;
   mocks.state.error = null;
   mocks.state.paneVisible = true;
@@ -1715,6 +1730,48 @@ describe("<BotTabSurface /> re-subscribe on return", () => {
   });
 });
 
+describe("<BotTabSurface /> channel actions menu", () => {
+  it("offers Mark as read beside the settings where the host keeps read cursors, and marks the channel read from it", async () => {
+    const user = userEvent.setup();
+    mocks.state.markReadAvailable = true;
+    render(surface());
+
+    await user.click(screen.getByTestId("bot-channel-settings-open"));
+    await user.click(await screen.findByTestId("bot-channel-mark-read"));
+
+    expect(mocks.markRead).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("stub-settings")).toBeNull();
+  });
+
+  it("opens the settings from its menu item, and closes them from it again", async () => {
+    const user = userEvent.setup();
+    mocks.state.markReadAvailable = true;
+    render(surface());
+
+    await user.click(screen.getByTestId("bot-channel-settings-open"));
+    await user.click(await screen.findByTestId("bot-channel-settings-item"));
+    expect(screen.getByTestId("stub-settings")).toBeTruthy();
+    expect(mocks.markRead).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId("bot-channel-settings-open"));
+    expect(
+      (await screen.findByTestId("bot-channel-settings-item")).textContent,
+    ).toBe("Close channel settings");
+    await user.click(screen.getByTestId("bot-channel-settings-item"));
+    expect(screen.queryByTestId("stub-settings")).toBeNull();
+  });
+
+  it("offers no Mark as read where the host keeps no read cursors: the ⋮ opens the settings directly", async () => {
+    const user = userEvent.setup();
+    render(surface());
+
+    await user.click(screen.getByTestId("bot-channel-settings-open"));
+
+    expect(screen.getByTestId("stub-settings")).toBeTruthy();
+    expect(screen.queryByTestId("bot-channel-mark-read")).toBeNull();
+  });
+});
+
 describe("<BotTabSurface /> main bot", () => {
   it("draws the header as the bot's picture, the channel's name with the main bot's star, its three views and the settings ⋮ only", () => {
     mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
@@ -2018,6 +2075,159 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
     expect(channel.getAttribute("data-open-thread")).toBe("post-7");
     expect(channel.getAttribute("data-land-on")).toBe("thread-reply-9");
     expect(channel.getAttribute("data-land-on-thread")).toBe("thread-1");
+  });
+
+  describe("an unrelated thread open beside the channel", () => {
+    const OTHER_THREAD_RAIL = {
+      kind: "thread",
+      anchorMessageId: "post-other",
+      announcement: false,
+      anchorKind: null,
+      sent: null,
+    } as const;
+
+    beforeEach(() => {
+      useBotOpenThreadStore.getState().setRail(BOT_ID, OTHER_THREAD_RAIL);
+      useBotTabLandingStore.setState({ byBotId: {} });
+    });
+
+    function openThreadBeside(): string | null {
+      return screen
+        .getByTestId("stub-channel")
+        .getAttribute("data-open-thread");
+    }
+
+    it("is closed when a session opens a row of the channel, and kept when it goes back to the channel", async () => {
+      const user = userEvent.setup();
+      render(surface());
+      expect(openThreadBeside()).toBe("post-other");
+
+      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+      await user.click(screen.getByTestId("stub-session-channel"));
+      expect(openThreadBeside()).toBe("post-other");
+
+      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+      await user.click(screen.getByTestId("stub-session-post"));
+      expect(openThreadBeside()).toBe("none");
+    });
+
+    it("is closed when a session opens a thread the list does not name", async () => {
+      const user = userEvent.setup();
+      mocks.state.threads = [];
+      render(surface());
+
+      await user.click(screen.getByTestId("stub-channel-open-thread-session"));
+      await user.click(screen.getByTestId("stub-session-thread"));
+
+      expect(openThreadBeside()).toBe("none");
+    });
+
+    it("is closed by a requested landing on a row of the channel", () => {
+      mocks.state.threads = [];
+      useBotTabLandingStore
+        .getState()
+        .request(BOT_ID, { threadId: null, messageId: "post-1" });
+      render(surface());
+
+      expect(openThreadBeside()).toBe("none");
+    });
+
+    it("is closed by a tapped push of the channel itself, from its payload through its route to the surface", () => {
+      mocks.state.threads = [];
+      const payload = parseNotificationPayload({
+        kind: "chat",
+        epicId: BOT_ID,
+        chatId: "conversation-app",
+        botId: BOT_ID,
+      });
+      expect(payload).toMatchObject({
+        kind: "chat",
+        bot: { botId: BOT_ID, threadId: null, messageId: null },
+      });
+      if (payload === null) throw new Error("the payload did not parse");
+
+      expect(
+        routeNotificationForHost(vi.fn(), payload, 1_000, {
+          originHostId: null,
+          effectiveHostId: "host-1",
+        }),
+      ).toBe(true);
+      expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
+        threadId: null,
+        messageId: null,
+      });
+      render(surface());
+
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+      expect(openThreadBeside()).toBe("none");
+    });
+
+    it("is closed by a requested landing on a thread the list does not name", () => {
+      mocks.state.threads = [];
+      useBotTabLandingStore
+        .getState()
+        .request(BOT_ID, { threadId: "thread-gone", messageId: "reply-3" });
+      render(surface());
+
+      expect(openThreadBeside()).toBe("none");
+    });
+  });
+
+  describe("a landing requested from outside, as a tapped push does", () => {
+    const LISTED_THREAD: BotThreadSummary = {
+      threadId: "thread-1",
+      conversationId: "conversation-app",
+      sessionChatId: "session-thread-1",
+      anchor: {
+        messageId: "post-7",
+        requestId: "req-7",
+        senderUserId: "user-1",
+        sentAt: 1_000,
+        resolvedAt: 1_001,
+      },
+      replyCount: 1,
+      lastReplyAt: 2_000,
+      openRequestCount: 0,
+      costUsd: null,
+    };
+
+    beforeEach(() => {
+      useBotTabLandingStore.setState({ byBotId: {} });
+    });
+
+    it("opens the listed thread beside the channel on the row, and is spent, so a later render does not land it again", () => {
+      mocks.state.threads = [LISTED_THREAD];
+      useBotTabLandingStore
+        .getState()
+        .request(BOT_ID, { threadId: "thread-1", messageId: "reply-3" });
+      const { rerender } = render(surface());
+
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-open-thread")).toBe("post-7");
+      expect(channel.getAttribute("data-land-on")).toBe("reply-3");
+      expect(channel.getAttribute("data-land-on-thread")).toBe("thread-1");
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+
+      // The person closes the thread; rendering again does not reopen it.
+      act(() => useBotOpenThreadStore.getState().setRail(BOT_ID, null));
+      rerender(surface());
+      expect(
+        screen.getByTestId("stub-channel").getAttribute("data-open-thread"),
+      ).toBe("none");
+    });
+
+    it("shows the channel when the list does not name the thread", () => {
+      mocks.state.threads = [LISTED_THREAD];
+      useBotTabLandingStore
+        .getState()
+        .request(BOT_ID, { threadId: "thread-gone", messageId: "reply-3" });
+      render(surface());
+
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-open-thread")).toBe("none");
+      expect(channel.getAttribute("data-land-on")).toBe("none");
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+    });
   });
 
   it("gives the channel the bot's trunk session", () => {
