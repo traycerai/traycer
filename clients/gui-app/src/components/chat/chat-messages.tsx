@@ -4151,12 +4151,14 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   const concealedScrollGeometryRef = useRef<ConcealedScrollGeometry | null>(
     null,
   );
-  // Ends the navigation settle loop a hide leaves behind. A restore still
-  // converging when the tile hides has nowhere left to converge: the hide
-  // zeroes this tile's measured geometry, so every further settle reads a
-  // viewport that cannot answer, and a re-issue the loop makes from a
-  // continuation resolving after the hide writes the saved position back onto a
-  // concealed node - over the reset a collapsing tab host just performed. The
+  // Ends the navigation settle loop a hide leaves behind. Only a hide that
+  // COLLAPSED the box makes that loop unfinishable, so only that hide calls
+  // this: the collapse zeroes this tile's measured geometry, every further
+  // settle reads a viewport that cannot answer, and a re-issue the loop makes
+  // from a continuation resolving after the hide writes the saved position back
+  // onto a concealed node - over the reset a collapsing tab host just
+  // performed. A box that survives concealment keeps measuring, so its loop is
+  // left to finish. For the collapsed hide the
   // show branch is then the only placement a hidden tile takes, and it
   // re-derives the anchor from the state cache rather than from wherever this
   // loop had reached - which is also what gives a row destroyed while hidden
@@ -4190,11 +4192,16 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
     if (visible === wasVisible) return;
 
     if (!visible) {
-      endNavigationSettleForConcealment();
-      concealedScrollGeometryRef.current = readIntactConcealedGeometry(
+      const concealed = readIntactConcealedGeometry(
         chatTimelineRef.current?.getScrollableNode(),
         lastVisibleScrollTopRef.current,
       );
+      concealedScrollGeometryRef.current = concealed;
+      // A null read is already the precondition the call below needs: it says
+      // this hide collapsed the box. Ending the loop for a hide that did not
+      // left its persistence gate armed into the show, and an armed gate
+      // replays the saved anchor over a list the reader never left.
+      if (concealed === null) endNavigationSettleForConcealment();
       // Publish the continuously-mirrored snapshot (kept fresh,
       // synchronously, by `captureLastVisibleScrollSnapshot` above - no
       // app-level rAF throttle sits between a scroll event and this ref
@@ -4240,11 +4247,12 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
       listRowsRef.current.map((row) => row.key),
     );
     // An undisturbed list needs no replay (see `concealedScrollGeometryRef`).
-    // Unless a saved restore was still converging when the tile hid: the hide
-    // ended its settle loop, and that loop was the only thing that would
-    // release the persistence gate - returning here would leave the gate
-    // armed with no scroll capture allowed until the next publishing reader
-    // gesture. Let the replay below re-issue it and own the release instead.
+    // Unless a restore is still pending: its gate is what suppresses scroll
+    // capture, and returning here would leave it armed with nothing left to
+    // release it until the next publishing reader gesture. The replay below
+    // re-issues and owns the release instead. A restore converging over a box
+    // that survived the hide does not reach here still pending - that loop was
+    // left running and releases its own gate.
     const concealed = concealedScrollGeometryRef.current;
     concealedScrollGeometryRef.current = null;
     if (

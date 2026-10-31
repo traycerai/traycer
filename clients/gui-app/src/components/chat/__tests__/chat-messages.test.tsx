@@ -8122,6 +8122,142 @@ describe("ChatMessages scroll policy", () => {
       expect(persisted.anchorIndex).toBeGreaterThan(anchorIndex);
     });
 
+    it("a restore still converging when the box survives concealment finishes while concealed, so the show replays nothing", async () => {
+      // The retained-box guard above is judged on a list whose restore had
+      // already finished. This drives the case where it had NOT: the saved
+      // row is still measuring when the tile is concealed WITHOUT collapsing
+      // (`visibility:hidden`, an in-pane tab switch, where the hosted record
+      // keeps its rect and the list never stops measuring), its measurement
+      // finishes while concealed, and the tile is shown again.
+      //
+      // Ending that restore's settle loop at the hide left its persistence
+      // gate armed - the loop's own terminal outcome is what clears it - and
+      // the show branch's undisturbed early return is gated on that flag, so
+      // an armed gate replayed the saved anchor over a list the reader never
+      // left. A box that survives concealment keeps measuring, so the loop
+      // converges there and clears its own gate.
+      const messages = makeCompletedTranscript(200);
+      const anchorIndex = 20;
+      const savedViewOffset = 24;
+      const anchorId = messages[anchorIndex]?.id ?? null;
+      expect(anchorId).toBeTruthy();
+      const key = `t-visibility-converging-intact-${Math.random().toString(36).slice(2)}`;
+      setLegendListScrollContainerScrollHeightOverride(
+        LEGEND_LIST_HEADER_PX + messages.length * 90 + 40,
+      );
+      saveChatTabState({
+        identity: makeDefaultTestIdentity(key),
+        mode: "free-scrolling",
+        anchorMessageId: anchorId,
+        anchorIndex,
+        offset: savedViewOffset,
+      });
+      const { rerenderWith } = renderChatMessages({
+        messages,
+        scrollStateKey: key,
+      });
+      const list = legendListRefHolder.current;
+      if (list === null) throw new Error("LegendList ref is not mounted");
+      const beforeHide = getScrollNode().scrollTop;
+      expect(beforeHide).toBeGreaterThan(0);
+      // The handoff decides "did the box collapse" from the last reported
+      // position, so report the landing a real browser would have reported.
+      await fireScrollTopAndFlush(beforeHide);
+
+      // The saved row's position keeps moving while `measuring` is true: its
+      // position is a sum over the rows above it, which resolve from estimates
+      // over several commits. Each read drifts a further 100px, which is past
+      // CHAT_TIMELINE_RESTORE_POSITION_HELD_EPSILON_PX, so the restore reads
+      // its target as still settling and defers acceptance - the deferral this
+      // witness needs, reached by the mechanism it names. A drift inside that
+      // epsilon would instead read as having HELD STILL, and the restore would
+      // stay pending only for as long as its landing check happened to keep
+      // failing: still red here, but for a reason the test does not state and
+      // does not check. Same seam as the held-still witness above - spy
+      // `getState` and override this one row's `positionAtIndex` - so no other
+      // consumer's reads are disturbed.
+      let measuring = true;
+      let reads = 0;
+      const originalGetState = list.getState.bind(list);
+      const getStateSpy = vi.spyOn(list, "getState").mockImplementation(() => {
+        const state = originalGetState();
+        return {
+          ...state,
+          positionAtIndex: (index: number) => {
+            const real = state.positionAtIndex(index);
+            // The list withholds this reading for a row it has not measured,
+            // and perturbing a reading that does not exist would model
+            // nothing. Pass those through: this test is about a row whose
+            // position is known and still moving.
+            if (
+              index !== anchorIndex ||
+              !measuring ||
+              typeof real !== "number"
+            ) {
+              return real;
+            }
+            reads += 1;
+            return real + reads * 100;
+          },
+        };
+      });
+
+      // ONE wrapper per placement call, installed before the restore's first
+      // settle and never nested: a second wrapper over one that is already
+      // live adds two placements to whatever the run would otherwise report,
+      // on both sides of the fix. Counts are therefore read as deltas, so only
+      // what the show itself issued is judged.
+      const scrollToIndexSpy = vi.spyOn(list, "scrollToIndex");
+      const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+
+      try {
+        // Two settles with the row still moving: the restore is mid-flight.
+        await settleLegendList();
+        const issuedEarly = scrollToIndexSpy.mock.calls.length;
+        await settleLegendList();
+
+        // The premise, asserted rather than assumed: the restore is still
+        // PENDING when the tile hides. A pending loop re-issues on every
+        // settle, so a placement count that grew across that second settle is
+        // the loop still running and its persistence gate still armed. A
+        // restore that had already accepted issues nothing further, and the
+        // hide would then be concealing a FINISHED restore - the defect this
+        // witness covers needs an unfinished one, so the run would pass while
+        // exercising nothing.
+        const issuedBeforeHide = scrollToIndexSpy.mock.calls.length;
+        expect(issuedBeforeHide).toBeGreaterThan(issuedEarly);
+
+        // Conceal WITHOUT collapsing. The assertion is the premise: a hide
+        // that zeroed the box would exercise the collapsed path instead, and
+        // this test would pass for the wrong reason.
+        rerenderWith({ visible: false });
+        expect(getScrollNode().scrollTop).toBe(beforeHide);
+
+        // Measurement finishes while the tile is concealed. An intact box
+        // keeps measuring, so a loop still running here converges and reaches
+        // the terminal outcome that releases the gate.
+        measuring = false;
+        for (let round = 0; round < 8; round += 1) {
+          await settleLegendList();
+        }
+
+        const issuedBeforeShow = scrollToIndexSpy.mock.calls.length;
+        const placedBeforeShow = scrollToOffsetSpy.mock.calls.length;
+        rerenderWith({ visible: true });
+        await settleLegendList();
+        await settleLegendList();
+        expect(scrollToIndexSpy.mock.calls.length).toBe(issuedBeforeShow);
+        expect(scrollToOffsetSpy.mock.calls.length).toBe(placedBeforeShow);
+        // The reader is where they were, and the mode survived the handoff.
+        expect(getScrollNode().scrollTop).toBe(beforeHide);
+        expect(getScrollNode().dataset.scrollMode).toBe("free-scrolling");
+      } finally {
+        scrollToIndexSpy.mockRestore();
+        scrollToOffsetSpy.mockRestore();
+        getStateSpy.mockRestore();
+      }
+    });
+
     it("a retained chat whose box survived concealment is not re-scrolled on show (bottom-following)", async () => {
       // Same guard for a reader parked at the tail: `scrollToEnd` over a list
       // that is already at its strict bottom is the jump the recording showed

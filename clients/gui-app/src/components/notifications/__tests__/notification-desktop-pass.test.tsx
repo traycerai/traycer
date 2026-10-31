@@ -1030,6 +1030,18 @@ describe("notification desktop-pass design corrections", () => {
   });
 
   describe("temporal separator subordination", () => {
+    // Fixed to local noon: a bucketing assertion must not depend on the
+    // first minute of the real local day, where `now - 60_000` lands
+    // yesterday and drops the Today separator. Noon also keeps the
+    // `- DAY_MS / 2` and `- 3 * DAY_MS` arithmetic clear of DST edges.
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 9, 15, 12, 0, 0));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it("keeps separators sentence-case and micro while section headers stay overline/uppercase", async () => {
       const now = Date.now();
       applyHostSnapshot(
