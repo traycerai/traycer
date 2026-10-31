@@ -127,6 +127,45 @@ const fake = vi.hoisted(() => {
   function slot<T>(): { value: T | null } {
     return { value: null };
   }
+  // Each bot's channel as `bot.conversation.list` answers it (bot-1's is
+  // chan-1, bot-2's chan-bot-2); `answer(botId, false)` leaves a bot's list
+  // unanswered until a test answers it, re-rendering its readers.
+  const answeredLists = new Set(["bot-1", "bot-2"]);
+  const listAnswers = new Map(
+    ["bot-1", "bot-2"].map((botId) => [
+      botId,
+      {
+        data: {
+          conversations: [
+            {
+              conversationId: botId === "bot-1" ? "chan-1" : `chan-${botId}`,
+              botId,
+              title: null,
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+        },
+      },
+    ]),
+  );
+  const unanswered = { data: undefined };
+  const listListeners = new Set<() => void>();
+  const conversationLists = {
+    get: (botId: string) =>
+      answeredLists.has(botId)
+        ? (listAnswers.get(botId) ?? unanswered)
+        : unanswered,
+    subscribe: (listener: () => void): (() => void) => {
+      listListeners.add(listener);
+      return () => listListeners.delete(listener);
+    },
+    answer: (botId: string, answered: boolean): void => {
+      if (answered) answeredLists.add(botId);
+      else answeredLists.delete(botId);
+      for (const listener of listListeners) listener();
+    },
+  };
   // The bot list as `bot.list` answers it, read by a real query over the
   // test's cache, so the change subscription's invalidation refetches it.
   const mainBotList: BotListResponse = {
@@ -149,9 +188,62 @@ const fake = vi.hoisted(() => {
         replyMode: "direct",
         appConversationChatId: "chan-1",
       },
+      {
+        botId: "bot-2",
+        environmentId: "env-1",
+        createdByUserId: "user-1",
+        title: "Release bot",
+        harness: "claude",
+        model: "opus",
+        effort: null,
+        profile: null,
+        trunkChatId: "trunk-bot-2",
+        boundHostId: "host-a",
+        hostEpoch: 0,
+        createdAt: 2_000,
+        archivedAt: null,
+        directive: null,
+        replyMode: "direct",
+        appConversationChatId: "chan-bot-2",
+      },
     ],
     mainBotIds: { "env-1": "bot-1" },
   };
+  // The router's fixture answer: post the whole utterance to `botId`'s
+  // channel (or its `threadId`), or to the focus for `null`.
+  function routePost(
+    botId: string | null,
+    threadId: string | null,
+    body: string,
+    uncertain: boolean,
+  ): unknown {
+    const segments = body.split(String.raw`\"segment\":`).length - 1;
+    return {
+      output: [
+        {
+          type: "message",
+          content: [
+            {
+              type: "output_text",
+              text: JSON.stringify({
+                action: "post",
+                target: {
+                  environmentId: null,
+                  botId,
+                  threadId,
+                  itemId: null,
+                },
+                span: { fromSegment: 0, toSegment: segments - 1 },
+                uncertain,
+                question: null,
+                control: null,
+              }),
+            },
+          ],
+        },
+      ],
+    };
+  }
   return {
     personalEnvironment,
     mainBotList,
@@ -183,6 +275,39 @@ const fake = vi.hoisted(() => {
     endVoiceSession: vi.fn(),
     engines: [] as FakeEngine[],
     handles: new Map<string, { store: StoreApi<ChatState> }>(),
+    /**
+     * The router's answer for these cases: every utterance posts, whole, to
+     * the focus, which is what the say loop's post path they pin needs.
+     */
+    routeToFocus: (body: string): unknown => routePost(null, null, body, false),
+    /** A router answer for one case, in place of {@link routeToFocus}; reset for every case. */
+    routeAnswer: null as ((body: string) => unknown) | null,
+    /**
+     * What the router's navigate resolves with for the next tab navigation:
+     * a settled navigation by default; a test makes it fail.
+     */
+    navigateOutcome: (): Promise<void> => Promise.resolve(),
+    navigate: vi.fn((_options: unknown): Promise<void> =>
+      fake.navigateOutcome(),
+    ),
+    /**
+     * How the tab navigation takes the voice's next activation: `"switches"`
+     * (the tab comes to the front at once and the route navigation runs; a
+     * rejected one puts the previous tab back), `"queued"` (accepted before
+     * the navigation is ready: nothing moves yet) or `"refused"`.
+     */
+    tabActivation: "switches",
+    conversationLists,
+    /** The answer that posts the whole utterance to bot `botId`'s channel. */
+    routeToBot: (botId: string, body: string): unknown =>
+      routePost(botId, null, body, false),
+    /** A post to `botId`'s channel the router is unsure of: it is confirmed first. */
+    routeToBotUnsure: (botId: string, body: string): unknown =>
+      routePost(botId, null, body, true),
+    routeToThread: (botId: string, threadId: string, body: string): unknown =>
+      routePost(botId, threadId, body, false),
+    /** Each bot's threads as `bot.thread.list` answers the voice's directory. */
+    botThreads: new Map<string, ReadonlyArray<unknown>>(),
   };
 });
 
@@ -220,10 +345,69 @@ vi.mock("@/lib/host", async (importOriginal) => ({
         },
       }),
     endVoiceSession: fake.endVoiceSession,
+    routeVoiceUtterance: (body: string) =>
+      Promise.resolve({
+        kind: "ok",
+        body: (fake.routeAnswer ?? fake.routeToFocus)(body),
+      }),
   }),
   useHostClient: () => null,
 }));
+// The router's directory is the real one, over the bot list above and the
+// person's one environment as `environment.list` answers it.
+const ENVIRONMENT_LIST = {
+  data: {
+    environments: [
+      {
+        environmentId: "env-1",
+        ownerKind: "user" as const,
+        ownerId: "user-1",
+        roomId: "room-env-1",
+        label: "Personal",
+        effectiveRole: "owner" as const,
+        kind: "personal" as const,
+        hostCount: 1,
+        providerHandle: null,
+      },
+    ],
+  },
+};
+vi.mock("@/hooks/bots/use-environment-list-query", () => ({
+  useEnvironmentListQuery: () => ENVIRONMENT_LIST,
+}));
 
+// The host queries the voice's directory makes: `bot.thread.list` answers
+// from `botThreads` (none by default); the follow, cursor and level reads
+// have not answered.
+vi.mock("@/hooks/host/use-host-queries", () => {
+  function result(data: unknown): unknown {
+    const settled = {
+      data,
+      isError: false,
+      isPending: data === undefined,
+      refetch: () => Promise.resolve(settled),
+    };
+    return settled;
+  }
+  return {
+    useHostQueries: (args: {
+      readonly requests: ReadonlyArray<{
+        readonly method: string;
+        readonly params: { readonly botId: string };
+      }>;
+    }) =>
+      args.requests.map((request) =>
+        result(
+          request.method === "bot.thread.list"
+            ? {
+                threads: fake.botThreads.get(request.params.botId) ?? [],
+                trunkCostUsd: null,
+              }
+            : undefined,
+        ),
+      ),
+  };
+});
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-a",
 }));
@@ -280,22 +464,15 @@ vi.mock(
     usePersonalEnvironment: () => fake.personalEnvironment.value,
   }),
 );
-const CONVERSATION_LIST = {
-  data: {
-    conversations: [
-      {
-        conversationId: "chan-1",
-        botId: "bot-1",
-        title: null,
-        createdAt: 1,
-        updatedAt: 1,
-      },
-    ],
-  },
-};
-vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
-  useBotConversationListQuery: () => CONVERSATION_LIST,
-}));
+vi.mock("@/hooks/bots/use-bot-conversation-list-query", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    useBotConversationListQuery: (_client: unknown, botId: string) =>
+      useSyncExternalStore(fake.conversationLists.subscribe, () =>
+        fake.conversationLists.get(botId),
+      ),
+  };
+});
 vi.mock("@/hooks/bots/use-bot-thread-list-query", async () => {
   const { useSyncExternalStore } = await import("react");
   return {
@@ -349,9 +526,53 @@ vi.mock("@/lib/voice/gpt-live-engine", () => ({
 vi.mock("@/lib/voice/audio-level", () => ({
   watchAudioLevel: () => ({ stop: () => undefined }),
 }));
+// The tab navigation's activation as the real one behaves for the voice: it
+// brings the bot's tab to the front at once and runs the route navigation
+// (whose outcome `navigateOutcome` decides), putting the previous tab back
+// when that navigation fails unless a newer activation superseded it; or it
+// queues the activation, or refuses it.
+vi.mock("@/lib/tab-navigation", async (importOriginal) => {
+  const { useTabsStore: tabs } = await import("@/stores/tabs/store");
+  let activations = 0;
+  return {
+    ...(await importOriginal<typeof import("@/lib/tab-navigation")>()),
+    activateTabIntent: (
+      navigate: (options: object) => Promise<void>,
+      intent: { readonly kind: string; readonly botId?: string },
+      options: { readonly onRejected?: (error: Error) => void } | undefined,
+    ): boolean => {
+      if (fake.tabActivation === "refused") {
+        options?.onRejected?.(new Error("refused"));
+        return false;
+      }
+      if (fake.tabActivation === "queued") return true;
+      const before = tabs.getState();
+      const botId = intent.botId ?? "";
+      // A newer activation supersedes this one: the tab navigation then
+      // drops it, and its failure later puts nothing back.
+      activations += 1;
+      const activation = activations;
+      tabs.setState({
+        items: [
+          ...before.items.filter((item) => item.id !== `item-${botId}`),
+          { kind: "tab", id: `item-${botId}`, ref: { kind: "bot", id: botId } },
+        ],
+        activeItemId: `item-${botId}`,
+      });
+      void navigate({}).catch(() => {
+        if (activation !== activations) return;
+        tabs.setState({
+          items: before.items,
+          activeItemId: before.activeItemId,
+        });
+      });
+      return true;
+    },
+  };
+});
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-router")>()),
-  useNavigate: () => vi.fn(),
+  useNavigate: () => fake.navigate,
 }));
 
 const initialVoice = useVoiceSessionStore.getState();
@@ -535,6 +756,13 @@ beforeEach(() => {
   fake.endVoiceSession.mockImplementation(() =>
     Promise.resolve({ kind: "ok", closedAt: 1 }),
   );
+  fake.routeAnswer = null;
+  fake.navigateOutcome = () => Promise.resolve();
+  fake.navigate.mockClear();
+  fake.conversationLists.answer("bot-1", true);
+  fake.conversationLists.answer("bot-2", true);
+  fake.tabActivation = "switches";
+  fake.botThreads.clear();
   fake.sendMock.mockReset();
   fake.sendMock.mockImplementation(() => fake.send.promise);
   fake.markRead.mockReset();
@@ -724,9 +952,10 @@ describe("an interruption whose ask is never delivered", () => {
 
     act(() => eventsOf(0).onInputTranscriptDelta("Run"));
     selectBotTab("bot-2");
-    expect(useVoiceSessionStore.getState().pendingAction?.askState).toBe(
-      "asking",
-    );
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "interrupted",
+      askState: "asking",
+    });
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(40_000);
@@ -759,9 +988,10 @@ describe("an ask given up during an utterance", () => {
 
     act(() => eventsOf(0).onInputTranscriptDelta("Delete "));
     selectBotTab("bot-2");
-    expect(useVoiceSessionStore.getState().pendingAction?.askState).toBe(
-      "asking",
-    );
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "interrupted",
+      askState: "asking",
+    });
 
     // Each unconfirmed append spends its confirm window; stop at the third.
     for (let step = 0; step < 400 && askCount() < 3; step += 1) {
@@ -770,9 +1000,10 @@ describe("an ask given up during an utterance", () => {
       });
     }
     expect(askCount()).toBe(3);
-    expect(useVoiceSessionStore.getState().pendingAction?.askState).toBe(
-      "asking",
-    );
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "interrupted",
+      askState: "asking",
+    });
 
     // Just before the third window ends the person is still mid-utterance.
     await act(async () => {
@@ -782,9 +1013,10 @@ describe("an ask given up during an utterance", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
-    expect(useVoiceSessionStore.getState().pendingAction?.askState).toBe(
-      "closing",
-    );
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "interrupted",
+      askState: "closing",
+    });
 
     await act(async () => {
       eventsOf(0).onDelegationCreated("d0");
@@ -823,6 +1055,84 @@ describe("an interruption before the session's first delegation", () => {
     expect(held?.text).toContain("Delete");
     expect(held?.text).toContain("the branch.");
   });
+});
+
+describe("a routed post to another bot", () => {
+  it("opens that bot, sends only once its channel is known and never on the previous bot's, and the voice's own tab change is no move", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    await bringLive();
+    expect(useVoiceSessionStore.getState().focus).toEqual(CHANNEL_FOCUS);
+    fake.routeAnswer = (body) => fake.routeToBot("bot-2", body);
+    act(() => fake.conversationLists.answer("bot-2", false));
+    const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+    await say("Ask the release bot when the train leaves.", "d1");
+
+    // The voice moved to bot-2 and its tab came up: the focus is bot-2's
+    // channel, not a move, and nothing is sent while its channel is unknown.
+    expect(useVoiceSessionStore.getState().focus).toEqual({
+      ...CHANNEL_FOCUS,
+      botId: "bot-2",
+    });
+    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
+      generation,
+    );
+    expect(fake.sendMock).not.toHaveBeenCalled();
+
+    act(() => fake.conversationLists.answer("bot-2", true));
+    await settle();
+
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    expect(fake.sendMock).toHaveBeenCalledWith({
+      botId: "bot-2",
+      conversationId: "chan-bot-2",
+      text: "Ask the release bot when the train leaves.",
+      threadId: null,
+      announcementId: null,
+      redeliver: null,
+      supersedes: null,
+      answer: null,
+    });
+    expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
+    expect(
+      (fake.engines[0]?.appendCommentary.mock.calls ?? []).filter(
+        ([text]) => text === MOVED_ASK_TEXT,
+      ),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["refused by the tab navigation", "refused" as const],
+    ["undone when its route navigation fails", "switches" as const],
+  ])(
+    "whose move is %s keeps the focus and the generation, posts nothing, and says the move did not happen",
+    async (_name, activation) => {
+      addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+      selectBotTab(BOT_ID);
+      await bringLive();
+      fake.routeAnswer = (body) => fake.routeToBot("bot-2", body);
+      fake.tabActivation = activation;
+      fake.navigateOutcome = () => Promise.reject(new Error("blocked"));
+      const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+      await say("Ask the release bot when the train leaves.", "d1");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+
+      const state = useVoiceSessionStore.getState();
+      expect(state.focus).toEqual(CHANNEL_FOCUS);
+      expect(state.selectionGeneration).toBe(generation);
+      expect(state.segments).toEqual([]);
+      expect(fake.sendMock).not.toHaveBeenCalled();
+      expect(
+        (fake.engines[0]?.appendCommentary.mock.calls ?? []).some(([text]) =>
+          text.includes("did not happen"),
+        ),
+      ).toBe(true);
+    },
+  );
 });
 
 describe("a fast answer in a cold existing thread", () => {
@@ -1825,5 +2135,452 @@ describe("a replacement asked for before its session started", () => {
     expect(state.endReason).toBe("connection");
     expect(fake.engines).toHaveLength(3);
     expect(fake.endVoiceSession).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("a rail change in the bot the voice is leaving", () => {
+  it("counts as the person moving while the target's tab has not come up", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    await bringLive();
+    fake.routeAnswer = (body) => fake.routeToBot("bot-2", body);
+    // The activation is queued (the tab navigation is not ready yet): bot-1's
+    // tab stays the active one while the voice's move is out.
+    fake.tabActivation = "queued";
+    await say("Ask the release bot when the train leaves.", "d1");
+    const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+    // The person opens a thread in bot-1's rail by hand.
+    act(() =>
+      useBotOpenThreadStore.getState().setRail(BOT_ID, {
+        kind: "thread",
+        anchorMessageId: "q1",
+        announcement: true,
+        anchorKind: null,
+        sent: null,
+      }),
+    );
+    await settle();
+
+    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
+      generation + 1,
+    );
+  });
+});
+
+describe("a routed post to another thread of the active bot", () => {
+  it("opens that thread, posts there once, and interrupts nothing while its navigation is out", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    fake.botThreads.set(BOT_ID, [
+      {
+        threadId: "t-safari",
+        conversationId: CHANNEL_ID,
+        sessionChatId: "session-safari",
+        anchor: {
+          messageId: "q-safari",
+          requestId: "r-safari",
+          senderUserId: "user-1",
+          sentAt: 1_000,
+          resolvedAt: null,
+        },
+        replyCount: 2,
+        lastReplyAt: 2_000,
+        openRequestCount: 0,
+        costUsd: null,
+      },
+    ]);
+    selectBotTab(BOT_ID);
+    await bringLive();
+    let land: () => void = () => undefined;
+    fake.navigateOutcome = () =>
+      new Promise<void>((resolve) => {
+        land = resolve;
+      });
+    fake.routeAnswer = (body) => fake.routeToThread(BOT_ID, "t-safari", body);
+    const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+    await say("Is the Safari fix in tonight's train?", "d1");
+
+    // The rail moved to the thread at once; the navigation is still out, so
+    // the new anchor is the voice's own and nothing is posted yet.
+    expect(useBotOpenThreadStore.getState().byBotId[BOT_ID]).toMatchObject({
+      kind: "thread",
+      anchorMessageId: "q-safari",
+    });
+    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
+      generation,
+    );
+    expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
+    expect(fake.sendMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      land();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    expect(fake.sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        botId: BOT_ID,
+        conversationId: CHANNEL_ID,
+        threadId: "t-safari",
+        text: "Is the Safari fix in tonight's train?",
+      }),
+    );
+    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
+      generation,
+    );
+    expect(
+      (fake.engines[0]?.appendCommentary.mock.calls ?? []).filter(
+        ([text]) => text === MOVED_ASK_TEXT,
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("a held voice navigation to another bot", () => {
+  it("a rail change by the person in the tab the voice is opening, while its navigation is out, is a move", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    await bringLive();
+    fake.routeAnswer = (body) => fake.routeToBot("bot-2", body);
+    act(() => fake.conversationLists.answer("bot-2", true));
+    let land: () => void = () => undefined;
+    fake.navigateOutcome = () =>
+      new Promise<void>((resolve) => {
+        land = resolve;
+      });
+    const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+    await say("Ask the release bot when the train leaves.", "d1");
+    // bot-2's tab is already the active one; its navigation is still out.
+    act(() =>
+      useBotOpenThreadStore.getState().setRail("bot-2", {
+        kind: "thread",
+        anchorMessageId: "q1",
+        announcement: true,
+        anchorKind: null,
+        sent: null,
+      }),
+    );
+    await settle();
+
+    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
+      generation + 1,
+    );
+    land();
+    await settle();
+    expect(fake.sendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("two overlapping voice navigations", () => {
+  it("when the older settles last, keep the focus on the newer destination, interrupt nothing, and post only the newer request", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    fake.botThreads.set(BOT_ID, [
+      {
+        threadId: "t-safari",
+        conversationId: CHANNEL_ID,
+        sessionChatId: "session-safari",
+        anchor: {
+          messageId: "q-safari",
+          requestId: "r-safari",
+          senderUserId: "user-1",
+          sentAt: 1_000,
+          resolvedAt: null,
+        },
+        replyCount: 2,
+        lastReplyAt: 2_000,
+        openRequestCount: 0,
+        costUsd: null,
+      },
+    ]);
+    selectBotTab(BOT_ID);
+    await bringLive();
+    // The first request goes to bot-2's channel, the second to bot-1's
+    // Safari thread; each navigation is held until the test lands it.
+    const routes = [
+      (body: string) => fake.routeToBot("bot-2", body),
+      (body: string) => fake.routeToThread(BOT_ID, "t-safari", body),
+    ];
+    fake.routeAnswer = (body) => (routes.shift() ?? fake.routeToFocus)(body);
+    const lands: Array<() => void> = [];
+    fake.navigateOutcome = () =>
+      new Promise<void>((resolve) => {
+        lands.push(resolve);
+      });
+    const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+    await say("Ask the release bot when the train leaves.", "d1");
+    await say("Is the Safari fix in tonight's train?", "d2");
+    expect(lands).toHaveLength(2);
+
+    // The newer navigation lands first, then the superseded older one.
+    await act(async () => {
+      lands[1]?.();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      lands[0]?.();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await settle();
+
+    const state = useVoiceSessionStore.getState();
+    expect(state.focus).toMatchObject({
+      botId: BOT_ID,
+      threadId: "t-safari",
+      anchorMessageId: "q-safari",
+    });
+    expect(state.selectionGeneration).toBe(generation);
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    expect(fake.sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        botId: BOT_ID,
+        threadId: "t-safari",
+        text: "Is the Safari fix in tonight's train?",
+      }),
+    );
+    expect(
+      (fake.engines[0]?.appendCommentary.mock.calls ?? []).filter(
+        ([text]) => text === MOVED_ASK_TEXT,
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("a held voice move within the active bot", () => {
+  it("the person closing the rail the voice just opened, back to the departing anchor, is a move", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    fake.botThreads.set(BOT_ID, [
+      {
+        threadId: "t-safari",
+        conversationId: CHANNEL_ID,
+        sessionChatId: "session-safari",
+        anchor: {
+          messageId: "q-safari",
+          requestId: "r-safari",
+          senderUserId: "user-1",
+          sentAt: 1_000,
+          resolvedAt: null,
+        },
+        replyCount: 2,
+        lastReplyAt: 2_000,
+        openRequestCount: 0,
+        costUsd: null,
+      },
+    ]);
+    selectBotTab(BOT_ID);
+    await bringLive();
+    let land: () => void = () => undefined;
+    fake.navigateOutcome = () =>
+      new Promise<void>((resolve) => {
+        land = resolve;
+      });
+    fake.routeAnswer = (body) => fake.routeToThread(BOT_ID, "t-safari", body);
+    const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+    await say("Is the Safari fix in tonight's train?", "d1");
+    expect(useBotOpenThreadStore.getState().byBotId[BOT_ID]).toMatchObject({
+      anchorMessageId: "q-safari",
+    });
+
+    // The person closes the rail the voice opened: back to the channel the
+    // voice departed from, while the navigation is still out.
+    act(() => useBotOpenThreadStore.getState().setRail(BOT_ID, null));
+    await settle();
+    // The move is noticed while the navigation is still out.
+    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
+      generation + 1,
+    );
+    await act(async () => {
+      land();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
+      generation + 1,
+    );
+    expect(fake.sendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("a confirmation dropped before its question was said", () => {
+  it("withdraws the question: a new request in its place leaves nothing asking about the dropped post", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    await bringLive();
+    const routes = [
+      (body: string) => fake.routeToBotUnsure("bot-2", body),
+      (body: string) => fake.routeToFocus(body),
+    ];
+    fake.routeAnswer = (body) => (routes.shift() ?? fake.routeToFocus)(body);
+
+    // The question waits behind the voice's own acknowledgement; before it
+    // is said, the person makes a new request instead.
+    await say("Tell the release bot hello.", "d1");
+    expect(useVoiceSessionStore.getState().pendingAction).toMatchObject({
+      kind: "confirming",
+    });
+    await say("Check the build.", "d2");
+    expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    const said = (fake.engines[0]?.appendCommentary.mock.calls ?? []).map(
+      ([text]) => text,
+    );
+    expect(said.some((text) => text.startsWith("Did you mean"))).toBe(false);
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    expect(fake.sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({ botId: BOT_ID, text: "Check the build." }),
+    );
+  });
+
+  it("a question that was appended but not confirmed is not appended again once a new request drops its confirmation", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    await bringLive();
+    const routes = [
+      (body: string) => fake.routeToBotUnsure("bot-2", body),
+      (body: string) => fake.routeToFocus(body),
+    ];
+    fake.routeAnswer = (body) => (routes.shift() ?? fake.routeToFocus)(body);
+    const questions = (): number =>
+      (fake.engines[0]?.appendCommentary.mock.calls ?? []).filter(([text]) =>
+        text.startsWith("Did you mean"),
+      ).length;
+
+    await say("Tell the release bot hello.", "d1");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+    // The question was appended once, and its output never confirmed.
+    expect(questions()).toBe(1);
+
+    await say("Check the build.", "d2");
+    expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    expect(questions()).toBe(1);
+  });
+});
+
+describe("a voice move to another thread of the active bot that fails", () => {
+  it("puts the bot's rail back as it was, so nothing reads the failed move as the person's", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    fake.botThreads.set(BOT_ID, [
+      {
+        threadId: "t-safari",
+        conversationId: CHANNEL_ID,
+        sessionChatId: "session-safari",
+        anchor: {
+          messageId: "q-safari",
+          requestId: "r-safari",
+          senderUserId: "user-1",
+          sentAt: 1_000,
+          resolvedAt: null,
+        },
+        replyCount: 2,
+        lastReplyAt: 2_000,
+        openRequestCount: 0,
+        costUsd: null,
+      },
+    ]);
+    selectBotTab(BOT_ID);
+    await bringLive();
+    fake.routeAnswer = (body) => fake.routeToThread(BOT_ID, "t-safari", body);
+    fake.navigateOutcome = () => Promise.reject(new Error("blocked"));
+    const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+    await say("Is the Safari fix in tonight's train?", "d1");
+    await settle();
+
+    expect(useBotOpenThreadStore.getState().byBotId[BOT_ID]).toBeUndefined();
+    const state = useVoiceSessionStore.getState();
+    expect(state.focus).toEqual(CHANNEL_FOCUS);
+    expect(state.selectionGeneration).toBe(generation);
+    expect(fake.sendMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("a rail put back against a newer navigation", () => {
+  const THREAD_RAIL = {
+    kind: "thread",
+    anchorMessageId: "q-safari",
+    announcement: false,
+    anchorKind: null,
+    sent: null,
+  } as const;
+
+  function navigateToChannel(botId: string): unknown {
+    return {
+      output: [
+        {
+          type: "message",
+          content: [
+            {
+              type: "output_text",
+              text: JSON.stringify({
+                action: "navigate",
+                target: {
+                  environmentId: null,
+                  botId,
+                  threadId: null,
+                  itemId: null,
+                },
+                span: { fromSegment: 0, toSegment: 0 },
+                uncertain: false,
+                question: null,
+                control: null,
+              }),
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  async function startWithOtherBotOnAThread(): Promise<void> {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    // bot-2 already shows a thread, as the person left it.
+    act(() => useBotOpenThreadStore.getState().setRail("bot-2", THREAD_RAIL));
+    await bringLive();
+  }
+
+  it("an older failing move to a bot's channel does not put that bot's thread rail back over a newer move to the same channel that landed", async () => {
+    await startWithOtherBotOnAThread();
+    fake.routeAnswer = () => navigateToChannel("bot-2");
+    let rejectOlder: (error: Error) => void = () => undefined;
+    const outcomes: Array<() => Promise<void>> = [
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectOlder = reject;
+        }),
+      () => Promise.resolve(),
+    ];
+    fake.navigateOutcome = () =>
+      (outcomes.shift() ?? (() => Promise.resolve()))();
+    const generation = useVoiceSessionStore.getState().selectionGeneration;
+
+    await say("Go to the release bot.", "d1");
+    await say("Go to the release bot please.", "d2");
+    // Precondition: the newer move landed on the channel.
+    expect(useBotOpenThreadStore.getState().byBotId["bot-2"]).toBeUndefined();
+
+    await act(async () => {
+      rejectOlder(new Error("blocked"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await settle();
+
+    expect(useBotOpenThreadStore.getState().byBotId["bot-2"]).toBeUndefined();
+    expect(useVoiceSessionStore.getState().selectionGeneration).toBe(
+      generation,
+    );
   });
 });

@@ -349,8 +349,8 @@ function installSandboxFrameGuard(webContents: WebContents): void {
  * `media` is the one exception: dictation into the composer and talking to
  * your bots by voice both need `getUserMedia({audio})`, so we allow it for
  * **audio only** (camera/video stays denied). The macOS TCC prompt is gated by
- * `NSMicrophoneUsageDescription` (which names both uses) + the audio-input
- * entitlement; this handler is the Chromium-layer gate.
+ * `NSMicrophoneUsageDescription` + the audio-input entitlement; this handler is
+ * the Chromium-layer gate.
  *
  * That audio allowance is load-bearing beyond the microphone: Chromium's WebRTC port
  * allocator consults this same permission CHECK, and a denial makes it gather

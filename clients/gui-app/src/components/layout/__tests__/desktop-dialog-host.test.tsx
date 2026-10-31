@@ -432,6 +432,11 @@ function createBaseRunnerHost(): IRunnerHost {
     mintVoiceSession: () => Promise.resolve({ kind: "dormant" as const }),
     endVoiceSession: () =>
       Promise.resolve({ kind: "ok" as const, closedAt: null }),
+    routeVoiceUtterance: () =>
+      Promise.resolve({
+        kind: "network-error" as const,
+        detail: "no router in this test",
+      }),
     setVoiceSessionLive: () => Promise.resolve(),
     setVoiceSessionIndicator: () => Promise.resolve(),
     requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),

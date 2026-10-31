@@ -10,6 +10,9 @@ import {
   type AuthStatus,
 } from "@/stores/auth/auth-store";
 
+/** What a surface says when it needs a device and the window has none. */
+export const NO_DEVICE_AVAILABLE = "No device is available right now.";
+
 /**
  * Display name for a host the composer is about to talk about. The generic
  * fallbacks are deliberate: the composer names a device in refusal and notice
@@ -137,8 +140,7 @@ export function resolveLandingPlacement(
   if (target.resolvedHostId === null) {
     return {
       kind: "refused",
-      message:
-        "No device is available right now. Connect a device before starting a task.",
+      message: `${NO_DEVICE_AVAILABLE} Connect a device before starting a task.`,
     };
   }
   if (target.namedHostDead) {

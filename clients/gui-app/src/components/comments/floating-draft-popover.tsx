@@ -269,6 +269,7 @@ export function FloatingDraftPopover(props: FloatingDraftPopoverProps) {
           isDirtyRef.current = isDirty;
           dismiss(false);
         }}
+        leadingActions={null}
         className={undefined}
       />
     </dialog>,

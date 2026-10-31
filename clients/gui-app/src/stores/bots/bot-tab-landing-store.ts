@@ -1,14 +1,24 @@
 import { create } from "zustand";
 
 /**
- * Where a bot's tab is asked to land from outside it (a tapped push): a
- * thread beside the channel, on one of its rows, or the channel itself
- * (`threadId` `null`), on a row of it where `messageId` names one.
+ * Where a bot's tab is asked to land from outside it, on a row where
+ * `messageId` names one:
+ *  - `thread` (a tapped push): a thread beside the channel, or the channel
+ *    itself (`threadId` `null`);
+ *  - `chat` (a chat search hit, a session link): one of the bot's chats by
+ *    its id, which the tab resolves to its channel, a thread, or a session.
  */
-export interface BotTabLanding {
-  readonly threadId: string | null;
-  readonly messageId: string | null;
-}
+export type BotTabLanding =
+  | {
+      readonly kind: "thread";
+      readonly threadId: string | null;
+      readonly messageId: string | null;
+    }
+  | {
+      readonly kind: "chat";
+      readonly chatId: string;
+      readonly messageId: string | null;
+    };
 
 interface BotTabLandingState {
   readonly byBotId: Readonly<Record<string, BotTabLanding>>;

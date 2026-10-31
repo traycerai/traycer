@@ -160,7 +160,12 @@ export interface RelayResumeClaim {
 interface RelayLegOptions {
   readonly attachBaseUrl: string;
   readonly grantJws: string;
-  /** The leg this dial replaces, or `null` on a first dial. Telemetry only. */
+  /**
+   * How the last leg that CARRIED a session ended, or `null` while this client
+   * has never had one. Not the dial before this one: a dial that never reached
+   * its attach carried nothing, so it leaves this as it found it. Telemetry
+   * only.
+   */
   readonly previousLeg: RelayLegEnd | null;
   /** The session this dial claims back, or `null` for a fresh attach. */
   readonly resumeClaim: RelayResumeClaim | null;
@@ -765,7 +770,7 @@ export class RelaySocket {
 /**
  * Appends the attach grant as a `?grant=` query param (fallback presentation),
  * `park=1` so the relay parks this leg's loss, `resume=<sid>:<key>` for a
- * claim, and `prev=<code>:<reason>` for the leg this dial replaces.
+ * claim, and `prev=<code>:<reason>` for the last leg that carried a session.
  */
 function withAttachQuery(
   attachBaseUrl: string,
