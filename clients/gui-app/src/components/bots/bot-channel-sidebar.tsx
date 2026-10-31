@@ -20,6 +20,7 @@ import { useRereadEnvironmentListOnFocus } from "@/hooks/bots/use-reread-environ
 import { useHostEnvironmentBindings } from "@/hooks/bots/use-host-environment-bindings-query";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { useBotChannelMuted } from "@/hooks/bots/use-bot-notification-level";
+import { useBotChannelBold } from "@/hooks/bots/use-bot-read-cursor";
 import { BotMutedGlyph } from "@/components/bots/bot-muted-glyph";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { indicatorHasUnread } from "@/stores/notifications/notification-indicator-state";
@@ -333,18 +334,24 @@ function ChannelRow(props: {
   readonly onOpen: () => void;
 }): ReactNode {
   const { bot, isMain, active, unread, unreadCount, hostId, onOpen } = props;
+  const client = useTabHostClient();
   const muted = useBotChannelMuted(
-    useTabHostClient(),
+    client,
     hostId,
     bot.botId,
     bot.appConversationChatId,
   );
+  // Bold is the read cursor's where the host keeps one (decision 139): a
+  // channel with new posts at Mentions level is bold with no count.
+  const bold =
+    useBotChannelBold(client, hostId, bot.botId, bot.appConversationChatId) ??
+    unread;
   return (
     <button
       type="button"
       data-testid="bot-channel-row"
       data-bot-id={bot.botId}
-      data-unread={unread ? "true" : "false"}
+      data-unread={bold ? "true" : "false"}
       aria-current={active ? "page" : undefined}
       onClick={onOpen}
       className={cn(
@@ -352,7 +359,7 @@ function ChannelRow(props: {
         active
           ? "bg-primary text-primary-foreground"
           : "text-muted-foreground hover:bg-foreground/6",
-        unread && !active && "font-semibold text-foreground",
+        bold && !active && "font-semibold text-foreground",
       )}
     >
       <NamedBotAvatar botId={bot.botId} title={bot.title} size="sm" />

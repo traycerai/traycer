@@ -44,6 +44,10 @@ import {
   botThreadFollowReadResponseSchema,
   botThreadFollowSetRequestSchema,
   botThreadFollowSetResponseSchema,
+  botReadCursorReadRequestSchema,
+  botReadCursorReadResponseSchema,
+  botReadCursorAdvanceRequestSchema,
+  botReadCursorAdvanceResponseSchema,
   botUpdateTitleRequestSchema,
 } from "./schemas";
 import {
@@ -198,6 +202,26 @@ export const botThreadFollowSetV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botThreadFollowSetRequestSchema,
   responseSchema: botThreadFollowSetResponseSchema,
+});
+
+/**
+ * `bot.readCursor.read@1.0` / `.advance@1.0` (decision 139): how far the
+ * caller has read each of a bot's conversations, kept in the cloud and
+ * proxied by any host, beside each conversation's newest row as the host
+ * knows it. The cursor drives bold; the mailbox keeps the bell.
+ */
+export const botReadCursorReadV10 = defineRpcContract({
+  method: "bot.readCursor.read",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botReadCursorReadRequestSchema,
+  responseSchema: botReadCursorReadResponseSchema,
+});
+
+export const botReadCursorAdvanceV10 = defineRpcContract({
+  method: "bot.readCursor.advance",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botReadCursorAdvanceRequestSchema,
+  responseSchema: botReadCursorAdvanceResponseSchema,
 });
 
 export const botDeleteV10 = defineRpcContract({

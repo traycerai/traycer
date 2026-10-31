@@ -30,7 +30,12 @@ import {
   useBotSubscriptionForClient,
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotThreadListQuery } from "@/hooks/bots/use-bot-thread-list-query";
+import { useBotReadCursorQuery } from "@/hooks/bots/use-bot-read-cursor";
 import { StubHostStreamClient, StubSession } from "./bot-subscribe-stub-stream";
+
+vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
+  useCloudChatViewerId: () => "user-1",
+}));
 
 const BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const HOST_ID = mockLocalHostEntry.hostId;
@@ -86,8 +91,9 @@ function claimed(
   };
 }
 
-function fixture(): {
+function fixture(watchReadCursors: boolean): {
   readonly session: StubSession;
+  readonly cursorReads: { value: number };
   readonly listReads: { value: number };
   readonly pendingReads: Array<(response: BotThreadListResponse) => void>;
   readonly queryClient: QueryClient;
@@ -98,6 +104,7 @@ function fixture(): {
     defaultOptions: { queries: { retry: false, staleTime: 0, gcTime: 0 } },
   });
   const listReads = { value: 0 };
+  const cursorReads = { value: 0 };
   // Each `bot.thread.list` dispatch parks here instead of answering inline,
   // so the test controls exactly when (and with what body) it resolves.
   const pendingReads: Array<(response: BotThreadListResponse) => void> = [];
@@ -105,6 +112,10 @@ function fixture(): {
     registry: hostRpcRegistry,
     requestId: () => `req-${listReads.value + 1}`,
     handlers: {
+      "bot.readCursor.read": () => {
+        cursorReads.value += 1;
+        return { cursors: {}, latest: {} };
+      },
       "bot.thread.list": () => {
         listReads.value += 1;
         return new Promise<BotThreadListResponse>((resolve) => {
@@ -132,6 +143,11 @@ function fixture(): {
     return null;
   }
 
+  function ReadCursors(): ReactNode {
+    useBotReadCursorQuery(requester, BOT_ID, true);
+    return null;
+  }
+
   // Mirrors `BotTabBody`'s real gate (`bot-tab-surface.tsx`): the
   // channel/thread-list reader mounts only once the bot's subscription has
   // produced its first snapshot, never unconditionally alongside it.
@@ -143,11 +159,17 @@ function fixture(): {
       client: streamClient,
     });
     if (subscription.snapshot === null) return null;
-    return <ThreadList />;
+    return (
+      <>
+        <ThreadList />
+        {watchReadCursors ? <ReadCursors /> : null}
+      </>
+    );
   }
 
   return {
     session,
+    cursorReads,
     listReads,
     pendingReads,
     queryClient,
@@ -174,7 +196,7 @@ afterEach(() => {
 
 describe("the bot's thread listing follows its subscription", () => {
   it("reads the listing again when the conversations' revision moves, and not for a snapshot that leaves it", async () => {
-    const world = fixture();
+    const world = fixture(false);
     world.render();
     act(() => world.session.emit(snapshot(3, 0)));
     await waitFor(() => expect(world.listReads.value).toBe(1));
@@ -201,7 +223,8 @@ describe("the bot's thread listing follows its subscription", () => {
     act(() => world.session.emit(snapshot(4, 1)));
     expect(cancel).toHaveBeenCalledTimes(1);
     await cancel.mock.results[0]?.value;
-    expect(invalidate).toHaveBeenCalledTimes(1);
+    // The listing's key, and the person's read cursors on the bot.
+    expect(invalidate).toHaveBeenCalledTimes(2);
 
     await waitFor(() => expect(world.listReads.value).toBe(2));
     act(() =>
@@ -216,7 +239,7 @@ describe("the bot's thread listing follows its subscription", () => {
   });
 
   it("reads the listing again when a reply's revision moves while the first read is in flight, and keeps the fresh body", async () => {
-    const world = fixture();
+    const world = fixture(false);
     world.render();
 
     // No snapshot yet: the thread-list reader is not mounted (the real
@@ -266,7 +289,7 @@ describe("the bot's thread listing follows its subscription", () => {
   });
 
   it("reads the listing again when the bot moves to another binding, whatever the revision says, and keeps the new binding's body over a read that started before the move", async () => {
-    const world = fixture();
+    const world = fixture(false);
     world.render();
     act(() => world.session.emit(claimed(null, HOST_ID, 0)));
     await waitFor(() => expect(world.listReads.value).toBe(1));
@@ -303,5 +326,20 @@ describe("the bot's thread listing follows its subscription", () => {
     // Claimed again by the same host, under a newer epoch.
     act(() => world.session.emit(claimed(null, "host-older", 2)));
     await waitFor(() => expect(world.listReads.value).toBe(3));
+  });
+});
+
+describe("the person's read cursors follow the bot's subscription", () => {
+  it("reads them again when the conversations' revision moves, and not for a snapshot that leaves it", async () => {
+    const world = fixture(true);
+    world.render();
+    act(() => world.session.emit(snapshot(3, 0)));
+    await waitFor(() => expect(world.cursorReads.value).toBe(1));
+
+    act(() => world.session.emit(snapshot(3, 1)));
+    expect(world.cursorReads.value).toBe(1);
+
+    act(() => world.session.emit(snapshot(4, 1)));
+    await waitFor(() => expect(world.cursorReads.value).toBe(2));
   });
 });

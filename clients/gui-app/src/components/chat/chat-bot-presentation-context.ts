@@ -21,6 +21,12 @@ export interface ChatBotThreadLine {
    * or by choice), which the line says.
    */
   readonly followedUnwritten: boolean;
+  /**
+   * The viewer follows the thread and a reply has landed past their read
+   * cursor (decision 139): the line is bold and says "new replies", with
+   * or without a count.
+   */
+  readonly newReplies: boolean;
 }
 
 /**

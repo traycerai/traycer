@@ -11,6 +11,7 @@ export const botMutationKeys = {
   updateReplyMode: () => ["bot.updateReplyMode"] as const,
   setNotificationLevel: () => ["bot.notificationLevel.set"] as const,
   setThreadFollow: () => ["bot.threadFollow.set"] as const,
+  advanceReadCursor: () => ["bot.readCursor.advance"] as const,
   delete: () => ["bot.delete"] as const,
   open: () => ["bot.open"] as const,
   conversationSend: () => ["bot.conversation.send"] as const,

@@ -26,7 +26,10 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotReadCursorReadResponse,
+  BotRecord,
+} from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptor } from "@traycer/protocol/host/environment/contracts";
 import type {
   BotOnboardingReadResponse,
@@ -76,6 +79,10 @@ const mocks = vi.hoisted(() => {
       version: { major: 1, minor: 1 },
       /** What `bot.notificationLevel.read` answers: levels by channel id. */
       levels: {},
+      /** What `bot.readCursor.read` answers; `undefined` while unread. */
+      readCursor: undefined as BotReadCursorReadResponse | undefined,
+      /** Methods the host does not advertise, whatever `support` says. */
+      unsupported: new Set<string>(),
     },
     readRequests,
   };
@@ -105,7 +112,8 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "host-tab",
 }));
 vi.mock("@/hooks/host/use-host-supports-method", () => ({
-  useHostMethodSupport: () => mocks.state.support,
+  useHostMethodSupport: (_hostId: string | null, method: string) =>
+    mocks.state.unsupported.has(method) ? false : mocks.state.support,
   useHostMethodSchemaVersion: () => mocks.state.version,
   useHostSupportsMethod: () => true,
 }));
@@ -151,12 +159,15 @@ vi.mock("@/hooks/bots/use-environment-list-query", async () => {
 // The person's notification levels, as the host answers them.
 vi.mock("@/hooks/host/use-host-query", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/host/use-host-query")>()),
-  useHostQuery: (args: { method: string }) => ({
-    data:
-      args.method === "bot.notificationLevel.read"
-        ? { levels: mocks.state.levels }
-        : undefined,
-  }),
+  useHostQuery: (args: { method: string }) => {
+    if (args.method === "bot.notificationLevel.read") {
+      return { data: { levels: mocks.state.levels } };
+    }
+    if (args.method === "bot.readCursor.read") {
+      return { data: mocks.state.readCursor };
+    }
+    return { data: undefined };
+  },
 }));
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
   useBotListQuery: () => ({
@@ -307,6 +318,8 @@ beforeEach(() => {
   mocks.state.support = true;
   mocks.state.version = { major: 1, minor: 1 };
   mocks.state.levels = {};
+  mocks.state.readCursor = undefined;
+  mocks.state.unsupported.clear();
   for (const key of Object.keys(mocks.state.reads)) {
     delete mocks.state.reads[key];
   }
@@ -449,6 +462,80 @@ describe("<BotChannelSidebar /> muted channels", () => {
     mount("bot-release");
 
     expect(screen.queryByTestId("bot-channel-row-muted")).toBeNull();
+  });
+});
+
+describe("<BotChannelSidebar /> read-cursor bold", () => {
+  const NEW_ROW = { messageId: "m-new", seq: 2_000 };
+  const OLD_ROW = { messageId: "m-old", seq: 1_000 };
+
+  beforeEach(() => {
+    mocks.state.bots = [
+      {
+        ...bot("bot-release", "env-team", "release-bot"),
+        appConversationChatId: "chan-release",
+      },
+      {
+        ...bot("bot-triage", "env-team", "triage-bot"),
+        appConversationChatId: "chan-triage",
+      },
+    ];
+  });
+
+  it("bolds a channel with a row past the cursor, with no count when the mailbox holds nothing", () => {
+    mocks.state.readCursor = {
+      cursors: { "chan-release": OLD_ROW },
+      latest: { "chan-release": NEW_ROW },
+    };
+    mount("bot-triage");
+
+    expect(row("bot-release").getAttribute("data-unread")).toBe("true");
+    expect(
+      within(row("bot-release")).queryByTestId("bot-channel-row-unread-count"),
+    ).toBeNull();
+  });
+
+  it("does not bold a channel at Nothing, though a new row has landed", () => {
+    mocks.state.readCursor = {
+      cursors: {},
+      latest: { "chan-release": NEW_ROW },
+    };
+    mocks.state.levels = { "chan-release": "off" };
+    mount("bot-triage");
+
+    expect(row("bot-release").getAttribute("data-unread")).toBe("false");
+  });
+
+  it("does not bold a channel the cursor has caught up with, whatever the mailbox says", () => {
+    mocks.state.readCursor = {
+      cursors: { "chan-release": NEW_ROW },
+      latest: { "chan-release": NEW_ROW },
+    };
+    mocks.state.epics = {
+      "bot-release": {
+        unreadDone: true,
+        unreadFailure: false,
+        unreadCount: 1,
+      },
+    };
+    mount("bot-triage");
+
+    expect(row("bot-release").getAttribute("data-unread")).toBe("false");
+  });
+
+  it("keeps the mailbox indicator's bold on a host without bot.readCursor.read", () => {
+    mocks.state.unsupported.add("bot.readCursor.read");
+    mocks.state.readCursor = {
+      cursors: {},
+      latest: { "chan-release": NEW_ROW },
+    };
+    mocks.state.epics = {
+      "bot-triage": { unreadDone: true, unreadFailure: false, unreadCount: 1 },
+    };
+    mount("bot-release");
+
+    expect(row("bot-release").getAttribute("data-unread")).toBe("false");
+    expect(row("bot-triage").getAttribute("data-unread")).toBe("true");
   });
 });
 

@@ -17,6 +17,7 @@ import {
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { botQueryKeys } from "@/lib/query-keys/bot-query-keys";
 import { hostQueryKeys } from "@/lib/query-keys/host-query-keys";
+import { isReadCursorReadOf } from "@/hooks/bots/use-bot-read-cursor";
 import { useWsStreamClient } from "@/lib/host/stream-runtime-context";
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
@@ -349,6 +350,10 @@ function createSharedSubscription(
       void queryClient
         .cancelQueries({ queryKey })
         .then(() => queryClient.invalidateQueries({ queryKey }));
+      // The conversations' newest rows moved with it (decision 139).
+      void queryClient.invalidateQueries({
+        predicate: (query) => isReadCursorReadOf(query.queryKey, args.botId),
+      });
     }
   });
 

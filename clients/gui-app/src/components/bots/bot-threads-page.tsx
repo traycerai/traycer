@@ -18,6 +18,7 @@ import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { BotThreadRowMenu } from "@/components/bots/bot-thread-follow";
 import { useBotThreadFollows } from "@/hooks/bots/use-bot-thread-follow";
+import { useBotReadCursors } from "@/hooks/bots/use-bot-read-cursor";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import {
   SettingsSegmentedControl,
@@ -25,6 +26,7 @@ import {
 } from "@/components/settings/controls/settings-segmented-control";
 import { useNotificationIndicators } from "@/hooks/notifications/use-notification-indicators-query";
 import { followingOf } from "@/lib/bots/bot-notification-settings";
+import { threadHasNewReplies } from "@/lib/bots/bot-read-cursor";
 import { firstLineOf, threadOpenOf } from "@/lib/bots/bot-trunk-model";
 import { postTextOf } from "@/lib/bots/reply-row";
 import type { BotOpenThread } from "@/stores/bots/bot-open-thread-store";
@@ -172,16 +174,37 @@ function FollowedThreads(props: {
   readonly onOpenPost: (open: BotOpenThread) => void;
 }): ReactNode {
   const { botId, hostId, threads, follows, onOpenPost } = props;
-  const followed = useMemo(
-    () =>
-      threads.filter(
-        (thread) =>
-          followingOf(follows.data?.follows, thread.threadId) !== null,
-      ),
-    [follows.data, threads],
-  );
+  const readCursors = useBotReadCursors(botId, hostId)?.data;
+  // Threads with new replies first (decision 139), each group by last
+  // activity, as the list comes.
+  const followed = useMemo(() => {
+    const newReplies = new Set<string>();
+    const listed = threads.filter((thread) => {
+      if (followingOf(follows.data?.follows, thread.threadId) === null) {
+        return false;
+      }
+      if (
+        threadHasNewReplies(
+          readCursors,
+          thread.threadId,
+          thread.lastReplyAt,
+          true,
+        )
+      ) {
+        newReplies.add(thread.threadId);
+      }
+      return true;
+    });
+    return {
+      threads: [
+        ...listed.filter((thread) => newReplies.has(thread.threadId)),
+        ...listed.filter((thread) => !newReplies.has(thread.threadId)),
+      ],
+      newReplies,
+    };
+  }, [follows.data, readCursors, threads]);
   const threadIds = useMemo(
-    () => followed.map((thread) => thread.threadId),
+    () => followed.threads.map((thread) => thread.threadId),
     [followed],
   );
   const chatEpicIds = useMemo(
@@ -219,16 +242,24 @@ function FollowedThreads(props: {
       </div>
     );
   }
-  if (followed.length === 0) {
+  if (followed.threads.length === 0) {
     return <EmptyLine text="You don't follow any threads here yet." />;
   }
   return (
     <ThreadList
       botId={botId}
       hostId={hostId}
-      threads={followed}
+      threads={followed.threads}
       renderTrailing={(thread) => (
         <>
+          {followed.newReplies.has(thread.threadId) ? (
+            <span
+              className="shrink-0 text-ui-xs font-semibold text-foreground"
+              data-testid="bot-thread-row-new-replies"
+            >
+              new replies
+            </span>
+          ) : null}
           <UnreadCountBadge
             count={
               Object.hasOwn(indicators.chats, thread.threadId)

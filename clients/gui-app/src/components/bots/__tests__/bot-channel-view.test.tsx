@@ -25,7 +25,11 @@ import type {
   BotThreadAnchors,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
-import type { BotThreadFollow } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotReadCursorAdvanceRequest,
+  BotReadCursorReadResponse,
+  BotThreadFollow,
+} from "@traycer/protocol/host/bot/schemas";
 import type { Message } from "@traycer/protocol/persistence/epic/schemas";
 import { ChatExpansionTestProviders } from "@/components/chat/__tests__/chat-expansion-test-providers";
 import type { ChatBotThreadLine } from "@/components/chat/chat-bot-presentation-context";
@@ -59,6 +63,7 @@ const mocks = vi.hoisted(() => {
     client: { stub: "tab-host-client" },
     markRead: vi.fn<(entity: { epicId: string; chatId: string }) => void>(),
     refetchThreads: vi.fn<() => void>(),
+    advance: vi.fn<(request: BotReadCursorAdvanceRequest) => void>(),
     send: vi.fn<
       (
         variables: BotConversationSendRequest,
@@ -101,6 +106,8 @@ const mocks = vi.hoisted(() => {
       sending: false,
       // The person's follows of the threads; `undefined` = not read.
       follows: undefined as Record<string, BotThreadFollow> | undefined,
+      // The person's read cursors and the newest rows; `undefined` = not read.
+      readCursors: undefined as BotReadCursorReadResponse | undefined,
       chats,
     },
   };
@@ -115,9 +122,15 @@ vi.mock("@/hooks/host/use-host-supports-method", async (importOriginal) => ({
   >()),
   useHostMethodSupport: () => mocks.state.threadListSupported,
 }));
-vi.mock("@/components/epic-tabs/pane-visibility-context", () => ({
-  usePaneVisible: () => mocks.state.paneVisible,
-}));
+vi.mock(
+  "@/components/epic-tabs/pane-visibility-context",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("@/components/epic-tabs/pane-visibility-context")
+    >()),
+    usePaneVisible: () => mocks.state.paneVisible,
+  }),
+);
 vi.mock("@/hooks/bots/use-bot-conversation-list-query", () => ({
   useBotConversationListQuery: () => ({
     data: { conversations: mocks.state.conversations },
@@ -186,6 +199,15 @@ vi.mock("@/hooks/bots/use-bot-thread-follow", async (importOriginal) => ({
         ? undefined
         : { follows: mocks.state.follows },
   }),
+}));
+// The person's read cursors are read from the cloud through the host; here
+// the read answers `state.readCursors` and an advance is recorded.
+vi.mock("@/hooks/bots/use-bot-read-cursor", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/hooks/bots/use-bot-read-cursor")
+  >()),
+  useBotReadCursors: () => ({ data: mocks.state.readCursors }),
+  useBotReadCursorAdvanceMutation: () => ({ mutate: mocks.advance }),
 }));
 vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
@@ -308,6 +330,7 @@ function PostStub(props: {
           line === null ? "" : String(line.followedUnwritten)
         }
         data-unread={line === null ? "" : String(line.unread)}
+        data-new-replies={line === null ? "" : String(line.newReplies)}
         data-unread-count={
           line === null || line.unreadCount === null
             ? ""
@@ -515,6 +538,7 @@ beforeEach(() => {
   mocks.state.sending = false;
   mocks.state.chats = {};
   mocks.state.follows = undefined;
+  mocks.state.readCursors = undefined;
   mocks.postIds = [];
   mocks.sendResponse = {
     messageId: "post-new",
@@ -1397,6 +1421,123 @@ describe("<BotChannelView /> channel read mark", () => {
       window.dispatchEvent(new Event("focus"));
     });
     expect(mocks.markRead).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("<BotChannelView /> read cursor", () => {
+  const OLD_ROW = { messageId: "row-old", seq: 1_000 };
+  const NEW_ROW = { messageId: "row-new", seq: 2_000 };
+
+  it("advances the channel's cursor to its newest row once, only while shown, and not again when the read catches up", () => {
+    mocks.state.paneVisible = false;
+    mocks.state.readCursors = {
+      cursors: { "conversation-channel": OLD_ROW },
+      latest: { "conversation-channel": NEW_ROW },
+    };
+    const { rerender } = mount({ openThreadPostId: null });
+    expect(mocks.advance).not.toHaveBeenCalled();
+
+    mocks.state.paneVisible = true;
+    rerender();
+    rerender();
+    expect(mocks.advance).toHaveBeenCalledTimes(1);
+    expect(mocks.advance).toHaveBeenCalledWith({
+      botId: BOT_ID,
+      conversationId: "conversation-channel",
+      ...NEW_ROW,
+    });
+
+    mocks.state.readCursors = {
+      cursors: { "conversation-channel": NEW_ROW },
+      latest: { "conversation-channel": NEW_ROW },
+    };
+    rerender();
+    expect(mocks.advance).toHaveBeenCalledTimes(1);
+  });
+
+  it("advances again for a row that lands while the channel is shown", () => {
+    mocks.state.readCursors = {
+      cursors: { "conversation-channel": NEW_ROW },
+      latest: { "conversation-channel": NEW_ROW },
+    };
+    const { rerender } = mount({ openThreadPostId: null });
+    expect(mocks.advance).not.toHaveBeenCalled();
+
+    const landed = { messageId: "row-landed", seq: 3_000 };
+    mocks.state.readCursors = {
+      cursors: { "conversation-channel": NEW_ROW },
+      latest: { "conversation-channel": landed },
+    };
+    rerender();
+    expect(mocks.advance).toHaveBeenCalledWith({
+      botId: BOT_ID,
+      conversationId: "conversation-channel",
+      ...landed,
+    });
+  });
+
+  it("says a followed thread has new replies past the cursor, and not a thread the person does not follow", () => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", { replyCount: 2, lastReplyAt: 2_000 }),
+      thread("thread-b", "post-b", { replyCount: 2, lastReplyAt: 2_000 }),
+      thread("thread-c", "post-c", { replyCount: 2, lastReplyAt: 2_000 }),
+    ];
+    mocks.state.follows = {
+      "thread-a": { state: "following", reason: "manual" },
+      "thread-b": { state: "unfollowed", reason: "manual" },
+      "thread-c": { state: "following", reason: "manual" },
+    };
+    mocks.state.readCursors = {
+      cursors: {
+        "thread-a": OLD_ROW,
+        "thread-b": OLD_ROW,
+        "thread-c": NEW_ROW,
+      },
+      latest: {
+        "thread-a": NEW_ROW,
+        "thread-b": NEW_ROW,
+        "thread-c": NEW_ROW,
+      },
+    };
+    mocks.postIds = ["post-a", "post-b", "post-c"];
+    mount({ openThreadPostId: null });
+
+    const marked = (postId: string): string | null =>
+      screen
+        .getByTestId(`stub-line-${postId}`)
+        .getAttribute("data-new-replies");
+    expect(marked("post-a")).toBe("true");
+    expect(marked("post-b")).toBe("false");
+    expect(marked("post-c")).toBe("false");
+  });
+
+  it("clears a thread's new replies once the cursor catches up, and advances the thread that is open", () => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", { replyCount: 2, lastReplyAt: 2_000 }),
+    ];
+    mocks.state.follows = {
+      "thread-a": { state: "following", reason: "manual" },
+    };
+    mocks.state.readCursors = {
+      cursors: { "thread-a": OLD_ROW },
+      latest: { "thread-a": NEW_ROW },
+    };
+    mocks.postIds = ["post-a"];
+    const { rerender } = mount({ openThreadPostId: "post-a" });
+    expect(mocks.advance).toHaveBeenCalledWith({
+      botId: BOT_ID,
+      conversationId: "thread-a",
+      ...NEW_ROW,
+    });
+
+    mocks.state.readCursors = {
+      cursors: { "thread-a": NEW_ROW },
+      latest: { "thread-a": NEW_ROW },
+    };
+    rerender();
+    expect(
+      screen.getByTestId("stub-line-post-a").getAttribute("data-new-replies"),
+    ).toBe("false");
   });
 });
 

@@ -708,6 +708,8 @@ import {
   botNotificationLevelSetV10,
   botThreadFollowReadV10,
   botThreadFollowSetV10,
+  botReadCursorReadV10,
+  botReadCursorAdvanceV10,
 } from "@traycer/protocol/host/bot/contracts";
 import {
   draftsDeleteV10,
@@ -9328,6 +9330,32 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       versions: {
         0: {
           contract: botThreadFollowSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.readCursor.read": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botReadCursorReadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.readCursor.advance": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botReadCursorAdvanceV10,
           upgradeFromPreviousVersion: null,
         },
       },

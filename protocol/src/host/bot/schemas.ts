@@ -390,6 +390,64 @@ export type BotThreadFollowSetResponse = z.infer<
   typeof botThreadFollowSetResponseSchema
 >;
 
+// ---- bot.readCursor.read / bot.readCursor.advance ---------------------- //
+
+/**
+ * A position in one of a bot's conversations (decision 139): the row, and
+ * its `seq`, the row's timestamp in epoch milliseconds. Positions compare
+ * by `seq`; it is per row, not dense.
+ */
+export const botReadPositionSchema = lazySchema(() =>
+  z.object({
+    messageId: z.string().min(1),
+    seq: z.number().int().nonnegative(),
+  }),
+);
+export type BotReadPosition = z.infer<typeof botReadPositionSchema>;
+
+export const botReadCursorReadRequestSchema = lazySchema(() =>
+  z.object({ botId: botIdSchema }),
+);
+export type BotReadCursorReadRequest = z.infer<
+  typeof botReadCursorReadRequestSchema
+>;
+
+/**
+ * `cursors`: how far the caller has read each conversation (the channel or
+ * a thread), kept per person in the cloud; a conversation absent was never
+ * read. `latest`: each conversation's newest row as the answering host
+ * knows it; a conversation absent has no row the host knows of.
+ */
+export const botReadCursorReadResponseSchema = lazySchema(() =>
+  z.object({
+    cursors: z.record(z.string().min(1), botReadPositionSchema),
+    latest: z.record(z.string().min(1), botReadPositionSchema),
+  }),
+);
+export type BotReadCursorReadResponse = z.infer<
+  typeof botReadCursorReadResponseSchema
+>;
+
+export const botReadCursorAdvanceRequestSchema = lazySchema(() =>
+  z.object({
+    botId: botIdSchema,
+    conversationId: z.string().min(1),
+    messageId: z.string().min(1),
+    seq: z.number().int().nonnegative(),
+  }),
+);
+export type BotReadCursorAdvanceRequest = z.infer<
+  typeof botReadCursorAdvanceRequestSchema
+>;
+
+/** The cursor as stored; an advance behind it leaves it where it was. */
+export const botReadCursorAdvanceResponseSchema = lazySchema(() =>
+  z.object({ cursor: botReadPositionSchema }),
+);
+export type BotReadCursorAdvanceResponse = z.infer<
+  typeof botReadCursorAdvanceResponseSchema
+>;
+
 // ---- bot.delete -------------------------------------------------------- //
 
 export const botDeleteRequestSchema = lazySchema(() =>

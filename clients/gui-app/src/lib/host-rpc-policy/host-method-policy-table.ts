@@ -1657,6 +1657,18 @@ export const HOST_METHOD_POLL_TABLE = {
     joinResponseTimeoutMs: null,
     poll: null,
   },
+  // A bot's read cursors and newest rows drive the sidebar's bold, so a read
+  // on another device clears it here within one interval while the window is
+  // visible.
+  "bot.readCursor.read": {
+    ...LATEST_SCHEDULING,
+    poll: { kind: "fixed", intervalMs: 30 * SECOND_MS },
+  },
+  "bot.readCursor.advance": {
+    mode: "fifo",
+    joinResponseTimeoutMs: null,
+    poll: null,
+  },
   "bot.updateTitle": { mode: "fifo", joinResponseTimeoutMs: null, poll: null },
   "bot.updateRunSettings": {
     mode: "fifo",

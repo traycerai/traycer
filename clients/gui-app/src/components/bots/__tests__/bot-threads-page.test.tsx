@@ -33,6 +33,7 @@ import type {
   BotThreadListResponse,
   BotThreadSummary,
 } from "@traycer/protocol/host/bot/conversation-schemas";
+import type { BotReadCursorReadResponse } from "@traycer/protocol/host/bot/schemas";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
 import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
@@ -54,6 +55,8 @@ const mocks = vi.hoisted(() => ({
   follows: null as FollowHostFixture | null,
   /** Unread notifications by thread id, as the indicators read them. */
   unread: {} as Record<string, number>,
+  /** The person's read cursors on the bot; `undefined` = not read. */
+  readCursors: undefined as BotReadCursorReadResponse | undefined,
 }));
 
 vi.mock("@/hooks/chats/use-cloud-chat-queries", () => ({
@@ -71,6 +74,9 @@ vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
   }),
 }));
 
+vi.mock("@/hooks/bots/use-bot-read-cursor", () => ({
+  useBotReadCursors: () => ({ data: mocks.readCursors }),
+}));
 vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () =>
     mocks.follows?.client ?? { getActiveHostId: () => "host-1" },
@@ -223,6 +229,7 @@ beforeEach(() => {
   mocks.releaseHeld = null;
   mocks.follows = null;
   mocks.unread = {};
+  mocks.readCursors = undefined;
 });
 
 afterEach(() => {
@@ -448,6 +455,35 @@ describe("<BotThreadsPage /> follow filter", () => {
     expect(screen.getByTestId("bot-thread-row-unread-count").textContent).toBe(
       "3 unread",
     );
+  });
+
+  it("lists a followed thread with new replies first and marks it, leaving a caught-up one in its place", async () => {
+    mocks.follows = createFollowHostFixture({
+      "thread-a": { state: "following", reason: "participated" },
+      "thread-b": { state: "following", reason: "manual" },
+    });
+    mocks.readCursors = {
+      cursors: {
+        "thread-a": { messageId: "m-a", seq: 2_000 },
+        "thread-b": { messageId: "m-b", seq: 1_000 },
+      },
+      latest: {
+        "thread-a": { messageId: "m-a", seq: 2_000 },
+        "thread-b": { messageId: "m-b2", seq: 2_000 },
+      },
+    };
+    mount(THREADS, true);
+
+    await waitFor(() =>
+      expect(listedThreadIds()).toEqual(["thread-b", "thread-a"]),
+    );
+    const items = screen.getAllByTestId("bot-thread-list-item");
+    expect(
+      within(items[0]).getByTestId("bot-thread-row-new-replies"),
+    ).toBeTruthy();
+    expect(
+      within(items[1]).queryByTestId("bot-thread-row-new-replies"),
+    ).toBeNull();
   });
 
   it("removes a thread from Following when Unfollow is chosen from its menu", async () => {
