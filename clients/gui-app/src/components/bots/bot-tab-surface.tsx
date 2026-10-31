@@ -899,7 +899,13 @@ function BotTabContent(props: {
             >
               {/* Threads, from the column, takes the place of the channel's
                   views and of a session. */}
-              {threadsView.shown ? <BotThreadsView hostId={hostId} /> : null}
+              {threadsView.shown ? (
+                <BotThreadsView
+                  hostId={hostId}
+                  channelTitle={snapshot.bot.title}
+                  onBack={threadsView.onLeave}
+                />
+              ) : null}
               {!threadsView.shown &&
                 (session !== null ? (
                   <BotSessionView

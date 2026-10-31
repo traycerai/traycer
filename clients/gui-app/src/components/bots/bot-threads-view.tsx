@@ -1,6 +1,8 @@
 import { useMemo, type ReactNode } from "react";
+import { ArrowLeft } from "lucide-react";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
+import { Button } from "@/components/ui/button";
 import { NamedBotAvatar } from "@/components/bots/bot-avatars";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
@@ -29,14 +31,33 @@ const NO_EPIC_IDS: ReadonlyArray<string> = [];
  * whether some are new, and how many of its notifications are unread.
  * Choosing one opens it beside its channel in its bot's tab, as a tapped push
  * does (the tab's landing); its menu unfollows it, which drops it here.
+ *
+ * Where the tab is too narrow for the column, whose channel row is the way
+ * back, the header goes back to the tab's channel itself.
  */
-export function BotThreadsView(props: { readonly hostId: string }): ReactNode {
+export function BotThreadsView(props: {
+  readonly hostId: string;
+  /** The tab's channel, which the back control names. */
+  readonly channelTitle: string;
+  readonly onBack: () => void;
+}): ReactNode {
   return (
     <div
       className="flex min-h-0 min-w-0 flex-1 flex-col"
       data-testid="bot-threads-view"
     >
       <header className="flex shrink-0 flex-col gap-0.5 px-4 pt-3 pb-2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="self-start @3xl:hidden"
+          data-testid="bot-threads-back"
+          onClick={props.onBack}
+        >
+          <ArrowLeft aria-hidden="true" />
+          {`Back to ${props.channelTitle}`}
+        </Button>
         <h1 className="text-ui-md font-bold text-foreground">Threads</h1>
         <p className="text-ui-xs text-muted-foreground">
           Threads you follow, across every bot.
@@ -52,10 +73,26 @@ export function BotThreadsView(props: { readonly hostId: string }): ReactNode {
 function BotThreadsBody(props: { readonly hostId: string }): ReactNode {
   const { hostId } = props;
   const client = useTabHostClient();
-  const bots = useBotListQuery(client, true).data?.bots ?? EMPTY_BOTS;
-  const followed = useBotFollowedThreads(client, hostId, bots);
+  const botList = useBotListQuery(client, true);
+  const followed = useBotFollowedThreads(
+    client,
+    hostId,
+    botList.data?.bots ?? EMPTY_BOTS,
+  );
   if (followed.kind === "unsupported") {
     return <EmptyLine text="This host can't list your threads." />;
+  }
+  // Until the bots are listed, there is nothing to say of their threads.
+  if (botList.data === undefined) {
+    return botList.isError ? (
+      <BotReadFailure
+        message="Couldn't load your threads."
+        onRetry={() => void botList.refetch()}
+        testId="bot-threads-error"
+      />
+    ) : (
+      <ThreadsLoading />
+    );
   }
   const failure =
     followed.retry === null ? null : (
@@ -67,21 +104,7 @@ function BotThreadsBody(props: { readonly hostId: string }): ReactNode {
     );
   if (followed.threads.length === 0) {
     if (failure !== null) return failure;
-    if (followed.pending) {
-      return (
-        <div
-          className="py-1 text-muted-foreground"
-          aria-busy="true"
-          data-testid="bot-threads-loading"
-        >
-          <AgentSpinningDots
-            className={undefined}
-            testId={undefined}
-            variant={undefined}
-          />
-        </div>
-      );
-    }
+    if (followed.pending) return <ThreadsLoading />;
     return <EmptyLine text="Threads you take part in appear here." />;
   }
   return (
@@ -250,6 +273,22 @@ function ThreadRowBody(props: {
 function ReplyTime(props: { readonly at: number }): ReactNode {
   const label = useRelativeTimestamp(props.at);
   return <span className="ml-auto shrink-0">{label}</span>;
+}
+
+function ThreadsLoading(): ReactNode {
+  return (
+    <div
+      className="py-1 text-muted-foreground"
+      aria-busy="true"
+      data-testid="bot-threads-loading"
+    >
+      <AgentSpinningDots
+        className={undefined}
+        testId={undefined}
+        variant={undefined}
+      />
+    </div>
+  );
 }
 
 function EmptyLine(props: { readonly text: string }): ReactNode {

@@ -550,8 +550,22 @@ vi.mock("@/components/bots/bot-activity-page", () => ({
   ),
 }));
 vi.mock("@/components/bots/bot-threads-view", () => ({
-  BotThreadsView: (props: { hostId: string }) => (
-    <div data-testid="stub-threads" data-host-id={props.hostId} />
+  BotThreadsView: (props: {
+    hostId: string;
+    channelTitle: string;
+    onBack: () => void;
+  }) => (
+    <div
+      data-testid="stub-threads"
+      data-host-id={props.hostId}
+      data-channel-title={props.channelTitle}
+    >
+      <button
+        type="button"
+        data-testid="stub-threads-back"
+        onClick={props.onBack}
+      />
+    </div>
   ),
 }));
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
@@ -2467,6 +2481,24 @@ describe("<BotTabSurface /> views", () => {
     expect(screen.queryByTestId("stub-threads")).toBeNull();
     expect(activityTab().getAttribute("aria-selected")).toBe("true");
     expect(sidebar.getAttribute("data-threads-shown")).toBe("false");
+  });
+
+  it("goes back from Threads to the channel where it was through the view's own back control, which names the tab's channel", async () => {
+    const user = userEvent.setup();
+    render(surface());
+    await user.click(activityTab());
+    await user.click(screen.getByTestId("stub-sidebar-threads"));
+    expect(
+      screen.getByTestId("stub-threads").getAttribute("data-channel-title"),
+    ).toBe(snapshot().bot.title);
+
+    await user.click(screen.getByTestId("stub-threads-back"));
+
+    expect(screen.queryByTestId("stub-threads")).toBeNull();
+    expect(activityTab().getAttribute("aria-selected")).toBe("true");
+    expect(
+      screen.getByTestId("stub-sidebar").getAttribute("data-threads-shown"),
+    ).toBe("false");
   });
 
   it("opens a thread chosen in Threads beside the channel, through the tab's landing, and leaves Threads", async () => {

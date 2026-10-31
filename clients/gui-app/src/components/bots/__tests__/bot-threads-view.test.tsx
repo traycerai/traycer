@@ -62,6 +62,10 @@ const mocks = vi.hoisted(() => ({
   writes: [] as BotThreadFollowSetRequest[],
   client: null as HostClient<HostRpcRegistry> | null,
   navigateToTabIntent: vi.fn<(intent: unknown) => void>(),
+  /** How `bot.list` stands: answered, still being read, or failed. */
+  botList: "listed" as "listed" | "pending" | "failed",
+  refetchBots: vi.fn<() => Promise<unknown>>(),
+  back: vi.fn<() => void>(),
 }));
 
 vi.mock("@/hooks/chats/use-cloud-chat-queries", async (importOriginal) => ({
@@ -81,7 +85,14 @@ vi.mock("@/hooks/host/use-tab-host-client", () => ({
   useTabHostClient: () => mocks.client,
 }));
 vi.mock("@/hooks/bots/use-bot-list-query", () => ({
-  useBotListQuery: () => ({ data: { bots: mocks.bots, mainBotIds: null } }),
+  useBotListQuery: () => ({
+    data:
+      mocks.botList === "listed"
+        ? { bots: mocks.bots, mainBotIds: null }
+        : undefined,
+    isError: mocks.botList === "failed",
+    refetch: mocks.refetchBots,
+  }),
 }));
 vi.mock("@/hooks/notifications/use-notification-indicators-query", () => ({
   useNotificationIndicators: (args: { chatIds: ReadonlyArray<string> }) => ({
@@ -231,7 +242,11 @@ function mount(): void {
   mocks.client = spine.createRequester(mockLocalHostEntry);
   render(
     <QueryClientProvider client={queryClient}>
-      <BotThreadsView hostId="host-1" />
+      <BotThreadsView
+        hostId="host-1"
+        channelTitle="Tracy"
+        onBack={mocks.back}
+      />
     </QueryClientProvider>,
   );
 }
@@ -253,6 +268,8 @@ function item(threadId: string): HTMLElement {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.bots = [bot(TRACY, "Tracy"), bot(TEAM, "Team Tracy")];
+  mocks.botList = "listed";
+  mocks.refetchBots.mockResolvedValue(undefined);
   mocks.hosted = {};
   mocks.unsupported.clear();
   mocks.posts = {};
@@ -362,6 +379,48 @@ describe("<BotThreadsView />", () => {
     expect(mocks.writes).toEqual([
       { botId: TRACY, threadId: "tracy-old", state: "unfollowed" },
     ]);
+  });
+});
+
+describe("<BotThreadsView /> header", () => {
+  it("goes back to the tab's channel from its back control, which only a tab too narrow for the column draws", async () => {
+    const user = userEvent.setup();
+    mocks.hosted[TRACY] = script([], {});
+    mocks.hosted[TEAM] = script([], {});
+    mount();
+
+    const back = screen.getByRole("button", { name: "Back to Tracy" });
+    expect(back.className).toContain("@3xl:hidden");
+    await user.click(back);
+
+    expect(mocks.back).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("<BotThreadsView /> before the bots are listed", () => {
+  it("shows its loading state while the bot list is read, not the empty state", () => {
+    mocks.botList = "pending";
+    mount();
+
+    expect(screen.getByTestId("bot-threads-loading")).toBeTruthy();
+    expect(
+      screen.queryByText("Threads you take part in appear here."),
+    ).toBeNull();
+  });
+
+  it("says the read failed when the bot list does, and Retry reads it again", async () => {
+    const user = userEvent.setup();
+    mocks.botList = "failed";
+    mount();
+
+    const failure = screen.getByTestId("bot-threads-error");
+    expect(failure.textContent).toContain("Couldn't load your threads.");
+    expect(
+      screen.queryByText("Threads you take part in appear here."),
+    ).toBeNull();
+    await user.click(within(failure).getByRole("button", { name: "Retry" }));
+
+    expect(mocks.refetchBots).toHaveBeenCalledTimes(1);
   });
 });
 
