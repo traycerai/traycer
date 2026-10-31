@@ -15,6 +15,8 @@ import {
  */
 export interface TeamSetup {
   readonly environmentId: string;
+  /** The team's name, as the environment list labels it. */
+  readonly teamName: string;
   readonly botId: string;
   readonly title: string;
 }
@@ -105,6 +107,7 @@ export function useTeamSetups(input: {
         return [
           {
             environmentId: team.environmentId,
+            teamName: team.label,
             botId: setup.botId,
             title: setup.title,
           },

@@ -1,8 +1,12 @@
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { v4 as uuidv4 } from "uuid";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
+import type { HostSandboxState } from "@traycer/protocol/host/host-status";
+import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { HostRpcRegistry } from "@/lib/host";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
 import { useHostQueries } from "@/hooks/host/use-host-queries";
+import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
 import { BotAvatar } from "@/components/bots/bot-avatars";
 import {
@@ -17,6 +21,16 @@ import { ChatBotAppPost } from "@/components/chat/chat-bot-message";
 import type { TeamSetup } from "@/hooks/bots/use-team-setups";
 import type { BotOnboardingArrival } from "@traycer/protocol/host/bot/onboarding-schemas";
 import type { TeamSetupHistory } from "@/hooks/bots/use-team-setup-history";
+import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import {
+  SandboxCreateError,
+  useSandboxCreate,
+} from "@/hooks/sandboxes/use-sandbox-create-mutation";
+import { useSandboxDefaults } from "@/hooks/sandboxes/use-sandbox-defaults";
+import { useSandboxList } from "@/hooks/sandboxes/use-sandbox-list-query";
+import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
+import { configurationStageShape } from "@/lib/sandboxes/sandbox-stage-model";
+import { createErrorNeedsFreshKey } from "@/lib/sandboxes/staged-sandbox-run";
 
 /**
  * A team's main bot's channel while the bot is still to be set up (Tracy Bots
@@ -33,8 +47,9 @@ export function TeamSetupChannel(props: {
 }): ReactNode {
   const { setup, hostId } = props;
   // Re-read on the shared on-screen cadence while the person can see the
-  // setup and it still needs a host: the team's host creating the bot rings
-  // no other host's bot list, so this is how the channel learns it went live.
+  // setup and it still needs a host. The team's host creating the bot rings
+  // the team's room, which reaches this channel's bot list only while this
+  // host listens to that room; this read is the backstop for a missed ring.
   const paneVisible = usePaneVisible();
   const [settled, setSettled] = useState(false);
   const [read] = useHostQueries<HostRpcRegistry, "bot.onboarding.read">({
@@ -101,7 +116,12 @@ export function TeamSetupChannel(props: {
           >
             <div className="mt-auto min-w-0" data-testid="team-setup-post-slot">
               <ChatBotAppPost name={setup.title} testId="team-setup-post">
-                <TeamSetupPostBody actions />
+                <TeamSetupPostBody
+                  live={{
+                    environmentId: setup.environmentId,
+                    teamName: setup.teamName,
+                  }}
+                />
               </ChatBotAppPost>
             </div>
           </div>
@@ -117,12 +137,20 @@ export function TeamSetupChannel(props: {
   );
 }
 
+/** The team a setup post's buttons act for. */
+interface TeamSetupLive {
+  readonly environmentId: string;
+  readonly teamName: string;
+}
+
 /**
  * The setup post: what the team's main bot is, that the team needs a host,
- * and the ways to get one. `actions` draws each way's button; the post kept
- * as a live channel's history has none.
+ * and the ways to get one. `live` draws each way's button; the post kept as a
+ * live channel's history (`null`) has none.
  */
-function TeamSetupPostBody(props: { readonly actions: boolean }): ReactNode {
+function TeamSetupPostBody(props: {
+  readonly live: TeamSetupLive | null;
+}): ReactNode {
   return (
     <div className="flex min-w-0 flex-col gap-2 text-ui-sm text-foreground">
       <p>
@@ -134,18 +162,21 @@ function TeamSetupPostBody(props: { readonly actions: boolean }): ReactNode {
         Before I can run, the team needs a host: a machine where its bots
         execute.
       </p>
-      <TeamHostOptionsCard actions={props.actions} />
+      <TeamHostOptionsCard live={props.live} />
     </div>
   );
 }
 
 /**
  * The ways a team gets a host its bots can run on (decision 127): cloud for
- * the team, or a team host on a machine. Neither can run a team's bots yet,
- * so with `actions` each option's button is drawn and does nothing, with a
- * line saying so.
+ * the team, which starts the team's kept sandbox (decision 130), or a team
+ * host on a machine, which cannot run a team's bots yet, so its button is
+ * drawn and does nothing, with a line saying so.
  */
-function TeamHostOptionsCard(props: { readonly actions: boolean }): ReactNode {
+function TeamHostOptionsCard(props: {
+  readonly live: TeamSetupLive | null;
+}): ReactNode {
+  const { live } = props;
   return (
     <div
       className="flex min-w-0 flex-col gap-3 rounded-lg border border-border/60 bg-card p-3"
@@ -156,16 +187,29 @@ function TeamHostOptionsCard(props: { readonly actions: boolean }): ReactNode {
       </h2>
       <TeamHostOption
         title="Enable cloud for the team"
-        description="Bots run on sandboxes started for each job."
-        action="Enable cloud"
-        actions={props.actions}
+        description="One cloud sandbox hosts the team's bots, using the team's credit while it runs."
+        action={
+          live === null ? null : (
+            <EnableTeamCloudAction
+              environmentId={live.environmentId}
+              teamName={live.teamName}
+              testId="team-host-option-cloud"
+            />
+          )
+        }
         testId="team-host-option-cloud"
       />
       <TeamHostOption
         title="Create a team host on a machine"
         description="A machine the team keeps running, signed in as the team."
-        action="Create team host"
-        actions={props.actions}
+        action={
+          live === null ? null : (
+            <TeamHostOptionUnavailable
+              action="Create team host"
+              testId="team-host-option-machine"
+            />
+          )
+        }
         testId="team-host-option-machine"
       />
     </div>
@@ -175,27 +219,25 @@ function TeamHostOptionsCard(props: { readonly actions: boolean }): ReactNode {
 function TeamHostOption(props: {
   readonly title: string;
   readonly description: string;
-  readonly action: string;
-  readonly actions: boolean;
+  /** The option's button; `null` in the post kept as history. */
+  readonly action: ReactNode;
   readonly testId: string;
 }): ReactNode {
-  const { testId } = props;
   return (
-    <div className="flex min-w-0 flex-col gap-1.5" data-testid={testId}>
+    <div className="flex min-w-0 flex-col gap-1.5" data-testid={props.testId}>
       <div className="flex min-w-0 flex-col gap-0.5">
         <h3 className="text-ui-sm font-medium text-foreground">
           {props.title}
         </h3>
         <p className="text-ui-xs text-muted-foreground">{props.description}</p>
       </div>
-      {props.actions ? (
-        <TeamHostOptionAction action={props.action} testId={testId} />
-      ) : null}
+      {props.action}
     </div>
   );
 }
 
-function TeamHostOptionAction(props: {
+/** An option with nothing behind it yet: its button, disabled, and why. */
+function TeamHostOptionUnavailable(props: {
   readonly action: string;
   readonly testId: string;
 }): ReactNode {
@@ -224,6 +266,194 @@ function TeamHostOptionAction(props: {
   );
 }
 
+/** States in which a sandbox is not, and will not become, the team's host. */
+const TEAM_SANDBOX_GONE_STATES: ReadonlySet<HostSandboxState> = new Set([
+  "destroying",
+  "destroyed",
+  "failed",
+]);
+
+/**
+ * Whether `summary` is the team's kept sandbox, started or on its way: a
+ * job's burst sandbox and the Automations pod host no team bot, and a failed
+ * one never will.
+ */
+function hostsTeamBots(
+  summary: SandboxSummary,
+  environmentId: string,
+): boolean {
+  return (
+    summary.environmentId === environmentId &&
+    summary.kind === "agent" &&
+    !summary.burst &&
+    !TEAM_SANDBOX_GONE_STATES.has(summary.state)
+  );
+}
+
+/**
+ * Why Enable cloud cannot be pressed yet: `note` is the line under it, or
+ * `null` while a read it waits on is still out.
+ */
+interface EnableTeamCloudBlocked {
+  readonly note: string | null;
+}
+
+/**
+ * Enable cloud (decision 130): create the team's one kept sandbox in the
+ * team's environment, in the configuration's default shape and region. The
+ * team's main bot is created on it once it is up, which ends this setup.
+ *
+ * It waits for a model a team sandbox can run (a team sandbox runs only
+ * Traycer's models, so without one the bot could never start), and for the
+ * team to have no kept sandbox, so a second press, or a teammate's, adds
+ * none. A refusal is said under the button, `insufficient_credit` included.
+ */
+function EnableTeamCloudAction(props: {
+  readonly environmentId: string;
+  readonly teamName: string;
+  readonly testId: string;
+}): ReactNode {
+  const { environmentId, testId } = props;
+  const noteId = useId();
+  const models = useSandboxTraycerModels(true);
+  const catalogue = useSandboxCatalogue(true);
+  const defaults = useSandboxDefaults([environmentId]).get(environmentId);
+  const sandboxes = useSandboxList();
+  const create = useSandboxCreate("inline");
+  // An unanswered request may already have created the sandbox. Reuse its key
+  // until the server accepts it or refuses it before creating anything.
+  const requestKey = useRef<string | null>(null);
+
+  const shape =
+    catalogue.data === undefined ||
+    defaults === undefined ||
+    defaults.kind === "pending"
+      ? undefined
+      : configurationStageShape(
+          catalogue.data,
+          // An unreadable item reads as none set, as every create does.
+          defaults.kind === "ready" ? defaults.value.defaults : null,
+        );
+  const blocked = ((): EnableTeamCloudBlocked | null => {
+    if (models.status === "error") return { note: models.error.message };
+    if (models.data === undefined) return { note: null };
+    if (models.data.length === 0) {
+      return { note: "No model is available for team sandboxes yet." };
+    }
+    // An unread list is not "none": the team may have its sandbox already.
+    const list = sandboxes.data;
+    if (list === undefined || list === null) {
+      return {
+        note: sandboxes.status === "error" ? sandboxes.error.message : null,
+      };
+    }
+    if (
+      list.sandboxes.some((summary) => hostsTeamBots(summary, environmentId))
+    ) {
+      return {
+        note: "The team has a cloud sandbox. Its bots start once it's running.",
+      };
+    }
+    if (catalogue.status === "error") return { note: catalogue.error.message };
+    if (shape === undefined) return { note: null };
+    if (shape === null) {
+      return { note: "Sandboxes aren't available right now. Try again later." };
+    }
+    return null;
+  })();
+
+  const enable = (): void => {
+    if (blocked !== null || shape === undefined || shape === null) return;
+    if (create.isPending) return;
+    if (requestKey.current === null) requestKey.current = uuidv4();
+    create.mutate(
+      {
+        request: {
+          os: shape.os,
+          cpus: shape.cpus,
+          memoryMb: shape.memoryMb,
+          diskMb: shape.diskMb,
+          region: shape.region,
+          displayName: TEAM_SANDBOX_NAME,
+          idleMinutes: shape.idleMinutes,
+          burst: false,
+          createdByHostId: null,
+          createdByAgentId: null,
+          environmentId,
+          // The shape's `null` is "never"; on a create `null` is the
+          // configuration's default and `0` is never.
+          destroyAfterRestingMinutes: shape.destroyAfterRestingMinutes ?? 0,
+          createdByTaskId: null,
+          clientRequestId: requestKey.current,
+        },
+        teamName: props.teamName,
+      },
+      {
+        onSuccess: () => {
+          requestKey.current = null;
+        },
+        onError: (error) => {
+          if (createErrorNeedsFreshKey(error)) requestKey.current = null;
+        },
+      },
+    );
+  };
+
+  const note = create.isPending ? null : (blocked?.note ?? null);
+  const refusal = create.isPending ? null : createRefusalLine(create.error);
+  return (
+    <div className="flex min-w-0 flex-col items-start gap-1">
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        disabled={blocked !== null || create.isPending}
+        aria-describedby={note === null ? undefined : noteId}
+        onClick={enable}
+        data-testid={`${testId}-action`}
+      >
+        {create.isPending ? (
+          <AgentSpinningDots
+            className={undefined}
+            testId={undefined}
+            variant={undefined}
+          />
+        ) : null}
+        Enable cloud
+      </Button>
+      {note === null ? null : (
+        <p
+          id={noteId}
+          className="text-ui-xs text-muted-foreground"
+          data-testid={`${testId}-note`}
+        >
+          {note}
+        </p>
+      )}
+      {refusal === null ? null : (
+        <p
+          role="alert"
+          className="text-ui-xs text-destructive"
+          data-testid={`${testId}-refusal`}
+        >
+          {refusal}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** A failed create in words; `null` when the last create did not fail. */
+function createRefusalLine(error: Error | null): string | null {
+  if (error === null) return null;
+  return error instanceof SandboxCreateError
+    ? error.message
+    : "Couldn't create the sandbox.";
+}
+
+/** The team's sandbox as the host list and Settings name it. */
+const TEAM_SANDBOX_NAME = "Team bots";
+
 /**
  * The top of a live team main bot's channel (T67b): the post the channel
  * showed before the team had a host, kept whole as history with its buttons
@@ -241,7 +471,7 @@ export function TeamSetupHistoryRows(props: {
       data-testid="team-setup-history"
     >
       <ChatBotAppPost name={props.botTitle} testId="team-setup-history-post">
-        <TeamSetupPostBody actions={false} />
+        <TeamSetupPostBody live={null} />
       </ChatBotAppPost>
       <p
         className="px-3 text-center text-ui-xs text-muted-foreground"
