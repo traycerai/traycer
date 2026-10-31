@@ -68,8 +68,8 @@ export function threadHasNewReplies(
 
 /**
  * The conversation's newest row when the person's cursor is behind it: what
- * presenting it, or Mark as read, advances the cursor to. `null` when there
- * is nothing to advance.
+ * presenting it advances the cursor to. `null` when there is nothing to
+ * advance.
  */
 export function advanceTarget(
   read: BotReadCursorReadResponse,

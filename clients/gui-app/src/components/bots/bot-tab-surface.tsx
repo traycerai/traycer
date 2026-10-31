@@ -14,12 +14,6 @@ import { Button } from "@/components/ui/button";
 import { TalkControl } from "@/components/layout/voice/talk-control";
 import { useIsMobileViewport } from "@/hooks/ui/use-mobile-viewport";
 import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
 import { usePaneVisible } from "@/components/epic-tabs/pane-visibility-context";
@@ -33,7 +27,6 @@ import {
   type BotSubscriptionSnapshot,
 } from "@/hooks/bots/use-bot-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
-import { useBotMarkChannelRead } from "@/hooks/bots/use-bot-read-cursor";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import { useBotListChangedSubscriptionForHost } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
@@ -48,7 +41,10 @@ import {
 import { useTeamSetupHistory } from "@/hooks/bots/use-team-setup-history";
 import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
 import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
-import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
+import {
+  useBotTabLandingStore,
+  type BotTabLanding,
+} from "@/stores/bots/bot-tab-landing-store";
 import {
   BotChannelView,
   type BotChannelLanding,
@@ -639,6 +635,61 @@ function useBotTabSession(args: {
 }
 
 /**
+ * Where the tab is: its view, Threads in its place, the session shown, what
+ * the rail beside the channel holds, and the channel's landing.
+ */
+type BotTabPlace = {
+  readonly view: BotTabView;
+  readonly threadsShown: boolean;
+  readonly session: BotOpenSession | null;
+  readonly openThread: BotOpenThread | null;
+  readonly openMemory: BotOpenMemory | null;
+  readonly channelLanding: BotChannelLanding | null;
+};
+
+/** A landing kept for a read of the thread list, and where the tab was then. */
+type WaitingLanding = {
+  readonly landing: BotTabLanding;
+  readonly place: BotTabPlace;
+};
+
+/**
+ * A `sender` landing: the thread whose session sent beside the channel, or
+ * the channel, once no read of the list is in flight that may bring the
+ * thread; a failed first read brings none, so the channel shows. A move of
+ * the tab while it waits spends it unlanded.
+ */
+function spendSenderLanding(input: {
+  readonly botId: string;
+  readonly landing: Extract<BotTabLanding, { kind: "sender" }>;
+  /** `null` while the list is first read, or when that read failed. */
+  readonly threads: ReadonlyArray<BotThreadSummary> | null;
+  readonly threadsFetching: boolean;
+  /** The last read of the list failed: no answer is coming without a new one. */
+  readonly threadsFailed: boolean;
+  readonly place: BotTabPlace;
+  readonly waiting: { current: WaitingLanding | null };
+  readonly landChannel: (messageId: string | null) => void;
+  readonly showThread: (threadId: string, messageId: string | null) => void;
+}): void {
+  const { landing, threads, place, waiting } = input;
+  const held = waiting.current?.landing === landing ? waiting.current : null;
+  const thread = threads?.find((t) => t.sessionChatId === landing.chatId);
+  const moved = held !== null && held.place !== place;
+  const reading =
+    input.threadsFetching || (threads === null && !input.threadsFailed);
+  if (!moved && thread === undefined && reading) {
+    waiting.current = held ?? { landing, place };
+    return;
+  }
+  waiting.current = null;
+  useBotTabLandingStore.getState().clear(input.botId);
+  if (moved) return;
+  if (thread === undefined) input.landChannel(null);
+  else input.showThread(thread.threadId, null);
+}
+
+/**
  * Lands the tab where it was asked to from outside, once the thread list has
  * answered, since a thread opens by the post it hangs off. Each request is
  * spent once.
@@ -647,7 +698,11 @@ function useBotTabSession(args: {
  * the channel. A `chat` landing (a chat search hit, a session link) names one
  * of the bot's chats, which is its channel, a thread, a thread's session or
  * its trunk session, each shown the way the tab shows it; an id that is none
- * of these lands nowhere, and the tab stays as it is.
+ * of these lands nowhere, and the tab stays as it is. A `sender` landing
+ * (a sender chip) shows the thread whose session sent beside the channel, or
+ * the channel for any other session once the list being read has answered:
+ * a thread the held list lacks may be in that answer. Where the person takes
+ * the tab while it waits stands: the landing is then spent unlanded.
  */
 function useSpendTabLanding(args: {
   readonly botId: string;
@@ -655,6 +710,12 @@ function useSpendTabLanding(args: {
   readonly trunkChatId: string;
   /** `null` while the list is read. */
   readonly threads: ReadonlyArray<BotThreadSummary> | null;
+  /** A read of the list is in flight, over `threads` when they are held. */
+  readonly threadsFetching: boolean;
+  /** The last read of the list failed. */
+  readonly threadsFailed: boolean;
+  /** Where the tab is; a new value is a move, the person's or a landing's. */
+  readonly place: BotTabPlace;
   readonly landChannel: (messageId: string | null) => void;
   readonly showThread: (threadId: string, messageId: string | null) => void;
   readonly openSession: BotSessionOpen;
@@ -662,12 +723,30 @@ function useSpendTabLanding(args: {
   readonly onViewChange: (view: BotTabView) => void;
 }): void {
   const { botId, channelChatId, trunkChatId, threads } = args;
-  const { landChannel, showThread, openSession, onViewChange } = args;
+  const { threadsFetching, threadsFailed } = args;
+  const { landChannel, showThread, openSession, onViewChange, place } = args;
   const landing = useBotTabLandingStore((state) =>
     Object.hasOwn(state.byBotId, botId) ? state.byBotId[botId] : null,
   );
+  const waiting = useRef<WaitingLanding | null>(null);
   useEffect(() => {
-    if (landing === null || threads === null) return;
+    if (landing === null) return;
+    // A sender's wait begins at the tab's place whether or not a list is held.
+    if (landing.kind === "sender") {
+      spendSenderLanding({
+        botId,
+        landing,
+        threads,
+        threadsFetching,
+        threadsFailed,
+        place,
+        waiting,
+        landChannel,
+        showThread,
+      });
+      return;
+    }
+    if (threads === null) return;
     useBotTabLandingStore.getState().clear(botId);
     const { messageId } = landing;
     if (landing.kind === "thread") {
@@ -704,8 +783,11 @@ function useSpendTabLanding(args: {
     landing,
     onViewChange,
     openSession,
+    place,
     showThread,
     threads,
+    threadsFailed,
+    threadsFetching,
     trunkChatId,
   ]);
 }
@@ -856,11 +938,26 @@ function BotTabContent(props: {
     landChannel,
     showThread,
   } = useBotTabSession({ threads, onViewChange, setOpenThread });
+  const threadsShown = tabThreadsView.shown;
+  const place = useMemo(
+    (): BotTabPlace => ({
+      view,
+      threadsShown,
+      session,
+      openThread,
+      openMemory,
+      channelLanding,
+    }),
+    [channelLanding, openMemory, openThread, session, threadsShown, view],
+  );
   useSpendTabLanding({
     botId,
     channelChatId: snapshot.bot.appConversationChatId,
     trunkChatId: snapshot.bot.trunkChatId,
     threads,
+    threadsFetching: threadList.isFetching,
+    threadsFailed: threadList.isError,
+    place,
     landChannel,
     showThread,
     openSession,
@@ -895,11 +992,6 @@ function BotTabContent(props: {
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
   // A link inside the tab (the switcher's "Bot settings") opens them too.
   const openSettings = useCallback(() => setSettingsOpen(true), []);
-  const markRead = useBotMarkChannelRead(
-    botId,
-    hostId,
-    snapshot.bot.appConversationChatId,
-  );
   const viewer = useAuthStore((s) => s.profile);
   const owner = useMemo((): BotOwner | null => {
     if (environment === null) return null;
@@ -1008,7 +1100,6 @@ function BotTabContent(props: {
                         isMain={isMain === true}
                         settingsOpen={settingsOpen}
                         onToggleSettings={toggleSettings}
-                        onMarkRead={markRead}
                         activityLabel={activityLabelParts({
                           stopped: activitySummary.stopped.length,
                           running: activitySummary.running.length,
@@ -1187,9 +1278,8 @@ function ErrorNotice(props: {
 
 /**
  * Slack's channel header: the bot's picture (its card on hover and click),
- * its name with the main bot's star, the ⋮ that opens the channel's settings
- * (and marks it read, where the host keeps read cursors), and the channel's views
- * under it. What the bot is for is the top of its channel; nothing else
+ * its name with the main bot's star, the ⋮ that opens the channel's settings,
+ * and the channel's views under it. What the bot is for is the top of its channel; nothing else
  * sits here but, on the phone, Talk: the phone has no tab strip to carry it,
  * so every bot channel does (V5), and a session started here is focused on
  * this channel. Activity's label is the bot's indicator: what stopped, in red
@@ -1200,8 +1290,6 @@ function BotChannelHeader(props: {
   readonly isMain: boolean;
   readonly settingsOpen: boolean;
   readonly onToggleSettings: () => void;
-  /** Clears the channel's bold; `null` where the host keeps no read cursors, and the ⋮ opens the settings directly. */
-  readonly onMarkRead: (() => void) | null;
   readonly activityLabel: ReadonlyArray<BotActivityLabelPart>;
 }): ReactNode {
   const { settingsOpen } = props;
@@ -1242,51 +1330,19 @@ function BotChannelHeader(props: {
             <TalkControl form="touch" />
           </>
         ) : null}
-        {props.onMarkRead === null ? (
-          <Button
-            ref={settingsButtonRef}
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Channel settings"
-            aria-expanded={settingsOpen}
-            data-testid="bot-channel-settings-open"
-            className="ml-auto"
-            onClick={props.onToggleSettings}
-          >
-            <EllipsisVertical aria-hidden="true" />
-          </Button>
-        ) : (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                ref={settingsButtonRef}
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Channel actions"
-                data-testid="bot-channel-settings-open"
-                className="ml-auto"
-              >
-                <EllipsisVertical aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                data-testid="bot-channel-mark-read"
-                onSelect={props.onMarkRead}
-              >
-                Mark as read
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                data-testid="bot-channel-settings-item"
-                onSelect={props.onToggleSettings}
-              >
-                {settingsOpen ? "Close channel settings" : "Channel settings"}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
+        <Button
+          ref={settingsButtonRef}
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Channel settings"
+          aria-expanded={settingsOpen}
+          data-testid="bot-channel-settings-open"
+          className="ml-auto"
+          onClick={props.onToggleSettings}
+        >
+          <EllipsisVertical aria-hidden="true" />
+        </Button>
       </div>
       <TabsList variant="line" aria-label="Channel view">
         <TabsTrigger value="messages" data-testid="bot-tab-view-messages">

@@ -72,6 +72,11 @@ vi.mock("@/components/epic-canvas/hooks/use-tab-host-id", () => ({
   useTabHostId: () => "active-host-1",
 }));
 
+// A bot receiver's channel opener; no case here sends to a bot.
+vi.mock("@/hooks/bots/use-open-bot-channel", () => ({
+  useOpenBotChannel: () => vi.fn(),
+}));
+
 const TEAM_SENTENCE =
   "not reachable from this host: Reviewer runs on a Acme sandbox. Open a tab on it to brief the agent there, or continue this chat on it.";
 const OTHER_SENTENCE =

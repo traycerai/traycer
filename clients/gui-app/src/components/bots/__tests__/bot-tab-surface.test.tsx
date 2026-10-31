@@ -69,6 +69,7 @@ import type {
 import type { BotChannelLanding } from "@/components/bots/bot-channel-view";
 import type { BotOpenSession } from "@/components/bots/bot-session-view";
 import type {
+  BotOpenMemory,
   BotOpenThread,
   BotSessionOpen,
   BotTurnOpen,
@@ -134,10 +135,7 @@ const mocks = vi.hoisted(() => ({
   }>,
   useBotListChangedSubscriptionForHost:
     vi.fn<(hostId: string, enabled: boolean) => void>(),
-  /** Mark as read, where the host keeps read cursors; `null` where it does not. */
-  markRead: vi.fn<() => void>(),
   state: {
-    markReadAvailable: false,
     snapshot: null as BotSubscriptionSnapshot | null,
     deleted: false,
     error: null as string | null,
@@ -174,6 +172,12 @@ const mocks = vi.hoisted(() => ({
     membersSupport: null as boolean | null,
     openResult: null as OpenResult | null,
     threads: [] as BotThreadSummary[],
+    // No bot.thread.list answer is held yet (the first read is in flight).
+    threadsHeld: true,
+    // A read of bot.thread.list is in flight over the held `threads`.
+    threadsFetching: false,
+    // The last read of bot.thread.list failed.
+    threadsError: false,
     environments: [] as Array<{
       environmentId: string;
       label: string;
@@ -287,12 +291,6 @@ vi.mock(
   }),
 );
 // The card's memory row is driven in `bot-memory-pane.test.tsx`.
-// "Mark as read" sends its advances through the host (decision 139); what
-// the surface decides is whether the ⋮ offers it.
-vi.mock("@/hooks/bots/use-bot-read-cursor", () => ({
-  useBotMarkChannelRead: () =>
-    mocks.state.markReadAvailable ? mocks.markRead : null,
-}));
 vi.mock("@/hooks/bots/use-bot-memory", () => ({
   useBotMemory: () => ({ kind: "unsupported" }),
 }));
@@ -409,6 +407,8 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
     openThread: BotOpenThread | null;
     landOn: BotChannelLanding | null;
     trunkChatId: string;
+    openMemory: BotOpenMemory | null;
+    onOpenMemory: (open: BotOpenMemory | null) => void;
     onOpenActivity: () => void;
     onOpenTurn: BotTurnOpen;
     onOpenSession: BotSessionOpen;
@@ -426,6 +426,7 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
       data-open-thread={props.openThread?.anchorMessageId ?? "none"}
       data-land-on={props.landOn?.messageId ?? "none"}
       data-land-on-thread={props.landOn?.threadId ?? "none"}
+      data-open-memory={String(props.openMemory !== null)}
       data-trunk-chat-id={props.trunkChatId}
       data-teammate-name={
         props.resolveMember("user-teammate")?.displayName ?? "unresolved"
@@ -435,6 +436,11 @@ vi.mock("@/components/bots/bot-channel-view", () => ({
         type="button"
         data-testid="stub-channel-open-activity"
         onClick={props.onOpenActivity}
+      />
+      <button
+        type="button"
+        data-testid="stub-channel-open-memory"
+        onClick={() => props.onOpenMemory({ back: null })}
       />
       <button
         type="button"
@@ -569,7 +575,13 @@ vi.mock("@/components/bots/bot-threads-view", () => ({
   ),
 }));
 vi.mock("@/hooks/bots/use-bot-thread-list-query", () => ({
-  useBotThreadListQuery: () => ({ data: { threads: mocks.state.threads } }),
+  useBotThreadListQuery: () => ({
+    data: mocks.state.threadsHeld
+      ? { threads: mocks.state.threads }
+      : undefined,
+    isFetching: mocks.state.threadsFetching,
+    isError: mocks.state.threadsError,
+  }),
 }));
 // The panel takes the bot, whether its environment is a person's own, its
 // channel, its environment's bots and how to close, and nothing else: no prop
@@ -787,7 +799,6 @@ beforeEach(() => {
   mocks.membersQueries.length = 0;
   mocks.state.membersSupport = true;
   mocks.state.snapshot = snapshot();
-  mocks.state.markReadAvailable = false;
   mocks.state.deleted = false;
   mocks.state.error = null;
   mocks.state.paneVisible = true;
@@ -817,6 +828,9 @@ beforeEach(() => {
     { environmentId: "env-team", label: "Acme", ownerKind: "organization" },
   ];
   mocks.state.threads = [];
+  mocks.state.threadsHeld = true;
+  mocks.state.threadsFetching = false;
+  mocks.state.threadsError = false;
   mocks.subscribed.length = 0;
   for (const key of Object.keys(mocks.reads)) delete mocks.reads[key];
   useBotTabsStore.setState({ tabs: {} });
@@ -2316,48 +2330,6 @@ describe("<BotTabSurface /> re-subscribe on return", () => {
   });
 });
 
-describe("<BotTabSurface /> channel actions menu", () => {
-  it("offers Mark as read beside the settings where the host keeps read cursors, and marks the channel read from it", async () => {
-    const user = userEvent.setup();
-    mocks.state.markReadAvailable = true;
-    render(surface());
-
-    await user.click(screen.getByTestId("bot-channel-settings-open"));
-    await user.click(await screen.findByTestId("bot-channel-mark-read"));
-
-    expect(mocks.markRead).toHaveBeenCalledTimes(1);
-    expect(screen.queryByTestId("stub-settings")).toBeNull();
-  });
-
-  it("opens the settings from its menu item, and closes them from it again", async () => {
-    const user = userEvent.setup();
-    mocks.state.markReadAvailable = true;
-    render(surface());
-
-    await user.click(screen.getByTestId("bot-channel-settings-open"));
-    await user.click(await screen.findByTestId("bot-channel-settings-item"));
-    expect(screen.getByTestId("stub-settings")).toBeTruthy();
-    expect(mocks.markRead).not.toHaveBeenCalled();
-
-    await user.click(screen.getByTestId("bot-channel-settings-open"));
-    expect(
-      (await screen.findByTestId("bot-channel-settings-item")).textContent,
-    ).toBe("Close channel settings");
-    await user.click(screen.getByTestId("bot-channel-settings-item"));
-    expect(screen.queryByTestId("stub-settings")).toBeNull();
-  });
-
-  it("offers no Mark as read where the host keeps no read cursors: the ⋮ opens the settings directly", async () => {
-    const user = userEvent.setup();
-    render(surface());
-
-    await user.click(screen.getByTestId("bot-channel-settings-open"));
-
-    expect(screen.getByTestId("stub-settings")).toBeTruthy();
-    expect(screen.queryByTestId("bot-channel-mark-read")).toBeNull();
-  });
-});
-
 describe("<BotTabSurface /> main bot", () => {
   it("draws the header as the bot's picture, the channel's name with the main bot's star, its two views and the settings ⋮ only", () => {
     mocks.state.listedBotIds = [BOT_ID, OTHER_BOT_ID];
@@ -2377,6 +2349,7 @@ describe("<BotTabSurface /> main bot", () => {
     expect(
       within(header).getByRole("button", { name: "Channel settings" }),
     ).toBe(screen.getByTestId("bot-channel-settings-open"));
+    expect(screen.queryByTestId("bot-channel-mark-read")).toBeNull();
     expect(screen.getByTestId("bot-tab-title").nextElementSibling).toBe(
       within(header).getByRole("img", { name: "Main bot" }).parentElement,
     );
@@ -3015,6 +2988,318 @@ describe("<BotTabSurface /> a bot's session in place of its channel", () => {
       const channel = screen.getByTestId("stub-channel");
       expect(channel.getAttribute("data-land-on")).toBe("none");
       expect(channel.getAttribute("data-open-thread")).toBe("none");
+      expectNoSession();
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+    });
+
+    it("shows the thread whose session sent beside the channel, with no session opened, for a sender landing", () => {
+      useBotTabLandingStore
+        .getState()
+        .request(BOT_ID, { kind: "sender", chatId: "session-thread-1" });
+      render(surface());
+
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-open-thread")).toBe("post-7");
+      expect(channel.getAttribute("data-land-on")).toBe("none");
+      expectNoSession();
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+    });
+
+    it("keeps a sender landing while the thread list is read again, and opens the thread the fresh list brings", () => {
+      const NEW_THREAD: BotThreadSummary = {
+        ...LISTED_THREAD,
+        threadId: "thread-2",
+        sessionChatId: "session-thread-2",
+        anchor: {
+          messageId: "post-8",
+          requestId: "req-8",
+          senderUserId: "user-1",
+          sentAt: 3_000,
+          resolvedAt: null,
+          excerpt: null,
+        },
+      };
+      const { rerender } = render(surface());
+
+      // The held list lacks the sender's thread, and a read of it starts.
+      mocks.state.threadsFetching = true;
+      rerender(surface());
+      act(() =>
+        useBotTabLandingStore
+          .getState()
+          .request(BOT_ID, { kind: "sender", chatId: "session-thread-2" }),
+      );
+
+      expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
+        kind: "sender",
+        chatId: "session-thread-2",
+      });
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-open-thread")).toBe("none");
+      expect(channel.getAttribute("data-land-on")).toBe("none");
+
+      // The read answers with the thread.
+      mocks.state.threads = [LISTED_THREAD, NEW_THREAD];
+      mocks.state.threadsFetching = false;
+      rerender(surface());
+
+      expect(
+        screen.getByTestId("stub-channel").getAttribute("data-open-thread"),
+      ).toBe("post-8");
+      expectNoSession();
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+    });
+
+    it("spends a waiting sender landing unlanded when the person moves the tab, and opens no thread when the list answers", async () => {
+      const user = userEvent.setup();
+      const NEW_THREAD: BotThreadSummary = {
+        ...LISTED_THREAD,
+        threadId: "thread-2",
+        sessionChatId: "session-thread-2",
+        anchor: {
+          messageId: "post-8",
+          requestId: "req-8",
+          senderUserId: "user-1",
+          sentAt: 3_000,
+          resolvedAt: null,
+          excerpt: null,
+        },
+      };
+      const { rerender } = render(surface());
+
+      // The held list lacks the sender's thread, and a read of it starts.
+      mocks.state.threadsFetching = true;
+      rerender(surface());
+      act(() =>
+        useBotTabLandingStore
+          .getState()
+          .request(BOT_ID, { kind: "sender", chatId: "session-thread-2" }),
+      );
+      expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
+        kind: "sender",
+        chatId: "session-thread-2",
+      });
+
+      // The person opens Activity while the landing waits.
+      await user.click(screen.getByRole("tab", { name: /^Activity/ }));
+
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+      expect(
+        screen.getByRole("tab", { name: /^Activity/, selected: true }),
+      ).toBeTruthy();
+
+      // The read answers with the thread.
+      mocks.state.threads = [LISTED_THREAD, NEW_THREAD];
+      mocks.state.threadsFetching = false;
+      rerender(surface());
+
+      expect(
+        screen.getByRole("tab", { name: /^Activity/, selected: true }),
+      ).toBeTruthy();
+      expect(screen.getByTestId("stub-activity")).toBeTruthy();
+      expectNoSession();
+
+      await user.click(screen.getByRole("tab", { name: /^Messages/ }));
+
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-open-thread")).toBe("none");
+      expect(channel.getAttribute("data-land-on")).toBe("none");
+      expectNoSession();
+    });
+
+    it("spends a waiting sender landing unlanded when the person opens Threads, which stays open when the list answers", async () => {
+      const user = userEvent.setup();
+      const NEW_THREAD: BotThreadSummary = {
+        ...LISTED_THREAD,
+        threadId: "thread-2",
+        sessionChatId: "session-thread-2",
+        anchor: {
+          messageId: "post-8",
+          requestId: "req-8",
+          senderUserId: "user-1",
+          sentAt: 3_000,
+          resolvedAt: null,
+          excerpt: null,
+        },
+      };
+      const { rerender } = render(surface());
+
+      // The held list lacks the sender's thread, and a read of it starts.
+      mocks.state.threadsFetching = true;
+      rerender(surface());
+      act(() =>
+        useBotTabLandingStore
+          .getState()
+          .request(BOT_ID, { kind: "sender", chatId: "session-thread-2" }),
+      );
+      expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
+        kind: "sender",
+        chatId: "session-thread-2",
+      });
+
+      // The person opens Threads from the column while the landing waits.
+      await user.click(screen.getByTestId("stub-sidebar-threads"));
+
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+      expect(screen.getByTestId("stub-threads")).toBeTruthy();
+
+      // The read answers with the thread.
+      mocks.state.threads = [LISTED_THREAD, NEW_THREAD];
+      mocks.state.threadsFetching = false;
+      rerender(surface());
+
+      expect(screen.getByTestId("stub-threads")).toBeTruthy();
+      expect(
+        screen.getByTestId("stub-sidebar").getAttribute("data-threads-shown"),
+      ).toBe("true");
+      expect(screen.queryByTestId("stub-channel")).toBeNull();
+      expectNoSession();
+    });
+
+    it("spends a sender landing waiting on the first thread-list read when the person opens Activity, which stays when the list answers", async () => {
+      const user = userEvent.setup();
+      const NEW_THREAD: BotThreadSummary = {
+        ...LISTED_THREAD,
+        threadId: "thread-2",
+        sessionChatId: "session-thread-2",
+        anchor: {
+          messageId: "post-8",
+          requestId: "req-8",
+          senderUserId: "user-1",
+          sentAt: 3_000,
+          resolvedAt: null,
+          excerpt: null,
+        },
+      };
+      // No list is held yet, and its first read is in flight.
+      mocks.state.threadsHeld = false;
+      mocks.state.threadsFetching = true;
+      const view = render(surface());
+      act(() =>
+        useBotTabLandingStore
+          .getState()
+          .request(BOT_ID, { kind: "sender", chatId: "session-thread-2" }),
+      );
+      expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
+        kind: "sender",
+        chatId: "session-thread-2",
+      });
+
+      // The person opens Activity while the landing waits on the first read.
+      await user.click(screen.getByRole("tab", { name: /^Activity/ }));
+
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+      expect(
+        screen.getByRole("tab", { name: /^Activity/, selected: true }),
+      ).toBeTruthy();
+
+      // The first read answers with the sender's thread.
+      mocks.state.threadsHeld = true;
+      mocks.state.threads = [LISTED_THREAD, NEW_THREAD];
+      mocks.state.threadsFetching = false;
+      view.rerender(surface());
+
+      expect(
+        screen.getByRole("tab", { name: /^Activity/, selected: true }),
+      ).toBeTruthy();
+      expect(screen.getByTestId("stub-activity")).toBeTruthy();
+      expectNoSession();
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+
+      await user.click(screen.getByRole("tab", { name: /^Messages/ }));
+
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-open-thread")).toBe("none");
+      expect(channel.getAttribute("data-land-on")).toBe("none");
+      expectNoSession();
+    });
+
+    it("spends a waiting sender landing unlanded when the person opens the bot's memory, which stays when the list answers", async () => {
+      const user = userEvent.setup();
+      const NEW_THREAD: BotThreadSummary = {
+        ...LISTED_THREAD,
+        threadId: "thread-2",
+        sessionChatId: "session-thread-2",
+        anchor: {
+          messageId: "post-8",
+          requestId: "req-8",
+          senderUserId: "user-1",
+          sentAt: 3_000,
+          resolvedAt: null,
+          excerpt: null,
+        },
+      };
+      const { rerender } = render(surface());
+
+      // The held list lacks the sender's thread, and a read of it starts.
+      mocks.state.threadsFetching = true;
+      rerender(surface());
+      act(() =>
+        useBotTabLandingStore
+          .getState()
+          .request(BOT_ID, { kind: "sender", chatId: "session-thread-2" }),
+      );
+      expect(useBotTabLandingStore.getState().byBotId[BOT_ID]).toEqual({
+        kind: "sender",
+        chatId: "session-thread-2",
+      });
+
+      // The person opens the bot's memory beside the channel while it waits.
+      await user.click(screen.getByTestId("stub-channel-open-memory"));
+
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+      expect(
+        screen.getByTestId("stub-channel").getAttribute("data-open-memory"),
+      ).toBe("true");
+
+      // The read answers with the thread.
+      mocks.state.threads = [LISTED_THREAD, NEW_THREAD];
+      mocks.state.threadsFetching = false;
+      rerender(surface());
+
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-open-memory")).toBe("true");
+      expect(channel.getAttribute("data-open-thread")).toBe("none");
+      expect(channel.getAttribute("data-land-on")).toBe("none");
+      expectNoSession();
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+    });
+
+    it("lands the channel for a sender landing when the first thread-list read fails", async () => {
+      const user = userEvent.setup();
+      // No list is held, and its first read has failed.
+      mocks.state.threadsHeld = false;
+      mocks.state.threadsFetching = false;
+      mocks.state.threadsError = true;
+      render(surface());
+      await user.click(screen.getByRole("tab", { name: /^Activity/ }));
+      expect(screen.getByTestId("stub-activity")).toBeTruthy();
+
+      act(() =>
+        useBotTabLandingStore
+          .getState()
+          .request(BOT_ID, { kind: "sender", chatId: "session-thread-2" }),
+      );
+
+      expect(useBotTabLandingStore.getState().byBotId).toEqual({});
+      expect(
+        screen.getByRole("tab", { name: /^Messages/, selected: true }),
+      ).toBeTruthy();
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-open-thread")).toBe("none");
+      expect(channel.getAttribute("data-land-on")).toBe("none");
+      expectNoSession();
+    });
+
+    it("lands the channel, with no thread or session, for a sender landing on the trunk chat", () => {
+      useBotTabLandingStore
+        .getState()
+        .request(BOT_ID, { kind: "sender", chatId: BOT.trunkChatId });
+      render(surface());
+
+      const channel = screen.getByTestId("stub-channel");
+      expect(channel.getAttribute("data-open-thread")).toBe("none");
+      expect(channel.getAttribute("data-land-on")).toBe("none");
       expectNoSession();
       expect(useBotTabLandingStore.getState().byBotId).toEqual({});
     });

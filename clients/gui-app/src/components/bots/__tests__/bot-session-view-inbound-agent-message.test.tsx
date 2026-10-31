@@ -122,6 +122,7 @@ const TASK_PEER: AgentMessagePeer = {
   hostId: "host-task",
   title: "Pool Image Agent",
   surface: "gui",
+  bot: null,
 };
 
 /** A task agent's A2A request, as the bot's trunk persisted it. */
