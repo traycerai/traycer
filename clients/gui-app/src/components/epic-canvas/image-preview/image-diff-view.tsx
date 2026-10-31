@@ -231,7 +231,7 @@ export interface ImageDiffViewProps {
   readonly newStage: "staged" | "unstaged" | null;
   readonly fileName: string;
   readonly conflicted: boolean;
-  /** Drops the shared toolbar and all gestures for bundle use - static fit only (image-preview decision log, decision #18). */
+  /** Drops the shared toolbar and all gestures for bundle use - static fit only (decision #18). */
   readonly compact: boolean;
   /** `null` when there is no single unambiguous file on disk to open for a per-side failure (e.g. a bundle row). */
   readonly onOpenExternally: (() => void) | null;
@@ -239,8 +239,8 @@ export interface ImageDiffViewProps {
 }
 
 /**
- * Two `ImagePreview` instances side by side (image-preview decision log,
- * decision #9), always two columns - a missing side renders an Added/Deleted
+ * Two `ImagePreview` instances side by side (decision #9), always two
+ * columns - a missing side renders an Added/Deleted
  * empty state rather than collapsing to one column. Zoom + pan are LINKED
  * (decision #17, rebuilt on `react-zoom-pan-pinch`):
  * - The shared toolbar's fit/actual/zoom buttons drive BOTH sides
@@ -445,8 +445,8 @@ export function ImageDiffView(props: ImageDiffViewProps): ReactNode {
     dualDispatch((instance) => instance.zoomOut(ZOOM_STEP, 0));
   }, [dualDispatch]);
 
-  // Matches the shared toolbar's own instant dual-dispatch (image-preview
-  // decision log) rather than letting one side's internal handler run solo
+  // Matches the shared toolbar's own instant dual-dispatch rather than
+  // letting one side's internal handler run solo
   // - that would mirror a raw fit/actual transform computed for THIS side's
   // size onto the differently-sized peer instead of the peer computing its
   // own.

@@ -61,7 +61,7 @@ export interface ImagePreviewProps {
   readonly servedFromCache: boolean;
   /** Alt text and the file name copy/report actions would reference. */
   readonly fileName: string;
-  /** Drops this instance's own toolbar - image-preview decision log, decision #18. Independent of `gesturesEnabled`: `ImageDiffView`'s linked sides pass `compact` but keep gestures on, driven by its own shared toolbar. */
+  /** Drops this instance's own toolbar - decision #18. Independent of `gesturesEnabled`: `ImageDiffView`'s linked sides pass `compact` but keep gestures on, driven by its own shared toolbar. */
   readonly compact: boolean;
   /** Pan/pinch/wheel-zoom/double-click-toggle on or off. `false` for the bundle diff variant (decision #18's affordance-free intent) - static fit only, no gesture traps inside a virtualized list. */
   readonly gesturesEnabled: boolean;
@@ -191,7 +191,7 @@ export function ImagePreview(props: ImagePreviewProps) {
   // Destructured (not `props.x` inline in JSX below) so the ref-safety
   // linter can see these are plain values, not a live ref read during
   // render - same reasoning as `diff-content-primitive.tsx`'s
-  // `scrollContainerRef` destructure (image-preview decision log).
+  // `scrollContainerRef` destructure.
   const {
     onDecodeError,
     onTransformChange,

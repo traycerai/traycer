@@ -1,5 +1,5 @@
 /**
- * The "synthetic ready slot/body seam" (design/index.md): a test-only
+ * The "synthetic ready slot/body seam": a test-only
  * `ReadyTileSurfaceEnvironment` builder and a
  * mount/unmount-counting body component, used to drive `StableTileSurfaceHost`
  * with REAL membership/registry/store state but a fake body - proving the

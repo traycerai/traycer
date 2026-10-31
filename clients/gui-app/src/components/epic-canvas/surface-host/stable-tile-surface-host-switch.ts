@@ -5,7 +5,7 @@
  * Enabled after the full recorded dev-desktop gate cleared
  * (lifecycle matrix, geometry/stacking/hit-testing, focus/selection/IME
  * survival, DnD, the divider-drag re-drive, and the integrated operation
- * pass - see the wave-2 live-pass evidence in the epic artifacts). Selected
+ * pass). Selected
  * chat bodies render once in the fixed surface plane and never remount on
  * structural canvas operations. A tab switch is no longer a remount either -
  * pane chat retention reversed decision #17 - so the intentional remounts left

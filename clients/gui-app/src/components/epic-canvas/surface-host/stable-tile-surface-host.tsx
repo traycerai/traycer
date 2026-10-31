@@ -5,8 +5,8 @@
  * surface and below the app-wide `DndContext` (mounted inside
  * `TopLevelTabHost`, itself inside `RootDndProvider`). A member's record is
  * a stable, permanently connected DOM container; structural moves reassign
- * its rect/environment, never its React parent or DOM parent - see
- * `design/index.md`'s "Why the host must be above EpicSurface".
+ * its rect/environment, never its React parent or DOM parent, which is why
+ * the host must be above EpicSurface.
  *
  * `renderRecordBody` is the seam the design calls a "synthetic ready
  * slot/body seam": nothing in production supplies a real one yet (the host
@@ -14,8 +14,8 @@
  * the permanent jsdom lifecycle suite - and a future dev-desktop
  * synthetic-body check - ever supply a real renderer.
  *
- * Layer contract (`design/index.md` "Permanent surface plane and
- * geometry"): the plane is `pointer-events:none` at the root
+ * Layer contract for the permanent surface plane and geometry: the plane
+ * is `pointer-events:none` at the root
  * auto/zero stacking layer; each record is `pointer-events:auto`,
  * `overflow:hidden`, and gets NO positive z-index of its own, so pane
  * drag shields/drop previews and document portals (which DO carry positive

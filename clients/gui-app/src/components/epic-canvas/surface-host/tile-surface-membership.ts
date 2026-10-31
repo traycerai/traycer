@@ -2,8 +2,7 @@
  * The canvas-wide, transaction-aware set of chat
  * `instanceId`s a stable tile surface host must keep painted.
  *
- * Three layers, matching the design (`ticket-21-stable-tile-surface-identity`,
- * "Host membership and lifecycle"):
+ * Three layers, matching the design's "Host membership and lifecycle":
  *
  * 1. Canvas-wide RETAINED identity - the chat tiles each pane, across every
  *    open top-level tab's canvas, keeps alive: the one it currently shows,

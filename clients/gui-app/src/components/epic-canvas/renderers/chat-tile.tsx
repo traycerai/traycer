@@ -1422,11 +1422,11 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
   const pendingComposerInterviewBlockId =
     view.lower.interview.pending?.blockId ?? null;
   // The composer + queue/pinned/agents/background dock now overlays the
-  // transcript (decision log #3, #13) instead of pushing it via flex height,
+  // transcript (decisions #3, #13) instead of pushing it via flex height,
   // so its reply stream can flow visually behind it. Measuring the whole
   // overlay as one unit (rather than composer/queued-surface separately) is
-  // a deliberate scope narrowing - see the scope report for the
-  // follow-up split. `useMeasuredElementHeight` (extracted so
+  // a deliberate scope narrowing: the composer and queued surface are not
+  // measured separately. `useMeasuredElementHeight` (extracted so
   // this measurement -> prop contract is directly testable)
   // owns the ResizeObserver plumbing.
   const {
@@ -2045,7 +2045,7 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                  * its transcript and scroll state, but releases catalog/provider query
                  * observers and cannot own palette/composer-global work.
                  *
-                 * Absolutely overlays the transcript (decision log #3) instead of
+                 * Absolutely overlays the transcript (decision #3) instead of
                  * pushing its height via flex, so streamed replies flow visually
                  * behind it; `lowerSurfacesHeight` (measured here) feeds the
                  * transcript's bottom content inset. The full-width positioning
