@@ -1214,7 +1214,7 @@ describe("CommGraphTile", () => {
 
   describe("Settings default view", () => {
     it("resets a followed default camera when Settings changes the resolved view", async () => {
-      // D68: the camera under test is the OFFICE's, which since D68 lives in
+      // The camera under test is the OFFICE's, which now lives in
       // `officeCamera` and not the top-level x/y/zoom (the graph's now) - the
       // claim is unchanged, only where it is read from.
       useSettingsStore.getState().setAgentOfficeDefaultView("floor");
@@ -1273,7 +1273,7 @@ describe("CommGraphTile", () => {
       // witness the change, so the only evidence is the record the camera
       // itself carries.
       //
-      // D68: the camera under test is the office's own, seeded through
+      // The camera under test is the office's own, seeded through
       // `officeCamera` rather than the top-level fields, which are the
       // graph's now and would sit unread by anything in office mode.
       useSettingsStore.getState().setAgentOfficeDefaultView("building");
@@ -1295,7 +1295,7 @@ describe("CommGraphTile", () => {
     });
 
     it("leaves the camera untouched on mount when the record already matches the resolved view", async () => {
-      // D68: seeded in `officeCamera`, which is the field the mount-time
+      // Seeded in `officeCamera`, which is the field the mount-time
       // reset would clear. Seeding the graph's `x`/`y`/`zoom` would make this
       // vacuous - nothing in this scenario writes them either way, so the
       // case would stay green even if the reset fired on every mount.
@@ -1351,7 +1351,7 @@ describe("CommGraphTile", () => {
         useSettingsStore
           .getState()
           .setAgentOfficeDefaultView(kind === "mounted" ? "floor" : "building");
-        // D68: the camera the office runtime actually reads is
+        // The camera the office runtime actually reads is
         // `officeCamera`, not the top-level fields (the graph's now) -
         // seeded there so this is a real test of the runtime this ticket is
         // about, not of a field nothing reads in office mode.
@@ -1415,7 +1415,7 @@ describe("CommGraphTile", () => {
     );
 
     it("preserves the actual runtime camera when the stored view and unchanged default agree", async () => {
-      // D68: seeded through `officeCamera`, same reasoning as the case above.
+      // Seeded through `officeCamera`, same reasoning as the case above.
       const { step } = installCanvas();
       const frames = vi.spyOn(OfficeScene.prototype, "frame");
       const sync = vi.spyOn(OfficeScene.prototype, "sync");
@@ -1455,7 +1455,7 @@ describe("CommGraphTile", () => {
     // reads x/y/zoom exactly once at construction and an effect's write
     // always lands one commit after the canvas that needed it.
     it("resets the actual runtime camera for a live default change with no framing record at all", async () => {
-      // D68: seeded through `officeCamera` - the camera under test is the
+      // Seeded through `officeCamera` - the camera under test is the
       // office's, and the top-level fields are the graph's now.
       const { step } = installCanvas();
       const frames = vi.spyOn(OfficeScene.prototype, "frame");
@@ -1524,7 +1524,7 @@ describe("CommGraphTile", () => {
         await new Promise((resolve) => window.setTimeout(resolve, 180));
       });
       expect(storedView()).toMatchObject({ officeCameraView: "building" });
-      // D68: the persisted-relative-to-neutral claim reads `officeCamera`
+      // The persisted-relative-to-neutral claim reads `officeCamera`
       // now, not the top-level fields.
       expect(storedView()?.officeCamera?.x).not.toBe(-10020);
       expect(storedView()?.officeCamera?.y).not.toBe(-20030);
@@ -1536,7 +1536,7 @@ describe("CommGraphTile", () => {
       // staying null (not stamped to the resolved view) is the tell - a
       // store-side stamp instead of a render-phase witness would have
       // written a fabricated record here even though nothing moved.
-      // D68: seeded through `officeCamera`, same reasoning as the case above.
+      // Seeded through `officeCamera`, same reasoning as the case above.
       const { step } = installCanvas();
       const frames = vi.spyOn(OfficeScene.prototype, "frame");
       const sync = vi.spyOn(OfficeScene.prototype, "sync");
@@ -1566,9 +1566,9 @@ describe("CommGraphTile", () => {
       // render either. Resetting here would throw away the framing of
       // EVERY tile saved before `officeCameraView` existed the instant
       // Settings' default happened to differ from what they were framed
-      // for - the worse of the two costs, and the one D52 accepted.
+      // for - the worse of the two costs, and the accepted one.
       //
-      // D68: seeded through `officeCamera`, same reasoning as every other
+      // Seeded through `officeCamera`, same reasoning as every other
       // case in this describe block.
       const { step } = installCanvas();
       const frames = vi.spyOn(OfficeScene.prototype, "frame");
@@ -1605,7 +1605,7 @@ describe("CommGraphTile", () => {
       // reaches a rendered frame. It is only visible one layer up, at the
       // prop boundary itself - so this reads what the canvas was actually
       // GIVEN on its most recent render, not what it drew.
-      // D68: seeded through `officeCamera` (same reasoning as the rest of
+      // Seeded through `officeCamera` (same reasoning as the rest of
       // this describe block), and the store-side comparison at the end
       // reads `officeCamera` too - the canvas's `view` prop is still the
       // PROJECTION (`officeCamera ?? NEUTRAL_CAMERA`) built for it, so
@@ -1668,15 +1668,15 @@ describe("CommGraphTile", () => {
 
   describe("graph camera untouched by an office default change (fixup 2, R3)", () => {
     it("leaves the active graph camera alone, and Office resumes framing neutral once it is active again", async () => {
-      // D68 restructures exactly what this case is about, so the claim is
+      // The camera split restructures exactly what this case is about, so the claim is
       // re-read rather than merely re-pointed at new fields.
       //
-      // Before D68: the graph's pan survived a default change made while
+      // Before the split: the graph's pan survived a default change made while
       // Graph was active (R3's own claim), and switching back to Office then
       // RESET the shared viewport - which is what kept the office from
       // inheriting the graph's numbers as if they were an office camera.
       //
-      // After D68: a mode switch resets nothing at all, in either direction
+      // After it: a mode switch resets nothing at all, in either direction
       // (that reset is precisely what N10 cost the office camera). The
       // graph's pan surviving the default change is UNCHANGED - it is still
       // the graph's alone, and a Settings change under Graph still can't
@@ -1791,7 +1791,7 @@ describe("CommGraphTile", () => {
   describe("each renderer owns its camera, so a Graph detour cannot lose the office's framing (fixup 11, D68, N10)", () => {
     it("mounts the office back on its saved camera after a Graph detour that moved the graph's own camera", async () => {
       // THE HEADLINE. The live re-run's N10: zoom into the office, switch to
-      // Graph, switch back, and before D68 the office returned at its
+      // Graph, switch back, and before the split the office returned at its
       // auto-fit rather than where it was left - because the one shared
       // camera was reset on every mode switch. Reproduced here end to end:
       // an office camera change, a detour through Graph that moves the
@@ -1832,7 +1832,7 @@ describe("CommGraphTile", () => {
           );
       });
 
-      // Back to Office. Before D68 this reset the shared camera to neutral;
+      // Back to Office. Before the split this reset the shared camera to neutral;
       // now nothing resets on a mode switch in either direction, so the
       // office's saved camera is exactly where the first write left it -
       // the graph's pan during the detour never had anywhere to reach it.
@@ -1860,7 +1860,7 @@ describe("CommGraphTile", () => {
     });
 
     it("a mode switch leaves the graph's camera exactly where it was, in either direction", async () => {
-      // Red before D68: `handleModeChange` reset the shared viewport to
+      // Red before the split: `handleModeChange` reset the shared viewport to
       // neutral on every switch, so the graph's own pan never survived one
       // either. Now the mode is the only thing a switch touches.
       const graphCanvas = vi.spyOn(commGraphCanvasModule, "CommGraphCanvas");
@@ -1906,7 +1906,7 @@ describe("CommGraphTile", () => {
       // The office camera persist is debounced 150ms; a wheel right before
       // switching to Graph is still PENDING when the switch unmounts the
       // office canvas, and that unmount cancels the timer - correct for a
-      // view-pick remount, wrong here, since D68 promises a mode switch
+      // view-pick remount, wrong here, since the split promises a mode switch
       // keeps each renderer's camera. No `await`/timer advance between the
       // wheel and the click: the claim is about catching the write BEFORE
       // the debounce has any chance to fire on its own.
@@ -2075,7 +2075,7 @@ describe("CommGraphTile", () => {
         officeCamera: null,
         officeCameraView: "building",
         // ...plus the Graph's own camera has to have survived the whole
-        // detour untouched - it is a different field entirely since D68,
+        // detour untouched - it is a different field entirely now,
         // and the office's own settling write touches only `officeCamera`
         // / `officeCameraView`.
         x: 900,
@@ -2089,7 +2089,7 @@ describe("CommGraphTile", () => {
       // the resolved view is already "building" when the tile mounts and
       // stays "building" throughout, so the witness never arms in the first
       // place - there is nothing here for the fix above to release
-      // wrongly, or to hold rightly. This is exactly the case D68 added a
+      // wrongly, or to hold rightly. This is exactly the case that added a
       // per-renderer camera to protect (a mode switch is not a camera
       // event), and the fix for the finding above must leave it alone:
       // expected GREEN both before this fixup and after it.
@@ -2130,7 +2130,7 @@ describe("CommGraphTile", () => {
     //
     // The reason this is expected to come back GREEN rather than red:
     // whenever `resolvedViewId` is concrete, the record/witness reset
-    // effect is never blocked, and - since D68/fixup 12 - it carries NO
+    // effect is never blocked, and it carries NO
     // mode gate either. So it retires the stale camera and releases the
     // witness the moment the default move resolves, whether Graph or
     // Office is on screen, well before any pick could ever see an armed
@@ -2451,7 +2451,7 @@ describe("CommGraphTile", () => {
     });
 
     it("picking a different view records the choice and resets the camera", async () => {
-      // D68: the camera under test is the office's own - seeded through
+      // The camera under test is the office's own - seeded through
       // `updateCommGraphTileOfficeCameraInTab`, the writer that reaches
       // `officeCamera`, since the graph's writer can no longer touch it.
       await reachFloor();

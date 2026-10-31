@@ -192,8 +192,8 @@ const OFFICE_VIEW: CommGraphTileViewState = {
   officeAutoView: null,
   officeAutoGeneration: null,
   officeCameraView: null,
-  // Unread by this canvas, which is handed the PROJECTION the tile builds
-  // (D68): `x`, `y` and `zoom` above are this suite's camera, and the office
+  // Unread by this canvas, which is handed the PROJECTION the tile builds:
+  // `x`, `y` and `zoom` above are this suite's camera, and the office
   // canvas has no idea the field exists.
   officeCamera: null,
 };
@@ -5684,7 +5684,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
    * T5 fixup 5: the block map's new `quad` drawable actually reaches the
    * canvas as a filled path.
    *
-   * D28/D58 rewrote what a lod-0 region emits - four PROJECTED corners
+   * A rewrite changed what a lod-0 region emits - four PROJECTED corners
    * instead of an axis-aligned box - but nothing upstream of the renderer
    * proves the new `kind: "quad"` arm of `drawDrawableLayer` is wired at
    * all. A painter that started emitting `quad` and a canvas that had not
