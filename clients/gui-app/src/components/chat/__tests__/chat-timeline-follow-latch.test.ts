@@ -8893,7 +8893,12 @@ describe("useChatTimelineFollowLatch", () => {
         // correction toward the end.
         fireNativeScroll(node);
 
-        expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+        // The correction's own write to the end is what says it ran, rather
+        // than the queued list command: a correction issued while the button
+        // is still down leaves no queued copy at all, so that command is no
+        // evidence either way here. An arm the press kept would have held this
+        // write off and left the view at 600.
+        expect(node.scrollTop).toBe(1000);
         expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
       });
 
