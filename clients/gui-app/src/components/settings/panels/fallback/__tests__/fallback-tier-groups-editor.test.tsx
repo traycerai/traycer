@@ -1765,7 +1765,7 @@ describe("FallbackTierGroupsEditor - seeded three-tier policy, end to end", () =
     const cardTestIds = screen
       .getAllByTestId(/^fallback-tier-group-(frontier|flagship|standard)$/)
       .map((card) => card.getAttribute("data-testid"));
-    // Falsification: the pre-ticket editor renders "group"-copy cards with no
+    // Falsification: the earlier editor renders "group"-copy cards with no
     // such testids at all - this whole suite reddens on it. Kept precise
     // (exact order, exactly these three) so a future seed reorder is also
     // caught here, not only in the host-side seed test.

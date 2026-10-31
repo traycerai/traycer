@@ -265,7 +265,7 @@ describe("chats.byId unions the host's records with the doc projection", () => {
 
   it("degrades to doc-only when the host lacks the method", () => {
     // `E_HOST_UNSUPPORTED` means the sync hook never calls `applyChatRecords`,
-    // so this session is exactly the pre-ticket one.
+    // so this session is exactly the doc-only one.
     const session = newSession(
       seedChats([
         [
