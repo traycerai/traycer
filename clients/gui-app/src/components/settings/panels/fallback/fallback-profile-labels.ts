@@ -19,9 +19,9 @@ export type FallbackSettingsProfileLabel = (profileId: string) => string;
 /**
  * The preview's account labels, resolved from the read this panel already makes.
  *
- * D190: the per-row preview used to print `preview.profileId` straight into the
+ * The per-row preview used to print `preview.profileId` straight into the
  * sentence, so a row read "resolves to gpt-5.6-sol on 3f2a9c1e-…". That is the
- * defect D118 fixed host-side, reappearing on the one surface whose whole job is
+ * defect fixed host-side, reappearing on the one surface whose whole job is
  * to tell the user what a row will do.
  *
  * The RULE is not restated here - `buildFallbackProfileLabels` and

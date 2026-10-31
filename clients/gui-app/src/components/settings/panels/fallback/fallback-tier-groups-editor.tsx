@@ -86,7 +86,7 @@ export interface FallbackTierGroupsEditorProps {
    * has not landed.
    */
   readonly preview: readonly TierCandidatePreview[] | null;
-  /** Names the account a preview row resolved on - never its raw id (D190). */
+  /** Names the account a preview row resolved on - never its raw id. */
   readonly labelFor: FallbackSettingsProfileLabel;
   /** The catalogs each row's Model and Effort cells draw from; see `fallback-catalog-options.ts`. */
   readonly catalog: FallbackCatalogOptions;
@@ -112,7 +112,7 @@ export interface FallbackTierGroupsEditorProps {
    * by construction - it is `data-or-null`, and a null renders no verdict line -
    * so a failed check looked exactly like a host that had never been asked. The
    * user got no answer and no way to ask again, on the one surface whose job is
-   * to say what a row will do. D159 accepts the null OMISSION as a fidelity
+   * to say what a row will do. The null OMISSION is accepted as a fidelity
    * rule (never guess a verdict in the client); this is the usability half on
    * top of it, and it deliberately does not put an error on any ROW - the
    * failure is one request covering every row, so it is stated once for the
@@ -638,7 +638,7 @@ function DefaultGroupSelect(props: {
  * printing "couldn't check" beside its own spinner would be describing the
  * state before the button was pressed. `previewPending` is the query's
  * `isFetching`, which covers the retry, so this remains the single pending
- * indicator D159 asks for.
+ * indicator required here.
  *
  * That exclusion used to be the ORDER of two early returns, which is why the
  * older wording here claimed it held "by construction rather than by a second
@@ -756,7 +756,7 @@ function TestPanelSlot(props: {
  * marks the user, so an empty list means "you emptied this", not "nothing has
  * been set up". Restoring is therefore an explicit action with its own verb
  * rather than something the next read does silently - which is exactly what the
- * seed marker exists to guarantee (D116/D127).
+ * seed marker exists to guarantee.
  *
  * It calls the RESTORE op rather than saving a client-built list: only the host
  * can build the seed a first read would have produced, and a list assembled here

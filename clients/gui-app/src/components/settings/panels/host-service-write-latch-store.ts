@@ -29,7 +29,7 @@ import { create } from "zustand";
  * been reconfigured.
  */
 /**
- * WHICH attempt this page's own update dispatch was granted (D8), and enough
+ * WHICH attempt this page's own update dispatch was granted, and enough
  * about the grant to know when to stop believing it.
  *
  * Not a latch and not a gate: nothing is disabled by this slot's presence. It

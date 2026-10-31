@@ -191,7 +191,7 @@ export interface FallbackPolicyDraftState {
    * replaces `draft` without touching `revision`, so after either adoption path
    * the revision still names the edit that is no longer displayed, and a
    * confirmation recorded against the request's revision describes something
-   * other than what the user is looking at (**D339**).
+   * other than what the user is looking at.
    *
    * Written at exactly three sites, each one a moment where the display and the
    * host's row are known to agree: `save-succeeded` when the confirmed
@@ -207,7 +207,7 @@ export interface FallbackPolicyDraftState {
    * The highest revision this editor has ever DISPATCHED, or `null` if it has
    * dispatched nothing.
    *
-   * The positive evidence behind "hasn't been sent" (**D339**). Saying a
+   * The positive evidence behind "hasn't been sent". Saying a
    * display was never sent is a claim, and before this field it was reached by
    * ELIMINATION - not the unanswered draft, not a rollback, not pending, not
    * confirmed - which is satisfied by three sequences where the values WERE
@@ -224,7 +224,7 @@ export interface FallbackPolicyDraftState {
    * Stamped ONLY where a draft is dispatched - `carries: "draft"`. `reset` and
    * `restore` dispatch DEFAULTS, not the values on screen, so counting them
    * would make "what's on screen was sent" true of a display those requests
-   * never carried: the same false-claim class D330 removed, arrived at from the
+   * never carried: the same false-claim class removed earlier, arrived at from the
    * other side. After a reset the display is genuinely unsent, and the
    * staleness banner - not this field - owns the story of what the host did.
    */
@@ -277,7 +277,7 @@ export interface FallbackPolicyDraftState {
    * Correlating instead of serialising is deliberate: serialising would delay
    * the second request until the first settled, which changes WHEN a commit is
    * dispatched. Nothing about FC3 needs that, and the commit-on-blur/Enter rule
-   * (D181) is pinned on the dispatch being synchronous with the gesture.
+   * is pinned on the dispatch being synchronous with the gesture.
    */
   readonly pendingSaves: readonly PendingFallbackSave[];
   /**
@@ -501,7 +501,7 @@ export interface UnknownFallbackSave {
    * only true of a `"draft"` request. A reset or restore whose own reply is
    * lost creates an unknown outcome at the display's revision while having
    * carried none of those values, and without this the page attaches the
-   * reset's uncertainty to an edit the reset never saw (**D347**).
+   * reset's uncertainty to an edit the reset never saw.
    */
   readonly carries: FallbackSaveCarries;
   /**
@@ -1286,7 +1286,7 @@ export function createFallbackPolicyDraftState(
     draft: policy,
     displayOrder: fallbackDisplayOrder(policy.ladder),
     // Hydration: the stored rows get their identities as they enter the draft,
-    // once, here. This is the seeding D174 names - a row loaded from the policy
+    // once, here. This is the seeding - a row loaded from the policy
     // is as much a row as one the user adds, and the two are indistinguishable
     // from then on.
     keyedTierGroups: toKeyedGroups(policy.tierGroups),
@@ -1385,7 +1385,7 @@ function applySaveSucceeded(
     : state.lastConfirmedRequestId;
   // NOT computed once for all three returns, because the three leave three
   // DIFFERENT things on screen and confirmation is a property of what is
-  // displayed (D339). Two of them put the host's row in the controls - the
+  // displayed. Two of them put the host's row in the controls - the
   // correcting rollback by adopting it, the ordinary echo by writing it - and
   // both record `state.revision`, the revision those displayed values now sit
   // at. The moved-on return leaves the user's newer draft standing and records
@@ -1435,7 +1435,7 @@ function applySaveSucceeded(
         // The controls below now show the policy the host just confirmed, so
         // the display is confirmed AT its current revision - which is not the
         // revision this request carried, and is the whole reason this is keyed
-        // to the view rather than to the request (D339).
+        // to the view rather than to the request.
         confirmedViewRevision,
         hostError: hostErrorAfterDischarge,
         ...adoptPolicyIntoView(state, action.policy),
@@ -1705,7 +1705,7 @@ function applySaveFailed(
  * Exported for the staleness banner, which needs the same distinction for a
  * different reason: it names what is on screen only when what is on screen is
  * the user's own live edit. A rollback is neither that nor the pre-reset
- * policy, and under D327 the banner says nothing about provenance there - the
+ * policy, and the banner says nothing about provenance there - the
  * save notice under the control already owns that sentence.
  *
  * The distinction matters because `revision` alone cannot make it: a revert
@@ -1820,7 +1820,7 @@ function adoptPolicyIntoView(
 /**
  * Whether a settled request actually JUDGED what the controls are showing.
  *
- * TWO conditions, and the second was missing until D353 exposed it. The request
+ * TWO conditions, and the second was missing until it was exposed. The request
  * must be about the draft on screen - `pending.revision === state.revision` -
  * AND it must have CARRIED that draft. A `reset` satisfies the first for free:
  * it sends no draft, so it moves no revision, so its pending revision is
@@ -1832,7 +1832,7 @@ function adoptPolicyIntoView(
  * call sites in `applySaveFailed`, all of them things the user can see:
  *
  *  - the VALIDATION ERROR, cleared only by a request that judged the draft it
- *    belongs to (D353). A reset with an invalid edit on screen erased that
+ *    belongs to. A reset with an invalid edit on screen erased that
  *    edit's error while leaving the invalid value in the field;
  *  - the refusal MARKER, which decides whether the display is described as a
  *    value the host turned down. A refused reset marked an unsent draft it
@@ -1956,7 +1956,7 @@ function applySaveStarted(
     ],
     // The high-water mark of DISPATCHED drafts, and only drafts - a reset
     // sends defaults the display never held, so counting it here would let
-    // the page say those displayed values "were sent" (D339).
+    // the page say those displayed values "were sent".
     //
     // `Math.max` rather than a plain assignment: revisions only increase,
     // so the two are equivalent today, and the max is what keeps this true
@@ -2108,12 +2108,12 @@ function applyReconciled(
     state.revision !== state.unknownSave.revision &&
     !draftIsNotUserAuthored(state)
   ) {
-    // No `confirmedViewRevision` here, and that is the distinction D330's
+    // No `confirmedViewRevision` here, and that is the distinction the
     // reducer pin holds: `persistedRevision` IS stamped just above, over a
     // draft the user is still typing and this editor never dispatched.
     // Reading that stamp as agreement would call an unsent edit stored;
     // the display's own account comes from `lastDispatchedRevision`, which
-    // proves it unsent rather than inferring it (D339).
+    // proves it unsent rather than inferring it.
     return { ...state, ...reconciled, hostError: null };
   }
   return {
@@ -2126,7 +2126,7 @@ function applyReconciled(
     // This arm puts the read-back's own policy in the controls, so the
     // display now equals the host's row - confirmation recorded against
     // the revision those values are displayed at, not against the request
-    // that went unanswered (D339). Without this, a read-back that answers
+    // that went unanswered. Without this, a read-back that answers
     // the display is followed by a LATER save going unknown, and the page
     // tells the user the confirmed values on screen were never sent.
     confirmedViewRevision: state.revision,

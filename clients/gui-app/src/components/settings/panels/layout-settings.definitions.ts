@@ -112,7 +112,7 @@ export const LAYOUT = defineSettingsSection("layout", {
     ],
   },
   /**
-   * What the side strip shows (D8): a surface-level row beside Placement,
+   * What the side strip shows: a surface-level row beside Placement,
    * drawn by `SideStripViewRow` on both hosts.
    */
   sideStripView: {

@@ -493,7 +493,7 @@ function FallbackPolicyEditor(props: {
    * line for it would be an unrelated surface going dark.
    */
   // Resolved once for the whole editor: one providers read builds one label
-  // map, rather than each card rebuilding it (D190).
+  // map, rather than each card rebuilding it.
   const profileLabelFor = useFallbackSettingsProfileLabels();
   // Same shape, same reason: one model-catalog read per distinct harness in the
   // draft serves every row's Model and Effort cells.
@@ -845,9 +845,9 @@ function FallbackPolicyEditor(props: {
     setOverrideSavePolicy(null);
     const requestId = createFallbackSaveRequestId();
     // A restore sends nothing from the screen - the host picks the default
-    // groups - so it must not make the displayed values count as dispatched
-    // (D339), and if its own reply is lost the notice has to say that the
-    // RESTORE is what went unanswered (D347).
+    // groups - so it must not make the displayed values count as dispatched,
+    // and if its own reply is lost the notice has to say that the
+    // RESTORE is what went unanswered.
     dispatch({
       type: "save-started",
       field: "tierGroups",
@@ -909,8 +909,8 @@ function FallbackPolicyEditor(props: {
     setOverrideSavePolicy(null);
     const requestId = createFallbackSaveRequestId();
     // As the restore above: a reset sends DEFAULTS, not the values on screen,
-    // so "what's on screen was sent" must stay unsupported by it (D339), and a
-    // lost reply is described as the reset's, not the display's (D347).
+    // so "what's on screen was sent" must stay unsupported by it, and a
+    // lost reply is described as the reset's, not the display's.
     dispatch({
       type: "save-started",
       field: "danger",
@@ -1042,7 +1042,7 @@ function FallbackPolicyEditor(props: {
           // time the failure arrived, and the banner called a post-reset policy
           // "the settings you had before the reset".
           //
-          // D327 orders the three cases: a ROLLBACK is checked first, because
+          // The three cases are ordered: a ROLLBACK is checked first, because
           // it is neither of the other two and the banner says nothing about
           // provenance there.
           displaySubject={unrefreshedResetSubject(state)}
@@ -1463,7 +1463,7 @@ type UnrefreshedResetSubject = "pre-reset-values" | "own-edit" | "rollback";
  */
 function unrefreshedResetBody(subject: UnrefreshedResetSubject): string {
   switch (subject) {
-    // D330: a reset that succeeded proves the host WROTE something, not that
+    // A reset that succeeded proves the host WROTE something, not that
     // what it wrote differs from this. Resetting an already-default policy
     // yields the same values back, and the follow-up get that would have shown
     // that is exactly the request that failed - so the old "not what this host
@@ -1472,7 +1472,7 @@ function unrefreshedResetBody(subject: UnrefreshedResetSubject): string {
       return "This page still shows the settings from before the reset. Select Reload settings to show what's now saved on this host.";
     case "own-edit":
       return "These are your edits. Select Reload settings to show what's now saved on this host.";
-    // D327: the notice under the control already says where these values came
+    // The notice under the control already says where these values came
     // from ("your last saved settings are back on screen", or that they still
     // predate the reset). The banner's subject is the RESET, so here it says
     // only that, and the two stop making the same decision in two places.
@@ -1489,8 +1489,8 @@ function UnrefreshedResetNotice(props: {
    * `pre-reset-values` is the only case where the banner names the displayed
    * values as out of date. Once anything has been submitted since the reset
    * went out, that is the user's own draft, which a save since may have stored;
-   * and once a refusal has rolled the display back, D327 gives the provenance
-   * sentence to the save notice and leaves this banner with its own subject -
+   * and once a refusal has rolled the display back, the provenance sentence
+   * belongs to the save notice, leaving this banner with its own subject -
    * the reset - alone. Two places describing one set of values is how the two
    * of them came to disagree.
    */
@@ -1605,7 +1605,7 @@ function FallbackSaveStatus(props: {
     unknownSave,
     lastConfirmedRequestId,
   } = props.state;
-  // D330. After a reset whose read failed, `persisted` is the PRE-reset policy
+  // After a reset whose read failed, `persisted` is the PRE-reset policy
   // and the host's row has been replaced by something nobody here has seen. It
   // stops being unverified only when a post-reset write is confirmed (a read
   // that succeeds clears the banner outright, so `unrefreshedReset !== null`
@@ -1956,7 +1956,7 @@ function TierStepHint({
  *    actively using and the stale sentence becomes the false one. Hence
  *    `persistedUnverified` rather than a bare "is the page stale".
  *  - `refused-kept` claims the DISPLAYED values are stored, and that takes TWO
- *    facts, not one (**D330**). Comparing the values against `persisted`
+ *    facts, not one. Comparing the values against `persisted`
  *    settles only SAMENESS - see {@link fallbackPolicyValuesEqual} - and
  *    sameness with a copy the host may have discarded is not storage. So this
  *    arm consults `persistedUnverified` too, and where `persisted` is
@@ -1984,8 +1984,8 @@ function TierStepHint({
  */
 /**
  * What the DISPLAYED values' own request is doing, from that request's actual
- * state rather than from a revision comparison (D330), and from POSITIVE
- * evidence rather than from elimination (D339).
+ * state rather than from a revision comparison, and from POSITIVE
+ * evidence rather than from elimination.
  *
  * Two rewrites, one direction. `unknownSave.revision !== revision` was standing
  * in for "the display was never sent" and covered four situations, three of
@@ -2006,7 +2006,7 @@ function TierStepHint({
  * Which of the three things the staleness banner is looking at, as one function
  * rather than a nested ternary at the call site.
  *
- * D327 orders the cases and the order is the rule: a ROLLBACK is checked first,
+ * The cases are ordered and the order is the rule: a ROLLBACK is checked first,
  * because the banner says nothing about provenance there - the notice owns the
  * display's story, and the banner is left saying only that the reset is unread.
  * Otherwise the display is the pre-reset values when its revision is still the
@@ -2057,7 +2057,7 @@ function displayDispatchState(input: {
    * arms answered `true` and both got the rollback's sentence.
    */
   readonly refused: FallbackRefusedDraft | null;
-  /** Whether the displayed values equal `persisted` - SAMENESS only (D330). */
+  /** Whether the displayed values equal `persisted` - SAMENESS only. */
   readonly matchesPersisted: boolean;
 }): FallbackDisplayDispatch {
   // The display IS the unanswered draft - the most specific thing that can be
@@ -2069,7 +2069,7 @@ function displayDispatchState(input: {
   // draft and neither moves it. Without this check that request's uncertainty
   // is attached to whatever happens to be on screen, including an invalid edit
   // that was never sent anywhere: this arm returns before the positive gate is
-  // ever consulted, so the gate cannot save it (D347).
+  // ever consulted, so the gate cannot save it.
   if (
     input.unknownSave !== null &&
     input.unknownSave.carries === "draft" &&
@@ -2099,7 +2099,7 @@ function displayDispatchState(input: {
   ) {
     return "confirmed";
   }
-  // The last two arms are the D339 split, and the ORDER is the point: "never
+  // The last two arms are the split, and the ORDER is the point: "never
   // sent" is now claimed only on evidence, never by elimination.
   //
   // A display above every revision this editor has dispatched is an edit made
@@ -2114,7 +2114,7 @@ function displayDispatchState(input: {
     input.revision > input.lastDispatchedRevision;
   if (!neverDispatched) return "sent-unknown";
   // Never dispatched splits in two, because "no draft was sent" does not make
-  // the display an EDIT (D353). A panel that has only ever loaded a policy has
+  // the display an EDIT. A panel that has only ever loaded a policy has
   // dispatched nothing and been edited by nobody, and calling that "a newer
   // edit that hasn't been sent" is false about both halves of the sentence.
   //
@@ -2124,7 +2124,7 @@ function displayDispatchState(input: {
   return input.matchesPersisted ? "loaded-unchanged" : "uncommitted";
 }
 
-/** The two independent questions a notice answers, resolved once (D353). */
+/** The two independent questions a notice answers, resolved once. */
 interface FallbackSaveNoticeStatus {
   /**
    * A reset was confirmed, its read failed, and nothing has confirmed a
@@ -2147,7 +2147,7 @@ interface FallbackSaveNoticeStatus {
   readonly unknownCarries: FallbackSaveCarries;
   /**
    * The operation whose unanswered outcome has taken away display authority,
-   * or `null` while it is intact (D353). Only the host-claiming sentences
+   * or `null` while it is intact. Only the host-claiming sentences
    * read it; the matrix in SETTINGS.md says which those are.
    */
   readonly authorityInvalidated: FallbackSaveCarries | null;
@@ -2180,7 +2180,7 @@ function saveNoticeStatus(
     // fallback here is unreachable; it is `"draft"` because that is the shape
     // every other outcome's sentence already assumes.
     unknownCarries: state.unknownSave?.carries ?? "draft",
-    // The authority rule, stated once (D353), now read from the OBLIGATION
+    // The authority rule, stated once, now read from the OBLIGATION
     // rather than from the notice (N2). An operation that does not carry the
     // display and has no answer may already have replaced the host's row, so
     // nothing on screen may be called what the host holds until something
@@ -2205,7 +2205,7 @@ function saveNoticeStatus(
  * The account of the display given while `persisted` is a pre-reset policy the
  * host has replaced with something nobody here has read.
  *
- * D330 forbids "is in force", "is what this host is using now", and "no longer"
+ * Forbidden: "is in force", "is what this host is using now", and "no longer"
  * in use while that is true. A successful reset proves the host WROTE
  * something; it does not prove the result differs from what is on screen - an
  * already-default policy reset to defaults yields identical values - so this
@@ -2352,7 +2352,7 @@ function unknownRequestAccount(carries: FallbackSaveCarries): string {
 }
 
 /**
- * The account of the DISPLAY, from the matrix's first axis (D353, SETTINGS.md).
+ * The account of the DISPLAY, from the matrix's first axis (SETTINGS.md).
  *
  * `authorityInvalidated` is the second column of that axis: the right to say
  * what the HOST holds, which an unanswered `reset` or `restore` takes away. Only
@@ -2372,7 +2372,7 @@ function displayAccount(status: {
       // reply was lost may already have replaced the row, and nothing has
       // re-read it - so the confirmation is a fact about the PAST, and the
       // sentence keeps it rather than collapsing to "we don't know", which
-      // would throw away a confirmation that really did happen (D353).
+      // would throw away a confirmation that really did happen.
       if (status.authorityInvalidated !== null) {
         // NO ORDER, in either direction. "before the reset" said the
         // confirmation came first; "since then a reset was sent" said the
@@ -2389,7 +2389,7 @@ function displayAccount(status: {
         return `What's on screen was confirmed as saved on this host. A ${operationNoun(status.authorityInvalidated)} ${OUTSTANDING_OPERATION_TAIL}`;
       }
       // Describes the DISPLAY's relation to the host, and says nothing about
-      // who authored it or when (D347). `confirmedViewRevision` records that
+      // who authored it or when. `confirmedViewRevision` records that
       // the values on screen ARE the host's row; it does not record that they
       // are a change the user made. A read-back can adopt the ORIGINAL policy -
       // neither of the two saves in flight having committed - and confirmation
@@ -2407,12 +2407,12 @@ function displayAccount(status: {
       // Deliberately neutral, and deliberately NOT a dispatch verdict either
       // way. These values reached the host; what it did with them is the one
       // thing nobody here knows, and the two sentences that would resolve it -
-      // "hasn't been sent" and "has been saved" - are both false (D339).
+      // "hasn't been sent" and "has been saved" - are both false.
       return "These settings were sent, but we couldn't confirm they were saved.";
     case "loaded-unchanged":
       // No host claim at all, which is why this arm has no authority branch:
       // "what was loaded" is a fact about this page, and an unanswered reset
-      // cannot make it false (D353).
+      // cannot make it false.
       return "This page still shows the settings it loaded.";
     case "uncommitted":
       return "You have changes that haven't been sent.";

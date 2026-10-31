@@ -533,7 +533,7 @@ export type RowStatusLine =
  *    heard of degrades to.
  *  - An exact pick that resolves to itself says nothing - the cell already
  *    names the model - unless the host attached warnings or would skip it.
- *  - The ACCOUNT is named, never its id (D118), and only for the first match
+ *  - The ACCOUNT is named, never its id, and only for the first match
  *    the walk would actually try.
  *
  * A blank row has no line: it is already marked invalid, and the draft's own
