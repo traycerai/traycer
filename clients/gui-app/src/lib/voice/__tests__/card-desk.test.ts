@@ -147,6 +147,14 @@ function speakTo(
   return verdict;
 }
 
+/** The person's words are heard and left open (a route for them is still out); their segment's seq. */
+function utterWords(text: string): number {
+  useVoiceSessionStore.getState().appendInputSegment(text, 0);
+  const seq = useVoiceSessionStore.getState().segments.at(-1)?.seq;
+  if (seq === undefined) throw new Error("no segment was heard");
+  return seq;
+}
+
 function option(index: number, label: string): CardChoice {
   return { kind: "option", index, label };
 }
@@ -200,6 +208,8 @@ interface Harness {
     readonly answerBotQuestion: Mock<CardApi["answerBotQuestion"]>;
     readonly actSurface: Mock<CardApi["actSurface"]>;
     readonly postInThread: Mock<CardApi["postInThread"]>;
+    /** Whether a post can be sent; a test may turn it off. */
+    canPost: boolean;
   };
   readonly records: Records;
   /** Everything the voice was given to say, in order. */
@@ -283,6 +293,7 @@ function setup(content: CardContent): Harness {
       }),
     ),
     postInThread: vi.fn<CardApi["postInThread"]>(() => Promise.resolve(true)),
+    canPost: true,
   };
   const deliverItem = (itemId: string): void => {
     const facts: CardFacts = {
@@ -851,6 +862,58 @@ describe("the router's answer to the card", () => {
     expect(h.card()?.candidate).toBeNull();
   });
 
+  describe("while the person names a choice exactly with a route still out", () => {
+    /** "use staging" is routed; before it comes back, "Production" is said exactly: its read-back is out. */
+    async function routeOutThenExactChoice() {
+      const h = setup(BOT_QUESTION);
+      await h.listen();
+      const earlySeq = utterWords("use staging");
+      expect(
+        h.desk.answer({ text: "use staging", seqs: [earlySeq] }, "d-early"),
+      ).toBe("route");
+      // The say loop holds those words for the route; later words are their own.
+      useVoiceSessionStore.getState().reserveOpenSpan("route");
+      h.say("Production");
+      const readBack = h.latest();
+      const active = h.card();
+      if (active === null) throw new Error("no card is open");
+      const key = {
+        opening: active.opening,
+        questionIndex: active.questionIndex,
+      };
+      return { h, earlySeq, readBack, key };
+    }
+
+    it("ignores the answer to the earlier words: the exact choice and its read-back stand", async () => {
+      const { h, earlySeq, readBack, key } = await routeOutThenExactChoice();
+      const spokenBefore = h.spoken.length;
+
+      const taken = h.desk.answerRouted(
+        { choice: 0, text: "use staging", key, seqs: [earlySeq] },
+        "d-early",
+      );
+
+      expect(taken).toBe(true);
+      expect(h.card()?.candidate).toEqual(option(1, "Production"));
+      expect(h.withdrawn).toEqual([]);
+      expect(h.latest()).toBe(readBack);
+      expect(h.spoken).toHaveLength(spokenBefore);
+    });
+
+    it("lets an answer to words said after the exact choice replace it", async () => {
+      const { h, readBack, key } = await routeOutThenExactChoice();
+      const laterSeq = utterWords("no, staging");
+
+      h.desk.answerRouted(
+        { choice: 0, text: "no, staging", key, seqs: [laterSeq] },
+        "d-later",
+      );
+
+      expect(h.card()?.candidate).toEqual(option(0, "Staging"));
+      expect(h.withdrawn).toEqual([readBack.id]);
+    });
+  });
+
   it("is not taken when no card waits", () => {
     const h = setup(BOT_QUESTION);
 
@@ -935,6 +998,37 @@ describe("a card settled first by someone else", () => {
       expect(h.api.postInThread).toHaveBeenCalledWith(label);
       await vi.waitFor(() => expect(h.card()).toBeNull());
       expect(h.texts().at(-1)).toBe("Posted your answer in the thread.");
+    },
+  );
+
+  it.each([
+    {
+      name: "a bot's question",
+      content: BOT_QUESTION,
+      words: "the second one",
+      verb: "answered",
+    },
+    { name: "an approval", content: APPROVAL, words: "deny", verb: "decided" },
+  ])(
+    "on $name offers no post when none can be sent: it says so and closes",
+    async ({ content, words, verb }) => {
+      const h = setup(content);
+      await h.listen();
+      await h.candidate(words);
+      h.api.canPost = false;
+      h.records.settledBy = "Dana";
+      refuseAsSettled(h, content.family);
+
+      h.say("yes");
+
+      await vi.waitFor(() =>
+        expect(h.latest().text).toBe(
+          `Dana already ${verb} it, so there is nothing to send.`,
+        ),
+      );
+      expect(h.card()).toBeNull();
+      expect(h.say("yes")).toBe("route");
+      expect(h.api.postInThread).not.toHaveBeenCalled();
     },
   );
 
@@ -1212,6 +1306,7 @@ function openOnRealScheduler(content: CardContent): RealScheduled {
     answerBotQuestion,
     actSurface,
     postInThread: () => Promise.resolve(true),
+    canPost: true,
   };
   const cardDesk = createCardDesk({
     store: useVoiceSessionStore,
@@ -1409,6 +1504,92 @@ describe("a read-back proven by its end", () => {
       expect(h.actSurface).toHaveBeenCalledTimes(1);
     },
   );
+
+  /** A bot's question whose choices share a word. */
+  function regions(
+    options: ReadonlyArray<string>,
+    question: string,
+  ): CardContent {
+    return {
+      ...BOT_QUESTION,
+      questions: [
+        { text: question, options, takesText: false, questionId: null },
+      ],
+    };
+  }
+  const BOT_LEAD = "Release bot asks in the thread about Deploy:";
+  const REGIONS = regions(
+    ["Production east", "Production west"],
+    "Choose a region.",
+  );
+
+  it("is not armed by a list cut off after an earlier choice that shares a word with the last", async () => {
+    const h = openOnRealScheduler(REGIONS);
+
+    h.speak(
+      `${BOT_LEAD} Choose a region. The first choice is Production east.`,
+    );
+    await h.endPlayback();
+    speakTo(h.cardDesk, "Production east", "d-words");
+    speakTo(h.cardDesk, "yes", "d-words");
+
+    expect(useVoiceSessionStore.getState().activeCard?.candidate).toBeNull();
+    expect(h.answerBotQuestion).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["both choices were said", "1. Production east; 2. Production west"],
+    [
+      "the closing skip was said",
+      "1. Production east. Say one of them, or skip.",
+    ],
+  ])(
+    "is armed once %s, and a candidate chosen then is sent by one yes",
+    async (_name, tail) => {
+      const h = openOnRealScheduler(REGIONS);
+      h.speak(`${BOT_LEAD} Choose a region. ${tail}`);
+      await h.endPlayback();
+
+      speakTo(h.cardDesk, "Production east", "d-words");
+      expect(useVoiceSessionStore.getState().activeCard?.candidate).toEqual(
+        option(0, "Production east"),
+      );
+      h.speak(' "Production east" as your answer. Say yes to send it, or no.');
+      await h.endPlayback();
+      speakTo(h.cardDesk, "yes", "d-words");
+
+      expect(h.answerBotQuestion).toHaveBeenCalledExactlyOnceWith({
+        text: "Production east",
+        questionIndex: 1,
+        skipped: false,
+      });
+    },
+  );
+
+  it("does not take a re-offered candidate as heard from the line it opens with, only once its label is said", async () => {
+    const h = openOnRealScheduler(
+      regions(["Open later", "Close now"], "When should it open?"),
+    );
+    h.speak(
+      `${BOT_LEAD} When should it open? 1. Open later; 2. Close now. Say one of them, or skip.`,
+    );
+    await h.endPlayback();
+    speakTo(h.cardDesk, "Open later", "d-words");
+    h.speak(' "Open later" as your answer. Say yes to send it, or no.');
+    await h.endPlayback();
+
+    h.cardDesk.invalidate("interjection");
+    h.speak("Still open:");
+    await h.endPlayback();
+    speakTo(h.cardDesk, "yes", "d-words");
+    expect(h.answerBotQuestion).not.toHaveBeenCalled();
+
+    h.speak(' "Open later" as your answer.');
+    await h.endPlayback();
+    speakTo(h.cardDesk, "yes", "d-words");
+
+    expect(h.answerBotQuestion).toHaveBeenCalledTimes(1);
+  });
 
   it("counts a candidate read-back as heard by its label, not by the tool it names", async () => {
     const h = openOnRealScheduler(APPROVAL);

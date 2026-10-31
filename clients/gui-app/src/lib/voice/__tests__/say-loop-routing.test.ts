@@ -924,6 +924,7 @@ describe("the card desk behind the say loop", () => {
       answerBotQuestion: () => Promise.resolve({ kind: "failed" }),
       actSurface: () => Promise.resolve({ kind: "failed" }),
       postInThread: () => Promise.resolve(true),
+      canPost: true,
     };
     useVoiceSessionStore.getState().setCardDriver(cardDesk);
     return {

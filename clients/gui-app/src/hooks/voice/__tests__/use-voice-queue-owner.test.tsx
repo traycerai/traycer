@@ -198,6 +198,7 @@ function mountOwnerWithWaitingItems(arrival: "briefed" | "during-session") {
       Promise.resolve({ kind: "failed" }),
     ),
     postInThread: vi.fn<CardApi["postInThread"]>(() => Promise.resolve(true)),
+    canPost: true,
   };
   const latest = (): SpeechItem => {
     const item = enqueued.mock.calls.at(-1)?.[0];
