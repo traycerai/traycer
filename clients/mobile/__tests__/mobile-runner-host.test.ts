@@ -276,6 +276,7 @@ function runner(returnScheme: string | null): MobileRunnerHost {
     // `null` is every other platform's answer.
     systemBack: null,
     statusBarTap: null,
+    voiceAudio: null,
   });
 }
 
@@ -309,6 +310,7 @@ function runnerWithSandboxReason(
     // `null` is every other platform's answer.
     systemBack: null,
     statusBarTap: null,
+    voiceAudio: null,
   });
 }
 
@@ -393,6 +395,7 @@ function runnerAround(
     canCopyImages: true,
     systemBack: null,
     statusBarTap: null,
+    voiceAudio: null,
   });
 }
 
@@ -466,6 +469,7 @@ function runnerWithAuthSheet(
     canCopyImages: true,
     systemBack: null,
     statusBarTap: null,
+    voiceAudio: null,
   });
 }
 

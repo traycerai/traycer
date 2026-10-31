@@ -90,6 +90,7 @@ import type {
   IWorkspaceFoldersHost,
   LocalHostSnapshot,
   LocalHostUnresponsive,
+  MicrophoneAccessStatus,
   NotificationShowOutcome,
   PushPermissionState,
   PushSeverity,
@@ -98,6 +99,7 @@ import type {
   StoredCredentials,
   StoredCredentialsIdentity,
   SystemResumeEvent,
+  SystemSuspendCause,
   TokenRotateResult,
   TokenStoreChange,
   TrayEpic,
@@ -188,6 +190,7 @@ import type {
   SandboxVerbGesture,
 } from "@traycer/protocol/host/sandbox-control";
 import type { MobileAuthSheet } from "./auth-sheet";
+import type { MobileVoiceAudio } from "./voice-audio";
 import type { MobilePushRegistration } from "./push-registration";
 
 /**
@@ -305,6 +308,13 @@ export interface MobileRunnerHostOptions {
    * `IRunnerHost.statusBarTap`. Decided by the entry point, like `systemBack`.
    */
   readonly statusBarTap: IStatusBarTapHost | null;
+  /**
+   * The microphone permission, its settings page and a live voice session's
+   * interruptions (see `voice-audio.ts`), or `null` where there is no OS to
+   * ask (the dev web entry, tests): access then resolves `"granted"` and
+   * `getUserMedia` drives the browser's own prompt.
+   */
+  readonly voiceAudio: MobileVoiceAudio | null;
 }
 
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
@@ -376,6 +386,7 @@ export class MobileRunnerHost implements IRunnerHost {
   readonly linkLoginDeepLinks: ILinkLoginDeepLinkSource | null;
   readonly deviceFlow: MobileDeviceFlowHost;
   private readonly authSheet: MobileAuthSheet | null;
+  private readonly voiceAudio: MobileVoiceAudio | null;
   /**
    * The phone's own notification switch. `null` wherever this shell cannot
    * both read the permission AND open the OS page to repair it (the dev web
@@ -436,6 +447,7 @@ export class MobileRunnerHost implements IRunnerHost {
     this.systemBack = options.systemBack;
     this.statusBarTap = options.statusBarTap;
     this.authSheet = options.authSheet;
+    this.voiceAudio = options.voiceAudio;
     this.notifications = buildNotifications(options.pushRegistration);
     this.tokenStore = new MobileTokenStore(
       this.secureStorage,
@@ -810,10 +822,11 @@ export class MobileRunnerHost implements IRunnerHost {
   }
 
   setVoiceSessionLive(live: boolean): Promise<void> {
-    // The phone has one window and no close; its background edge ends the
-    // session instead (the mobile voice ticket).
-    void live;
-    return Promise.resolve();
+    // The phone has one window and no close, so nothing keeps a live session
+    // alive here; its background edge ends one (`onSystemSuspended`). Live is
+    // when the OS interruptions are watched, and on Android when the session
+    // holds the audio focus.
+    return this.voiceAudio?.setLive(live) ?? Promise.resolve();
   }
 
   setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void> {
@@ -1051,12 +1064,14 @@ export class MobileRunnerHost implements IRunnerHost {
     return [];
   }
 
-  async requestMicrophoneAccess(): Promise<"granted" | "denied"> {
-    return "granted";
+  async requestMicrophoneAccess(): Promise<MicrophoneAccessStatus> {
+    return this.voiceAudio === null
+      ? "granted"
+      : this.voiceAudio.requestAccess();
   }
 
   async openMicrophoneSettings(): Promise<void> {
-    // Mobile microphone permissions are driven by `getUserMedia`.
+    await this.voiceAudio?.openSettings();
   }
 
   async openFullDiskAccessSettings(): Promise<void> {
@@ -1105,11 +1120,22 @@ export class MobileRunnerHost implements IRunnerHost {
     return this.systemResume.subscribe(handler);
   }
 
-  onSystemSuspended(handler: () => void): Disposable {
-    // The phone ends a voice session on its background edge, which the
-    // mobile voice ticket wires; nothing fires this signal here yet.
-    void handler;
-    return disposable();
+  onSystemSuspended(handler: (cause: SystemSuspendCause) => void): Disposable {
+    // The same background edge the resume is paired with, so the screen lock
+    // and an app switch end a voice session and a transient overlay (Control
+    // Center, a permission prompt) does not. Interruptions come from the OS
+    // audio session, and only while a session is live.
+    const background = this.systemResume.subscribeBackground(() =>
+      handler("background"),
+    );
+    const interrupted =
+      this.voiceAudio?.onInterrupted(() => handler("interrupted")) ?? null;
+    return {
+      dispose: () => {
+        background.dispose();
+        interrupted?.dispose();
+      },
+    };
   }
 
   onVoiceTrayAction(handler: (action: VoiceTrayAction) => void): Disposable {
@@ -1828,6 +1854,7 @@ function resumeEvidenceModeFor(platform: string): ResumeEvidenceMode {
 
 class MobileSystemResume {
   private readonly handlers = new Set<(event: SystemResumeEvent) => void>();
+  private readonly backgroundHandlers = new Set<() => void>();
   private listening = false;
   private background = false;
   /** Stamped only by the numeric modes; `null` dwell everywhere else. */
@@ -1869,6 +1896,21 @@ class MobileSystemResume {
     };
   }
 
+  /**
+   * The background edge itself, once per episode on the selected source: what
+   * ends a live voice session. Synchronous with the edge, so the microphone
+   * is released before the OS suspends the WebView.
+   */
+  subscribeBackground(handler: () => void): Disposable {
+    this.ensureTracking();
+    this.backgroundHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.backgroundHandlers.delete(handler);
+      },
+    };
+  }
+
   private noteBackground(stampDwell: boolean): void {
     if (this.background) {
       // Level-triggered: a duplicate background report says nothing new.
@@ -1876,6 +1918,13 @@ class MobileSystemResume {
     }
     this.background = true;
     this.enteredAt = stampDwell ? Date.now() : null;
+    for (const handler of Array.from(this.backgroundHandlers)) {
+      try {
+        handler();
+      } catch (error) {
+        console.error("[mobile] system-background handler threw", error);
+      }
+    }
   }
 
   /**
