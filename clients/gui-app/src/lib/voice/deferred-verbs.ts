@@ -46,8 +46,7 @@ export function executeDeferredVerb(input: {
       // item the route names is checked against the queue as it is now: the
       // route was made from an earlier snapshot, and the item may have been
       // heard or set aside since.
-      const itemId =
-        input.itemId ?? newestWaitingOf(target, input.threadNamed);
+      const itemId = input.itemId ?? newestWaitingOf(target, input.threadNamed);
       if (input.itemId === null && target !== null && itemId === null) {
         return { kind: "refused", say: NOTHING_WAITING_NOTICE };
       }
