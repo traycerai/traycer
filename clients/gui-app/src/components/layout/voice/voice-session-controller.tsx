@@ -371,6 +371,7 @@ export function VoiceSessionController(): ReactNode {
   // ---- Session lifecycle ----------------------------------------------- //
   const micStreamRef = useRef<MediaStream | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
   const levelWatchRef = useRef<AudioLevelWatch | null>(null);
   const expiryTimerRef = useRef<number | null>(null);
   const remintWhenClearRef = useRef<(() => void) | null>(null);
@@ -419,6 +420,7 @@ export function VoiceSessionController(): ReactNode {
       audio.srcObject = null;
       audioRef.current = null;
     }
+    remoteStreamRef.current = null;
     const stream = micStreamRef.current;
     if (stream !== null) {
       for (const track of stream.getTracks()) track.stop();
@@ -436,17 +438,26 @@ export function VoiceSessionController(): ReactNode {
   }, []);
 
   /**
-   * What the microphone carries: nothing while the person muted it, and
-   * nothing while dictation holds the microphone (`pausedForDictation`, set
-   * by the dictation hook; VT6 arbitrates further). The mute is the
-   * person's own and outlives the pause.
+   * What the microphone carries and what the speaker plays, both switched
+   * locally with no network wait. The microphone carries nothing while the
+   * person muted it or while the voice is paused for dictation
+   * (`pausedForDictation`); the voice's sound is silent while paused, so it
+   * never reaches the dictation capture. The mute is the person's own and
+   * outlives the pause.
    */
   const applyCapture = useCallback(() => {
-    const stream = micStreamRef.current;
-    if (stream === null) return;
     const { muted, pausedForDictation } = useVoiceSessionStore.getState();
-    for (const track of stream.getAudioTracks()) {
-      track.enabled = !muted && !pausedForDictation;
+    const stream = micStreamRef.current;
+    if (stream !== null) {
+      for (const track of stream.getAudioTracks()) {
+        track.enabled = !muted && !pausedForDictation;
+      }
+    }
+    const remote = remoteStreamRef.current;
+    if (remote !== null) {
+      for (const track of remote.getAudioTracks()) {
+        track.enabled = !pausedForDictation;
+      }
     }
   }, []);
   useEffect(
@@ -454,10 +465,17 @@ export function VoiceSessionController(): ReactNode {
       useVoiceSessionStore.subscribe((state, previous) => {
         if (state.pausedForDictation === previous.pausedForDictation) return;
         applyCapture();
+        // Nothing is appended while paused: an item spoken into a silent
+        // speaker would read as delivered from its transcript alone. The
+        // engine takes appends again on Resume, once it has started.
+        const attempt = attemptRef.current;
+        if (attempt !== null && attempt.started && !attempt.cancelled) {
+          speechRef.current?.setReady(!state.pausedForDictation);
+        }
         // Words said before dictation took the microphone and not closed
         // yet are let go: their boundary, if it comes, falls in the pause,
         // and the next request must not inherit them. A request already
-        // sent finishes on its own. (VT6 decides what the voice says here.)
+        // sent finishes on its own.
         if (state.pausedForDictation) state.dropOpenSpan();
       }),
     [applyCapture],
@@ -616,6 +634,8 @@ export function VoiceSessionController(): ReactNode {
             audioRef.current = audio;
             audio.autoplay = true;
             audio.srcObject = remote;
+            remoteStreamRef.current = remote;
+            applyCapture();
             // Sound that cannot play is a session nobody can hear: it ends,
             // and says so, rather than confirming deliveries by transcript.
             void audio.play().catch((error: unknown) => {
@@ -719,7 +739,9 @@ export function VoiceSessionController(): ReactNode {
         expiresAt: attempt.expiresAt,
         engine: attempt.engine,
       });
-      ensureSpeech().setReady(true);
+      ensureSpeech().setReady(
+        !useVoiceSessionStore.getState().pausedForDictation,
+      );
       setShellVoiceLive(true);
       clearTimers();
       const untilRemint =
@@ -734,6 +756,7 @@ export function VoiceSessionController(): ReactNode {
       return true;
     },
     [
+      applyCapture,
       clearTimers,
       endAsync,
       ensureSpeech,

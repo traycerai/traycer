@@ -180,10 +180,11 @@ export interface VoiceSessionState {
   readonly captions: boolean;
   readonly captionLines: ReadonlyArray<CaptionLine>;
   /**
-   * Dictation holds the microphone: a live session's capture pauses. True
-   * while `dictationHolds` has an owner. Dictation's state, not the
-   * session's: no session transition writes it, so a Talk ended and started
-   * again while dictation records starts paused.
+   * The session's capture and the voice's sound are paused for dictation:
+   * true while `dictationHolds` has an owner, and after that while
+   * `dictationPauseLatched` waits for the person's Resume. The holds are
+   * dictation's state, which no session transition writes, so a Talk ended
+   * and started again while dictation records starts paused.
    */
   readonly pausedForDictation: boolean;
   /**
@@ -192,6 +193,14 @@ export interface VoiceSessionState {
    * only its own hold, so an idle instance never frees another's.
    */
   readonly dictationHolds: ReadonlySet<string>;
+  /**
+   * Dictation paused a running session, and the session stays paused until
+   * the person resumes it (`resumeFromDictation`): dictation ending never
+   * resumes the voice on its own. The session's state: set when a hold is
+   * taken while a session runs or a session starts under a hold, and
+   * forgotten when the session ends.
+   */
+  readonly dictationPauseLatched: boolean;
   /**
    * Whether a session started now would have a bot to talk to: the bot tab
    * the person has open, else the personal environment's main bot. Set by
@@ -245,6 +254,12 @@ export interface VoiceSessionState {
   readonly pushCaptionLine: (line: CaptionDelta) => void;
   readonly acquireDictationHold: (owner: string) => void;
   readonly releaseDictationHold: (owner: string) => void;
+  /**
+   * The person's Resume after dictation: the latched pause ends. Refused
+   * while dictation still holds the microphone, whose words must not reach
+   * the voice.
+   */
+  readonly resumeFromDictation: () => void;
   readonly setDestinationKnown: (known: boolean) => void;
   readonly setMuted: (muted: boolean) => void;
   readonly setDriver: (driver: VoiceSessionDriver | null) => void;
@@ -283,6 +298,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   captionLines: NO_CAPTIONS,
   pausedForDictation: false,
   dictationHolds: NO_HOLDS,
+  dictationPauseLatched: false,
   destinationKnown: true,
   muted: false,
   driver: null,
@@ -295,6 +311,8 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
       session: null,
       sessionToken: get().sessionToken + 1,
       engineGeneration: get().engineGeneration + 1,
+      // Started while dictation records: paused until the person resumes.
+      dictationPauseLatched: get().dictationHolds.size > 0,
     }),
   engineReplacing: () =>
     set({
@@ -319,6 +337,8 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
       pendingAction: null,
       captionLines: NO_CAPTIONS,
       muted: false,
+      dictationPauseLatched: false,
+      pausedForDictation: get().dictationHolds.size > 0,
     }),
   clearEndReason: () => {
     if (get().endReason === null) return;
@@ -415,14 +435,28 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
     if (get().dictationHolds.has(owner)) return;
     const dictationHolds = new Set(get().dictationHolds);
     dictationHolds.add(owner);
-    set({ dictationHolds, pausedForDictation: true });
+    set({
+      dictationHolds,
+      pausedForDictation: true,
+      dictationPauseLatched:
+        get().dictationPauseLatched || get().phase !== "idle",
+    });
   },
   setDestinationKnown: (destinationKnown) => set({ destinationKnown }),
   releaseDictationHold: (owner) => {
     if (!get().dictationHolds.has(owner)) return;
     const dictationHolds = new Set(get().dictationHolds);
     dictationHolds.delete(owner);
-    set({ dictationHolds, pausedForDictation: dictationHolds.size > 0 });
+    set({
+      dictationHolds,
+      pausedForDictation:
+        dictationHolds.size > 0 || get().dictationPauseLatched,
+    });
+  },
+  resumeFromDictation: () => {
+    const { dictationHolds, dictationPauseLatched } = get();
+    if (dictationHolds.size > 0 || !dictationPauseLatched) return;
+    set({ dictationPauseLatched: false, pausedForDictation: false });
   },
   setMuted: (muted) => set({ muted }),
   setDriver: (driver) => set({ driver }),

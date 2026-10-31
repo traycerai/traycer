@@ -38,13 +38,20 @@ interface ChatState {
   readonly messages: ReadonlyArray<ReplyRow>;
 }
 
+/** The part of the voice's stream the controller switches. */
+interface FakeRemoteStream {
+  getAudioTracks(): ReadonlyArray<{ enabled: boolean }>;
+}
+
 interface ConnectInput {
   readonly exchangeSdp: (offer: string) => Promise<string>;
+  readonly onRemoteAudio: (remote: FakeRemoteStream) => void;
   readonly events: VoiceEngineEvents;
 }
 
 interface FakeEngine {
   events: VoiceEngineEvents | null;
+  onRemoteAudio: ((remote: FakeRemoteStream) => void) | null;
   readonly started: Deferred<void>;
   readonly connect: Mock<(input: ConnectInput) => Promise<void>>;
   readonly appendCommentary: Mock<
@@ -76,6 +83,12 @@ const fake = vi.hoisted(() => {
   const stream = {
     getTracks: () => [track],
     getAudioTracks: () => [track],
+  };
+  // The voice's sound as the peer hands it over.
+  const remoteTrack = { kind: "audio", enabled: true };
+  const remoteStream = {
+    getTracks: () => [remoteTrack],
+    getAudioTracks: () => [remoteTrack],
   };
   // The bot's thread list as the selection sync reads it: `undefined` until
   // it answers; `set` answers it and re-renders the readers.
@@ -148,6 +161,8 @@ const fake = vi.hoisted(() => {
     deferred,
     track,
     stream,
+    remoteTrack,
+    remoteStream,
     micAccess: deferred<string>(),
     media: deferred<typeof stream>(),
     send: deferred<unknown>(),
@@ -291,9 +306,11 @@ vi.mock("@/lib/voice/gpt-live-engine", () => ({
   createBrowserGptLiveEngine: () => {
     const engine: FakeEngine = {
       events: null,
+      onRemoteAudio: null,
       started: fake.deferred<void>(),
       connect: vi.fn<(input: ConnectInput) => Promise<void>>(async (input) => {
         engine.events = input.events;
+        engine.onRemoteAudio = input.onRemoteAudio;
         await input.exchangeSdp("offer");
         await engine.started.promise;
       }),
@@ -484,6 +501,8 @@ beforeEach(() => {
   fake.botList.value = fake.mainBotList;
   fake.doorbell.value = new ServingStreamClient();
   fake.track.stop.mockClear();
+  fake.track.enabled = true;
+  fake.remoteTrack.enabled = true;
   fake.setVoiceSessionLive.mockReset();
   fake.setVoiceSessionLive.mockImplementation(() => Promise.resolve());
   fake.endVoiceSession.mockReset();
@@ -1176,36 +1195,89 @@ describe("a bot answering in its channel", () => {
 });
 
 describe("dictation while a session is live", () => {
-  it("pauses capture, drops words and boundaries that still arrive, and resumes with the person's own mute kept", async () => {
+  it("pauses capture and the voice's sound, keeps the pause past dictation's end, and Resume re-enables both with the person's own mute kept", async () => {
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
     await bringLive();
     focusOn(CHANNEL_FOCUS);
+    act(() => fake.engines[0]?.onRemoteAudio?.(fake.remoteStream));
     expect(fake.track.enabled).toBe(true);
+    expect(fake.remoteTrack.enabled).toBe(true);
 
     act(() => useVoiceSessionStore.getState().acquireDictationHold("composer"));
     expect(fake.track.enabled).toBe(false);
+    expect(fake.remoteTrack.enabled).toBe(false);
     await say("Dear team, the invoice", "d1");
     expect(fake.sendMock).not.toHaveBeenCalled();
     expect(useVoiceSessionStore.getState().openSpan()).toBe("");
     expect(useVoiceSessionStore.getState().pendingDelegationId).toBeNull();
 
+    // Dictation ends: the voice stays paused, and still hears nothing.
     act(() => useVoiceSessionStore.getState().releaseDictationHold("composer"));
+    expect(useVoiceSessionStore.getState().pausedForDictation).toBe(true);
+    expect(fake.track.enabled).toBe(false);
+    expect(fake.remoteTrack.enabled).toBe(false);
+    await say("Signed, the team", "d2");
+    expect(fake.sendMock).not.toHaveBeenCalled();
+
+    act(() => useVoiceSessionStore.getState().resumeFromDictation());
     expect(fake.track.enabled).toBe(true);
-    await say("Merge it.", "d2");
+    expect(fake.remoteTrack.enabled).toBe(true);
+    await say("Merge it.", "d3");
     expect(fake.sendMock).toHaveBeenCalledTimes(1);
     expect(fake.sendMock).toHaveBeenCalledWith(
       expect.objectContaining({ text: "Merge it." }),
     );
 
-    // Muted by the person: the pause and its end leave the mute in place.
+    // Muted by the person: the pause and its Resume leave the mute in place.
     act(() => useVoiceSessionStore.getState().driver?.setMuted(true));
     expect(fake.track.enabled).toBe(false);
     act(() => useVoiceSessionStore.getState().acquireDictationHold("composer"));
     act(() => useVoiceSessionStore.getState().releaseDictationHold("composer"));
+    act(() => useVoiceSessionStore.getState().resumeFromDictation());
     expect(fake.track.enabled).toBe(false);
+    expect(fake.remoteTrack.enabled).toBe(true);
     expect(useVoiceSessionStore.getState().muted).toBe(true);
     act(() => useVoiceSessionStore.getState().driver?.setMuted(false));
     expect(fake.track.enabled).toBe(true);
+  });
+
+  it("holds a reply that lands while paused until Resume, then speaks it", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    const thread = addChat("t1", { snapshotLoaded: false, messages: [] });
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    await say("Merge it.", "d1");
+    await act(async () => {
+      fake.send.resolve(ACCEPTED);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    act(() => useVoiceSessionStore.getState().acquireDictationHold("composer"));
+    act(() => {
+      thread.setState({
+        snapshotLoaded: true,
+        messages: [botRow("a1", "Merged.")],
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    act(() => useVoiceSessionStore.getState().releaseDictationHold("composer"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    const commentary = fake.engines[0]?.appendCommentary;
+    expect(commentary).not.toHaveBeenCalled();
+
+    act(() => useVoiceSessionStore.getState().resumeFromDictation());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(commentary).toHaveBeenCalledTimes(1);
+    expect(commentary).toHaveBeenCalledWith(
+      expect.stringContaining("Merged."),
+      "d1",
+    );
   });
 });
 
@@ -1226,6 +1298,7 @@ describe("words open when dictation starts", () => {
     expect(fake.sendMock).not.toHaveBeenCalled();
 
     act(() => useVoiceSessionStore.getState().releaseDictationHold("composer"));
+    act(() => useVoiceSessionStore.getState().resumeFromDictation());
     await say("Check branch B.", "d2");
     expect(fake.sendMock).toHaveBeenCalledTimes(1);
     expect(fake.sendMock).toHaveBeenCalledWith(
@@ -1235,7 +1308,7 @@ describe("words open when dictation starts", () => {
 });
 
 describe("a Talk ended and started again while dictation records", () => {
-  it("starts with capture paused and drops its words until dictation ends", async () => {
+  it("starts with capture paused and drops its words until the person resumes after dictation", async () => {
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
     await bringLive();
     act(() => useVoiceSessionStore.getState().acquireDictationHold("composer"));
@@ -1262,6 +1335,8 @@ describe("a Talk ended and started again while dictation records", () => {
     expect(useVoiceSessionStore.getState().openSpan()).toBe("");
 
     act(() => useVoiceSessionStore.getState().releaseDictationHold("composer"));
+    expect(fake.track.enabled).toBe(false);
+    act(() => useVoiceSessionStore.getState().resumeFromDictation());
     expect(fake.track.enabled).toBe(true);
     await act(async () => {
       eventsOf(1).onInputTranscriptDelta("Merge it.");

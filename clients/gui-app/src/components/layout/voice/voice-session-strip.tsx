@@ -106,6 +106,7 @@ export function VoiceSessionStrip(): ReactNode {
         >
           {stateLabel(state.phase, state.muted, state.pausedForDictation)}
         </span>
+        <ResumeAfterDictation />
         {state.focus === null ? null : <FocusLine focus={state.focus} />}
         {state.queueCount > 0 ? (
           <span data-testid="voice-strip-waiting" className="shrink-0">
@@ -177,6 +178,30 @@ export function VoiceSessionStrip(): ReactNode {
         </ul>
       ) : null}
     </section>
+  );
+}
+
+/**
+ * Resume, while the voice is paused for dictation. Explicit: dictation
+ * ending never resumes the voice. Disabled while dictation still holds the
+ * microphone.
+ */
+function ResumeAfterDictation(): ReactNode {
+  const paused = useVoiceSessionStore((s) => s.pausedForDictation);
+  const dictating = useVoiceSessionStore((s) => s.dictationHolds.size > 0);
+  const resume = useVoiceSessionStore((s) => s.resumeFromDictation);
+  if (!paused) return null;
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="xs"
+      data-testid="voice-strip-resume"
+      disabled={dictating}
+      onClick={resume}
+    >
+      Resume
+    </Button>
   );
 }
 
