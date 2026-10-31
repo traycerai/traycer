@@ -916,7 +916,7 @@ const secretBindingCandidateFields = {
  * the connection and the host seals it to authn's intake key before it is
  * written anywhere; the answer never carries it back. `plaintextConsent` is
  * the disclosure version shown when the protocol needs the plaintext-at-the-
- * gateway consent (the create route appends its acceptance).
+ * gateway consent (the create route records its acceptance).
  */
 export const environmentSecretsCreateRequestSchema = lazySchema(() =>
   z.object({

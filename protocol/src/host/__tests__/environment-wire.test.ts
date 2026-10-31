@@ -1391,7 +1391,7 @@ describe("secret versions, Undo, Destroy, rotation and consent shapes, field for
     ).toBe(false);
 
     // No actor on the request: a caller-supplied one is stripped, so it can
-    // never reach the row the server appends.
+    // never reach what the server records.
     const withActor = env.environmentSecretsConsentRequestSchema.parse({
       ...request,
       actorRef: "user:someone-else",
@@ -1405,7 +1405,7 @@ describe("secret versions, Undo, Destroy, rotation and consent shapes, field for
       "secretId",
     ]);
 
-    // The answer names the appended row and when it was accepted.
+    // The answer names the acceptance and when it was accepted.
     expect(
       env.environmentSecretsConsentResponseSchema.parse({
         acceptanceId: "acc-1",
