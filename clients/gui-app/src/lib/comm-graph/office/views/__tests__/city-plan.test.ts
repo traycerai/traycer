@@ -1328,7 +1328,7 @@ describe("planCity", () => {
     );
 
     // 2. `hitTest` genuinely distinguishes the two buildings by their own
-    // The `hitBox` - each queried at a point that lands in ONLY that
+    // `hitBox` - each queried at a point that lands in ONLY that
     // building's box, so a lookup that answered from the other seat's box
     // (or from neither) would fail loudly rather than by coincidence.
     const nearerOnlyPoint = {

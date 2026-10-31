@@ -19,8 +19,8 @@
  *
  * ## Why a closed start-page draft
  *
- * Drafts are the application's durable, user-visible home for an unsent prompt
- * Persisted, listed in the composer's Drafts control, openable into
+ * Drafts are the application's durable, user-visible home for an unsent prompt:
+ * persisted, listed in the composer's Drafts control, openable into
  * any composer, and explicitly built to survive a session ending. A `closed`
  * start-page draft is the put-away shape of exactly that - it is a row in the
  * list and nothing is mounted on it. Inventing a second place would mean
