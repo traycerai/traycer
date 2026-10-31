@@ -20,7 +20,7 @@ export type NeedsYouReason = "approval" | "reply";
 
 /**
  * One agent prompt waiting on the person: the Notifications drawer's Needs you group, its
- * count, and the Activity view's Needs you block all read this (D10).
+ * count, and the Activity view's Needs you block all read this.
  */
 export interface NeedsYouItem {
   /** The notification row behind the item; activating it opens the chat. */

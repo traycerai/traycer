@@ -540,7 +540,7 @@ type DeferredWindowedSnapshotAux = Pick<
   | "pendingFallback"
   | "pendingReturn"
   | "lastFailedAttempt"
-  // The outcome (D215) is here for the replay rule above AND for a second
+  // The outcome is here for the replay rule above AND for a second
   // reason the other three do not have: it is the only one of the four with a
   // consumer that must speak it EXACTLY ONCE. A stale replay is not a stale
   // card there, it is a false announcement of a result that was superseded.
@@ -1582,7 +1582,7 @@ export interface ChatSessionState {
   readonly pendingReturn: PendingReturn | undefined;
   /**
    * The chat's latest terminal failure, when the host would admit a manual
-   * rung on it (`chat.subscribe@1.10`, D152/D156) - the error card's Retry /
+   * rung on it (`chat.subscribe@1.10`) - the error card's Retry /
    * Switch… / Wait-until affordances and nothing else.
    *
    * Same derived-per-frame contract and the same assign-straight-across rule
@@ -1591,7 +1591,7 @@ export interface ChatSessionState {
    *
    * **Never accumulate it.** `undefined` is what HIDES the affordances, and a
    * store that kept its last value would offer Retry on a turn that has since
-   * succeeded - the defect D122 closed on the host, arriving through the
+   * succeeded - the defect closed on the host, arriving through the
    * renderer instead.
    *
    * **`eligibleRungs: []` is a different fact from an absent value.** Absent
@@ -1603,7 +1603,7 @@ export interface ChatSessionState {
   readonly lastFailedAttempt: LastFailedAttempt | undefined;
   /**
    * The last CONFIRMED fallback result for the current incident
-   * (`chat.subscribe@1.10`, D215/D218), or `undefined` when there is none.
+   * (`chat.subscribe@1.10`), or `undefined` when there is none.
    *
    * Same derived-per-frame contract, same assign-straight-across rule and same
    * BY-VALUE read as the three above. What is different is what a reader may
@@ -6949,7 +6949,7 @@ export function createChatSessionStoreWithNotificationDependencies(
     ): void => {
       if (!isTailHydrated(window)) {
         const records = hydratedRecords(window);
-        // D215: the OUTCOME is seated immediately, alone among the four
+        // The OUTCOME is seated immediately, alone among the four
         // fallback DTOs, and the asymmetry is deliberate.
         //
         // The other three are transcript-coupled CARD state: publishing them a
@@ -9676,7 +9676,7 @@ export function createChatSessionStoreWithNotificationDependencies(
           pendingFallback: frame.pendingFallback,
           pendingReturn: frame.pendingReturn,
           lastFailedAttempt: frame.lastFailedAttempt,
-          // The supersession half of D215. Without this a held snapshot
+          // The supersession half of that rule. Without this a held snapshot
           // replays the outcome it was sent with even after this frame cleared
           // it, and the announcer speaks a result that was withdrawn.
           lastFallbackOutcome: frame.lastFallbackOutcome,
@@ -12462,7 +12462,7 @@ export function createChatSessionStoreWithNotificationDependencies(
         // registry disposes whatever the predicate says. A longer timer is not
         // a handoff. So before this store goes, anything that exists ONLY here
         // is installed as a closed start-page draft - the app's durable,
-        // user-visible home for an unsent prompt (D01/D03), which outlives the
+        // user-visible home for an unsent prompt, which outlives the
         // session and has its own UI, the composer's Drafts control, for
         // finding and reopening it.
         //
@@ -14174,7 +14174,7 @@ function refusalCauseOf(
  * `status: "rejected"` becomes `refused` rather than `null`, deliberately. The
  * menu has to tell "the host declined this hold" from "no hold was ever asked
  * for": the first puts "Couldn't pause the countdown." on the chooser's footer
- * - no cause, since a refusal proves no advancement (D220) - the second is the
+ * - no cause, since a refusal proves no advancement - the second is the
  * ordinary closed state, and collapsing them would make a refusal look like a
  * menu that simply never opened.
  */

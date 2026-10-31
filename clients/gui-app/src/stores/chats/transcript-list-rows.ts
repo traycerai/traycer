@@ -39,7 +39,7 @@ const NO_PART_CUTS: readonly string[] = [];
  *
  * ## A placeholder is its own row type, never a partial `ChatMessage`
  *
- * Overview decision D2, and it is load-bearing rather than tidy. A partial
+ * Load-bearing rather than tidy. A partial
  * `ChatMessage` would have to lie about `content`, `segments` and `createdAt`,
  * and every consumer that reads those would silently get the lie. Worse, the
  * renderer's row comparators are keyed on `ChatMessage` fields: a row that went
