@@ -1241,8 +1241,7 @@ describe("comm-graph agent detail", () => {
    *
    * "Plain" means PROSE, not source. The timeline still renders no markdown -
    * no element comes out of it - but the text it shows is the projection.
-   */
-  /**
+   *
    * The lexer keeps character references encoded, so before this the snippet
    * read `R&amp;D` while expanding the same row in the detail panel read `R&D`.
    */

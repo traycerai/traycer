@@ -243,6 +243,7 @@ function threadSummary(anchorSenderUserId: string | null): BotThreadSummary & {
       senderUserId: anchorSenderUserId,
       sentAt: 1_000,
       resolvedAt: null,
+      excerpt: null,
     },
     replyCount: 1,
     lastReplyAt: 2_000,

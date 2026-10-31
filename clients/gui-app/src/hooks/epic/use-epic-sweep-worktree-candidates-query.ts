@@ -139,8 +139,7 @@ const EMPTY_ROWS: ReadonlyArray<EpicSweepWorktreeRow> = [];
  * until `isPending` and `isError` are both false. Pass `null` (or an empty
  * selection) while the dialog is closed to disable the query. The host-side
  * busy-check on `worktree.deleteByPath` remains the authoritative backstop.
- */
-/**
+ *
  * Sweep-candidate rows against a caller-resolved client. The proof (and the
  * sweep it authorises, whose host id is frozen from it) is per HOST: the
  * Epics list passes the app-wide client; the Epic panel's sweep action

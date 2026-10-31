@@ -634,6 +634,22 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
 };
 
 /**
+ * Whether a reachable host ANSWERED for this reason.
+ *
+ * Both are selected only after a host replied (`tab-group-view` picks them off
+ * a live response), so nothing downstream may describe them as a connectivity
+ * failure - that would invert the evidence of a host that just spoke.
+ *
+ * Shared by the foreign-owner sentence and its report metadata deliberately:
+ * they were split before, and the report went on claiming a disconnected host
+ * under a sentence that said the opposite.
+ * One predicate means the two cannot disagree again.
+ */
+function hostAnsweredForReason(reason: ChatDeadTileBannerReason): boolean {
+  return reason === "chat-not-visible" || reason === "chat-not-on-this-host";
+}
+
+/**
  * The sentence for a collaborator's chat, composed from three independently
  * true clauses rather than one blanket claim (the first
  * cut collapsed presentation state and failure reason into a sentence that
@@ -653,22 +669,6 @@ const CHAT_DEAD_TILE_BANNER_COPY: Record<
  *   promise does not extend to this reader instead of dangling a button the
  *   host's editor gate would refuse.
  */
-/**
- * Whether a reachable host ANSWERED for this reason.
- *
- * Both are selected only after a host replied (`tab-group-view` picks them off
- * a live response), so nothing downstream may describe them as a connectivity
- * failure - that would invert the evidence of a host that just spoke.
- *
- * Shared by the foreign-owner sentence and its report metadata deliberately:
- * they were split before, and the report went on claiming a disconnected host
- * under a sentence that said the opposite.
- * One predicate means the two cannot disagree again.
- */
-function hostAnsweredForReason(reason: ChatDeadTileBannerReason): boolean {
-  return reason === "chat-not-visible" || reason === "chat-not-on-this-host";
-}
-
 function foreignOwnerMessage(input: {
   readonly reason: ChatDeadTileBannerReason;
   readonly showsPublishedCopy: boolean;

@@ -253,7 +253,6 @@ function renderBackgroundPanelInChat(alongside: React.ReactNode): void {
   fireEvent.click(screen.getByRole("button", { name: /Background/ }));
 }
 
-/** Panes across the whole canvas currently holding this command's window. */
 /**
  * The instance id the pane is currently holding as its PREVIEW tab, if any -
  * the one an italic tab title and the next preview's eviction both read.
@@ -265,6 +264,7 @@ function previewInstanceIdFor(tabId: string, paneId: string): string | null {
   return pane === null ? null : pane.previewTabId;
 }
 
+/** Panes across the whole canvas currently holding this command's window. */
 function openWindowCountFor(commandId: string): number {
   const canvasByTabId = useEpicCanvasStore.getState().canvasByTabId;
   return Object.values(canvasByTabId).reduce((count, canvas) => {

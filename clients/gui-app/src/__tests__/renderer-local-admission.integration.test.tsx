@@ -429,23 +429,6 @@ const DEFAULT_STORED_IDENTITY: StoredCredentialsIdentity = {
 };
 
 /**
- * `storedIdentity` parameterises WHICH principal `host.tokenStore.signIn`
- * mints the stored session for. `MockRunnerHost.tokenStore.signIn` already
- * accepts any identity (see its mock implementation), so this is fixture
- * plumbing only - no credential-layer work. Defaults to
- * {@link DEFAULT_STORED_IDENTITY} when the caller passes `undefined`, so both
- * existing arms below are unaffected; a later cross-principal test mints a
- * SECOND harness with a different identity to drive a two-principal scenario
- * through the same real `AuthService` × `useAuthStore` wiring.
- *
- * `T | undefined` with every caller passing explicitly, NOT `storedIdentity?:`.
- * The repo bans optional parameters in favour of this shape, and the three
- * lines below (`workspaceFolderPickerPaths: undefined`, `hasLocalHost`,
- * `traycerCli`) are the same convention in the same function. ESLint's
- * `optionalParameterRestrictions` happens not to reach a `TSPropertySignature`,
- * but that is an enforcement gap rather than a licence.
- */
-/**
  * Harnesses mounted by the current test, torn down unconditionally in
  * `afterEach`. See the note at the push site for why the per-test tail calls
  * are not sufficient on their own.
@@ -456,6 +439,23 @@ function mountHarness(opts: {
   readonly storedToken: string;
   readonly initialFetch: FetchHandler;
   readonly tasksHandler: ListTasksHandler;
+  /**
+   * `storedIdentity` parameterises WHICH principal `host.tokenStore.signIn`
+   * mints the stored session for. `MockRunnerHost.tokenStore.signIn` already
+   * accepts any identity (see its mock implementation), so this is fixture
+   * plumbing only - no credential-layer work. Defaults to
+   * {@link DEFAULT_STORED_IDENTITY} when the caller passes `undefined`, so all
+   * three existing arms below are unaffected; a later cross-principal test
+   * mints a SECOND harness with a different identity to drive a two-principal
+   * scenario through the same real `AuthService` × `useAuthStore` wiring.
+   *
+   * `T | undefined` with every caller passing explicitly, NOT `storedIdentity?:`.
+   * The repo bans optional parameters in favour of this shape, and the three
+   * lines below (`workspaceFolderPickerPaths: undefined`, `hasLocalHost`,
+   * `traycerCli`) are the same convention in the same function. ESLint's
+   * `optionalParameterRestrictions` happens not to reach a `TSPropertySignature`,
+   * but that is an enforcement gap rather than a licence.
+   */
   readonly storedIdentity: StoredCredentialsIdentity | undefined;
 }): Harness {
   const host = new MockRunnerHost({

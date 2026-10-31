@@ -19,13 +19,6 @@ import {
 } from "@traycer/protocol/host/epic/share-refusal";
 
 /**
- * Maps a HostRpcError to its toast copy.
- * Permission errors get distinct copy from network/RPC
- * errors so the user knows whether to retry or ask for access.
- *
- * Call this in every mutation hook's `onError` callback.
- */
-/**
  * One stable id for every PRE-SEND transport notice, across every call site.
  *
  * Being unable to reach the host is a SESSION-WIDE condition, not a property
@@ -296,6 +289,13 @@ export function toastHostRefusalWithGuidance(
   );
 }
 
+/**
+ * Maps a HostRpcError to its toast copy.
+ * Permission errors get distinct copy from network/RPC
+ * errors so the user knows whether to retry or ask for access.
+ *
+ * Call this in every mutation hook's `onError` callback.
+ */
 export function toastFromHostError(
   error: HostRpcError,
   fallback: string,

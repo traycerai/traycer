@@ -734,24 +734,6 @@ const SIREN_DARK_FRAME = 0;
 const SIREN_LIT_FRAME = 1;
 
 /**
- * WHAT ONE CIVIC SIGN COUNTS, or `null` where its room counts nothing.
- *
- * Three rules, one per kind that has one:
- *
- * - a ward or a waiting room says how many of ITS OWN seats are taken, because
- *   "is there a bed free" is the question somebody looking at it has;
- * - the archive says how many records it holds, which is its whole content
- *   (C5: no crate per agent, the number is the room) - ITS OWN host's records
- *   in a view whose storeys belong to one host each, and every host's in a view
- *   whose one floor serves them all. `room.hostScope` is what says which, and
- *   it is a field rather than a reading of `hostId` because `null` there is the
- *   unattributed host - a real host with records of its own - so a shared room
- *   and an unattributed one are indistinguishable by that field alone;
- * - the help desk says nothing. The queue standing in front of it is the
- *   count, drawn at full size, and a number over it would be the same fact
- *   said twice.
- */
-/**
  * HOW MANY RECORDS THIS ARCHIVE HOLDS, over the hosts its room serves.
  *
  * The tally is kept per host because that is what the population knows, and a
@@ -769,6 +751,24 @@ function archivedFor(room: OfficeCivicRoom, tally: OfficeCivicTally): number {
   return total;
 }
 
+/**
+ * WHAT ONE CIVIC SIGN COUNTS, or `null` where its room counts nothing.
+ *
+ * Three rules, one per kind that has one:
+ *
+ * - a ward or a waiting room says how many of ITS OWN seats are taken, because
+ *   "is there a bed free" is the question somebody looking at it has;
+ * - the archive says how many records it holds, which is its whole content
+ *   (C5: no crate per agent, the number is the room) - ITS OWN host's records
+ *   in a view whose storeys belong to one host each, and every host's in a view
+ *   whose one floor serves them all. `room.hostScope` is what says which, and
+ *   it is a field rather than a reading of `hostId` because `null` there is the
+ *   unattributed host - a real host with records of its own - so a shared room
+ *   and an unattributed one are indistinguishable by that field alone;
+ * - the help desk says nothing. The queue standing in front of it is the
+ *   count, drawn at full size, and a number over it would be the same fact
+ *   said twice.
+ */
 function civicCounterOf(
   room: OfficeCivicRoom,
   tally: OfficeCivicTally,

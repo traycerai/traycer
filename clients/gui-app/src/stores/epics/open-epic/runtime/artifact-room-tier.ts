@@ -274,14 +274,6 @@ export const ARTIFACT_ROOM_LEASE_POLICY: LeasePolicy = {
 export type RoomSnapshotOutcome = "filed-cold" | "merged" | "seeded";
 
 /**
- * One inbound body snapshot, with the authority's own account of what it is.
- *
- * The tier used to decide merge-vs-seed by itself - "is there already a replica
- * for this room" - which is the only thing it COULD do on a wire that states
- * nothing. `artifact.subscribe` states both halves, and this is the shape that
- * carries them, so the decision moves to the authority that owns it.
- */
-/**
  * This client's position on one body, in the shape `artifact.subscribe`'s open
  * request takes.
  *
@@ -332,6 +324,14 @@ export type ArtifactRoomColdSettlement =
       readonly reason: "not-held" | "newer-generation" | "pinned";
     };
 
+/**
+ * One inbound body snapshot, with the authority's own account of what it is.
+ *
+ * The tier used to decide merge-vs-seed by itself - "is there already a replica
+ * for this room" - which is the only thing it COULD do on a wire that states
+ * nothing. `artifact.subscribe` states both halves, and this is the shape that
+ * carries them, so the decision moves to the authority that owns it.
+ */
 export interface ArtifactRoomSnapshotInput {
   readonly artifactRoomId: string;
   readonly snapshotBytes: Uint8Array;
@@ -924,22 +924,6 @@ export function createArtifactRoomTier(
   }
 
   /**
-   * True when the room must stay materialized.
-   *
-   * Three reasons, all of which cost correctness rather than memory if
-   * ignored:
-   *  - an editor holds a lease;
-   *  - the replica carries local divergence the host has not acknowledged,
-   *    where cooling would encode away the very bytes the reconnect reconcile
-   *    is supposed to ship and silently lose user edits;
-   *  - a remote collaborator is present in the room. Cooling destroys the
-   *    room's `Awareness`, and while cold every inbound awareness frame is
-   *    dropped with no way to ask for a resync, so a peer who was sitting in
-   *    the body would simply vanish - caret, selection and avatar - until they
-   *    happened to move again. Presence is exactly what a shared room is for,
-   *    so a room someone else is in is not a room worth reclaiming.
-   */
-  /**
    * The pin arms that survive a RELEASED lease: local divergence and remote
    * presence.
    *
@@ -959,6 +943,19 @@ export function createArtifactRoomTier(
     );
   }
 
+  /**
+   * True when the room must stay materialized.
+   *
+   * Three reasons, all of which cost correctness rather than memory if
+   * ignored:
+   *  - an editor holds a lease;
+   *  - the replica carries local divergence the host has not acknowledged,
+   *    where cooling would discard the dirty watermark, pending updates,
+   *    and pending reconcile;
+   *  - a remote collaborator is present in the room. Cooling destroys the
+   *    room's `Awareness`. Presence is exactly what a shared room is for,
+   *    so a room someone else is in is not a room worth reclaiming.
+   */
   function isPinned(artifactRoomId: string): boolean {
     if (leaseCountOf(artifactRoomId) > 0) return true;
     const entry = replicas.get(artifactRoomId);

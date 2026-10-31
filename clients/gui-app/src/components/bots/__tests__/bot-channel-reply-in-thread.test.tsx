@@ -335,6 +335,7 @@ describe("the box of a listed thread under a row of the bot, opened by its ancho
       senderUserId: null,
       sentAt: 3_000,
       resolvedAt: null,
+      excerpt: null,
     },
     replyCount: 1,
     lastReplyAt: 5_000,

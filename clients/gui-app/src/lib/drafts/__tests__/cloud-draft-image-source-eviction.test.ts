@@ -45,8 +45,9 @@ const IDENTITY: CloudChatIdentity = {
   ownerUserId: OWNER,
 };
 
-/** Map overflow point in `cloud-draft-image-recovery.ts`. */
 /**
+ * Map overflow point in `cloud-draft-image-recovery.ts`.
+ *
  * Restated, because production does not export it - and safe to restate only
  * because of the positive control below. If the real cap is RAISED, this file's
  * registrations no longer overflow, no eviction runs, the unrooted hash stays

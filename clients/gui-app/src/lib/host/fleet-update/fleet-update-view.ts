@@ -790,8 +790,7 @@ function localLivenessProofHolds(
  * the cause the updater terminated the marker with — the health-check failure
  * that used to be invisible on a @1.3 peer, because the Overview only read the
  * coarse field for peers that could not report an attempt.
- */
-/**
+ *
  * The view the coarse `updateProgress` marker projects on its own, or `null`
  * when the peer reported no marker. Shared by the two arms that have no
  * attempt to read - a pre-@1.3 peer (`operation === null`) and a @1.3 peer

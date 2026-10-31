@@ -2557,6 +2557,7 @@ describe("CommGraphTile", () => {
      * needs to be alive: a remount starts with no intersection state and no
      * measured box of its own.
      */
+
     /** The distinct scene instances a spy has seen sync. */
     function scenesSeen(spy: MockInstance<OfficeScene["sync"]>): number {
       return new Set(spy.mock.contexts).size;

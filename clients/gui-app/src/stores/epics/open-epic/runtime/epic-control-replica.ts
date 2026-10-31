@@ -463,22 +463,6 @@ export function createEpicControlReplica(
   };
 
   /**
-   * `ownsControlCycle` splits this handler in two, and the split is the whole
-   * point of the parameter.
-   *
-   * CONNECTION facts - `transportStatus`, the published slice, and the policy
-   * that follows a fatal close - belong to every lane that reports one: a
-   * required lane going away is the session's problem whichever lane it was.
-   *
-   * CYCLE facts - the durability proof and `hasFreshRootSnapshotForOpenCycle` -
-   * belong only to the socket that carries the control snapshot, because a
-   * control snapshot is the only thing that can re-establish them. A lane that
-   * can clear them but cannot restore them is a one-way door: the records lane
-   * opening late, or reconnecting while the status lane stayed up, closed the
-   * write gate with no snapshot owed to reopen it, and every write was refused
-   * for the rest of the connection.
-   */
-  /**
    * Move the reporting lane's leg and re-derive the session's aggregate.
    *
    * Extracted from `applyTransportStatus` so that handler stays under the
@@ -550,6 +534,22 @@ export function createEpicControlReplica(
     return resetDurabilityProofForOpenCycle();
   }
 
+  /**
+   * `ownsControlCycle` splits this handler in two, and the split is the whole
+   * point of the parameter.
+   *
+   * CONNECTION facts - `transportStatus`, the published slice, and the policy
+   * that follows a fatal close - belong to every lane that reports one: a
+   * required lane going away is the session's problem whichever lane it was.
+   *
+   * CYCLE facts - the durability proof and `hasFreshRootSnapshotForOpenCycle` -
+   * belong only to the socket that carries the control snapshot, because a
+   * control snapshot is the only thing that can re-establish them. A lane that
+   * can clear them but cannot restore them is a one-way door: the records lane
+   * opening late, or reconnecting while the status lane stayed up, closed the
+   * write gate with no snapshot owed to reopen it, and every write was refused
+   * for the rest of the connection.
+   */
   function applyTransportStatus(
     event: Extract<EpicControlEvent, { kind: "transport-status" }>,
   ): void {

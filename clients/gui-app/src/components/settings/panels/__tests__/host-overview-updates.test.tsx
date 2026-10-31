@@ -250,13 +250,6 @@ function renderPanel(): RenderResult & { readonly queryClient: QueryClient } {
   return { ...render(panelElement(queryClient)), queryClient };
 }
 
-/**
- * A `host.update.check` manifest with an arbitrary number of versions, in the
- * same shape `updateCheckManifest` (`host-overview-test-support.ts`) builds —
- * that helper deliberately produces only ONE entry, so the multi-version
- * cases here assemble the manifest by hand instead of growing a second
- * exported helper for a shape only this file needs.
- */
 /** The provenance an explicit override produces — never `installed-rc`. */
 function sourceForExplicit(
   include: boolean,
@@ -264,6 +257,13 @@ function sourceForExplicit(
   return include ? "explicit-include" : "explicit-exclude";
 }
 
+/**
+ * A `host.update.check` manifest with an arbitrary number of versions, in the
+ * same shape `updateCheckManifest` (`host-overview-test-support.ts`) builds —
+ * that helper deliberately produces only ONE entry, so the multi-version
+ * cases here assemble the manifest by hand instead of growing a second
+ * exported helper for a shape only this file needs.
+ */
 function multiVersionManifest(
   versions: readonly string[],
 ): HostAvailableManifest {

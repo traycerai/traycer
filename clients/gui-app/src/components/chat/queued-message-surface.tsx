@@ -1237,6 +1237,7 @@ function QueuedMessageFallbackReason(props: {
  * exception (#2441): the user can only reorder it, so it is one line until
  * clicked, and the chip is what that one line leads with.
  */
+
 /** The one badge a queued row's provenance calls for, or `null` for none. */
 function queuedMessageProvenanceBadge(item: OpenChatQueuedItem): ReactNode {
   if (isReceivedAgentResponse(item))
