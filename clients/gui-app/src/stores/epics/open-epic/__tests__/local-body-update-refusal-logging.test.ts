@@ -410,7 +410,7 @@ describe("local body/update refusal settlement (open-epic store.ts)", () => {
   );
 
   it("latches isDirty the instant a body edit posts, before the worker answers either way", async () => {
-    // Codex, #1694: the cap's data-loss gate reads `isDirty` synchronously on
+    // The cap's data-loss gate reads `isDirty` synchronously on
     // every prune walk, but until this fix `onLocalDocUpdate` only latched it
     // on a PROVEN refusal - the window between posting `body/update` and that
     // answer arriving read `isDirty: false` although the edit exists ONLY in

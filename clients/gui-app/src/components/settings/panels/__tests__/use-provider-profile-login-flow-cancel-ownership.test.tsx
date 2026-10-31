@@ -1003,7 +1003,7 @@ describe("useProviderProfileLoginFlow — a failed cancel RPC must not latch out
   });
 
   it("with ownership: the next press releases a holder whose cancel from waiting failed", async () => {
-    // Codex review of OSS #2283 head 8ee3e1a0a: a cancel pressed from the
+    // A cancel pressed from the
     // settled `waiting` state (the started answer already landed) has no
     // later start answer to retry it if its cancel RPC rejects - round 1
     // only reopened the latch. Nothing else calls `cancelProfile` again for

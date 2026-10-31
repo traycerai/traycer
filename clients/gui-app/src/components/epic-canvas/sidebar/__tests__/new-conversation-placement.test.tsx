@@ -158,12 +158,12 @@ const testState = vi.hoisted(() => ({
     readonly sessionHostId: string | null;
   }>,
   /**
-   * The workspace-controls element the body was handed (Codex T-50). The
+   * The workspace-controls element the body was handed. The
    * ComposerBody mock renders only the banner, so the picker's `hostScope`
    * is read off the element's props rather than through a render.
    */
   workspaceControlsElements: [] as unknown[],
-  /** The pin the latest-conversation seed was read for (Codex T-50). */
+  /** The pin the latest-conversation seed was read for. */
   latestSeedPins: [] as unknown[],
 }));
 
@@ -790,7 +790,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
   });
 
   it("asks the per-EPIC placement for THIS epic with the session's host as its default", () => {
-    // Codex #1243 T-48: the modal used to resolve the landing composer's
+    // The modal used to resolve the landing composer's
     // window-keyed pin ?? effective, so a new agent in an Epic served from B
     // landed on wherever the window's landing chip pointed. The placement now
     // resolves per Epic with the session's host as the default tier; this
@@ -808,7 +808,7 @@ describe("new-conversation modal shares the composer's placement semantics", () 
   });
 
   it("keeps the workspace picker selectable on the RESOLVED host and seeds from it", () => {
-    // Codex #1243 T-50: the request is unnamed (`hostId: null`) and the
+    // The request is unnamed (`hostId: null`) and the
     // placement resolves it to host-a through the Epic's tiers. The picker
     // and the seed used to key on the raw request field, so they browsed and
     // seeded from the app-wide host while the create went to host-a. An

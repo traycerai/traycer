@@ -2986,7 +2986,7 @@ describe("release states its meaning for retained buffers", () => {
   });
 
   it("retains the DIRTY LIVE handle when an owner-identity rotation releases it", () => {
-    // Codex #1243 post-merge. `"keep"` spared only buffers ALREADY retained;
+    // `"keep"` spared only buffers ALREADY retained;
     // the live handle - the one actually holding the user's unsynced edits -
     // was disposed either way. An owner-identity rotation leaves `userId`
     // unchanged, so the provider takes this arm, and a same-host
@@ -3070,7 +3070,7 @@ describe("a re-point whose edits were MERGED into the replacement", () => {
   const EPIC = "epic-transferred";
 
   it("disposes the outgoing handle instead of retaining a duplicate of it", () => {
-    // Codex #1243 T-57. When both snapshots name the same room,
+    // When both snapshots name the same room,
     // `EpicSessionProvider` applies the outgoing doc into the replacement
     // under LOCAL_ORIGIN BEFORE calling this - so those edits are already
     // queued on the new handle and will sync through its transport.

@@ -1611,7 +1611,7 @@ describe("<TestEpicSessionTab />", () => {
   });
 
   it("keys the session identity on the canonical user id, so two accounts sharing an email do NOT share a session", async () => {
-    // Codex #1243 T-66. The arm above seeds `userId: email`, so it is green
+    // The arm above seeds `userId: email`, so it is green
     // whether the provider reads the id or the address - it cannot tell them
     // apart. This one seeds DIFFERENT canonical ids behind ONE address, which
     // is the real-world shape: keyed on the email the identity comparison saw
