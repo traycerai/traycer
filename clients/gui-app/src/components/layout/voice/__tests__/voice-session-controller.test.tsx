@@ -2144,3 +2144,79 @@ describe("an announcement on the focused channel", () => {
     ).toEqual([["ann-1", "announcement"]]);
   });
 });
+
+describe("a bot's question at the focused channel's top level", () => {
+  it("is spoken with its choices, and is not kept as an announcement, whichever record names it", async () => {
+    const channel = addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    focusOn(CHANNEL_FOCUS);
+    await bringLive();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+
+    // No repliesTo, no member request resolved to it: an open question.
+    act(() => {
+      channel.setState({
+        snapshotLoaded: true,
+        messages: [
+          {
+            ...botRow("q-1", "Ready to release. Ship or hold?"),
+            question: {
+              requestId: "req-q",
+              questions: [
+                {
+                  text: "Ship or hold?",
+                  options: ["Ship", "Hold"],
+                  allowFreeText: false,
+                  settlement: null,
+                },
+              ],
+            },
+          },
+        ],
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    const commentary = fake.engines[0]?.appendCommentary;
+    expect(commentary).toHaveBeenCalledTimes(1);
+    expect(commentary).toHaveBeenCalledWith(
+      expect.stringContaining("The choices are: 1. Ship; 2. Hold."),
+      null,
+    );
+    expect(
+      useVoiceSessionStore.getState().queue.map((item) => item.kind),
+    ).not.toContain("announcement");
+
+    act(() => eventsOf(0).onOutputTranscriptDelta("CI bot asks: ready to release"));
+
+    // The notification names the same message, as a blocking row.
+    act(() =>
+      fake.attention.set({
+        answers: [
+          {
+            messageId: "q-1",
+            botId: BOT_ID,
+            threadId: null,
+            chatId: CHANNEL_ID,
+            originHostId: "host-a",
+            at: Date.now(),
+            blocking: true,
+          },
+        ],
+        prompts: { approvals: [], questions: ["q-1"] },
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+
+    expect(
+      useVoiceSessionStore.getState().queue.map((item) => item.kind),
+    ).not.toContain("announcement");
+    expect(commentary).toHaveBeenCalledTimes(1);
+  });
+});
+

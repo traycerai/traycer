@@ -834,6 +834,32 @@ describe("a withdrawn item in flight", () => {
   });
 });
 
+describe("a withdrawn item suspended in flight", () => {
+  it("keeps draining through the pause: its late words confirm nothing, and the next item goes only once they are over", () => {
+    const onDelivered = vi.fn();
+    scheduler.enqueue(item("a", {}));
+    scheduler.enqueue(item("b", { onDelivered }));
+    scheduler.withdraw("a");
+
+    scheduler.setReady(false);
+    scheduler.suspendInFlight();
+    scheduler.setReady(true);
+    expect(appended).toHaveLength(1);
+
+    // The engine goes on producing the withdrawn item's words.
+    scheduler.noteOutputTranscript("Tracy says reply a");
+    expect(onDelivered).not.toHaveBeenCalled();
+    expect(appended).toHaveLength(1);
+
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(appended.map((entry) => entry.text)).toEqual(["reply a", "reply b"]);
+    expect(onDelivered).not.toHaveBeenCalled();
+
+    scheduler.noteOutputTranscript("Tracy says reply b");
+    expect(onDelivered).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("a bare backchannel", () => {
   it("never confirms an item that itself opens with a backchannel word", () => {
     const text = "Mm-hmm, the deployment completed successfully.";

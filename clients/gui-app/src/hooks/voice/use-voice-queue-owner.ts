@@ -15,7 +15,7 @@ import {
   composeBriefing,
   VOICE_SESSION_INPUT_MAX_CHARS,
 } from "@/lib/voice/briefing";
-import type { ReplyRef } from "@/lib/voice/queue-sources";
+import type { ReplyRef, StoppedAnswer } from "@/lib/voice/queue-sources";
 import { confirmationWords, type SpeechScheduler } from "@/lib/voice/scheduler";
 import { createVoiceQueue, type VoiceQueue } from "@/lib/voice/voice-queue";
 import { useBotOpenThreadStore } from "@/stores/bots/bot-open-thread-store";
@@ -90,6 +90,22 @@ export interface VoiceQueueOwner {
   readonly noteFocused: (messageId: string) => void;
   /** The focused feed passed an announcement over: the queue keeps it, unsaid. */
   readonly noteAnnouncement: VoiceQueue["addAnnouncement"];
+  /**
+   * A bot's stopped answers as its stream says now, kept whether or not a
+   * session runs (the opening briefing names them) and handed to the queue
+   * while one does.
+   */
+  readonly noteStopped: (facts: StoppedFacts) => void;
+  /** The bot's tab closed: its reading is no longer kept. */
+  readonly forgetStopped: (botId: string) => void;
+}
+
+/** One bot's stopped answers, as `syncStopped` takes them less the time. */
+export interface StoppedFacts {
+  readonly botId: string;
+  readonly hostId: string;
+  readonly channelChatId: string;
+  readonly stopped: ReadonlyArray<StoppedAnswer>;
 }
 
 /**
@@ -300,13 +316,30 @@ export function useVoiceQueueOwner(input: {
     };
   }, [appHostId, ensureQueue]);
 
+  const stoppedRef = useRef(new Map<string, StoppedFacts>());
+  const noteStopped = useCallback((facts: StoppedFacts) => {
+    stoppedRef.current.set(facts.botId, facts);
+    const live = useVoiceSessionStore.getState().phase !== "idle";
+    if (live) queueRef.current?.syncStopped({ ...facts, seenAt: Date.now() });
+  }, []);
+  const forgetStopped = useCallback((botId: string) => {
+    stoppedRef.current.delete(botId);
+  }, []);
+
   const beginQueue = useCallback((): string => {
     const briefed = attentionRef.current;
-    ensureQueue().begin(briefed.answers, (ref) => hostOfRef.current(ref));
+    const queue = ensureQueue();
+    queue.begin(briefed.answers, (ref) => hostOfRef.current(ref));
+    // What the bots' streams already say stopped is in the queue, and so in
+    // the briefing, from the first word.
+    const now = Date.now();
+    for (const facts of stoppedRef.current.values()) {
+      queue.syncStopped({ ...facts, seenAt: now });
+    }
     return composeBriefing({
       answers: briefed.answers,
       prompts: briefed.prompts,
-      items: [],
+      items: queue.items(),
       botTitle: (botId) => botTitleRef.current(botId),
       maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
     });
@@ -340,5 +373,7 @@ export function useVoiceQueueOwner(input: {
     noteChannel,
     noteFocused,
     noteAnnouncement,
+    noteStopped,
+    forgetStopped,
   };
 }

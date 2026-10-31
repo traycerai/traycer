@@ -450,6 +450,32 @@ describe("read, asked before the offer's own words have come", () => {
   });
 });
 
+describe("read, asked before the offer's words came, across a dictation pause", () => {
+  it("is not confirmed by the offer's late words, and is appended once they are over", () => {
+    queue.begin([], hostOf);
+    arrive(replyRef({}), botRow("r-1", REPLY_TEXT));
+    queue.run({ kind: "read", itemId: "r-1", delegationId: null });
+
+    scheduler.setReady(false);
+    scheduler.suspendInFlight();
+    scheduler.setReady(true);
+    scheduler.noteOutputTranscript(
+      "Release bot has an answer for you, the Safari fix landed in build forty.",
+    );
+    expect(appended).toHaveLength(1);
+    expect(markRead).not.toHaveBeenCalled();
+
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(appended).toHaveLength(2);
+    expect(appended[1]?.text).toBe(`Release bot said: ${REPLY_TEXT}`);
+    expect(markRead).not.toHaveBeenCalled();
+
+    scheduler.noteOutputTranscript(" The Safari fix landed");
+    expect(markRead).toHaveBeenCalledTimes(1);
+    expect(stateOf("r-1")).toBe("heard");
+  });
+});
+
 describe("a bot's stopped answer", () => {
   const stopped = (requestId: string): ReadonlyArray<StoppedAnswer> => [
     { requestId, threadId: "thread-x", state: "failed", at: 5_000 },

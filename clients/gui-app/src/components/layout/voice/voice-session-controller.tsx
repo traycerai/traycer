@@ -83,7 +83,10 @@ import {
   remintInput,
 } from "@/lib/voice/session-input";
 import { useRunnerHost } from "@/providers/use-runner-host";
-import { VoiceQueueSources } from "@/components/layout/voice/voice-queue-feed";
+import {
+  VoiceQueueSources,
+  VoiceStoppedSources,
+} from "@/components/layout/voice/voice-queue-feed";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   useBotOpenThreadStore,
@@ -1057,6 +1060,7 @@ export function VoiceSessionController(): ReactNode {
         />
       ) : null}
       {running ? <VoiceQueueSources owner={voiceQueue} /> : null}
+      <VoiceStoppedSources owner={voiceQueue} />
       {running && focus !== null && channelId !== null && speech !== null ? (
         <VoiceFocusedReplyFeed
           key={`${focus.botId}:${focus.threadId ?? channelId}`}

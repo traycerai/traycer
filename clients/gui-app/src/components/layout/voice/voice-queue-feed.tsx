@@ -127,7 +127,6 @@ function VoiceQueueFeed(props: {
     });
   }, [bots, queue]);
 
-  const botTabs = useBotTabsStore((state) => state.tabs);
   const queueHosts = useVoiceSessionStore((state) =>
     uniqueHosts(state.queue.map((item) => item.hostId)),
   );
@@ -143,18 +142,6 @@ function VoiceQueueFeed(props: {
             bots.find((bot) => bot.botId === hydration.ref.botId)
               ?.environmentId ?? null
           }
-        />
-      ))}
-      {Object.values(botTabs).map((tab) => (
-        <VoiceStoppedWatch
-          key={tab.botId}
-          botId={tab.botId}
-          hostId={tab.hostId}
-          channelChatId={
-            bots.find((bot) => bot.botId === tab.botId)
-              ?.appConversationChatId ?? tab.botId
-          }
-          queue={queue}
         />
       ))}
       {queueHosts
@@ -242,6 +229,36 @@ function VoiceReplyHydrator(props: {
 }
 
 /**
+ * The stopped answers of the bots whose tabs are open, read whether or not a
+ * session runs, so the briefing a session opens with already names them.
+ * Each bot's reading goes to the queue's owner, which keeps the latest and
+ * hands it to the queue while a session runs.
+ */
+export function VoiceStoppedSources(props: {
+  readonly owner: VoiceQueueOwner;
+}): ReactNode {
+  const { owner } = props;
+  const botTabs = useBotTabsStore((state) => state.tabs);
+  return (
+    <>
+      {Object.values(botTabs).map((tab) => (
+        <VoiceStoppedWatch
+          key={tab.botId}
+          botId={tab.botId}
+          hostId={tab.hostId}
+          channelChatId={
+            owner.bots.find((bot) => bot.botId === tab.botId)
+              ?.appConversationChatId ?? tab.botId
+          }
+          noteStopped={owner.noteStopped}
+          forgetStopped={owner.forgetStopped}
+        />
+      ))}
+    </>
+  );
+}
+
+/**
  * A bot's failed and parked answers, as its stream says (`bot.subscribe`,
  * read through the bot's tab host like every reading of what a bot does).
  */
@@ -249,20 +266,21 @@ function VoiceStoppedWatch(props: {
   readonly botId: string;
   readonly hostId: string;
   readonly channelChatId: string;
-  readonly queue: VoiceQueue;
+  readonly noteStopped: VoiceQueueOwner["noteStopped"];
+  readonly forgetStopped: (botId: string) => void;
 }): null {
-  const { botId, hostId, channelChatId, queue } = props;
+  const { botId, hostId, channelChatId, noteStopped, forgetStopped } = props;
   const activity = useBotActivity(botId);
   useEffect(() => {
     if (activity === null) return;
-    queue.syncStopped({
+    noteStopped({
       botId,
       hostId,
       channelChatId,
       stopped: stoppedAnswersOf(activity),
-      seenAt: Date.now(),
     });
-  }, [activity, botId, channelChatId, hostId, queue]);
+  }, [activity, botId, channelChatId, hostId, noteStopped]);
+  useEffect(() => () => forgetStopped(botId), [botId, forgetStopped]);
   return null;
 }
 

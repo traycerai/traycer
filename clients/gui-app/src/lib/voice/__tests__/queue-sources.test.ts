@@ -463,6 +463,31 @@ describe("announcementsOf", () => {
       { messageId: "a-new-2", content: "Post a-new-2.", at: 5_000 },
     ]);
   });
+
+  it("leaves out a bot row that asks something, whatever its place, and keeps one whose question is settled", () => {
+    const rows: ReadonlyArray<AnnouncementRow> = [
+      post("a-question", 2_000, {
+        question: { requestId: "q-1", questions: [OPEN_QUESTION] },
+      }),
+      post("a-approval", 3_000, {
+        surface: {
+          kind: "approval",
+          epicId: "epic-1",
+          hostId: "host-a",
+          chatId: "task-chat",
+          approvalId: "ap-1",
+          resolution: null,
+        },
+      }),
+      post("a-settled", 4_000, {
+        question: { requestId: "q-2", questions: [SETTLED_QUESTION] },
+      }),
+    ];
+
+    expect(announcementsOf(rows, 1_000).map((found) => found.messageId)).toEqual(
+      ["a-settled"],
+    );
+  });
 });
 
 describe("stoppedAnswersOf", () => {

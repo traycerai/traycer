@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { BotQuestionSettlement } from "@traycer/protocol/persistence/epic/messages";
 import type { OpenTextBlock } from "@traycer/protocol/persistence/epic/open-harness-records";
 import {
   baselineReplyWatch,
@@ -88,6 +89,50 @@ describe("takeNewBotReplies", () => {
       { messageId: "m30", text: "thirty" },
     ]);
     expect(takeNewBotReplies([hydrated, arrival], memory)).toEqual([]);
+  });
+});
+
+describe("takeNewBotReplies with a question", () => {
+  const question = (settlement: BotQuestionSettlement | null): ReplyRow => ({
+    role: "assistant",
+    messageId: "q-1",
+    timestamp: 20,
+    blocks: [textBlock("Ready to release. Ship or hold?")],
+    question: {
+      requestId: "req-q",
+      questions: [
+        {
+          text: "Ship or hold?",
+          options: ["Ship", "Hold"],
+          allowFreeText: false,
+          settlement,
+        },
+      ],
+    },
+  });
+
+  it("gives an open question's choices as an explicit list after its prose", () => {
+    const memory = createReplyWatchMemory();
+    baselineReplyWatch(memory, []);
+
+    expect(takeNewBotReplies([question(null)], memory)).toEqual([
+      {
+        messageId: "q-1",
+        text: "Ready to release. Ship or hold? The choices are: 1. Ship; 2. Hold.",
+      },
+    ]);
+  });
+
+  it("gives a settled question's prose alone", () => {
+    const memory = createReplyWatchMemory();
+    baselineReplyWatch(memory, []);
+
+    expect(
+      takeNewBotReplies(
+        [question({ answer: "Ship", skipped: false, by: { kind: "bot" }, at: 25 })],
+        memory,
+      ),
+    ).toEqual([{ messageId: "q-1", text: "Ready to release. Ship or hold?" }]);
   });
 });
 
