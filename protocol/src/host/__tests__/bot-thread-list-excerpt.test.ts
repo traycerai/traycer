@@ -117,6 +117,44 @@ describe("botThreadAnchorExcerptOf", () => {
     ).toBe("Hold the 1.5.1 build");
   });
 
+  it.each([
+    [
+      "a closing quote",
+      '"Hold the build." Then ship tonight.',
+      '"Hold the build"',
+    ],
+    [
+      "a closing Markdown marker",
+      "**Deploy is blocked.** Ask the release owner.",
+      "**Deploy is blocked**",
+    ],
+    ["a closing bracket", "(See the log.) Then retry.", "(See the log)"],
+    ["a CJK full stop", "构建失败了。请重新运行。", "构建失败了"],
+    ["a CJK question mark", "真的吗？我不知道！", "真的吗"],
+    [
+      "a dot after an abbreviation before a lowercase word",
+      "Check e.g. the nightly run. Then ship.",
+      "Check e.g. the nightly run",
+    ],
+    [
+      "a dot after dotted letters before a lowercase word",
+      "The U.S. team is up. Go.",
+      "The U.S. team is up",
+    ],
+    [
+      "an ellipsis before a lowercase word",
+      "Wait... what happened here? Nothing.",
+      "Wait... what happened here",
+    ],
+    [
+      "a dot after an ordinary word before a lowercase word",
+      "hold the build. then ship it",
+      "hold the build",
+    ],
+  ])("ends the first sentence at %s", (_rule, text, expected) => {
+    expect(botThreadAnchorExcerptOf(text)).toBe(expected);
+  });
+
   it("cuts past ten words with an ellipsis, trims the punctuation the cut leaves, and marks no cut at ten words", () => {
     expect(
       botThreadAnchorExcerptOf(
@@ -137,7 +175,7 @@ describe("botThreadAnchorExcerptOf", () => {
   });
 
   it("answers null for a post with no words", () => {
-    for (const text of ["", " \n\t ", "?!...", " ; : "]) {
+    for (const text of ["", " \n\t ", "?!...", " ; : ", '"..."']) {
       expect(botThreadAnchorExcerptOf(text)).toBeNull();
     }
   });

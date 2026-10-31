@@ -1,4 +1,8 @@
-import type { BotThreadSummary } from "@traycer/protocol/host/bot/conversation-schemas";
+import { botThreadListV12 } from "@traycer/protocol/host/bot/contracts";
+import {
+  botThreadAnchorExcerptOf,
+  type BotThreadSummary,
+} from "@traycer/protocol/host/bot/conversation-schemas";
 import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
 import type { EnvironmentDescriptorV11 } from "@traycer/protocol/host/environment/contracts";
 import { describe, expect, it } from "vitest";
@@ -258,6 +262,36 @@ describe("the same words in two teams", () => {
         excerpt: "hold the 1.5.1 build",
       },
     ]);
+  });
+});
+
+describe("a 1.2 host's excerpt of a quoted first sentence", () => {
+  it("names the thread by the first sentence alone, in the directory and in what the router is shown", () => {
+    const post = '"Hold the build." Then ship tonight.';
+    const listed = botThreadListV12.responseSchema.parse({
+      threads: [
+        withExcerpt(
+          threadSummary("thr-quoted", "m-quoted", VIEWER, NOW - 10),
+          botThreadAnchorExcerptOf(post),
+        ),
+      ],
+      trunkCostUsd: null,
+      threadAnchors: null,
+    });
+
+    const directory = composeVoiceDirectory({
+      ...SOURCES,
+      bots: [botRecord("bot_acme", ACME, null)],
+      threadsByBot: new Map([["bot_acme", listed.threads]]),
+      heldPostText: () => null,
+    });
+
+    expect(directory.threads.map((thread) => thread.anchorExcerpt)).toEqual([
+      '"Hold the build"',
+    ]);
+    const rendered = renderDirectory(directory, NOW);
+    expect(rendered).toContain("Hold the build");
+    expect(rendered).not.toContain("Then ship tonight");
   });
 });
 
