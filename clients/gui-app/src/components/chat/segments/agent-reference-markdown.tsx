@@ -13,13 +13,14 @@ import {
   isUuidReferenceCandidate,
   rehypeTraycerAgentReferences,
 } from "@/markdown/plugins/rehype-traycer-agent-references";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 // Mentions first: a member's token holds their id, which the agent-reference
-// pass would otherwise read as an id to chip.
-const AGENT_REFERENCE_REHYPE_PLUGINS = [
-  rehypeBotMentions,
-  rehypeTraycerAgentReferences,
-];
+// pass would otherwise read as an id to chip. Without the features there are
+// no bot mentions, and the pass stays the one the release before had.
+const AGENT_REFERENCE_REHYPE_PLUGINS = UNRELEASED_FEATURES_ENABLED
+  ? [rehypeBotMentions, rehypeTraycerAgentReferences]
+  : [rehypeTraycerAgentReferences];
 
 const AGENT_REFERENCE_MARKDOWN_COMPONENTS: Record<
   string,
