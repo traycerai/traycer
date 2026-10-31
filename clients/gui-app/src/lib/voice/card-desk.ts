@@ -839,10 +839,24 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
         notify(current, sentText(content, last));
         close(current);
         return;
-      case "forwarded":
+      case "forwarded": {
         setCard({ state: "forwarded" });
         notify(current, "Sent. It is on its way to the task's machine.");
+        // The records may already say how it ended (its refusal, or the
+        // post's resolution) while the call was out: nothing re-reads them
+        // for a change of state alone, so they are read now.
+        const now = card();
+        const facts = current.facts;
+        if (now !== null && facts !== null) {
+          observeForwarded(
+            current,
+            now,
+            facts,
+            facts.settledBy(now.questionIndex),
+          );
+        }
         return;
+      }
       case "refused":
         refused(current, response.code ?? "NOT_FOUND", last);
         return;
