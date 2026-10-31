@@ -59,7 +59,6 @@ let handles: FakeHandle[];
 let registryListeners: Set<() => void>;
 let source: ChannelHandleSource<FakeHandle>;
 let found: Found[];
-let focusedChannels: Set<string>;
 let stop: () => void;
 
 /** The registry gains or loses a channel store. */
@@ -72,7 +71,6 @@ function watch(): void {
   stop = watchAnnouncements({
     source,
     channelBot: (chatId) => (chatId.startsWith("chan-") ? "bot-2" : null),
-    isFocused: (_botId, chatId) => focusedChannels.has(chatId),
     onAnnouncement: (announcement) => found.push(announcement),
   });
 }
@@ -81,7 +79,6 @@ beforeEach(() => {
   handles = [];
   registryListeners = new Set<() => void>();
   found = [];
-  focusedChannels = new Set<string>();
   source = {
     listHandles: () => handles,
     subscribe: (listener) => {
@@ -136,33 +133,21 @@ describe("watchAnnouncements", () => {
     ]);
   });
 
-  it("ignores a chat that is not a bot's channel, one under another bot's epic, and a focused channel", () => {
+  it("ignores a chat that is not a bot's channel and one under another bot's epic", () => {
     const notChannel = handle("bot-2", "thread-x", LOADED_EMPTY);
     const otherBot = handle("bot-9", "chan-9", LOADED_EMPTY);
-    const focused = handle("bot-2", "chan-focus", LOADED_EMPTY);
     const watched = handle("bot-2", "chan-2", LOADED_EMPTY);
-    focusedChannels.add("chan-focus");
-    setHandles([notChannel, otherBot, focused, watched]);
+    setHandles([notChannel, otherBot, watched]);
     watch();
 
-    for (const channel of [notChannel, otherBot, focused, watched]) {
+    for (const channel of [notChannel, otherBot, watched]) {
       channel.store.setState({
         snapshotLoaded: true,
         messages: [post(`post-${channel.chatId}`, 2_000)],
       });
     }
-    expect(found.map((entry) => entry.chatId)).toEqual(["chan-2"]);
 
-    // What landed while the channel was focused was said there, not news later.
-    focusedChannels.delete("chan-focus");
-    focused.store.setState({
-      snapshotLoaded: true,
-      messages: [post("post-chan-focus", 2_000), post("later", 3_000)],
-    });
-    expect(found.map((entry) => entry.announcement.messageId)).toEqual([
-      "post-chan-2",
-      "later",
-    ]);
+    expect(found.map((entry) => entry.chatId)).toEqual(["chan-2"]);
   });
 
   it("watches a channel store the registry gains later, from its first loaded snapshot", () => {

@@ -6,7 +6,7 @@ import {
   NOTHING_WAITING_TEXT,
   VOICE_SESSION_INPUT_MAX_CHARS,
 } from "../briefing";
-import type { ReplyRef } from "../queue-sources";
+import type { AttentionPrompts, ReplyRef } from "../queue-sources";
 import { remintInput } from "../session-input";
 
 const BOT_TITLES: Readonly<Record<string, string>> = {
@@ -16,7 +16,7 @@ const BOT_TITLES: Readonly<Record<string, string>> = {
 
 const botTitle = (botId: string): string => BOT_TITLES[botId] ?? "the bot";
 
-const NO_PROMPTS = { approvals: 0, questions: 0 };
+const NO_PROMPTS: AttentionPrompts = { approvals: [], questions: [] };
 
 function queueItem(overrides: Partial<QueueItem>): QueueItem {
   const item: QueueItem = {
@@ -29,6 +29,7 @@ function queueItem(overrides: Partial<QueueItem>): QueueItem {
     messageId: "i-1",
     surfaceId: null,
     title: "A title",
+    author: null,
     line: "",
     at: 1_000,
     state: "queued",
@@ -45,6 +46,7 @@ function answerRef(overrides: Partial<ReplyRef>): ReplyRef {
     chatId: "thread-y",
     originHostId: "host-a",
     at: 2_000,
+    blocking: false,
     ...overrides,
   };
 }
@@ -141,6 +143,77 @@ describe("composeBriefing", () => {
     });
 
     expect(text).toBe(NOTHING_WAITING_TEXT);
+  });
+
+  it("gives a bot's question its own line and does not count it again among the questions waiting on the person", () => {
+    const question = queueItem({
+      id: "q-1",
+      messageId: "q-1",
+      kind: "question",
+      title: "Ship or hold",
+    });
+    const text = composeBriefing({
+      answers: [
+        answerRef({ messageId: "q-1", botId: "bot-2", blocking: true }),
+      ],
+      prompts: { approvals: [], questions: ["q-1", "iv-1"] },
+      items: [question],
+      botTitle,
+      maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
+    });
+
+    expect(text).toContain(
+      'Release bot has a question for you in a thread: "Ship or hold".',
+    );
+    expect(text).toContain("1 question is waiting on you.");
+    expect(text).not.toContain("2 questions");
+    expect(text).not.toContain("answered");
+  });
+
+  it("does not count an approval again when a surface item already names it", () => {
+    const surface = queueItem({
+      id: "s-1",
+      messageId: "s-1",
+      kind: "surface",
+      surfaceId: "ap-1",
+      title: "Deploy approval",
+    });
+    const text = composeBriefing({
+      answers: [],
+      prompts: { approvals: ["ap-1", "ap-2"], questions: [] },
+      items: [surface],
+      botTitle,
+      maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
+    });
+
+    expect(text).toContain("1 approval is waiting on you.");
+    expect(text).toContain(
+      'Release bot says a task is waiting on you: "Deploy approval".',
+    );
+  });
+
+  it("keeps a blocking approval, ahead of the answers, when 120 waiting replies fill the briefing", () => {
+    const replies = Array.from({ length: 120 }, (_, n) =>
+      queueItem({
+        id: `i-${n}`,
+        messageId: `i-${n}`,
+        title: `Finding number ${n} about the release pipeline`,
+        at: 10_000 - n,
+      }),
+    );
+    const text = composeBriefing({
+      answers: [],
+      prompts: { approvals: ["ap-1"], questions: [] },
+      items: replies,
+      botTitle,
+      maxChars: VOICE_SESSION_INPUT_MAX_CHARS,
+    });
+
+    expect(text.length).toBeLessThanOrEqual(VOICE_SESSION_INPUT_MAX_CHARS);
+    expect(text).toContain("1 approval is waiting on you.");
+    expect(text.indexOf("1 approval")).toBeLessThan(
+      text.indexOf("Finding number 0"),
+    );
   });
 
   it.each([

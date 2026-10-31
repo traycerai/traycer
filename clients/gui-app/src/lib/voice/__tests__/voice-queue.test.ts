@@ -98,7 +98,7 @@ beforeEach(() => {
   appended = [];
   published = [];
   focusedChats = new Set<string>();
-  attentionNow = { answers: [], prompts: { approvals: 0, questions: 0 } };
+  attentionNow = { answers: [], prompts: { approvals: [], questions: [] } };
   markRead = vi.fn<VoiceQueueDeps["markRead"]>();
   switchTo = vi.fn<VoiceQueueDeps["switchTo"]>();
   scheduler = createSpeechScheduler({
@@ -132,6 +132,7 @@ function replyRef(overrides: Partial<ReplyRef>): ReplyRef {
     chatId: "thread-x",
     originHostId: "host-a",
     at: 5_000,
+    blocking: false,
     ...overrides,
   };
 }
@@ -155,7 +156,7 @@ function botRow(messageId: string, text: string): HydrationRow {
 /** A reply that arrives while the session runs, hydrated and so offered. */
 function arrive(ref: ReplyRef, row: HydrationRow): void {
   queue.ingestReplies([ref], hostOf);
-  queue.hydrated(ref.messageId, row);
+  queue.hydrated(ref.messageId, row, null);
 }
 
 function stateOf(itemId: string): QueueItem["state"] | undefined {
@@ -172,7 +173,7 @@ describe("a reply elsewhere that arrives while the session runs", () => {
 
     // The person is speaking when the row is read: the offer waits.
     scheduler.noteInputTranscript();
-    queue.hydrated("r-1", botRow("r-1", REPLY_TEXT));
+    queue.hydrated("r-1", botRow("r-1", REPLY_TEXT), null);
 
     expect(queue.pendingHydrations()).toEqual([]);
     expect(queue.items()).toHaveLength(1);
@@ -217,7 +218,7 @@ describe("a reply seen from two views", () => {
     queue.begin([replyRef({ messageId: "r-1" })], hostOf);
     queue.ingestReplies([replyRef({ messageId: "r-1" })], hostOf);
     expect(queue.pendingHydrations()).toHaveLength(1);
-    queue.hydrated("r-1", botRow("r-1", REPLY_TEXT));
+    queue.hydrated("r-1", botRow("r-1", REPLY_TEXT), null);
     queue.ingestReplies([replyRef({ messageId: "r-1" })], hostOf);
     expect(queue.pendingHydrations()).toEqual([]);
     expect(queue.items().map((item) => item.id)).toEqual(["r-1"]);
@@ -226,7 +227,7 @@ describe("a reply seen from two views", () => {
     queue.ingestReplies([replyRef({ messageId: "r-2" })], hostOf);
     queue.noteFocused("r-2");
     expect(queue.pendingHydrations()).toEqual([]);
-    queue.hydrated("r-2", botRow("r-2", "Merged the release branch."));
+    queue.hydrated("r-2", botRow("r-2", "Merged the release branch."), null);
     queue.ingestReplies([replyRef({ messageId: "r-2" })], hostOf);
     expect(queue.pendingHydrations()).toEqual([]);
     expect(queue.items().map((item) => item.id)).toEqual(["r-1"]);
@@ -246,12 +247,18 @@ describe("a reply seen from two views", () => {
     expect(appended).toEqual([]);
   });
 
-  it("is not queued when its chat is the focus the moment its row arrives", () => {
+  it("is queued without an offer when its chat is the focus, until the focused feed claims it", () => {
     focusedChats.add("bot-2:thread-x");
     arrive(replyRef({}), botRow("r-1", REPLY_TEXT));
 
-    expect(queue.items()).toEqual([]);
+    expect(queue.items().map((item) => [item.id, item.state])).toEqual([
+      ["r-1", "queued"],
+    ]);
+    clock.advance(120_000);
     expect(appended).toEqual([]);
+
+    queue.noteFocused("r-1");
+    expect(queue.items()).toEqual([]);
     queue.ingestReplies([replyRef({})], hostOf);
     expect(queue.pendingHydrations()).toEqual([]);
   });
@@ -260,7 +267,7 @@ describe("a reply seen from two views", () => {
 describe("read", () => {
   it("appends the reply under the delegation and marks its thread read only once it is confirmed said", () => {
     queue.begin([replyRef({})], hostOf);
-    queue.hydrated("r-1", botRow("r-1", REPLY_TEXT));
+    queue.hydrated("r-1", botRow("r-1", REPLY_TEXT), null);
 
     expect(queue.run({ kind: "read", itemId: "r-1", delegationId: "d1" })).toBe(
       "appended",
@@ -288,20 +295,24 @@ describe("read", () => {
 
   it("reads an open question's choices as an explicit list", () => {
     queue.begin([replyRef({})], hostOf);
-    queue.hydrated("r-1", {
-      ...botRow("r-1", "The release is ready. Ship or hold?"),
-      question: {
-        requestId: "q-1",
-        questions: [
-          {
-            text: "Ship or hold?",
-            options: ["Ship", "Hold"],
-            allowFreeText: false,
-            settlement: null,
-          },
-        ],
+    queue.hydrated(
+      "r-1",
+      {
+        ...botRow("r-1", "The release is ready. Ship or hold?"),
+        question: {
+          requestId: "q-1",
+          questions: [
+            {
+              text: "Ship or hold?",
+              options: ["Ship", "Hold"],
+              allowFreeText: false,
+              settlement: null,
+            },
+          ],
+        },
       },
-    });
+      null,
+    );
 
     expect(queue.items()[0]?.kind).toBe("question");
     queue.run({ kind: "read", itemId: "r-1", delegationId: null });
@@ -332,10 +343,12 @@ describe("two posts about the same approval", () => {
     queue.hydrated(
       "r-1",
       approvalRow("r-1", "The task needs your approval to deploy."),
+      null,
     );
     queue.hydrated(
       "r-2",
       approvalRow("r-2", "Still waiting on the deploy approval."),
+      null,
     );
 
     expect(
@@ -399,6 +412,35 @@ describe("read, asked while the offer is on its way unconfirmed", () => {
       appended.filter((entry) => entry.text.includes("Want it?")),
     ).toHaveLength(1);
     expect(appended).toHaveLength(2);
+  });
+});
+
+describe("read, asked before the offer's own words have come", () => {
+  it("waits for the offer's words to come and go, and only its own transcript confirms it", () => {
+    queue.begin([], hostOf);
+    arrive(replyRef({}), botRow("r-1", REPLY_TEXT));
+    expect(appended).toHaveLength(1);
+
+    queue.run({ kind: "read", itemId: "r-1", delegationId: null });
+    // The offer is already with the engine, whose words are still to come.
+    expect(appended).toHaveLength(1);
+    scheduler.noteOutputTranscript(
+      "Release bot has an answer for you, the Safari fix landed in build forty.",
+    );
+    expect(markRead).not.toHaveBeenCalled();
+    expect(appended).toHaveLength(1);
+
+    clock.advance(OUTPUT_HANGOVER_MS);
+    expect(appended).toHaveLength(2);
+    expect(appended[1]?.text).toBe(`Release bot said: ${REPLY_TEXT}`);
+    expect(markRead).not.toHaveBeenCalled();
+    expect(stateOf("r-1")).toBe("queued");
+
+    scheduler.noteOutputTranscript(" The Safari fix landed");
+    expect(markRead.mock.calls).toEqual([
+      [{ hostId: "host-a", botId: "bot-2", chatId: "thread-x" }],
+    ]);
+    expect(stateOf("r-1")).toBe("heard");
   });
 });
 
@@ -470,7 +512,7 @@ describe("a bot's stopped answer", () => {
 describe("later, asked after a read that is still waiting to be said", () => {
   it("takes the read back: it is never said, marks nothing, and the item stays set aside", () => {
     queue.begin([replyRef({})], hostOf);
-    queue.hydrated("r-1", botRow("r-1", REPLY_TEXT));
+    queue.hydrated("r-1", botRow("r-1", REPLY_TEXT), null);
     scheduler.noteOutputLevel(true);
 
     queue.run({ kind: "read", itemId: "r-1", delegationId: "d1" });
@@ -517,7 +559,7 @@ describe("switch", () => {
 describe("looking at the channel", () => {
   it("does not remove an item: a later notification view without its row leaves it queued", () => {
     queue.begin([replyRef({})], hostOf);
-    queue.hydrated("r-1", botRow("r-1", REPLY_TEXT));
+    queue.hydrated("r-1", botRow("r-1", REPLY_TEXT), null);
 
     // The row was read, so the attention tier no longer lists it.
     queue.ingestReplies([], hostOf);
@@ -537,8 +579,8 @@ describe("what the session started with", () => {
       ],
       hostOf,
     );
-    queue.hydrated("r-1", botRow("r-1", REPLY_TEXT));
-    queue.hydrated("r-2", botRow("r-2", "Merged the release branch."));
+    queue.hydrated("r-1", botRow("r-1", REPLY_TEXT), null);
+    queue.hydrated("r-2", botRow("r-2", "Merged the release branch."), null);
 
     expect(queue.items()).toHaveLength(2);
     clock.advance(120_000);
@@ -549,7 +591,7 @@ describe("what the session started with", () => {
 describe("a reference whose row cannot be read", () => {
   it("creates nothing and is not asked for again", () => {
     queue.ingestReplies([replyRef({})], hostOf);
-    queue.hydrated("r-1", null);
+    queue.hydrated("r-1", null, null);
 
     expect(queue.items()).toEqual([]);
     queue.ingestReplies([replyRef({})], hostOf);
@@ -608,7 +650,7 @@ describe("brief", () => {
           at: 7_000,
         }),
       ],
-      prompts: { approvals: 1, questions: 2 },
+      prompts: { approvals: ["ap-1"], questions: ["q-1", "q-2"] },
     };
 
     queue.run({ kind: "brief", delegationId: "d3" });

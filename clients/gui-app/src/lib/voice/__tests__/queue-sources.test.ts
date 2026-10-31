@@ -56,6 +56,7 @@ describe("replyRefsOf", () => {
         chatId: "thread-x",
         originHostId: "host-a",
         at: 4_000,
+        blocking: false,
       },
     ]);
     expect(JSON.stringify(refs)).not.toContain(COPY);
@@ -84,7 +85,13 @@ describe("replyRefsOf", () => {
       name: "a row that is no bot answer",
       excluded: row({ botAnswer: false }),
     },
-    { name: "a blocking prompt", excluded: row({ severity: "needs_action" }) },
+    {
+      name: "a blocking prompt that names no bot",
+      excluded: row({
+        severity: "needs_action",
+        payload: { kind: "chat", epicId: "epic-1", chatId: "chat-1" },
+      }),
+    },
     { name: "a failure", excluded: row({ severity: "failure" }) },
     { name: "a global row", excluded: row({ source: "global" }) },
     {
@@ -139,25 +146,75 @@ describe("replyRefsOf", () => {
   });
 });
 
+describe("a bot's own question", () => {
+  // The server emits it as a host operation notice that needs action.
+  const question = row({
+    botAnswer: false,
+    hostKind: "host.operation.finished",
+    severity: "needs_action",
+  });
+
+  it("is referenced for the queue as a blocking row, by ids alone", () => {
+    const refs = replyRefsOf([question]);
+
+    expect(refs).toEqual([
+      {
+        messageId: "m-1",
+        botId: "bot-2",
+        threadId: "thread-x",
+        chatId: "thread-x",
+        originHostId: "host-a",
+        at: 1_000,
+        blocking: true,
+      },
+    ]);
+    expect(JSON.stringify(refs)).not.toContain(COPY);
+  });
+
+  it("is counted as a waiting question by its message id", () => {
+    expect(attentionPromptsOf([question])).toEqual({
+      approvals: [],
+      questions: ["m-1"],
+    });
+  });
+});
+
 describe("attentionPromptsOf", () => {
-  it("counts the unread blocking approvals and questions by the row's kind", () => {
-    const prompts = attentionPromptsOf([
-      row({ hostKind: "approval.requested", severity: "needs_action" }),
-      row({ hostKind: "approval.requested", severity: "needs_action" }),
-      row({ hostKind: "interview.requested", severity: "needs_action" }),
-      // Read, so no longer blocking.
+  it("names the unread blocking approvals and questions by their ids, by the row's kind", () => {
+    const prompt = (
+      overrides: Partial<MergedNotificationRow>,
+    ): MergedNotificationRow =>
       row({
-        hostKind: "approval.requested",
+        payload: null,
+        botAnswer: false,
         severity: "needs_action",
+        ...overrides,
+      });
+    const prompts = attentionPromptsOf([
+      prompt({ hostKind: "approval.requested", sourceRef: "ap-1" }),
+      // No source ref: the row's own feed id names it.
+      prompt({ hostKind: "approval.requested", feedId: "host:n-2" }),
+      prompt({ hostKind: "interview.requested", sourceRef: "iv-1" }),
+      // Read, so no longer blocking.
+      prompt({
+        hostKind: "approval.requested",
+        sourceRef: "ap-read",
         readAt: 2_000,
       }),
       // Blocking, but neither an approval nor a question.
-      row({ hostKind: "browser.human.needed", severity: "needs_action" }),
+      prompt({ hostKind: "browser.human.needed", sourceRef: "br-1" }),
       // Not a blocking row at all.
-      row({ hostKind: "interview.requested", severity: "info" }),
+      prompt({
+        hostKind: "interview.requested",
+        sourceRef: "iv-info",
+        severity: "info",
+      }),
     ]);
 
-    expect(prompts).toEqual({ approvals: 2, questions: 1 });
+    expect(prompts).toEqual({
+      approvals: ["ap-1", "host:n-2"],
+      questions: ["iv-1"],
+    });
   });
 });
 
@@ -224,6 +281,7 @@ describe("hydratedEntryOf", () => {
     expect(entry).toEqual({
       kind: "question",
       content: "Ready to release. Ship or hold?",
+      authorUserId: null,
       options: ["Ship", "Hold"],
       surfaceId: null,
     });
@@ -295,6 +353,36 @@ describe("hydratedEntryOf", () => {
     expect(hydratedEntryOf(hydrated)).toEqual({
       kind: "reply",
       content: "Ready to release. Ship or hold?",
+      authorUserId: null,
+      options: [],
+      surfaceId: null,
+    });
+  });
+
+  it("reads a teammate's message as a message, with the words as written and who wrote it", () => {
+    const entry = hydratedEntryOf({
+      role: "user",
+      messageId: "tm-1",
+      sender: { type: "user", userId: "u-9" },
+      message: {
+        kind: "user",
+        content: {
+          type: "doc",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: "Ship it Friday" }],
+            },
+          ],
+        },
+        browserAnnotations: [],
+      },
+    });
+
+    expect(entry).toEqual({
+      kind: "message",
+      content: "Ship it Friday",
+      authorUserId: "u-9",
       options: [],
       surfaceId: null,
     });

@@ -786,6 +786,54 @@ describe("withdraw", () => {
   });
 });
 
+describe("a withdrawn item in flight", () => {
+  it("keeps the slot until its own output has come and gone, and that output confirms nothing", () => {
+    const onDelivered = vi.fn();
+    scheduler.enqueue(item("a", { onDelivered }));
+    scheduler.enqueue(item("b", {}));
+
+    scheduler.withdraw("a");
+    // Facts are clear, but a's words are still to come.
+    expect(scheduler.isClear()).toBe(true);
+    expect(appended).toHaveLength(1);
+
+    scheduler.noteOutputTranscript("Tracy says reply a");
+    clock.advance(OUTPUT_HANGOVER_MS - 1);
+    expect(appended).toHaveLength(1);
+    clock.advance(1);
+
+    expect(appended.map((entry) => entry.text)).toEqual(["reply a", "reply b"]);
+    expect(onDelivered).not.toHaveBeenCalled();
+  });
+
+  it("frees the slot when its confirm window ends with no output", () => {
+    scheduler.enqueue(item("a", {}));
+    scheduler.enqueue(item("b", {}));
+
+    scheduler.withdraw("a");
+    clock.advance(CONFIRM_WINDOW_MS - 1);
+    expect(appended).toHaveLength(1);
+    clock.advance(1);
+
+    expect(appended.map((entry) => entry.text)).toEqual(["reply a", "reply b"]);
+  });
+
+  it("does not come back when the voice is suspended and resumed", () => {
+    const onGivenUp = vi.fn();
+    scheduler.enqueue(item("a", { onGivenUp }));
+    scheduler.withdraw("a");
+
+    scheduler.setReady(false);
+    scheduler.suspendInFlight();
+    scheduler.setReady(true);
+    clock.advance(CONFIRM_WINDOW_MS * (MAX_DELIVERY_ATTEMPTS + 1));
+
+    expect(appended).toEqual([{ text: "reply a", delegationId: "d-a" }]);
+    expect(scheduler.pendingCount()).toBe(0);
+    expect(onGivenUp).not.toHaveBeenCalled();
+  });
+});
+
 describe("a bare backchannel", () => {
   it("never confirms an item that itself opens with a backchannel word", () => {
     const text = "Mm-hmm, the deployment completed successfully.";
