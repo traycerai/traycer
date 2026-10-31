@@ -14,7 +14,7 @@ import {
  * place before this coordinator's lazily-constructed singleton observer is
  * ever created) lets these tests fire real RO callbacks on demand. Same
  * technique this repo already used for the ticket-17/18 stack's height-only
- * resize pin - see [[legendlist-pass-through-mock-ref-tee]] in memory.
+ * resize pin.
  */
 class ControllableResizeObserver implements ResizeObserver {
   readonly callback: ResizeObserverCallback;

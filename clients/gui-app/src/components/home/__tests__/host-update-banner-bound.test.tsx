@@ -22,7 +22,7 @@ vi.mock("@/components/settings/host-scope/use-scoped-stream-binding", () => ({
 // / 68 tests takes the UNBOUND arm exclusively. None of them touch
 // `BoundHostUpdateBanner`, `OperationContent`, `describeUpdateOperation`, or
 // `LocalHostRestartFlow`'s cooperative arm - this file is what actually
-// exercises that code, which is the coverage gap the ticket flagged.
+// exercises that code.
 interface HostBindingFixture {
   readonly directory: {
     readonly getLocalEntry: () => HostDirectoryEntry | null;
@@ -491,7 +491,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
       renderBanner(undefined);
       const text = await findPhaseText();
       expect(text).toMatch(expectedPhrase);
-      // Never the generic fallback the experience doc forbids.
+      // Never the generic fallback.
       expect(text).not.toMatch(/^Updating this host/i);
     },
   );
@@ -1430,7 +1430,7 @@ describe("HostUpdateBanner — bound arm (Ticket 06 subject E)", () => {
     });
   });
 
-  // 9. The host-down window reaching THIS surface (Ticket 07 §5.2.7).
+  // 9. The host-down window reaching THIS surface (Ticket 07).
   //
   // The projector's record arm always returns `kind: "unknown"` carrying
   // `lastKnownKind`, and this banner's supersede predicate rejected `unknown`

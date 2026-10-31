@@ -426,7 +426,7 @@ function TuiAgentTileLive(
   // orchestrator setup before the visible PTY is created. Codex and OpenCode
   // have always required this for app-server URL freshness; routing Claude
   // through the same RPC closes the bug where a Claude reopen / rebind kept
-  // using the stored invocation + persisted `workspaceFolders[0]` (Flow 6 / Flow 11).
+  // using the stored invocation + persisted `workspaceFolders[0]`.
   const prepareLaunchMutateAsync = prepareLaunch.mutateAsync;
   const preparePayload =
     useCallback(async (): Promise<TerminalCreatePayload | null> => {
@@ -892,7 +892,7 @@ function TuiAgentTileLive(
   }
 
   // Pre-launch / live shell: the worktree chip sits at the top of the tile so
-  // the user can confirm the binding before the harness starts (Flow 1 step 6).
+  // the user can confirm the binding before the harness starts.
   // The host is fixed for a terminal agent because a PTY can't migrate, but
   // folder binding changes are supported by committing the new binding and
   // restarting the PTY from the updated prepare-launch payload. The body

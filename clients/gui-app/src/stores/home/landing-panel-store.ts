@@ -1193,7 +1193,7 @@ export const useLandingPanelStore = create<LandingPanelStoreState>()(
       ...basePersistOptions(landingTerminalsKey(null)),
       storage: createJSONStorage(() => window.localStorage),
       // `placeholder` is deliberately absent: an unpicked new-tab row is not
-      // state worth restoring, and the core flows say so outright.
+      // state worth restoring.
       partialize: (state): PersistedLandingPanelState => ({
         tabs: state.tabs,
         activeInstanceId: state.activeInstanceId,

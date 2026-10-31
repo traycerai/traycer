@@ -1,7 +1,7 @@
 /**
  * The `epic.subscribe@1` ↔ lanes mid-session replacement, asserted as a value.
  *
- * This is the path T6 declined by an approved scope split and the ticket makes
+ * This is the path T6 declined by an approved scope split and this file makes
  * "an explicitly tested path". The seam's own doc says why it deserves a test
  * of its own rather than a line in a bigger one: *every long-lived tab hits this
  * exactly once*, which makes it the single most likely path to ship untested.

@@ -1400,7 +1400,7 @@ export class OpenEpicSessionRegistry {
    * BEFORE calling here, and the session has left the registry by then - so a
    * source is merged exactly once, structurally. A guard was written here and
    * removed: it read as protection while its condition was excluded, which is
-   * the same defect as the `reparentArtifact` catch this ticket deleted.
+   * the same defect as the `reparentArtifact` catch this change deleted.
    *
    * ## The disposal fence is NOT that guard
    *

@@ -605,7 +605,7 @@ function overlappingCityRoofs(): {
 /**
  * The view contract's invariants against one City layout. Restated rather
  * than shared with `campus-plan.test.ts` because these two files must stand
- * alone (see the ticket).
+ * alone.
  */
 function checkContract(
   layout: OfficeLayout,
@@ -1448,7 +1448,7 @@ describe("planCity", () => {
       if (seat.civicRoomId !== null) continue;
       const occupantId = occupantBySeatId.get(seat.seatId) ?? null;
 
-      // Occupied, not sheeted, `openRequests: 3` - the state the ticket
+      // Occupied, not sheeted, `openRequests: 3` - the state this test
       // measures the union against.
       const boxes = spriteBoxesOf(layout, seat, stateFor(occupantId, false));
       const mast = boxes.find((entry) => entry.name === "spire");

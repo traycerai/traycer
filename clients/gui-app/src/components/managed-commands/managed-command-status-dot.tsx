@@ -12,7 +12,7 @@ const TONE_CLASS = {
 } as const;
 
 /**
- * The passive status signal (`UI.md` §7): a dot that changes and nothing that
+ * The passive status signal: a dot that changes and nothing that
  * toasts, badges or pings. Its accessible name carries the same text the row
  * shows, so a screen reader is not left with a colour.
  */

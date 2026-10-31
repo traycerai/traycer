@@ -15,7 +15,7 @@ interface AccentDotProps {
 }
 
 /**
- * Deterministic profile-identity dot (multi-profile decision log): a
+ * Deterministic profile-identity dot: a
  * bottom-right corner badge on the rail's provider icon, or an inline swatch
  * next to the profile dropdown's trigger/row label. Both variants resolve the
  * same accent color (`resolveProfileAccentColor`) - the dot signals PRESENCE

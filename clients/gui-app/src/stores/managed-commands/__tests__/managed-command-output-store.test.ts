@@ -17,7 +17,7 @@ import {
 } from "@/stores/managed-commands/managed-command-output-store";
 
 /**
- * The viewer half of the Shells surface (`UI.md` §4): one interleaved
+ * The viewer half of the Shells surface: one interleaved
  * timeline, opened at the tail and paged backwards on demand. Gaplessness is
  * the host's contract - the client's job is to hand back the position it was
  * given and to append what arrives, in order.

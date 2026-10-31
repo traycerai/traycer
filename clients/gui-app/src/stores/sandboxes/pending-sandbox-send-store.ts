@@ -111,7 +111,7 @@ export interface PendingSandboxSendDispatch {
 }
 
 /**
- * A message sent to a staged sandbox (sandboxes redesign, Flow 1 step 2): the
+ * A message sent to a staged sandbox: the
  * task opened at once and the message waits in it, behind the setup line,
  * until the agent the person asked for is ready on the sandbox. The create's
  * state is the stage under {@link pendingSendSurfaceKey}; this is the message

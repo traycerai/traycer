@@ -1491,7 +1491,7 @@ describe("empty focus / startup preservation", () => {
 
   // Cold review #6: startup / same-location layout sync may preserve empty
   // focus; later envelope-free PUSH/REPLACE is real external navigation and
-  // must focus the backing member (Core Flow 4).
+  // must focus the backing member.
   it.each([
     { action: "PUSH" as const, key: "key-empty-push" },
     { action: "REPLACE" as const, key: "key-empty-replace" },

@@ -52,7 +52,7 @@ import type {
 /**
  * Cross-seam coverage for `s6-renderer-local-admission`.
  *
- * The composition this ticket fixes has no other test owner: host Vitest
+ * The composition this change fixes has no other test owner: host Vitest
  * globally stubs auth, and GUI tests mock the host away. This file drives
  * the REAL `AuthService` (constructed internally by the REAL
  * `HostRuntimeProvider`, exactly as production boots it) through a faked
@@ -94,7 +94,7 @@ import type {
  * This file's `LocalEpicsProbe` still drives `epic.listTasks` directly through
  * the same real `useHostQuery` primitive those components use internally,
  * WITHOUT their auth gate — now to keep this file testing only what THIS
- * ticket owns (whether the renderer ADMITS the user to a point where local,
+ * change owns (whether the renderer ADMITS the user to a point where local,
  * disk-served content renders and is interactive), rather than because the
  * surfaces cannot do it themselves.
  */
@@ -514,7 +514,7 @@ function mountHarness(opts: {
           invalidator={null}
           requestId={null}
           // `null` installs the REAL `buildDefaultRemoteFetcher` (via
-          // `createAuthBoundHostDirectory`) — the path this ticket's fix
+          // `createAuthBoundHostDirectory`) — the path the fix
           // lives on. A stubbed fetcher here would suppress `GET
           // /api/v3/hosts` itself, making the absence assertions below
           // vacuous; see the file header.
@@ -532,7 +532,7 @@ function mountHarness(opts: {
       {/* Persistent, routing-independent admission sentinel: the REAL
           `RootLandingPage`, driven by the REAL store. It renders the REAL
           `AuthLandingPage` whenever `!admitsLocalPlane(status)` and `null`
-          otherwise — this is the mechanism the ticket fixes, not a stand-in
+          otherwise — this is the mechanism the fix is for, not a stand-in
           for it. */}
       <div data-testid="admission-sentinel">
         <RootLandingPage />
@@ -634,7 +634,7 @@ describe("renderer local admission — cross-seam (real AuthService × real useA
     );
     expect(ledger.validationSuccesses).toBe(0);
     expect(ledger.validationAttempts).toBeGreaterThan(0);
-    // network-error never authorizes a rotate spend (tech plan §5).
+    // network-error never authorizes a rotate spend.
     expect(ledger.refreshAttempts).toBe(0);
     // DISCRIMINATING ASSERTION, at the fetch boundary: the REAL
     // `buildDefaultRemoteFetcher` is installed (no stub — see

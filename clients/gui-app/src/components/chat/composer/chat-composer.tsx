@@ -745,7 +745,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   });
   // ONE value for both readers: the chain's `rateLimitVisible` below and the
   // return banner, which OUTRANKS the advisory in that chain and so absorbs
-  // its sentence rather than silencing it (MF09, UX §2). Withheld while the
+  // its sentence rather than silencing it (MF09). Withheld while the
   // settled routing card in the transcript draws its own "Switch to…" for this
   // account (clutter cuts, 2026-09-27) - the live routing cards are already
   // handled by the chain below; that card is the one that lives outside it.

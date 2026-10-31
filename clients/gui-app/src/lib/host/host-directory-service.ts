@@ -796,7 +796,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     if (typeof window === "undefined") {
       return;
     }
-    // WHO OWNS THE CADENCE (redesign P4.1/F22, connection registry §1b).
+    // WHO OWNS THE CADENCE (redesign P4.1/F22).
     //
     // When the shell polls the registry for the whole app - desktop's main
     // process does, so N windows make ONE `GET /api/v3/hosts` instead of N -

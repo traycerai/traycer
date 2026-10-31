@@ -4863,7 +4863,7 @@ function tagBoxesFrom(
  * Two boxes count as colliding when their baselines are within one line
  * height of each other - INCLUSIVE, so the tag `layoutNameTags` stagger
  * drops exactly one line below a collision (`NAME_TAG_LINE_HEIGHT` away,
- * never less) still counts, which is the ticket's own "centre ±
+ * never less) still counts, which is the "centre ±
  * measured width / 2" box test - AND their measured x-ranges overlap. A
  * cubby storey shares one baseline, so the ordinary case is caught at
  * `dy === 0`; the widened window is what still catches a stagger the
@@ -6220,7 +6220,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * reading as resolved. A case built from `layoutNameTags`' own strict
      * check would never see this - it would have to reimplement the exact
      * mechanism being tested, which begs the question - so this reads the
-     * canvas's actual painted boxes and checks them under the ticket's
+     * canvas's actual painted boxes and checks them under the
      * "centre ± measured width / 2" rule instead of the placer's own.
      *
      * ZOOM 3, not 2: at a one-tile budget of 16 px (zoom 2) the honest

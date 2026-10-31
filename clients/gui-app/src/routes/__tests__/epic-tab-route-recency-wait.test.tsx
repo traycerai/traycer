@@ -18,9 +18,9 @@ import type { EpicCanvasState } from "@/stores/epics/canvas/types";
 
 /**
  * `7d521991d` - the bounded-wait recency decision inside
- * `epic-tab-route-components.tsx`'s `EpicRouteTabSync`. Gap 3 of the lane 9
- * evidence artifact (§3.3): this pins the SECOND table there, the route's
- * decision over time. The first table (`readEpicLocalHomeReading`'s own
+ * `epic-tab-route-components.tsx`'s `EpicRouteTabSync`: this pins
+ * the route's
+ * decision over time. The local-home reading (`readEpicLocalHomeReading`'s own
  * classification) is pinned separately in
  * `src/lib/registries/__tests__/use-epic-local-home-reading.test.ts`.
  *

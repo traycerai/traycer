@@ -135,7 +135,7 @@ export function traycerInferenceOff(
 
 /**
  * The requested agent's readiness on the sandbox, from the sandbox host's own
- * harness catalog and provider list (sandboxes redesign Flow 1: the message
+ * harness catalog and provider list (the message
  * is delivered when the setup the requested agent needs is ready, not merely
  * when the control plane says awake). A install in flight or an availability
  * still being probed is a wait; Traycer Inference switched off there, a failed

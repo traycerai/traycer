@@ -30,7 +30,7 @@ import { Analytics, AnalyticsEvent } from "@/lib/analytics";
 
 /**
  * Which side of which surface an image asset came from - the routing part of
- * the blob-cache key (image-preview decision log, decision #11).
+ * the blob-cache key (decision #11).
  */
 type FileAssetSource = "workspace" | "git-old" | "git-new";
 
@@ -128,7 +128,7 @@ export type FileAssetRenderKind = "image" | DocumentAssetKind;
 
 /**
  * Every `AssetStreamFailureReason` maps to the SAME uniform fallback UI
- * (image-preview decision log, decision #14) - this is only the one-line
+ * (decision #14) - this is only the one-line
  * message shown alongside it, per render kind so a document failure never
  * reads as an image bug ("not one of the supported image formats" next to a
  * PDF that the app usually previews would read as broken, not as a limit).
@@ -253,7 +253,7 @@ const FILE_ASSET_SCOPE_KEY = "file-asset";
 
 /**
  * Composite key for `imageBlobCache`: `hostScopeKey`/`source`/location/`filePath`/
- * `contentIdentity` (image-preview decision log, decision #11), as a JSON
+ * `contentIdentity` (decision #11), as a JSON
  * array - not delimiter-joined, since any of those fields can legally
  * contain the delimiter and alias two different files onto the same key.
  * Git object sides are immutable by OID, so their key never changes for the
@@ -355,8 +355,8 @@ function sharedSubscriptionKeyFor(
 /**
  * Whether `request` reads live filesystem bytes that can change independently
  * of any git object identity - the workspace file itself, or a git side's
- * "new" position while unstaged (worktree via fs, per the tech plan's
- * side-selection table). Every other git side (staged/HEAD/index reads) is
+ * "new" position while unstaged (worktree via fs).
+ * Every other git side (staged/HEAD/index reads) is
  * immutable for the life of the session (decision #11): it must neither
  * re-fetch on refocus nor lose its cached blob to grace-window revocation.
  */

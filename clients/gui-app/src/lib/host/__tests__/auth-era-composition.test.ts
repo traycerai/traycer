@@ -380,7 +380,7 @@ describe("auth-era composition — the credential a refresh actually uses", () =
     const mark = endpoint.bearers.length;
 
     // The user signs into B in the same app lifetime: the shared credentials
-    // file changes, the §4 watcher reconciles it, and the cross-user branch
+    // file changes, the watcher reconciles it, and the cross-user branch
     // runs the full signed-in projection - emitting the new RequestContext,
     // inside which the runtime issues the mandatory refresh.
     await composition.runnerHost.tokenStore.signIn(
@@ -394,7 +394,7 @@ describe("auth-era composition — the credential a refresh actually uses", () =
       ]);
     });
 
-    // THE ASSERTION THIS TICKET EXISTS FOR. Not "the refresh was stamped B" -
+    // THE ASSERTION THIS TEST EXISTS FOR. Not "the refresh was stamped B" -
     // it was, in the version that shipped this bug - but which credential the
     // request carried. B's refresh must go out under B's bearer; issuing it
     // under A's returns A's machine names, ids and platforms, and the identity
@@ -661,7 +661,7 @@ describe("auth-era composition — an unverified session promotes to signed-in a
 
     expect(useAuthStore.getState().status).toBe("signed-in");
 
-    // THE ASSERTION THIS TICKET EXISTS FOR, asserted immediately after the
+    // THE ASSERTION THIS TEST EXISTS FOR, asserted immediately after the
     // promotion's own tick - before any poll interval could fire, else this
     // would pass for the wrong reason (the ~60s registry poll eventually
     // heals the same empty directory on its own, which is exactly the

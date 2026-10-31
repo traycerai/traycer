@@ -233,8 +233,8 @@ export function noteAgentActivityConnectionStatus(
 export interface OpenAgentActivityStreamInput {
   readonly hostId: string;
   /**
-   * THE reconnect policy for this stream's host (redesign P4.1 /
-   * connection-registry §6), acquired from the connection registry by the one
+   * THE reconnect policy for this stream's host (redesign P4.1),
+   * acquired from the connection registry by the one
    * place that opens these streams. This store no longer constructs its own
    * scheduler: the constants, the terminal-close classification and the
    * backoff shape live once, in the engine, and each stream still gets its

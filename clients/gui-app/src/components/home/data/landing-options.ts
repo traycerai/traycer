@@ -654,8 +654,7 @@ export interface HarnessModelSelection {
   modelSlug: string;
   // Which of the harness's logged-in profiles (subscriptions) this selection
   // runs on. `null` = the ambient/host login - the only value single/no-profile
-  // providers ever carry, so their behavior stays byte-identical. See the
-  // multi-profile decision log.
+  // providers ever carry, so their behavior stays byte-identical.
   profileId: string | null;
 }
 

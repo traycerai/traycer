@@ -232,7 +232,7 @@ function openNewConversationModal(
   // host, else the host the Epic is served from) and keeps the picker live.
   // These items act on the ACTIVE TILE's pane, but the tile's host is not
   // passed - a new agent is not required to live on the machine of the tile
-  // it replaces, and naming one would freeze the picker (§55).
+  // it replaces, and naming one would freeze the picker.
   useNewConversationModalOpenStore
     .getState()
     .open({ epicId, tabId, placement, parentId: null, hostId: null });

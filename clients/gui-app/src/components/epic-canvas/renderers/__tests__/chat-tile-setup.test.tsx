@@ -716,7 +716,7 @@ describe("useChatSetupFailureRestoreDriver", () => {
   });
 
   it("does not re-restore after a retry transitions setup back to running", () => {
-    // After Flow 8 restoration the user typically retries setup. The
+    // After a restore the user typically retries setup. The
     // ensuing `setup.running` (or `setup.succeeded`) for the same
     // workspace must clear the restorable failure so a re-render of
     // the driver does not seed the composer a second time on top of

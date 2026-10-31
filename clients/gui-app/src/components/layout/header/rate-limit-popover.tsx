@@ -454,7 +454,7 @@ function rateLimitProfileId(profile: ProviderProfile): string | null {
 /**
  * The header rate-limit popover content: a left rail (Overview + one tab per
  * connected provider) and a detail pane, mirroring the composer's model-picker
- * shell (Core Flows: "same interaction family as the composer's model picker").
+ * shell.
  * The whole body is a child of `PopoverContent`, so Radix only mounts it - and
  * runs its queries - while the popover is open. The selected tab is persisted
  * separately so reopening restores the provider the user last inspected.
@@ -1475,7 +1475,7 @@ function useTraycerRateLimitUsageState(
 }
 
 /**
- * The rail's icon-only "Refresh all" (Core Flows): ephemeralProcess providers
+ * The rail's icon-only "Refresh all": ephemeralProcess providers
  * refresh with one forced fetch per profile, all sent at once - how many of
  * those probes run together is the host's call - while httpFetch providers
  * refresh alongside via a direct query invalidation.
@@ -2606,7 +2606,7 @@ function ProfileUsageUpdatedLabel({
 /**
  * "Updated Xm ago", only once a reading actually exists - and a trailing
  * degraded note appended when a last-known-good reading is being shown after
- * a failed poll (Core Flows degraded state): the specific transient reason's
+ * a failed poll (the degraded state): the specific transient reason's
  * plain-language copy (e.g. "couldn't fetch usage - will retry") when the
  * envelope itself is why (`degradedReason` non-null), or the generic
  * "· refresh failed" when the degrade is only a thrown query-level exception
@@ -2725,7 +2725,7 @@ function RateLimitProviderBody({
       );
     case "ready":
       // Degraded (stale, latest poll failed): dim the reading in place rather
-      // than replacing it with an error (Core Flows).
+      // than replacing it with an error.
       return (
         <div className={cn(state.degraded && "opacity-60")}>
           <ProviderRateLimitDetail
@@ -3073,8 +3073,8 @@ function RateLimitErrorMessage({
 
 /**
  * Cold load (first open this session, no data yet): skeleton bars previewing
- * the eventual window layout, not a spinner replacing the panel (Core Flows -
- * a deliberate difference from the Settings card's spinner).
+ * the eventual window layout, not a spinner replacing the panel -
+ * a deliberate difference from the Settings card's spinner.
  *
  * The per-block `bg-foreground/15` overrides these carried are gone: the
  * `Skeleton` primitive now defaults to a foreground-alpha fill for exactly
@@ -3101,7 +3101,7 @@ function RateLimitDetailSkeleton(): ReactNode {
 }
 
 /**
- * Zero-provider state (Core Flows): no rail, no tabs - a single CTA linking to
+ * Zero-provider state: no rail, no tabs - a single CTA linking to
  * Settings › Providers, since there's nothing yet to switch between.
  */
 function RateLimitZeroState({

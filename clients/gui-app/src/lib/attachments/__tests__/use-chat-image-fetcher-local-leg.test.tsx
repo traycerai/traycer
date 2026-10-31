@@ -4,8 +4,8 @@
  * `useChatImageFetcher`'s EXISTING local-store leg (`use-chat-image-fetcher.ts`,
  * the `getImageBytes` fallback after the chat-plane and epic-doc legs miss).
  * T3 deliberately did not add a second, draft-specific leg to this fetcher -
- * see the ticket's "known deviations" - so this is a test of behaviour that
- * predates this ticket, written because nothing else exercised it.
+ * so this is a test of behaviour that
+ * predates this change, written because nothing else exercised it.
  *
  * A separate, minimal harness from `use-chat-image-fetcher.test.tsx`'s (which
  * this file does not import from) so it is not entangled with that suite's
