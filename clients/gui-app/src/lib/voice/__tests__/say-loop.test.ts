@@ -347,7 +347,9 @@ describe("a session that ended or was replaced during a send", () => {
     expect(state.phase).toBe("idle");
     expect(h.opened).toEqual([]);
     expect(h.notices).toEqual([]);
-    expect(h.loop.delegationForReply(placeOf(null, "r-1"))).toBeNull();
+    expect(h.loop.placementFor(placeOf(null, "r-1"))).toEqual({
+      kind: "pending",
+    });
   });
 
   it("spends only its own reserved words when the session was replaced, leaving newer open words", async () => {
@@ -367,11 +369,13 @@ describe("a session that ended or was replaced during a send", () => {
     expect(state.segments).toHaveLength(1);
     expect(h.opened).toEqual([]);
     expect(h.notices).toEqual([]);
-    expect(h.loop.delegationForReply(placeOf(null, "r-1"))).toBeNull();
+    expect(h.loop.placementFor(placeOf(null, "r-1"))).toEqual({
+      kind: "pending",
+    });
   });
 });
 
-describe("delegationForReply", () => {
+describe("placementFor", () => {
   it("returns the bound delegation once, then null", async () => {
     const h = harness();
     useVoiceSessionStore.getState().sessionConnecting();
@@ -398,8 +402,13 @@ describe("delegationForReply", () => {
       "a-7",
     );
     expect(requestId).toBe("r-7");
-    expect(h.loop.delegationForReply(placeOf(null, requestId))).toBe("d-7");
-    expect(h.loop.delegationForReply(placeOf(null, requestId))).toBeNull();
+    expect(h.loop.placementFor(placeOf(null, requestId))).toEqual({
+      kind: "placed",
+      delegationId: "d-7",
+    });
+    expect(h.loop.placementFor(placeOf(null, requestId))).toEqual({
+      kind: "pending",
+    });
   });
 
   it("finds the delegation by the thread an accepted post opened, once, before the records name the request", async () => {
@@ -410,8 +419,13 @@ describe("delegationForReply", () => {
     await done;
 
     expect(h.loop.awaitedIn("t1")).toBe("opened");
-    expect(h.loop.delegationForReply(placeOf("t1", null))).toBe("d-1");
-    expect(h.loop.delegationForReply(placeOf("t1", null))).toBeNull();
+    expect(h.loop.placementFor(placeOf("t1", null))).toEqual({
+      kind: "placed",
+      delegationId: "d-1",
+    });
+    expect(h.loop.placementFor(placeOf("t1", null))).toEqual({
+      kind: "pending",
+    });
     expect(h.loop.awaitedIn("t1")).toBe("none");
   });
 
@@ -517,7 +531,10 @@ describe("an engine replacement during a send", () => {
     expect(h.opened).toHaveLength(1);
     expect(h.noticeDelegations).toEqual([null]);
     expect(state.openSpan()).toBe("later words");
-    expect(h.loop.delegationForReply(placeOf("t1", "r-1"))).toBeNull();
+    expect(h.loop.placementFor(placeOf("t1", "r-1"))).toEqual({
+      kind: "placed",
+      delegationId: null,
+    });
   });
 });
 
@@ -582,7 +599,36 @@ describe("an interruption whose ask is not yet heard", () => {
   });
 });
 
-describe("delegationForReply fallbacks", () => {
+describe("an ask given up during an utterance", () => {
+  it("fences the utterance under way through its boundary, then posts a fresh request", async () => {
+    const h = harness();
+    useVoiceSessionStore.getState().dropOpenSpan();
+    const store = useVoiceSessionStore.getState();
+    store.appendInputSegment("Delete ", 1);
+    store.selectionChanged(OTHER_FOCUS);
+    h.loop.onSelectionChanged();
+    expect(h.asks).toEqual([MOVED_ASK_TEXT]);
+    store.appendInputSegment("the branch.", 2);
+
+    h.outcomes[0]?.onGivenUp();
+    expect(useVoiceSessionStore.getState().pendingAction?.askState).toBe(
+      "closing",
+    );
+
+    await h.loop.onDelegationCreated("d-1");
+    expect(h.sends).toEqual([]);
+    expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
+    expect(useVoiceSessionStore.getState().openSpan()).toBe("");
+
+    store.appendInputSegment("Run the build.", 3);
+    const fresh = h.loop.onDelegationCreated("d-2");
+    expect(h.sends.map((send) => send.text)).toEqual(["Run the build."]);
+    h.resolve(response({ threadId: null }), 0);
+    await fresh;
+  });
+});
+
+describe("placementFor fallbacks", () => {
   it("spends nothing for a reply in an existing thread the records do not tie to a request", async () => {
     const h = harness();
     useVoiceSessionStore.getState().setFocus({ ...FOCUS, threadId: "t1" });
@@ -591,8 +637,13 @@ describe("delegationForReply fallbacks", () => {
     await done;
 
     expect(h.loop.awaitedIn("t1")).toBe("joined");
-    expect(h.loop.delegationForReply(placeOf("t1", null))).toBeNull();
-    expect(h.loop.delegationForReply(placeOf("t1", "r-new"))).toBe("d-1");
+    expect(h.loop.placementFor(placeOf("t1", null))).toEqual({
+      kind: "pending",
+    });
+    expect(h.loop.placementFor(placeOf("t1", "r-new"))).toEqual({
+      kind: "placed",
+      delegationId: "d-1",
+    });
   });
 
   async function acceptTopLevel(
@@ -639,12 +690,15 @@ describe("delegationForReply fallbacks", () => {
       threadId: null,
       requestId: null,
     };
-    expect(h.loop.delegationForReply(forB)).toBe("d-b");
-    expect(h.loop.delegationForReply(forB)).toBeNull();
+    expect(h.loop.placementFor(forB)).toEqual({
+      kind: "placed",
+      delegationId: "d-b",
+    });
+    expect(h.loop.placementFor(forB)).toEqual({ kind: "pending" });
     expect(h.loop.isAwaiting("r-a")).toBe(true);
     expect(
-      h.loop.delegationForReply({ ...forB, botId: "A", requestId: "r-a" }),
-    ).toBe("d-a");
+      h.loop.placementFor({ ...forB, botId: "A", requestId: "r-a" }),
+    ).toEqual({ kind: "placed", delegationId: "d-a" });
   });
 
   it("matches nothing when two requests of the same bot wait at the top level", async () => {
@@ -673,7 +727,7 @@ describe("delegationForReply fallbacks", () => {
       threadId: null,
       requestId: null,
     };
-    expect(h.loop.delegationForReply(place)).toBeNull();
+    expect(h.loop.placementFor(place)).toEqual({ kind: "pending" });
     expect(h.loop.isAwaiting("r-1")).toBe(true);
     expect(h.loop.isAwaiting("r-2")).toBe(true);
   });

@@ -91,6 +91,11 @@ export interface AcceptedRequest {
   readonly threadId: string | null;
 }
 
+/** The loop's answer to where a reply belongs; see {@link SayLoop.placementFor}. */
+export type ReplyPlacement =
+  | { readonly kind: "placed"; readonly delegationId: string | null }
+  | { readonly kind: "pending" };
+
 /** Where a bot's reply was found, for the loop to name the request it answers. */
 export interface ReplyPlace {
   readonly botId: string;
@@ -110,17 +115,18 @@ export interface SayLoop {
   /** The person selected another channel or thread by hand. */
   onSelectionChanged(): void;
   /**
-   * The delegation a reply answers, or `null`: a request this session
-   * accepted and still awaits an answer to, named by its id when the records
-   * name it; else, for a thread that an accepted post OPENED, that post (its
-   * first reply answers it before the channel's row says so); else, at the
-   * channel's top level of the same bot on the same host, the one request
-   * awaiting an answer there. A reply in an existing thread the records do
-   * not yet tie to a request spends nothing: the caller places it once they
-   * do. `null` also for a request of a replaced engine: the new one knows no
-   * such delegation.
+   * Where a reply belongs: `placed` with the delegation of the request this
+   * session accepted and still awaits an answer to (named by its id when the
+   * records name it; else, for a thread that an accepted post OPENED, that
+   * post, whose first reply answers it before the channel's row says so;
+   * else, at the channel's top level of the same bot on the same host, the
+   * one request awaiting an answer there), spending that binding; `placed`
+   * with `null` when the binding belongs to a replaced engine, which knows
+   * no such delegation; `pending` when no binding fits yet (the records do
+   * not tie the reply to a request, or its request's acceptance has not
+   * come back), spending nothing: the caller places it again when they do.
    */
-  delegationForReply(place: ReplyPlace): string | null;
+  placementFor(place: ReplyPlace): ReplyPlacement;
   /**
    * What this session awaits in `threadId` (the channel, for `null`):
    * `"opened"` when an accepted post OPENED that thread (every row the
@@ -254,15 +260,16 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
 
   /**
    * A boundary while an interruption is pending. Unheard ask: the words are
-   * held with the interrupted ones. Heard: this boundary closes the
-   * interruption; the next is a fresh request.
+   * held with the interrupted ones. Heard, or given up with an utterance
+   * under way: this boundary closes the interruption; the next is a fresh
+   * request.
    */
   function holdInterruptedBoundary(): void {
     const state = store.getState();
     const pending = state.pendingAction;
     if (pending === null) return;
     const more = state.dropOpenSpan();
-    if (pending.askState === "heard") {
+    if (pending.askState !== "asking") {
       state.setPendingAction(null);
       return;
     }
@@ -344,16 +351,26 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
           now.setPendingAction({ ...pending, askState: "heard" });
         },
         onGivenUp: () => {
-          // The voice could not ask: the interruption resolves itself, the
-          // held words go, and the next request posts as usual.
+          // The voice could not ask: the interruption resolves itself and
+          // the held words go. An utterance already under way (words open
+          // with no boundary yet) is still the interrupted one, and closes
+          // the interruption at its boundary without posting; a request
+          // begun after this is a fresh one.
           const now = store.getState();
           if (now.sessionToken !== sessionToken) return;
-          if (now.pendingAction !== null) now.setPendingAction(null);
+          const pending = now.pendingAction;
+          if (pending === null) return;
+          if (pending.askState === "heard") return;
+          if (now.openSpan().length > 0) {
+            now.setPendingAction({ ...pending, askState: "closing" });
+          } else {
+            now.setPendingAction(null);
+          }
         },
       });
     },
 
-    delegationForReply(place) {
+    placementFor(place) {
       let binding: RequestBinding | null = null;
       if (place.requestId !== null) {
         binding = awaiting.get(place.requestId) ?? null;
@@ -380,9 +397,9 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
         );
         binding = atTopLevel.length === 1 ? atTopLevel[0] : null;
       }
-      if (binding === null) return null;
+      if (binding === null) return { kind: "pending" };
       awaiting.delete(binding.requestId);
-      return delegationOf(binding);
+      return { kind: "placed", delegationId: delegationOf(binding) };
     },
 
     awaitedIn(threadId) {

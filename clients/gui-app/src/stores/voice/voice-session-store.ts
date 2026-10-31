@@ -77,9 +77,12 @@ export interface PendingAction {
    * Whether the person has heard the voice ask them to say the request
    * again. While `"asking"`, words that reach a boundary are held with the
    * interrupted ones, since nothing has told the person to start over; once
-   * `"heard"`, the next boundary closes the interruption.
+   * `"heard"`, the next boundary closes the interruption. `"closing"` is the
+   * ask given up on while an utterance was already under way: that utterance
+   * is still the interrupted one, so its boundary closes the interruption
+   * without posting, and only words said after it are a request.
    */
-  readonly askState: "asking" | "heard";
+  readonly askState: "asking" | "heard" | "closing";
 }
 
 export type VoicePhase = "idle" | "connecting" | "live" | "ending";

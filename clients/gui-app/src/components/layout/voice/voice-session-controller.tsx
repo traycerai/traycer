@@ -54,6 +54,7 @@ import {
   createSayLoop,
   type AcceptedRequest,
   type ReplyPlace,
+  type ReplyPlacement,
   type SayLoop,
 } from "@/lib/voice/say-loop";
 import {
@@ -834,8 +835,8 @@ export function VoiceSessionController(): ReactNode {
           botTitle={botTitle(focus.botId)}
           scheduler={speech}
           memory={watchMemoryFor(focus.threadId ?? channelId)}
-          delegationForReply={(place) =>
-            sayLoopRef.current?.delegationForReply(place) ?? null
+          placementFor={(place) =>
+            sayLoopRef.current?.placementFor(place) ?? { kind: "pending" }
           }
           registerReconcile={(reconcile) => {
             reconcileRef.current = reconcile;
@@ -1008,7 +1009,7 @@ function VoiceFocusedReplyFeed(props: {
   readonly botTitle: string;
   readonly scheduler: SpeechScheduler;
   readonly memory: ReplyWatchMemory;
-  readonly delegationForReply: (place: ReplyPlace) => string | null;
+  readonly placementFor: (place: ReplyPlace) => ReplyPlacement;
   readonly awaitedIn: (threadId: string | null) => "opened" | "joined" | "none";
   readonly isAwaiting: (requestId: string) => boolean;
   /** Hands the controller this feed's reconciliation for the loop's acceptances. */
@@ -1024,7 +1025,7 @@ function VoiceFocusedReplyFeed(props: {
     botTitle,
     scheduler,
     memory,
-    delegationForReply,
+    placementFor,
     awaitedIn,
     isAwaiting,
     registerReconcile,
@@ -1047,10 +1048,10 @@ function VoiceFocusedReplyFeed(props: {
   useEffect(() => {
     markReadRef.current = markRead;
   }, [markRead]);
-  const placeRef = useRef({ delegationForReply, awaitedIn, isAwaiting });
+  const placeRef = useRef({ placementFor, awaitedIn, isAwaiting });
   useEffect(() => {
-    placeRef.current = { delegationForReply, awaitedIn, isAwaiting };
-  }, [awaitedIn, delegationForReply, isAwaiting]);
+    placeRef.current = { placementFor, awaitedIn, isAwaiting };
+  }, [awaitedIn, isAwaiting, placementFor]);
   const registerReconcileRef = useRef(registerReconcile);
   useEffect(() => {
     registerReconcileRef.current = registerReconcile;
@@ -1063,13 +1064,18 @@ function VoiceFocusedReplyFeed(props: {
       threadRows: threadId === null ? [] : handle.store.getState().messages,
       channelRows: channelHandle.store.getState().messages,
     });
-    /** Replies scheduled under no delegation whose request the records may still name. */
+    /**
+     * Replies scheduled before they could be placed: the records did not tie
+     * them to a request, or the request's acceptance had not come back.
+     * Kept until a binding exists (or is known not to), so an acceptance
+     * can still re-label a queued item.
+     */
     const unplaced = new Map<string, string>();
     const place = (
       replyMessageId: string,
       where: ReplyRecords,
-    ): string | null =>
-      placeRef.current.delegationForReply({
+    ): ReplyPlacement =>
+      placeRef.current.placementFor({
         botId: focus.botId,
         hostId: focus.hostId,
         threadId,
@@ -1079,8 +1085,10 @@ function VoiceFocusedReplyFeed(props: {
       if (memory.scheduled.has(reply.messageId)) return;
       memory.scheduled.add(reply.messageId);
       const itemId = `reply:${reply.messageId}`;
-      const delegationId = place(reply.messageId, where);
-      if (delegationId === null) unplaced.set(reply.messageId, itemId);
+      const placement = place(reply.messageId, where);
+      if (placement.kind === "pending") unplaced.set(reply.messageId, itemId);
+      const delegationId =
+        placement.kind === "placed" ? placement.delegationId : null;
       scheduler.enqueue({
         id: itemId,
         priority: "focused",
@@ -1099,20 +1107,17 @@ function VoiceFocusedReplyFeed(props: {
         onGivenUp: null,
       });
     };
-    // Records that arrived after a reply was scheduled may name its request
-    // now: the item is re-labelled while it still waits to be appended.
+    // Records that arrived, or an acceptance that came back, after a reply
+    // was scheduled may place it now: the item is re-labelled while it still
+    // waits to be appended. One the loop still cannot place stays here.
     const placeLater = (where: ReplyRecords): void => {
       for (const [replyMessageId, itemId] of unplaced) {
-        const requestId = requestIdAnsweredIn(where, replyMessageId);
-        if (requestId === null) continue;
+        const placement = place(replyMessageId, where);
+        if (placement.kind === "pending") continue;
         unplaced.delete(replyMessageId);
-        const delegationId = placeRef.current.delegationForReply({
-          botId: focus.botId,
-          hostId: focus.hostId,
-          threadId,
-          requestId,
-        });
-        if (delegationId !== null) scheduler.relabel(itemId, delegationId);
+        if (placement.delegationId !== null) {
+          scheduler.relabel(itemId, placement.delegationId);
+        }
       }
     };
     // A watch that already has a baseline carries on; a fresh one takes the

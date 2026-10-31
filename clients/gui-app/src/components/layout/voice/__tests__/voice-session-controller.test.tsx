@@ -569,6 +569,60 @@ describe("an interruption whose ask is never delivered", () => {
   });
 });
 
+describe("an ask given up during an utterance", () => {
+  it("fences the utterance under way through its boundary, then posts a fresh request", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    const askCount = (): number =>
+      (fake.engines[0]?.appendCommentary.mock.calls ?? []).filter(
+        ([text]) => text === MOVED_ASK_TEXT,
+      ).length;
+
+    act(() => eventsOf(0).onInputTranscriptDelta("Delete "));
+    selectBotTab("bot-2");
+    expect(useVoiceSessionStore.getState().pendingAction?.askState).toBe(
+      "asking",
+    );
+
+    // Each unconfirmed append spends its confirm window; stop at the third.
+    for (let step = 0; step < 400 && askCount() < 3; step += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100);
+      });
+    }
+    expect(askCount()).toBe(3);
+    expect(useVoiceSessionStore.getState().pendingAction?.askState).toBe(
+      "asking",
+    );
+
+    // Just before the third window ends the person is still mid-utterance.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(7_900);
+    });
+    act(() => eventsOf(0).onInputTranscriptDelta("the branch."));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(useVoiceSessionStore.getState().pendingAction?.askState).toBe(
+      "closing",
+    );
+
+    await act(async () => {
+      eventsOf(0).onDelegationCreated("d0");
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(fake.sendMock).not.toHaveBeenCalled();
+    expect(useVoiceSessionStore.getState().pendingAction).toBeNull();
+
+    await say("Run the build.", "d1");
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    expect(fake.sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({ botId: "bot-2", text: "Run the build." }),
+    );
+  });
+});
+
 describe("an interruption before the session's first delegation", () => {
   it("holds the words and asks, and the first delegation posts nothing", async () => {
     addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
@@ -729,5 +783,85 @@ describe("a follow-up accepted in an existing thread", () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
     expect(commentary).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("a reply and its acknowledgement in a warm existing thread", () => {
+  const THREAD_FOCUS: VoiceFocus = { ...CHANNEL_FOCUS, threadId: "t1" };
+  const FOLLOW_UP = {
+    messageId: "m1",
+    requestId: "r1",
+    delivery: "written",
+    threadId: "t1",
+  };
+  const HISTORY = botRow("h0", "Old news about the release.");
+
+  async function holdSend(): Promise<StoreApi<ChatState>> {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    const thread = addChat("t1", { snapshotLoaded: true, messages: [HISTORY] });
+    await bringLive();
+    focusOn(THREAD_FOCUS);
+    await settle();
+    await say("Update it.", "d1");
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    return thread;
+  }
+
+  function publishReply(thread: StoreApi<ChatState>): void {
+    act(() => {
+      thread.setState({
+        snapshotLoaded: true,
+        messages: [
+          HISTORY,
+          requestRow("u1", "r1", "a1"),
+          botRow("a1", "Merged."),
+        ],
+      });
+    });
+  }
+
+  async function acknowledge(): Promise<void> {
+    await act(async () => {
+      fake.send.resolve(FOLLOW_UP);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+
+  async function expectOneAnswerUnderDelegation(): Promise<void> {
+    const commentary = fake.engines[0]?.appendCommentary;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(commentary).toHaveBeenCalledTimes(1);
+    expect(commentary).toHaveBeenCalledWith(
+      expect.stringContaining("Merged."),
+      "d1",
+    );
+    act(() => eventsOf(0).onOutputTranscriptDelta("CI bot says merged"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(commentary).toHaveBeenCalledTimes(1);
+    expect(fake.markRead).toHaveBeenCalledTimes(1);
+    expect(fake.markRead).toHaveBeenCalledWith({
+      epicId: BOT_ID,
+      chatId: "t1",
+    });
+  }
+
+  it("keeps the delegation when the reply lands before the acknowledgement", async () => {
+    const thread = await holdSend();
+    publishReply(thread);
+    await acknowledge();
+
+    await expectOneAnswerUnderDelegation();
+  });
+
+  it("keeps the delegation when the acknowledgement lands before the reply", async () => {
+    const thread = await holdSend();
+    await acknowledge();
+    publishReply(thread);
+
+    await expectOneAnswerUnderDelegation();
   });
 });
