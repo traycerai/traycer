@@ -78,6 +78,14 @@ export interface SpeechScheduler {
   /** Drops a queued item that has not been appended; a no-op otherwise. */
   remove(itemId: string): void;
   /**
+   * Takes an item back whatever its stage: a queued one is dropped; one in
+   * flight runs neither of its callbacks and is never retried, but keeps the
+   * slot while its own output drains (until that utterance completes, or its
+   * confirm window ends), so the words it was already given can never be
+   * read as another item's delivery.
+   */
+  withdraw(itemId: string): void;
+  /**
    * Re-labels a queued item's delegation before it is appended (its request
    * was placed after it was scheduled). A no-op once the item is in flight
    * or gone.
@@ -105,8 +113,8 @@ export interface SpeechScheduler {
    * dictation): the in-flight item goes back to the front of the queue as
    * if it had never been appended, its spent attempt refunded, and the
    * transcript of its silent speech confirms nothing. It is appended again
-   * as a fresh item once appends are taken again. A no-op with nothing in
-   * flight.
+   * as a fresh item once appends are taken again. One withdrawn while in
+   * flight is left draining, never requeued. A no-op with nothing in flight.
    */
   suspendInFlight(): void;
   /**
@@ -184,6 +192,11 @@ interface InFlight {
   readonly queued: QueuedItem;
   transcript: string;
   timer: unknown;
+  /**
+   * Taken back after its append: it confirms nothing and is not retried,
+   * and holds the slot only until its own output is over.
+   */
+  withdrawn: boolean;
 }
 
 export function createSpeechScheduler(
@@ -312,6 +325,12 @@ export function createSpeechScheduler(
    */
   function completeUtterance(): void {
     if (inFlight === null) return;
+    // A withdrawn item's output is over once an utterance after its append
+    // completes: the slot is free.
+    if (inFlight.withdrawn) {
+      if (inFlight.transcript.length > 0) settleInFlight(false);
+      return;
+    }
     if (confirmedAtCompletion(inFlight.transcript, inFlight.queued.item)) {
       settleInFlight(true);
     }
@@ -322,6 +341,7 @@ export function createSpeechScheduler(
     if (current === null) return;
     inFlight = null;
     if (current.timer !== null) deps.clearTimer(current.timer);
+    if (current.withdrawn) return;
     if (delivered) {
       current.queued.item.onDelivered?.();
       return;
@@ -346,6 +366,7 @@ export function createSpeechScheduler(
     inFlight = {
       queued: next,
       transcript: "",
+      withdrawn: false,
       timer: deps.setTimer(
         () => {
           if (inFlight?.queued !== next) return;
@@ -384,6 +405,22 @@ export function createSpeechScheduler(
       const index = queue.findIndex((entry) => entry.item.id === itemId);
       if (index !== -1) queue.splice(index, 1);
     },
+    withdraw(itemId) {
+      const index = queue.findIndex((entry) => entry.item.id === itemId);
+      if (index !== -1) queue.splice(index, 1);
+      if (inFlight?.queued.item.id !== itemId) return;
+      inFlight.withdrawn = true;
+      // Its utterance already came and went: nothing of it is left to drain.
+      const drained =
+        inFlight.transcript.length > 0 &&
+        outputTimer === null &&
+        !completionPending &&
+        !outputLevelPlaying;
+      if (drained) {
+        settleInFlight(false);
+        onFactsChanged();
+      }
+    },
     relabel(itemId, delegationId) {
       const entry = queue.find((candidate) => candidate.item.id === itemId);
       if (entry === undefined) return;
@@ -399,7 +436,11 @@ export function createSpeechScheduler(
       notify();
     },
     noteOutputTranscript(text) {
-      if (inFlight !== null) {
+      if (inFlight?.withdrawn === true) {
+        // The withdrawn item's own words, or whatever plays over them:
+        // proof of nothing.
+        inFlight.transcript += text;
+      } else if (inFlight !== null) {
         inFlight.transcript += text;
         // Ordinary content, once said, stays said; a short answer (a number,
         // a word of acknowledgement) is judged only once the utterance is
@@ -443,6 +484,11 @@ export function createSpeechScheduler(
     suspendInFlight() {
       const current = inFlight;
       if (current === null) return;
+      // A withdrawn item keeps draining through the pause: silencing the
+      // track cancels neither its response nor its transcript, so its words
+      // may still arrive, and they must not land on the item appended next.
+      // It is never retried.
+      if (current.withdrawn) return;
       inFlight = null;
       if (current.timer !== null) deps.clearTimer(current.timer);
       current.queued.attempts = Math.max(0, current.queued.attempts - 1);
@@ -502,11 +548,14 @@ export function createSpeechScheduler(
     if (inFlight !== null) {
       if (inFlight.timer !== null) deps.clearTimer(inFlight.timer);
       // Its append was spent on the engine that is going; the item keeps
-      // what is left of its budget, and is given up with none left.
-      if (inFlight.queued.attempts < MAX_DELIVERY_ATTEMPTS) {
-        queue.unshift(inFlight.queued);
-      } else if (!disposed) {
-        inFlight.queued.item.onGivenUp?.();
+      // what is left of its budget, and is given up with none left. One
+      // withdrawn is simply gone.
+      if (!inFlight.withdrawn) {
+        if (inFlight.queued.attempts < MAX_DELIVERY_ATTEMPTS) {
+          queue.unshift(inFlight.queued);
+        } else if (!disposed) {
+          inFlight.queued.item.onGivenUp?.();
+        }
       }
       inFlight = null;
     }
