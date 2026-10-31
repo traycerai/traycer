@@ -87,8 +87,6 @@ function channelPresentation(
 ): ChatBotPresentation {
   return {
     botTitle: "Release Bot",
-    scrollToMessage: null,
-    replyFollowsPost: null,
     threadLine,
     openThread,
     openAnnouncementThread: null,
@@ -188,7 +186,6 @@ describe("<ChatMessage /> in a bot channel", () => {
     );
     expect(screen.queryByTestId("conversation-request")).toBeNull();
     expect(within(row).queryByText("Resolved")).toBeNull();
-    expect(screen.queryByTestId("conversation-request-reply-link")).toBeNull();
   });
 
   it("draws no badge on a post whose request is unresolved", () => {
@@ -457,9 +454,7 @@ describe("<ChatMessage /> in a bot channel", () => {
 });
 
 describe("<ChatMessage /> in a bot thread", () => {
-  it("draws no thread line, and a resolved request's See reply lands the list on the reply", async () => {
-    const user = userEvent.setup();
-    const scrollToMessage = vi.fn<(messageId: string) => void>();
+  it("draws no thread line under a resolved request", () => {
     renderRow(
       memberPost({
         requestId: "req-3",
@@ -468,7 +463,6 @@ describe("<ChatMessage /> in a bot thread", () => {
       }),
       {
         botTitle: "Release Bot",
-        scrollToMessage,
         threadLine: null,
         openThread: null,
         openAnnouncementThread: null,
@@ -479,20 +473,11 @@ describe("<ChatMessage /> in a bot thread", () => {
         failedRecovery: null,
         replyReceipt: null,
         requestReceipt: null,
-        replyFollowsPost: null,
       },
     );
 
     expect(screen.queryByTestId("bot-thread-line")).toBeNull();
     expect(screen.queryByTestId("bot-message-actions")).toBeNull();
-    const link = screen.getByTestId("conversation-request-reply-link");
-    expect(link.textContent).toBe("See reply");
-    expect(scrollToMessage).not.toHaveBeenCalled();
-
-    await user.click(link);
-
-    expect(scrollToMessage).toHaveBeenCalledTimes(1);
-    expect(scrollToMessage).toHaveBeenCalledWith("reply-9");
   });
 });
 
@@ -778,30 +763,11 @@ describe("<ChatMessage /> a message the bot failed to answer", () => {
     expect(screen.queryByTestId("bot-message-edit")).toBeNull();
     expect(screen.queryByTestId("bot-message-unanswered")).toBeNull();
   });
-
-  it("shows no See reply on a request a later message of the member's took over", () => {
-    renderRow(
-      memberPost({
-        requestId: "req-replaced",
-        resolvedAt: 5_000,
-        resolvedByMessageId: "conversation-request:req-new",
-      }),
-      {
-        ...channelPresentation(NO_THREAD_LINE, vi.fn()),
-        scrollToMessage: vi.fn(),
-      },
-    );
-
-    expect(screen.getByText("Please review the release")).toBeTruthy();
-    expect(screen.queryByTestId("conversation-request-reply-link")).toBeNull();
-  });
 });
 
 describe("<ChatMessage /> bot rows", () => {
   const presentation: ChatBotPresentation = {
     botTitle: "Release Bot",
-    scrollToMessage: null,
-    replyFollowsPost: null,
     threadLine: null,
     openThread: null,
     openAnnouncementThread: null,
@@ -926,8 +892,6 @@ describe("<ChatMessage /> bot row choices and announcement threads", () => {
   }): ChatBotPresentation {
     return {
       botTitle: "Release Bot",
-      scrollToMessage: null,
-      replyFollowsPost: null,
       threadLine: input.threadLine,
       openThread: null,
       openAnnouncementThread: input.openAnnouncementThread,
@@ -1192,8 +1156,6 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
   const REPLY_ID = "reply-9";
   const CHANNEL: ChatBotPresentation = {
     botTitle: "Release Bot",
-    scrollToMessage: null,
-    replyFollowsPost: null,
     threadLine: NO_THREAD_LINE,
     openThread: null,
     openAnnouncementThread: null,
@@ -1206,13 +1168,13 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     requestReceipt: null,
   };
 
-  function resolvedPost(direct: boolean): ChatMessageModel {
-    const request: ConversationRequest = {
+  function resolvedDirectPost(): ChatMessageModel {
+    return memberPost({
       requestId: "req-d",
       resolvedAt: 5_000,
       resolvedByMessageId: REPLY_ID,
-    };
-    return memberPost(direct ? { ...request, direct: true } : request);
+      direct: true,
+    });
   }
 
   it("opens the thread box under a direct post, not a post thread", async () => {
@@ -1256,45 +1218,11 @@ describe("<ChatMessage /> direct replies in a bot channel", () => {
     expect(openAnnouncementThread).not.toHaveBeenCalled();
   });
 
-  it("jumps from a resolved direct post to the reply that is in the channel", async () => {
-    const user = userEvent.setup();
-    const scrollToMessage = vi.fn<(messageId: string) => void>();
-    renderRow(resolvedPost(true), {
-      ...CHANNEL,
-      scrollToMessage,
-      replyFollowsPost: () => false,
-    });
+  it("draws no link to the reply under a resolved direct post", () => {
+    renderRow(resolvedDirectPost(), CHANNEL);
 
-    const link = screen.getByTestId("conversation-request-reply-link");
-    expect(link.textContent).toBe("See reply");
-
-    await user.click(link);
-
-    expect(scrollToMessage).toHaveBeenCalledTimes(1);
-    expect(scrollToMessage).toHaveBeenCalledWith(REPLY_ID);
-  });
-
-  it("offers no jump from a resolved direct post whose reply is the very next row", () => {
-    const replyFollowsPost = vi.fn<(post: string, reply: string) => boolean>(
-      () => true,
-    );
-    renderRow(resolvedPost(true), {
-      ...CHANNEL,
-      scrollToMessage: vi.fn(),
-      replyFollowsPost,
-    });
-
-    expect(replyFollowsPost).toHaveBeenCalledWith(POST_ID, REPLY_ID);
-    expect(screen.queryByTestId("conversation-request-reply-link")).toBeNull();
-  });
-
-  it("offers no jump from a resolved post that is not direct, whose reply is in its thread", () => {
-    renderRow(resolvedPost(false), {
-      ...CHANNEL,
-      scrollToMessage: vi.fn(),
-    });
-
-    expect(screen.queryByTestId("conversation-request-reply-link")).toBeNull();
+    expect(screen.getByText("Please review the release")).toBeTruthy();
+    expect(screen.queryByText("See reply")).toBeNull();
   });
 
   it("opens a direct reply's own thread from its hover action, by the reply's id and not the post's, where the bot's host takes replies under one", async () => {
@@ -1748,8 +1676,6 @@ describe("<ChatEmptyState /> in a bot channel", () => {
   it("draws nothing for an empty thread, so its box follows the post it opens on", () => {
     renderEmpty({
       botTitle: "Release Bot",
-      scrollToMessage: vi.fn(),
-      replyFollowsPost: null,
       threadLine: null,
       openThread: null,
       openAnnouncementThread: null,
