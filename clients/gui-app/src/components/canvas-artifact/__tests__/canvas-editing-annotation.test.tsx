@@ -21,6 +21,12 @@ import { createStore } from "zustand/vanilla";
 import type { CanvasAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
 import type { QuoteChatTarget } from "@/components/epic-canvas/renderers/chat-target-menu/quote-chat-targets";
 import type { ArtifactReadSpan } from "@/lib/sandbox/artifact-serving";
+import {
+  recordNegotiatedHostManifest,
+  resetNegotiatedManifests,
+} from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
+import { useNewConversationAnnotationStore } from "@/stores/epics/new-conversation-annotation-store";
+import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import type { CanvasBox } from "@/lib/sandbox/canvas-bridge";
 import { CanvasEditingOverlay } from "../canvas-editing-overlay";
 import {
@@ -129,6 +135,7 @@ vi.mock(
       readonly onOpenChange: (open: boolean) => void;
       readonly onClosed: (() => void) | null;
       readonly onSelectChat: (chatId: string) => void;
+      readonly onSelectNewChat: (() => void) | null;
     }) {
       const wasOpen = useRef(false);
       const [exiting, setExiting] = useState(false);
@@ -173,6 +180,18 @@ vi.mock(
                   {target.title}
                 </button>
               ))}
+              {props.onSelectNewChat === null ? null : (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    props.onOpenChange(false);
+                    props.onSelectNewChat?.();
+                  }}
+                >
+                  New chat
+                </button>
+              )}
             </div>
           ) : null}
         </div>
@@ -301,6 +320,9 @@ beforeEach(() => {
   outside.menuExit.hold = false;
   outside.menuExit.release = null;
   useCanvasSelectionStore.getState().clear();
+  resetNegotiatedManifests();
+  useNewConversationAnnotationStore.setState({ byEpicId: {} });
+  useNewConversationModalOpenStore.setState({ request: null });
 });
 
 afterEach(() => {
@@ -630,5 +652,59 @@ describe("the selection bar and its keyboard", () => {
     await waitFor(() => {
       expect(useCanvasSelectionStore.getState().selection).toBeNull();
     });
+  });
+});
+
+describe("sending a selected range to a new chat", () => {
+  const newChat = (): HTMLElement | null =>
+    screen.queryByRole("menuitem", { name: "New chat" });
+
+  async function openPicker(): Promise<void> {
+    mountOverlay();
+    select(LITERAL);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Send to chat" }),
+    );
+  }
+
+  it("puts the card in the new-conversation sidecar and opens the modal once the host takes it", async () => {
+    recordNegotiatedHostManifest(SCOPE.hostId, {
+      "epic.createChat": { major: 1, minor: 5 },
+    });
+    await openPicker();
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "New chat" }));
+
+    await waitFor(() => {
+      expect(useNewConversationModalOpenStore.getState().request).toEqual({
+        epicId: SCOPE.epicId,
+        tabId: SCOPE.viewTabId,
+        placement: null,
+        parentId: null,
+        hostId: null,
+      });
+    });
+    const cards =
+      useNewConversationAnnotationStore.getState().byEpicId[SCOPE.epicId] ?? [];
+    expect(cards).toHaveLength(1);
+    expect(cards[0].elements[0]).toMatchObject({
+      tid: "t",
+      textRange: { quote: "big" },
+    });
+    expect(outside.attach).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a host below the minor", { major: 1, minor: 4 }],
+    ["a host that has not negotiated", null],
+  ])("offers no New chat for %s", async (_name, version) => {
+    if (version !== null)
+      recordNegotiatedHostManifest(SCOPE.hostId, {
+        "epic.createChat": version,
+      });
+    await openPicker();
+
+    expect(screen.getByRole("menuitem", { name: "Chat one" })).toBeDefined();
+    expect(newChat()).toBeNull();
   });
 });

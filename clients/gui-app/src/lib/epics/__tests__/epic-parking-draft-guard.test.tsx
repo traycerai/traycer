@@ -235,7 +235,6 @@ function Harness(props: {
               isPending={false}
               onSubmit={() => Promise.resolve()}
               onCancel={null}
-              leadingActions={null}
               className={undefined}
               ref={refA}
             />
@@ -252,7 +251,6 @@ function Harness(props: {
               isPending={false}
               onSubmit={() => Promise.resolve()}
               onCancel={null}
-              leadingActions={null}
               className={undefined}
               ref={refB}
             />
@@ -629,7 +627,6 @@ function EditHarness(props: {
             isPending={false}
             onSubmit={() => Promise.resolve()}
             onCancel={null}
-            leadingActions={null}
             className={undefined}
             ref={refA}
           />
