@@ -219,6 +219,16 @@ function tileRenderer<K extends TileKindId>(
 }
 
 /**
+ * The gesture a tile's open wake is recorded under: Open terminal for a
+ * terminal, Open files for a workspace file, none for any other tile.
+ */
+function tileWakeGesture(node: EpicCanvasTileRef): SandboxVerbGesture | null {
+  if (node.type === "terminal") return "open-terminal";
+  if (isWorkspaceFileRef(node)) return "open-files";
+  return null;
+}
+
+/**
  * Render any canvas tile. Wraps the kind-specific body in
  * `<TabHostProvider>` so every tile reads its bound host via
  * `useTabHostId()`, in `<LinkTargetProvider>` so an in-app link opens on this
@@ -245,16 +255,6 @@ function tileRenderer<K extends TileKindId>(
  * per host per epic. Gating on reachability was rejected: stale or pending
  * reachability reintroduces exactly the first-click failure this closes.
  */
-/**
- * The gesture a tile's open wake is recorded under: Open terminal for a
- * terminal, Open files for a workspace file, none for any other tile.
- */
-function tileWakeGesture(node: EpicCanvasTileRef): SandboxVerbGesture | null {
-  if (node.type === "terminal") return "open-terminal";
-  if (isWorkspaceFileRef(node)) return "open-files";
-  return null;
-}
-
 export function renderTile(args: TileRenderArgs<EpicCanvasTileRef>): ReactNode {
   return (
     <TabHostProvider hostId={args.node.hostId}>
