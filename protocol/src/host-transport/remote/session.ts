@@ -1043,7 +1043,7 @@ interface ActiveConnection {
    * order and never reject, so awaiting the last one drains them all.
    */
   inboundTail: Promise<void>;
-  /** How this leg's socket ended, when it ended on its own. */
+  /** How this leg's socket ended: its own close, or the one `leaveLeg` gave it. */
   legEnd: RelayLegEnd | null;
   /**
    * Whether this leg reached its own attach ack - whether it ever carried the
@@ -5426,13 +5426,16 @@ export class RemoteSession<
 
   /** Gives a leg up without giving the session up; see the close code. */
   private leaveLeg(connection: ActiveConnection): void {
-    this.recordReplacedLeg(
-      connection.legAttached,
-      connection.legEnd ?? {
-        code: RELAY_RELINK_CLOSE_CODE,
-        reason: RELAY_RELINK_CLOSE_REASON,
-      },
-    );
+    const end = connection.legEnd ?? {
+      code: RELAY_RELINK_CLOSE_CODE,
+      reason: RELAY_RELINK_CLOSE_REASON,
+    };
+    // This leg has now ended, whichever of the two ended it, and the socket
+    // below is gone. Recorded so a teardown that reaches this connection
+    // before the next dial replaces it reports THIS - the close that happened
+    // - rather than synthesizing a 1000 for a socket that cannot take one.
+    connection.legEnd = end;
+    this.recordReplacedLeg(connection.legAttached, end);
     connection.socket.close(RELAY_RELINK_CLOSE_CODE, RELAY_RELINK_CLOSE_REASON);
   }
 

@@ -1389,6 +1389,32 @@ describe("RemoteSession relink on an own-leg loss", () => {
       expect(relay.legs[2]?.params.get("prev")).toBe("1000:connect-path-threw");
     });
 
+    // `leaveLeg` closed this leg 4007 and the claim dial is parked on its mint
+    // when the held fatal drops the connection - so the teardown finds a leg
+    // already gone, and must report the close it was given over one of its own
+    // that the socket could not take.
+    it("keeps the close leaveLeg gave a leg when a teardown reaches it before the next dial", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { relay, session, grants } = fixture;
+      const held = holdNextDecrypt();
+      await relay.sendSessionFatal("INTERNAL_ERROR", true);
+      await until(() => held.spy.mock.calls.length === 1);
+      const mint = deferred<AttachGrantProvision>();
+      grants.mockImplementationOnce(() => mint.promise);
+
+      session.forceReconnect("test");
+      await step(0);
+      // Parked: the claim never dials, so the leg stays the one just left.
+      expect(grants).toHaveBeenCalledTimes(2);
+      expect(relay.legs).toHaveLength(1);
+
+      held.release();
+      await advanceUntil(() => relay.legs.length === 2, 30_000);
+
+      expect(relay.legs[1]?.params.has("resume")).toBe(false);
+      expect(relay.legs[1]?.params.get("prev")).toBe("4007:relay-relink");
+    });
+
     // A leg that ended WHILE the adoption ran delivered its close into the
     // adopting queue, which a failed adoption retires unreplayed - so the
     // teardown's own close of it is a no-op and reports nothing. The leg's
