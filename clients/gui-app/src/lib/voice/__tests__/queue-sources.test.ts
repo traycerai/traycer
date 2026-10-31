@@ -233,7 +233,14 @@ function textBlock(
   };
 }
 
-function botRow(overrides: Partial<HydrationRow>): HydrationRow {
+type AssistantHydrationRow = Extract<
+  HydrationRow,
+  { readonly role: "assistant" }
+>;
+
+function botRow(
+  overrides: Partial<Omit<AssistantHydrationRow, "role">>,
+): AssistantHydrationRow {
   return {
     role: "assistant",
     messageId: "m-1",

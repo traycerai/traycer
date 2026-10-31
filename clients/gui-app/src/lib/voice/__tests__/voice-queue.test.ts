@@ -149,7 +149,10 @@ function textBlock(text: string): OpenTextBlock {
   };
 }
 
-function botRow(messageId: string, text: string): HydrationRow {
+function botRow(
+  messageId: string,
+  text: string,
+): Extract<HydrationRow, { readonly role: "assistant" }> {
   return { role: "assistant", messageId, blocks: [textBlock(text)] };
 }
 
@@ -322,7 +325,10 @@ describe("read", () => {
 
 describe("two posts about the same approval", () => {
   it("are one surface item and one offer", () => {
-    const approvalRow = (messageId: string, text: string): HydrationRow => ({
+    const approvalRow = (
+      messageId: string,
+      text: string,
+    ): Extract<HydrationRow, { readonly role: "assistant" }> => ({
       ...botRow(messageId, text),
       surface: {
         kind: "approval",

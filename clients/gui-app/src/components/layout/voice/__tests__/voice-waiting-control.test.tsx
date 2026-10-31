@@ -30,6 +30,7 @@ function queueItem(overrides: Partial<QueueItem>): QueueItem {
     messageId: "i-1",
     surfaceId: null,
     title: "A title",
+    author: null,
     line: "",
     at: Date.now(),
     state: "queued",
