@@ -90,7 +90,7 @@ describe("appendCommentTextToDraft", () => {
 describe("appendCommentTextToNewConversationDraft", () => {
   const modalContent = (): JsonContent[] => [
     ...(useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"]
-      ?.content.content ?? []),
+      ?.content?.content ?? []),
   ];
 
   it("appends below what the modal already holds, with a blank paragraph between, and drops the selection", () => {

@@ -1654,7 +1654,9 @@ export function NewConversationModalBody(props: {
               ...(attachmentsByHash
                 ? { attachmentsByHash: true as const }
                 : {}),
-              ...(browserAnnotations.length > 0 ? { browserAnnotations } : {}),
+              ...(browserAnnotations.length > 0
+                ? { browserAnnotations: [...browserAnnotations] }
+                : {}),
             };
       if (initialMessage !== null) {
         useEpicCanvasStore.getState().markChatTitlePending(chatId, "");

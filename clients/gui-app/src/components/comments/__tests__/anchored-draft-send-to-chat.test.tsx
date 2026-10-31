@@ -407,7 +407,7 @@ describe("the draft box's New chat", () => {
     ).toHaveLength(1);
     expect(
       useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
-        ?.content.content,
+        ?.content?.content,
     ).toEqual([
       {
         type: "paragraph",

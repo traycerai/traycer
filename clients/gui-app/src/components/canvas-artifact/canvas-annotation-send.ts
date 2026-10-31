@@ -1,6 +1,7 @@
 import type { CanvasAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
 import type { EpicReadArtifactObjectResponse } from "@traycer/protocol/host/epic/artifact-objects";
 import type { CanvasBox } from "@/lib/sandbox/canvas-bridge";
+import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import type { CanvasAnnotationScope } from "./canvas-annotation-action";
 import {
   attachCanvasAnnotation,
@@ -53,7 +54,7 @@ export function canvasSelectionAnnotationRecord(
  */
 export async function captureCanvasAnnotationCrop(
   captureRect: CanvasBox | null,
-): Promise<Uint8Array | null> {
+): Promise<ImageBytes | null> {
   const bridge = canvasWindowCaptureBridge();
   if (captureRect === null || bridge === null) return null;
   const crop = await bridge.captureRegion(captureRect);
