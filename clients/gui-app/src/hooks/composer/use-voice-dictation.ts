@@ -15,6 +15,7 @@ import { useSurfaceHostStreamBinding } from "@/hooks/host/use-surface-host-strea
 import { appLogger, describeLogError, type AppLogFields } from "@/lib/logger";
 import { useRunnerHost } from "@/providers/use-runner-host";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 import {
   Analytics,
   AnalyticsEvent,
@@ -873,6 +874,21 @@ export function useVoiceDictation(
     voiceInputWasEnabledRef.current = voiceInputEnabled;
     if (wasEnabled && !voiceInputEnabled) cancelRef.current();
   }, [voiceInputEnabled]);
+
+  // While dictation holds the microphone (the prompt and the recording), a
+  // live voice session pauses its capture, so dictated words never reach the
+  // say loop; it resumes when the capture ends or fails. Through the store,
+  // so it holds with no voice controller mounted. Who wins, the indicators
+  // and the shortcut are VT6's; this is the safety wiring alone.
+  useEffect(() => {
+    const capturing = state === "requesting" || state === "recording";
+    useVoiceSessionStore.getState().setPausedForDictation(capturing);
+    return () => {
+      if (capturing) {
+        useVoiceSessionStore.getState().setPausedForDictation(false);
+      }
+    };
+  }, [state]);
 
   // Tear everything down on unmount. Mark closing first so a stream-close
   // callback that lands after teardown is treated as an expected close, not the

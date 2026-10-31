@@ -12,6 +12,7 @@ import {
   type UseVoiceDictation,
 } from "@/hooks/composer/use-voice-dictation";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
 import {
   localEntry,
@@ -277,6 +278,40 @@ function renderDictation() {
 }
 
 describe("useVoiceDictation lifecycle", () => {
+  it("pauses a voice session's capture while it holds the microphone, and releases it when the recording ends", async () => {
+    const paused = (): boolean =>
+      useVoiceSessionStore.getState().pausedForDictation;
+    expect(paused()).toBe(false);
+    const { result, unmount } = renderDictation();
+
+    act(() => {
+      result.current.start();
+    });
+    // The prompt is up: the microphone is being taken.
+    expect(result.current.state).toBe("requesting");
+    expect(paused()).toBe(true);
+    await flushAsync();
+    act(() => {
+      lastSpeechClient().callbacks.onReady();
+    });
+    expect(result.current.state).toBe("recording");
+    expect(paused()).toBe(true);
+
+    act(() => {
+      result.current.stop();
+    });
+    expect(result.current.state).toBe("transcribing");
+    expect(paused()).toBe(false);
+
+    // A recording cut short by unmount releases the pause too.
+    act(() => {
+      result.current.start();
+    });
+    expect(paused()).toBe(true);
+    unmount();
+    expect(paused()).toBe(false);
+  });
+
   it("does not open the microphone just because the hook is mounted", () => {
     renderDictation();
     expect(getUserMediaCalls).toBe(0);

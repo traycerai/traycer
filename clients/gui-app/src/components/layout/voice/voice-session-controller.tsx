@@ -397,6 +397,30 @@ export function VoiceSessionController(): ReactNode {
   }, []);
 
   /**
+   * What the microphone carries: nothing while the person muted it, and
+   * nothing while dictation holds the microphone (`pausedForDictation`, set
+   * by the dictation hook; VT6 arbitrates further). The mute is the
+   * person's own and outlives the pause.
+   */
+  const applyCapture = useCallback(() => {
+    const stream = micStreamRef.current;
+    if (stream === null) return;
+    const { muted, pausedForDictation } = useVoiceSessionStore.getState();
+    for (const track of stream.getAudioTracks()) {
+      track.enabled = !muted && !pausedForDictation;
+    }
+  }, []);
+  useEffect(
+    () =>
+      useVoiceSessionStore.subscribe((state, previous) => {
+        if (state.pausedForDictation !== previous.pausedForDictation) {
+          applyCapture();
+        }
+      }),
+    [applyCapture],
+  );
+
+  /**
    * The vendor side of an attempt that is no longer the controller's: the
    * peer's close (confirmed or timed out) and then the server's end route,
    * for every attempt that was minted, started or not.
@@ -574,6 +598,9 @@ export function VoiceSessionController(): ReactNode {
             onInputTranscriptDelta: (text) => {
               if (!owns()) return;
               const current = useVoiceSessionStore.getState();
+              // Dictation holds the microphone: a word that still arrives is
+              // the person's draft, not a request.
+              if (current.pausedForDictation) return;
               current.appendInputSegment(text, Date.now());
               current.pushCaptionLine({ direction: "input", text });
               ensureSpeech().noteInputTranscript();
@@ -587,6 +614,7 @@ export function VoiceSessionController(): ReactNode {
             },
             onDelegationCreated: (delegationId) => {
               if (!owns() || !attempt.started) return;
+              if (useVoiceSessionStore.getState().pausedForDictation) return;
               ensureSpeech().noteDelegationCreated();
               void sayLoop().onDelegationCreated(delegationId);
             },
@@ -825,16 +853,24 @@ export function VoiceSessionController(): ReactNode {
       return;
     }
     micStreamRef.current = stream;
+    applyCapture();
     await connectEngine(FIRST_SESSION_INPUT);
-  }, [connectEngine, finishLocal, fixedBotId, microphoneAccessAsync, navigate]);
+  }, [
+    applyCapture,
+    connectEngine,
+    finishLocal,
+    fixedBotId,
+    microphoneAccessAsync,
+    navigate,
+  ]);
 
-  const setMuted = useCallback((muted: boolean) => {
-    const stream = micStreamRef.current;
-    if (stream !== null) {
-      for (const track of stream.getAudioTracks()) track.enabled = !muted;
-    }
-    useVoiceSessionStore.getState().setMuted(muted);
-  }, []);
+  const setMuted = useCallback(
+    (muted: boolean) => {
+      useVoiceSessionStore.getState().setMuted(muted);
+      applyCapture();
+    },
+    [applyCapture],
+  );
 
   useEffect(() => {
     const store = useVoiceSessionStore.getState();

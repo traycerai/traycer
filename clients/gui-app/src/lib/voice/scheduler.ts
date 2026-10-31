@@ -599,7 +599,10 @@ function isDiscriminative(word: string): boolean {
  * The words that prove an item was spoken: the bot's name and the thread's
  * title whole, and the item's own content words of four letters or more,
  * none of them filler or acknowledgement vocabulary. Numbers count: a
- * paraphrase keeps a version or a count.
+ * paraphrase keeps a version or a count. An answer whose content has no
+ * such word (a short one: "42", "yes it is") is proven by its own short
+ * words instead, a number by its spoken form too ("forty-two", "forty two"),
+ * so a short answer is confirmed rather than repeated and given up on.
  */
 export function confirmationWords(input: {
   readonly botTitle: string | null;
@@ -613,11 +616,71 @@ export function confirmationWords(input: {
       if (word.length >= 3 && isDiscriminative(word)) words.add(word);
     }
   }
-  for (const word of wordsOf(input.text)) {
+  const content = wordsOf(input.text);
+  const before = words.size;
+  for (const word of content) {
     if (words.size >= MAX_CONFIRM_WORDS) break;
     if (word.length >= 4 && isDiscriminative(word)) words.add(word);
   }
+  if (words.size === before) {
+    for (const word of content) {
+      if (words.size >= MAX_CONFIRM_WORDS) break;
+      if (!isDiscriminative(word)) continue;
+      words.add(word);
+      for (const spoken of spokenNumberWords(word)) words.add(spoken);
+    }
+  }
   return Array.from(words);
+}
+
+const ONES = [
+  "zero",
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
+  "eleven",
+  "twelve",
+  "thirteen",
+  "fourteen",
+  "fifteen",
+  "sixteen",
+  "seventeen",
+  "eighteen",
+  "nineteen",
+];
+const TENS = [
+  "",
+  "",
+  "twenty",
+  "thirty",
+  "forty",
+  "fifty",
+  "sixty",
+  "seventy",
+  "eighty",
+  "ninety",
+];
+
+/**
+ * How a small integer is said, as the words a transcript would hold: "42" is
+ * "forty-two" when the transcriber hyphenates and "forty" "two" when it does
+ * not, so all three are offered. Anything but 0 to 99 is left to its digits.
+ */
+function spokenNumberWords(word: string): ReadonlyArray<string> {
+  if (!/^\d{1,2}$/.test(word)) return [];
+  const value = Number(word);
+  if (value < 20) return [ONES[value]];
+  const tens = TENS[Math.floor(value / 10)];
+  const one = value % 10;
+  if (one === 0) return [tens];
+  return [`${tens}-${ONES[one]}`, tens, ONES[one]];
 }
 
 /**

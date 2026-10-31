@@ -1086,6 +1086,40 @@ describe("a bot answering in its channel", () => {
   });
 });
 
+describe("dictation while a session is live", () => {
+  it("pauses capture, drops words and boundaries that still arrive, and resumes with the person's own mute kept", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    await bringLive();
+    focusOn(CHANNEL_FOCUS);
+    expect(fake.track.enabled).toBe(true);
+
+    act(() => useVoiceSessionStore.getState().setPausedForDictation(true));
+    expect(fake.track.enabled).toBe(false);
+    await say("Dear team, the invoice", "d1");
+    expect(fake.sendMock).not.toHaveBeenCalled();
+    expect(useVoiceSessionStore.getState().openSpan()).toBe("");
+    expect(useVoiceSessionStore.getState().pendingDelegationId).toBeNull();
+
+    act(() => useVoiceSessionStore.getState().setPausedForDictation(false));
+    expect(fake.track.enabled).toBe(true);
+    await say("Merge it.", "d2");
+    expect(fake.sendMock).toHaveBeenCalledTimes(1);
+    expect(fake.sendMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Merge it." }),
+    );
+
+    // Muted by the person: the pause and its end leave the mute in place.
+    act(() => useVoiceSessionStore.getState().driver?.setMuted(true));
+    expect(fake.track.enabled).toBe(false);
+    act(() => useVoiceSessionStore.getState().setPausedForDictation(true));
+    act(() => useVoiceSessionStore.getState().setPausedForDictation(false));
+    expect(fake.track.enabled).toBe(false);
+    expect(useVoiceSessionStore.getState().muted).toBe(true);
+    act(() => useVoiceSessionStore.getState().driver?.setMuted(false));
+    expect(fake.track.enabled).toBe(true);
+  });
+});
+
 describe("the voice routes", () => {
   it("mint, end, the microphone prompt and the shell flag run as keyed mutations the cache holds, awaited by the attempt", async () => {
     await bringLive();

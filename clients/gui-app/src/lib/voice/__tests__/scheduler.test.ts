@@ -143,6 +143,33 @@ describe("when an item is appended", () => {
 });
 
 describe("delivery confirmation", () => {
+  it("confirms a short numeric answer by its spoken form, once, instead of repeating it", () => {
+    let delivered = 0;
+    const words = confirmationWords({
+      botTitle: null,
+      threadTitle: null,
+      text: "42",
+    });
+    expect(words).toEqual(
+      expect.arrayContaining(["42", "forty-two", "forty", "two"]),
+    );
+    scheduler.enqueue(
+      item("a", {
+        text: "42",
+        confirmWords: words,
+        onDelivered: () => delivered++,
+      }),
+    );
+    expect(appended).toHaveLength(1);
+
+    scheduler.noteOutputTranscript("Forty-two.");
+    clock.advance(CONFIRM_WINDOW_MS * MAX_DELIVERY_ATTEMPTS);
+
+    expect(delivered).toBe(1);
+    expect(appended).toHaveLength(1);
+    expect(scheduler.pendingCount()).toBe(0);
+  });
+
   it("runs onDelivered once when the transcript holds a confirm word", () => {
     let delivered = 0;
     scheduler.enqueue(item("a", { onDelivered: () => delivered++ }));
