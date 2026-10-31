@@ -1,6 +1,5 @@
 import {
   Fragment,
-  useContext,
   useEffect,
   useState,
   type ReactElement,
@@ -12,17 +11,12 @@ import {
   Pencil,
   RotateCcw,
 } from "lucide-react";
-import {
-  isConversationRequestMessageId,
-  type BotAnnouncement,
-  type BotAnnouncementKind,
-  type BotQuestion,
-  type ConversationRequest,
+import type {
+  BotAnnouncement,
+  BotAnnouncementKind,
+  BotQuestion,
 } from "@traycer/protocol/persistence/epic/messages";
-import {
-  BOT_THREAD_ANCHOR_ANSWER,
-  BOT_THREAD_ANCHOR_MESSAGE,
-} from "@traycer/protocol/host/bot/conversation-schemas";
+import { BOT_THREAD_ANCHOR_ANSWER } from "@traycer/protocol/host/bot/conversation-schemas";
 import { UnreadCountBadge } from "@/components/notifications/unread-count-badge";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { Button } from "@/components/ui/button";
@@ -39,7 +33,10 @@ import { SHARED_BY_EARLIER_VERSION_LINE } from "@/components/settings/move/overv
 import { useOpenLink } from "@/lib/links/open-link";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { formatClockDuration } from "@/lib/format-duration";
-import { firstLineOf } from "@/lib/bots/bot-trunk-model";
+import {
+  botRowThreadAnchorKind,
+  firstLineOf,
+} from "@/lib/bots/bot-trunk-model";
 import { turnReceiptLabel } from "@/lib/bots/bot-turn-receipt";
 import { useElapsedSeconds } from "@/hooks/use-elapsed-seconds";
 import { useLongPress, type LongPress } from "@/hooks/ui/use-long-press";
@@ -54,14 +51,13 @@ import { BotIdentityTrigger } from "@/components/bots/bot-identity-popover";
 import { BotSurfaceCard } from "@/components/bots/bot-surface-card";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
 import type { ChatMessage as ChatMessageModel } from "@/stores/composer/chat-store";
-import {
-  ChatBotPresentationContext,
-  type ChatBotFailedRecovery,
-  type ChatBotFailedRequest,
-  type ChatBotPresentation,
-  type ChatBotQuestions,
-  type ChatBotThreadLine,
-  type ChatBotTurnReceipt,
+import type {
+  ChatBotFailedRecovery,
+  ChatBotFailedRequest,
+  ChatBotPresentation,
+  ChatBotQuestions,
+  ChatBotThreadLine,
+  ChatBotTurnReceipt,
 } from "./chat-bot-presentation-context";
 import { chatFindSegmentUnitId } from "./chat-find";
 import { ChatMessageTimestamp } from "./chat-message-timestamp";
@@ -80,9 +76,8 @@ import { TextSegment } from "./segments/text-segment";
 /**
  * One row of a bot's channel or thread, in Slack's message layout (Tracy
  * Bots, decision 41): the sender's picture, their name and the time, then
- * the text. A member's message carries a jump to the reply that answered it
- * where that reply is not right under it and, in the channel, the line of
- * its thread once the thread has a reply; an announcement carries its kind
+ * the text. A member's message carries, in the channel, the line of its
+ * thread once the thread has a reply; an announcement carries its kind
  * on a coloured bar, as Slack draws an app's attachment. A question or a
  * proposal carries the line of the thread a member answers it in, and a
  * reply that asks carries its options as buttons. A row that asks without
@@ -146,7 +141,7 @@ export function ChatBotMessage(props: {
 }
 
 /**
- * A member's row: their message, what it was answered with or why not, and
+ * A member's row: their message, why it went unanswered where it did, and
  * the line of its thread.
  */
 function MemberRow(props: {
@@ -196,13 +191,6 @@ function MemberRow(props: {
       )}
       {failedReceipt === null ? null : (
         <TurnReceiptLine receipt={failedReceipt} alwaysShown />
-      )}
-      {message.conversationRequest === undefined ? null : (
-        <AnsweredReplyLink
-          request={message.conversationRequest}
-          postId={postId}
-          inChannel={presentation.threadLine !== null}
-        />
       )}
       {replyInThread === null || !threadStarted(threadLine) ? null : (
         <ThreadLine
@@ -605,7 +593,11 @@ function botRowThread(
   readonly replyInThread: (() => void) | null;
   readonly threadLine: ChatBotThreadLine | null;
 } {
-  const anchorKind = botRowAnchorKind(message);
+  const anchorKind = botRowThreadAnchorKind({
+    announcementKind: message.announcement?.kind ?? null,
+    asksQuestion: message.question !== undefined,
+    repliesToPost: message.repliesTo !== undefined,
+  });
   const ownThread =
     anchorKind === null || presentation.threadAnchorKinds.includes(anchorKind);
   let anchorId: string | null = message.persistentMessageId;
@@ -626,23 +618,6 @@ function botRowThread(
         ? null
         : presentation.threadLine(anchorId),
   };
-}
-
-/**
- * The thread anchor a bot's row needs its host to name to root its own
- * thread: none for a question, a proposal or a row that asks (a row that
- * asks roots its own thread whatever post it follows, as a question
- * announcement does), `"answer"` for a direct reply, `"message"` for any
- * other row.
- */
-function botRowAnchorKind(message: ChatMessageModel): string | null {
-  const kind = message.announcement?.kind ?? null;
-  if (kind === "question" || kind === "proposal") return null;
-  if (message.question !== undefined) return null;
-  if (kind === null && message.repliesTo !== undefined) {
-    return BOT_THREAD_ANCHOR_ANSWER;
-  }
-  return BOT_THREAD_ANCHOR_MESSAGE;
 }
 
 /**
@@ -1213,57 +1188,6 @@ function AnnouncementLink(props: { readonly link: string }): ReactNode {
   );
 }
 
-/**
- * "See reply" under a member's message the bot has answered, a jump to the
- * reply when that reply is in this list (in a thread, or in the channel for
- * a direct post, whose reply is in the channel) and not the row right under
- * the message. Whether a message still waits for its answer is the bot's
- * own bookkeeping and is not drawn. Read off the member's row, which is
- * where the host keeps it; the reply row says nothing about the request.
- */
-function AnsweredReplyLink(props: {
-  readonly request: ConversationRequest;
-  /** The member's message, by its message id; `null` before it is written. */
-  readonly postId: string | null;
-  readonly inChannel: boolean;
-}): ReactNode {
-  const { request, postId, inChannel } = props;
-  const presentation = useContext(ChatBotPresentationContext);
-  const scrollToMessage =
-    inChannel && request.direct !== true
-      ? null
-      : (presentation?.scrollToMessage ?? null);
-  const replyId =
-    request.resolvedAt === null ? null : request.resolvedByMessageId;
-  // A message the person replaced with an edit was not answered: the new
-  // message carries the request now.
-  if (
-    replyId === null ||
-    scrollToMessage === null ||
-    isConversationRequestMessageId(replyId)
-  ) {
-    return null;
-  }
-  if (
-    postId !== null &&
-    presentation?.replyFollowsPost?.(postId, replyId) === true
-  ) {
-    return null;
-  }
-  return (
-    <Button
-      type="button"
-      variant="link"
-      size="xs"
-      className="self-start"
-      onClick={() => scrollToMessage(replyId)}
-      data-testid="conversation-request-reply-link"
-    >
-      See reply
-    </Button>
-  );
-}
-
 const THREAD_LINE_STACK_MAX = 3;
 
 /**
@@ -1298,6 +1222,7 @@ function ThreadLine(props: {
       type="button"
       data-testid="bot-thread-line"
       data-unread={unread ? "true" : "false"}
+      data-new-replies={line.newReplies === true ? "true" : "false"}
       onClick={onOpen}
       className="group/thread -ml-1 flex w-fit max-w-full items-center gap-2 rounded-md border border-transparent px-1 py-0.5 text-left text-ui-xs transition-colors hover:border-border/60 hover:bg-background focus-visible:outline-2 focus-visible:outline-ring focus-visible:-outline-offset-2"
     >
@@ -1311,8 +1236,25 @@ function ThreadLine(props: {
       <ThreadLineCount
         replies={replies}
         unread={unread}
+        bold={line.newReplies ?? unread}
         unreadCount={line.unreadCount}
       />
+      {line.newReplies === true ? (
+        <span
+          className="shrink-0 font-semibold text-foreground"
+          data-testid="bot-thread-new-replies"
+        >
+          new replies
+        </span>
+      ) : null}
+      {line.followedUnwritten ? (
+        <span
+          className="shrink-0 text-muted-foreground"
+          data-testid="bot-thread-following-mark"
+        >
+          following
+        </span>
+      ) : null}
       <ThreadLineStatus
         lastReplyAt={line.lastReplyAt}
         replying={replying}
@@ -1323,16 +1265,18 @@ function ThreadLine(props: {
 }
 
 /**
- * "N replies", bold behind the unread count while one is unread (a 2 badge
- * before "5 replies" reads two unread of five), or behind a dot where the
- * host does not count.
+ * "N replies" behind the unread count while one is unread (a 2 badge before
+ * "5 replies" reads two unread of five), or behind a dot where the host does
+ * not count; bold while a followed thread has new replies, or, where the
+ * host keeps no read cursors, while unread.
  */
 function ThreadLineCount(props: {
   readonly replies: number;
   readonly unread: boolean;
+  readonly bold: boolean;
   readonly unreadCount: number | null;
 }): ReactNode {
-  const { replies, unread, unreadCount } = props;
+  const { replies, unread, bold, unreadCount } = props;
   return (
     <>
       {unreadCount === null ? (
@@ -1353,7 +1297,7 @@ function ThreadLineCount(props: {
       )}
       {replies === 0 ? null : (
         <span
-          className={cn("text-primary", unread ? "font-bold" : "font-semibold")}
+          className={cn("text-primary", bold ? "font-bold" : "font-semibold")}
         >
           {replies === 1 ? "1 reply" : `${replies} replies`}
         </span>

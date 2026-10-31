@@ -23,23 +23,17 @@ function deferredRead(): {
   readonly read: ArtifactReadSpan;
   resolve: (result: ArtifactReadSpanResult) => void;
   readonly calls: {
-    readonly hash: string;
-    readonly offset: number;
-    readonly length: number;
     readonly signal: AbortSignal;
   }[];
 } {
   const calls: {
-    readonly hash: string;
-    readonly offset: number;
-    readonly length: number;
     readonly signal: AbortSignal;
   }[] = [];
   let resolve: (result: ArtifactReadSpanResult) => void = () => {
     throw new Error("resolve called before a read started");
   };
-  const read: ArtifactReadSpan = (hash, offset, length, signal) => {
-    calls.push({ hash, offset, length, signal });
+  const read: ArtifactReadSpan = (_hash, _offset, _length, signal) => {
+    calls.push({ signal });
     return new Promise((res, rej) => {
       resolve = res;
       // A real read port rejects once its own signal is cancelled; the fake

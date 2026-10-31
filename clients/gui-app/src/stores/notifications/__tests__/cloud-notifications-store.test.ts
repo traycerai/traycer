@@ -156,6 +156,32 @@ function cloudBotAnswerRow(
   };
 }
 
+/** An unread row a bot's conversation wrote to the person's mailbox. */
+function cloudBotConversationRow(
+  entryId: string,
+  createdAt: number,
+  operation: "bot.reply" | "bot.post",
+  mention: boolean,
+): HostNotificationsCloudFeedRowV16 {
+  return {
+    ...cloudBotAnswerRow(entryId, createdAt),
+    entry: {
+      ...cloudBotAnswerRow(entryId, createdAt).entry,
+      payload: {
+        outcome: "completed",
+        kind: "bot_conversation",
+        operation,
+        title: "Tracy",
+        message: "Something in the thread",
+        botId: "bot-1",
+        threadId: "chat-1",
+        messageId: entryId,
+        mention,
+      },
+    },
+  };
+}
+
 class ControlledSession implements IStreamSession {
   private statusChangeHandler: StatusChangeHandler | null = null;
   private serverFrameHandler: ServerFrameHandler | null = null;
@@ -529,6 +555,72 @@ describe("cloud notifications store", () => {
       totalCount: 1,
       unreadCount: 0,
       attentionCount: 0,
+    });
+  });
+
+  it("removes an unread bot reply, then an unread mention, from the attention count", () => {
+    const reply = cloudBotConversationRow(
+      "entry-reply",
+      10,
+      "bot.reply",
+      false,
+    );
+    const mention = cloudBotConversationRow(
+      "entry-mention",
+      20,
+      "bot.post",
+      true,
+    );
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [reply, mention],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 2 },
+      version: 1,
+    });
+
+    useCloudNotificationsStore.getState().markReadLocally(reply.entryId, 40);
+    expect(useCloudNotificationsStore.getState().summary).toEqual({
+      totalCount: 2,
+      unreadCount: 1,
+      attentionCount: 1,
+    });
+
+    useCloudNotificationsStore
+      .getState()
+      .beginEntityRead([mention.entryId], 50);
+    expect(useCloudNotificationsStore.getState().summary).toEqual({
+      totalCount: 2,
+      unreadCount: 0,
+      attentionCount: 0,
+    });
+  });
+
+  it("lowers only the unread count when a post that mentions no one is read", () => {
+    const reply = cloudBotConversationRow(
+      "entry-reply",
+      10,
+      "bot.reply",
+      false,
+    );
+    const plainPost = cloudBotConversationRow(
+      "entry-post",
+      30,
+      "bot.post",
+      false,
+    );
+    useCloudNotificationsStore.getState().applySnapshot({
+      rows: [reply, plainPost],
+      summary: { totalCount: 2, unreadCount: 2, attentionCount: 1 },
+      version: 1,
+    });
+
+    useCloudNotificationsStore
+      .getState()
+      .markReadLocally(plainPost.entryId, 40);
+
+    expect(useCloudNotificationsStore.getState().summary).toEqual({
+      totalCount: 2,
+      unreadCount: 1,
+      attentionCount: 1,
     });
   });
 

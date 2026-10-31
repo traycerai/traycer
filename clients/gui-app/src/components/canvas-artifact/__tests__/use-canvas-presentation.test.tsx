@@ -39,8 +39,6 @@ const SIZE = { width: 800, height: 600 };
 const VIEWPORT = { x: 0, y: 0, zoom: 1 };
 
 function Harness(props: {
-  readonly tabSelected: boolean;
-  readonly paneVisible: boolean;
   readonly onResult: (result: PresentationHarnessResult) => void;
 }) {
   const result = useCanvasPresentation({
@@ -79,11 +77,7 @@ function renderHarness(tabSelected: boolean, paneVisible: boolean) {
   const view = render(
     <PaneVisibilityContext.Provider value={paneVisible}>
       <TabBodySelectedContext.Provider value={tabSelected}>
-        <Harness
-          tabSelected={tabSelected}
-          paneVisible={paneVisible}
-          onResult={capture}
-        />
+        <Harness onResult={capture} />
       </TabBodySelectedContext.Provider>
     </PaneVisibilityContext.Provider>,
   );
@@ -94,11 +88,7 @@ function renderHarness(tabSelected: boolean, paneVisible: boolean) {
     view.rerender(
       <PaneVisibilityContext.Provider value={next.paneVisible}>
         <TabBodySelectedContext.Provider value={next.tabSelected}>
-          <Harness
-            tabSelected={next.tabSelected}
-            paneVisible={next.paneVisible}
-            onResult={capture}
-          />
+          <Harness onResult={capture} />
         </TabBodySelectedContext.Provider>
       </PaneVisibilityContext.Provider>,
     );

@@ -110,12 +110,25 @@ export type {
   TraycerModelsFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 export type {
+  VoiceAvailabilityFetchResult,
+  VoiceSessionEndFetchResult,
+  VoiceSessionMintFetchResult,
+  VoiceSessionMintRequest,
+} from "@traycer-clients/shared/host-client/voice-sessions";
+export type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
   SecretRequestDecideFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-secrets";
 export type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
+export type {
+  SlackAppInstallUrlResult,
+  SlackAppManifestResult,
+  SlackAppReadResult,
+  SlackAppWriteResult,
+} from "@traycer-clients/shared/host-client/slack-app";
+export type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
 export type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
 export type {
   SandboxAutomationOpenTarget,

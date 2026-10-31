@@ -40,6 +40,14 @@ import {
   botNotificationLevelReadResponseSchema,
   botNotificationLevelSetRequestSchema,
   botNotificationLevelSetResponseSchema,
+  botThreadFollowReadRequestSchema,
+  botThreadFollowReadResponseSchema,
+  botThreadFollowSetRequestSchema,
+  botThreadFollowSetResponseSchema,
+  botReadCursorReadRequestSchema,
+  botReadCursorReadResponseSchema,
+  botReadCursorAdvanceRequestSchema,
+  botReadCursorAdvanceResponseSchema,
   botUpdateTitleRequestSchema,
 } from "./schemas";
 import {
@@ -63,6 +71,7 @@ import {
   botOnboardingReadRequestSchema,
   botOnboardingReadResponseSchema,
   botOnboardingReadResponseSchemaV10,
+  botOnboardingReadResponseSchemaV11,
 } from "./onboarding-schemas";
 import {
   botSurfaceActRequestSchema,
@@ -174,6 +183,45 @@ export const botNotificationLevelSetV10 = defineRpcContract({
   schemaVersion: { major: 1, minor: 0 } as const,
   requestSchema: botNotificationLevelSetRequestSchema,
   responseSchema: botNotificationLevelSetResponseSchema,
+});
+
+/**
+ * `bot.threadFollow.read@1.0` / `.set@1.0` (decision 137): the caller's
+ * follow state per thread of a bot, kept in the cloud and proxied by any
+ * host, as the notification levels are.
+ */
+export const botThreadFollowReadV10 = defineRpcContract({
+  method: "bot.threadFollow.read",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botThreadFollowReadRequestSchema,
+  responseSchema: botThreadFollowReadResponseSchema,
+});
+
+export const botThreadFollowSetV10 = defineRpcContract({
+  method: "bot.threadFollow.set",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botThreadFollowSetRequestSchema,
+  responseSchema: botThreadFollowSetResponseSchema,
+});
+
+/**
+ * `bot.readCursor.read@1.0` / `.advance@1.0` (decision 139): how far the
+ * caller has read each of a bot's conversations, kept in the cloud and
+ * proxied by any host, beside each conversation's newest row as the host
+ * knows it. The cursor drives bold; the mailbox keeps the bell.
+ */
+export const botReadCursorReadV10 = defineRpcContract({
+  method: "bot.readCursor.read",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botReadCursorReadRequestSchema,
+  responseSchema: botReadCursorReadResponseSchema,
+});
+
+export const botReadCursorAdvanceV10 = defineRpcContract({
+  method: "bot.readCursor.advance",
+  schemaVersion: { major: 1, minor: 0 } as const,
+  requestSchema: botReadCursorAdvanceRequestSchema,
+  responseSchema: botReadCursorAdvanceResponseSchema,
 });
 
 export const botDeleteV10 = defineRpcContract({
@@ -372,7 +420,7 @@ export const botOnboardingReadV11 = defineRpcContract({
   method: "bot.onboarding.read",
   schemaVersion: { major: 1, minor: 1 } as const,
   requestSchema: botOnboardingReadRequestSchema,
-  responseSchema: botOnboardingReadResponseSchema,
+  responseSchema: botOnboardingReadResponseSchemaV11,
 });
 export const botOnboardingReadUpgradeV10ToV11 = defineUpgradePath<
   typeof botOnboardingReadV10,
@@ -382,6 +430,34 @@ export const botOnboardingReadUpgradeV10ToV11 = defineUpgradePath<
   to: botOnboardingReadV11.schemaVersion,
   upgradeRequest: (request) => request,
   upgradeResponse: (response) => ({ ...response, setup: null }),
+});
+
+/**
+ * `bot.onboarding.read@1.2` (T67b): the setup stays once the team's main bot
+ * exists, `live`, with how the team's host came. A `1.1` setup is a main bot
+ * still to be set up; a `1.1` caller is served `null` once it is live
+ * (`WITHIN_MAJOR_RESPONSE_PROJECTIONS` on the host).
+ */
+export const botOnboardingReadV12 = defineRpcContract({
+  method: "bot.onboarding.read",
+  schemaVersion: { major: 1, minor: 2 } as const,
+  requestSchema: botOnboardingReadRequestSchema,
+  responseSchema: botOnboardingReadResponseSchema,
+});
+export const botOnboardingReadUpgradeV11ToV12 = defineUpgradePath<
+  typeof botOnboardingReadV11,
+  typeof botOnboardingReadV12
+>({
+  from: botOnboardingReadV11.schemaVersion,
+  to: botOnboardingReadV12.schemaVersion,
+  upgradeRequest: (request) => request,
+  upgradeResponse: (response) => ({
+    ...response,
+    setup:
+      response.setup === null
+        ? null
+        : { ...response.setup, state: "needs_host", arrival: null },
+  }),
 });
 
 export const botOnboardingChooseV10 = defineRpcContract({

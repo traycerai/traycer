@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
   type ReactNode,
@@ -15,7 +16,9 @@ import type {
 } from "@traycer/protocol/host/bot/conversation-schemas";
 import type {
   BotSurfaceActionState,
+  BotReadCursorReadResponse,
   BotTaskEntry,
+  BotThreadFollow,
 } from "@traycer/protocol/host/bot/schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import type { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
@@ -32,6 +35,17 @@ import {
 import { BotRoutingCard } from "@/components/bots/bot-routing-card";
 import { useChatSessionHandleForContainer } from "@/lib/registries/chat-session-registry";
 import { threadOpenOf } from "@/lib/bots/bot-trunk-model";
+import {
+  channelMuted,
+  followingOf,
+} from "@/lib/bots/bot-notification-settings";
+import { useBotNotificationLevelsQuery } from "@/hooks/bots/use-bot-notification-level";
+import { useBotThreadFollows } from "@/hooks/bots/use-bot-thread-follow";
+import {
+  useBotReadCursorAdvanceMutation,
+  useBotReadCursors,
+} from "@/hooks/bots/use-bot-read-cursor";
+import { advanceTarget, threadHasNewReplies } from "@/lib/bots/bot-read-cursor";
 import {
   BotMemoryPanel,
   type BotMemoryNavigation,
@@ -143,13 +157,6 @@ function channelConversation(
 export type BotChannelLanding = BotTranscriptLanding & {
   readonly threadId: string | null;
 };
-
-/** The landing the channel's own transcript takes: one on a message of the channel. */
-function channelLandingOf(
-  landOn: BotChannelLanding | null,
-): BotTranscriptLanding | null {
-  return landOn !== null && landOn.threadId === null ? landOn : null;
-}
 
 /**
  * The listed thread whose panel is drawn: none while the channel's own read
@@ -281,6 +288,8 @@ export function BotChannelView(props: {
   readonly botNameOf: (botId: string) => string | null;
   /** Opens the bot's Activity tab, from the open thread's header. */
   readonly onOpenActivity: () => void;
+  /** A live team main bot's setup history at the top of the channel (T67b); `null` for none. */
+  readonly setupHistory: ReactNode;
 }): ReactNode {
   const {
     botId,
@@ -303,6 +312,7 @@ export function BotChannelView(props: {
     environmentId,
     botNameOf,
     onOpenActivity,
+    setupHistory,
   } = props;
   const openThreadPostId = open?.anchorMessageId ?? null;
   const client = useTabHostClient();
@@ -323,6 +333,9 @@ export function BotChannelView(props: {
     isUnread,
     unreadCountOf,
     threadAnchorKinds,
+    follows,
+    readCursors,
+    newRepliesOf,
   } = useChannelThreads({
     client,
     botId,
@@ -482,7 +495,9 @@ export function BotChannelView(props: {
   // channel opens where the tab asked it to: it mounts afresh each time a
   // session shown in its place closes.
   const [landing, setLanding] = useState<BotTranscriptLanding | null>(() =>
-    channelLandingOf(props.landOn),
+    props.landOn !== null && props.landOn.threadId === null
+      ? props.landOn
+      : null,
   );
   const memoryNavigation = useMemo(
     (): BotMemoryNavigation => ({
@@ -521,6 +536,8 @@ export function BotChannelView(props: {
           replying:
             postMessageId !== openThreadPostId &&
             activity?.threads[thread.threadId]?.state === "replying",
+          followedUnwritten: followedUnwritten(follows, thread.threadId),
+          newReplies: newRepliesOf(thread),
         };
       },
       // A host without the thread list has no thread to open.
@@ -544,6 +561,7 @@ export function BotChannelView(props: {
       openTurn: onOpenTurn,
       sessionChatId: trunkChatId,
       intro: { botTitle, directive },
+      history: setupHistory,
     }),
     [
       answerQuestion,
@@ -554,7 +572,9 @@ export function BotChannelView(props: {
       directive,
       discussQuestion,
       failedRequest,
+      follows,
       isUnread,
+      newRepliesOf,
       unreadCountOf,
       onOpenThread,
       openAnnouncementThread,
@@ -562,6 +582,7 @@ export function BotChannelView(props: {
       onOpenTurn,
       resolveMember,
       sending,
+      setupHistory,
       threadListSupported,
       threadAnchorKinds,
       threadsByPost,
@@ -644,6 +665,7 @@ export function BotChannelView(props: {
     botId,
     thread: openThread,
     isUnread,
+    readCursors,
     shown: threadOpen,
   });
   const [channelSection, setChannelSection] = useState<HTMLElement | null>(
@@ -654,6 +676,7 @@ export function BotChannelView(props: {
     hostId,
     botId,
     channelId,
+    readCursors,
     threadOpen: railOpen,
     section: channelSection,
   });
@@ -965,6 +988,12 @@ function useChannelThreads(args: {
   readonly unreadCountOf: (threadId: string) => number | null;
   /** The rows of the bot its host opens their own thread under. */
   readonly threadAnchorKinds: readonly string[];
+  /** The person's follows of the threads; `undefined` until read, or where the host keeps none. */
+  readonly follows: Readonly<Record<string, BotThreadFollow>> | undefined;
+  /** The person's read cursors on the bot; `undefined` until read, or where the host keeps none. */
+  readonly readCursors: BotReadCursorReadResponse | undefined;
+  /** A thread line's `newReplies`: `null` where the host keeps no read cursors. */
+  readonly newRepliesOf: (thread: BotThreadSummary) => boolean | null;
 } {
   const { client, botId, hostId, boundHostId, boundHostEpoch } = args;
   const supported = useHostMethodSupport(hostId, "bot.thread.list") === true;
@@ -1023,6 +1052,30 @@ function useChannelThreads(args: {
         : [],
     [anchors, boundHostEpoch, boundHostId, supported],
   );
+  const follows = useBotThreadFollows(botId, hostId)?.data?.follows;
+  const readCursorQuery = useBotReadCursors(botId, hostId);
+  const cursorsKept = readCursorQuery !== null;
+  const readCursors = readCursorQuery?.data;
+  const levels = useBotNotificationLevelsQuery(
+    client,
+    botId,
+    useHostMethodSupport(hostId, "bot.notificationLevel.read") === true,
+  ).data?.levels;
+  // A followed thread of a muted channel never has new replies to show
+  // (decision 138).
+  const newRepliesOf = useCallback(
+    (thread: BotThreadSummary): boolean | null =>
+      cursorsKept
+        ? threadHasNewReplies(
+            readCursors,
+            thread.threadId,
+            thread.lastReplyAt,
+            followingOf(follows, thread.threadId) !== null &&
+              !channelMuted(levels, thread.conversationId),
+          )
+        : null,
+    [cursorsKept, follows, levels, readCursors],
+  );
   return {
     supported,
     threadList,
@@ -1030,7 +1083,22 @@ function useChannelThreads(args: {
     isUnread,
     unreadCountOf,
     threadAnchorKinds,
+    follows,
+    readCursors,
+    newRepliesOf,
   };
+}
+
+/**
+ * Whether the person follows a thread without having written in it: they
+ * were mentioned in it, or chose to follow it.
+ */
+function followedUnwritten(
+  follows: Readonly<Record<string, BotThreadFollow>> | undefined,
+  threadId: string,
+): boolean {
+  const follow = followingOf(follows, threadId);
+  return follow !== null && follow.reason !== "participated";
 }
 
 /**
@@ -1134,6 +1202,7 @@ function useReadChannelWhilePresented(args: {
   readonly hostId: string;
   readonly botId: string;
   readonly channelId: string | null;
+  readonly readCursors: BotReadCursorReadResponse | undefined;
   readonly threadOpen: boolean;
   /** The channel's section: beside an open thread a container query hides it on a narrow pane, which only its size tells. */
   readonly section: HTMLElement | null;
@@ -1166,6 +1235,13 @@ function useReadChannelWhilePresented(args: {
     if (!presented || channelId === null || !unread) return;
     markRead({ epicId: botId, chatId: channelId });
   }, [botId, channelId, markRead, presented, unread]);
+  useAdvanceWhilePresented({
+    client,
+    botId,
+    conversationId: channelId,
+    readCursors: args.readCursors,
+    presented,
+  });
 }
 
 /**
@@ -1178,6 +1254,7 @@ function useReadThreadWhilePresented(args: {
   readonly botId: string;
   readonly thread: BotThreadSummary | null;
   readonly isUnread: (threadId: string) => boolean;
+  readonly readCursors: BotReadCursorReadResponse | undefined;
   /** The thread panel is rendered. */
   readonly shown: boolean;
 }): void {
@@ -1190,4 +1267,61 @@ function useReadThreadWhilePresented(args: {
     if (!presented || threadId === null || !unread) return;
     markRead({ epicId: botId, chatId: threadId });
   }, [botId, markRead, presented, threadId, unread]);
+  useAdvanceWhilePresented({
+    client,
+    botId,
+    conversationId: threadId,
+    readCursors: args.readCursors,
+    presented,
+  });
+}
+
+/**
+ * Moves the person's read cursor on a conversation they can see to its
+ * newest row (decision 139), as that row arrives: one advance per newest
+ * row, never while it is not presented. The read cursor's own read follows
+ * the rows (the bot's subscription reads it again as they land), so a row
+ * landing while the conversation is in view advances the cursor past it.
+ */
+function useAdvanceWhilePresented(args: {
+  readonly client: HostClient<HostRpcRegistry> | null;
+  readonly botId: string;
+  readonly conversationId: string | null;
+  readonly readCursors: BotReadCursorReadResponse | undefined;
+  readonly presented: boolean;
+}): void {
+  const { client, botId, conversationId, readCursors, presented } = args;
+  const { mutateAsync: advance } = useBotReadCursorAdvanceMutation(client);
+  const target =
+    !presented || conversationId === null || readCursors === undefined
+      ? null
+      : advanceTarget(readCursors, conversationId);
+  // The newest row advanced to, or being advanced to, per conversation: a
+  // read that has not caught up with the advance yet asks for the same row
+  // again. A failed advance is forgotten, so the row is asked for again.
+  const advanced = useRef(new Map<string, number>());
+  const targetMessageId = target?.messageId ?? null;
+  const targetSeq = target?.seq ?? null;
+  useEffect(() => {
+    if (
+      conversationId === null ||
+      targetMessageId === null ||
+      targetSeq === null
+    ) {
+      return;
+    }
+    const done = advanced.current.get(conversationId);
+    if (done !== undefined && done >= targetSeq) return;
+    advanced.current.set(conversationId, targetSeq);
+    advance({
+      botId,
+      conversationId,
+      messageId: targetMessageId,
+      seq: targetSeq,
+    }).catch(() => {
+      if (advanced.current.get(conversationId) === targetSeq) {
+        advanced.current.delete(conversationId);
+      }
+    });
+  }, [advance, botId, conversationId, targetMessageId, targetSeq]);
 }

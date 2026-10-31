@@ -148,7 +148,7 @@ interface ProviderReauthBannerProps {
 // A profile-specific block (missing/removed, or that profile's own auth is
 // signed out) has no provider-wide OAuth/token form to fall into - the
 // managed profile's config dir is what would need reconnecting, and that
-// flow already lives in Settings -> Providers (ticket 04/06), not duplicated
+// flow already lives in Settings -> Providers, not duplicated
 // here. This banner only offers the confirm-first ambient fallback plus a
 // link to the existing per-profile reconnect UI.
 function ProfileUnavailableBanner({

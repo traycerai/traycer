@@ -15,6 +15,7 @@ import {
  */
 export interface TeamSetup {
   readonly environmentId: string;
+  /** The team's name, as the environment list labels it. */
   readonly teamName: string;
   readonly botId: string;
   readonly title: string;
@@ -101,7 +102,8 @@ export function useTeamSetups(input: {
     ? NO_SETUPS
     : teams.flatMap((team, index): TeamSetup[] => {
         const setup = reads[index]?.data?.setup ?? null;
-        if (setup === null) return [];
+        // A live setup's bot exists: its channel is the bot's own (T67b).
+        if (setup === null || setup.state !== "needs_host") return [];
         return [
           {
             environmentId: team.environmentId,

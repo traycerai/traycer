@@ -680,7 +680,9 @@ import {
   botOnboardingCompleteV10,
   botOnboardingReadV10,
   botOnboardingReadV11,
+  botOnboardingReadV12,
   botOnboardingReadUpgradeV10ToV11,
+  botOnboardingReadUpgradeV11ToV12,
   botCreateV10,
   botDeleteV10,
   botListChangedV10,
@@ -704,6 +706,10 @@ import {
   botUpdateTitleV10,
   botNotificationLevelReadV10,
   botNotificationLevelSetV10,
+  botThreadFollowReadV10,
+  botThreadFollowSetV10,
+  botReadCursorReadV10,
+  botReadCursorAdvanceV10,
 } from "@traycer/protocol/host/bot/contracts";
 import {
   draftsDeleteV10,
@@ -9304,6 +9310,58 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "bot.threadFollow.read": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botThreadFollowReadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.threadFollow.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botThreadFollowSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.readCursor.read": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botReadCursorReadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.readCursor.advance": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botReadCursorAdvanceV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "bot.delete": {
     degrade: { kind: "unsupported" },
     1: {
@@ -9488,7 +9546,7 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.onboarding.read": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: botOnboardingReadV10,
@@ -9499,6 +9557,12 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: botOnboardingReadV11,
           upgradeFromPreviousVersion: botOnboardingReadUpgradeV10ToV11,
+        },
+        // @1.2 keeps the setup once the main bot exists (`state: live`,
+        // `arrival`, T67b); a 1.1 caller is served its setup as `null` then.
+        2: {
+          contract: botOnboardingReadV12,
+          upgradeFromPreviousVersion: botOnboardingReadUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},

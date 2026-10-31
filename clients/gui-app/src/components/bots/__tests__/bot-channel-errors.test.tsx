@@ -250,6 +250,7 @@ function mount(openThread: BotOpenThread | null): void {
             openThread={openThread}
             onOpenThread={vi.fn()}
             onOpenActivity={onOpenActivity}
+            setupHistory={null}
           />
         </ChatExpansionTestProviders>
       </TooltipProvider>

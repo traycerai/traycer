@@ -29,11 +29,25 @@ import {
   runSandboxVerbViaHttp,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import {
+  voiceSessionsAvailabilityViaHttp,
+  voiceSessionsEndViaHttp,
+  voiceSessionsMintViaHttp,
+  type VoiceSessionMintRequest,
+} from "@traycer-clients/shared/host-client/voice-sessions";
+import { voiceLiveWindows } from "../windows/voice-live-windows";
+import {
   decideSecretRequestViaHttp,
   fetchEnvironmentProvidersViaHttp,
   fetchSandboxGrantsViaHttp,
   fetchTeamEnvironmentViaHttp,
 } from "@traycer-clients/shared/host-client/sandbox-secrets";
+import {
+  disconnectSlackAppViaHttp,
+  fetchSlackAppManifestViaHttp,
+  mintSlackAppInstallUrlViaHttp,
+  readSlackAppViaHttp,
+  registerSlackAppViaHttp,
+} from "@traycer-clients/shared/host-client/slack-app";
 import { mintExecutableWriteGrantViaHttp } from "@traycer-clients/shared/host-client/executable-write-grant";
 import { config } from "../../config";
 import type {
@@ -61,6 +75,8 @@ import {
   parseSandboxVerbGesture,
   parseSandboxPatchRequest,
   parseSecretRequestDecision,
+  parseSlackAppBotId,
+  parseSlackAppRegisterRequest,
   parseStoredAuthTokens,
   parseStoredCredentialsIdentity,
   parseTokenRotateExpected,
@@ -85,6 +101,18 @@ function assertBoolean(
   if (typeof value !== "boolean") {
     throw new Error(`${context} requires a boolean argument`);
   }
+}
+
+/** The renderer's mint request, checked field by field before it is sent. */
+function voiceSessionMintRequestOf(value: unknown): VoiceSessionMintRequest {
+  if (typeof value !== "object" || value === null) {
+    throw new Error("mintVoiceSession.request requires an object argument");
+  }
+  const offerSdp: unknown = Reflect.get(value, "offerSdp");
+  const input: unknown = Reflect.get(value, "input");
+  assertString(offerSdp, "mintVoiceSession.request.offerSdp");
+  assertString(input, "mintVoiceSession.request.input");
+  return { offerSdp, input };
 }
 
 /**
@@ -160,6 +188,56 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         config.serverBaseUrl,
         bearerToken,
         await iapProxyToken(),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.getVoiceAvailability,
+    async (_event, bearerToken: unknown) => {
+      assertString(bearerToken, "getVoiceAvailability.bearerToken");
+      return voiceSessionsAvailabilityViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.setVoiceSessionLive,
+    (event, live: unknown) => {
+      assertBoolean(live, "setVoiceSessionLive.live");
+      const windowId = bridge.resolveSenderWindowId(event);
+      if (windowId === null) return Promise.resolve();
+      voiceLiveWindows.set(windowId, live);
+      return Promise.resolve();
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.mintVoiceSession,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "mintVoiceSession.bearerToken");
+      return voiceSessionsMintViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        voiceSessionMintRequestOf(request),
+      );
+    },
+  );
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.endVoiceSession,
+    async (_event, bearerToken: unknown, voiceSessionId: unknown) => {
+      assertString(bearerToken, "endVoiceSession.bearerToken");
+      assertString(voiceSessionId, "endVoiceSession.voiceSessionId");
+      return voiceSessionsEndViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        voiceSessionId,
       );
     },
   );
@@ -299,6 +377,43 @@ function registerSandboxControlPlaneIpc(bridge: RunnerIpcBridge): void {
         bearerToken,
         await iapProxyToken(),
         parsedTarget,
+      );
+    },
+  );
+
+  // A bot's Slack app, on the same server and with the same proxy token.
+  const slackAppBotCalls = [
+    [RunnerHostInvoke.readSlackApp, readSlackAppViaHttp],
+    [RunnerHostInvoke.getSlackAppManifest, fetchSlackAppManifestViaHttp],
+    [RunnerHostInvoke.mintSlackAppInstallUrl, mintSlackAppInstallUrlViaHttp],
+    [RunnerHostInvoke.disconnectSlackApp, disconnectSlackAppViaHttp],
+  ] as const;
+  for (const [channel, viaHttp] of slackAppBotCalls) {
+    bridge.handleInvoke(
+      channel,
+      async (_event, bearerToken: unknown, botId: unknown) => {
+        assertString(bearerToken, `${channel}.bearerToken`);
+        const parsedBotId = parseSlackAppBotId(botId, `${channel}.botId`);
+        return viaHttp(
+          config.serverBaseUrl,
+          bearerToken,
+          await iapProxyToken(),
+          parsedBotId,
+        );
+      },
+    );
+  }
+
+  bridge.handleInvoke(
+    RunnerHostInvoke.registerSlackApp,
+    async (_event, bearerToken: unknown, request: unknown) => {
+      assertString(bearerToken, "registerSlackApp.bearerToken");
+      const parsedRequest = parseSlackAppRegisterRequest(request);
+      return registerSlackAppViaHttp(
+        config.serverBaseUrl,
+        bearerToken,
+        await iapProxyToken(),
+        parsedRequest,
       );
     },
   );

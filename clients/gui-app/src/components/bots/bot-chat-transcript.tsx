@@ -14,11 +14,7 @@ import {
 import { botMutationKeys } from "@/lib/query-keys/bot-mutation-keys";
 import type { TranscriptRowLocator } from "@traycer/protocol/persistence/chat-transcript/locate-row";
 import { useChatLocateRowAnswer } from "@/hooks/chats/use-chat-locate-row";
-import {
-  replyFollowsPost,
-  replyRowIdFor,
-  sendCardFor,
-} from "@/lib/bots/reply-row";
+import { replyRowIdFor, sendCardFor } from "@/lib/bots/reply-row";
 import { botTurnIndexOf, turnOfMessages } from "@/lib/bots/bot-turn-receipt";
 import type { BotTurnRef } from "@traycer/protocol/host/bot/conversation-schemas";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -33,6 +29,7 @@ import {
 } from "@/lib/bots/bot-member-names";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { BotChannelIntro } from "@/components/bots/bot-channel-intro";
+import { ChatTimelineHeaderContext } from "@/components/chat/chat-timeline-header-context";
 import {
   ChatMessages,
   type ChatMessageScrollRequest,
@@ -97,6 +94,11 @@ export type BotTranscriptSurface =
         readonly botTitle: string;
         readonly directive: string | null;
       };
+      /**
+       * A live team main bot's setup history (T67b), above every post and in
+       * place of the intro; `null` for any other channel.
+       */
+      readonly history: ReactNode;
     }
   | {
       readonly kind: "thread";
@@ -322,6 +324,21 @@ export function BotChatTranscript(props: {
 
 type ChannelIntro = Extract<BotTranscriptSurface, { kind: "channel" }>["intro"];
 
+/** An empty channel's first screen: its setup history, or else its intro. */
+function BotChannelOpening(props: {
+  readonly history: ReactNode;
+  readonly intro: ChannelIntro;
+}): ReactNode {
+  return (
+    props.history ?? (
+      <BotChannelIntro
+        botTitle={props.intro.botTitle}
+        directive={props.intro.directive}
+      />
+    )
+  );
+}
+
 /**
  * A channel nobody has written in opens with what it is for, as Slack's
  * does; a windowed one is empty only when the host counts no row. `null`
@@ -385,12 +402,12 @@ function BotChatTranscriptBody(props: {
   const tabClient = useTabHostClient();
   const subagentDrillIn = useSubagentDrillIn(state.snapshotLoaded);
 
-  // "See reply" names the reply's MESSAGE id; the list lands by RENDERED ROW
-  // key, so the id is resolved to the row that renders it (see
-  // `replyRowIdFor`). A reply outside the hydrated window has no row yet: the
-  // id is held as pending, the host locates its ordinal, the store hydrates
-  // around it (`requestTranscriptOrdinal`), and the scroll is issued the
-  // moment the row renders.
+  // A landing names a MESSAGE id; the list lands by RENDERED ROW key, so the
+  // id is resolved to the row that renders it (see `replyRowIdFor`). A
+  // message outside the hydrated window has no row yet: the id is held as
+  // pending, the host locates its ordinal, the store hydrates around it
+  // (`requestTranscriptOrdinal`), and the scroll is issued the moment the
+  // row renders.
   // Requests are numbered past every one issued, settled ones included: the
   // list drops a request whose id it has handled, and a settled request is
   // cleared.
@@ -425,10 +442,6 @@ function BotChatTranscriptBody(props: {
       setPendingJump(jump);
     },
     [issueScroll, messages],
-  );
-  const scrollToMessage = useCallback(
-    (messageId: string) => jumpTo({ kind: "message", messageId }),
-    [jumpTo],
   );
   const land = useCallback(
     (landing: BotTranscriptLanding) =>
@@ -510,8 +523,6 @@ function BotChatTranscriptBody(props: {
   });
   const presentation = useMemo<ChatBotPresentation | null>(() => {
     if (surface === null) return null;
-    const followsPost = (postMessageId: string, replyMessageId: string) =>
-      replyFollowsPost(messages, postMessageId, replyMessageId);
     const questions = {
       botId,
       viewerUserId: profile?.userId ?? null,
@@ -523,8 +534,6 @@ function BotChatTranscriptBody(props: {
     if (surface.kind === "thread") {
       return {
         botTitle: title,
-        scrollToMessage,
-        replyFollowsPost: followsPost,
         threadLine: null,
         openThread: null,
         openAnnouncementThread: null,
@@ -537,10 +546,6 @@ function BotChatTranscriptBody(props: {
     }
     return {
       botTitle: title,
-      // A thread post's verdict is in its thread, which the thread line
-      // opens; a direct post's reply is here.
-      scrollToMessage,
-      replyFollowsPost: followsPost,
       threadLine: surface.threadLine,
       openThread: surface.openThread,
       openAnnouncementThread: surface.openAnnouncementThread,
@@ -550,20 +555,12 @@ function BotChatTranscriptBody(props: {
       failedRequest: surface.failedRequest,
       ...turns,
     };
-  }, [
-    botId,
-    messages,
-    profile,
-    resolveMember,
-    scrollToMessage,
-    surface,
-    title,
-    turns,
-  ]);
+  }, [botId, profile, resolveMember, surface, title, turns]);
 
   const transcriptWindow = isWindowedTranscript(state)
     ? state.transcriptWindow
     : null;
+  const channelHistory = surface?.kind === "channel" ? surface.history : null;
   const intro = channelIntro(
     surface,
     state.snapshotLoaded,
@@ -579,10 +576,7 @@ function BotChatTranscriptBody(props: {
         data-testid="bot-channel-not-here-yet"
         className="flex min-h-0 flex-1 flex-col"
       >
-        <BotChannelIntro
-          botTitle={surface.intro.botTitle}
-          directive={surface.intro.directive}
-        />
+        <BotChannelOpening history={surface.history} intro={surface.intro} />
       </div>
     );
   }
@@ -597,36 +591,40 @@ function BotChatTranscriptBody(props: {
           className="flex min-h-0 flex-1 flex-col"
         >
           {intro !== null ? (
-            <BotChannelIntro
-              botTitle={intro.botTitle}
-              directive={intro.directive}
-            />
+            <BotChannelOpening history={channelHistory} intro={intro} />
           ) : (
-            <TasklessMarkdownLinkProvider tabId={instanceId} tabHostId={hostId}>
-              <ChatMessages
-                taskTitle={title}
-                taskId={chatId}
-                epicId={botId}
-                hostId={hostId}
-                messages={messages}
-                transcriptWindow={transcriptWindow}
-                onVisibleOrdinalRangeChange={state.reportVisibleTranscriptRange}
-                onFindReadOrdinalChange={state.requestFindReadOrdinal}
-                baselineEpoch={state.transcriptBaselineEpoch}
-                hydrationSequence={state.transcriptHydrationSequence}
-                coldRewrittenMessageIds={state.coldRewrittenMessageIds}
-                backgroundItems={state.backgroundItems}
-                getMessageActions={getMessageActions}
-                nextStepActions={null}
-                instanceId={instanceId}
-                visible
-                systemOverlayActive={false}
-                scrollRequest={scrollRequest}
-                onScrollRequestSettled={onScrollRequestSettled}
-                composerOverlayHeight={0}
-                subagentDrillIn={subagentDrillIn}
-              />
-            </TasklessMarkdownLinkProvider>
+            <ChatTimelineHeaderContext value={channelHistory}>
+              <TasklessMarkdownLinkProvider
+                tabId={instanceId}
+                tabHostId={hostId}
+              >
+                <ChatMessages
+                  taskTitle={title}
+                  taskId={chatId}
+                  epicId={botId}
+                  hostId={hostId}
+                  messages={messages}
+                  transcriptWindow={transcriptWindow}
+                  onVisibleOrdinalRangeChange={
+                    state.reportVisibleTranscriptRange
+                  }
+                  onFindReadOrdinalChange={state.requestFindReadOrdinal}
+                  baselineEpoch={state.transcriptBaselineEpoch}
+                  hydrationSequence={state.transcriptHydrationSequence}
+                  coldRewrittenMessageIds={state.coldRewrittenMessageIds}
+                  backgroundItems={state.backgroundItems}
+                  getMessageActions={getMessageActions}
+                  nextStepActions={null}
+                  instanceId={instanceId}
+                  visible
+                  systemOverlayActive={false}
+                  scrollRequest={scrollRequest}
+                  onScrollRequestSettled={onScrollRequestSettled}
+                  composerOverlayHeight={0}
+                  subagentDrillIn={subagentDrillIn}
+                />
+              </TasklessMarkdownLinkProvider>
+            </ChatTimelineHeaderContext>
           )}
         </div>
       </ChatBotPresentationContext.Provider>

@@ -34,6 +34,7 @@ import {
 import { BotReadFailure } from "@/components/bots/bot-read-failure";
 import { BotReplyingStrip } from "@/components/bots/bot-replying-strip";
 import { BotTaskList } from "@/components/bots/bot-task-list";
+import { BotThreadFollowControl } from "@/components/bots/bot-thread-follow";
 import { ChannelPost } from "@/components/bots/bot-channel-post";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useBotConversationSendMutation } from "@/hooks/bots/use-bot-mutations";
@@ -53,7 +54,6 @@ import type {
   ChatBotQuestions,
   ChatBotTurnReceipt,
 } from "@/components/chat/chat-bot-presentation-context";
-import { tasksOfThread } from "@/lib/bots/bot-trunk-model";
 import type { BotMemberResolver } from "@/lib/bots/bot-member-names";
 import { threadOriginRow } from "@/lib/bots/reply-row";
 import { useAuthStore } from "@/stores/auth/auth-store";
@@ -168,6 +168,13 @@ export function BotThreadPanel(props: {
   // A send from the panel that fails, a retry of its post included, says so
   // in the panel's box.
   const sendFailure = useBotSendFailure();
+  const viewerUserId = useAuthStore((s) => s.profile?.userId ?? null);
+  // A thread the person's send just opened is theirs; a listed one is whose
+  // post it hangs off.
+  const postedByViewer =
+    props.thread.kind === "posted" ||
+    (viewerUserId !== null &&
+      (thread?.anchor?.senderUserId ?? null) === viewerUserId);
   return (
     <section
       aria-label="Thread"
@@ -187,6 +194,14 @@ export function BotThreadPanel(props: {
             <span className="truncate">{botTitle}</span>
           </span>
         </div>
+        {threadId === null ? null : (
+          <BotThreadFollowControl
+            botId={props.botId}
+            hostId={props.hostId}
+            threadId={threadId}
+            postedByViewer={postedByViewer}
+          />
+        )}
         {thread === null ? null : (
           <Button
             type="button"
@@ -446,7 +461,10 @@ function ThreadTasks(props: {
   readonly tasks: ReadonlyArray<BotTaskEntry>;
 }): ReactNode {
   const { botId, hostId, threadId, thread, tasks } = props;
-  const own = useMemo(() => tasksOfThread(tasks, threadId), [tasks, threadId]);
+  const own = useMemo(
+    () => tasks.filter((task) => task.createdByChatId === threadId),
+    [tasks, threadId],
+  );
   const threads = useMemo(() => (thread === null ? [] : [thread]), [thread]);
   const place = useMemo(
     () => ({ kind: "thread" as const, threadId }),
@@ -503,7 +521,7 @@ function useCollapsed(element: HTMLElement | null): boolean {
 }
 
 /**
- * The origin's row: no thread to open, no jump, no options to pick, and a
+ * The origin's row: no thread to open, no options to pick, and a
  * question's card that says how each question was settled and is answered
  * in the channel.
  */
@@ -515,8 +533,6 @@ function originPresentation(
 ): ChatBotPresentation {
   return {
     botTitle,
-    scrollToMessage: null,
-    replyFollowsPost: null,
     threadLine: null,
     openThread: null,
     openAnnouncementThread: null,

@@ -4,7 +4,7 @@
  * drawn by the real `<ChatMessage>`), its message box and the `bot.conversation
  * .send` mutation run over a host client whose messenger records the request
  * that leaves. Only the virtualised list is replaced by a stub, as in the
- * reply-jump suite. What is asserted is what the host RECEIVES: a first reply
+ * channel-rows suite. What is asserted is what the host RECEIVES: a first reply
  * under a question opens its thread, an option clicked in a thread is the
  * person's next message in it, and a thread hung off the bot's own row is
  * drawn as the bot's, with no request to show. Every state opens on the
@@ -230,7 +230,9 @@ const resolveMember: BotMemberResolver = (userId) =>
     ? { displayName: "Tess Teammate", avatarUrl: null }
     : null;
 
-function threadSummary(anchorSenderUserId: string | null): BotThreadSummary {
+function threadSummary(anchorSenderUserId: string | null): BotThreadSummary & {
+  readonly anchor: NonNullable<BotThreadSummary["anchor"]>;
+} {
   return {
     threadId: THREAD_ID,
     conversationId: CONVERSATION_ID,
@@ -249,7 +251,9 @@ function threadSummary(anchorSenderUserId: string | null): BotThreadSummary {
   };
 }
 
-function botReply(options: ReadonlyArray<string> | null): Message {
+function botReply(
+  options: ReadonlyArray<string> | null,
+): Extract<Message, { role: "assistant" }> {
   const base: Extract<Message, { role: "assistant" }> = {
     role: "assistant",
     messageId: "reply-1",
@@ -318,9 +322,11 @@ const SEND_RESPONSE: BotConversationSendResponse = {
 /** The channel's own rows, where the anchor's text is read from. */
 let channelMessages: ReadonlyArray<Message>;
 
-function announcement(messageId: string, text: string): Message {
+function announcement(
+  messageId: string,
+  text: string,
+): Extract<Message, { role: "assistant" }> {
   const base = botReply(null);
-  if (base.role !== "assistant") throw new Error("botReply is the bot's row");
   return {
     ...base,
     messageId,
@@ -446,7 +452,9 @@ function panelTree(thread: BotThreadPanelThread): ReactNode {
   );
 }
 
-function listed(anchorSenderUserId: string | null): BotThreadPanelThread {
+function listed(
+  anchorSenderUserId: string | null,
+): Extract<BotThreadPanelThread, { kind: "listed" }> {
   return {
     kind: "listed",
     retry: null,
@@ -532,7 +540,6 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
   /** The member's post, then the bot's direct reply to it, on the channel. */
   function answeredPost(): void {
     const answer = announcement("answer-1", "It failed on the retry job.");
-    if (answer.role !== "assistant") throw new Error("expected the bot's row");
     channelMessages = [
       {
         role: "user",
@@ -632,7 +639,6 @@ describe("<BotThreadPanel /> a direct reply nobody has replied under", () => {
     const user = userEvent.setup();
     answeredPost();
     const taking = listed("user-teammate");
-    if (taking.kind !== "listed") throw new Error("expected a listed thread");
     const panel = mountPanel(taking, []);
     const box = screen.getByTestId("bot-thread-composer-input");
     await user.type(box, "Which job?");
@@ -747,7 +753,6 @@ describe("<BotThreadPanel /> a direct reply's box through a failed read", () => 
 describe("<BotThreadPanel /> a listed thread", () => {
   it("puts the box right under the post of a listed thread with no reply yet, with no count or rule, and keeps its replies subscribed", () => {
     const zero = listed("user-teammate");
-    if (zero.kind !== "listed") throw new Error("expected a listed thread");
     mountPanel(
       {
         kind: "listed",
@@ -866,7 +871,6 @@ describe("<BotThreadPanel /> a listed thread", () => {
   it("sends no reply and no picked option while it does not take a send, keeping the draft, and sends both once it does again", async () => {
     const user = userEvent.setup();
     const taking = listed("user-teammate");
-    if (taking.kind !== "listed") throw new Error("expected a listed thread");
     const view = mountPanel(taking, [botReply(["Ship it", "Hold"])]);
     const box = screen.getByRole("textbox", { name: "Reply in the thread" });
     if (!(box instanceof HTMLTextAreaElement)) throw new Error("no reply box");
@@ -902,7 +906,6 @@ describe("<BotThreadPanel /> a listed thread", () => {
     const user = userEvent.setup();
     const retry = vi.fn<() => void>();
     const taking = listed("user-teammate");
-    if (taking.kind !== "listed") throw new Error("expected a listed thread");
     const panel = mountPanel({ ...taking, retry, sendable: false }, [
       botReply(null),
     ]);
@@ -1054,7 +1057,6 @@ describe("<BotThreadPanel /> a thread its post opened as it was sent", () => {
     const box = replyBox();
     await user.type(box, "And the nightly?");
     const zero = listed("user-teammate");
-    if (zero.kind !== "listed") throw new Error("expected a listed thread");
 
     mocks.threadHandle.held = true;
     view.rerender(
@@ -1138,7 +1140,7 @@ describe("<BotThreadPanel /> the anchor", () => {
     cleanup();
 
     const resolved = listed("user-teammate");
-    if (resolved.kind !== "listed" || resolved.thread.anchor === null) {
+    if (resolved.thread.anchor === null) {
       throw new Error("expected a listed thread with an anchor");
     }
     mountPanel(
@@ -1425,7 +1427,6 @@ describe("<BotThreadPanel /> a message the bot failed to answer", () => {
     const user = userEvent.setup();
     activityStore.setState({ activity: threadFailedOn(REPLY_REQUEST) });
     const taking = listed(VIEWER_USER_ID);
-    if (taking.kind !== "listed") throw new Error("expected a listed thread");
     const view = mountPanel({ ...taking, sendable: false }, [
       memberMessage(
         "member-reply-1",
@@ -2003,10 +2004,7 @@ describe("<BotThreadPanel /> the thread's tasks", () => {
         kind: "listed",
         thread: {
           ...summary,
-          anchor:
-            summary.anchor === null
-              ? null
-              : { ...summary.anchor, messageId: postId },
+          anchor: { ...summary.anchor, messageId: postId },
         },
         retry: null,
         sendable: true,

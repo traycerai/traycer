@@ -11,7 +11,7 @@ import {
 import { useStreamAuthRevalidator } from "@/lib/host/stream-auth-revalidator";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useHostStreamClientFor } from "@/hooks/host/use-host-stream-client-for";
-import { invalidateBotLists } from "@/hooks/bots/use-bot-mutations";
+import { hostQueryKeys } from "@/lib/query-keys";
 
 type StreamClient = IHostStreamClient<HostStreamRpcRegistry>;
 
@@ -45,7 +45,9 @@ export function useBotListChangedSubscriptionForHost(
  * Keeps `bot.list` current while a bots surface is mounted (Tracy Bots):
  * holds a `bot.listChanged` subscription on `hostId` and invalidates every
  * host's `bot.list` on each `changed` frame, the way the app's own bot writes
- * do. The frame carries nothing; the list is refetched.
+ * do, and every host's `bot.onboarding.read`, whose team setup turns live
+ * when the team's main bot is created on the team's host (T67b). The frame
+ * carries nothing; the reads are refetched.
  *
  * ONE session per host, however many surfaces ask (Home and an open bot tab
  * read the same host through two different clients): two sessions would
@@ -142,6 +144,18 @@ function joinSharedSession(
   };
 }
 
+/** One invalidation for both reads a `changed` frame makes stale, on every host scope. */
+function invalidateOnBotListChanged(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({
+    predicate: (query) =>
+      hostQueryKeys.matchesMethodOnAnyHost(query.queryKey, "bot.list") ||
+      hostQueryKeys.matchesMethodOnAnyHost(
+        query.queryKey,
+        "bot.onboarding.read",
+      ),
+  });
+}
+
 /**
  * Puts the session on a remaining consumer's client when it has none, or
  * rides a client no remaining consumer holds. The session can be gone before
@@ -175,7 +189,7 @@ function openOn(entry: SharedSession, client: StreamClient): void {
     if (closed) return;
     const parsed = botListChangedServerFrameSchema.safeParse(envelope);
     if (!parsed.success || parsed.data.kind !== "changed") return;
-    invalidateBotLists(entry.queryClient);
+    invalidateOnBotListChanged(entry.queryClient);
   });
   session.onStatusChange((status, reason) => {
     if (closed) return;

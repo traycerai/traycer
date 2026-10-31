@@ -1,14 +1,8 @@
-diff --git a/node_modules/@legendapp/list/.bun-tag-4b52ac0e691df484 b/.bun-tag-4b52ac0e691df484
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
-diff --git a/node_modules/@legendapp/list/.bun-tag-4c2b088007216e56 b/.bun-tag-4c2b088007216e56
-new file mode 100644
-index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/react-native.web.d.ts b/react-native.web.d.ts
-index b6c7481603f4119495551b3e4c1c071984c144af..54cfca30be22310b025fc2ad0af66f91dba32bba 100644
+index b6c7481603f4119495551b3e4c1c071984c144af..cb3af95517da36eab8a357c047fc157c21b24007 100644
 --- a/react-native.web.d.ts
 +++ b/react-native.web.d.ts
-@@ -562,6 +562,8 @@ type LegendListState$1 = {
+@@ -562,14 +562,20 @@ type LegendListState$1 = {
      isWithinMaintainScrollAtEndThreshold: boolean;
      getAverageItemSizes: () => Record<string, LegendListAverageItemSize>;
      indexByKey: (key: string) => number | undefined;
@@ -16,8 +10,22 @@ index b6c7481603f4119495551b3e4c1c071984c144af..54cfca30be22310b025fc2ad0af66f91
 +    keyAtIndex: (index: number) => string;
      listen: <T extends LegendListListenerType>(listenerType: T, callback: (value: ListenerTypeValueMap[T]) => void) => () => void;
      listenToPosition: (key: string, callback: (value: number) => void) => () => void;
-     positionAtIndex: (index: number) => number;
-@@ -683,6 +685,12 @@ type LegendListRef$1 = {
+-    positionAtIndex: (index: number) => number;
++    /** Patched: `positions[index]`, a layout-pass output, so a row the
++     *  current pass has not laid out has no position here. */
++    positionAtIndex: (index: number) => number | undefined;
+     positionByKey: (key: string) => number | undefined;
+     scroll: number;
+     scrollLength: number;
+     scrollVelocity: number;
+-    sizeAtIndex: (index: number) => number;
++    /** Patched: `sizesKnown.get(...)`, so a row the list has never measured
++     *  has no size here. It does not fall back to the layout estimate. */
++    sizeAtIndex: (index: number) => number | undefined;
+     sizes: Map<string, number>;
+     start: number;
+     startBuffered: number;
+@@ -683,6 +689,12 @@ type LegendListRef$1 = {
       * @param size - The measured item size.
       */
      setItemSize(itemKey: string, size: Pick<LayoutRectangle, "height" | "width">): void;
@@ -1267,10 +1275,10 @@ index c96345be154d77f66c26ea42cea15a18e22f5dfa..9c0cb47c5974e05965816218e21e09cb
          columns: [],
          containerItemGenerations: [],
 diff --git a/react.d.ts b/react.d.ts
-index b6c7481603f4119495551b3e4c1c071984c144af..54cfca30be22310b025fc2ad0af66f91dba32bba 100644
+index b6c7481603f4119495551b3e4c1c071984c144af..cb3af95517da36eab8a357c047fc157c21b24007 100644
 --- a/react.d.ts
 +++ b/react.d.ts
-@@ -562,6 +562,8 @@ type LegendListState$1 = {
+@@ -562,14 +562,20 @@ type LegendListState$1 = {
      isWithinMaintainScrollAtEndThreshold: boolean;
      getAverageItemSizes: () => Record<string, LegendListAverageItemSize>;
      indexByKey: (key: string) => number | undefined;
@@ -1278,8 +1286,22 @@ index b6c7481603f4119495551b3e4c1c071984c144af..54cfca30be22310b025fc2ad0af66f91
 +    keyAtIndex: (index: number) => string;
      listen: <T extends LegendListListenerType>(listenerType: T, callback: (value: ListenerTypeValueMap[T]) => void) => () => void;
      listenToPosition: (key: string, callback: (value: number) => void) => () => void;
-     positionAtIndex: (index: number) => number;
-@@ -683,6 +685,12 @@ type LegendListRef$1 = {
+-    positionAtIndex: (index: number) => number;
++    /** Patched: `positions[index]`, a layout-pass output, so a row the
++     *  current pass has not laid out has no position here. */
++    positionAtIndex: (index: number) => number | undefined;
+     positionByKey: (key: string) => number | undefined;
+     scroll: number;
+     scrollLength: number;
+     scrollVelocity: number;
+-    sizeAtIndex: (index: number) => number;
++    /** Patched: `sizesKnown.get(...)`, so a row the list has never measured
++     *  has no size here. It does not fall back to the layout estimate. */
++    sizeAtIndex: (index: number) => number | undefined;
+     sizes: Map<string, number>;
+     start: number;
+     startBuffered: number;
+@@ -683,6 +689,12 @@ type LegendListRef$1 = {
       * @param size - The measured item size.
       */
      setItemSize(itemKey: string, size: Pick<LayoutRectangle, "height" | "width">): void;

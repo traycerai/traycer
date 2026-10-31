@@ -7,7 +7,11 @@ import {
   AvatarImage,
 } from "@/components/ui/avatar";
 import { computeInitials } from "@/lib/auth/compute-initials";
-import { resolveProfileAccentColor } from "@/lib/providers/profile-accent-color";
+import {
+  type BotSwatch,
+  resolveBotSwatch,
+  resolveProfileAccentColor,
+} from "@/lib/providers/profile-accent-color";
 import { useBotIdentity } from "@/components/bots/bot-identity-context";
 
 type IdentityAvatarSize = "xs" | "sm" | "default" | "lg";
@@ -15,9 +19,10 @@ type IdentityAvatarSize = "xs" | "sm" | "default" | "lg";
 /**
  * Who a picture is of, in a bot's channel and everywhere a bot appears
  * (Tracy Bots, T62): a person is a circle, a bot a squircle. Without a
- * picture it shows the initials on a colour hashed from who it is (the
- * profile badges' palette), so two members with no picture still tell apart
- * at a glance; the smallest size has room for one letter.
+ * picture it shows the initials on a colour hashed from who it is (a person
+ * on the profile badges' palette, a bot on its two tones of those hues), so
+ * two members with no picture still tell apart at a glance; the smallest size
+ * has room for one letter.
  */
 function IdentityAvatar(props: {
   readonly kind: "bot" | "person";
@@ -30,6 +35,10 @@ function IdentityAvatar(props: {
 }): ReactElement {
   const { kind, name, seed, avatarUrl, size, testId } = props;
   const initials = computeInitials(name, "");
+  const swatch: BotSwatch =
+    kind === "bot"
+      ? resolveBotSwatch(seed)
+      : { color: resolveProfileAccentColor(seed, null), ink: "dark" };
   return (
     <Avatar
       shape={kind === "bot" ? "squircle" : "circle"}
@@ -41,10 +50,14 @@ function IdentityAvatar(props: {
       <AvatarFallback
         style={
           {
-            "--swatch": resolveProfileAccentColor(seed, null),
+            "--swatch": swatch.color,
           } as CSSProperties
         }
-        className="bg-[var(--swatch)] font-semibold text-neutral-950"
+        className={
+          swatch.ink === "light"
+            ? "bg-[var(--swatch)] font-semibold text-white"
+            : "bg-[var(--swatch)] font-semibold text-neutral-950"
+        }
       >
         {size === "xs" ? initials.slice(0, 1) : initials}
       </AvatarFallback>

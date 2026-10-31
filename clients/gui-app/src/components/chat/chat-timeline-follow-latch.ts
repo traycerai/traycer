@@ -290,6 +290,22 @@ interface ListRowTop {
   readonly rowCount: number;
 }
 
+/** What the list can say about the size of the row a lift recorded. Three
+ *  answers, and `readerEndShift` compares them for equality, so they must
+ *  stay distinct:
+ *
+ *  - a number: the list has measured that row, and this is its size;
+ *  - `undefined`: the list has never measured it, so it has none to give.
+ *    `sizeAtIndex` reads `sizesKnown`, which holds measured rows only, and
+ *    does not fall back to the estimate the row is laid out with;
+ *  - `null`: the row the lift recorded is neither the row standing last nor
+ *    a turn re-keyed in place, so no row here is the one to size.
+ *
+ *  Collapsing `undefined` into `null` would make a lift whose row was never
+ *  measured compare equal once the transcript grows past it, admitting an
+ *  arrival at an end that may have moved. */
+type UnreadRowSize = number | null | undefined;
+
 /** What a gesture's end is tracked by: the block of the content it was
  *  thrown at, or the row that content sits in. Shared by the momentum a
  *  lift records and the candidate a toward-end gesture arms, which read it
@@ -300,7 +316,7 @@ interface ReaderEndTracking {
   /** How tall the list held `lastRow` when there was no tail block to
    *  capture, and null when there was one. A row that is no longer this
    *  tall has moved the end by an amount nothing can read back. */
-  readonly unreadRowSize: number | null;
+  readonly unreadRowSize: UnreadRowSize;
 }
 
 interface ReaderEndCandidate {
@@ -310,7 +326,7 @@ interface ReaderEndCandidate {
   /** As `ReaderMomentumEnd.tailBlock`, for the gesture's end. */
   readonly tailBlock: TailBlock | null;
   /** As `ReaderMomentumEnd.unreadRowSize`, for the gesture's end. */
-  readonly unreadRowSize: number | null;
+  readonly unreadRowSize: UnreadRowSize;
   /** The list's last row when the gesture began, read only when the tail
    *  block cannot be (`tailBlockShift`). Rows above the reader that the list
    *  remeasures since move it, and the list moves the reader with them, so
@@ -340,7 +356,7 @@ interface ReaderMomentumEnd {
   readonly lastRow: ListRowTop | null;
   /** How tall the list held that row at the lift, when it had rendered no
    *  tail block to capture; null when it had. See `readerEndShift`. */
-  readonly unreadRowSize: number | null;
+  readonly unreadRowSize: UnreadRowSize;
   /** Where the view stood at the lift, carried with every announced write
    *  since (`noteScrollerMoved`), so it stays an offset this view can be
    *  read against. Momentum travels from the lift toward the end: a view
@@ -470,6 +486,56 @@ function armAwaitsScrollAway(
     arm.blocksAutomaticCorrection &&
     arm.direction === "away-from-end"
   );
+}
+
+/** A scrollbar press still held. It publishes a reading position but no
+ *  direction, so `canReaderGestureMove` reports it movable and it always
+ *  blocks correction: the flag would say nothing here, and the direction is
+ *  what names the contact. */
+function armHoldsPressContact(
+  arm: ArmedReaderDeparture,
+): arm is ReaderGestureArm {
+  return arm?.source === "gesture" && arm.direction === "indeterminate";
+}
+
+/** Whether a scrollbar press stands after this intent.
+ *
+ *  A pointer contact is the only intent with no direction of its own, so it
+ *  both names a press beginning and ends whichever stood before it: one on the
+ *  scroller publishes a reading position and holds its button down, while any
+ *  other contact - or an owned navigation - says the last press is over. A
+ *  directional intent, a key or a wheel, leaves the press as it was, because
+ *  the button is still down through them. */
+function pressStandsAfterIntent(
+  intent: ChatTimelineReaderGestureIntent,
+  pressStands: boolean,
+): boolean {
+  if (intent.direction !== "indeterminate") return pressStands;
+  return intent.publishesReaderPosition;
+}
+
+/** Whether a gesture intent replaces the contact standing before it.
+ *
+ *  A touch contact outlives every intent during it: neither a delivered
+ *  `touchmove` nor a pointer preflight ends it. Replacing it with a gesture
+ *  arm would let a strict-bottom report release that arm, leaving the rest of
+ *  the contact - which iOS may deliver as bare scroll reports - unprotected.
+ *  Only the lift ends the contact.
+ *
+ *  A held press outlives an intent that cannot move the view. The button is
+ *  still down, and a key that moves nothing at the edge is not the reader
+ *  letting go of it: at the end a toward-end key steps nowhere, so it leaves
+ *  no report to judge the press by. Replacing the press's arm there drops it -
+ *  toward the end `readerGestureArm` returns none at all while follow holds -
+ *  and the drag that follows then reads as layout-owned, its report correcting
+ *  the view away from where the press stands. An intent that can move the view
+ *  is the reader's own movement, and takes the arm as any gesture does. */
+function intentReplacesArm(
+  arm: ArmedReaderDeparture,
+  blocksAutomaticCorrection: boolean,
+): boolean {
+  if (arm?.source === "touch") return false;
+  return !(armHoldsPressContact(arm) && !blocksAutomaticCorrection);
 }
 
 /** The arm a gesture outside a touch contact leaves: none for one that
@@ -943,7 +1009,7 @@ function tailBlockShift(
 function lastRowSizeOf(
   list: LegendListRef | null,
   row: ListRowTop | null,
-): number | null {
+): UnreadRowSize {
   if (list === null || row === null) return null;
   const state = list.getState();
   const last = state.data.length - 1;
@@ -1063,7 +1129,7 @@ function touchReferenceRow(
     index += 1
   ) {
     const top = state.positionAtIndex(index);
-    if (top > geometry.scrollTop) {
+    if (top !== undefined && top > geometry.scrollTop) {
       return {
         key: state.keyAtIndex(index),
         top,
@@ -1247,8 +1313,7 @@ function canReaderGestureMove(
 }
 
 /**
- * Fixup (fix-detached-streaming-yank/callback-synchronous-follow): replaces
- * the rejected render-gated `maintainScrollAtEnd` design entirely.
+ * Replaces the rejected render-gated `maintainScrollAtEnd` design entirely.
  *
  * The installed `@legendapp/list` source shows every one of its own
  * `doMaintainScrollAtEnd` call sites (data change, item-layout, footer-
@@ -1362,6 +1427,12 @@ export function useChatTimelineFollowLatch(
   const armedReaderDepartureRef = useRef<ArmedReaderDeparture>(null);
   const activeCorrectionRef = useRef<ActiveEndCorrection | null>(null);
   const pendingEndCorrectionScrollRef = useRef<Promise<void> | null>(null);
+  // Whether a scrollbar press is still held. A drag under it moves the view
+  // and reports late, so a correction that leaves the list a queued end
+  // command can land it after the drag has moved on - see `startEndCorrection`.
+  // The press's own release is not reliable evidence on its own: it can be
+  // delivered to another element entirely, so every clear below stands for it.
+  const pressIsDownRef = useRef(false);
   const readerEndCandidateRef = useRef<ReaderEndCandidate | null>(null);
   // From a touch lift until the next reader input or owned navigation: the
   // momentum after the lift is the reader's own motion, with no touch event
@@ -1515,6 +1586,10 @@ export function useChatTimelineFollowLatch(
         readerDepartureScrollTopRef.current = null;
         departureOwedRef.current = false;
       }
+      pressIsDownRef.current = pressStandsAfterIntent(
+        intent,
+        pressIsDownRef.current,
+      );
       const readerGestureGeneration = readerGestureGenerationRef.current;
       ownsFreeNavigationRef.current = false;
       cancelActiveCorrection();
@@ -1537,12 +1612,12 @@ export function useChatTimelineFollowLatch(
         permissionRef.current &&
         intent.direction === "toward-end" &&
         !isTouchContact;
-      // A touch contact outlives every intent during it: neither a delivered
-      // `touchmove` nor a pointer preflight ends it. Replacing it with a
-      // gesture arm would let a strict-bottom report release that
-      // arm, leaving the rest of the contact - which iOS may deliver as bare
-      // scroll reports - unprotected. Only the lift ends the contact.
-      if (!isTouchContact) {
+      if (
+        intentReplacesArm(
+          armedReaderDepartureRef.current,
+          blocksAutomaticCorrection,
+        )
+      ) {
         armedReaderDepartureRef.current = readerGestureArm(
           intent,
           continuesFollow,
@@ -1751,14 +1826,29 @@ export function useChatTimelineFollowLatch(
         moveChatTimelineScroller(node, end, () => {
           node.scrollTop = end;
         });
-        const pendingScroll = list.scrollToEnd({ animated: false });
-        pendingEndCorrectionScrollRef.current = pendingScroll;
-        const clearPendingScroll = (): void => {
-          if (pendingEndCorrectionScrollRef.current === pendingScroll) {
-            pendingEndCorrectionScrollRef.current = null;
-          }
-        };
-        void pendingScroll.then(clearPendingScroll, clearPendingScroll);
+        if (pressIsDownRef.current) {
+          // Under a held press the queued command is the one write that can
+          // outlive the reader's next movement: the list releases it once its
+          // layout has been still for two frames, and a drag reports late, so
+          // it can land after the drag has carried the view away and take it
+          // back to an end the reader has already left. The immediate write
+          // above still lands this correction's end, and the retry below still
+          // follows the content as it grows; only the queued copy, which exists
+          // to bring the list's own offset along, waits for the release.
+          supersedePendingEndCorrection();
+        } else {
+          const pendingScroll = list.scrollToEnd({ animated: false });
+          pendingEndCorrectionScrollRef.current = pendingScroll;
+          const clearPendingScroll = (): void => {
+            if (pendingEndCorrectionScrollRef.current === pendingScroll) {
+              pendingEndCorrectionScrollRef.current = null;
+            }
+          };
+          void pendingScroll.then(clearPendingScroll, clearPendingScroll);
+        }
+        // Outside the branch on purpose: this burst is what follows content
+        // that grows after the write above, so gating the queued command must
+        // never stop it being scheduled.
         scheduleValidation();
       };
 
@@ -1770,6 +1860,7 @@ export function useChatTimelineFollowLatch(
       noteViewRead,
       noteViewportGrowthClamp,
       publishUnannouncedDeparture,
+      supersedePendingEndCorrection,
     ],
   );
 
@@ -2832,7 +2923,23 @@ export function useChatTimelineFollowLatch(
       // scroll reports.
       noteReaderLift();
     };
+    // Every clear of `pressIsDownRef` publishes nothing and reads no geometry:
+    // the press ending is not itself reader movement, and the correction that
+    // follows decides what to do from live geometry as it always has.
+    const clearPressIsDown = (): void => {
+      pressIsDownRef.current = false;
+    };
+    // A pointer event with no button down cannot belong to a held press, so it
+    // stands for a release this node never saw: one delivered to another
+    // element, or swallowed while the window was not focused.
+    const clearPressIsDownIfNoButtons = (event: PointerEvent): void => {
+      if (event.buttons !== 0) return;
+      pressIsDownRef.current = false;
+    };
     const completePointerPreflight = (): void => {
+      // Ahead of the arm test below, which is a no-op once the arm is spent:
+      // the release ends the press whether or not an arm is still standing.
+      pressIsDownRef.current = false;
       const armedDeparture = armedReaderDepartureRef.current;
       if (
         armedDeparture?.source === "gesture" &&
@@ -2890,6 +2997,27 @@ export function useChatTimelineFollowLatch(
     node.addEventListener("pointercancel", completePointerPreflight, {
       passive: true,
     });
+    // A scrollbar press releases wherever the pointer happens to be, and the
+    // capture phase is the only place this node is guaranteed to hear it. The
+    // window loses focus with the button still down (an OS drag, a tab switch),
+    // and a later pointer event with no button down proves the release
+    // happened unseen. Together these stand for a node release that never
+    // comes, so the press cannot be left standing after it is over.
+    window.addEventListener("pointerup", clearPressIsDown, {
+      capture: true,
+      passive: true,
+    });
+    window.addEventListener("pointercancel", clearPressIsDown, {
+      capture: true,
+      passive: true,
+    });
+    window.addEventListener("blur", clearPressIsDown);
+    window.addEventListener("pointermove", clearPressIsDownIfNoButtons, {
+      passive: true,
+    });
+    window.addEventListener("pointerover", clearPressIsDownIfNoButtons, {
+      passive: true,
+    });
     // Viewport-layout trigger (divider drag / pane resize): fires with no
     // ChatTimeline render at all. Like every maintain trigger, it may heal a
     // stale false latch only when fresh geometry is already at the strict
@@ -2941,6 +3069,15 @@ export function useChatTimelineFollowLatch(
       node.removeEventListener("touchcancel", clearTouch);
       node.removeEventListener("pointerup", completePointerPreflight);
       node.removeEventListener("pointercancel", completePointerPreflight);
+      window.removeEventListener("pointerup", clearPressIsDown, {
+        capture: true,
+      });
+      window.removeEventListener("pointercancel", clearPressIsDown, {
+        capture: true,
+      });
+      window.removeEventListener("blur", clearPressIsDown);
+      window.removeEventListener("pointermove", clearPressIsDownIfNoButtons);
+      window.removeEventListener("pointerover", clearPressIsDownIfNoButtons);
       resizeObserver.disconnect();
       contentStyleObserver.disconnect();
       cancelActiveCorrection();

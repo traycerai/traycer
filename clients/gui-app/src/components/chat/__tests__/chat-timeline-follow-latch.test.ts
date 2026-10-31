@@ -272,21 +272,22 @@ function makeFakeListState(list: {
     isStartReached: false,
     isWithinMaintainScrollAtEndThreshold: false,
     getAverageItemSizes: () => ({}),
-    indexByKey: (key) => keys.indexOf(key),
+    indexByKey: (key) => {
+      const index = keys.indexOf(key);
+      return index === -1 ? undefined : index;
+    },
     keyAtIndex: (index) => keys[index],
     listen: () => () => undefined,
     listenToPosition: () => () => undefined,
-    positionAtIndex: (index) => rowTops.get(keys[index]) ?? 0,
+    positionAtIndex: (index) => rowTops.get(keys[index]),
     positionByKey: (key) => rowTops.get(key),
     scroll: 0,
     scrollLength: 0,
     scrollVelocity: 0,
     // The list answers `sizesKnown.get(...)`, so a row it has never
     // measured has no size - it does not fall back to the estimate it lays
-    // the row out with. Its type says `number`, so a row never measured is
-    // spelled 0 here; no fixture measures a row at 0, so the two cannot be
-    // confused.
-    sizeAtIndex: (index) => rowSizes.get(keys[index]) ?? 0,
+    // the row out with, and it answers `undefined` rather than a number.
+    sizeAtIndex: (index) => rowSizes.get(keys[index]),
     sizes: new Map(),
     start: 0,
     startBuffered: 0,
@@ -8844,6 +8845,375 @@ describe("useChatTimelineFollowLatch", () => {
         expect(onFollowIntentChange).not.toHaveBeenCalledWith(true);
         expect(listRef.scrollToEnd).not.toHaveBeenCalled();
       });
+    });
+
+    // --- intentReplacesArm parity witnesses (Class 2: green on main AND on
+    // the fix; teeth only from mutants) ----------------------------------
+
+    describe("a standing arm's replacement by the next gesture", () => {
+      it("Class 2.1: a toward-end intent with room to move still takes the arm from a standing press", () => {
+        // Mount already at the strict bottom so the mount-time maintain
+        // pass is a no-op and permission stays granted, then move off it
+        // with no scroll report - the press itself is the first thing to
+        // happen, before any report of the view having left the tail.
+        const node = shim.makeNode({
+          scrollTop: 1000,
+          scrollHeight: 1500,
+          clientHeight: 500,
+        });
+        const listRef = makeFakeListRef(node);
+        const onFollowIntentChange = vi.fn();
+        const { result } = renderHook(() =>
+          useChatTimelineFollowLatch(listRef, true, true, {
+            ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+            onFollowIntentChange,
+          }),
+        );
+        listRef.scrollToEnd.mockClear();
+        shim.setGeometry(node, { scrollTop: 600 });
+
+        // A scrollbar press standing at scrollTop=600 (indeterminate).
+        result.current.noteReaderGesture({
+          direction: "indeterminate",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        // A toward-end intent with 400px of room: replaces the press's arm,
+        // exactly as on main - the press gets no special treatment here.
+        result.current.noteReaderGesture({
+          direction: "toward-end",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+
+        // A report back at the SAME offset (600, unchanged). An
+        // indeterminate press's own hold (`indeterminateArmHoldsFollow`)
+        // would read this as "not landed yet" and stay silent; a replaced
+        // arm has no such hold, so nothing blocks the normal maintain
+        // correction toward the end.
+        fireNativeScroll(node);
+
+        // The correction's own write to the end is what says it ran, rather
+        // than the queued list command: a correction issued while the button
+        // is still down leaves no queued copy at all, so that command is no
+        // evidence either way here. An arm the press kept would have held this
+        // write off and left the view at 600.
+        expect(node.scrollTop).toBe(1000);
+        expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      });
+
+      it("Class 2.1: a non-indeterminate standing gesture is replaced by a later toward-end intent with no room, exactly as on main", () => {
+        const node = shim.makeNode({
+          scrollTop: 1000,
+          scrollHeight: 1500,
+          clientHeight: 500,
+        });
+        const listRef = makeFakeListRef(node);
+        const onFollowIntentChange = vi.fn();
+        const { result } = renderHook(() =>
+          useChatTimelineFollowLatch(listRef, true, true, {
+            ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+            onFollowIntentChange,
+          }),
+        );
+        listRef.scrollToEnd.mockClear();
+
+        // A standing away-from-end gesture (a wheel up, say) at the strict
+        // bottom - movable, so it blocks automatic correction, but it is
+        // never a press: `armHoldsPressContact` only ever answers true for
+        // an INDETERMINATE direction.
+        result.current.noteReaderGesture({
+          direction: "away-from-end",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        // A toward-end key at the strict bottom, with no room to move:
+        // still replaces the standing arm, because it was never a press.
+        result.current.noteReaderGesture({
+          direction: "toward-end",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+
+        shim.setGeometry(node, { scrollTop: 950 });
+        fireNativeScroll(node);
+
+        expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+        expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+      });
+
+      it("Class 2.3: a touch contact absorbs a same-offset report as a tap; a replaced arm would not", () => {
+        // Mount at the strict bottom (so the mount-time maintain pass is a
+        // no-op and never silently writes scrollTop back to the end), then
+        // move off it with no scroll report, as the press-room test above
+        // does.
+        const node = shim.makeNode({
+          scrollTop: 1000,
+          scrollHeight: 1500,
+          clientHeight: 500,
+        });
+        const listRef = makeFakeListRef(node);
+        const onFollowIntentChange = vi.fn();
+        renderHook(() =>
+          useChatTimelineFollowLatch(listRef, true, true, {
+            ...DEFAULT_FOLLOW_LATCH_OPTIONS,
+            onFollowIntentChange,
+          }),
+        );
+        listRef.scrollToEnd.mockClear();
+        shim.setGeometry(node, { scrollTop: 900 });
+
+        fireTouch(node, "touchstart", 100);
+        // A touchmove reports a toward-end intent mid-contact (the real
+        // production path: `handleTouchMove` itself calls
+        // `noteReaderGesture`). It must not displace the touch arm.
+        fireTouch(node, "touchmove", 80);
+
+        // A report back at the exact step offset (900, unchanged) - a tap,
+        // by the touch arm's own rule (`publishArmedDeparture`'s touch
+        // branch). A plain gesture arm has no such exception and would
+        // read this as its own one-shot departure.
+        fireNativeScroll(node);
+
+        expect(onFollowIntentChange).not.toHaveBeenCalledWith(false);
+        expect(listRef.scrollToEnd).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  // --- T2: pressIsDownRef gates the held end-correction command -----------
+
+  describe("a standing scrollbar press gates the correction's held command", () => {
+    interface PressGateHarness {
+      readonly node: HTMLDivElement;
+      readonly listRef: FakeListRef;
+      readonly result: { readonly current: ChatTimelineFollowLatch };
+    }
+
+    /** Mounted already at the strict bottom, so the mount-time maintain
+     *  pass is a no-op and never confounds the press-arming below (see the
+     *  PressKey suite's own note on this). */
+    function mountPressGateHarness(): PressGateHarness {
+      const node = shim.makeNode({
+        scrollTop: 1000,
+        scrollHeight: 1500,
+        clientHeight: 500,
+      });
+      const listRef = makeFakeListRef(node);
+      const { result } = renderHook(() =>
+        useChatTimelineFollowLatch(
+          listRef,
+          true,
+          true,
+          DEFAULT_FOLLOW_LATCH_OPTIONS,
+        ),
+      );
+      listRef.scrollToEnd.mockClear();
+      return { node, listRef, result };
+    }
+
+    /** Arms a press (indeterminate, publishing), then replaces it with a
+     *  toward-end intent that has room to move: PressKey's Class 2.1 shape.
+     *  `continuesFollow` is true (still following, toward-end, not touch),
+     *  so the arm clears to null even though the button is still down -
+     *  the one shape in which a correction can actually run while
+     *  `pressIsDownRef` stays true. */
+    function pressDownWithNoBlockingArm(harness: PressGateHarness): void {
+      harness.result.current.noteReaderGesture({
+        direction: "indeterminate",
+        freezeInFlightScroll: true,
+        publishesReaderPosition: true,
+      });
+      shim.setGeometry(harness.node, { scrollHeight: 1900 });
+      harness.result.current.noteReaderGesture({
+        direction: "toward-end",
+        freezeInFlightScroll: true,
+        publishesReaderPosition: true,
+      });
+    }
+
+    it("Class 1 (the gate): a correction under a standing press writes the end immediately but creates no held command", () => {
+      const harness = mountPressGateHarness();
+
+      pressDownWithNoBlockingArm(harness);
+      fireNativeScroll(harness.node);
+
+      // The immediate announced write still lands the correction's end.
+      expect(harness.node.scrollTop).toBe(1400);
+      // The held list command, and its bookkeeping, are skipped outright.
+      expect(harness.listRef.scrollToEnd).not.toHaveBeenCalled();
+    });
+
+    describe("five clear-only sources, each clearing the press and nothing else", () => {
+      it("Class 2 (parity): a window pointerup (capture) clears the press; the standing arm still needs its own replacement before a correction can run", () => {
+        const { node, listRef, result } = mountPressGateHarness();
+
+        result.current.noteReaderGesture({
+          direction: "indeterminate",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        // The node's own pointerup never arrives - delivered elsewhere
+        // entirely. Only the window capture-phase listener sees it.
+        window.dispatchEvent(new PointerEvent("pointerup"));
+        shim.setGeometry(node, { scrollHeight: 1900 });
+        result.current.noteReaderGesture({
+          direction: "toward-end",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        fireNativeScroll(node);
+
+        expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      });
+
+      it("Class 2 (parity): a window pointercancel (capture) clears the press; the standing arm still needs its own replacement before a correction can run", () => {
+        const { node, listRef, result } = mountPressGateHarness();
+
+        result.current.noteReaderGesture({
+          direction: "indeterminate",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        window.dispatchEvent(new PointerEvent("pointercancel"));
+        shim.setGeometry(node, { scrollHeight: 1900 });
+        result.current.noteReaderGesture({
+          direction: "toward-end",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        fireNativeScroll(node);
+
+        expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      });
+
+      it("Class 2 (parity): a window blur clears the press (an OS drag/tab switch with the button still down); the standing arm still needs its own replacement", () => {
+        const { node, listRef, result } = mountPressGateHarness();
+
+        result.current.noteReaderGesture({
+          direction: "indeterminate",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        window.dispatchEvent(new Event("blur"));
+        shim.setGeometry(node, { scrollHeight: 1900 });
+        result.current.noteReaderGesture({
+          direction: "toward-end",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        fireNativeScroll(node);
+
+        expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      });
+
+      it("Class 2 (parity): a window pointermove with buttons===0 proves a release this node never saw, clearing the press; the standing arm still needs its own replacement", () => {
+        const { node, listRef, result } = mountPressGateHarness();
+
+        result.current.noteReaderGesture({
+          direction: "indeterminate",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        window.dispatchEvent(new PointerEvent("pointermove", { buttons: 0 }));
+        shim.setGeometry(node, { scrollHeight: 1900 });
+        result.current.noteReaderGesture({
+          direction: "toward-end",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        fireNativeScroll(node);
+
+        expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      });
+
+      it("Class 2 (parity): a fresh pointerdown (not itself publishing) clears both the press and its arm before being re-set", () => {
+        const { node, listRef, result } = mountPressGateHarness();
+
+        result.current.noteReaderGesture({
+          direction: "indeterminate",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: true,
+        });
+        // A fresh contact that is not itself a scrollbar press - a bare
+        // content-tap preflight, `publishesReaderPosition: false` - ends
+        // the standing press and its arm in the same call, before
+        // `pressStandsAfterIntent` computes the (false) value it is reset
+        // to.
+        result.current.noteReaderGesture({
+          direction: "indeterminate",
+          freezeInFlightScroll: true,
+          publishesReaderPosition: false,
+        });
+        shim.setGeometry(node, { scrollHeight: 1700 });
+        result.current.followEndIfPermitted();
+
+        expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("Class 2 (parity): the growth-follow burst still reissues while the press is held, even though its held command is gated", () => {
+      const harness = mountPressGateHarness();
+
+      pressDownWithNoBlockingArm(harness);
+      fireNativeScroll(harness.node);
+      expect(harness.node.scrollTop).toBe(1400);
+
+      // Content grows again before the burst's two-frame reissue - the
+      // held command is not what follows this, since it was never created.
+      shim.setGeometry(harness.node, { scrollHeight: 2100 });
+      flushAnimationFrame();
+      flushAnimationFrame();
+
+      expect(harness.node.scrollTop).toBe(1600);
+    });
+
+    it("Class 1 (the gate): a correction under a standing press retires a command the press's own path could not", () => {
+      const { node, listRef, result } = mountHeldFollowing();
+
+      // A correction before any press leaves the list a held end command.
+      shim.setGeometry(node, { scrollHeight: 1700 });
+      result.current.followEndIfPermitted();
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      expect(node.scrollTop).toBe(1200);
+
+      // The press lands while the surface is unmeasurable - a collapsed or
+      // hidden tile, `clientHeight` 0. `noteReaderGesture`'s own retirement
+      // needs geometry, so this is the one shape in which a press starts with
+      // a held end command still standing behind it.
+      shim.setGeometry(node, { clientHeight: 0 });
+      result.current.noteReaderGesture({
+        direction: "indeterminate",
+        freezeInFlightScroll: true,
+        publishesReaderPosition: true,
+      });
+      expect(listRef.cancelPendingScroll).not.toHaveBeenCalled();
+
+      // Measured again, with room toward the end: the press's arm is replaced
+      // (PressKey's rule) and `continuesFollow` clears it, so a correction can
+      // run. The press itself still stands - a directional intent leaves it as
+      // it was, the button being down through it.
+      shim.setGeometry(node, { clientHeight: 500, scrollHeight: 1900 });
+      result.current.noteReaderGesture({
+        direction: "toward-end",
+        freezeInFlightScroll: true,
+        publishesReaderPosition: true,
+      });
+      expect(listRef.cancelPendingScroll).not.toHaveBeenCalled();
+
+      result.current.followEndIfPermitted();
+      // The immediate write lands this correction's end, no new command is
+      // queued, and the stale one is retired here or nowhere.
+      expect(node.scrollTop).toBe(1400);
+      expect(listRef.scrollToEnd).toHaveBeenCalledTimes(1);
+      expect(listRef.cancelPendingScroll).toHaveBeenCalled();
+
+      // The drag carries the view away with its report still queued, as a
+      // drag's report always lags. A command that survived the correction
+      // settles over the reader here.
+      shim.setGeometry(node, { scrollTop: 467 });
+      listRef.settle();
+      expect(node.scrollTop).toBe(467);
     });
   });
 });

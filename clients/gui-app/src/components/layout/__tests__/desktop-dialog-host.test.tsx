@@ -354,6 +354,14 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "unauthorized" as const }),
     openSandboxAutomation: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
+    readSlackApp: () => Promise.resolve({ kind: "unauthorized" as const }),
+    getSlackAppManifest: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    registerSlackApp: () => Promise.resolve({ kind: "unauthorized" as const }),
+    mintSlackAppInstallUrl: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    disconnectSlackApp: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxGrants: () => Promise.resolve({ kind: "unauthorized" as const }),
     getTeamEnvironment: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
@@ -416,7 +424,14 @@ function createBaseRunnerHost(): IRunnerHost {
     onLocalHostChange: () => ({ dispose: () => undefined }),
     onLocalHostUnresponsive: () => ({ dispose: () => undefined }),
     onSystemResumed: () => ({ dispose: () => undefined }),
+    onSystemSuspended: () => ({ dispose: () => undefined }),
     onNetworkPathChanged: () => ({ dispose: () => undefined }),
+    getVoiceAvailability: () =>
+      Promise.resolve({ kind: "ok" as const, available: false }),
+    mintVoiceSession: () => Promise.resolve({ kind: "dormant" as const }),
+    endVoiceSession: () =>
+      Promise.resolve({ kind: "ok" as const, closedAt: null }),
+    setVoiceSessionLive: () => Promise.resolve(),
     requestHostRespawn: () => Promise.resolve({ kind: "restarted" as const }),
     forceRestartUnresponsiveHost: () =>
       Promise.resolve({ kind: "restarted" as const }),

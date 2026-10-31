@@ -121,6 +121,18 @@ import {
 import type { SelectionAuthorityClient } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 import type { Disposable } from "@traycer-clients/shared/platform/uri-callback";
 import {
+  disconnectSlackAppViaHttp,
+  fetchSlackAppManifestViaHttp,
+  mintSlackAppInstallUrlViaHttp,
+  readSlackAppViaHttp,
+  registerSlackAppViaHttp,
+  type SlackAppInstallUrlResult,
+  type SlackAppManifestResult,
+  type SlackAppReadResult,
+  type SlackAppWriteResult,
+} from "@traycer-clients/shared/host-client/slack-app";
+import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
+import {
   createSandboxViaHttp,
   destroySandboxViaHttp,
   fetchSandboxCatalogueViaHttp,
@@ -142,6 +154,15 @@ import {
   type SandboxVerbFetchResult,
   type TraycerModelsFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
+import {
+  voiceSessionsAvailabilityViaHttp,
+  voiceSessionsEndViaHttp,
+  voiceSessionsMintViaHttp,
+  type VoiceAvailabilityFetchResult,
+  type VoiceSessionEndFetchResult,
+  type VoiceSessionMintFetchResult,
+  type VoiceSessionMintRequest,
+} from "@traycer-clients/shared/host-client/voice-sessions";
 import {
   decideSecretRequestViaHttp,
   fetchEnvironmentProvidersViaHttp,
@@ -736,6 +757,47 @@ export class MobileRunnerHost implements IRunnerHost {
     return fetchTraycerModelsViaHttp(this.serverBaseUrl, bearerToken, null);
   }
 
+  getVoiceAvailability(
+    bearerToken: string,
+  ): Promise<VoiceAvailabilityFetchResult> {
+    return voiceSessionsAvailabilityViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+    );
+  }
+
+  mintVoiceSession(
+    bearerToken: string,
+    request: VoiceSessionMintRequest,
+  ): Promise<VoiceSessionMintFetchResult> {
+    return voiceSessionsMintViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      request,
+    );
+  }
+
+  endVoiceSession(
+    bearerToken: string,
+    voiceSessionId: string,
+  ): Promise<VoiceSessionEndFetchResult> {
+    return voiceSessionsEndViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      voiceSessionId,
+    );
+  }
+
+  setVoiceSessionLive(live: boolean): Promise<void> {
+    // The phone has one window and no close; its background edge ends the
+    // session instead (the mobile voice ticket).
+    void live;
+    return Promise.resolve();
+  }
+
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -817,6 +879,61 @@ export class MobileRunnerHost implements IRunnerHost {
       bearerToken,
       null,
       target,
+    );
+  }
+
+  readSlackApp(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppReadResult> {
+    return readSlackAppViaHttp(this.serverBaseUrl, bearerToken, null, botId);
+  }
+
+  getSlackAppManifest(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppManifestResult> {
+    return fetchSlackAppManifestViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      botId,
+    );
+  }
+
+  registerSlackApp(
+    bearerToken: string,
+    request: SlackAppRegisterRequest,
+  ): Promise<SlackAppWriteResult> {
+    return registerSlackAppViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      request,
+    );
+  }
+
+  mintSlackAppInstallUrl(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppInstallUrlResult> {
+    return mintSlackAppInstallUrlViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      botId,
+    );
+  }
+
+  disconnectSlackApp(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppWriteResult> {
+    return disconnectSlackAppViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      botId,
     );
   }
 
@@ -962,6 +1079,13 @@ export class MobileRunnerHost implements IRunnerHost {
 
   onSystemResumed(handler: (event: SystemResumeEvent) => void): Disposable {
     return this.systemResume.subscribe(handler);
+  }
+
+  onSystemSuspended(handler: () => void): Disposable {
+    // The phone ends a voice session on its background edge, which the
+    // mobile voice ticket wires; nothing fires this signal here yet.
+    void handler;
+    return disposable();
   }
 
   onNetworkPathChanged(handler: () => void): Disposable {

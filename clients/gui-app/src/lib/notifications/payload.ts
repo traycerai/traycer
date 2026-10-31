@@ -32,6 +32,9 @@ import {
 } from "@/stores/chats/chat-transcript-jump-store";
 import { selectWorktreeCleanupView } from "@/stores/settings/worktree-cleanup-view-store";
 import { carryViewedHostIntoSettingsScope } from "@/components/settings/host-scope/carry-viewed-host-into-settings";
+import { botTabIntent } from "@/lib/tab-navigation/intents";
+import { lookupBotTab, useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 
 export type NotificationPayloadKind =
   | "session"
@@ -77,10 +80,23 @@ export interface InterviewNotificationPayload {
   readonly interviewBlockId: string | undefined;
 }
 
+/**
+ * A bot's conversation a notification is about (a push of the bot's
+ * channel, Tracy Bots VN4): the bot, the thread of it, and the row.
+ */
+export interface BotNotificationTarget {
+  readonly botId: string;
+  /** `null` for a row of the channel no thread hangs off. */
+  readonly threadId: string | null;
+  readonly messageId: string | null;
+}
+
 export interface ChatNotificationPayload {
   readonly kind: "chat";
   readonly epicId: string;
   readonly chatId: string | undefined;
+  /** Opens the bot's tab rather than the chat, where a bot is named. */
+  readonly bot?: BotNotificationTarget;
   /** Durable host binding of the chat itself. This may differ from the host
    * that authored the notification feed row. */
   readonly hostId?: string;
@@ -220,6 +236,7 @@ function parseChatPayload(
   const hostId = readString(value.hostId);
   const messageId = readString(value.messageId);
   const eventId = readString(value.eventId);
+  const botId = readString(value.botId);
   const scrollToEnd =
     value.outcome === "completed" && value.backgroundWorkRunning !== true;
   const includeTranscriptAnchor = !scrollToEnd;
@@ -227,6 +244,15 @@ function parseChatPayload(
     kind: "chat",
     epicId,
     chatId: chatId === null ? undefined : chatId,
+    ...(botId === null
+      ? {}
+      : {
+          bot: {
+            botId,
+            threadId: readString(value.threadId),
+            messageId,
+          },
+        }),
     ...(hostId === null ? {} : { hostId }),
     messageId:
       includeTranscriptAnchor && messageId !== null ? messageId : undefined,
@@ -524,11 +550,7 @@ export function routeNotificationForHost(
       );
       return true;
     case "chat":
-      return routeEpicChatNotification(navigate, payload, receivedAt, {
-        targetHostId: payload.hostId ?? originHostId,
-        effectiveHostId,
-        transcriptTarget: chatNotificationTranscriptTarget(payload),
-      });
+      return routeChatNotification(navigate, payload, receivedAt, context);
     case "terminal":
       routeTerminalNotification(navigate, payload, receivedAt);
       return true;
@@ -815,6 +837,55 @@ function parkChatTranscriptJump(
       payload.chatId,
       context.transcriptTarget,
     );
+}
+
+/** A chat row: the bot's tab where the row names its bot, else the chat. */
+function routeChatNotification(
+  navigate: NotificationNavigate,
+  payload: ChatNotificationPayload,
+  receivedAt: number,
+  context: NotificationHostRouteContext,
+): boolean {
+  const { originHostId, effectiveHostId } = context;
+  if (
+    payload.bot !== undefined &&
+    routeBotNotification(navigate, payload.bot, effectiveHostId)
+  ) {
+    return true;
+  }
+  return routeEpicChatNotification(navigate, payload, receivedAt, {
+    targetHostId: payload.hostId ?? originHostId,
+    effectiveHostId,
+    transcriptTarget: chatNotificationTranscriptTarget(payload),
+  });
+}
+
+/**
+ * Opens the bot's tab, landed on the thread beside its channel (or on the
+ * channel) once the tab can: the tab already open keeps its host, and a new
+ * one is bound to the window's. `false`, with nothing opened, while the
+ * window has no host to open it on: the chat route then opens the row as a
+ * chat.
+ */
+function routeBotNotification(
+  navigate: NotificationNavigate,
+  target: BotNotificationTarget,
+  effectiveHostId: string | null,
+): boolean {
+  const tabs = useBotTabsStore.getState();
+  const existing = lookupBotTab(tabs.tabs, target.botId);
+  const hostId = existing?.hostId ?? effectiveHostId;
+  if (hostId === null) return false;
+  // The tab names itself from the bot once it reads it.
+  if (existing === null) {
+    tabs.openBotTab({ botId: target.botId, hostId, title: "Bot" });
+  }
+  useBotTabLandingStore.getState().request(target.botId, {
+    threadId: target.threadId,
+    messageId: target.messageId,
+  });
+  navigateToTabIntent(navigate, botTabIntent(target.botId), undefined);
+  return true;
 }
 
 function routeEpicChatNotification(

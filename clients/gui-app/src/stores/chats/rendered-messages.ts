@@ -17,6 +17,7 @@ import type {
   BotQuestion,
   BotSurfaceReference,
 } from "@traycer/protocol/persistence/epic/messages";
+import type { BotSendReceipt } from "@traycer/protocol/persistence/epic/content-blocks";
 import type {
   ChatActiveTurn,
   ChatApprovalState,
@@ -5284,6 +5285,17 @@ function absentAsNull<T>(value: T | null): T | null {
   return read === undefined ? null : value;
 }
 
+/**
+ * A bot send's receipt, or `null`, normalizing older records: one from
+ * before the receipt's `slack` member (S4b) names a Traycer post.
+ */
+function botSendReceiptOf(
+  receipt: BotSendReceipt | null,
+): BotSendReceipt | null {
+  const read = absentAsNull(receipt);
+  return read === null ? null : { ...read, slack: absentAsNull(read.slack) };
+}
+
 /** A tool call's app stamp, or `null`, normalizing older records that omit the field. */
 function toolCallMcpAppStamp(
   block: Extract<OpenContentBlock, { type: "tool_call" }>,
@@ -5357,7 +5369,7 @@ const BLOCK_HANDLERS: {
     managedCommand: block.managedCommand,
     agentMessageReceipt: absentAsNull(block.agentMessageReceipt),
     agentMessageDelivery: absentAsNull(block.agentMessageDelivery),
-    botSendReceipt: absentAsNull(block.botSendReceipt),
+    botSendReceipt: botSendReceiptOf(block.botSendReceipt),
     isStreaming: block.status === "streaming",
     endState: segmentEndState(block.status),
     stopped: block.stopped,

@@ -16,6 +16,11 @@ import type {
   StepUpChallengeFetchResult,
   SandboxAutomationFetchResult,
   ExecutableWriteGrantFetchResult,
+  SlackAppInstallUrlResult,
+  SlackAppManifestResult,
+  SlackAppReadResult,
+  SlackAppRegisterRequest,
+  SlackAppWriteResult,
   SandboxAutomationOpenFetchResult,
   SandboxCatalogueFetchResult,
   SandboxCostsFetchResult,
@@ -36,6 +41,10 @@ import type {
   SecretRequestDecision,
   UpdateHostVersionPolicyFetchResult,
   UpdateHostVersionPolicyInput,
+  VoiceAvailabilityFetchResult,
+  VoiceSessionEndFetchResult,
+  VoiceSessionMintFetchResult,
+  VoiceSessionMintRequest,
 } from "../ipc-contracts/host-types";
 import type {
   CredentialsMigrationOutcome,
@@ -132,6 +141,18 @@ export interface AuthBridgeSurface {
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult>;
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
+  getVoiceAvailability(
+    bearerToken: string,
+  ): Promise<VoiceAvailabilityFetchResult>;
+  mintVoiceSession(
+    bearerToken: string,
+    request: VoiceSessionMintRequest,
+  ): Promise<VoiceSessionMintFetchResult>;
+  endVoiceSession(
+    bearerToken: string,
+    voiceSessionId: string,
+  ): Promise<VoiceSessionEndFetchResult>;
+  setVoiceSessionLive(live: boolean): Promise<void>;
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -165,6 +186,23 @@ export interface AuthBridgeSurface {
     bearerToken: string,
     target: SandboxAutomationOpenTarget | null,
   ): Promise<SandboxAutomationOpenFetchResult>;
+  readSlackApp(bearerToken: string, botId: string): Promise<SlackAppReadResult>;
+  getSlackAppManifest(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppManifestResult>;
+  registerSlackApp(
+    bearerToken: string,
+    request: SlackAppRegisterRequest,
+  ): Promise<SlackAppWriteResult>;
+  mintSlackAppInstallUrl(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppInstallUrlResult>;
+  disconnectSlackApp(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppWriteResult>;
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -283,6 +321,32 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
       ) as Promise<SandboxCatalogueFetchResult>,
 
+    getVoiceAvailability: (bearerToken) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getVoiceAvailability,
+        bearerToken,
+      ) as Promise<VoiceAvailabilityFetchResult>,
+
+    mintVoiceSession: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.mintVoiceSession,
+        bearerToken,
+        request,
+      ) as Promise<VoiceSessionMintFetchResult>,
+
+    endVoiceSession: (bearerToken, voiceSessionId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.endVoiceSession,
+        bearerToken,
+        voiceSessionId,
+      ) as Promise<VoiceSessionEndFetchResult>,
+
+    setVoiceSessionLive: (live) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.setVoiceSessionLive,
+        live,
+      ) as Promise<void>,
+
     getTraycerModels: (bearerToken) =>
       ipcRenderer.invoke(
         RunnerHostInvoke.getTraycerModels,
@@ -342,6 +406,41 @@ export function buildAuthBridge(): AuthBridgeSurface {
         bearerToken,
         target,
       ) as Promise<SandboxAutomationOpenFetchResult>,
+
+    readSlackApp: (bearerToken, botId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.readSlackApp,
+        bearerToken,
+        botId,
+      ) as Promise<SlackAppReadResult>,
+
+    getSlackAppManifest: (bearerToken, botId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.getSlackAppManifest,
+        bearerToken,
+        botId,
+      ) as Promise<SlackAppManifestResult>,
+
+    registerSlackApp: (bearerToken, request) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.registerSlackApp,
+        bearerToken,
+        request,
+      ) as Promise<SlackAppWriteResult>,
+
+    mintSlackAppInstallUrl: (bearerToken, botId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.mintSlackAppInstallUrl,
+        bearerToken,
+        botId,
+      ) as Promise<SlackAppInstallUrlResult>,
+
+    disconnectSlackApp: (bearerToken, botId) =>
+      ipcRenderer.invoke(
+        RunnerHostInvoke.disconnectSlackApp,
+        bearerToken,
+        botId,
+      ) as Promise<SlackAppWriteResult>,
 
     getSandboxGrants: (bearerToken, environmentId, hostId) =>
       ipcRenderer.invoke(

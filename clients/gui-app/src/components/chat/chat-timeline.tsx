@@ -18,6 +18,7 @@ import {
 import { cn } from "@/lib/utils";
 import { ChatEmptyState } from "@/components/chat/chat-empty-state";
 import { ChatBotPresentationContext } from "@/components/chat/chat-bot-presentation-context";
+import { ChatTimelineHeaderContext } from "@/components/chat/chat-timeline-header-context";
 import {
   ChatMessage,
   type ChatMessageActions,
@@ -99,7 +100,7 @@ function resolveChatTimelineMvcp(
     : CHAT_TIMELINE_MVCP_SIZE_ONLY;
 }
 
-// M4 (ticket 16 spacer alignment): the old 40px header/footer were
+// Spacer alignment: the old 40px header/footer were
 // unsanctioned drift (decision log #30).
 // Consumers read the live measured size via `onListMetricsChange`, so they
 // adapt automatically; nothing here is a hardcoded assumption elsewhere.
@@ -110,7 +111,7 @@ const CHAT_TIMELINE_LIST_FOOTER = (
   <div aria-hidden="true" className="h-3 sm:h-4" />
 );
 
-/** Ticket 5: LegendList's own `initialScrollIndex` shape - a row index plus
+/** LegendList's own `initialScrollIndex` shape - a row index plus
  *  the exact pixel offset/anchoring edge to bootstrap-scroll to. */
 export interface ChatTimelineInitialScrollAnchor {
   readonly index: number;
@@ -215,7 +216,7 @@ export interface ChatTimelineProps {
   /** Fires for every mounted virtual row, including cached equal-size rows. */
   readonly onRowMount?: (messageId: string) => void;
   /**
-   * Ticket 5: LegendList's measured header/footer sizes. The free-scrolling
+   * LegendList's measured header/footer sizes. The free-scrolling
    * save path needs `headerSize` as the top-offset adjustment that
    * `initialScrollIndex` / `scrollToIndex` re-add on restore (decision #18
    * exact-pixel contract) - `positionAtIndex` is content-relative and does
@@ -278,9 +279,9 @@ export const ChatTimeline = memo(function ChatTimeline({
     [isReattachSuppressed],
   );
 
-  // Fixup (fix-detached-streaming-yank/callback-synchronous-follow): see the
-  // hook's own doc comment. Bottom-follow is owned entirely here now -
-  // LegendList's own `maintainScrollAtEnd` is never passed at all below.
+  // See the hook's own doc comment. Bottom-follow is owned entirely here
+  // now - LegendList's own `maintainScrollAtEnd` is never passed at all
+  // below.
   const followLatch = useChatTimelineFollowLatch(
     listRef,
     initialScrollAtEnd,
@@ -314,6 +315,20 @@ export const ChatTimeline = memo(function ChatTimeline({
   const navigationHighlightStore = useNavigationHighlightStore(
     navigationHighlightedMessageId,
     navigationHighlightedBlockId,
+  );
+
+  const header = use(ChatTimelineHeaderContext);
+  const listHeader = useMemo(
+    () =>
+      header === null ? (
+        CHAT_TIMELINE_LIST_HEADER
+      ) : (
+        <>
+          {CHAT_TIMELINE_LIST_HEADER}
+          {header}
+        </>
+      ),
+    [header],
   );
 
   const sharedState = useMemo<ChatTimelineRowSharedState>(
@@ -372,10 +387,10 @@ export const ChatTimeline = memo(function ChatTimeline({
     onScroll?.();
   }, [followLatch, onScroll]);
 
-  // Fixup (callback-synchronous-follow): item-layout and footer/header-
-  // layout are two of the real LegendList maintain triggers that never
-  // re-enter this component's render - consult the latch right here, at the
-  // actual callback boundary, not through a prop the library reads later.
+  // Item-layout and footer/header-layout are two of the real LegendList
+  // maintain triggers that never re-enter this component's render - consult
+  // the latch right here, at the actual callback boundary, not through a
+  // prop the library reads later.
   const handleItemSizeChanged = useCallback(
     (info: ChatTimelineItemSizeInfo) => {
       // Only a HYDRATED row's measurement says anything true about how tall
@@ -459,17 +474,16 @@ export const ChatTimeline = memo(function ChatTimeline({
     };
   }, []);
 
-  // Fixup (callback-synchronous-follow): the data-change and content-inset
-  // maintain triggers DO go through a React commit (both are props), so a
-  // layout effect - synchronous, before paint - is the right boundary for
-  // them; the viewport-layout trigger has its own ResizeObserver inside the
-  // latch hook itself, since no prop change accompanies a pure container
-  // resize.
+  // The data-change and content-inset maintain triggers DO go through a
+  // React commit (both are props), so a layout effect - synchronous, before
+  // paint - is the right boundary for them; the viewport-layout trigger has
+  // its own ResizeObserver inside the latch hook itself, since no prop
+  // change accompanies a pure container resize.
   useLayoutEffect(() => {
     followLatch.followEndIfPermitted();
   }, [rows, contentInsetEndAdjustment, followLatch]);
 
-  // Ticket 23 (D20 port): registers this mounted timeline as a panel-resize
+  // D20: registers this mounted timeline as a panel-resize
   // participant so a divider drag's capture pass (see
   // `lib/layout/panel-resizing-class.ts`) can mark ITS OWN currently visible
   // rows right before the freeze class lands - see `ChatTimelineRow`'s own
@@ -518,14 +532,14 @@ export const ChatTimeline = memo(function ChatTimeline({
           initialScrollAtEnd={initialScrollAtEnd}
           initialScrollIndex={initialScrollIndex ?? undefined}
           contentInsetEndAdjustment={contentInsetEndAdjustment}
-          // Fixup (callback-synchronous-follow): the library's own
-          // `maintainScrollAtEnd` is never passed - every one of its internal
-          // call sites (data/item/footer/layout) no-ops when this prop is
-          // falsy, so leaving it unset makes them categorically unreachable.
-          // Bottom-follow is reimplemented in `chat-timeline-follow-latch.ts`
-          // and driven imperatively from the callbacks below instead - see
-          // that module's doc comment for why the library's own cached
-          // threshold could not be trusted, render-gated or not.
+          // The library's own `maintainScrollAtEnd` is never passed - every
+          // one of its internal call sites (data/item/footer/layout) no-ops
+          // when this prop is falsy, so leaving it unset makes them
+          // categorically unreachable. Bottom-follow is reimplemented in
+          // `chat-timeline-follow-latch.ts` and driven imperatively from
+          // the callbacks below instead - see that module's doc comment for
+          // why the library's own cached threshold could not be trusted,
+          // render-gated or not.
           //
           // The explicit zero still narrows `isWithinMaintainScrollAtEndThreshold`
           // (used internally by the library's own content-inset compensation)
@@ -576,7 +590,7 @@ export const ChatTimeline = memo(function ChatTimeline({
             className,
           )}
           {...TRANSCRIPT_LAYOUT_PASSIVE}
-          ListHeaderComponent={CHAT_TIMELINE_LIST_HEADER}
+          ListHeaderComponent={listHeader}
           ListFooterComponent={CHAT_TIMELINE_LIST_FOOTER}
           {...rest}
         />
@@ -600,7 +614,7 @@ function chatTimelineKeyExtractor(item: TranscriptListRow): string {
   return item.key;
 }
 
-/** Ticket 13 (bonus): the assistant estimate (14rem) is tuned for
+/** The assistant estimate (14rem) is tuned for
  *  multi-paragraph turns; a synthesized `role: "system"` row (the fork
  *  marker, the collapsed setup card) is a single hairline-ruled line, so
  *  reusing that estimate overshoots badly for the pre-measurement paint. */
@@ -639,7 +653,7 @@ function chatTimelineRowSizeHintClassName(
  * retention reversed decision #17). Same shape as
  * `rendered-messages.ts`'s per-context `WeakMap`s.
  *
- * Review fix (F4, ticket 16 batch review): the earlier `useState`-held `Map`
+ * The earlier `useState`-held `Map`
  * mutated mid-render was flagged as a lint loophole, not real purity - a
  * speculative/discarded React render still executes `useMemo`'s callback and
  * could publish a cache write that a LATER, actually-committed render then
@@ -746,7 +760,7 @@ function useCommittedKeySequenceChanged(
 }
 
 /**
- * One transcript row. Ticket 23's live profile measured a divider drag
+ * One transcript row. A live profile measured a divider drag
  * across two heavy transcripts at ~2x the idle frame budget (19.5-24% of
  * frames over 1.5x budget, 50-75ms long tasks); a count-only ResizeObserver
  * pass recorded substantial multi-row churn per pointermove (~22 entries in
