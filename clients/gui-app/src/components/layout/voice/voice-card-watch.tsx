@@ -2,6 +2,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
   type ReactNode,
 } from "react";
@@ -498,10 +499,43 @@ function VoiceSurfaceOpener(props: {
   const navigate = useNavigate();
   const effectiveHostId = useEffectiveHostId();
   const title = item.title.length > 0 ? item.title : botTitle;
-  const openPage = useBotSurfaceOpen(surface, null, title);
+  // A parked page the post names no tab of opens on its live park's tab, as
+  // the channel's card opens it: the task's open surfaces, from the bot's
+  // stream, are read first.
+  const needsPark = surface.kind === "browser" && surface.tabId === null;
+  const subscription = useBotSubscriptionForHost({
+    botId: item.botId,
+    hostId: item.hostId,
+    enabled: needsPark,
+  });
+  const snapshot = subscription.snapshot;
+  const open = useMemo(
+    () =>
+      snapshot === null
+        ? null
+        : openSurfaceOf(
+            surface,
+            snapshot.tasks.find((task) => task.taskId === surface.epicId)
+              ?.inputNeeded ?? null,
+          ),
+    [snapshot, surface],
+  );
+  const [waited, setWaited] = useState(!needsPark);
+  useEffect(() => {
+    if (waited) return;
+    const timer = window.setTimeout(() => setWaited(true), PARK_READ_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [waited]);
+  const ready =
+    !needsPark ||
+    open !== null ||
+    snapshot !== null ||
+    subscription.error !== null ||
+    waited;
+  const openPage = useBotSurfaceOpen(surface, open, title);
   const done = useRef(false);
   useEffect(() => {
-    if (done.current) return;
+    if (done.current || !ready) return;
     done.current = true;
     const now = useVoiceSessionStore.getState();
     if (now.phase === "idle" || now.sessionToken !== request.sessionToken) {
@@ -511,7 +545,13 @@ function VoiceSurfaceOpener(props: {
     let text: string;
     if (surface.kind === "browser") {
       openPage();
-      text = `${botTitle}'s page "${title}" is waiting for you to sign in. It is open now, in its task.`;
+      // With no tab known, the opener lands on the task (or the chat that
+      // parked the page), not the page: the voice says which.
+      const tabKnown =
+        surface.tabId !== null || open?.surface.kind === "browser";
+      text = tabKnown
+        ? `${botTitle}'s page "${title}" is waiting for you to sign in. It is open now, in its task.`
+        : `${botTitle}'s page "${title}" is waiting for you to sign in. Its task is open now.`;
     } else {
       // The channel's link policy opens an artifact in place; from here,
       // the task it is in is opened, as its notification does.
@@ -541,7 +581,9 @@ function VoiceSurfaceOpener(props: {
     effectiveHostId,
     navigate,
     onOpened,
+    open,
     openPage,
+    ready,
     request,
     speech,
     surface,
@@ -549,3 +591,6 @@ function VoiceSurfaceOpener(props: {
   ]);
   return null;
 }
+
+/** How long a parked page waits for its task's open surfaces before it opens without them. */
+export const PARK_READ_TIMEOUT_MS = 4_000;
