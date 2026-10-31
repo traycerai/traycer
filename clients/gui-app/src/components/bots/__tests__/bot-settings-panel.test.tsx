@@ -30,7 +30,10 @@ import {
   vi,
   type Mock,
 } from "vitest";
-import type { BotRecord } from "@traycer/protocol/host/bot/schemas";
+import type {
+  BotMemoryEntry,
+  BotRecord,
+} from "@traycer/protocol/host/bot/schemas";
 import {
   SLACK_APP_REFUSAL_BOT_NOT_FOUND,
   SLACK_APP_REFUSAL_NOT_CONFIGURED,
@@ -48,6 +51,15 @@ import {
   type BotIdentity,
   type BotOwner,
 } from "@/components/bots/bot-identity-context";
+import {
+  BotMemoryContext,
+  type BotMemoryAccess,
+} from "@/components/bots/bot-memory-context";
+import type { BotMemoryReading } from "@/hooks/bots/use-bot-memory";
+import {
+  memoryRailOver,
+  useBotOpenThreadStore,
+} from "@/stores/bots/bot-open-thread-store";
 import type { ComposerSeedSource } from "@/lib/composer/composer-seed-source";
 import type { ComposerToolbarStore } from "@/stores/composer/composer-toolbar-store";
 import type { ModelOption } from "@/components/home/data/landing-options";
@@ -55,6 +67,17 @@ import {
   maxModeListedFor,
   type MaxModeContext,
 } from "@/components/home/data/model-max-mode";
+
+function memoryEntry(index: number): BotMemoryEntry {
+  return {
+    id: `memory-${index}`,
+    text: `Memory ${index}`,
+    tags: ["bot_01ARZ3NDEKTSV4RRFFQ69G5FAV"],
+    writtenBy: { botId: null, chatId: "trunk-1", requestId: null },
+    at: 1_000,
+    confirmedAt: 1_000,
+  };
+}
 
 const mocks = vi.hoisted(() => ({
   hostClient: { stub: "tab-host-client" },
@@ -87,6 +110,8 @@ const mocks = vi.hoisted(() => ({
   usageSupported: false,
   // The host each read of that support asked about.
   usageSupportHosts: [] as Array<string | null>,
+  // What the bot's memory reads as (`useBotMemory`); `null` = unsupported.
+  memoryEntries: null as number | "loading" | null,
   // The binding `useHostBinding` answers: its `auth` is the Slack adapter.
   binding: null as { readonly auth: object } | null,
   // What each write's mutation reports as its error; `null` = no refusal.
@@ -127,6 +152,24 @@ vi.mock("@/hooks/usage-analytics/use-usage-summary-support", () => ({
   useUsageSummarySupported: (hostId: string | null) => {
     mocks.usageSupportHosts.push(hostId);
     return mocks.usageSupported;
+  },
+}));
+// The memory pane has its own suite (`bot-memory-pane.test.tsx`); here the
+// entry only counts what the stream reads.
+vi.mock("@/hooks/bots/use-bot-memory", () => ({
+  useBotMemory: (): BotMemoryReading => {
+    if (mocks.memoryEntries === null) return { kind: "unsupported" };
+    if (mocks.memoryEntries === "loading") return { kind: "loading" };
+    return {
+      kind: "ready",
+      memory: {
+        entries: Array.from({ length: mocks.memoryEntries }, (_, index) =>
+          memoryEntry(index),
+        ),
+        own: { entries: mocks.memoryEntries, chars: 0, ceiling: 8_000 },
+        shared: { entries: 0, chars: 0, ceiling: 8_000 },
+      },
+    };
   },
 }));
 // The usage dialog has its own suite; here it only shows which epic it reads.
@@ -360,6 +403,7 @@ beforeEach(() => {
   mocks.supportQueries.length = 0;
   mocks.usageSupported = false;
   mocks.usageSupportHosts.length = 0;
+  mocks.memoryEntries = null;
   mocks.notificationLevels = {};
   mocks.notificationSupport = true;
   mocks.notificationReadError = null;
@@ -882,6 +926,95 @@ describe("<BotChannelSettingsPanel /> as the channel's settings", () => {
     expect(groupTitles()).not.toContain("Usage");
     expect(screen.queryByRole("button", { name: "View usage" })).toBeNull();
     expect(new Set(mocks.usageSupportHosts)).toEqual(new Set(["host-1"]));
+  });
+
+  describe("what it knows", () => {
+    function mountKnowingPanel(): Mock<() => void> {
+      const onClose = vi.fn<() => void>();
+      const access: BotMemoryAccess = {
+        hostId: "host-1",
+        botId: BOT.botId,
+        environmentId: BOT.environmentId,
+        open: () =>
+          useBotOpenThreadStore
+            .getState()
+            .setRail(
+              BOT.botId,
+              memoryRailOver(
+                useBotOpenThreadStore.getState().byBotId[BOT.botId] ?? null,
+              ),
+            ),
+      };
+      render(
+        inProviders(
+          <BotMemoryContext value={access}>
+            <BotChannelSettingsPanel
+              bot={BOT}
+              personal
+              channelId={CHANNEL}
+              environmentBots={null}
+              onClose={onClose}
+            />
+          </BotMemoryContext>,
+        ),
+      );
+      return onClose;
+    }
+
+    beforeEach(() => {
+      useBotOpenThreadStore.setState({ byBotId: {} });
+    });
+
+    it("counts the memories and opens them where the bot's card opens them, closing the settings", async () => {
+      const user = userEvent.setup();
+      mocks.memoryEntries = 3;
+      const onClose = mountKnowingPanel();
+
+      const usage = screen.getByTestId("bot-settings-usage");
+      expect(
+        within(usage).queryByRole("button", { name: "View usage" }),
+      ).toBeNull();
+      const entry = within(usage).getByTestId("bot-settings-memory-open");
+      expect(entry.textContent).toBe("What it knows · 3 memories");
+      await user.click(entry);
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(useBotOpenThreadStore.getState().byBotId[BOT.botId]).toEqual({
+        kind: "memory",
+        back: null,
+      });
+    });
+
+    it("sits beside View usage where the host can read usage", () => {
+      mocks.usageSupported = true;
+      mocks.memoryEntries = 2;
+      mountKnowingPanel();
+
+      expect(
+        within(screen.getByTestId("bot-settings-usage"))
+          .getAllByRole("button")
+          .map((button) => button.textContent),
+      ).toEqual(["View usage", "What it knows · 2 memories"]);
+    });
+
+    it.each([
+      [1, "What it knows · 1 memory"],
+      ["loading" as const, "What it knows"],
+    ])("reads %s as %s", (entries, label) => {
+      mocks.memoryEntries = entries;
+      mountKnowingPanel();
+
+      expect(screen.getByTestId("bot-settings-memory-open").textContent).toBe(
+        label,
+      );
+    });
+
+    it("offers nothing on a host that cannot serve the memory, and no empty Usage group", () => {
+      mountKnowingPanel();
+
+      expect(screen.queryByTestId("bot-settings-memory-open")).toBeNull();
+      expect(groupTitles()).not.toContain("Usage");
+    });
   });
 
   it("groups a personal bot's channel with its reply mode and the model after it, and no members or bots", () => {
