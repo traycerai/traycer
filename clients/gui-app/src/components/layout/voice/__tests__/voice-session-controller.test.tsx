@@ -111,6 +111,28 @@ const fake = vi.hoisted(() => {
       };
     },
   };
+  // The attention tier as the voice reads it (`useVoiceAttention`): no
+  // unread replies or prompts unless a test sets them; `set` re-renders.
+  const noAttention = {
+    answers: [] as ReadonlyArray<unknown>,
+    prompts: { approvals: 0, questions: 0 },
+  };
+  let attentionValue = noAttention;
+  const attentionListeners = new Set<() => void>();
+  const attention = {
+    get: () => attentionValue,
+    subscribe: (listener: () => void): (() => void) => {
+      attentionListeners.add(listener);
+      return () => attentionListeners.delete(listener);
+    },
+    set: (value: typeof noAttention): void => {
+      attentionValue = value;
+      for (const listener of attentionListeners) listener();
+    },
+    reset: (): void => {
+      attentionValue = noAttention;
+    },
+  };
   function slot<T>(): { value: T | null } {
     return { value: null };
   }
@@ -141,6 +163,7 @@ const fake = vi.hoisted(() => {
   };
   return {
     personalEnvironment,
+    attention,
     mainBotList,
     botList: { value: mainBotList },
     doorbell: slot<MockWsStreamClient<StreamFrameEnvelope>>(),
@@ -277,6 +300,17 @@ vi.mock(
     useNotificationMarkEntityRead: () => ({ mutate: fake.markRead }),
   }),
 );
+vi.mock("@/hooks/voice/use-voice-attention", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    useVoiceAttention: () =>
+      useSyncExternalStore(fake.attention.subscribe, fake.attention.get),
+  };
+});
+vi.mock("@/hooks/bots/use-bot-activity", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/bots/use-bot-activity")>()),
+  useBotActivity: () => null,
+}));
 vi.mock("@/hooks/voice/use-voice-availability-query", () => ({
   useVoiceAvailabilityQuery: () => ({ data: true }),
 }));
@@ -480,6 +514,7 @@ beforeEach(() => {
   fake.engines.length = 0;
   fake.handles.clear();
   fake.threadList.set(undefined);
+  fake.attention.reset();
   fake.personalEnvironment.resolved();
   fake.botList.value = fake.mainBotList;
   fake.doorbell.value = new ServingStreamClient();
@@ -1374,7 +1409,7 @@ describe("the voice routes", () => {
     expect(mints.map((mutation) => mutation.state.status)).toEqual(["success"]);
     expect(mints[0]?.state.variables).toEqual({
       offerSdp: "offer",
-      input: "Listening.",
+      input: "Nothing needs your attention right now.",
     });
     expect(cache.findAll({ mutationKey: voiceMutationKeys.end() })).toEqual([]);
 

@@ -27,6 +27,11 @@ import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useHostClientForHostId } from "@/hooks/host/use-host-client-for-host-id";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useNotificationMarkEntityRead } from "@/hooks/notifications/use-notification-mark-entity-read-mutation";
+import {
+  useVoiceQueueOwner,
+  VOICE_SWITCH_SETTLE_MS,
+  type VoiceSwitch,
+} from "@/hooks/voice/use-voice-queue-owner";
 import { useVoiceAvailabilityQuery } from "@/hooks/voice/use-voice-availability-query";
 import {
   useVoiceMicrophoneAccessMutation,
@@ -69,7 +74,6 @@ import {
   type SpeechScheduler,
 } from "@/lib/voice/scheduler";
 import {
-  FIRST_SESSION_INPUT,
   MAX_SHORT_SESSIONS,
   REMINT_BEFORE_EXPIRY_MS,
   REMINT_CONTEXT_USAGE_RATIO,
@@ -77,6 +81,7 @@ import {
   remintInput,
 } from "@/lib/voice/session-input";
 import { useRunnerHost } from "@/providers/use-runner-host";
+import { VoiceQueueSources } from "@/components/layout/voice/voice-queue-feed";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
   useBotOpenThreadStore,
@@ -252,6 +257,14 @@ export function VoiceSessionController(): ReactNode {
     [],
   );
 
+  const voiceQueue = useVoiceQueueOwner({
+    ensureSpeech,
+    botList: bots.data,
+    appHostId,
+    botTitle,
+  });
+  const { beginQueue, noteChannel, noteFocused, resetQueue } = voiceQueue;
+
   // ---- Posting ---------------------------------------------------------- //
   const send = useBotConversationSendMutation(focusClient);
   const conversations = useBotConversationListQuery(
@@ -271,6 +284,9 @@ export function VoiceSessionController(): ReactNode {
       )?.conversationId ?? null
     );
   }, [bots.data, conversations.data, focus]);
+  useEffect(() => {
+    noteChannel(channelId);
+  }, [channelId, noteChannel]);
   const viewerUserId = useAuthStore((state) => state.profile?.userId ?? null);
   const { mutateAsync: sendAsync } = send;
   const sendRef = useRef<
@@ -507,13 +523,14 @@ export function VoiceSessionController(): ReactNode {
     (reason: VoiceEndReason | null) => {
       clearTimers();
       releaseAudio();
+      resetQueue();
       speechRef.current?.reset();
       sayLoopRef.current = null;
       watchMemories.clear();
       setShellVoiceLive(false);
       useVoiceSessionStore.getState().sessionEnded(reason);
     },
-    [clearTimers, releaseAudio, setShellVoiceLive, watchMemories],
+    [clearTimers, releaseAudio, resetQueue, setShellVoiceLive, watchMemories],
   );
 
   /**
@@ -844,6 +861,9 @@ export function VoiceSessionController(): ReactNode {
     const { sessionToken: token, engineGeneration: generation } =
       useVoiceSessionStore.getState();
     store.setFocus(destination);
+    // The first thing the session says is the briefing; what it covers is
+    // queued and not offered again.
+    const briefing = beginQueue();
     const stillStarting = (): boolean => {
       const now = useVoiceSessionStore.getState();
       return (
@@ -887,10 +907,11 @@ export function VoiceSessionController(): ReactNode {
     }
     micStreamRef.current = stream;
     applyCapture();
-    await connectEngine(FIRST_SESSION_INPUT);
+    await connectEngine(briefing);
   }, [
     appHostId,
     applyCapture,
+    beginQueue,
     connectEngine,
     finishLocal,
     microphoneAccessAsync,
@@ -953,8 +974,10 @@ export function VoiceSessionController(): ReactNode {
         <VoiceSelectionSync
           onManualChange={() => sayLoop().onSelectionChanged()}
           onResolved={() => void sayLoopRef.current?.onFocusResolved()}
+          voiceSwitch={voiceQueue.voiceSwitch}
         />
       ) : null}
+      {running ? <VoiceQueueSources owner={voiceQueue} /> : null}
       {running && focus !== null && channelId !== null && speech !== null ? (
         <VoiceFocusedReplyFeed
           key={`${focus.botId}:${focus.threadId ?? channelId}`}
@@ -977,6 +1000,7 @@ export function VoiceSessionController(): ReactNode {
           isAwaiting={(requestId) =>
             sayLoopRef.current?.isAwaiting(requestId) ?? false
           }
+          onScheduled={noteFocused}
         />
       ) : null}
     </>
@@ -1057,8 +1081,9 @@ function VoiceSelectionSync(props: {
   readonly onManualChange: () => void;
   /** The thread list resolved the anchor the focus already names. */
   readonly onResolved: () => void;
+  readonly voiceSwitch: { current: VoiceSwitch | null };
 }): null {
-  const { onManualChange, onResolved } = props;
+  const { onManualChange, onResolved, voiceSwitch } = props;
   const focusedRef = useTabsStore(selectHostFocusedRef);
   const activeBotId = focusedRef?.kind === "bot" ? focusedRef.id : null;
   const tab = useBotTabsStore((state) =>
@@ -1074,14 +1099,44 @@ function VoiceSelectionSync(props: {
 
   useEffect(() => {
     if (activeBotId === null || tab === null) return;
-    applySelection(
-      focusOf(activeBotId, tab.hostId, thread, listed),
-      onManualChange,
-      onResolved,
-    );
-  }, [activeBotId, listed, onManualChange, onResolved, tab, thread]);
+    const selection = focusOf(activeBotId, tab.hostId, thread, listed);
+    if (followsVoiceSwitch(selection, voiceSwitch)) return;
+    applySelection(selection, onManualChange, onResolved);
+  }, [activeBotId, listed, onManualChange, onResolved, tab, thread, voiceSwitch]);
 
   return null;
+}
+
+/**
+ * Whether a selection is the landing of a switch the voice made, not the
+ * person's move. While it is pending, a selection of that bot is the voice's
+ * own: the one it lands on is written to the focus and ends the switch; the
+ * ones it passes through (the channel before the thread opens, an earlier
+ * rail) leave the focus where the switch put it. A selection of another bot,
+ * or one after the wait, ends the switch and is the person's.
+ */
+function followsVoiceSwitch(
+  selection: VoiceFocus,
+  voiceSwitch: { current: VoiceSwitch | null },
+): boolean {
+  const pending = voiceSwitch.current;
+  if (pending === null) return false;
+  if (
+    selection.botId !== pending.botId ||
+    Date.now() - pending.at > VOICE_SWITCH_SETTLE_MS
+  ) {
+    voiceSwitch.current = null;
+    return false;
+  }
+  const landed =
+    pending.threadId === null
+      ? selection.anchorMessageId === null
+      : selection.threadId === pending.threadId;
+  if (landed) {
+    voiceSwitch.current = null;
+    useVoiceSessionStore.getState().setFocus(selection);
+  }
+  return true;
 }
 
 /**
@@ -1199,6 +1254,8 @@ function VoiceFocusedReplyFeed(props: {
   readonly registerReconcile: (
     reconcile: (request: AcceptedRequest) => void,
   ) => void;
+  /** A row this feed will say: the queue does not offer it too. */
+  readonly onScheduled: (messageId: string) => void;
 }): null {
   const {
     focus,
@@ -1212,6 +1269,7 @@ function VoiceFocusedReplyFeed(props: {
     awaitedIn,
     isAwaiting,
     registerReconcile,
+    onScheduled,
   } = props;
   const chatId = focus.threadId ?? channelId;
   const handle = useChatSessionHandleForContainer(
@@ -1239,6 +1297,10 @@ function VoiceFocusedReplyFeed(props: {
   useEffect(() => {
     registerReconcileRef.current = registerReconcile;
   }, [registerReconcile]);
+  const onScheduledRef = useRef(onScheduled);
+  useEffect(() => {
+    onScheduledRef.current = onScheduled;
+  }, [onScheduled]);
 
   useEffect(() => {
     if (handle === null || channelHandle === null) return;
@@ -1267,6 +1329,7 @@ function VoiceFocusedReplyFeed(props: {
     const speak = (reply: FocusedReply, where: ReplyRecords): void => {
       if (memory.scheduled.has(reply.messageId)) return;
       memory.scheduled.add(reply.messageId);
+      onScheduledRef.current(reply.messageId);
       const itemId = `reply:${reply.messageId}`;
       const placement = place(reply.messageId, where);
       if (placement.kind === "pending") unplaced.set(reply.messageId, itemId);
