@@ -24,6 +24,7 @@ import {
   it,
   onTestFinished,
   vi,
+  type MockInstance,
 } from "vitest";
 import type { StoreApi } from "zustand/vanilla";
 import {
@@ -618,6 +619,14 @@ function requireList(): import("@legendapp/list/react").LegendListRef {
   return list;
 }
 
+interface HeldScrollToOffsetWrites {
+  readonly spy: MockInstance<
+    import("@legendapp/list/react").LegendListRef["scrollToOffset"]
+  >;
+  readonly callCount: () => number;
+  readonly settleOldest: () => void;
+}
+
 /**
  * Holds every `scrollToOffset` call the cross-tile landing issues: the real
  * write still lands synchronously (so a test can read whether it happened),
@@ -627,7 +636,7 @@ function requireList(): import("@legendapp/list/react").LegendListRef {
  */
 function holdScrollToOffsetWrites(
   list: import("@legendapp/list/react").LegendListRef,
-) {
+): HeldScrollToOffsetWrites {
   const real = list.scrollToOffset.bind(list);
   let calls = 0;
   const resolvers: Array<() => void> = [];
@@ -9418,6 +9427,82 @@ describe("ChatMessages scroll policy", () => {
             { timeout: 8_000 },
           );
           expect(held.callCount()).toBe(2);
+        } finally {
+          held.spy.mockRestore();
+        }
+      });
+
+      it("a pending landing survives an intact conceal and settles while still hidden", async () => {
+        const messages = makeCompletedTranscript(30);
+        const target = messages[10];
+        expect(target).toBeTruthy();
+        const onScrollRequestSettled = vi.fn();
+        const { rerenderWith } = renderChatMessages({
+          messages,
+          scrollStateKey: "landing-suspend-witness-7",
+          onScrollRequestSettled,
+        });
+        await settleLegendList();
+
+        const list = requireList();
+        const held = holdScrollToOffsetWrites(list);
+        try {
+          rerenderWith({
+            scrollRequest: {
+              kind: "message",
+              messageId: target.id,
+              blockId: null,
+              requestId: 701,
+            },
+          });
+          // The loop's own write landed for real before anything conceals
+          // it, same premise as the collapsed-hide witnesses above.
+          const scrollTopAtIssue = getScrollNode().scrollTop;
+          expect(scrollTopAtIssue).toBeGreaterThan(0);
+          expect(held.callCount()).toBe(1);
+
+          // Conceal WITHOUT collapsing: report the box's CURRENT position
+          // (not the true bottom) before hiding - the same "intact" premise
+          // witness 4 uses, just at the landing's own scrollTop instead of
+          // the natural rest position, so this is an intact conceal of a
+          // tile with a LIVE request loop still running.
+          await fireScrollTopAndFlush(scrollTopAtIssue);
+          rerenderWith({ visible: false });
+          await settleLegendList();
+          expect(getScrollNode().scrollTop).toBe(scrollTopAtIssue);
+          expect(onScrollRequestSettled).not.toHaveBeenCalled();
+
+          // Settle the held command now, box intact, still hidden: a box
+          // that survives concealment keeps measuring, so this loop must be
+          // left running and allowed to reach its own terminal outcome
+          // right here, invisibly - exactly the behaviour the retained-box
+          // witnesses above protect for a restore, now proven for a
+          // request's landing loop too.
+          act(() => {
+            held.settleOldest();
+          });
+          await waitFor(
+            () => {
+              expect(onScrollRequestSettled).toHaveBeenCalledWith(
+                701,
+                "landed",
+              );
+            },
+            { timeout: 8_000 },
+          );
+
+          // Nothing left pending: the show issues no placement of its own.
+          // Restore the held spy first so the fresh one below tracks the
+          // real method directly, not a wrapper around the held mock.
+          held.spy.mockRestore();
+          const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+          try {
+            rerenderWith({ visible: true });
+            await settleLegendList();
+            expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+          } finally {
+            scrollToOffsetSpy.mockRestore();
+          }
         } finally {
           held.spy.mockRestore();
         }
