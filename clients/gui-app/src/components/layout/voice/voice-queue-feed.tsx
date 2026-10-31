@@ -9,7 +9,10 @@ import type {
   BotRecord,
   BotTaskEntry,
 } from "@traycer/protocol/host/bot/schemas";
-import { liveActivityOf, useBotActivity } from "@/hooks/bots/use-bot-activity";
+import {
+  liveActivityOf,
+  useBotActivityReading,
+} from "@/hooks/bots/use-bot-activity";
 import { useBotActivitySummary } from "@/hooks/bots/use-bot-activity-summary";
 import { useBotSubscriptionForHost } from "@/hooks/bots/use-bot-subscription";
 import { useEnvironmentMemberDirectory } from "@/hooks/bots/use-environment-members-query";
@@ -279,24 +282,28 @@ function VoiceStoppedWatch(props: {
     forgetStopped,
     dropStopped,
   } = props;
-  const activity = useBotActivity(botId);
+  const reading = useBotActivityReading(botId);
+  const kind = reading.kind;
+  const activity = reading.kind === "live" ? reading.activity : null;
   useEffect(() => {
-    // No reading (the stream closed for good, or the bot is gone): what was
-    // read before no longer stands, in the kept reading or in the live
-    // queue, and unknown is not idle, so nothing is seeded from it either.
-    // (Before the first snapshot there is nothing of this bot's to drop; the
-    // snapshot, when it comes, is read as usual.)
-    if (activity === null) {
+    // The stream closed for good, or the bot is gone: what was read before
+    // no longer stands, in the kept reading or in the live queue, and no
+    // reading will come again. Nothing is seeded from it either.
+    if (kind === "closed") {
       dropStopped(botId);
       return;
     }
+    // No reading yet (a tab reopened before its first snapshot, a host
+    // that cannot read the room): one may still come, so what the queue
+    // holds, a Read in progress included, stays as it is.
+    if (activity === null) return;
     noteStopped({
       botId,
       hostId,
       channelChatId,
       stopped: stoppedAnswersOf(activity),
     });
-  }, [activity, botId, channelChatId, dropStopped, hostId, noteStopped]);
+  }, [activity, botId, channelChatId, dropStopped, hostId, kind, noteStopped]);
   useEffect(() => () => forgetStopped(botId), [botId, forgetStopped]);
   return null;
 }

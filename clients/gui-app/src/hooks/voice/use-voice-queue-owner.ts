@@ -104,9 +104,10 @@ export interface VoiceQueueOwner {
   /** The bot's tab closed: its reading is no longer kept. */
   readonly forgetStopped: (botId: string) => void;
   /**
-   * The bot's stream closed for good, or the bot is gone: no reading will
-   * come again, so its stopped answers leave the live queue too (their
-   * pending reads and offers withdrawn), besides the kept reading.
+   * The bot's stream closed for good, or the bot is gone (never merely a
+   * reading not come yet): no reading will come again, so its stopped
+   * answers leave the live queue too (their pending reads and offers
+   * withdrawn), besides the kept reading.
    */
   readonly dropStopped: (botId: string) => void;
 }
