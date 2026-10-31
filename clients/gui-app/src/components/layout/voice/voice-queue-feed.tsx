@@ -365,8 +365,7 @@ function VoiceBotStatusReader(props: {
   const composedRef = useRef(false);
   const usageSettled =
     !usageSupported || usage.data !== undefined || usage.isError;
-  const ready =
-    timedOut || ((snapshot !== null || closed) && usageSettled);
+  const ready = timedOut || ((snapshot !== null || closed) && usageSettled);
   useEffect(() => {
     if (!ready || composedRef.current) return;
     composedRef.current = true;
