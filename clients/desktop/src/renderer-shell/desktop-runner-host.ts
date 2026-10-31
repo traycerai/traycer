@@ -160,6 +160,13 @@ import type {
   SecretRequestDecideFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-secrets";
 import type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
+import type {
+  SlackAppInstallUrlResult,
+  SlackAppManifestResult,
+  SlackAppReadResult,
+  SlackAppWriteResult,
+} from "@traycer-clients/shared/host-client/slack-app";
+import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
 import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
 import type {
   SandboxAutomationOpenTarget,
@@ -271,6 +278,23 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     target: SandboxAutomationOpenTarget | null,
   ): Promise<SandboxAutomationOpenFetchResult>;
+  readSlackApp(bearerToken: string, botId: string): Promise<SlackAppReadResult>;
+  getSlackAppManifest(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppManifestResult>;
+  registerSlackApp(
+    bearerToken: string,
+    request: SlackAppRegisterRequest,
+  ): Promise<SlackAppWriteResult>;
+  mintSlackAppInstallUrl(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppInstallUrlResult>;
+  disconnectSlackApp(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppWriteResult>;
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -1298,6 +1322,41 @@ export class DesktopRunnerHost implements IRunnerHost {
     target: SandboxAutomationOpenTarget | null,
   ): Promise<SandboxAutomationOpenFetchResult> {
     return this.bridge.openSandboxAutomation(bearerToken, target);
+  }
+
+  readSlackApp(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppReadResult> {
+    return this.bridge.readSlackApp(bearerToken, botId);
+  }
+
+  getSlackAppManifest(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppManifestResult> {
+    return this.bridge.getSlackAppManifest(bearerToken, botId);
+  }
+
+  registerSlackApp(
+    bearerToken: string,
+    request: SlackAppRegisterRequest,
+  ): Promise<SlackAppWriteResult> {
+    return this.bridge.registerSlackApp(bearerToken, request);
+  }
+
+  mintSlackAppInstallUrl(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppInstallUrlResult> {
+    return this.bridge.mintSlackAppInstallUrl(bearerToken, botId);
+  }
+
+  disconnectSlackApp(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppWriteResult> {
+    return this.bridge.disconnectSlackApp(bearerToken, botId);
   }
 
   getSandboxGrants(

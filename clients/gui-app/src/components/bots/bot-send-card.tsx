@@ -17,6 +17,7 @@ import {
 } from "@/components/bots/bot-session-context";
 import {
   sendQuestionStates,
+  slackSendPlace,
   type BotSend,
   type BotSendQuestion,
 } from "@/lib/bots/bot-send-tool";
@@ -39,6 +40,11 @@ import { postTextOf } from "@/lib/bots/reply-row";
  * and one still open says nothing. A send from before the stamp links to
  * the post a reply or question follows, the thread, or the channel, and a
  * question claims no state.
+ *
+ * A send the host posted in Slack (S4b) says so - "Posted in Slack", the
+ * thread, the channel - and links nowhere: no Traycer post exists, and a
+ * question asked there is answered by the thread's next message, so it
+ * claims no state. Find reads that line with what it posted.
  */
 export function BotSendCard(props: {
   readonly id: string;
@@ -48,19 +54,31 @@ export function BotSendCard(props: {
   const { id, send, findUnitId } = props;
   const access = use(BotSessionContext);
   const Icon = SEND_ICONS[send.kind];
+  const slackPlace = slackSendPlace(send);
+  // Find reads a Slack send's place line too, so its unit takes the card.
+  const unitId = findUnitId ?? undefined;
   return (
     <div
       data-testid="bot-send-card"
       data-kind={send.kind}
       data-block-id={id}
+      data-chat-find-unit={slackPlace === null ? undefined : unitId}
       className="flex max-w-prose flex-col gap-1.5 rounded-md border-l-2 border-primary/60 bg-foreground/3 px-3 py-2 text-ui-sm"
     >
       <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-ui-xs text-muted-foreground">
         <Icon aria-hidden="true" className="size-3.5 shrink-0" />
-        <SendPlace send={send} access={access} />
-        <SendLink send={send} access={access} />
+        {slackPlace === null ? (
+          <>
+            <SendPlace send={send} access={access} />
+            <SendLink send={send} access={access} />
+          </>
+        ) : (
+          <span data-testid="bot-send-place" className="min-w-0 truncate">
+            {slackPlace}
+          </span>
+        )}
       </div>
-      <div data-chat-find-unit={findUnitId ?? undefined}>
+      <div data-chat-find-unit={slackPlace === null ? unitId : undefined}>
         {send.kind === "ask" ? (
           <AskedQuestions
             questions={send.questions}
@@ -97,7 +115,7 @@ function AskedQuestions(props: {
   readonly access: BotSessionAccess | null;
 }): ReactNode {
   const { questions, receipt, access } = props;
-  if (access === null || receipt === null) {
+  if (access === null || receipt === null || receipt.slack !== null) {
     return <SendQuestions questions={questions} states={null} />;
   }
   return (

@@ -244,6 +244,14 @@ function createBaseRunnerHost(): IRunnerHost {
       Promise.resolve({ kind: "unauthorized" as const }),
     openSandboxAutomation: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
+    readSlackApp: () => Promise.resolve({ kind: "unauthorized" as const }),
+    getSlackAppManifest: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    registerSlackApp: () => Promise.resolve({ kind: "unauthorized" as const }),
+    mintSlackAppInstallUrl: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
+    disconnectSlackApp: () =>
+      Promise.resolve({ kind: "unauthorized" as const }),
     getSandboxGrants: () => Promise.resolve({ kind: "unauthorized" as const }),
     getTeamEnvironment: () =>
       Promise.resolve({ kind: "unauthorized" as const }),
