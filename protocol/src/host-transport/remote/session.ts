@@ -5410,7 +5410,7 @@ export class RemoteSession<
   /** Gives a leg up without giving the session up; see the close code. */
   private leaveLeg(connection: ActiveConnection): void {
     this.recordReplacedLeg(
-      connection,
+      connection.legAttached,
       connection.legEnd ?? {
         code: RELAY_RELINK_CLOSE_CODE,
         reason: RELAY_RELINK_CLOSE_REASON,
@@ -5421,6 +5421,7 @@ export class RemoteSession<
 
   /**
    * Records how the leg being left ended, as the `prev` of every later dial.
+   * The sole write of {@link replacedLeg}, so the rule lives in one place.
    *
    * Only a leg that ATTACHED may move it. `prev` is the relay's measurement of
    * how the leg that CARRIED a session was lost, and a dial that never reached
@@ -5434,13 +5435,14 @@ export class RemoteSession<
    * the close that ended the session's leg.
    *
    * So the value SURVIVES any number of failed claim and redial dials, and is
-   * replaced only by the end of the next leg that attaches.
+   * replaced only by the end of the next leg that attached.
+   *
+   * `attached` rather than a connection because the leg being left does not
+   * always have one: a leg between connections, mid-adoption, is attached by
+   * construction (see the teardown).
    */
-  private recordReplacedLeg(
-    connection: ActiveConnection,
-    end: RelayLegEnd,
-  ): void {
-    if (!connection.legAttached) {
+  private recordReplacedLeg(attached: boolean, end: RelayLegEnd): void {
+    if (!attached) {
       return;
     }
     this.replacedLeg = end;
@@ -7184,18 +7186,28 @@ export class RemoteSession<
     // fatal and caller close routes through here - which is what keeps the
     // survival test honest without a clear() at each call site.
     this.clearStableResetTimer();
-    this.adoptingLeg?.socket.close(1000, reason);
+    const adopting = this.adoptingLeg;
+    if (adopting !== null) {
+      adopting.socket.close(1000, reason);
+      // This close ENDS it, and `adoptFreshLeg` only ever adopts a leg the
+      // relay acknowledged, so it carried a session and its end is the next
+      // dial's `prev`. Unconditional because an adopting leg has no connection
+      // to hold that fact: the one it came from was torn down with `keepLeg`,
+      // and the one it is bound for does not exist until its channel does.
+      this.recordReplacedLeg(true, { code: 1000, reason });
+    }
     this.adoptingLeg = null;
     if (connection === null) {
       return;
     }
     if (connection.legEnd !== null) {
-      this.recordReplacedLeg(connection, connection.legEnd);
+      this.recordReplacedLeg(connection.legAttached, connection.legEnd);
     } else if (!keepLeg) {
       // The synthetic 1000 is the close below, so a leg this teardown KEEPS (a
-      // rebuild adopting it) has not ended and reports nothing: its own end,
-      // when it comes, arrives here under the connection it was adopted into.
-      this.recordReplacedLeg(connection, { code: 1000, reason });
+      // rebuild adopting it) has not ended here and reports nothing. Its own
+      // end comes from whichever teardown does end it - as an adopting leg
+      // above, or under the connection it was installed into.
+      this.recordReplacedLeg(connection.legAttached, { code: 1000, reason });
     }
     connection.scheduler.stop();
     connection.reassembler.reset();

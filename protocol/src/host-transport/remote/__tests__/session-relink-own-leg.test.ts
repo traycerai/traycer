@@ -1368,9 +1368,10 @@ describe("RemoteSession relink on an own-leg loss", () => {
       expect(relay.legs[3]?.params.get("prev")).toBe("1012:session-superseded");
     });
 
-    // The adoption tears the old connection down KEEPING the leg it re-installs;
-    // that leg has not ended, so the teardown must not stand in for its close.
-    it("is not replaced by the teardown of a leg a rebuild adopts, when the adoption fails", async () => {
+    // The claim leg reached its ack, so it carried a session and its own close
+    // is the next dial's `prev` - not the synthetic one the teardown that KEPT
+    // it would have written, and not the leg it replaced.
+    it("takes the close of a leg a rebuild adopts when the adoption then fails", async () => {
       const fixture = await readyFixture(LIVE);
       const { relay } = fixture;
       vi.spyOn(NoiseChannel, "begin").mockRejectedValueOnce(
@@ -1381,8 +1382,11 @@ describe("RemoteSession relink on an own-leg loss", () => {
       relay.dropLeg(1006, "net");
       await advanceUntil(() => relay.legs.length === 3, 30_000);
 
+      expect(relay.legs[1]?.closes).toEqual([
+        { code: 1000, reason: "connect-path-threw" },
+      ]);
       expect(relay.legs[2]?.params.has("resume")).toBe(false);
-      expect(relay.legs[2]?.params.get("prev")).toBe("1006:net");
+      expect(relay.legs[2]?.params.get("prev")).toBe("1000:connect-path-threw");
     });
 
     // Past RESUME_HOLD_MS the claim ladder keeps claiming, so a fresh attach is
