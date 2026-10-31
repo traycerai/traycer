@@ -179,6 +179,114 @@ export interface ConfirmingAction {
 /** The one spoken request the voice holds instead of acting on at once. */
 export type PendingAction = InterruptedAction | ConfirmingAction;
 
+/**
+ * Which card a voice answer settles, by the API that settles it: a bot's own
+ * question (`bot.conversation.send` with `answer`), a task agent's question
+ * a bot's post surfaced, or its tool approval (both `bot.surface.act`).
+ */
+export type CardFamily = "bot-question" | "agent-question" | "approval";
+
+/**
+ * What the person chose on a card: one of the choices read back (a
+ * question's option, or Allow and Deny), their own words for a question that
+ * takes them, or a Skip.
+ */
+export type CardChoice =
+  | {
+      readonly kind: "option";
+      /** Where the choice stands in the list the voice read. */
+      readonly index: number;
+      /** The choice verbatim, as the card shows it. */
+      readonly label: string;
+    }
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "skip" };
+
+/**
+ * Where the voice is with the active card: `proposed`, read back and waiting
+ * for the person's choice or their yes; `confirmed`, the yes came;
+ * `sending`, the act is out; `forwarded`, the act is on its way to the
+ * task's machine, the draft kept until that machine answers; `settled`, done
+ * (by the person, or by someone else first); `refused`, nothing was recorded.
+ */
+export type ActiveCardState =
+  | "proposed"
+  | "confirmed"
+  | "sending"
+  | "forwarded"
+  | "settled"
+  | "refused";
+
+/** What the active card points at: the queue item, the bot's row and, for a surfaced card, the task's surface. */
+export interface ActiveCardIds {
+  readonly itemId: string;
+  readonly botId: string;
+  readonly hostId: string;
+  readonly threadId: string | null;
+  readonly chatId: string;
+  /** The bot's row that asks, or that carries the surface. */
+  readonly messageId: string;
+}
+
+/**
+ * The one card the voice is reading back and acting on (Tracy Bots voice,
+ * VT5). A "yes" binds to `candidate` and nothing else.
+ */
+export interface ActiveCard {
+  readonly family: CardFamily;
+  readonly ids: ActiveCardIds;
+  /** The question being answered: the row's index for a bot's question, the surface's for an agent's. */
+  readonly questionIndex: number;
+  /** The choice a yes would send; `null` until the person names one. */
+  readonly candidate: CardChoice | null;
+  readonly state: ActiveCardState;
+  /**
+   * The answers confirmed so far (an agent's questions go together, one per
+   * question), and the act being sent: kept until the act is acknowledged.
+   */
+  readonly draft: ReadonlyArray<CardChoice>;
+}
+
+/** What the router and the say loop ask of the card the voice holds; installed by the controller. */
+export interface VoiceCardDriver {
+  /** Reads a queued question or surfaced prompt back, and makes it the active card. */
+  readonly open: (itemId: string, delegationId: string | null) => "appended" | "nothing";
+  /** Whether the active card is waiting for the person's words (a choice, or a yes). */
+  readonly awaitsAnswer: () => boolean;
+  /**
+   * A boundary while the card waits: `"handled"` when the words were its
+   * answer (consumed, never posted), `"route"` when they are not.
+   */
+  readonly answer: (
+    words: { readonly text: string; readonly seqs: ReadonlyArray<number> },
+    delegationId: string | null,
+  ) => "handled" | "route";
+  /**
+   * The router's answer to the card: a choice by its number in the list
+   * read back, or (`null`) the person's own words for a question that takes
+   * them. `false` when no card waits.
+   */
+  readonly answerRouted: (
+    choice: number | null,
+    text: string,
+    delegationId: string | null,
+  ) => boolean;
+  /** The question and choices the router is shown while the card waits; `null` otherwise. */
+  readonly routerCard: () => RouterCard | null;
+  /** Words routed elsewhere: a yes said later must not bind to the candidate. */
+  readonly dropCandidate: () => void;
+  /** The person moved, or another card was interjected: the candidate is offered again. */
+  readonly invalidate: (reason: "focus" | "interjection") => void;
+}
+
+/** The active card as the router sees it: what was asked, and the choices by number. */
+export interface RouterCard {
+  readonly question: string;
+  readonly choices: ReadonlyArray<string>;
+  /** Whether the person may answer in their own words. */
+  readonly takesText: boolean;
+}
+
 export type VoicePhase = "idle" | "connecting" | "live" | "ending";
 
 /** Why the last session ended, for the strip's one line about it. */
@@ -260,8 +368,8 @@ export interface VoiceSessionState {
   readonly activity: SpeechActivity;
   readonly queue: ReadonlyArray<QueueItem>;
   readonly pendingAction: PendingAction | null;
-  /** The one card the voice is reading; a later ticket fills it. */
-  readonly activeCard: null;
+  /** The one card the voice is reading back and acting on; `null` for none. */
+  readonly activeCard: ActiveCard | null;
   readonly captions: boolean;
   readonly captionLines: ReadonlyArray<CaptionLine>;
   /**
@@ -297,6 +405,8 @@ export interface VoiceSessionState {
   readonly driver: VoiceSessionDriver | null;
   /** The queue's executor while the controller is mounted; the session's state says whether it acts. */
   readonly queueDriver: VoiceQueueDriver | null;
+  /** The card desk while the controller is mounted; the session's state says whether it acts. */
+  readonly cardDriver: VoiceCardDriver | null;
 
   readonly setAvailability: (availability: VoiceAvailability) => void;
   /** A new user session begins: a new token and a new engine generation. */
@@ -343,6 +453,7 @@ export interface VoiceSessionState {
   readonly setActivity: (activity: SpeechActivity) => void;
   readonly setQueue: (queue: ReadonlyArray<QueueItem>) => void;
   readonly setPendingAction: (action: PendingAction | null) => void;
+  readonly setActiveCard: (card: ActiveCard | null) => void;
   readonly setCaptions: (on: boolean) => void;
   readonly pushCaptionLine: (line: CaptionDelta) => void;
   readonly acquireDictationHold: (owner: string) => void;
@@ -357,6 +468,7 @@ export interface VoiceSessionState {
   readonly setMuted: (muted: boolean) => void;
   readonly setDriver: (driver: VoiceSessionDriver | null) => void;
   readonly setQueueDriver: (driver: VoiceQueueDriver | null) => void;
+  readonly setCardDriver: (driver: VoiceCardDriver | null) => void;
 }
 
 const CLEAR_ACTIVITY: SpeechActivity = {
@@ -397,6 +509,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   muted: false,
   driver: null,
   queueDriver: null,
+  cardDriver: null,
 
   setAvailability: (availability) => set({ availability }),
   sessionConnecting: () =>
@@ -430,6 +543,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
       activity: CLEAR_ACTIVITY,
       queue: NO_QUEUE,
       pendingAction: null,
+      activeCard: null,
       captionLines: NO_CAPTIONS,
       muted: false,
       dictationPauseLatched: false,
@@ -512,6 +626,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   },
   setQueue: (queue) => set({ queue }),
   setPendingAction: (pendingAction) => set({ pendingAction }),
+  setActiveCard: (activeCard) => set({ activeCard }),
   setCaptions: (captions) =>
     set({
       captions,
@@ -558,6 +673,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
   setMuted: (muted) => set({ muted }),
   setDriver: (driver) => set({ driver }),
   setQueueDriver: (queueDriver) => set({ queueDriver }),
+  setCardDriver: (cardDriver) => set({ cardDriver }),
 }));
 
 /**
