@@ -275,6 +275,7 @@ function VoiceCardWatch(props: {
           action,
         });
       },
+      canPost: channelId !== null,
       postInThread: async (text) => {
         if (channelId === null) return false;
         try {

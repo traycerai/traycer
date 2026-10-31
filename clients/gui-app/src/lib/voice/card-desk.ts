@@ -133,6 +133,8 @@ export interface CardApi {
   ) => Promise<SurfaceActOutcome>;
   /** Posts the person's answer in the card's thread (or the channel), as a message. */
   readonly postInThread: (text: string) => Promise<boolean>;
+  /** Whether a post can be sent now (the bot's channel is known): only then is one offered. */
+  readonly canPost: boolean;
 }
 
 /** A queued prompt the desk can open, by its family. */
@@ -514,6 +516,12 @@ interface Desk {
   offer: { readonly text: string; say: Spoken } | null;
   /** A refusal waiting for the records to name who settled the card. */
   awaitingSettler: boolean;
+  /**
+   * The newest segment of the latest choice taken, exact or routed: a
+   * routed answer made of words said before it is older than that choice,
+   * and never overwrites it.
+   */
+  latestChoiceSeq: number;
   /** Waits for a confirmed item's playback to end; stopped when the card closes. */
   readonly waits: Set<() => void>;
 }
@@ -793,7 +801,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
     if (content === null) return;
     setCard({ state: "settled" });
     const offered =
-      choice !== null && choice.kind !== "skip" && held.api !== null;
+      choice !== null && choice.kind !== "skip" && held.api?.canPost === true;
     const text = settledText(content.family, by, offered);
     if (!offered) {
       notify(held, text);
@@ -1216,6 +1224,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
       actionId: null,
       offer: null,
       awaitingSettler: false,
+      latestChoiceSeq: Number.NEGATIVE_INFINITY,
       waits: new Set(),
     };
     desk = held;
@@ -1256,6 +1265,28 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
   };
 
   /** The router's answer to the card that listens; `true` when the card took it. */
+  /** The newest of a choice's segments is the latest choice taken. */
+  const noteChoice = (held: Desk, seqs: ReadonlyArray<number>): void => {
+    held.latestChoiceSeq = Math.max(held.latestChoiceSeq, ...seqs);
+  };
+
+  /**
+   * Whether a routed answer's words were said too early to choose, judged by
+   * when they were said, not by when the route came back: before the card
+   * could be answered, before its list was heard (as an exact choice said
+   * then is), or before a choice the person has made since (an exact
+   * "Production" said while "use staging" was still being routed stands).
+   */
+  const routedTooEarly = (
+    held: Desk,
+    seqs: ReadonlyArray<number>,
+  ): boolean => {
+    const list = held.list;
+    if (list === null || !answerable(held)) return true;
+    if (seqs.some((seq) => seq <= list.heardAfterSeq)) return true;
+    return seqs.length > 0 && Math.max(...seqs) <= held.latestChoiceSeq;
+  };
+
   const answerRoutedWith = (
     held: Desk,
     active: ActiveCard,
@@ -1269,18 +1300,8 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
       return true;
     }
     const content = held.content;
-    // Said before the card could be answered, judged by when the words were
-    // said, not by when the route came back: spent, choosing nothing, as an
-    // exact choice said then is.
-    const list = held.list;
-    if (
-      content === null ||
-      list === null ||
-      !answerable(held) ||
-      routed.seqs.some((seq) => seq <= list.heardAfterSeq)
-    ) {
-      return true;
-    }
+    if (content === null || routedTooEarly(held, routed.seqs)) return true;
+    noteChoice(held, routed.seqs);
     const question = currentQuestion(held);
     const choices = choicesOf(content, question);
     if (choice === null) {
@@ -1334,6 +1355,7 @@ export function createCardDesk(deps: CardDeskDeps): CardDesk {
       if (words.seqs.some((seq) => seq <= list.heardAfterSeq)) {
         return "handled";
       }
+      noteChoice(held, words.seqs);
       readCandidate(held, choice, "");
       return "handled";
     }
