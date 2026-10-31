@@ -2905,12 +2905,13 @@ export class RemoteSession<
     };
   }
 
+  /** Returns the connection it installed, for a caller with more to put on it. */
   private installConnection(
     generation: number,
     attachGrant: AttachGrant | null,
     socket: RelaySocket,
     channel: MuxChannel,
-  ): void {
+  ): ActiveConnection {
     const scheduler = new PriorityScheduler({
       write: (frame) => this.writeFrame(generation, frame),
       onWriteError: () =>
@@ -2924,7 +2925,7 @@ export class RemoteSession<
     });
     scheduler.onFrameWritten = (streamId) =>
       this.subscriptions.get(streamId)?.notifyOutboundProgress();
-    this.connection = {
+    const connection: ActiveConnection = {
       generation,
       attachGrant,
       socket,
@@ -2960,8 +2961,10 @@ export class RemoteSession<
       inChannelFrames: 0,
       refusedMethods: new Map(),
     };
+    this.connection = connection;
     this.parkedRefusals = 0;
     this.armPhaseTimer(generation, ATTACH_ACK_TIMEOUT_MS, "attach-ack-timeout");
+    return connection;
   }
 
   private onAttachAck(
@@ -5556,7 +5559,21 @@ export class RemoteSession<
           return;
         }
         this.adoptingLeg = null;
-        this.installConnection(nextGeneration, attachGrant, socket, noise);
+        const installed = this.installConnection(
+          nextGeneration,
+          attachGrant,
+          socket,
+          noise,
+        );
+        // The leg may have ENDED while its channel was being built, and that
+        // close is still only queued below. It moves onto the connection the
+        // leg is now part of, BEFORE the replay: the first queued event can be
+        // one that tears this connection down (a `peer_gone`, a
+        // `host_attached`), and the teardown would otherwise find no end and
+        // report a close of its own - on a socket already past taking one -
+        // while the queued close behind it replays into a connection that has
+        // gone and is dropped.
+        installed.legEnd = adopted.legEnd;
         this.onAttachAck(nextGeneration, sid, resumeKey);
         for (const event of adopted.events) {
           event();

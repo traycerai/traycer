@@ -1439,6 +1439,28 @@ describe("RemoteSession relink on an own-leg loss", () => {
       expect(relay.legs[2]?.params.get("prev")).toBe("1006:gone");
     });
 
+    // The adoption SUCCEEDS, so the leg's queued close replays - but behind a
+    // control frame that tears the fresh connection down first, which leaves
+    // the close to replay into a connection that has gone. The end has to
+    // reach the connection with the leg, not wait in the queue behind it.
+    it("carries a close an adopted leg had onto the connection it is installed into", async () => {
+      const fixture = await readyFixture(LIVE);
+      const { relay } = fixture;
+      relay.expireRows = true;
+      relay.onFreshAck = (leg) => {
+        leg.deliverControl("host_attached");
+        leg.closed = true;
+        relay.onLegClosed(leg, 1006);
+        leg.onclose?.({ code: 1006, reason: "gone", wasClean: false });
+      };
+
+      relay.dropLeg(1006, "net");
+      await advanceUntil(() => relay.legs.length === 3, 30_000);
+
+      expect(relay.legs[2]?.params.has("resume")).toBe(false);
+      expect(relay.legs[2]?.params.get("prev")).toBe("1006:gone");
+    });
+
     // Past RESUME_HOLD_MS the claim ladder keeps claiming, so a fresh attach is
     // reached through a rebuild instead: a frame that fails to decode ends the
     // relink and the session attaches afresh.
