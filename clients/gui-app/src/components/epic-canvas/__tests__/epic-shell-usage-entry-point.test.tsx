@@ -32,7 +32,7 @@ import { createInProcessEpicRuntimeWorker } from "@/stores/epics/open-epic/test-
 import type { RuntimeWorkerLike } from "@/stores/epics/open-epic/runtime/worker/spawn-epic-runtime-worker";
 
 /**
- * Ticket 12 successor to `epic-shell-cost-badge.test.tsx` (whose regression
+ * Successor to `epic-shell-cost-badge.test.tsx` (whose regression
  * coverage this replaces): the AMBIENT badge is gone by design, so
  * its "renders a stuck-pending query self-heals via poll" scenario no
  * longer has a subject. What survives is the mount-composition discipline

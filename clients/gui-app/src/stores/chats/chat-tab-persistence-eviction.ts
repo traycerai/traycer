@@ -88,8 +88,8 @@ export function evictChatTabPersistenceForEpic(epicId: string): void {
  * them, so a batch larger than the tombstone's FIFO cap cannot half-expire
  * its own earlier entries before the caller's own subsequent sweep
  * (`handleEpicAccessLoss`'s canvas close, which writes durable state back
- * for any of these epics that still had open tiles) gets to them - ticket
- * 15 review round 5 (item 2): a fence must survive its own transaction.
+ * for any of these epics that still had open tiles) gets to them -
+ * review round 5 (item 2): a fence must survive its own transaction.
  */
 export function evictChatTabPersistenceForEpics(
   epicIds: ReadonlyArray<string>,

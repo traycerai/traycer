@@ -14634,7 +14634,7 @@ describe("OfficeScene fixup 8 - a seated agent's name tag is fitted to its seat"
 });
 
 /**
- * Fixup 8d - the two cold-review fixes: the arrival queue keyed at the
+ * The two cold-review fixes: the arrival queue keyed at the
  * pool's own granularity (host, not floor), and a claim that will not answer
  * a request with a seat of the wrong kind.
  *
