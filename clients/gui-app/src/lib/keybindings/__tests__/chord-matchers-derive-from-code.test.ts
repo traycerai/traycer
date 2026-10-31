@@ -172,6 +172,10 @@ const KEYBOARD_KEY_READS: Readonly<Record<string, number>> = {
   // ContextMenu and Shift+F10, plus Enter and Space on a surface that opts in
   // (the Activity label). Named keys, none of them a registered chord.
   "gui-app/src/components/layout/tabs/group-editor-anchor.tsx": 5,
+  // The phone's talk button under push-to-talk: Space and Enter are held, not
+  // clicked, so the key-down and key-up handlers read the button's own
+  // activation keys by name. Named keys, not a registered chord.
+  "gui-app/src/components/layout/voice/voice-phone-view.tsx": 2,
   // The guided tour's card answers arrows, Enter and Escape by name; none is
   // a registered chord.
   // Arrows, Home and End walking the minimap's own list - named keys inside an

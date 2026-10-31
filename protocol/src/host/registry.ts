@@ -1,8 +1,12 @@
 import {
   epicCreateV14,
   epicCreateUpgradeV13ToV14,
+  epicCreateV15,
+  epicCreateUpgradeV14ToV15,
   epicCreateChatV14,
   epicCreateChatUpgradeV13ToV14,
+  epicCreateChatV15,
+  epicCreateChatUpgradeV14ToV15,
   epicUpdateChatRunSettingsV12,
   epicUpdateChatRunSettingsUpgradeV11ToV12,
   epicGetChatRunSettingsV41,
@@ -8515,7 +8519,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   // place: an unknown `kind` fails that peer's whole response parse.
   "epic.create": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: epicCreateV10,
@@ -8547,6 +8551,12 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         4: {
           contract: epicCreateV14,
           upgradeFromPreviousVersion: epicCreateUpgradeV13ToV14,
+        },
+        // v1.5: the folded chat's first message carries the browser-annotation
+        // sidecar. A `@1.4` host strips it, so a caller sending one needs `@1.5`.
+        5: {
+          contract: epicCreateV15,
+          upgradeFromPreviousVersion: epicCreateUpgradeV14ToV15,
         },
       },
       downgradePathsFromLatest: {},
@@ -8964,7 +8974,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.createChat": {
     1: {
-      latestMinor: 4,
+      latestMinor: 5,
       versions: {
         0: {
           contract: epicCreateChatV10,
@@ -8999,6 +9009,13 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         4: {
           contract: epicCreateChatV14,
           upgradeFromPreviousVersion: epicCreateChatUpgradeV13ToV14,
+        },
+        // v1.5: the first message carries the browser-annotation sidecar, as a
+        // `send` frame does. A `@1.4` host strips it, so a caller sending one
+        // needs `@1.5`.
+        5: {
+          contract: epicCreateChatV15,
+          upgradeFromPreviousVersion: epicCreateChatUpgradeV14ToV15,
         },
       },
       downgradePathsFromLatest: {},
