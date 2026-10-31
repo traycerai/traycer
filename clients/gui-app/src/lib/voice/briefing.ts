@@ -145,9 +145,7 @@ export function composeBriefing(input: {
     }
   }
   for (const group of answerGroups(
-    input.answers.filter(
-      (ref) => !ref.blocking && !known.has(ref.messageId),
-    ),
+    input.answers.filter((ref) => !ref.blocking && !known.has(ref.messageId)),
   )) {
     answers.push({
       at: group.at,
