@@ -390,6 +390,7 @@ function mountWithThreads(
         activeBotId={activeBotId}
         hostId={TAB_HOST}
         threadsView={threadsView}
+        onChannelOpened={() => {}}
       />
     </QueryClientProvider>,
   );
