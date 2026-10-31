@@ -502,18 +502,15 @@ export type LiveRevalidationOutcome =
   | { readonly kind: "superseded" };
 
 /**
- * The result of applying a same-user `rotate` outcome to the live session:
- *   - `rotated`    → the lease was rotated in place to `token`;
- *   - `signed-out` → a terminal outcome cleared the UI session (file kept);
- *   - `transient`  → a `lock-busy`/`refresh-network` retry; state untouched.
- */
-/**
  * What a live same-user rotation did. These name the fate of the REQUEST that
  * triggered the rotation, which since `unverified` arrived is no longer the
  * same thing as the fate of the session:
  *
  *  - `rotated`        - a fresh pair is live; re-drive the request.
  *  - `signed-out`     - the UI session was cleared; the request cannot proceed.
+ *                       The credentials file is kept: only explicit user intent
+ *                       destroys it, and every automatic path clears the UI
+ *                       session alone - see `clearUiSession`.
  *  - `credential-dead`- the refresh token is terminally rejected, so the request
  *                       cannot proceed EITHER, but the session was demoted to
  *                       `unverified` rather than cleared and the local plane is
@@ -567,6 +564,18 @@ function linkResultForTokenApplication(
   }
 }
 
+/** The session a terminal verdict loss is about; see `onCloudAuthorizationRevoked`. */
+export interface RevokedCloudAuthorization {
+  /** The bearer the cloud rejected - the fence a copy held elsewhere applies. */
+  readonly token: string;
+  /**
+   * `user-epoch` when the refusal was the user's own "sign out everywhere".
+   * A host refuses such a bearer at once rather than at its expiry, so a
+   * sibling window holding it needs to know (`revokedHeldBearer`).
+   */
+  readonly revocation: "user-epoch" | null;
+}
+
 /**
  * GUI-owned auth service. Drives the sign-in flow through the shell-owned
  * runner host and projects the current authenticated session into:
@@ -601,18 +610,6 @@ function linkResultForTokenApplication(
  *      (or a `network-error`) surfaces `AUTH_ERROR_SIGN_IN_FAILED` ("Sign-in
  *      failed - please try again") and clears any persisted token.
  */
-/** The session a terminal verdict loss is about; see `onCloudAuthorizationRevoked`. */
-export interface RevokedCloudAuthorization {
-  /** The bearer the cloud rejected - the fence a copy held elsewhere applies. */
-  readonly token: string;
-  /**
-   * `user-epoch` when the refusal was the user's own "sign out everywhere".
-   * A host refuses such a bearer at once rather than at its expiry, so a
-   * sibling window holding it needs to know (`revokedHeldBearer`).
-   */
-  readonly revocation: "user-epoch" | null;
-}
-
 export class AuthService {
   private readonly runnerHost: IRunnerHost;
   private readonly tokenStore: AuthTokenStore;
@@ -5573,50 +5570,6 @@ export class AuthService {
   }
 
   /**
-   * Demote a session that IS currently verified down to `unverified`, keeping
-   * the local plane alive.
-   *
-   * The one caller is a terminal, server-issued CREDENTIAL verdict on the live
-   * rotation path (`applyLiveRotateOutcome`'s `refresh-rejected-credential`):
-   * authn has said this refresh token is dead, which is a fact about the token
-   * and not about the person or their disk. Before this existed that arm called
-   * `clearUiSession()`, producing a real `signed-out` - which redirected the
-   * shell out from under someone editing local work AND made
-   * `useAuthIdentityTransition` run its destructive arm, purging account-scoped
-   * persisted state (reading positions are deleted from disk outright). That
-   * was cold-review P1-4.
-   *
-   * Deliberately bypasses {@link applyUnverifiedSession}'s live-session guard
-   * rather than weakening it, because the two callers mean opposite things by
-   * the same state: "we hold no verdict yet" versus "the verdict we held has
-   * been revoked". Only the second may demote, and naming it here is what stops
-   * a future edit from relaxing the guard for everyone to reach this case.
-   *
-   * The bearer stays the one in hand: its access token is still valid for its
-   * own TTL (the rejection was of the REFRESH token), and it is the credential
-   * the host is already serving this machine's local epics on. Nulling it is not
-   * an option in the way it looks: `extractBearerForOpenFrame` THROWS on a null
-   * or empty bearer, so a bearerless `unverified` session cannot open the host
-   * WebSocket at all and the local plane never connects. The retained bearer is
-   * what the plane runs on, not a leftover of the dead one.
-   *
-   * KNOWN GAP, recorded rather than papered over. The two paths that reach this
-   * arm leave the retained bearer in different conditions and nothing here
-   * distinguishes them:
-   *
-   *  - REACTIVE (`revalidateCurrentContextOnce`): `/api/v3/user` rejected this
-   *    access token BEFORE the rotate, so it is known-dead.
-   *  - PROACTIVE (the refresh scheduler): the access token was never rejected;
-   *    only its refresh token was, so it stays usable until its own TTL.
-   *
-   * Both are held identically, which means the reactive case retains a secret a
-   * server has already refused. The fix is NOT `null` (see above) but a
-   * present-but-unconfirmed representation that readers can tell apart from a
-   * live bearer - today `currentBearer` has no such third state, and every
-   * cloud caller gates on `=== null`. Out of scope here; it wants its own
-   * ticket rather than an inline invention.
-   */
-  /**
    * Demote the LIVE session on a terminal server verdict, taking the identity
    * from the live profile rather than the credentials file.
    *
@@ -5658,6 +5611,51 @@ export class AuthService {
     return true;
   }
 
+  /**
+   * Demote a session that IS currently verified down to `unverified`, keeping
+   * the local plane alive.
+   *
+   * The case this exists for is a terminal, server-issued CREDENTIAL verdict on
+   * the live rotation path (`applyLiveRotateOutcome`'s
+   * `refresh-rejected-credential`):
+   * authn has said this refresh token is dead, which is a fact about the token
+   * and not about the person or their disk. Before this existed that arm called
+   * `clearUiSession()`, producing a real `signed-out` - which redirected the
+   * shell out from under someone editing local work AND made
+   * `useAuthIdentityTransition` run its destructive arm, purging account-scoped
+   * persisted state (reading positions are deleted from disk outright). That
+   * was cold-review P1-4.
+   *
+   * Deliberately bypasses {@link applyUnverifiedSession}'s live-session guard
+   * rather than weakening it, because the two callers mean opposite things by
+   * the same state: "we hold no verdict yet" versus "the verdict we held has
+   * been revoked". Only the second may demote, and naming it here is what stops
+   * a future edit from relaxing the guard for everyone to reach this case.
+   *
+   * The bearer stays the one in hand: its access token is still valid for its
+   * own TTL (the rejection was of the REFRESH token), and it is the credential
+   * the host is already serving this machine's local epics on. Nulling it is not
+   * an option in the way it looks: `extractBearerForOpenFrame` THROWS on a null
+   * or empty bearer, so a bearerless `unverified` session cannot open the host
+   * WebSocket at all and the local plane never connects. The retained bearer is
+   * what the plane runs on, not a leftover of the dead one.
+   *
+   * KNOWN GAP, recorded rather than papered over. The two paths that reach this
+   * arm leave the retained bearer in different conditions and nothing here
+   * distinguishes them:
+   *
+   *  - REACTIVE (`revalidateCurrentContextOnce`): `/api/v3/user` rejected this
+   *    access token BEFORE the rotate, so it is known-dead.
+   *  - PROACTIVE (the refresh scheduler): the access token was never rejected;
+   *    only its refresh token was, so it stays usable until its own TTL.
+   *
+   * Both are held identically, which means the reactive case retains a secret a
+   * server has already refused. The fix is NOT `null` (see above) but a
+   * present-but-unconfirmed representation that readers can tell apart from a
+   * live bearer - today `currentBearer` has no such third state, and every
+   * cloud caller gates on `=== null`. Out of scope here; it wants its own
+   * ticket rather than an inline invention.
+   */
   private demoteVerifiedSessionToUnverified(
     session: {
       readonly token: string;
@@ -6024,11 +6022,6 @@ export class AuthService {
 }
 
 /**
- * Maps a terminal (non-`authorized`) device-flow result to the stable error id
- * the device surface renders. `error` (invalid grant / exhausted retries) reuses
- * the generic sign-in-failed copy.
- */
-/**
  * The credentials pair a `rotate` outcome hands back to adopt: present for
  * `applied`/`superseded`/`commit-failed`, `null` for the terminal/transient
  * outcomes that carry no pair (`deleted`/`user-mismatch`/`tombstoned`/
@@ -6105,6 +6098,11 @@ function identityFromUser(user: AuthenticatedUser): StoredCredentialsIdentity {
   return credentialsIdentityFromAuthenticatedUser(user);
 }
 
+/**
+ * Maps a terminal (non-`authorized`) device-flow result to the stable error id
+ * the device surface renders. `error` (invalid grant / exhausted retries) reuses
+ * the generic sign-in-failed copy.
+ */
 function deviceFailureError(
   result: Exclude<DeviceFlowResult, { kind: "authorized" }>,
 ): string {
