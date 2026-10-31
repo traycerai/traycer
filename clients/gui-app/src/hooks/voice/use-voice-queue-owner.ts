@@ -209,6 +209,7 @@ export function useVoiceQueueOwner(input: {
         anchorThread: null,
       });
       useBotTabLandingStore.getState().request(target.botId, {
+        kind: "thread",
         threadId: target.threadId,
         messageId: target.messageId,
       });
