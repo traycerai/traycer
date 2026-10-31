@@ -91,6 +91,7 @@ let attentionNow: {
 };
 let markRead: Mock<VoiceQueueDeps["markRead"]>;
 let switchTo: Mock<VoiceQueueDeps["switchTo"]>;
+let noteHeard: Mock<VoiceQueueDeps["noteHeard"]>;
 let queue: VoiceQueue;
 
 beforeEach(() => {
@@ -101,6 +102,7 @@ beforeEach(() => {
   attentionNow = { answers: [], prompts: { approvals: [], questions: [] } };
   markRead = vi.fn<VoiceQueueDeps["markRead"]>();
   switchTo = vi.fn<VoiceQueueDeps["switchTo"]>();
+  noteHeard = vi.fn<VoiceQueueDeps["noteHeard"]>();
   scheduler = createSpeechScheduler({
     now: clock.now,
     setTimer: clock.setTimer,
@@ -117,6 +119,7 @@ beforeEach(() => {
     botTitle: (botId) => BOT_TITLES[botId] ?? "the bot",
     markRead,
     switchTo,
+    noteHeard,
     isFocused: (botId, chatId) => focusedChats.has(`${botId}:${chatId}`),
     attention: () => attentionNow,
   });
@@ -284,9 +287,11 @@ describe("read", () => {
 
     scheduler.noteOutputTranscript("Mm-hmm.");
     expect(markRead).not.toHaveBeenCalled();
+    expect(noteHeard).not.toHaveBeenCalled();
     expect(stateOf("r-1")).toBe("queued");
 
     scheduler.noteOutputTranscript(" The Safari fix landed");
+    expect(noteHeard.mock.calls).toEqual([["thread-x", "r-1"]]);
     expect(markRead).toHaveBeenCalledTimes(1);
     expect(markRead).toHaveBeenCalledWith({
       hostId: "host-a",

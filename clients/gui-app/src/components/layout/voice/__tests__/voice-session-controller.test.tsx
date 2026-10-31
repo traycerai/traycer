@@ -2323,3 +2323,79 @@ describe("a bot whose stream is gone before Talk", () => {
     expect(useVoiceSessionStore.getState().queue).toEqual([]);
   });
 });
+
+describe("a reply read through Waiting", () => {
+  it("is not read again on returning to its thread", async () => {
+    addChat(CHANNEL_ID, { snapshotLoaded: true, messages: [] });
+    const thread = addChat("t-5", { snapshotLoaded: true, messages: [] });
+    selectBotTab(BOT_ID);
+    await bringLive();
+    const threadFocus: VoiceFocus = { ...CHANNEL_FOCUS, threadId: "t-5" };
+    // The feed baselines the thread's loaded snapshot, then the person moves on.
+    focusOn(threadFocus);
+    await settle();
+    focusOn(CHANNEL_FOCUS);
+    await settle();
+
+    act(() => {
+      thread.setState({
+        snapshotLoaded: true,
+        messages: [botRow("r-t", "Merged the release branch.")],
+      });
+      fake.attention.set({
+        answers: [
+          {
+            messageId: "r-t",
+            botId: BOT_ID,
+            threadId: "t-5",
+            chatId: "t-5",
+            originHostId: "host-a",
+            at: Date.now(),
+            blocking: false,
+          },
+        ],
+        prompts: { approvals: [], questions: [] },
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    const commentary = fake.engines[0]?.appendCommentary;
+    expect(commentary).toHaveBeenCalledTimes(1);
+    expect(commentary).toHaveBeenLastCalledWith(
+      expect.stringContaining("Want it?"),
+      null,
+    );
+    act(() =>
+      eventsOf(0).onOutputTranscriptDelta(
+        "CI bot answered, merged the release",
+      ),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+
+    act(() => {
+      runVoiceQueueVerb({ kind: "read", itemId: "r-t", delegationId: null });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(commentary).toHaveBeenCalledTimes(2);
+    expect(commentary).toHaveBeenLastCalledWith(
+      "CI bot said: Merged the release branch.",
+      null,
+    );
+    act(() => eventsOf(0).onOutputTranscriptDelta("Merged the release branch"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+
+    focusOn(threadFocus);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+
+    expect(commentary).toHaveBeenCalledTimes(2);
+  });
+});
