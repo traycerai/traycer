@@ -469,7 +469,7 @@ function buildRoom(args: RoomBuildArgs): RoomBuild {
   // the partition's order renumbers every index after it, and a seat named by
   // one is a seat that changes name because somebody else showed up. Campus
   // re-packs, so it has no seat book to invalidate - but the name is free to
-  // get right, and the same defect on City was this fixup's F1.
+  // get right, and the same defect on City was this fix's F1.
   const seatGroup = [hostId ?? ISO_SEAT_ID_NONE, plan.roomId].join("/");
   const desks: OfficeDesk[] = [];
   for (const [index, agent] of plan.occupants.entries()) {

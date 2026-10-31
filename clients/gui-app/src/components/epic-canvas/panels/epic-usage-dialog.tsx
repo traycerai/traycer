@@ -78,7 +78,7 @@ const COARSE_POINTER_TRIGGER =
  * 7/30/90 - variant B of the usage-dialog redesign (48rem mini-dashboard
  * in a fixed frame; states swap inside it, never resize it). Cost is
  * on-demand by construction - the query is only `enabled` while the dialog
- * is open, so there is nothing ambient left to silently revert (fixup-01's
+ * is open, so there is nothing ambient left to silently revert (the badge's
  * failure mode). `poll: false` matches every other actively-viewed usage
  * surface (Settings' `UsageSummaryPanel`).
  */

@@ -93,7 +93,7 @@ function boardWidthPx(widthTiles: number): number {
 }
 
 /**
- * FIXUP 7's OWN INVARIANT, shared between the sweep (below) and the real
+ * THE INVARIANT, shared between the sweep (below) and the real
  * 309 Building case: the HQ board's ladder no longer has a rung of
  * manufactured initials, because the third `nameRungs` element it used to
  * letter with is gone. The ticket wrote down two regexes for this and both
@@ -369,7 +369,7 @@ describe("officeBoardText - F11 roster filtering and width", () => {
     // (38 chars, 266.4px) as both written and first names - and neither fits
     // 128px. The ladder falls straight to the roster's counts, which is
     // exactly what an ordinary `board` over the same roster would say: this
-    // is the fixup's own point, not a coincidence.
+    // is the point, not a coincidence.
     const sign = boardSign({
       kind: "hq-board",
       agentIds: ["a", "b", "c", "d", "e"],
@@ -461,7 +461,7 @@ describe("officeBoardText - F11 five HQ names, laid out to the board", () => {
   it("fixup 7: names all five hottest agents once the first-names rung fits, never dropping the fifth", () => {
     // EIGHT TILES no longer letters these five names - the ladder falls to
     // the roster's counts there instead (see the "agrees ... at the board's
-    // own eight tiles" case above). This pins the other half of the fixup's
+    // own eight tiles" case above). This pins the other half of the
     // promise: at a width wide enough for the FIRST-NAMES rung, all five are
     // still named, never four-plus-a-drop.
     const firstNamesJoined = "Alpha · Beta · Gamma · Delta · Epsilon";
@@ -1408,7 +1408,7 @@ describe("officeFloorSignsToDraw - fixup 6 rule 1: one host label per building, 
  * budget (`OFFICE_SIGN_PLATE_MAX_CHARS`, `truncateSign` in the canvas) cut it
  * to `BULLPEN · 9…` - the count is the part that got cut, because it sits
  * after everything else in the string being trimmed. That assertion would
- * have passed before this fixup too: the ellipsis was never the resolver's to
+ * have passed before this change too: the ellipsis was never the resolver's to
  * add or withhold. What is actually new is that the RESOLVER now steps the
  * reading down itself, so nothing it hands the renderer is left for that
  * budget to cut - proven here by size (the character budget) and by pixels

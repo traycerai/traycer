@@ -416,7 +416,7 @@ export interface ProviderProfileLoginFlow {
  * log's "Paste field visibility" row. `settleAttempt` is the two-sided join
  * that decides what a `waiting` attempt resolves to once `awaitLogin` and
  * `submitLoginCode` have both had a chance to weigh in - see its own doc
- * comment for the exact rules (fixup review findings 1 and 2).
+ * comment for the exact rules (review findings 1 and 2).
  *
  * Callers render their own UI per `state.kind`; profile naming/coloring stays
  * outside this machine. Callers remain conditionally mounted so closing
@@ -805,7 +805,7 @@ export function useProviderProfileLoginFlow(
   );
 
   /**
-   * Two-sided settlement join for the current attempt (fixup review
+   * Two-sided settlement join for the current attempt (review
    * finding 1): `awaitLogin` and `submitLoginCode` can resolve in either
    * order, and neither side may act alone on a `noActiveLogin`/not-yet-
    * authenticated verdict - only this shared arbiter decides, after both
@@ -908,7 +908,7 @@ export function useProviderProfileLoginFlow(
       liveLoginRef.current = null;
       lastAnswerRef.current = null;
       lastTouchAtRef.current = 0;
-      // Statefulness fixup: without this, a restart's fresh `CodePasteField`
+      // Without this, a restart's fresh `CodePasteField`
       // (remounted via `key={attemptId}`) would still render the PREVIOUS
       // attempt's `submitError`/pending flags off the shared mutation
       // object, since TanStack Query mutation state otherwise persists

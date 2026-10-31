@@ -29,7 +29,7 @@ export interface ChatTimelineScrollGeometry {
  * scrollHeight=clientHeight=0`. That is UNKNOWN geometry, never a confirmed
  * edge - treating it as "at the bottom" would let a restored free-reading
  * position get silently overwritten the moment the pane becomes visible
- * again (fixup review P1 finding 3).
+ * again (review P1 finding 3).
  */
 export function isChatTimelineGeometryMeasurable(
   geometry: ChatTimelineScrollGeometry,

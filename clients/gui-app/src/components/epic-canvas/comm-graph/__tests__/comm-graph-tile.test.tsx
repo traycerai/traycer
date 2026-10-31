@@ -925,7 +925,7 @@ function lastFrameAndBounds(
  * run. A cold mount (agents still empty on the first render) can mask R1's
  * "unmounted" reproduction entirely - the effect that resets the camera
  * closes over an empty `node.view` update cycle no differently, but the
- * render-time decision this fixup added reads `agents.length` nowhere, so
+ * render-time decision this change added reads `agents.length` nowhere, so
  * the real risk is a probe that never reaches a truthful `drawReady`
  * because the office canvas measured before agents existed. Loading first is
  * what the reviewer's own probe does to rule that out.
@@ -2092,7 +2092,7 @@ describe("CommGraphTile", () => {
       // wrongly, or to hold rightly. This is exactly the case that added a
       // per-renderer camera to protect (a mode switch is not a camera
       // event), and the fix for the finding above must leave it alone:
-      // expected GREEN both before this fixup and after it.
+      // expected GREEN both before this change and after it.
       useSettingsStore.getState().setAgentOfficeDefaultView("building");
       await renderSeededOffice(seededTile());
       expect(storedView()?.mode).toBe("graph");
@@ -2250,7 +2250,7 @@ describe("CommGraphTile", () => {
 
   describe("the plan the settled feed owes (fixup 8c, P2)", () => {
     /**
-     * FIXUP 8 DREW THE OFFICE EARLY AND THEN LEFT IT THERE.
+     * THE OFFICE WAS DRAWN EARLY AND THEN LEFT THERE.
      *
      * The floor an explicit view draws while the feed is behind is planned
      * from statuses that are still arriving, so nobody is busy and the woken

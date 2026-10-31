@@ -773,7 +773,7 @@ describe("<HostSettingsPanel /> Overview ▸ Updates tab", () => {
     expect(screen.getByTestId("host-auto-update-host-a")).toBeTruthy();
   });
 
-  // T3 fixup-1: `versionConnecting` (`host-overview-panel.tsx`) never read
+  // T3: `versionConnecting` (`host-overview-panel.tsx`) never read
   // `host.health.state === "restarting"`, so an expected restart fell through
   // to whatever the scope status or operation view said instead of the
   // loading shape every other region already gives a restart. Two arms, one

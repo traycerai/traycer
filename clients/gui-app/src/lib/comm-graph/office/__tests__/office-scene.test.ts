@@ -14291,7 +14291,7 @@ describe("OfficeScene fixup 8c - the settle plan walks people, it does not pop t
     // THE PREMISE READ OFF THE BOOK, not the plan. `layout.desks` is where
     // the plan put somebody; `whereabouts` is where the scene says they are,
     // and the two disagreeing for a whole settled office is the finding this
-    // fixup's second half exists for - a premise taken from the plan would
+    // fix's second half exists for - a premise taken from the plan would
     // have been satisfied by a floor nobody was standing on.
     const moved = team.memberAgentIds.find(
       (id) => scene.whereabouts(id) === "Quiet stack",
@@ -14413,7 +14413,7 @@ describe("OfficeScene fixup 8c - the book settles with the plan (D66)", () => {
    * answer from the CHARACTER while it is out of its chair, which is what the
    * settle deliberately sets thirty-nine of these agents doing - so with
    * motion on this would compare walkers against a reference office where
-   * nobody ever walked, and fail on the walk this fixup wants. Reduced motion
+   * nobody ever walked, and fail on the walk this case wants. Reduced motion
    * collapses the walk into sitting down, which leaves exactly the question
    * being asked: did the book take up the settled plan. The walking half is
    * pinned by the R4 cases, and the case below asserts the shortfall's own

@@ -9,7 +9,7 @@ import type { ProviderProfileLoginFlowCodePaste } from "./use-provider-profile-l
 /**
  * Auto-restart notice, shared verbatim by the add-profile dialog, the
  * Settings reauth panel, and the in-chat banner's waiting step - rendered
- * at the top of the step (visual-flow fixup: it previously sat squeezed
+ * at the top of the step (it previously sat squeezed
  * between the paste field's label and its input, easy to miss).
  */
 export function CodePasteRestartNotice({

@@ -611,7 +611,7 @@ function survivingMemberHostOf(
  * team that is still named after it, because their classes are frozen. The two
  * halves are each following their own correct rule and together they produce a
  * team whose lead is standing outside it: the same broken shape three earlier
- * fixups closed, arrived at from a direction none of them covered.
+ * fixes closed, arrived at from a direction none of them covered.
  *
  * The WAITING TEAM is what makes this safe to do, and what says where to put
  * the returner: it establishes that the team is real and which building it is

@@ -7026,7 +7026,7 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("close-before-hydration under temporary end keeps durable row for a new instance reopen", async () => {
-      // Fixup hydration-transaction P1: a temporary isAtEnd=true report on a
+      // P1: a temporary isAtEnd=true report on a
       // partial tail-only snapshot must not release the persistence gate. A
       // genuine close before the original row appears would otherwise commit
       // following-end to the durable chat key; the instance-keyed session
@@ -7325,7 +7325,7 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("failed hydration landing retains the coordinate for a later messages-change retry", async () => {
-      // Fixup hydration-transaction P1: the late-hydration catch-up must not
+      // P1: the late-hydration catch-up must not
       // clear the pending id / session fallback before a validated landing.
       // A first bounded restore that exhausts without validating leaves the
       // coordinate armed so a later `messages` reference change can retry.
@@ -7425,7 +7425,7 @@ describe("ChatMessages scroll policy", () => {
     });
 
     it("explicit gesture while hydration is pending supersedes and survives later full transcript", async () => {
-      // Fixup hydration-transaction P1: a real recognized gesture must clear
+      // P1: a real recognized gesture must clear
       // the pending hydration coordinate immediately. When the transcript
       // later grows to include the original raw anchor, the viewport must
       // not jump back to it - reader intent already superseded it.
@@ -8741,11 +8741,11 @@ describe("ChatMessages scroll policy", () => {
       // OR a live DOM read, guarded or not) before that frame risks
       // resolving to the wrong row rather than failing safely - a
       // library-internal scheduling floor this component cannot bypass by
-      // itself, distinct from the app-level throttle this fixup removes.
+      // itself, distinct from the app-level throttle this change removes.
       // `fireScrollTopAndFlush` gives exactly that one required frame; this
       // test hides IMMEDIATELY after it, with zero ADDITIONAL settle, to
       // prove the app no longer needs a SECOND frame on top of the one
-      // LegendList itself needs (the throttled version this fixup replaces
+      // LegendList itself needs (the throttled version this change replaces
       // scheduled its own capture for that second frame, which a hide
       // arriving before it fired would miss entirely).
       const messages = makeCompletedTranscript(200);

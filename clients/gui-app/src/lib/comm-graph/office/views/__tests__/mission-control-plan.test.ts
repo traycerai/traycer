@@ -1930,7 +1930,7 @@ describe("mission-control cold-review findings", () => {
  * 309-agent triage population the live finding came from. Case 2 walks the
  * ladder itself on a synthetic tier of two-seat teams. The last case guards
  * the fix against leaking into the HQ board, the Lounge area sign and the
- * host signs, which this fixup does not touch.
+ * host signs, which this case does not touch.
  */
 describe("mission control plates: fixup 5 - plates fit their own arc segment and never overlap", () => {
   /**

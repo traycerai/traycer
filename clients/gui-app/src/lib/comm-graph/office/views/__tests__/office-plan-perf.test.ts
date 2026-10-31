@@ -1236,7 +1236,7 @@ describe("the Campus pan the cold review actually found", () => {
   });
 
   it("paints nothing over the corner the report named, which no district stands on", () => {
-    // The other half, and the one this fixup added: a block map that reaches
+    // The other half, and the one this change added: a block map that reaches
     // past its own tiles is how the corner came to be painted in the first
     // place. The whole-world map is checked as well as the frame, so a frame
     // that simply returned nothing could not pass this on its own.

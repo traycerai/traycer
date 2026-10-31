@@ -2595,7 +2595,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   );
 
   // `releasePersistenceGate` decouples "publish following-end" from "the
-  // saved coordinate is resolved" (fixup: hydration-transaction). A temporary
+  // saved coordinate is resolved". A temporary
   // landing at the strict edge while `pendingHydrationRestoreAnchorIdRef` is
   // still unresolved is not reader intent and must not release the
   // persistence gate - every caller that already represents a real gesture
@@ -2770,7 +2770,7 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
   // call below is decision-sanctioned and unconditional, same as before;
   // the settle/re-issue only corrects the LANDING it produces, never
   // re-decides whether the click counts as "following". Pill action is an
-  // explicit supersession (fixup: hydration-transaction), so the pending
+  // explicit supersession, so the pending
   // hydration id is cleared above and the gate always releases.
   const scrollToEnd = useCallback(
     (animated: boolean): void => {
@@ -3574,8 +3574,8 @@ function ChatMessagesInner(props: ChatMessagesInnerProps) {
    * reissues the same semantic target, bounded, if geometry moved underneath
    * it. A reader gesture bumps the shared generation and wins immediately.
    *
-   * `isAborted`/`onValidated`/`onExhausted` are caller-supplied (fixup:
-   * hydration-transaction) because the two callers below need different
+   * `isAborted`/`onValidated`/`onExhausted` are caller-supplied
+   * because the two callers below need different
    * failure policy: the reserve-convergence caller (below) accepts the
    * browser-clamped landing as its new fallback truth on exhaustion, while
    * the late-hydration catch-up caller must instead retain the original

@@ -5156,8 +5156,8 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     readonly col: number;
     readonly row: number;
     /**
-     * The seat's own tile width - a REQUIRED argument, not a default: fixup
-     * 8 fits a seated tag to exactly this width, so a caller that means to
+     * The seat's own tile width - a REQUIRED argument, not a default: a
+     * seated tag is fitted to exactly this width, so a caller that means to
      * exercise that fit (the cluster below) has to say so, and every other
      * caller has to say it does not mean to.
      */
@@ -5331,7 +5331,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     // The control that makes it a walker case: the other agent is seated,
     // unselected and unhovered, so the middle band leaves it unnamed.
     //
-    // FIXUP 8: "Alpha Sitter" itself is no longer a possible reading at this
+    // "Alpha Sitter" itself is no longer a possible reading at this
     // zoom - a 1-tile seat's 16px budget only ever admits its initials, "AS"
     // (the search-matched sibling case above proves that is exactly what a
     // QUALIFIED sitter paints here). Asserting the absence of a string the
@@ -5360,7 +5360,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     // and the same tag. Drop the tag for walkers and the walker's count falls
     // short of the sitter's by one label's worth of calls.
     //
-    // FIXUP 8: the sitter's own tag is now fitted to `seatAt`'s one-tile seat
+    // The sitter's own tag is now fitted to `seatAt`'s one-tile seat
     // (16px at this zoom), and "Alpha Sitter" (12 chars) fits nothing past
     // its initials - "AS" - so the FULL "Alpha Sitter" string this case used
     // to count is gone from the canvas entirely. The walker keeps its
@@ -5385,9 +5385,9 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     // guard left to be vacuous about. This negative is real: it is the FIT
     // ladder alone standing between "Alpha Sitter" and the canvas, and
     // removing the fit (the seated tag drawing its written name, as it did
-    // before this fixup) paints it and reddens this line.
+    // before this fix) paints it and reddens this line.
     //
-    // FIXUP 8: the sitter's tag is fitted to its one-tile seat (32px at this
+    // The sitter's tag is fitted to its one-tile seat (32px at this
     // zoom), which admits "Alpha" (its first word) but not the written
     // "Alpha Sitter" (72px) or a clip that keeps the required six characters
     // in front of the ellipsis. The walker is unaffected (`fitTiles: null`).
@@ -5903,7 +5903,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      *
      * The ordinary tag cuts a long name to fit - "Quilfeather Zarrowmere" is
      * painted "Quilfeather Z…" - so counting exact matches misses the very
-     * label this case is about. That is how the shipped fixup-3 case passed
+     * label this case is about. That is how the shipped case passed
      * while two names were being drawn: the long name hid the truncated tag,
      * and only Find's untruncated copy was counted.
      *
@@ -5933,7 +5933,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
     });
 
     it("keeps one name when the ordinary tag TRUNCATES it", async () => {
-      // ZOOM RAISED FOR FIXUP 8: a City lot is one tile, and a seated tag is
+      // ZOOM RAISED: a City lot is one tile, and a seated tag is
       // now fitted to that seat's own width. At zoom 1 the one-tile budget
       // (16px) admits nothing past initials ("QZ"), which drops this case's
       // own mechanism - a TRUNCATED tag, not an initialed or dropped one.
@@ -5949,7 +5949,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
       // The control this case exists to be. A long name is painted
       // "Quilfe…" by the tag path and in full by Find, so the two strings
       // differ and an exact-match count sees only one of them - which is
-      // exactly how the fixup-3 case passed while two names were on screen.
+      // exactly how this case passed while two names were on screen.
       expect(namePaints(matched.name)).toBe(PASSES_PER_LABEL);
       // And the one that survived is the tag's, fitted to its own seat -
       // not Find's untruncated copy over the top of it.
@@ -6063,7 +6063,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * pairs overlap and the fourth (rightmost) is the one left with nowhere
      * to go.
      *
-     * FIXUP 8 fits a seated tag to its own seat, and requirement 4 there is
+     * A seated tag is fitted to its own seat, and requirement 4 there is
      * that two neighbours' tags then never overlap BY CONSTRUCTION - which
      * retires a one-tile-pitch collision as a real scenario: a seat that
      * narrow would have fitted its neighbour's tag down to initials long
@@ -6162,7 +6162,7 @@ describe("CommGraphOfficeCanvas fixups 1 and 2 - renderer projection, semantic z
      * Every `fillText` pass that NAMES this agent, truncation included - the
      * same shape as N1's `namePaints`, reused here because the tag path
      * truncates a long name while Find does not, and an exact-match count
-     * would miss the truncated tag exactly as it did before N1's fixup.
+     * would miss the truncated tag exactly as it did before N1's fix.
      */
     function namePaints(name: string): number {
       return paintedText().filter(
@@ -6998,7 +6998,7 @@ describe("CommGraphOfficeCanvas fixup 2 - real Towers semantic zoom", () => {
   });
 
   it("draws a qualified real Towers name at LOD 1 when selected", () => {
-    // ZOOM RAISED FOR FIXUP 8: Orchestrator's desk is two tiles, and at
+    // ZOOM RAISED: Orchestrator's desk is two tiles, and at
     // zoom 1 that budget (32px) admits nothing readable - not even initials,
     // since "Orchestrator" is one word - so its tag is DROPPED there rather
     // than qualified. 1.5 is still inside LOD 1 (below the 1.6 close-up

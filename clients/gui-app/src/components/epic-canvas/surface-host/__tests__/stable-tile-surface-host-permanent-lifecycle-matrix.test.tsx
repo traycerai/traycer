@@ -1801,7 +1801,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 14 - production visibility boundary: topLevelVisible handoff through real hosted chain restores free-reading position", async () => {
-    // Fixup requirement 3 / review P2: every existing visibility-handoff
+    // Every existing visibility-handoff
     // case in `chat-messages.test.tsx` drives `ChatMessages.visible` via a
     // direct prop re-render, so a broken
     // `environment.presentation.topLevelVisible` bridge would still pass.

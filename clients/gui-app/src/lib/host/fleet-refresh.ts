@@ -2,7 +2,7 @@ import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 
 /**
  * Renderer-side seam for "the fleet changed; the authority must re-read it"
- * (redesign P1.2 fixup F6).
+ * (redesign P1.2, F6).
  *
  * Deregistering a host refreshes renderer state only - the directory service
  * and the registered-hosts query. The authority that derives `effectiveHostId`
