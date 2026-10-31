@@ -81,6 +81,7 @@ const createEpicV14: CreateEpicRequestV14 = {
   epic: epicLight,
   repoIdentifiers: [],
   workspaces: [],
+  owner: null,
   chat: {
     chatId: "chat-1",
     parentId: null,
@@ -112,7 +113,8 @@ describe("epic.createChat@1.5 and epic.create@1.5 carry the browser-annotation s
   });
 
   it("upgrades a @1.4 create-chat request with the sidecar absent", () => {
-    const upgraded = epicCreateChatUpgradeV14ToV15.upgradeRequest(createChatV14);
+    const upgraded =
+      epicCreateChatUpgradeV14ToV15.upgradeRequest(createChatV14);
     expect(upgraded.initialMessage).not.toHaveProperty("browserAnnotations");
     expect(upgraded.initialMessage?.sentFromHostId).toBe("host-2");
   });
