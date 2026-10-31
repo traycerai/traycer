@@ -594,6 +594,17 @@ describe("spawnEpicRuntimeWorker — the projection path", () => {
 });
 
 /**
+ * A host that serves BOTH record-list methods, at the minor that carries the
+ * doc remainder. `epic.listTuiAgents` needs `@1.1` specifically - at `@1.0`
+ * the host withholds doc-only entries, so the doc arm stays on - which is why
+ * this names a version rather than just a method.
+ */
+const RECORD_SERVING_MANIFEST: ConnectionManifest = {
+  "epic.listChatRecords": { major: 1, minor: 1 },
+  "epic.listTuiAgents": { major: 1, minor: 1 },
+};
+
+/**
  * The negotiated manifest actually crosses, and a host that upgrades under an
  * open tab moves the arm.
  *
@@ -613,17 +624,6 @@ describe("spawnEpicRuntimeWorker — the projection path", () => {
  * "an event was posted" would have passed against a payload no reader could
  * use.
  */
-/**
- * A host that serves BOTH record-list methods, at the minor that carries the
- * doc remainder. `epic.listTuiAgents` needs `@1.1` specifically - at `@1.0`
- * the host withholds doc-only entries, so the doc arm stays on - which is why
- * this names a version rather than just a method.
- */
-const RECORD_SERVING_MANIFEST: ConnectionManifest = {
-  "epic.listChatRecords": { major: 1, minor: 1 },
-  "epic.listTuiAgents": { major: 1, minor: 1 },
-};
-
 describe("the negotiated manifest crossing to the worker", () => {
   function supportController(): {
     readonly source: StreamMethodSupportSource<HostStreamRpcRegistry>;

@@ -88,8 +88,9 @@ const EMPTY_OCCUPANCY: ReadonlyMap<string, string> = new Map();
 const EMPTY_NEEDS: ReadonlyArray<string> = [];
 const EMPTY_ACTIVITY: ReadonlyMap<string, number> = new Map();
 
-/** Measured from `planMissionControl` on triage seed 1; not the ticket estimates. */
 /**
+ * Measured from `planMissionControl` on triage seed 1; not the ticket estimates.
+ *
  * Re-measured for the medbay's two rows: the hall is two rows taller than it was
  * before it had a ward, so every fit the HEIGHT binds moved. The 309-agent
  * narrow fit is unchanged because width binds there, which is the check that

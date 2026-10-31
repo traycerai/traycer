@@ -399,14 +399,6 @@ interface RuntimeRig {
 let nextEpicSequence = 0;
 
 /**
- * Builds a real `createEpicReplicaRuntime`, with a real (lane-capable)
- * `laneSelection` wired to counting factories. Every non-lane source is the
- * same one `store.ts` passes in production - `createRendererRuntimeEnvironment`,
- * `createBatchingDelivery`, `DOC_IS_THE_ONLY_RECORD_SOURCE` - reused rather
- * than reinvented, so the only thing under test is the lane-selection wiring
- * itself.
- */
-/**
  * The two support sources a pin may run against.
  *
  * `"forever-unknown"` is the relay case and hands back NO controller, so a test
@@ -462,6 +454,14 @@ function buildSupportSource(mode: SupportMode): SupportController | null {
   return null;
 }
 
+/**
+ * Builds a real `createEpicReplicaRuntime`, with a real (lane-capable)
+ * `laneSelection` wired to counting factories. Every non-lane source is the
+ * same one `store.ts` passes in production - `createRendererRuntimeEnvironment`,
+ * `createBatchingDelivery`, `DOC_IS_THE_ONLY_RECORD_SOURCE` - reused rather
+ * than reinvented, so the only thing under test is the lane-selection wiring
+ * itself.
+ */
 function buildRuntimeRig(mode: SupportMode): RuntimeRig {
   nextEpicSequence += 1;
   const legacy = createCountingLegacyFactory();

@@ -485,18 +485,6 @@ function rectsOverlap(left: OfficeRect, right: OfficeRect): boolean {
   );
 }
 
-/**
- * A real City scene holding two buildings whose PAINTED roofs overlap, with
- * the nearer and the farther of the two picked out.
- *
- * Measured fixture: `one-team(3)` with activity 100/190/280 gives all three
- * of `team-lead`, `member-0` and `agent-root` seven storeys - the cap, which
- * this activity level is chosen to hit for all of them - whose roofs land at
- * `(120,120)` and `(136,128)` for the first two - a 16 x 8 overlap, with
- * `member-0` one lot nearer. The overlap is asserted rather than assumed, so
- * a plan that moved this geometry fails the cases below loudly instead of
- * making them vacuous.
- */
 /** One seat's painted roof and its D53 `hitBox`, or `null` if it draws none. */
 function cityRoofFactsOf(
   layout: OfficeLayout,
@@ -556,6 +544,18 @@ function firstOverlappingPair(
   return null;
 }
 
+/**
+ * A real City scene holding two buildings whose PAINTED roofs overlap, with
+ * the nearer and the farther of the two picked out.
+ *
+ * Measured fixture: `one-team(3)` with activity 100/190/280 gives all three
+ * of `team-lead`, `member-0` and `agent-root` seven storeys - the cap, which
+ * this activity level is chosen to hit for all of them - whose roofs land at
+ * `(120,120)` and `(136,128)` for the first two - a 16 x 8 overlap, with
+ * `member-0` one lot nearer. The overlap is asserted rather than assumed, so
+ * a plan that moved this geometry fails the cases below loudly instead of
+ * making them vacuous.
+ */
 function overlappingCityRoofs(): {
   readonly scene: OfficeScene;
   readonly layout: OfficeLayout;

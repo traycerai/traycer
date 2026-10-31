@@ -286,21 +286,6 @@ const setupWorkerFactory = getEpicRuntimeWorkerFactoryOverride();
 let workerFactoryBeforeTest: (() => RuntimeWorkerLike) | null = null;
 
 /**
- * Install this test's stream factory, one seam over.
- *
- * Every call site below used to read `installStreamFactory(fn)`
- * and passed the SAME `fn` unchanged; only the seam moved, because a factory
- * built on MAIN cannot cross `postMessage` to a runtime living in the worker.
- * Keeping one helper rather than inlining the composition twenty-two times is
- * what makes that a rename at each site instead of twenty-two chances to differ.
- *
- * A FRESH worker per spawn: one helper instance owns one bridge pair and one
- * composition, so a shared instance would hand two sessions the same runtime -
- * and this file re-points sessions across hosts, which acquires a second one.
- * The deleted stream override was called once per session too, so this matches
- * what these tests have always exercised.
- */
-/**
  * What {@link installWorkerWithFatalOnFirstSpawn} hands back.
  *
  * `spawnCount` is the pin's real observable: "Retry rebuilt" and "Retry
@@ -455,6 +440,21 @@ function installWorkerWithTogglableConstruction(
   };
 }
 
+/**
+ * Install this test's stream factory, one seam over.
+ *
+ * Every call site below used to read `installStreamFactory(fn)`
+ * and passed the SAME `fn` unchanged; only the seam moved, because a factory
+ * built on MAIN cannot cross `postMessage` to a runtime living in the worker.
+ * Keeping one helper rather than inlining the composition twenty-two times is
+ * what makes that a rename at each site instead of twenty-two chances to differ.
+ *
+ * A FRESH worker per spawn: one helper instance owns one bridge pair and one
+ * composition, so a shared instance would hand two sessions the same runtime -
+ * and this file re-points sessions across hosts, which acquires a second one.
+ * The deleted stream override was called once per session too, so this matches
+ * what these tests have always exercised.
+ */
 function installStreamFactory(factory: EpicStreamClientFactory): void {
   __setEpicRuntimeWorkerFactoryForTests(() =>
     createInProcessEpicRuntimeWorker({
