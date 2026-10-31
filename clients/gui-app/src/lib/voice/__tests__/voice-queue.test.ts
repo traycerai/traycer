@@ -93,6 +93,7 @@ let attentionNow: {
 let markRead: Mock<VoiceQueueDeps["markRead"]>;
 let switchTo: Mock<VoiceQueueDeps["switchTo"]>;
 let noteHeard: Mock<VoiceQueueDeps["noteHeard"]>;
+let onOfferHeard: Mock<VoiceQueueDeps["onOfferHeard"]>;
 let queue: VoiceQueue;
 
 beforeEach(() => {
@@ -104,6 +105,7 @@ beforeEach(() => {
   markRead = vi.fn<VoiceQueueDeps["markRead"]>();
   switchTo = vi.fn<VoiceQueueDeps["switchTo"]>();
   noteHeard = vi.fn<VoiceQueueDeps["noteHeard"]>();
+  onOfferHeard = vi.fn<VoiceQueueDeps["onOfferHeard"]>();
   scheduler = createSpeechScheduler({
     now: clock.now,
     setTimer: clock.setTimer,
@@ -123,6 +125,7 @@ beforeEach(() => {
     noteHeard,
     isFocused: (botId, chatId) => focusedChats.has(`${botId}:${chatId}`),
     attention: () => attentionNow,
+    onOfferHeard,
   });
 });
 
@@ -158,6 +161,26 @@ function botRow(
   text: string,
 ): Extract<HydrationRow, { readonly role: "assistant" }> {
   return { role: "assistant", messageId, blocks: [textBlock(text)] };
+}
+
+/** A bot row asking one open question. */
+function questionRow(
+  messageId: string,
+): Extract<HydrationRow, { readonly role: "assistant" }> {
+  return {
+    ...botRow(messageId, "The release is ready. Ship or hold?"),
+    question: {
+      requestId: "req-1",
+      questions: [
+        {
+          text: "Ship or hold?",
+          options: ["Ship", "Hold"],
+          allowFreeText: false,
+          settlement: null,
+        },
+      ],
+    },
+  };
 }
 
 /** A reply that arrives while the session runs, hydrated and so offered. */
@@ -199,6 +222,7 @@ describe("a reply elsewhere that arrives while the session runs", () => {
     // The voice said it: the item is offered, and nothing offers it again.
     scheduler.noteOutputTranscript("Release bot has an answer for you.");
     expect(stateOf("r-1")).toBe("offered");
+    expect(onOfferHeard).toHaveBeenCalledTimes(1);
     clock.advance(120_000);
     expect(appended).toHaveLength(1);
   });
@@ -233,7 +257,8 @@ describe("a reply seen from two views", () => {
     // The focused feed schedules a row before the records answer for it.
     queue.ingestReplies([replyRef({ messageId: "r-2" })], hostOf);
     queue.noteFocused("r-2");
-    expect(queue.pendingHydrations()).toEqual([]);
+    // Whether it is a prompt is not known until its row is read.
+    expect(queue.pendingHydrations()).toHaveLength(1);
     queue.hydrated("r-2", botRow("r-2", "Merged the release branch."), null);
     queue.ingestReplies([replyRef({ messageId: "r-2" })], hostOf);
     expect(queue.pendingHydrations()).toEqual([]);
@@ -369,6 +394,83 @@ describe("two posts about the same approval", () => {
     expect(queue.pendingHydrations()).toEqual([]);
     expect(appended).toHaveLength(1);
     expect(appended[0]?.text).toContain("says a task is waiting on you");
+    expect(queue.surfaceOf("r-1")).toEqual({
+      kind: "approval",
+      epicId: "epic-1",
+      hostId: "host-a",
+      chatId: "task-chat",
+      approvalId: "ap-1",
+      resolution: null,
+    });
+    expect(queue.surfaceOf("r-unknown")).toBeNull();
+  });
+});
+
+describe("a question or approval the focused feed says", () => {
+  it("stays queued as a card to open, with its offer taken back, and is left by the focused feed", () => {
+    scheduler.noteInputTranscript();
+    arrive(replyRef({ messageId: "q-1" }), questionRow("q-1"));
+    expect(stateOf("q-1")).toBe("queued");
+
+    queue.noteFocused("q-1");
+
+    expect(
+      queue.items().map((item) => [item.id, item.kind, item.state]),
+    ).toEqual([["q-1", "question", "queued"]]);
+    expect(queue.keepsFromFocus("q-1")).toBe(true);
+    clock.advance(INPUT_ACTIVE_WINDOW_MS * 5);
+    expect(appended).toEqual([]);
+  });
+
+  it("is decided once its row is read when the feed said it while it was pending: a question is kept", () => {
+    queue.ingestReplies([replyRef({ messageId: "q-2" })], hostOf);
+    queue.noteFocused("q-2");
+    expect(queue.pendingHydrations()).toHaveLength(1);
+
+    queue.hydrated("q-2", questionRow("q-2"), null);
+
+    expect(
+      queue.items().map((item) => [item.id, item.kind, item.state]),
+    ).toEqual([["q-2", "question", "queued"]]);
+    expect(queue.keepsFromFocus("q-2")).toBe(true);
+    clock.advance(120_000);
+    expect(appended).toEqual([]);
+  });
+
+  it("is let go once its row is read when it turns out to be a plain reply", () => {
+    queue.ingestReplies([replyRef({ messageId: "r-2" })], hostOf);
+    queue.noteFocused("r-2");
+
+    queue.hydrated("r-2", botRow("r-2", REPLY_TEXT), null);
+
+    expect(queue.items()).toEqual([]);
+    clock.advance(120_000);
+    expect(appended).toEqual([]);
+  });
+});
+
+describe("an item claimed for a card", () => {
+  it("has its queued offer and its queued Read taken back, and is left by the focused feed", () => {
+    scheduler.noteOutputLevel(true);
+    arrive(replyRef({}), botRow("r-1", REPLY_TEXT));
+    queue.run({ kind: "read", itemId: "r-1", delegationId: null });
+    expect(appended).toEqual([]);
+    queue.claimForCard("r-1");
+
+    scheduler.noteOutputLevel(false);
+    clock.advance(OUTPUT_HANGOVER_MS * 3);
+
+    expect(appended).toEqual([]);
+    expect(stateOf("r-1")).toBe("queued");
+  });
+
+  it("is not kept from the focused feed before it is claimed", () => {
+    scheduler.noteOutputLevel(true);
+    arrive(replyRef({}), botRow("r-1", REPLY_TEXT));
+
+    expect(queue.keepsFromFocus("r-1")).toBe(false);
+    queue.claimForCard("r-1");
+    expect(queue.keepsFromFocus("r-1")).toBe(true);
   });
 });
 
