@@ -17,6 +17,7 @@ import {
   CARD_SETTLER_WAIT_MS,
   CARD_UNREADABLE_TEXT,
   CARD_WHICH_TEXT,
+  cardListText,
   createCardDesk,
   matchCardChoice,
   type BotAnswerOutcome,
@@ -238,8 +239,8 @@ interface Harness {
   readonly candidate: (choiceWords: string) => Promise<SpeechItem>;
   /** The router's answer, routed against the card as it stands now. */
   readonly route: (choice: number | null, text: string) => boolean;
-  /** Words routed elsewhere, against the card as it stands now. */
-  readonly drop: () => void;
+  /** Words (by their segments) routed elsewhere, against the card as it stands now. */
+  readonly drop: (seqs: ReadonlyArray<number>) => void;
   readonly card: () => ActiveCard | null;
   readonly texts: () => ReadonlyArray<string>;
 }
@@ -360,7 +361,7 @@ function setup(content: CardContent): Harness {
         { choice, text, key: currentKey(), seqs: [] },
         "d-routed",
       ),
-    drop: () => cardDesk.dropCandidate(currentKey()),
+    drop: (seqs) => cardDesk.dropCandidate(currentKey(), seqs),
     card: () => useVoiceSessionStore.getState().activeCard,
     texts: () => spoken.map((item) => item.text),
   };
@@ -626,7 +627,8 @@ describe("a move or an interjection while a candidate waits", () => {
     h.say("Staging");
     const readBack = h.latest();
 
-    h.drop();
+    // A request said after the choice, routed elsewhere.
+    h.drop([utterWords("tell the CI bot hello")]);
 
     expect(h.withdrawn).toEqual([readBack.id]);
     expect(h.card()?.candidate).toBeNull();
@@ -1590,6 +1592,65 @@ describe("a read-back proven by its end", () => {
 
     expect(h.answerBotQuestion).toHaveBeenCalledTimes(1);
   });
+
+  const WHO: CardContent = {
+    ...AGENT_QUESTION,
+    questions: [
+      {
+        text: "Who should handle it?",
+        options: ["Agent"],
+        takesText: false,
+        questionId: "q-who",
+      },
+    ],
+  };
+  const DENY_FIRST: CardContent = {
+    ...APPROVAL,
+    approval: { tool: "Bash", summary: "deny the old branch" },
+  };
+
+  it.each([
+    [
+      "the template's introduction and the question",
+      "Release bot says a task's agent asks in its channel: Who should handle it?",
+      0,
+    ],
+    ["the whole read-back", cardListText(WHO, 0), 1],
+  ])(
+    "arms a sole choice named like the template's own words only by its tail: %s",
+    async (_name, transcript, sends) => {
+      const h = openOnRealScheduler(WHO);
+
+      h.speak(transcript);
+      await h.endPlayback();
+      speakTo(h.cardDesk, "yes", "d-words");
+
+      expect(h.actSurface).toHaveBeenCalledTimes(sends);
+    },
+  );
+
+  it.each([
+    [
+      "before the choice list",
+      "Release bot says a task's agent wants to use Bash: deny the old branch, in its channel.",
+      null,
+    ],
+    ["the whole read-back", cardListText(DENY_FIRST, 0), option(0, "Allow")],
+  ])(
+    "arms an approval whose summary says Deny only by its choice list: %s",
+    async (_name, transcript, candidate) => {
+      const h = openOnRealScheduler(DENY_FIRST);
+
+      h.speak(transcript);
+      await h.endPlayback();
+      speakTo(h.cardDesk, "approve", "d-words");
+
+      expect(useVoiceSessionStore.getState().activeCard?.candidate).toEqual(
+        candidate,
+      );
+      expect(h.actSurface).not.toHaveBeenCalled();
+    },
+  );
 
   it("counts a candidate read-back as heard by its label, not by the tool it names", async () => {
     const h = openOnRealScheduler(APPROVAL);

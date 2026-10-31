@@ -799,7 +799,10 @@ describe("the active card", () => {
 
     expect(h.requests.map((request) => request.card)).toEqual([CARD]);
     expect(h.sends.map((focus) => focus.botId)).toEqual([TRACY]);
-    expect(driver.dropCandidate).toHaveBeenCalledExactlyOnceWith(CARD.key);
+    expect(driver.dropCandidate).toHaveBeenCalledTimes(1);
+    const [key, seqs] = vi.mocked(driver.dropCandidate).mock.calls[0];
+    expect(key).toEqual(CARD.key);
+    expect(seqs).toHaveLength(2);
     expect(driver.answerRouted).not.toHaveBeenCalled();
   });
 
@@ -894,11 +897,12 @@ describe("the card desk behind the say loop", () => {
   /** The real desk, installed as the store's card driver, with the voice's speech captured. */
   function installDesk() {
     const spoken: SpeechItem[] = [];
+    const withdrawn: string[] = [];
     const cardDesk = createCardDesk({
       store: useVoiceSessionStore,
       speech: {
         enqueue: (item) => spoken.push(item),
-        withdraw: () => undefined,
+        withdraw: (itemId) => withdrawn.push(itemId),
         activity: () => ({
           inputActiveUntil: null,
           outputPlaying: false,
@@ -920,15 +924,20 @@ describe("the card desk behind the say loop", () => {
       }),
       newActionId: () => "act-1",
     });
+    const actSurface = vi.fn<CardApi["actSurface"]>(() =>
+      Promise.resolve({ kind: "failed" }),
+    );
     const api: CardApi = {
       answerBotQuestion: () => Promise.resolve({ kind: "failed" }),
-      actSurface: () => Promise.resolve({ kind: "failed" }),
+      actSurface,
       postInThread: () => Promise.resolve(true),
       canPost: true,
     };
     useVoiceSessionStore.getState().setCardDriver(cardDesk);
     return {
       spoken,
+      withdrawn,
+      actSurface,
       /** The card of this item is opened and its records read. */
       show: (itemId: string): void => {
         cardDesk.open(itemId, null);
@@ -1019,6 +1028,66 @@ describe("the card desk behind the say loop", () => {
       expect(desk.spoken).toHaveLength(spokenBefore + 1);
       expect(desk.spoken.at(-1)?.text).toContain("Allow Bash");
       expect(h.sends).toEqual([]);
+    });
+  });
+
+  describe("a request routed while the card waited, coming back after the person made a choice", () => {
+    /** The list is heard; "tell tracy hello" is routed (the answer is out), and the choice is made before or after it. */
+    async function choiceAroundRoute(choiceFirst: boolean) {
+      const desk = installDesk();
+      desk.show("a");
+      await desk.heard();
+      const h = build({ recheckHolds: true, canSend: true });
+      const out = heldAnswer();
+      h.answers.push(out.answer);
+      const routeRequest = (): Promise<void> => {
+        speak("tell tracy hello");
+        return h.loop.onDelegationCreated("slow");
+      };
+      const choose = async (): Promise<void> => {
+        speak("approve");
+        await h.loop.onDelegationCreated("choose");
+      };
+      let done: Promise<void>;
+      if (choiceFirst) {
+        await choose();
+        done = routeRequest();
+      } else {
+        done = routeRequest();
+        await choose();
+      }
+      const readBack = desk.spoken.at(-1);
+      if (readBack === undefined) throw new Error("no read-back was spoken");
+      return { desk, h, out, done, readBack };
+    }
+
+    it("is ignored when it was said before the choice: the candidate and its read-back stand", async () => {
+      const { desk, h, out, done } = await choiceAroundRoute(false);
+      expect(activeCard()?.candidate).toMatchObject({ label: "Allow" });
+
+      out.release(route("post", null, null, 1));
+      await done;
+
+      expect(h.sends.map((focus) => focus.botId)).toEqual([TRACY]);
+      expect(activeCard()?.candidate).toMatchObject({ label: "Allow" });
+      expect(desk.withdrawn).toEqual([]);
+
+      await desk.heard();
+      speak("yes");
+      await h.loop.onDelegationCreated("yes");
+      expect(desk.actSurface).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops the candidate and takes back its read-back when it was said after the choice", async () => {
+      const { desk, h, out, done, readBack } = await choiceAroundRoute(true);
+      expect(activeCard()?.candidate).toMatchObject({ label: "Allow" });
+
+      out.release(route("post", null, null, 1));
+      await done;
+
+      expect(h.sends.map((focus) => focus.botId)).toEqual([TRACY]);
+      expect(activeCard()?.candidate).toBeNull();
+      expect(desk.withdrawn).toEqual([readBack.id]);
     });
   });
 
