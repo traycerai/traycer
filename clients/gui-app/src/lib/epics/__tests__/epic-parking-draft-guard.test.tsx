@@ -225,6 +225,7 @@ function Harness(props: {
         <EpicSessionGate fallback={null}>
           {showA ? (
             <CommentComposer
+              leadingActions={null}
               epicId={epicId}
               hostClient={null}
               initialContent={null}
@@ -234,13 +235,13 @@ function Harness(props: {
               isPending={false}
               onSubmit={() => Promise.resolve()}
               onCancel={null}
-              leadingActions={null}
               className={undefined}
               ref={refA}
             />
           ) : null}
           {showB ? (
             <CommentComposer
+              leadingActions={null}
               epicId={epicId}
               hostClient={null}
               initialContent={null}
@@ -250,7 +251,6 @@ function Harness(props: {
               isPending={false}
               onSubmit={() => Promise.resolve()}
               onCancel={null}
-              leadingActions={null}
               className={undefined}
               ref={refB}
             />
@@ -617,6 +617,7 @@ function EditHarness(props: {
       <TestEpicSessionTab epicId={epicId} tabId={epicId}>
         <EpicSessionGate fallback={null}>
           <CommentComposer
+            leadingActions={null}
             epicId={epicId}
             hostClient={null}
             initialContent={initialContent}
@@ -626,7 +627,6 @@ function EditHarness(props: {
             isPending={false}
             onSubmit={() => Promise.resolve()}
             onCancel={null}
-            leadingActions={null}
             className={undefined}
             ref={refA}
           />

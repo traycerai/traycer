@@ -27,6 +27,7 @@ import {
 } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { useNewConversationAnnotationStore } from "@/stores/epics/new-conversation-annotation-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import type { CanvasBox } from "@/lib/sandbox/canvas-bridge";
 import { CanvasEditingOverlay } from "../canvas-editing-overlay";
 import {
   useCanvasSelectionStore,
@@ -67,11 +68,25 @@ interface Outside {
   >;
   readonly reveal: Mock<(chatId: string) => void>;
   readonly source: { current: { kind: "text"; text: string } | null };
+  /** The desktop's window screenshot bridge, or `null` where there is none (web). */
+  readonly capture: {
+    current: {
+      captureRegion: Mock<(rect: CanvasBox) => Promise<ArrayBuffer | null>>;
+    } | null;
+  };
+  /**
+   * The mocked roster's exit animation. With `hold` set, a closed menu stays
+   * mounted and `onClosed` waits until `release` is called, the way Radix
+   * keeps the content until its exit animation ends.
+   */
+  readonly menuExit: { hold: boolean; release: (() => void) | null };
 }
 const outside = vi.hoisted((): Outside => ({
   attach: vi.fn(),
   reveal: vi.fn(),
   source: { current: null },
+  capture: { current: null },
+  menuExit: { hold: false, release: null },
 }));
 
 vi.mock("@/providers/use-open-epic-handle", () => ({
@@ -106,60 +121,91 @@ vi.mock(
 );
 vi.mock(
   "@/components/epic-canvas/renderers/chat-target-menu/chat-target-menu",
-  () => ({
+  async () => {
+    const { useEffect, useRef, useState } = await import("react");
     // The roster is Radix's; what matters here is that it lists the chats only
-    // once the trigger has opened it.
-    ChatTargetMenu: (props: {
+    // once the trigger has opened it, and that it reports the menu gone the
+    // way Radix does: from the unmount that follows a close, not from the
+    // close itself. With `outside.menuExit.hold` the closed menu stays on
+    // screen until the test releases it, standing in for the exit animation.
+    function ChatTargetMenu(props: {
       readonly trigger: ReactNode;
       readonly targets: readonly QuoteChatTarget[];
       readonly open: boolean;
       readonly onOpenChange: (open: boolean) => void;
+      readonly onClosed: (() => void) | null;
       readonly onSelectChat: (chatId: string) => void;
       readonly onSelectNewChat: (() => void) | null;
-    }) => (
-      <div>
-        <div
-          role="presentation"
-          onClick={() => props.onOpenChange(!props.open)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") props.onOpenChange(!props.open);
-          }}
-        >
-          {props.trigger}
-        </div>
-        {props.open ? (
-          <div role="menu">
-            {props.targets.map((target) => (
-              <button
-                key={target.chatId}
-                type="button"
-                role="menuitem"
-                onClick={() => props.onSelectChat(target.chatId)}
-              >
-                {target.title}
-              </button>
-            ))}
-            {props.onSelectNewChat === null ? null : (
-              <button
-                type="button"
-                role="menuitem"
-                onClick={props.onSelectNewChat}
-              >
-                New chat
-              </button>
-            )}
+    }) {
+      const wasOpen = useRef(false);
+      const [exiting, setExiting] = useState(false);
+      const { open, onClosed } = props;
+      useEffect(() => {
+        if (wasOpen.current && !open) {
+          if (outside.menuExit.hold) {
+            setExiting(true);
+            outside.menuExit.release = () => {
+              setExiting(false);
+              if (onClosed !== null) onClosed();
+            };
+          } else if (onClosed !== null) onClosed();
+        }
+        wasOpen.current = open;
+      }, [open, onClosed]);
+      return (
+        <div>
+          <div
+            role="presentation"
+            onClick={() => props.onOpenChange(!props.open)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") props.onOpenChange(!props.open);
+            }}
+          >
+            {props.trigger}
           </div>
-        ) : null}
-      </div>
-    ),
-  }),
+          {props.open || exiting ? (
+            <div role="menu">
+              {props.targets.map((target) => (
+                <button
+                  key={target.chatId}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    // Radix closes the menu on a pick before the item's own
+                    // handler runs; the real roster does the same.
+                    props.onOpenChange(false);
+                    props.onSelectChat(target.chatId);
+                  }}
+                >
+                  {target.title}
+                </button>
+              ))}
+              {props.onSelectNewChat === null ? null : (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    props.onOpenChange(false);
+                    props.onSelectNewChat?.();
+                  }}
+                >
+                  New chat
+                </button>
+              )}
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+    return { ChatTargetMenu };
+  },
 );
 vi.mock("@/hooks/files/use-artifact-object-text-query", () => ({
   useArtifactObjectTextQuery: () => ({ data: outside.source.current }),
 }));
 vi.mock("../canvas-annotation-attach", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../canvas-annotation-attach")>()),
-  canvasWindowCaptureBridge: () => null,
+  canvasWindowCaptureBridge: () => outside.capture.current,
   attachCanvasAnnotation: outside.attach,
 }));
 
@@ -214,6 +260,8 @@ function mountOverlay() {
   stage.append(frame);
   Object.defineProperty(frame, "clientWidth", { value: 640 });
   Object.defineProperty(frame, "clientHeight", { value: 360 });
+  // jsdom lays nothing out; the capture rect is the frame's box on screen.
+  frame.getBoundingClientRect = () => new DOMRect(0, 0, 640, 360);
   registry.update(BOARD_PATH, {
     frame,
     source: {
@@ -268,6 +316,9 @@ beforeEach(() => {
     .mockImplementation((input) => Promise.resolve(input.record));
   outside.reveal.mockReset();
   outside.source.current = { kind: "text", text: HTML };
+  outside.capture.current = null;
+  outside.menuExit.hold = false;
+  outside.menuExit.release = null;
   useCanvasSelectionStore.getState().clear();
   resetNegotiatedManifests();
   useNewConversationAnnotationStore.setState({ byEpicId: {} });
@@ -417,6 +468,84 @@ describe("attaching a selected range to a chat", () => {
     await addToChat();
     expect(outside.reveal).toHaveBeenCalledWith("chat-1");
     expect(screen.queryByRole("menuitem", { name: "Chat one" })).toBeNull();
+  });
+
+  it("screenshots the window only once the picker is gone and the selection chrome is hidden", async () => {
+    // What the window looked like at the instant it was photographed. The
+    // crop is cut from the app window as composited, so a picker still
+    // fading out or the outline around the element would be in the picture.
+    const seen = {
+      menu: true,
+      outline: true,
+      actionBarVisible: true,
+    };
+    const png = new Uint8Array([137, 80, 78, 71]);
+    outside.capture.current = {
+      captureRegion: vi.fn(() => {
+        seen.menu = screen.queryByRole("menu") !== null;
+        seen.outline =
+          document.querySelector("[data-canvas-selection-outline]") !== null;
+        seen.actionBarVisible =
+          document
+            .querySelector("[data-canvas-selection-action]")
+            ?.classList.contains("invisible") === false;
+        return Promise.resolve(png.buffer.slice(0));
+      }),
+    };
+    // The picker keeps painting through its exit animation after the pick;
+    // nothing may be photographed until it reports itself gone.
+    outside.menuExit.hold = true;
+    mountOverlay();
+    select(LITERAL);
+    await screen.findByRole("button", { name: "Send to chat" });
+    expect(
+      document.querySelector("[data-canvas-selection-outline]"),
+    ).not.toBeNull();
+    chooseChatOne();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 60)));
+    expect(screen.queryByRole("menu")).not.toBeNull();
+    expect(outside.capture.current.captureRegion).not.toHaveBeenCalled();
+    act(() => outside.menuExit.release?.());
+    await waitFor(() => {
+      expect(outside.reveal).toHaveBeenCalledWith("chat-1");
+      expect(screen.queryByRole("menuitem", { name: "Chat one" })).toBeNull();
+    });
+
+    expect(outside.capture.current.captureRegion).toHaveBeenCalledOnce();
+    expect(seen).toEqual({
+      menu: false,
+      outline: false,
+      actionBarVisible: false,
+    });
+    expect(outside.attach.mock.calls[0][0].crop).toEqual(png);
+    // The chrome is back once the picture is taken: the selection is still
+    // the user's, and the action bar is where the next send starts.
+    expect(
+      document.querySelector("[data-canvas-selection-outline]"),
+    ).not.toBeNull();
+    expect(
+      document
+        .querySelector("[data-canvas-selection-action]")
+        ?.classList.contains("invisible"),
+    ).toBe(false);
+  });
+
+  it("does not wait on animation frames the window will never paint while hidden", async () => {
+    // A hidden window stops requestAnimationFrame entirely (background
+    // throttling), so a capture that waited for a frame would hang with the
+    // chrome hidden until the window came back.
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 0);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    outside.capture.current = {
+      captureRegion: vi.fn(() => Promise.resolve(new Uint8Array([1]).buffer)),
+    };
+    mountOverlay();
+    select(LITERAL);
+    await screen.findByRole("button", { name: "Send to chat" });
+    await addToChat();
+
+    expect(outside.capture.current.captureRegion).toHaveBeenCalledOnce();
+    expect(useCanvasSelectionStore.getState().capturing).toBe(false);
   });
 
   it("waits for the source of a range in source text rather than attaching a guess", async () => {

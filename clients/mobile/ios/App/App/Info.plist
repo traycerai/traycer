@@ -54,6 +54,8 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Traycer uses the camera to scan the sign-in QR code shown on your desktop.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Traycer uses the microphone when you talk to your bots.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Traycer saves exported images to your photo library when you choose Save Image.</string>
 	<key>UIFileSharingEnabled</key>

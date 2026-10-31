@@ -93,6 +93,7 @@ import type {
   RegisteredHostsChange,
   StoredAuthTokens,
   SystemResumeEvent,
+  SystemSuspendCause,
   StoredCredentials,
   StoredCredentialsIdentity,
   TokenRotateResult,
@@ -298,7 +299,9 @@ export class MockRunnerHost implements IRunnerHost {
     (event: SystemResumeEvent) => void
   >();
   private readonly networkPathChangedHandlers = new Set<() => void>();
-  private readonly systemSuspendedHandlers = new Set<() => void>();
+  private readonly systemSuspendedHandlers = new Set<
+    (cause: SystemSuspendCause) => void
+  >();
   private localHostUnresponsive: LocalHostUnresponsive | null = null;
   private readonly localHostUnresponsiveHandlers = new Set<
     (state: LocalHostUnresponsive | null) => void
@@ -1378,7 +1381,7 @@ export class MockRunnerHost implements IRunnerHost {
     };
   }
 
-  onSystemSuspended(handler: () => void): Disposable {
+  onSystemSuspended(handler: (cause: SystemSuspendCause) => void): Disposable {
     this.systemSuspendedHandlers.add(handler);
     return {
       dispose: () => {
@@ -1432,10 +1435,10 @@ export class MockRunnerHost implements IRunnerHost {
     }
   }
 
-  /** Test helper: fire the sleep / lock signal to every `onSystemSuspended` subscriber. */
-  emitSystemSuspended(): void {
+  /** Test helper: fire the suspend signal to every `onSystemSuspended` subscriber. */
+  emitSystemSuspended(cause: SystemSuspendCause): void {
     for (const handler of this.systemSuspendedHandlers) {
-      handler();
+      handler(cause);
     }
   }
 

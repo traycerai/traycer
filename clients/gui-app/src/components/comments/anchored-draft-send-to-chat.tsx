@@ -5,6 +5,7 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import { Button } from "@/components/ui/button";
 import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { ChatTargetMenu } from "@/components/epic-canvas/renderers/chat-target-menu/chat-target-menu";
+import { useChatTargetMenuClosed } from "@/components/epic-canvas/renderers/chat-target-menu/use-chat-target-menu-closed";
 import { useRevealChatInTab } from "@/components/epic-canvas/renderers/use-reveal-chat-in-tab";
 import { appendCommentTextToDraft } from "@/components/chat/quote/append-comment-text-to-draft";
 import type { CanvasAnnotationScope } from "@/components/canvas-artifact/canvas-annotation-action";
@@ -18,6 +19,7 @@ import { useCanvasAnnotationChatTargets } from "@/components/canvas-artifact/use
 import { useCanvasAnnotationNewChat } from "@/components/canvas-artifact/use-canvas-annotation-new-chat";
 import { useArtifactObjectTextQuery } from "@/hooks/files/use-artifact-object-text-query";
 import { canvasMutationKeys } from "@/lib/query-keys/canvas-mutation-keys";
+import type { CanvasBox } from "@/lib/sandbox/canvas-bridge";
 
 /** What the draft box needs from the surface to send its element to a chat. */
 export interface AnchoredDraftSendToChatSurface {
@@ -72,6 +74,7 @@ function AnchoredDraftSendToChat(props: AnchoredDraftSendToChatProps) {
     sha256: props.selection.servedSha256,
   });
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuClosed = useChatTargetMenuClosed(setMenuOpen);
   const send = useMutation({
     mutationKey: canvasMutationKeys.attach(scope.artifactId),
     mutationFn: async (chatId: string | null) => {
@@ -83,16 +86,20 @@ function AnchoredDraftSendToChat(props: AnchoredDraftSendToChatProps) {
         props.selection,
         source.data,
       );
-      const frame = frameFor(props.selection.boardPath);
-      const captureRect =
-        frame === null
-          ? null
-          : canvasSelectionCaptureRect(frame, props.selection.element.box);
+      const capture = {
+        captureRect: (): CanvasBox | null => {
+          const frame = frameFor(props.selection.boardPath);
+          return frame === null
+            ? null
+            : canvasSelectionCaptureRect(frame, props.selection.element.box);
+        },
+        awaitPickerClosed: menuClosed.awaitClosed,
+      };
       if (chatId === null) {
-        await newChat.send({ record, captureRect, text });
+        await newChat.send({ ...capture, record, text });
         return null;
       }
-      await captureAndAttachCanvasAnnotation({ chatId, record, captureRect });
+      await captureAndAttachCanvasAnnotation({ ...capture, chatId, record });
       appendCommentTextToDraft(chatId, text);
       return chatId;
     },
@@ -112,7 +119,8 @@ function AnchoredDraftSendToChat(props: AnchoredDraftSendToChatProps) {
       onSelectChat={(chatId) => send.mutate(chatId)}
       onSelectNewChat={newChat.supported ? () => send.mutate(null) : null}
       open={menuOpen}
-      onOpenChange={setMenuOpen}
+      onOpenChange={menuClosed.onOpenChange}
+      onClosed={menuClosed.onClosed}
       trigger={
         <Button
           type="button"

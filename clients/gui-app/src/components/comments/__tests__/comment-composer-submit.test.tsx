@@ -63,6 +63,7 @@ function composerElement(args: RenderComposerArgs) {
   return (
     <QueryClientProvider client={queryClient}>
       <CommentComposer
+        leadingActions={null}
         epicId="epic-1"
         hostClient={null}
         initialContent={args.initialContent}
@@ -72,7 +73,6 @@ function composerElement(args: RenderComposerArgs) {
         isPending={args.isPending}
         onSubmit={args.onSubmit}
         onCancel={null}
-        leadingActions={null}
         className={undefined}
         ref={args.handleRef}
       />

@@ -191,7 +191,7 @@ function TabStripBody() {
   if (controller.isEmptyLanding) {
     return (
       <TabStripSectionsScope controller={controller}>
-        <TalkControl compact={false} />
+        <TalkControl form="label" />
       </TabStripSectionsScope>
     );
   }
@@ -224,7 +224,7 @@ function TabStripBody() {
             belongs to the whole bot surface, not to one draft, and not to the
             Tracy entry either, which "Show Tracy" can take away while the bot
             stays a tab. */}
-        <TalkControl compact={false} />
+        <TalkControl form="label" />
         <div className="relative flex min-w-0 max-w-full flex-[0_1_auto] items-end">
           {hasOverflow ? (
             <HiddenTabsMenu

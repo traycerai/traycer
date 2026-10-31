@@ -7,6 +7,7 @@ import {
   attachCanvasAnnotation,
   canvasAnnotationElement,
   canvasWindowCaptureBridge,
+  captureCanvasRegionWithoutChrome,
 } from "./canvas-annotation-attach";
 import type { CanvasSelection } from "./canvas-selection-store";
 
@@ -48,16 +49,32 @@ export function canvasSelectionAnnotationRecord(
   };
 }
 
+/** How a send photographs its element: where, and when the picker is gone. */
+export interface CanvasAnnotationCapture {
+  /** Measured right before the capture, since the board can move while the picker closes. */
+  readonly captureRect: () => CanvasBox | null;
+  /** Resolves once the caller's picker has left the screen. */
+  readonly awaitPickerClosed: () => Promise<void>;
+}
+
 /**
  * The crop of the selected region, cut from the app window as composited, or
  * `null` where there is nothing to capture (no region, or no window bridge).
+ * The picture is taken only once the caller's picker has left the screen and
+ * with the selection chrome hidden, so neither ends up in the card.
  */
 export async function captureCanvasAnnotationCrop(
-  captureRect: CanvasBox | null,
+  capture: CanvasAnnotationCapture,
 ): Promise<ImageBytes | null> {
   const bridge = canvasWindowCaptureBridge();
-  if (captureRect === null || bridge === null) return null;
-  const crop = await bridge.captureRegion(captureRect);
+  // Whether there is anything on screen to photograph is decided now; the
+  // rectangle itself is measured again right before the capture.
+  if (bridge === null || capture.captureRect() === null) return null;
+  await capture.awaitPickerClosed();
+  const crop = await captureCanvasRegionWithoutChrome(
+    bridge,
+    capture.captureRect,
+  );
   if (crop === null)
     throw new Error("The selected region could not be captured. Try again.");
   return new Uint8Array(crop);
@@ -69,14 +86,15 @@ export async function captureCanvasAnnotationCrop(
  * moves on screen: the selection bar and the comment draft box both route
  * through this one path so their cards match.
  */
-export async function captureAndAttachCanvasAnnotation(input: {
-  readonly chatId: string;
-  readonly record: CanvasAnnotationRecord;
-  readonly captureRect: CanvasBox | null;
-}): Promise<CanvasAnnotationRecord> {
+export async function captureAndAttachCanvasAnnotation(
+  input: CanvasAnnotationCapture & {
+    readonly chatId: string;
+    readonly record: CanvasAnnotationRecord;
+  },
+): Promise<CanvasAnnotationRecord> {
   return attachCanvasAnnotation({
     chatId: input.chatId,
     record: input.record,
-    crop: await captureCanvasAnnotationCrop(input.captureRect),
+    crop: await captureCanvasAnnotationCrop(input),
   });
 }

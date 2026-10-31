@@ -11,7 +11,10 @@ import {
 } from "@/lib/composer/composer-image-preparation";
 import { putImage } from "@/lib/composer/landing-image-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
-import type { CanvasSelection } from "./canvas-selection-store";
+import {
+  useCanvasSelectionStore,
+  type CanvasSelection,
+} from "./canvas-selection-store";
 
 export function canvasAnnotationElement(
   selection: CanvasSelection,
@@ -70,8 +73,59 @@ function canvasSourceRange(
   };
 }
 
-interface WindowCaptureBridge {
+export interface WindowCaptureBridge {
   captureRegion(rect: CanvasBox): Promise<ArrayBuffer | null>;
+}
+
+/**
+ * Two frames: one for React to commit the hidden chrome, one for the
+ * compositor to present it. A hidden window paints no frames at all, so the
+ * wait gives up as soon as the document is or becomes hidden: the capture
+ * then fails fast instead of hanging until the window is shown again.
+ */
+function nextPresentedFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    if (document.visibilityState === "hidden") {
+      resolve();
+      return;
+    }
+    const settle = (): void => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      resolve();
+    };
+    const onVisibilityChange = (): void => {
+      if (document.visibilityState === "hidden") settle();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    requestAnimationFrame(() => requestAnimationFrame(settle));
+  });
+}
+
+/**
+ * Screenshot a region of the app window with nothing of ours painted over the
+ * board. The desktop captures the window as composited, so the selection
+ * outline, its handles and the action bar would otherwise be cut into the
+ * crop with the element. The caller has already waited for its own popover
+ * to leave the screen; this hides the overlay's chrome for the one frame
+ * the capture needs and restores it whatever the capture does.
+ *
+ * The rectangle is measured after that frame, not before: the board can be
+ * dragged while the picker closes, and a rectangle measured at the pick
+ * would then crop the old place.
+ */
+export async function captureCanvasRegionWithoutChrome(
+  bridge: WindowCaptureBridge,
+  captureRect: () => CanvasBox | null,
+): Promise<ArrayBuffer | null> {
+  useCanvasSelectionStore.getState().setCapturing(true);
+  try {
+    await nextPresentedFrame();
+    const rect = captureRect();
+    if (rect === null) return null;
+    return await bridge.captureRegion(rect);
+  } finally {
+    useCanvasSelectionStore.getState().setCapturing(false);
+  }
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;

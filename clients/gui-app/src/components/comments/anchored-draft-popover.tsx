@@ -1,5 +1,7 @@
 import { FrameCommentPortalContext } from "./frame-comment-surface-context";
 import { readNegotiatedMethodVersion } from "@/lib/host/read-negotiated-method-version";
+import { useCanvasSelectionStore } from "@/components/canvas-artifact/canvas-selection-store";
+import { cn } from "@/lib/utils";
 import type { CommentAnchor } from "@traycer/protocol/host/epic/unary-schemas";
 import {
   useContext,
@@ -290,6 +292,10 @@ export function AnchoredDraftPopover(props: {
           .updateDraft(epicId, draft.draftId, { submitting: false });
       });
   };
+  // Send to chat screenshots the app window around the element, and this box
+  // sits right beside it. Invisible rather than unmounted for that frame: the
+  // send in flight lives in this box's footer.
+  const capturing = useCanvasSelectionStore((state) => state.capturing);
   if (draft === null) return null;
   let label = draft.artifactType === "canvas" ? "Whole canvas" : "Whole page";
   if (draft.anchor.kind !== "artifact") label = draft.anchor.label;
@@ -299,7 +305,10 @@ export function AnchoredDraftPopover(props: {
       open
       aria-label="New comment"
       data-slot="anchored-draft-popover"
-      className="fixed z-50 m-0 w-[min(90vw,24rem)] max-w-safe-dvw rounded-md border border-border bg-popover p-2 text-popover-foreground shadow-lg outline-none"
+      className={cn(
+        "fixed z-50 m-0 w-[min(90vw,24rem)] max-w-safe-dvw rounded-md border border-border bg-popover p-2 text-popover-foreground shadow-lg outline-none",
+        capturing && "invisible",
+      )}
     >
       <p className="mb-2 truncate text-ui-xs text-muted-foreground">{label}</p>
       {draft.generatedText ? (

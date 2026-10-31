@@ -3,12 +3,14 @@ import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { CanvasAnnotationRecord } from "@traycer/protocol/persistence/epic/messages";
 import { appendCommentTextToNewConversationDraft } from "@/components/chat/quote/append-comment-text-to-draft";
 import { useHostNegotiatedMethodVersions } from "@/hooks/host/use-host-negotiated-method-version";
-import type { CanvasBox } from "@/lib/sandbox/canvas-bridge";
 import { useNewConversationAnnotationStore } from "@/stores/epics/new-conversation-annotation-store";
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import type { CanvasAnnotationScope } from "./canvas-annotation-action";
 import { prepareCanvasAnnotationCrop } from "./canvas-annotation-attach";
-import { captureCanvasAnnotationCrop } from "./canvas-annotation-send";
+import {
+  type CanvasAnnotationCapture,
+  captureCanvasAnnotationCrop,
+} from "./canvas-annotation-send";
 
 /** The create minor whose first message carries the annotation sidecar. */
 const NEW_CHAT_ANNOTATION_MINOR = 5;
@@ -25,11 +27,12 @@ export interface CanvasAnnotationNewChat {
    * the new-conversation modal's draft and opens the modal. Nothing is
    * created until the user sends.
    */
-  readonly send: (input: {
-    readonly record: CanvasAnnotationRecord;
-    readonly captureRect: CanvasBox | null;
-    readonly text: JsonContent | null;
-  }) => Promise<void>;
+  readonly send: (
+    input: CanvasAnnotationCapture & {
+      readonly record: CanvasAnnotationRecord;
+      readonly text: JsonContent | null;
+    },
+  ) => Promise<void>;
 }
 
 export function useCanvasAnnotationNewChat(
@@ -50,13 +53,14 @@ export function useCanvasAnnotationNewChat(
   const openModal = useNewConversationModalOpenStore((state) => state.open);
   const { epicId, viewTabId } = scope;
   const send = useCallback(
-    async (input: {
-      readonly record: CanvasAnnotationRecord;
-      readonly captureRect: CanvasBox | null;
-      readonly text: JsonContent | null;
-    }): Promise<void> => {
+    async (
+      input: CanvasAnnotationCapture & {
+        readonly record: CanvasAnnotationRecord;
+        readonly text: JsonContent | null;
+      },
+    ): Promise<void> => {
       // Capture first, before the modal opens over the element.
-      const crop = await captureCanvasAnnotationCrop(input.captureRect);
+      const crop = await captureCanvasAnnotationCrop(input);
       const record = await prepareCanvasAnnotationCrop(input.record, crop);
       useNewConversationAnnotationStore.getState().add(epicId, record);
       if (input.text !== null)

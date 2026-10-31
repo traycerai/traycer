@@ -5,6 +5,7 @@ import { AgentSpinningDots } from "@/components/ui/agent-spinning-dots";
 import { MessageSquareShare } from "lucide-react";
 import { ToolbarActionButton } from "@/editor-core/toolbar/toolbar-action-button";
 import { ChatTargetMenu } from "@/components/epic-canvas/renderers/chat-target-menu/chat-target-menu";
+import { useChatTargetMenuClosed } from "@/components/epic-canvas/renderers/chat-target-menu/use-chat-target-menu-closed";
 import { useRevealChatInTab } from "@/components/epic-canvas/renderers/use-reveal-chat-in-tab";
 import { useArtifactObjectTextQuery } from "@/hooks/files/use-artifact-object-text-query";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
@@ -60,6 +61,7 @@ export function CanvasAnnotationAction(props: {
   const targets = useCanvasAnnotationChatTargets(props.scope);
   const newChat = useCanvasAnnotationNewChat(props.scope);
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuClosed = useChatTargetMenuClosed(setMenuOpen);
   const [attached, setAttached] = useState<{
     chatId: string;
     record: CanvasAnnotationRecord;
@@ -68,12 +70,13 @@ export function CanvasAnnotationAction(props: {
   const mutation = useMutation({
     mutationKey: canvasMutationKeys.attach(props.scope.artifactId),
     mutationFn: async (chatId: string | null) => {
-      // Capture immediately on the explicit action, before revealing another tile.
+      // Capture on the explicit action, before revealing another tile.
       const annotation = props.record();
       if (chatId === null) {
         await newChat.send({
           record: annotation,
-          captureRect: props.captureRect(),
+          captureRect: props.captureRect,
+          awaitPickerClosed: menuClosed.awaitClosed,
           text: null,
         });
         return null;
@@ -81,7 +84,8 @@ export function CanvasAnnotationAction(props: {
       const record = await captureAndAttachCanvasAnnotation({
         chatId,
         record: annotation,
-        captureRect: props.captureRect(),
+        captureRect: props.captureRect,
+        awaitPickerClosed: menuClosed.awaitClosed,
       });
       return { chatId, record };
     },
@@ -123,7 +127,8 @@ export function CanvasAnnotationAction(props: {
             newChat.supported ? () => mutation.mutate(null) : null
           }
           open={menuOpen}
-          onOpenChange={setMenuOpen}
+          onOpenChange={menuClosed.onOpenChange}
+          onClosed={menuClosed.onClosed}
           trigger={
             <ToolbarActionButton
               label="Send to chat"
