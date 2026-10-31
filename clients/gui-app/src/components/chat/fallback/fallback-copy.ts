@@ -12,7 +12,7 @@ import type { ProfileRateLimitSeverity } from "@/lib/rate-limits/rate-limit-scop
 /**
  * User-facing copy for the provider-fallback chat surfaces.
  *
- * Centralised because the vocabulary is FIXED by the UX spec's table and is the
+ * Centralised because the vocabulary is FIXED and is the
  * kind of thing that drifts one card at a time. The words that must never
  * appear anywhere below: "tier", "ladder", "rung", "grace", "fallback",
  * "Inherit", a raw reason code, or a time this client invented. The words that
@@ -606,7 +606,7 @@ export function describeManualRungRefusal(input: {
   if (outcome === "applied") return null;
   if (outcome === "attempt_not_latest") {
     // The card has room for the next step, which a toast or a picker footer
-    // does not (spec Flow 4's table).
+    // does not.
     return {
       text: `${CHAT_MOVED_ON_LABEL} Send a new message to continue.`,
       remaining: "none",

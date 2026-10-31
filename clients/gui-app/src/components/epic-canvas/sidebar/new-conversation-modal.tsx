@@ -1874,7 +1874,7 @@ export function NewConversationModalBody(props: {
     const editor = editorRef.current;
     if (editor === null) return;
     const captured = editor.getJSON();
-    // A staged sandbox takes the send (sandboxes redesign Flow 1): the
+    // A staged sandbox takes the send: the
     // message waits in this task, behind the setup line, until the agent the
     // person picked is ready on the sandbox, and the modal closes at once. It
     // runs on that agent and model, never one this host would swap in.

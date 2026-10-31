@@ -943,7 +943,7 @@ export function LandingComposer(props: LandingComposerProps) {
   /** Whether the submit went ahead. */
   const handleSubmit = useCallback((): boolean | Promise<boolean> => {
     if (!canSubmit) return false;
-    // A staged sandbox takes the send (sandboxes redesign Flow 1): the task
+    // A staged sandbox takes the send: the task
     // opens at once and the message waits in it, behind the setup line,
     // until the agent the person picked is ready on the sandbox. It runs
     // on that agent and model, never one this host would swap in.

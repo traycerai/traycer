@@ -194,7 +194,7 @@ export function countdownRefusalLabel(
 /**
  * Whether the countdown card renders for this frame.
  *
- * Not for a countdown with NOTHING to try (spec Flow 1: "no countdown card;
+ * Not for a countdown with NOTHING to try ("no countdown card;
  * the failed-turn card shows instead"). The host does not arm such a hold -
  * a walk that comes up empty refuses to arm - and ends a window early when a
  * probe's answer leaves nothing to take, so this is the moment between that

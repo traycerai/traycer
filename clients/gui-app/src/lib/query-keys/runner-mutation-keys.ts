@@ -76,7 +76,7 @@ export const runnerMutationKeys = {
   // Builds the scrubbed public draft for the publish preview (ticket 09/07).
   supportBuildPublicDraft: () => ["runner.support.buildPublicDraft"] as const,
   // Opens the previewed draft's GitHub issue-form URL in the browser
-  // (ticket 07's publish preview - Flow 3b), separate from the fetch above so
+  // (ticket 07's publish preview), separate from the fetch above so
   // the preview can render before the user opts to leave the app.
   supportPublicDraftOpen: () => ["runner.support.publicDraftOpen"] as const,
   // Reveal a log file in the OS file manager (Diagnostics → Logs).

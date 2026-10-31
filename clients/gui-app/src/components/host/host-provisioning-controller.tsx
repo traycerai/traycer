@@ -588,7 +588,7 @@ interface LocalHostStartupState {
  * `useLocalHostGateState` until P3.4 deleted the gate it was named for; the
  * behaviour is unchanged, so a search for the old name lands here.
  *
- * Staged wait (Flow 5):
+ * Staged wait:
  *   1. "loading" - the immediate waiting state, no Retry affordance. The
  *      default on mount and after every Ready -> not-ready transition.
  *   2. "slow" - entered after `LOCAL_HOST_SLOW_START_THRESHOLD_MS` has
