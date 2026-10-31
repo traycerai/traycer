@@ -9730,6 +9730,76 @@ describe("ChatMessages scroll policy", () => {
           held.spy.mockRestore();
         }
       });
+
+      it("an end request against a never-issued landing does not cancel it: the row still lands after the end, which the scoping deliberately keeps", async () => {
+        // This is MAIN'S OWN BEHAVIOUR for a landing whose row was never in
+        // the rendered index when the end request arrived - not a claim
+        // about what the behaviour ought to be. The end branch's supersede
+        // is scoped to a `"suspended"` landing on purpose (see its comment
+        // at the `kind === "end"` branch): a `"pending"` landing with no
+        // loop of its own is read as still-owed, not as something an end
+        // navigation displaces, so nothing here cancels it and the
+        // `listRows` retry effect places it once its row hydrates - AFTER
+        // the end the reader asked for. Observed directly below, not
+        // assumed: dropping the `&& superseded.state === "suspended"` half
+        // of that condition changes this outcome (confirmed by hand - see
+        // the handoff this witness answers) to an immediate `"cancelled"`
+        // with no placement ever. If the owner later decides an end request
+        // should also supersede a never-issued landing, THIS witness is the
+        // one that has to change, and the mutation this comment names is
+        // exactly what that change would look like.
+        const full = makeCompletedTranscript(8);
+        const initial = full.slice(0, 6);
+        const lateTarget = full[7];
+        const onScrollRequestSettled = vi.fn();
+        const { rerenderWith } = renderChatMessages({
+          messages: initial,
+          scrollStateKey: "landing-suspend-witness-9",
+          onScrollRequestSettled,
+        });
+        await settleLegendList();
+
+        const list = requireList();
+        const scrollToOffsetSpy = vi.spyOn(list, "scrollToOffset");
+        try {
+          rerenderWith({
+            scrollRequest: {
+              kind: "message",
+              messageId: lateTarget.id,
+              blockId: null,
+              requestId: 901,
+            },
+          });
+          await settleLegendList();
+          // Never issued: the row was not in the rendered index when the
+          // request arrived, so `landScrollRequestRow` returned before
+          // registering any loop - nothing settled yet, nothing written.
+          expect(onScrollRequestSettled).not.toHaveBeenCalled();
+          expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+
+          rerenderWith({ scrollRequest: { kind: "end", requestId: 902 } });
+          await settleLegendList();
+          // The end request does not cancel a `"pending"` (never-issued)
+          // landing - the scoping's deliberate effect.
+          expect(onScrollRequestSettled).not.toHaveBeenCalled();
+          expect(scrollToOffsetSpy).not.toHaveBeenCalled();
+
+          // The row hydrates: the `listRows` retry effect is not gated on
+          // an end request having intervened, so it places the still-
+          // pending landing - after the end the reader already asked for.
+          rerenderWith({ messages: full });
+          await waitFor(() => {
+            expect(onScrollRequestSettled).toHaveBeenCalledWith(901, "landed");
+          });
+          expect(scrollToOffsetSpy).toHaveBeenCalled();
+          expect(onScrollRequestSettled).not.toHaveBeenCalledWith(
+            901,
+            "cancelled",
+          );
+        } finally {
+          scrollToOffsetSpy.mockRestore();
+        }
+      });
     });
   });
 
