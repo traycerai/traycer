@@ -521,6 +521,8 @@ const REPEAT_SENSITIVE_ACTIONS: ReadonlySet<ActionId> = new Set([
   "app.tabs.vertical.toggle",
   // A held chord would walk the strip between the rail and expanded.
   "app.tabs.vertical.collapse",
+  // A held chord would start and end a voice session once per repeat.
+  "voice.talk.toggle",
 ]);
 
 export function isRepeatSensitiveAction(id: ActionId): boolean {

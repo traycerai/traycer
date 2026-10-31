@@ -1,5 +1,6 @@
 import { canonicalChord, type ChordString } from "@/lib/keybindings/chord";
 import { isMac } from "@/lib/keybindings/platform";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 /**
  * Stable identifiers for every keyboard-bindable action in the app. Adding
@@ -71,6 +72,7 @@ export const ACTION_IDS = [
   "app.zoom.out",
   "app.zoom.reset",
   "composer.dictation.toggle",
+  "voice.talk.toggle",
   "composer.suggestion.accept",
   "composer.drafts",
   "composer.model-picker.toggle",
@@ -911,6 +913,26 @@ export const ACTION_META: Readonly<Record<ActionId, ActionMeta>> = {
     terminalPolicy: "app",
     secondaryTerminalPolicy: undefined,
     desktopOnly: false,
+  },
+  "voice.talk.toggle": {
+    id: "voice.talk.toggle",
+    label: "Talk",
+    description:
+      "Start or stop talking with your bots. Costs credits while on.",
+    category: "app",
+    kind: "chord",
+    // Its own chord, apart from dictation's ⌃⇧M. Per-platform like the model
+    // picker's: ⌃⌥T keeps Control distinct from ⌘ on macOS, and Alt+Shift+T
+    // avoids the Windows/Linux Ctrl+Alt=AltGr conflict. Unbound while the
+    // voice layer is unreleased, so the chord is not reserved for nothing.
+    defaultChord: UNRELEASED_FEATURES_ENABLED
+      ? { mac: "ctrl+alt+t", other: "alt+shift+t" }
+      : null,
+    secondaryChord: undefined,
+    terminalPolicy: "app",
+    secondaryTerminalPolicy: undefined,
+    // The phone's Talk is its own surface (the mobile voice ticket).
+    desktopOnly: true,
   },
   "composer.suggestion.accept": {
     id: "composer.suggestion.accept",

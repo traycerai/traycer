@@ -25,6 +25,7 @@ import type {
   GlobalShortcutIntent,
   GlobalShortcutStatus,
 } from "@/lib/windows/types";
+import { UNRELEASED_FEATURES_ENABLED } from "@/unreleased-features";
 
 const SUB_LEADER_ACTION_IDS: ReadonlyArray<ActionId> = [
   "epic.switch.byDigit",
@@ -52,11 +53,13 @@ export function KeybindingsSettingsPanel() {
   // row for a surface this build has not got - the same reason the command
   // palette omits it. `app.tabs.vertical.collapse` likewise, while this
   // window's tabs are at the top and there is no strip to collapse.
+  // Talk is part of the unreleased voice layer: no row while it is off.
   const primaryActionIds = ACTION_IDS.filter(
     (id) =>
       !SUB_LEADER_ACTION_SET.has(id) &&
       (homeTabEnabled || id !== "app.home.open") &&
-      (verticalTabs || id !== "app.tabs.vertical.collapse"),
+      (verticalTabs || id !== "app.tabs.vertical.collapse") &&
+      (UNRELEASED_FEATURES_ENABLED || id !== "voice.talk.toggle"),
   );
 
   // Lifted (rather than owned by `SummonHotkeyRow`) so the "Reset all to

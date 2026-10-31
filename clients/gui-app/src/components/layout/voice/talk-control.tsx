@@ -1,10 +1,47 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { AudioLines } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TooltipWrapper } from "@/components/ui/tooltip-wrapper";
+import { ACTION_META } from "@/lib/keybindings/actions";
+import { registerDynamicActionHandler } from "@/lib/keybindings/dispatch";
+import { isMobileApp } from "@/lib/mobile-app";
 import { useVoiceSessionStore } from "@/stores/voice/voice-session-store";
 
 export const TALK_CONTROL_LABEL = "Talk";
+
+/**
+ * Talk's toggle, shared by the control and the `voice.talk.toggle` shortcut:
+ * starts a session when none runs and Talk could start one, and ends one
+ * that is connecting or live. Dictation is a separate action and is never
+ * touched here.
+ */
+function toggleTalk(): void {
+  const { availability, phase, driver, destinationKnown } =
+    useVoiceSessionStore.getState();
+  if (driver === null) return;
+  if (phase === "connecting" || phase === "live") {
+    driver.end();
+    return;
+  }
+  if (phase === "idle" && availability === "live" && destinationKnown) {
+    driver.start();
+  }
+}
+
+/**
+ * Registers Talk's shortcut with the keybinding registry, mounted with the
+ * controller that owns the session. The handler reads the store when it
+ * fires, so it is registered once.
+ */
+export function TalkShortcutBridge(): ReactNode {
+  useEffect(() => {
+    if (ACTION_META["voice.talk.toggle"].desktopOnly && isMobileApp()) {
+      return undefined;
+    }
+    return registerDynamicActionHandler("voice.talk.toggle", toggleTalk);
+  }, []);
+  return null;
+}
 
 /**
  * The "Talk" control beside the fixed Tracy entry in the tab strip (V6),
@@ -52,10 +89,7 @@ export function TalkControl(props: {
         data-testid="voice-talk-control"
         data-state={phase}
         disabled={phase === "connecting" || phase === "ending" || nowhere}
-        onClick={() => {
-          if (live) driver.end();
-          else driver.start();
-        }}
+        onClick={toggleTalk}
         className="shrink-0 self-center [-webkit-app-region:no-drag]"
       >
         <AudioLines aria-hidden="true" />
