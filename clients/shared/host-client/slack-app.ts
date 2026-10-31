@@ -42,11 +42,24 @@ const SLACK_APP_WRITE_TIMEOUT_MS = 70_000;
  *  - `network-error` — transport/timeout, a non-2xx without a typed body, or
  *                      a body this build cannot parse. `detail` is a stable
  *                      classification, never a raw server body.
+ *  - `unavailable`   — never sent: this build cannot reach traycer-server at
+ *                      all (`IRunnerHost.sandboxControlUnavailableReason`),
+ *                      so nothing here produces it; `AuthService` answers it
+ *                      before any call. `reason` is the person's line.
  */
 export type SlackAppFailure =
   | { readonly kind: "unauthorized" }
   | { readonly kind: "refused"; readonly status: number; readonly code: string }
-  | { readonly kind: "network-error"; readonly detail: string };
+  | { readonly kind: "network-error"; readonly detail: string }
+  | { readonly kind: "unavailable"; readonly reason: string };
+
+/**
+ * Why a build that cannot reach traycer-server (staging mobile, whose server
+ * is fronted by IAP: see `SANDBOXES_UNAVAILABLE_IN_STAGING`) offers no Slack
+ * settings.
+ */
+export const SLACK_SETTINGS_UNAVAILABLE_IN_STAGING =
+  "Slack settings aren't available in this app. Use the desktop app.";
 
 export type SlackAppReadResult =
   | { readonly kind: "ok"; readonly app: SlackAppView | null }

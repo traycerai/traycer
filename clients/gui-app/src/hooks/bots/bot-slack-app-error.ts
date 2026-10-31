@@ -11,8 +11,7 @@ export const SLACK_NOT_AVAILABLE_LINE = "Slack isn't available on this server.";
 /**
  * A Slack app call that did not succeed, thrown by the bot's Slack hooks so
  * the settings panel shows it in place. `message` is the person's line for
- * it; `failure` is what the server answered, for the one place that branches
- * on it (the not-configured server, which replaces the steps).
+ * it; `failure` is what the call answered, for the places that branch on it.
  */
 export class BotSlackAppError extends Error {
   readonly failure: SlackAppFailure;
@@ -24,13 +23,19 @@ export class BotSlackAppError extends Error {
   }
 }
 
-/** Whether this server cannot connect any bot to Slack. */
-export function isSlackNotConfigured(error: Error | null): boolean {
-  return (
-    error instanceof BotSlackAppError &&
-    error.failure.kind === "refused" &&
-    error.failure.code === SLACK_APP_REFUSAL_NOT_CONFIGURED
-  );
+/**
+ * The line that replaces the group when no bot can be connected to Slack
+ * from here: this server has no Slack, or this build cannot reach the server
+ * at all. `null` for any other failure.
+ */
+export function slackUnavailableLine(error: Error | null): string | null {
+  if (!(error instanceof BotSlackAppError)) return null;
+  const failure = error.failure;
+  if (failure.kind === "unavailable") return failure.reason;
+  return failure.kind === "refused" &&
+    failure.code === SLACK_APP_REFUSAL_NOT_CONFIGURED
+    ? SLACK_NOT_AVAILABLE_LINE
+    : null;
 }
 
 /**
@@ -55,6 +60,7 @@ function slackAppFailureLine(
   if (failure.kind === "unauthorized") {
     return "Sign in to change this bot's Slack app.";
   }
+  if (failure.kind === "unavailable") return failure.reason;
   if (failure.kind === "network-error") return fallback;
   switch (failure.code) {
     case SLACK_APP_REFUSAL_NOT_CONFIGURED:

@@ -42,6 +42,8 @@ import type {
   SlackAppReadResult,
 } from "@traycer-clients/shared/host-client/slack-app";
 import { MockRunnerHost } from "@traycer-clients/shared/host-client/mock/mock-runner-host";
+import { SLACK_SETTINGS_UNAVAILABLE_IN_STAGING } from "@traycer-clients/shared/host-client/slack-app";
+import type { IRunnerHost } from "@traycer-clients/shared/platform/runner-host";
 import {
   BotIdentityContext,
   type BotIdentity,
@@ -241,11 +243,13 @@ vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
 });
 
 import { BotChannelSettingsPanel } from "@/components/bots/bot-settings-panel";
+import { AuthService } from "@/lib/auth/auth-service";
 import { createAppQueryClient } from "@/lib/query-client";
 import { RunnerHostContext } from "@/providers/runner-host-context";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useBotSlackPendingInstallStore } from "@/stores/bots/bot-slack-pending-install-store";
 import { useSettingsStore } from "@/stores/settings/settings-store";
+import { createFakeRunnerHost } from "../../../../__tests__/create-fake-runner-host";
 
 const BOT: BotRecord = {
   botId: "bot_01ARZ3NDEKTSV4RRFFQ69G5FAV",
@@ -1311,6 +1315,39 @@ describe("<BotChannelSettingsPanel /> Slack", () => {
       "Couldn't read this bot's Slack settings.",
     );
     expect(screen.getByTestId("bot-settings-slack-connected")).toBeTruthy();
+  });
+
+  it("shows that Slack settings are unavailable in this app, and sends no Slack request, on a build that cannot reach the server", async () => {
+    const slackCalls = {
+      readSlackApp: vi.fn<IRunnerHost["readSlackApp"]>(),
+      getSlackAppManifest: vi.fn<IRunnerHost["getSlackAppManifest"]>(),
+      registerSlackApp: vi.fn<IRunnerHost["registerSlackApp"]>(),
+      mintSlackAppInstallUrl: vi.fn<IRunnerHost["mintSlackAppInstallUrl"]>(),
+      disconnectSlackApp: vi.fn<IRunnerHost["disconnectSlackApp"]>(),
+    };
+    // The real AuthService floor over a runner host that reports the reason.
+    const auth = new AuthService({
+      runnerHost: createFakeRunnerHost({
+        ...slackCalls,
+        sandboxControlUnavailableReason: "no server here",
+      }),
+    });
+    try {
+      mocks.binding = { auth };
+      mountSlackPanel();
+
+      const line = await within(slackGroup()).findByTestId(
+        "bot-settings-slack-unavailable",
+      );
+      expect(line.textContent).toBe(SLACK_SETTINGS_UNAVAILABLE_IN_STAGING);
+      expect(screen.queryByTestId("bot-settings-refusal")).toBeNull();
+      expect(screen.queryByTestId("bot-settings-slack-setup")).toBeNull();
+      for (const spy of Object.values(slackCalls)) {
+        expect(spy).not.toHaveBeenCalled();
+      }
+    } finally {
+      auth.dispose();
+    }
   });
 
   it("says only that Slack is unavailable on a server without it", async () => {

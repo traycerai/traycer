@@ -13,8 +13,7 @@ import {
 } from "@/components/bots/bot-settings-group";
 import {
   isSlackAccessRefused,
-  isSlackNotConfigured,
-  SLACK_NOT_AVAILABLE_LINE,
+  slackUnavailableLine,
 } from "@/hooks/bots/bot-slack-app-error";
 import {
   useBotSlackAppQuery,
@@ -50,8 +49,11 @@ export function BotSlackSettings(props: { readonly botId: string }): ReactNode {
   const app = appQuery.data;
   const error = appQuery.error;
   const accessRefused = isSlackAccessRefused(error);
+  const unavailable = slackUnavailableLine(error);
   let body: ReactNode;
-  if (app === undefined || accessRefused) {
+  if (unavailable !== null) {
+    body = <BotSlackUnavailable line={unavailable} />;
+  } else if (app === undefined || accessRefused) {
     body = (
       <BotSlackAppUnread
         error={appQuery.error}
@@ -67,7 +69,8 @@ export function BotSlackSettings(props: { readonly botId: string }): ReactNode {
   }
   // A read that failed after one succeeded keeps the app the last one read,
   // and says so under it.
-  const staleError = app !== undefined && !accessRefused ? error : null;
+  const staleError =
+    app !== undefined && !accessRefused && unavailable === null ? error : null;
   return (
     <SettingsGroup title="Slack" testId="bot-settings-slack">
       {body}
@@ -100,6 +103,18 @@ function BotSlackAppUnread(props: {
   );
 }
 
+/** No bot can be connected to Slack from here: one line, nothing to retry. */
+function BotSlackUnavailable(props: { readonly line: string }): ReactNode {
+  return (
+    <p
+      className="text-ui-xs text-muted-foreground"
+      data-testid="bot-settings-slack-unavailable"
+    >
+      {props.line}
+    </p>
+  );
+}
+
 function BotSlackNotConnected(props: { readonly botId: string }): ReactNode {
   const { botId } = props;
   const manifest = useBotSlackManifestQuery(botId);
@@ -109,16 +124,8 @@ function BotSlackNotConnected(props: { readonly botId: string }): ReactNode {
     onSuccess: null,
     onError: null,
   });
-  if (isSlackNotConfigured(manifest.error)) {
-    return (
-      <p
-        className="text-ui-xs text-muted-foreground"
-        data-testid="bot-settings-slack-unavailable"
-      >
-        {SLACK_NOT_AVAILABLE_LINE}
-      </p>
-    );
-  }
+  const unavailable = slackUnavailableLine(manifest.error);
+  if (unavailable !== null) return <BotSlackUnavailable line={unavailable} />;
   const text = manifest.data ?? null;
   return (
     <div className="flex flex-col gap-4" data-testid="bot-settings-slack-setup">
