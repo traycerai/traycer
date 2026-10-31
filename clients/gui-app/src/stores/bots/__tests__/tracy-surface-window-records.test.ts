@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { persistKey, STORE_KEYS } from "@/lib/persist";
 import type { DesktopPerWindowSnapshot } from "@/lib/windows/types";
-import { forgetClosedTracySurfaceWindows } from "@/stores/bots/tracy-surface-store";
+import {
+  forgetClosedTracySurfaceWindows,
+  readTracySurfaceWindowRecords,
+} from "@/stores/bots/tracy-surface-store";
 import type { TabRef } from "@/stores/tabs/types";
 
 /**
@@ -16,6 +19,9 @@ const SURFACE_KEY = persistKey(STORE_KEYS.botTabs);
 const SYSTEM_TABS = { history: null, settings: null };
 
 const TRACY_REF: TabRef = { kind: "tracy", id: "tracy" };
+
+/** The desktop's windows in the order its list names them. */
+const DESKTOP_WINDOW_IDS: ReadonlyArray<string> = ["win-a", "win-b"];
 
 function snapshotWithTracyTab(botId: string): DesktopPerWindowSnapshot {
   return {
@@ -54,17 +60,35 @@ interface WindowBoot {
   readonly closeSurface: () => void;
 }
 
-async function bootWindow(
-  windowId: string,
-  snapshot: DesktopPerWindowSnapshot,
-): Promise<WindowBoot> {
+interface BoundWindow {
+  readonly windowId: string;
+  readonly surfaceModule: typeof import("@/stores/bots/tracy-surface-store");
+  readonly persistence: typeof import("@/stores/tabs/desktop-tabs-persistence");
+  readonly layout: typeof import("@/stores/tabs/layout");
+  readonly tabs: typeof import("@/stores/tabs/store");
+}
+
+/** A freshly loaded renderer, up to its bridge installing: bound, not settled. */
+async function bindWindow(windowId: string): Promise<BoundWindow> {
   vi.resetModules();
   const surfaceModule = await import("@/stores/bots/tracy-surface-store");
   const persistence = await import("@/stores/tabs/desktop-tabs-persistence");
   const layout = await import("@/stores/tabs/layout");
   const tabs = await import("@/stores/tabs/store");
-  const { useTracySurfaceStore } = surfaceModule;
   surfaceModule.bindTracySurfaceToWindow(windowId);
+  return { windowId, surfaceModule, persistence, layout, tabs };
+}
+
+/** The desktop's list answering, then the window's layout restore. */
+function settleWindow(
+  bound: BoundWindow,
+  snapshot: DesktopPerWindowSnapshot,
+): WindowBoot {
+  const { surfaceModule, persistence, layout, tabs } = bound;
+  const { useTracySurfaceStore } = surfaceModule;
+  surfaceModule.settleTracySurfaceAdoption(
+    DESKTOP_WINDOW_IDS[0] === bound.windowId,
+  );
   persistence.hydrateDesktopTabs(snapshot, true, null);
   const { open, hostId, botId } = useTracySurfaceStore.getState();
   return {
@@ -76,6 +100,13 @@ async function bootWindow(
     },
     closeSurface: () => useTracySurfaceStore.getState().closeSurface(),
   };
+}
+
+async function bootWindow(
+  windowId: string,
+  snapshot: DesktopPerWindowSnapshot,
+): Promise<WindowBoot> {
+  return settleWindow(await bindWindow(windowId), snapshot);
 }
 
 beforeEach(() => {
@@ -159,7 +190,7 @@ describe("Tracy surface records per desktop window", () => {
     ];
 
     it.each(GLOBAL_RECORDS)(
-      "goes to the first window that binds and no other (%s)",
+      "goes to the desktop's first window and no other (%s)",
       async (_label, payload) => {
         window.localStorage.setItem(SURFACE_KEY, payload);
 
@@ -186,6 +217,38 @@ describe("Tracy surface records per desktop window", () => {
         });
       },
     );
+
+    it("goes to one window when two bind before either settles", async () => {
+      window.localStorage.setItem(
+        SURFACE_KEY,
+        JSON.stringify({
+          state: { open: true, hostId: "host-1", botId: "bot-x" },
+          version: 2,
+        }),
+      );
+      const snapshot = snapshotWithTracyTab("bot-x");
+
+      const boundA = await bindWindow("win-a");
+      const boundB = await bindWindow("win-b");
+      const settledB = settleWindow(boundB, snapshot);
+      const settledA = settleWindow(boundA, snapshot);
+      const restartedA = await bootWindow("win-a", snapshot);
+      const restartedB = await bootWindow("win-b", snapshot);
+
+      expect({
+        a: settledA.surface,
+        b: settledB.surface,
+        globalKey: window.localStorage.getItem(SURFACE_KEY),
+        restartedA: restartedA.surface,
+        restartedB: restartedB.surface,
+      }).toEqual({
+        a: { open: true, hostId: "host-1", botId: "bot-x" },
+        b: { open: false, hostId: null, botId: null },
+        globalKey: null,
+        restartedA: { open: true, hostId: "host-1", botId: "bot-x" },
+        restartedB: { open: false, hostId: null, botId: null },
+      });
+    });
   });
 
   it("forgets the records of windows that are gone and nothing else", () => {
@@ -204,7 +267,10 @@ describe("Tracy surface records per desktop window", () => {
       window.localStorage.setItem(key, record);
     }
 
-    forgetClosedTracySurfaceWindows(new Set(["win-live"]));
+    forgetClosedTracySurfaceWindows(
+      readTracySurfaceWindowRecords(),
+      new Set(["win-live"]),
+    );
 
     expect(
       Array.from({ length: window.localStorage.length }, (_, index) =>

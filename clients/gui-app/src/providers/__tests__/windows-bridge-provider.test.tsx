@@ -604,6 +604,58 @@ describe("<WindowsBridgeProvider />", () => {
     });
   });
 
+  it("sweeps only the Tracy records that existed before the window list was requested", async () => {
+    const surfaceKey = persistKey(STORE_KEYS.botTabs);
+    const record = JSON.stringify({
+      state: { open: true, hostId: "host-1", botId: "bot-x" },
+      version: 2,
+    });
+    window.localStorage.setItem(`${surfaceKey}:window-gone`, record);
+    const fake = createDesktopWindowsBridge();
+    const windowList = createDeferred<readonly DesktopWindowSummary[]>();
+    const capabilities = {
+      schemaVersion: 2,
+      features: ["tab-strip-layout-v2", "active-route-v1"],
+    } as const;
+    const listedBridge = {
+      ...fake.bridge,
+      list: () => windowList.promise,
+      perWindowState: {
+        ...fake.bridge.perWindowState,
+        capabilities: () => Promise.resolve(capabilities),
+        update: () => Promise.resolve({ capabilities, revision: 2 }),
+      },
+    } satisfies DesktopWindowsBridge;
+
+    render(
+      <RunnerHostProvider
+        runnerHost={createRunnerHostWithWindows(listedBridge)}
+      >
+        <WindowsBridgeProvider>
+          <HydrationProbe />
+        </WindowsBridgeProvider>
+      </RunnerHostProvider>,
+    );
+    await waitFor(() => {
+      expect(useTracySurfaceStore.persist.getOptions().name).toBe(
+        `${surfaceKey}:window-1`,
+      );
+    });
+    window.localStorage.setItem(`${surfaceKey}:window-new`, record);
+    windowList.resolve([
+      { windowId: "window-1", title: "", isFocused: false, isVisible: true },
+    ]);
+
+    await waitFor(() => {
+      expect(
+        window.localStorage.getItem(`${surfaceKey}:window-gone`),
+      ).toBeNull();
+    });
+    expect(window.localStorage.getItem(`${surfaceKey}:window-new`)).toBe(
+      record,
+    );
+  });
+
   it("keeps a subscribed newer snapshot when the initial get resolves stale", async () => {
     const fake = createDesktopWindowsBridge();
     const deferredSnapshot = createDeferred<DesktopPerWindowSnapshot>();

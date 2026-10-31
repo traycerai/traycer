@@ -273,18 +273,23 @@ export function adoptLegacyActiveBotTab(botId: string): void {
 }
 
 /**
+ * What the global record held when this window bound with no record of its
+ * own: the surface it takes if it is the window that adopts that record
+ * (`settleTracySurfaceAdoption`). `null` when there is nothing to adopt.
+ */
+let globalRecordCandidate: PersistedTracySurface | null = null;
+
+/**
  * Gives a desktop window its own record, so one window never overwrites or
  * closes the surface another uses. The store hydrates from the global key
  * when it loads, before the window is known; this runs as the window's bridge
- * installs, before its tabs layout is restored, so the layout keeps or drops
- * the Tracy ref by this window's own `open`.
+ * installs, so every write from then on is the window's own.
  *
  * A window with a record reads it back. One without (a window opened since,
- * or every window on the first launch that keeps records per window) takes
- * the global record if no window has taken it yet - what an earlier version
- * saved, its version-1 migration included - and removes it. Any other starts
+ * or every window on the first launch that keeps records per window) starts
  * with the surface closed, and the fixed entry opens Tracy afresh there while
- * "Show Tracy" is on. The browser has no window and keeps the global record.
+ * "Show Tracy" is on, unless it is the window that adopts the global record.
+ * The browser has no window and keeps the global record.
  */
 export function bindTracySurfaceToWindow(windowId: string): void {
   const key = `${TRACY_SURFACE_WINDOW_KEY_PREFIX}${windowId}`;
@@ -298,12 +303,51 @@ export function bindTracySurfaceToWindow(windowId: string): void {
     void persistApi.rehydrate();
     return;
   }
-  const { open, hostId, botId } = globalRecord
-    ? useTracySurfaceStore.getState()
-    : CLOSED_SURFACE;
+  if (globalRecord) {
+    const { open, hostId, botId } = useTracySurfaceStore.getState();
+    globalRecordCandidate = { open, hostId, botId };
+  }
   // Written under this window's key, which holds the record from now on.
-  useTracySurfaceStore.setState({ open, hostId, botId });
-  if (globalRecord) removeStoredItem(TRACY_SURFACE_PERSIST_KEY);
+  useTracySurfaceStore.setState(CLOSED_SURFACE);
+}
+
+/**
+ * The global record an earlier version saved, its version-1 migration
+ * included, goes to one window: the desktop's first window (`adopts`), which
+ * every window's list names alike, as storage offers windows no transaction
+ * to claim it with. That window takes the surface it held, if it was open,
+ * and removes it; any other keeps its own. Runs before the window's tabs
+ * layout is restored, so the layout keeps or drops the Tracy ref by it.
+ */
+export function settleTracySurfaceAdoption(adopts: boolean): void {
+  const candidate = globalRecordCandidate;
+  globalRecordCandidate = null;
+  if (!adopts || candidate === null) return;
+  if (readStoredItem(TRACY_SURFACE_PERSIST_KEY) === null) return;
+  removeStoredItem(TRACY_SURFACE_PERSIST_KEY);
+  if (candidate.open) useTracySurfaceStore.setState(candidate);
+}
+
+/**
+ * The desktop windows' records as they are now, by key, to be swept against
+ * the window list requested after (`forgetClosedTracySurfaceWindows`).
+ */
+export function readTracySurfaceWindowRecords(): ReadonlyMap<string, string> {
+  try {
+    return new Map(
+      Array.from({ length: localStorage.length }, (_, index) =>
+        localStorage.key(index),
+      ).flatMap((key): ReadonlyArray<readonly [string, string]> => {
+        if (key === null || !key.startsWith(TRACY_SURFACE_WINDOW_KEY_PREFIX)) {
+          return [];
+        }
+        const value = localStorage.getItem(key);
+        return value === null ? [] : [[key, value]];
+      }),
+    );
+  } catch {
+    return new Map();
+  }
 }
 
 /**
@@ -311,23 +355,20 @@ export function bindTracySurfaceToWindow(windowId: string): void {
  * others stayed open is not restored, so its record would never be read
  * again; the renderer cannot tell that close from a quit, so the records are
  * swept against `liveWindowIds`, every window the desktop has, the restored
- * ones included (all are created before any of them loads).
+ * ones included (all are created before any of them loads). Only `records`,
+ * read before that list was requested, are candidates, and only while they
+ * still hold what was read: a window created since the list answered has
+ * written a record the list does not name.
  */
 export function forgetClosedTracySurfaceWindows(
+  records: ReadonlyMap<string, string>,
   liveWindowIds: ReadonlySet<string>,
 ): void {
-  try {
-    const stale = Array.from({ length: localStorage.length }, (_, index) =>
-      localStorage.key(index),
-    ).filter(
-      (key): key is string =>
-        key !== null &&
-        key.startsWith(TRACY_SURFACE_WINDOW_KEY_PREFIX) &&
-        !liveWindowIds.has(key.slice(TRACY_SURFACE_WINDOW_KEY_PREFIX.length)),
-    );
-    for (const key of stale) localStorage.removeItem(key);
-  } catch {
-    // Storage unavailable: the records stay until a later sweep.
+  for (const [key, value] of records) {
+    if (liveWindowIds.has(key.slice(TRACY_SURFACE_WINDOW_KEY_PREFIX.length))) {
+      continue;
+    }
+    if (readStoredItem(key) === value) removeStoredItem(key);
   }
 }
 

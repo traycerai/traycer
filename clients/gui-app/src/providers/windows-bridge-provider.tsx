@@ -46,6 +46,8 @@ import { readPersistedCurrentRoute } from "@/lib/persistent-history";
 import {
   bindTracySurfaceToWindow,
   forgetClosedTracySurfaceWindows,
+  readTracySurfaceWindowRecords,
+  settleTracySurfaceAdoption,
 } from "@/stores/bots/tracy-surface-store";
 import { installTabSyncCoordinator } from "@/lib/tab-sync/tab-sync-coordinator";
 import type {
@@ -223,8 +225,7 @@ function installDesktopWindowsBridge(
   bridge: DesktopWindowsBridge,
   hydrationRequest: WindowsBridgeHydrationRequest,
 ): () => void {
-  // This window's own Tracy surface record, before any layout restore reads
-  // whether the surface is open.
+  // This window's own Tracy surface record, before anything writes to it.
   bindTracySurfaceToWindow(bridge.windowId);
   const lifecycle = { cancelled: false };
   let tabsCompatible = false;
@@ -294,15 +295,19 @@ function installDesktopWindowsBridge(
 
   const isCancelled = (): boolean => lifecycle.cancelled;
 
-  void Promise.resolve()
+  // The desktop's windows, asked once: the first adopts the global Tracy
+  // record, and the records read before asking are swept against them.
+  const surfaceRecords = readTracySurfaceWindowRecords();
+  const windowIds = Promise.resolve()
     .then(() => bridge.list())
-    .then((windows) => {
-      if (isCancelled()) return;
-      forgetClosedTracySurfaceWindows(
-        new Set(windows.map((summary) => summary.windowId)),
-      );
-    })
-    .catch(() => undefined);
+    .then((windows): ReadonlyArray<string> | null =>
+      windows.map((summary) => summary.windowId),
+    )
+    .catch(() => null);
+  void windowIds.then((ids) => {
+    if (isCancelled() || ids === null) return;
+    forgetClosedTracySurfaceWindows(surfaceRecords, new Set(ids));
+  });
 
   void (async () => {
     if (isCancelled()) return;
@@ -317,6 +322,9 @@ function installDesktopWindowsBridge(
       if (isCancelled()) return;
       tabsCompatible = verification.supported;
       configureDesktopTabsAuthority(tabsCompatible);
+      const ids = await windowIds;
+      if (isCancelled()) return;
+      settleTracySurfaceAdoption(ids !== null && ids[0] === bridge.windowId);
       const hydrationSnapshot = snapshotObservation.latest ?? snapshot;
       const hydratedTabs = hydrateDesktopTabs(
         hydrationSnapshot,
