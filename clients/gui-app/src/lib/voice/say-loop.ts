@@ -901,11 +901,12 @@ export function createSayLoop(deps: SayLoopDeps): SayLoop {
       case "deferred": {
         store.getState().consumeReservation(entry.seqs);
         settleDelegation(entry.delegationId);
-        const outcome = executeDeferredVerb(
-          decision.verb,
-          decision.target,
-          decision.span,
-        );
+        const outcome = executeDeferredVerb({
+          verb: decision.verb,
+          target: decision.target,
+          itemId: decision.itemId,
+          delegationId: delegationOf(entry),
+        });
         if (outcome.kind === "refused") {
           deps.notify(outcome.say, delegationOf(entry));
         }

@@ -319,6 +319,8 @@ export type RoutedDecision =
       readonly kind: "deferred";
       readonly verb: DeferredVerb;
       readonly target: BoundTarget | null;
+      /** The queue item the route names, checked against the directory; `null` for none. */
+      readonly itemId: string | null;
       readonly span: SpanPick;
     }
   | { readonly kind: "refused"; readonly reason: RouteRefusal };
@@ -398,13 +400,20 @@ function resolveDeferred(
   directory: VoiceDirectory,
   span: SpanPick,
 ): RoutedDecision {
+  const itemId = result.target.itemId;
+  if (
+    itemId !== null &&
+    !directory.queue.some((candidate) => candidate.itemId === itemId)
+  ) {
+    return { kind: "refused", reason: "unknown-target" };
+  }
   const named = namedOf(result);
   if (named.botId === null && named.threadId === null) {
-    return { kind: "deferred", verb, target: null, span };
+    return { kind: "deferred", verb, target: null, itemId, span };
   }
   const target = bindTarget(directory, named);
   if (target === null) return { kind: "refused", reason: "unknown-target" };
-  return { kind: "deferred", verb, target, span };
+  return { kind: "deferred", verb, target, itemId, span };
 }
 
 /**

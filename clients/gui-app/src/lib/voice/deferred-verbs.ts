@@ -1,5 +1,13 @@
 import type { BoundTarget } from "@/lib/voice/directory";
-import type { DeferredVerb, SpanPick } from "@/lib/voice/router";
+import {
+  runVoiceQueueVerb,
+  type QueueVerbOutcome,
+} from "@/lib/voice/queue-verbs";
+import type { DeferredVerb } from "@/lib/voice/router";
+import {
+  useVoiceSessionStore,
+  waitingItems,
+} from "@/stores/voice/voice-session-store";
 
 /**
  * What became of a verb the router recognised: done, or refused with what
@@ -10,29 +18,80 @@ export type VerbOutcome =
   | { readonly kind: "executed" }
   | { readonly kind: "refused"; readonly say: string };
 
+export const NOTHING_WAITING_NOTICE = "Nothing is waiting to be read.";
+export const NO_BOT_NOTICE = "Which bot? Say its name.";
+export const NOT_LIVE_NOTICE = "The voice is not connected. Nothing was done.";
+
 /**
- * The executor of `read`, `later`, `brief`, `status` and `open`, which the
- * queue and briefing (VT4) and cards (VT5) build. Until they land each is
- * recognised and refused here with a spoken "not yet", so a build that has
- * the router but not the verb never posts the words by mistake. This is the
- * one place a later ticket swaps in its executor.
+ * The executor of `read`, `later`, `brief`, `status` and `open`. The first
+ * four run on the voice's queue (VT4) through `runVoiceQueueVerb`, the same
+ * executor the Waiting control's buttons run, under the delegation of the
+ * request they answer. `open` acts on cards (VT5) and is refused with a
+ * spoken "not yet" until it lands, so the words are never posted by mistake.
  */
-export function executeDeferredVerb(
-  verb: DeferredVerb,
-  target: BoundTarget | null,
-  span: SpanPick,
-): VerbOutcome {
-  void target;
-  void span;
-  const what: Record<DeferredVerb, string> = {
-    read: "reading replies aloud",
-    later: "putting replies aside for later",
-    brief: "a briefing of what needs attention",
-    status: "what a bot is running",
-    open: "opening cards and pages",
-  };
-  return {
-    kind: "refused",
-    say: `Not yet: the voice cannot do ${what[verb]} yet. Nothing was posted.`,
-  };
+export function executeDeferredVerb(input: {
+  readonly verb: DeferredVerb;
+  readonly target: BoundTarget | null;
+  readonly itemId: string | null;
+  readonly delegationId: string | null;
+}): VerbOutcome {
+  const { verb, target, delegationId } = input;
+  switch (verb) {
+    case "read":
+    case "later": {
+      const itemId = input.itemId ?? newestWaitingOf(target);
+      const outcome =
+        verb === "read"
+          ? runVoiceQueueVerb({ kind: "read", itemId, delegationId })
+          : runVoiceQueueVerb({ kind: "later", itemId });
+      return outcomeOf(outcome, NOTHING_WAITING_NOTICE);
+    }
+    case "brief":
+      return outcomeOf(
+        runVoiceQueueVerb({ kind: "brief", delegationId }),
+        NOTHING_WAITING_NOTICE,
+      );
+    case "status":
+      return outcomeOf(
+        runVoiceQueueVerb({
+          kind: "status",
+          botId: target?.tuple.botId ?? null,
+          delegationId,
+        }),
+        NO_BOT_NOTICE,
+      );
+    case "open":
+      return {
+        kind: "refused",
+        say: "Not yet: the voice cannot open cards and pages yet. Nothing was posted.",
+      };
+  }
+}
+
+/**
+ * The newest waiting item of the bot (and thread) a route names, when it
+ * names one and no item; `null` (the newest waiting item of all) otherwise.
+ */
+function newestWaitingOf(target: BoundTarget | null): string | null {
+  if (target === null) return null;
+  const { botId, threadId } = target.tuple;
+  const item = waitingItems(useVoiceSessionStore.getState().queue).find(
+    (candidate) =>
+      candidate.botId === botId &&
+      (threadId === null || candidate.threadId === threadId),
+  );
+  return item?.id ?? null;
+}
+
+function outcomeOf(outcome: QueueVerbOutcome, nothing: string): VerbOutcome {
+  switch (outcome) {
+    case "appended":
+    case "navigated":
+    case "dismissed":
+      return { kind: "executed" };
+    case "nothing":
+      return { kind: "refused", say: nothing };
+    case "not-live":
+      return { kind: "refused", say: NOT_LIVE_NOTICE };
+  }
 }
