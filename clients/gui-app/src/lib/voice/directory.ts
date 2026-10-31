@@ -89,10 +89,10 @@ export function threadKey(botId: string, threadId: string): string {
 }
 
 /**
- * The anchor excerpt of a thread: the one read of it. The thread list
- * carries no post text today, so it is the text the app already holds for
- * the anchor row (a loaded channel, the rail's own sent post), shortened;
- * `null` when it holds none.
+ * The anchor excerpt of a thread: the one read of it. The thread list's own
+ * (`anchor.excerpt`, `bot.thread.list@1.2`), else the text the app already
+ * holds for the anchor row (a loaded channel, the rail's own sent post),
+ * shortened, for a host below the minor; `null` when neither has it.
  */
 export function anchorExcerptOf(
   botId: string,
@@ -100,6 +100,7 @@ export function anchorExcerptOf(
   heldPostText: (botId: string, messageId: string) => string | null,
 ): string | null {
   if (summary.anchor === null) return null;
+  if (summary.anchor.excerpt !== null) return summary.anchor.excerpt;
   const text = heldPostText(botId, summary.anchor.messageId);
   if (text === null) return null;
   const collapsed = text.replace(/\s+/g, " ").trim();

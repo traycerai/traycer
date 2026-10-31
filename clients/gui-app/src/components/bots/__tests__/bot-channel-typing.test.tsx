@@ -327,6 +327,7 @@ function threadSummary(): BotThreadSummary {
       senderUserId: USER_ID,
       sentAt: 1_000,
       resolvedAt: null,
+      excerpt: null,
     },
     replyCount: 1,
     lastReplyAt: 2_000,

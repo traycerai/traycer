@@ -131,6 +131,7 @@ const thread: BotThreadSummary = {
     senderUserId: null,
     sentAt: 1_000,
     resolvedAt: null,
+    excerpt: null,
   },
   replyCount: 3,
   lastReplyAt: 2_000,
