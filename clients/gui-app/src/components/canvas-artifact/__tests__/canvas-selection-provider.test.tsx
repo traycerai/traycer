@@ -44,7 +44,6 @@ vi.mock("../canvas-editing-overlay", () => ({
     props: ComponentProps<typeof CanvasSelectionOverlay>,
   ) => (
     <CanvasSelectionOverlay
-      onSelectParent={null}
       scope={props.scope}
       boardPath={props.boardPath}
       registry={props.registry}
