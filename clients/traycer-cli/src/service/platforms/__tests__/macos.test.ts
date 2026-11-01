@@ -9,7 +9,14 @@ import {
 } from "vitest";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync } from "node:fs";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { setTimeout as realSleep } from "node:timers/promises";
@@ -291,6 +298,23 @@ function drainingBootouts(runner: ProcessRunner): ProcessRunner {
       polled = args[args.length - 1] ?? null;
     }
     return result;
+  };
+}
+
+// A bootstrap that fails for its own reasons, with nothing racing it: once
+// booted out, the label stays gone for every later `print`.
+function bootoutEmptiesTheLabel(runner: ProcessRunner): ProcessRunner {
+  let bootedOut = false;
+  return async (command, args, options) => {
+    if (command === "launchctl" && args[0] === "bootout") bootedOut = true;
+    if (command === "launchctl" && args[0] === "print" && bootedOut) {
+      return {
+        exitCode: 113,
+        stdout: "",
+        stderr: `Could not find service "${args[1]}" in domain for user gui: 501\n`,
+      };
+    }
+    return runner(command, args, options);
   };
 }
 
@@ -1102,6 +1126,8 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     // a freshly regenerated plist - NOT the stale cache the reload evicts.
     // This used to be misreported as SERVICE_INSTALL_FAILED.
     const calls: RecordedCall[] = [];
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+    const manifest = createdPlistPath;
     const runner: ProcessRunner = async (command, args) => {
       calls.push({ command, args });
       if (args[0] === "bootstrap") {
@@ -1113,10 +1139,12 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
           exitCode: 37,
         });
       }
+      if (args[0] === "print") {
+        return { stdout: `path = ${manifest}\n`, stderr: "", exitCode: 0 };
+      }
       return buildSuccessResult();
     };
     const controller = createMacosController(drainingBootouts(runner));
-    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
 
     await expect(
       controller.install({
@@ -1136,6 +1164,79 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       "print",
       "kickstart",
     ]);
+  });
+
+  it("accepts a concurrent installer's job when launchd prints the same plist through a symlink", async () => {
+    const calls: RecordedCall[] = [];
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+    const aliasDir = `${tempPlistDir}-alias`;
+    await symlink(tempPlistDir, aliasDir);
+    try {
+      const printed = join(aliasDir, `${label.id}.plist`);
+      const runner: ProcessRunner = async (command, args) => {
+        calls.push({ command, args });
+        if (args[0] === "bootstrap") {
+          throw buildLaunchctlError({
+            command,
+            cmdArgs: args,
+            stderr: REFUSED_BOOTSTRAP_STDERR,
+            stdout: "",
+            exitCode: 5,
+          });
+        }
+        if (args[0] === "print") {
+          return { stdout: `path = ${printed}\n`, stderr: "", exitCode: 0 };
+        }
+        return buildSuccessResult();
+      };
+
+      await expect(
+        createMacosController(drainingBootouts(runner)).install({
+          label,
+          cli: { command: "/usr/local/bin/traycer", args: [] },
+          enableLinger: false,
+        }),
+      ).resolves.toBeUndefined();
+      expect(calls.at(-1)?.args[0]).toBe("kickstart");
+    } finally {
+      await rm(aliasDir, { force: true });
+    }
+  });
+
+  it("fails an install whose reload lost the label to a job loaded from another plist, and starts nothing", async () => {
+    const calls: RecordedCall[] = [];
+    const rivalPlist = "/tmp/someone-elses/ai.traycer.host.plist";
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === "bootstrap") {
+        throw buildLaunchctlError({
+          command,
+          cmdArgs: args,
+          stderr: REFUSED_BOOTSTRAP_STDERR,
+          stdout: "",
+          exitCode: 5,
+        });
+      }
+      if (args[0] === "print") {
+        return { stdout: `path = ${rivalPlist}\n`, stderr: "", exitCode: 0 };
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(drainingBootouts(runner));
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+
+    await expect(
+      controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: expect.stringContaining(rivalPlist),
+      details: { label: label.id, loadedPath: rivalPlist },
+    });
+    expect(calls.some((c) => c.args[0] === "kickstart")).toBe(false);
   });
   it("refuses to bootout Desktop's SMAppService job when it wins the reload race before the recovery bootout", async () => {
     // A competing registrar that re-loads the label between the CLI's
@@ -1271,6 +1372,101 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     // the suite intentionally redirects manifests to a private temp dir.
   });
 
+  // The bytes launchctl printed on a real refusal: launchd logged
+  // `Bootstrap by launchctl failed (37: Operation already in progress)` for a
+  // job it still held, and this is what the caller saw. No text in it says so.
+  const REFUSED_BOOTSTRAP_STDERR =
+    "Bootstrap failed: 5: Input/output error\nTry re-running the command as root for richer errors.\n";
+
+  it("recovers from launchctl's real refusal when launchd still holds the job: the reload reads the fresh plist", async () => {
+    const calls: RecordedCall[] = [];
+    let bootstrapAttempts = 0;
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === "bootstrap") {
+        bootstrapAttempts += 1;
+        if (bootstrapAttempts === 1) {
+          throw buildLaunchctlError({
+            command,
+            cmdArgs: args,
+            stderr: REFUSED_BOOTSTRAP_STDERR,
+            stdout: "",
+            exitCode: 5,
+          });
+        }
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(drainingBootouts(runner));
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+
+    await expect(
+      controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      }),
+    ).resolves.toBeUndefined();
+    expect(calls.map((c) => c.args[0])).toEqual([
+      "print",
+      "print",
+      "bootout",
+      "bootstrap",
+      "print",
+      "bootout",
+      "bootstrap",
+      "kickstart",
+    ]);
+  });
+
+  it("reports launchctl's refusal against the job it asked for when launchd holds nothing, with no reload", async () => {
+    const calls: RecordedCall[] = [];
+    const runner: ProcessRunner = async (command, args) => {
+      calls.push({ command, args });
+      if (args[0] === "bootstrap") {
+        throw buildLaunchctlError({
+          command,
+          cmdArgs: args,
+          stderr: REFUSED_BOOTSTRAP_STDERR,
+          stdout: "",
+          exitCode: 5,
+        });
+      }
+      if (args[0] === "print") {
+        return {
+          stdout: "",
+          stderr: `Could not find service "${label.id}"\n`,
+          exitCode: 113,
+        };
+      }
+      return buildSuccessResult();
+    };
+    const controller = createMacosController(runner);
+    createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
+
+    await expect(
+      controller.install({
+        label,
+        cli: { command: "/usr/local/bin/traycer", args: [] },
+        enableLinger: false,
+      }),
+    ).rejects.toMatchObject({
+      code: CLI_ERROR_CODES.SERVICE_INSTALL_FAILED,
+      message: expect.stringContaining(
+        `launchctl bootstrap failed for ${label.id}:`,
+      ),
+      details: { label: label.id },
+    });
+    expect(calls.map((c) => c.args[0])).toEqual([
+      "print",
+      "print",
+      "bootstrap",
+      "print",
+    ]);
+    const bootstrap = calls.find((c) => c.args[0] === "bootstrap");
+    expect(bootstrap?.args[2]).toBe(createdPlistPath);
+  });
+
   it("surfaces a real launchctl bootstrap failure (permission denied) as SERVICE_INSTALL_FAILED", async () => {
     const calls: RecordedCall[] = [];
     const runner: ProcessRunner = async (command, args) => {
@@ -1286,7 +1482,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(drainingBootouts(runner));
+    const controller = createMacosController(bootoutEmptiesTheLabel(runner));
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
     await expect(
       controller.install({
@@ -1397,7 +1593,7 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
       }
       return buildSuccessResult();
     };
-    const controller = createMacosController(drainingBootouts(runner));
+    const controller = createMacosController(bootoutEmptiesTheLabel(runner));
     createdPlistPath = join(tempPlistDir, `${label.id}.plist`);
     let caught: unknown = null;
     try {
@@ -1577,6 +1773,123 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
     // would need its own ~32s fake-timer advance to time out too.
     await expect(stopping).rejects.toMatchObject({
       message: expect.stringContaining("Re-run with --force"),
+    });
+    await expect(stopping).rejects.toMatchObject({
+      message: expect.stringContaining(`of SIGTERM to job '${label.id}'`),
+      details: { label: label.id, signalDelivered: true },
+    });
+  });
+
+  describe("a stop launchd refused to signal", () => {
+    const refusedKill: ProcessRunner = async (_command, args) =>
+      args[0] === "kill"
+        ? {
+            stdout: "",
+            stderr: `Could not find service "${label.id}" in domain for user gui: 501\n`,
+            exitCode: 113,
+          }
+        : buildSuccessResult();
+
+    it("names the job it asked and never reports a SIGTERM that was not sent", async () => {
+      vi.useFakeTimers();
+      MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+        kind: "read",
+        metadata: HOST_PID_METADATA,
+      });
+      MOCKS.isProcessAlive.mockReturnValue(true);
+      const controller = createMacosController(refusedKill);
+
+      const stopping = controller.stop(label, { force: false });
+      const failure = stopping.catch((cause: unknown) => cause);
+      await vi.runAllTimersAsync();
+
+      await expect(failure).resolves.toMatchObject({
+        code: CLI_ERROR_CODES.SERVICE_CONTROL_FAILED,
+        message: expect.stringContaining(`signal job '${label.id}'`),
+        details: { label: label.id, signalDelivered: false },
+      });
+      await expect(failure).resolves.toMatchObject({
+        message: expect.stringContaining("exit 113: Could not find service"),
+      });
+      await expect(failure).resolves.toMatchObject({
+        message: expect.stringContaining("no SIGTERM was sent"),
+      });
+      await expect(failure).resolves.toMatchObject({
+        message: expect.not.stringContaining("of SIGTERM"),
+      });
+    });
+
+    it("says the same when the host's record is unreadable and its exit cannot be confirmed", async () => {
+      vi.useFakeTimers();
+      MOCKS.readHostPidMetadataEvidence.mockReset();
+      MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+        kind: "unreadable",
+        cause: "not valid JSON",
+      });
+      const controller = createMacosController(refusedKill);
+
+      const failure = controller
+        .stop(label, { force: false })
+        .catch((cause: unknown) => cause);
+      await vi.runAllTimersAsync();
+
+      await expect(failure).resolves.toMatchObject({
+        message: expect.stringContaining("stop-not-confirmed"),
+        details: { label: label.id, signalDelivered: false },
+      });
+      await expect(failure).resolves.toMatchObject({
+        message: expect.stringContaining("no SIGTERM was sent"),
+      });
+      await expect(failure).resolves.toMatchObject({
+        message: expect.not.stringContaining("of SIGTERM"),
+      });
+    });
+
+    it("does not call a signal refused or unsent when launchctl never answered", async () => {
+      vi.useFakeTimers();
+      MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+        kind: "read",
+        metadata: HOST_PID_METADATA,
+      });
+      MOCKS.isProcessAlive.mockReturnValue(true);
+      const unanswered: ProcessRunner = async (_command, args) =>
+        args[0] === "kill"
+          ? { stdout: "", stderr: "", exitCode: -1 }
+          : buildSuccessResult();
+      const controller = createMacosController(unanswered);
+
+      const failure = controller
+        .stop(label, { force: false })
+        .catch((cause: unknown) => cause);
+      await vi.runAllTimersAsync();
+
+      await expect(failure).resolves.toMatchObject({
+        message: expect.stringContaining(
+          `signal job '${label.id}', which gave no answer`,
+        ),
+        details: { label: label.id, signalDelivered: null },
+      });
+      await expect(failure).resolves.toMatchObject({
+        message: expect.not.stringContaining("refused"),
+      });
+      await expect(failure).resolves.toMatchObject({
+        message: expect.not.stringContaining("no SIGTERM was sent"),
+      });
+    });
+
+    it("still confirms a host that exits on its own while the wait runs", async () => {
+      vi.useFakeTimers();
+      MOCKS.readHostPidMetadataEvidence.mockResolvedValue({
+        kind: "read",
+        metadata: HOST_PID_METADATA,
+      });
+      MOCKS.isProcessAlive.mockReturnValueOnce(true).mockReturnValue(false);
+      const controller = createMacosController(refusedKill);
+
+      const stopping = controller.stop(label, { force: false });
+      await vi.runAllTimersAsync();
+
+      await expect(stopping).resolves.toBeUndefined();
     });
   });
 
@@ -2462,6 +2775,115 @@ printf '%s\\n' "$@" > ${JSON.stringify(newArgs)}
         controller: createMacosController(drainingBootouts(runner)),
       };
     }
+
+    // Both jobs as launchd printed them on a machine with Desktop's agent
+    // running the host and the CLI label loaded and idle (`launchctl list`:
+    // `89066 0 ai.traycer.host.agent`, `- 0 ai.traycer.host`), the state a
+    // `host restart` from a pre-split CLI failed on: its SIGTERM went to the
+    // idle CLI job and the host never heard it. Environment blocks left out.
+    describe("the agent runs the host while the CLI label sits idle", () => {
+      const uid = process.getuid?.() ?? 0;
+      const agentPrint = [
+        `gui/${uid}/ai.traycer.host.agent = {`,
+        "\tactive count = 1",
+        "\tpath = (submitted by smd.347)",
+        "\ttype = Submitted",
+        "\tmanaged_by = com.apple.xpc.ServiceManagement",
+        "\tstate = running",
+        "",
+        "\tprogram identifier = Contents/Library/LaunchAgents/Traycer Host.app/Contents/MacOS/Traycer Host (mode: 2)",
+        "\tparent bundle identifier = ai.traycer.desktop",
+        "\tparent bundle version = 1.5.2-rc.2",
+        "\targuments = {",
+        "\t\tContents/Library/LaunchAgents/Traycer Host.app/Contents/MacOS/Traycer Host",
+        "\t\tai.traycer.host.agent",
+        "\t}",
+        "",
+        `\tdomain = gui/${uid} [100021]`,
+        "\tminimum runtime = 10",
+        "\texit timeout = 47",
+        "\truns = 1",
+        "\tpid = 89066",
+        "\tlast exit code = (never exited)",
+        "}",
+        "",
+      ].join("\n");
+      const cliPrint = [
+        `gui/${uid}/${label.id} = {`,
+        "\tactive count = 0",
+        `\tpath = /Users/person/Library/LaunchAgents/${label.id}.plist`,
+        "\ttype = LaunchAgent",
+        "\tstate = not running",
+        "",
+        "\tprogram = /Users/person/.traycer/cli/bin/traycer",
+        "\truns = 1",
+        "\tlast exit code = 0",
+        "}",
+        "",
+      ].join("\n");
+
+      function stageBothJobs(): {
+        launchctl: string[];
+        controller: ServiceController;
+      } {
+        const launchctl: string[] = [];
+        const runner: ProcessRunner = async (_command, args) => {
+          launchctl.push(args.join(" "));
+          if (args[0] !== "print") return buildSuccessResult();
+          return {
+            stdout:
+              args[1]?.endsWith(".agent") === true ? agentPrint : cliPrint,
+            stderr: "",
+            exitCode: 0,
+          };
+        };
+        return { launchctl, controller: createMacosController(runner) };
+      }
+
+      it("reads the printed agent job as Desktop's", () => {
+        expect(classifyLaunchdPrintOutput(agentPrint)).toEqual({
+          kind: "smappservice",
+          path: "(submitted by smd.347)",
+        });
+      });
+
+      it("stop asks the host and signals neither job", async () => {
+        const { launchctl, controller } = stageBothJobs();
+        MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+        await expect(
+          controller.stop(label, { force: false }),
+        ).resolves.toBeUndefined();
+
+        expect(launchctl).toEqual([`print ${agentTarget}`]);
+      });
+
+      it("restart relaunches the agent's job and never touches the CLI label", async () => {
+        const { launchctl, controller } = stageBothJobs();
+        MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+        await expect(controller.restart(label)).resolves.toBeUndefined();
+
+        expect(launchctl).toEqual([
+          `print ${agentTarget}`,
+          `kickstart ${agentTarget}`,
+        ]);
+      });
+
+      it("a restart's stop and relaunch halves route to the agent too", async () => {
+        const { launchctl, controller } = stageBothJobs();
+        MOCKS.requestCooperativeShutdown.mockResolvedValue({ kind: "stopped" });
+
+        const stop = await controller.stopForRestart(label, { force: false });
+        await controller.relaunchAfterRestart(label, stop);
+
+        expect(launchctl).toEqual([
+          `print ${agentTarget}`,
+          `print ${agentTarget}`,
+          `kickstart ${agentTarget}`,
+        ]);
+      });
+    });
 
     it("stop asks the host to stand down and touches no launchd job", async () => {
       const { calls, controller } = stageDesktopManagedRunner();

@@ -174,6 +174,10 @@ export function epicRuntimeCorePortSourceOf(
       runtime.markChatRecordListAuthoritative(),
     markChatRecordListNotAuthoritative: () =>
       runtime.markChatRecordListNotAuthoritative(),
+    markTuiAgentRecordListAuthoritative: () =>
+      runtime.markTuiAgentRecordListAuthoritative(),
+    markTuiAgentRecordListNotAuthoritative: () =>
+      runtime.markTuiAgentRecordListNotAuthoritative(),
     beginPendingChatCreation: (pending) =>
       runtime.beginPendingChatCreation(pending),
     clearPendingChatCreation: (chatId) =>

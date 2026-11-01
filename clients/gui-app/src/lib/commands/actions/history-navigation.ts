@@ -192,8 +192,11 @@ export function preservedTileRecordIsLive(
     (epicHandle === null ? null : getEpicSessionHandleHostId(epicHandle)) ??
     getAppHostClientSnapshot()?.getActiveHostId() ??
     null;
+  const recordState = epicHandle?.store.getState();
   const recordListAuthorizesChatAbsence =
-    epicHandle?.store.getState().chatRecordListAuthoritative ?? false;
+    recordState?.chatRecordListAuthoritative ?? false;
+  const recordListAuthorizesTuiAgentAbsence =
+    recordState?.tuiAgentRecordListAuthoritative ?? false;
   return isTileRefRecordLive(
     preserved.node,
     pendingCreateArtifactIds,
@@ -201,6 +204,7 @@ export function preservedTileRecordIsLive(
       hasLiveRecord,
       isCloudKnown: cloudKnownPredicate(activeHostId, epicId),
       recordListAuthorizesChatAbsence,
+      recordListAuthorizesTuiAgentAbsence,
     },
     activeHostId,
   );

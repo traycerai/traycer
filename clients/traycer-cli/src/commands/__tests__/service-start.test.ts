@@ -37,6 +37,8 @@ const mocks = vi.hoisted(() => ({
   controllerCalls: [] as string[],
   lockCalls: [] as Array<{ reason: string }>,
   startFails: false,
+  // The job the service manager runs for the label, when it is not the label.
+  serviceJobId: null as string | null,
   // Is a host POSITIVELY serving? The `running` status alone is derived from a
   // bare liveness check over pid metadata, so this is what decides whether the
   // idempotent shortcut is safe.
@@ -71,7 +73,8 @@ vi.mock("../../service", async (importOriginal) => {
         mocks.controllerCalls.push("start");
         if (mocks.startFails) throw new Error("schtasks /Run failed");
       },
-      hostStartAdoptionLabel: async (label: { id: string }) => label.id,
+      hostStartAdoptionLabel: async (label: { id: string }) =>
+        mocks.serviceJobId ?? label.id,
     }),
   };
 });
@@ -163,11 +166,34 @@ describe("buildServiceStartCommand", () => {
     mocks.lockCalls = [];
     mocks.statusResponses = [];
     mocks.startFails = false;
+    mocks.serviceJobId = null;
     mocks.hostServing = true;
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("names the job launchd started when that is Desktop's agent", async () => {
+    mocks.serviceJobId = "ai.traycer.host.agent";
+    mocks.statusResponses = [
+      {
+        state: "externally-managed",
+        version: null,
+        listenUrl: null,
+        pid: null,
+      },
+      { state: "running", version: "1.2.3", listenUrl: null, pid: 4242 },
+    ];
+
+    const result = await buildServiceStartCommand({
+      lifecycleOrigin: "terminal",
+    })(fakeCtx());
+
+    expect(result.human).toBe(
+      "requested start for service 'ai.traycer.host.agent'; a host is now serving (pid 4242)",
+    );
+    expect(result.data).toMatchObject({ label: "ai.traycer.host" });
   });
 
   // The `not-installed` read is ADVISORY, not a gate. A registration probe
