@@ -472,7 +472,13 @@ export function CanvasSelectionOverlay(props: {
         selection={selection}
         box={box}
         frame={frame}
-        hideAction={Boolean(props.hideAction) || pointerDown}
+        // A press while the bar is concealed is the user working in the
+        // surface standing in for it (typing in the draft box, pressing its
+        // buttons); the bar is already out of sight, and unmounting it would
+        // drop the chat its send remembers.
+        hideAction={
+          Boolean(props.hideAction) || (pointerDown && !props.concealAction)
+        }
         concealAction={Boolean(props.concealAction)}
         hideHandles={props.hideHandles}
         capturing={capturing}

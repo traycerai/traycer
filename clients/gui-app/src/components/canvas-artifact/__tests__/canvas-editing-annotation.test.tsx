@@ -29,6 +29,7 @@ import { useNewConversationAnnotationStore } from "@/stores/epics/new-conversati
 import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
 import type { CanvasBox } from "@/lib/sandbox/canvas-bridge";
 import { useAnchoredDraftStore } from "@/stores/comments/anchored-draft-store";
+import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import { CanvasEditingOverlay } from "../canvas-editing-overlay";
 import {
   useCanvasSelectionStore,
@@ -325,6 +326,7 @@ beforeEach(() => {
   useNewConversationAnnotationStore.setState({ byEpicId: {} });
   useNewConversationModalOpenStore.setState({ request: null });
   useAnchoredDraftStore.setState({ byEpicId: {} });
+  useComposerDraftStore.setState({ drafts: {} });
 });
 
 afterEach(() => {
@@ -509,6 +511,56 @@ describe("attaching a selected range to a chat", () => {
     await addToChat();
     expect(outside.reveal).toHaveBeenCalledWith("chat-1");
     expect(screen.queryByRole("menuitem", { name: "Chat one" })).toBeNull();
+  });
+
+  it("still knows where it sent the card after a comment draft is opened, used and cancelled", async () => {
+    // The attached card lives in the chat's composer draft; the bar remembers
+    // it so a second send moves the card instead of adding another. Working in
+    // the draft box (a press outside the bar) must not make the bar forget.
+    outside.attach.mockImplementation((input) => {
+      useComposerDraftStore
+        .getState()
+        .addBrowserAnnotation(input.chatId, input.record);
+      return Promise.resolve(input.record);
+    });
+    mountOverlay();
+    select(LITERAL);
+    await screen.findByRole("button", { name: "Send to chat" });
+    await addToChat();
+    expect(outside.attach).toHaveBeenCalledOnce();
+
+    act(() => {
+      useAnchoredDraftStore.getState().setDraft(SCOPE.epicId, {
+        draftId: "draft-1",
+        tileId: "canvas-tile-1",
+        artifactId: SCOPE.artifactId,
+        artifactType: "canvas",
+        anchor: {
+          kind: "element",
+          artboard: BOARD_PATH,
+          elementId: "t",
+          label: "p",
+        },
+        quotedText: "",
+        rect: { x: 40, y: 100, width: 200, height: 24 },
+        selection: LITERAL,
+        retargeted: false,
+      });
+    });
+    fireEvent.pointerDown(document.body);
+    fireEvent.pointerUp(document.body);
+    act(() => {
+      useAnchoredDraftStore.getState().clearDraft(SCOPE.epicId, "draft-1");
+    });
+
+    chooseChatOne();
+    await waitFor(() => {
+      expect(outside.reveal).toHaveBeenCalledTimes(2);
+    });
+    expect(outside.attach).toHaveBeenCalledOnce();
+    expect(
+      useComposerDraftStore.getState().drafts["chat-1"]?.browserAnnotations,
+    ).toHaveLength(1);
   });
 
   it("screenshots the window only once the picker is gone and the selection chrome is hidden", async () => {
