@@ -2657,6 +2657,68 @@ describe("downloadAndStageHost", () => {
       expect(await readHostStagedRecord(ENV)).toBeNull();
     });
 
+    it("refuses a registry target over an install recorded as the source-tree sentinel", async () => {
+      await writeInstall("0.0.0-dev", {});
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+
+      await expect(
+        resolveUpdatePlan({
+          environment: ENV,
+          request: {
+            intent: "install",
+            versionRequest: null,
+            allowDowngrade: false,
+          },
+          onProgress: noopProgress,
+          registryClient: registry("1.5.0"),
+        }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      });
+    });
+
+    it("plans an upgrade over a side-loaded install its runtime version orders", async () => {
+      await writeInstall("local-host-20261017", {
+        runtimeVersion: "1.0.0",
+        source: { kind: "local-file", value: "dl/host.tar.gz" },
+      });
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: null,
+          allowDowngrade: false,
+        },
+        onProgress: noopProgress,
+        registryClient: registry("1.5.0"),
+      });
+
+      expect(plan).toMatchObject({ targetVersion: "1.5.0" });
+    });
+
+    it("plans an explicit downgrade to the runtime version of a local install recorded under a newer one", async () => {
+      await writeInstall("2.0.0", {
+        runtimeVersion: "1.0.0",
+        source: { kind: "local-file", value: "dl/host.tar.gz" },
+      });
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "install",
+          versionRequest: "1.0.0",
+          allowDowngrade: true,
+        },
+        onProgress: noopProgress,
+        registryClient: registry("2.0.0"),
+      });
+
+      expect(plan).toMatchObject({ kind: "downgrade", targetVersion: "1.0.0" });
+    });
+
     it("still plans an upgrade to a comparable newer target", async () => {
       await writeInstall("1.0.0", {});
       dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
@@ -2769,6 +2831,27 @@ describe("downloadAndStageHost", () => {
       ).rejects.toMatchObject({
         code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
       });
+    });
+
+    it("continue: resumes a park at a side-loaded install's runtime version", async () => {
+      await writeInstall("local-host-20261017", {
+        runtimeVersion: "1.2.0",
+        source: { kind: "local-file", value: "dl/host.tar.gz" },
+      });
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+
+      const plan = await resolveUpdatePlan({
+        environment: ENV,
+        request: {
+          intent: "continue",
+          targetVersion: "1.2.0",
+          needsTransfer: false,
+        },
+        onProgress: noopProgress,
+        registryClient: unreachableRegistryClient(),
+      });
+
+      expect(plan).toMatchObject({ kind: "resume", targetVersion: "1.2.0" });
     });
 
     it("continue: a park already at the installed version resumes unchanged", async () => {

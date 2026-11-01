@@ -25,11 +25,14 @@ import {
   assertStoreFormatFloorAfterStop,
   assertStoreFormatFloorAtCommit,
   gateStoreFormatFloor,
-  storeFormatFloorTargetVersion,
+  storeFormatFloorBuildVersion,
   STORE_FORMAT_FLOOR_LISTED_EPICS,
   ungatedStoreFormatFloorEvidence,
 } from "../store-format-floor";
-import type { StoreFormatFloorInput } from "../store-format-floor";
+import type {
+  StoreFloorProvenance,
+  StoreFormatFloorInput,
+} from "../store-format-floor";
 import type { SwapQuiescence } from "../swap-quiescence";
 
 interface RecordedCall {
@@ -37,6 +40,12 @@ interface RecordedCall {
   readonly message: string;
   readonly fields: LogFields;
 }
+
+const NO_PROVENANCE: StoreFloorProvenance = {
+  installed: null,
+  targetEntry: null,
+  sameArchive: false,
+};
 
 function fakeLogger(): ILogger & { readonly calls: RecordedCall[] } {
   const calls: RecordedCall[] = [];
@@ -116,6 +125,7 @@ describe("assertHostStoreFormatFloor", () => {
         declaredStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         acceptStoreFormatLoss: false,
         site: "host update",
         logger,
@@ -144,6 +154,7 @@ describe("assertHostStoreFormatFloor", () => {
         declaredStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         acceptStoreFormatLoss: false,
         site: "host update",
         logger,
@@ -181,6 +192,7 @@ describe("assertHostStoreFormatFloor", () => {
         declaredStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         acceptStoreFormatLoss: false,
         site: "host install",
         logger,
@@ -228,6 +240,7 @@ describe("assertHostStoreFormatFloor", () => {
         declaredStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         acceptStoreFormatLoss: false,
         site: "host install",
         logger,
@@ -272,6 +285,7 @@ describe("assertHostStoreFormatFloor", () => {
         declaredStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         acceptStoreFormatLoss: false,
         site: "host install",
         logger,
@@ -307,6 +321,7 @@ describe("assertHostStoreFormatFloor", () => {
         declaredStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         acceptStoreFormatLoss: false,
         site: "host install",
         logger,
@@ -339,6 +354,7 @@ describe("assertHostStoreFormatFloor", () => {
         declaredStoreFormats: null,
         installedVersion: "1.9.0",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         acceptStoreFormatLoss: false,
         site: "host install",
         logger,
@@ -368,6 +384,7 @@ describe("assertHostStoreFormatFloor", () => {
         declaredStoreFormats: null,
         installedVersion: "1.9.0",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         acceptStoreFormatLoss: false,
         site: "host install",
         logger,
@@ -389,6 +406,7 @@ describe("assertHostStoreFormatFloor", () => {
         declaredStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         acceptStoreFormatLoss: true,
         site: "host install",
         logger,
@@ -417,6 +435,7 @@ describe("assertHostStoreFormatFloor", () => {
         declaredStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         acceptStoreFormatLoss: true,
         site: "host install",
         logger,
@@ -449,6 +468,7 @@ describe("assertHostStoreFormatFloor", () => {
           declaredStoreFormats: null,
           installedVersion: "1.3.0-rc.4",
           installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
           acceptStoreFormatLoss: false,
           site: "host install",
           logger,
@@ -478,6 +498,7 @@ describe("assertHostStoreFormatFloor", () => {
           declaredStoreFormats: { chatDb: 8 },
           installedVersion: "1.3.0-rc.4",
           installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
           acceptStoreFormatLoss: false,
           site: "host install",
           logger,
@@ -506,6 +527,7 @@ describe("assertHostStoreFormatFloor", () => {
           declaredStoreFormats: { chatDb: 9 },
           installedVersion: "1.3.0-rc.4",
           installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
           acceptStoreFormatLoss: false,
           site: "host install",
           logger,
@@ -528,6 +550,7 @@ describe("assertHostStoreFormatFloor", () => {
           declaredStoreFormats: null,
           installedVersion: OFF_LADDER_TARGET,
           installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
           acceptStoreFormatLoss: false,
           site: "host install",
           logger,
@@ -563,6 +586,7 @@ describe("assertHostStoreFormatFloor", () => {
           declaredStoreFormats: null,
           installedVersion: BUILD_STAMPED_INSTALLED,
           installedStoreFormats: { chatDb: 9 },
+          provenance: NO_PROVENANCE,
           acceptStoreFormatLoss: false,
           site: "host ensure",
           logger,
@@ -600,6 +624,7 @@ describe("assertHostStoreFormatFloor", () => {
           declaredStoreFormats: null,
           installedVersion: BUILD_STAMPED_INSTALLED,
           installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
           acceptStoreFormatLoss: false,
           site: "host ensure",
           logger,
@@ -638,6 +663,7 @@ describe("assertHostStoreFormatFloor", () => {
           declaredStoreFormats: null,
           installedVersion: SOURCE_TREE_HOST_VERSION,
           installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
           acceptStoreFormatLoss: false,
           site: "host install",
           logger,
@@ -664,6 +690,7 @@ describe("gateStoreFormatFloor", () => {
       targetVersion: "1.4.0",
       installedVersion: "1.3.0-rc.4",
       installedStoreFormats: null,
+      installedProvenance: null,
       consultRegistry: true,
       acceptStoreFormatLoss: false,
       site: "host install",
@@ -683,6 +710,7 @@ describe("gateStoreFormatFloor", () => {
       targetVersion: "1.3.0-rc.1",
       installedVersion: "1.3.0-rc.4",
       installedStoreFormats: null,
+      installedProvenance: null,
       consultRegistry: false,
       acceptStoreFormatLoss: false,
       site: "host update",
@@ -708,6 +736,7 @@ describe("gateStoreFormatFloor", () => {
       targetVersion: "local-something",
       installedVersion: "1.3.0-rc.4",
       installedStoreFormats: null,
+      installedProvenance: null,
       consultRegistry: true,
       acceptStoreFormatLoss: false,
       site: "host install",
@@ -753,6 +782,7 @@ describe("assertStoreFormatFloorAtCommit", () => {
         declaredStoreFormats: null,
         installedVersion: "1.9.0",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         evidence: {
           clearedVersion: "1.4.0",
           publishedStoreFormats: { chatDb: 9 },
@@ -788,6 +818,7 @@ describe("assertStoreFormatFloorAtCommit", () => {
         declaredStoreFormats: null,
         installedVersion: "1.9.0",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         evidence: {
           clearedVersion: "1.5.0",
           publishedStoreFormats: { chatDb: 9 },
@@ -817,6 +848,7 @@ describe("assertStoreFormatFloorAtCommit", () => {
         declaredStoreFormats: { chatDb: 9 },
         installedVersion: "1.9.0",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         evidence: {
           clearedVersion: "1.4.0",
           publishedStoreFormats: null,
@@ -853,6 +885,7 @@ describe("assertStoreFormatFloorAtCommit", () => {
           declaredStoreFormats: null,
           installedVersion: "1.3.0-rc.4",
           installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
           evidence: ungatedStoreFormatFloorEvidence("host install", false),
           logger,
         });
@@ -884,6 +917,7 @@ describe("assertStoreFormatFloorAtCommit", () => {
           declaredStoreFormats: { chatDb: 9 },
           installedVersion: "1.3.0-rc.4",
           installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
           evidence: ungatedStoreFormatFloorEvidence("host install", false),
           logger,
         }),
@@ -904,6 +938,7 @@ describe("assertStoreFormatFloorAtCommit", () => {
           declaredStoreFormats: null,
           installedVersion: "1.3.0-rc.4",
           installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
           evidence: ungatedStoreFormatFloorEvidence("host install", false),
           logger,
         }),
@@ -928,6 +963,7 @@ describe("assertStoreFormatFloorAtCommit", () => {
           declaredStoreFormats: null,
           installedVersion: "1.3.0-rc.4",
           installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
           evidence: ungatedStoreFormatFloorEvidence("host install", true),
           logger,
         }),
@@ -959,6 +995,7 @@ describe("assertStoreFormatFloorAtCommit", () => {
           declaredStoreFormats: null,
           installedVersion: "1.3.0-rc.4",
           installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
           evidence: {
             clearedVersion: "1.2.0",
             publishedStoreFormats: { chatDb: 9 },
@@ -996,6 +1033,7 @@ describe("assertStoreFormatFloorAtCommit", () => {
           declaredStoreFormats: null,
           installedVersion: "1.3.0-rc.4",
           installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
           evidence: {
             clearedVersion: LOCAL_COMMITTING_VERSION,
             publishedStoreFormats: { chatDb: 9 },
@@ -1050,6 +1088,7 @@ describe("target identity (provenance) and the archive declaration", () => {
         publishedStoreFormats: null,
         installedVersion: "1.3.0",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         observeQuiescence,
         acceptStoreFormatLoss: false,
         site: "host install",
@@ -1073,6 +1112,7 @@ describe("target identity (provenance) and the archive declaration", () => {
         declaredStoreFormats: { chatDb: 8 },
         installedVersion: "1.3.0",
         installedStoreFormats: { chatDb: 9 },
+        provenance: NO_PROVENANCE,
         acceptStoreFormatLoss: false,
         site: "host install",
         logger,
@@ -1095,6 +1135,7 @@ describe("target identity (provenance) and the archive declaration", () => {
         declaredStoreFormats: { chatDb: 8 },
         installedVersion: "1.3.0",
         installedStoreFormats: { chatDb: 9 },
+        provenance: NO_PROVENANCE,
         acceptStoreFormatLoss: false,
         site: "host install",
         logger,
@@ -1130,6 +1171,7 @@ describe("target identity (provenance) and the archive declaration", () => {
         declaredStoreFormats: null,
         installedVersion: "1.2.0",
         installedStoreFormats: { chatDb: 9 },
+        provenance: NO_PROVENANCE,
         acceptStoreFormatLoss: false,
         site: "host install",
         logger,
@@ -1159,6 +1201,7 @@ describe("target identity (provenance) and the archive declaration", () => {
         declaredStoreFormats: { chatDb: 9 },
         installedVersion: "1.3.0",
         installedStoreFormats: { chatDb: 9 },
+        provenance: NO_PROVENANCE,
         acceptStoreFormatLoss: false,
         site: "host install",
         logger,
@@ -1191,6 +1234,7 @@ describe("target identity (provenance) and the archive declaration", () => {
           declaredStoreFormats: null,
           installedVersion: "1.3.0",
           installedStoreFormats: { chatDb: 9 },
+          provenance: NO_PROVENANCE,
           acceptStoreFormatLoss: false,
           site: "host update",
           logger,
@@ -1221,6 +1265,7 @@ describe("target identity (provenance) and the archive declaration", () => {
           declaredStoreFormats: null,
           installedVersion: "1.3.0",
           installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
           acceptStoreFormatLoss: false,
           site: "host update",
           logger,
@@ -1250,6 +1295,7 @@ describe("target identity (provenance) and the archive declaration", () => {
           declaredStoreFormats: null,
           installedVersion: "1.3.0",
           installedStoreFormats: null,
+          provenance: NO_PROVENANCE,
           acceptStoreFormatLoss: false,
           site: "host update",
           logger,
@@ -1277,6 +1323,67 @@ describe("assertStoreFormatFloorAfterStop", () => {
   };
   const ESTABLISHED: SwapQuiescence = { established: true };
 
+  it.each([
+    [
+      "an unplaced target",
+      "1.9.0",
+      "1.3.0-rc.4",
+      "its chat store format is unknown",
+    ],
+    [
+      "nothing installed",
+      "1.2.0",
+      null,
+      "no installed build vouches for this machine's chat stores",
+    ],
+  ])(
+    "names what the formats could not settle with %s",
+    async (_case, targetVersion, installedVersion, verdict) => {
+      const refusal = assertStoreFormatFloorAfterStop({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion,
+        declaredStoreFormats: null,
+        publishedStoreFormats: null,
+        installedVersion,
+        installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
+        observeQuiescence: async () => NOT_ESTABLISHED,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger: fakeLogger(),
+      });
+
+      await expect(refusal).rejects.toThrow(verdict);
+    },
+  );
+
+  it("asks for no quiescence over the identical archive, a move no writer can spoil", async () => {
+    const logger = fakeLogger();
+    const observeQuiescence = vi.fn(async () => NOT_ESTABLISHED);
+
+    await expect(
+      assertStoreFormatFloorAfterStop({
+        environment: "production",
+        targetIdentity: "local-archive",
+        surveyRoots: singleChatStoreSurveyRoot(hostHome),
+        targetVersion: "1.2.0",
+        declaredStoreFormats: null,
+        publishedStoreFormats: null,
+        installedVersion: "1.3.0-rc.4",
+        installedStoreFormats: null,
+        provenance: { ...NO_PROVENANCE, sameArchive: true },
+        observeQuiescence,
+        acceptStoreFormatLoss: false,
+        site: "host install",
+        logger,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(observeQuiescence).not.toHaveBeenCalled();
+  });
+
   it("refuses on an unproven quiescence WITHOUT ever surveying disk - the reason is named, not the epics", async () => {
     // A garbage fixture that would surface as an "unreadable" epic-named
     // failure if the survey ran at all. The point of this arm is that it
@@ -1295,6 +1402,7 @@ describe("assertStoreFormatFloorAfterStop", () => {
         publishedStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         observeQuiescence: async () => NOT_ESTABLISHED,
         acceptStoreFormatLoss: false,
         site: "host install",
@@ -1338,6 +1446,7 @@ describe("assertStoreFormatFloorAfterStop", () => {
         publishedStoreFormats: null,
         installedVersion: "1.3.0",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         observeQuiescence: async () => NOT_ESTABLISHED,
         acceptStoreFormatLoss: false,
         site: "host install",
@@ -1370,6 +1479,7 @@ describe("assertStoreFormatFloorAfterStop", () => {
         publishedStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         observeQuiescence: async () => NOT_ESTABLISHED,
         acceptStoreFormatLoss: true,
         site: "host install",
@@ -1404,6 +1514,7 @@ describe("assertStoreFormatFloorAfterStop", () => {
         publishedStoreFormats: null,
         installedVersion: null,
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         observeQuiescence: async () => quiescence,
         acceptStoreFormatLoss,
         site: "host install",
@@ -1492,6 +1603,7 @@ describe("assertStoreFormatFloorAfterStop", () => {
         publishedStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         observeQuiescence: async () => ESTABLISHED,
         acceptStoreFormatLoss: false,
         site: "host install",
@@ -1519,6 +1631,7 @@ describe("assertStoreFormatFloorAfterStop", () => {
         publishedStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         observeQuiescence: async () => ESTABLISHED,
         acceptStoreFormatLoss: false,
         site: "host install",
@@ -1571,6 +1684,7 @@ describe("assertStoreFormatFloorAfterStop", () => {
         publishedStoreFormats: null,
         installedVersion: "0.0.0-dev",
         installedStoreFormats: { chatDb: 9 },
+        provenance: NO_PROVENANCE,
         observeQuiescence,
         acceptStoreFormatLoss: false,
         site: "host install",
@@ -1608,6 +1722,7 @@ describe("assertStoreFormatFloorAfterStop", () => {
         publishedStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         observeQuiescence: async () => ({
           established: false,
           reason: "unseen-writers",
@@ -1655,6 +1770,7 @@ describe("assertStoreFormatFloorAfterStop", () => {
         publishedStoreFormats: null,
         installedVersion: "1.3.0-rc.4",
         installedStoreFormats: null,
+        provenance: NO_PROVENANCE,
         observeQuiescence,
         acceptStoreFormatLoss: false,
         site: "host install",
@@ -1665,10 +1781,10 @@ describe("assertStoreFormatFloorAfterStop", () => {
   });
 });
 
-describe("storeFormatFloorTargetVersion", () => {
+describe("storeFormatFloorBuildVersion", () => {
   it("returns the declaration when present", () => {
     expect(
-      storeFormatFloorTargetVersion(
+      storeFormatFloorBuildVersion(
         "1.2.0",
         "local-host-v1.2.0.tar.gz-2026-01-01T00-00-00-000Z",
       ),
@@ -1677,7 +1793,7 @@ describe("storeFormatFloorTargetVersion", () => {
 
   it("returns the record version when the declaration is null", () => {
     expect(
-      storeFormatFloorTargetVersion(
+      storeFormatFloorBuildVersion(
         null,
         "local-host-v1.2.0.tar.gz-2026-01-01T00-00-00-000Z",
       ),
@@ -1720,6 +1836,7 @@ describe("the task store floor", () => {
       declaredStoreFormats: null,
       installedVersion: "1.5.0",
       installedStoreFormats: { chatDb: 20 },
+      provenance: NO_PROVENANCE,
       acceptStoreFormatLoss: false,
       site: "host update",
       logger,
@@ -1847,6 +1964,7 @@ describe("the task store floor", () => {
           declaredStoreFormats: { chatDb: 20 },
           installedVersion: "1.4.2",
           installedStoreFormats: { chatDb: 20 },
+          provenance: NO_PROVENANCE,
         }),
       ),
     ).resolves.toBeUndefined();
