@@ -643,6 +643,23 @@ function writePidMetadata(
   );
 }
 
+/**
+ * A pid that names no process: a child spawned and waited out, so the kernel
+ * has reaped it before the record naming it is read. The busy gate's liveness
+ * check runs the real, unmocked `process.kill(pid, 0)`, which answers ESRCH
+ * for it - a hardcoded "probably free" pid would be a live process on the
+ * machine that happened to reach it first.
+ */
+async function exitedChildPid(): Promise<number> {
+  const child = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+  const { pid } = child;
+  if (pid === undefined) throw new Error("spawning a child yielded no pid");
+  await new Promise<void>((resolve) => {
+    child.once("exit", () => resolve());
+  });
+  return pid;
+}
+
 function removePidMetadata(environment: "production" | "dev"): void {
   const layout = getHostFsLayout(environment);
   try {
@@ -4728,6 +4745,64 @@ describe("platform matrix", () => {
       "keep-installed",
     );
 
+    expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
+  });
+
+  // The force-kill repair: a host killed outright leaves its pid.json behind
+  // naming a pid the kernel has reaped. The bytes are intact, so the
+  // bytes-only `ensure` is a `noop` and this activation cycle is the only
+  // thing that can start a host again - but nothing answers the recorded
+  // endpoint, and `probeHostActivityBusy` folds a refused connection into
+  // `busy` by design. The busy gate therefore returned before
+  // `registerHostLoginItem`, the SMAppService agent was never registered, and
+  // the launch reported "local host boot did not complete" on its retry
+  // ladder instead.
+  it("registers the login item when the only pid.json names a process that has exited", async () => {
+    vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+    // What the real probe answers for a loopback endpoint nothing serves.
+    vi.mocked(probeHostActivityBusy).mockResolvedValue(true);
+    vi.mocked(waitForHostReady).mockResolvedValue({
+      ready: true,
+      version: "1.7.0",
+      pid: process.pid,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      reason: "ready",
+    });
+    // What registering the agent does on a real machine: launchd starts the
+    // host, which publishes its own live record over the dead one. Until
+    // then every "is a host running" read sees only the stale pid.
+    let registered = false;
+    vi.mocked(registerHostLoginItem).mockImplementation(async () => {
+      writePidMetadata("production", { version: "1.7.0", pid: process.pid });
+      registered = true;
+      return "enabled";
+    });
+    const controller = newControllerWithReachability(
+      "production",
+      async () => registered,
+    );
+    writeInstallRecord("production", {
+      version: "1.7.0",
+      runtimeVersion: "1.7.0",
+    });
+    writePidMetadata("production", {
+      version: "1.7.0",
+      pid: await exitedChildPid(),
+    });
+    vi.mocked(streamBundledTraycerCliJson).mockResolvedValue({
+      data: { action: "noop", version: "1.7.0", runtimeVersion: "1.7.0" },
+    });
+
+    const outcome = await controller.convergeReady(
+      false,
+      { kind: "background" },
+      "keep-installed",
+    );
+
+    expect(outcome).toEqual({
+      kind: "ok",
+      value: { running: true, version: "1.7.0" },
+    });
     expect(registerHostLoginItem).toHaveBeenCalledTimes(1);
   });
 
