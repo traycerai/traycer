@@ -1072,8 +1072,8 @@ export function VoiceSessionController(): ReactNode {
    * closed, its end reported) BEFORE the microphone track is offered to a
    * new peer, so two sessions never carry the person's audio at once. The
    * scheduler keeps its items but forgets the old engine's facts, and the
-   * new engine opens seeded with a summary of where the person is. Nothing
-   * is replayed.
+   * new engine opens seeded with a summary of where the person is. Landed
+   * posts are not sent again; unconfirmed speech keeps its remaining retries.
    */
   const remint = useCallback(
     async (old: Attempt): Promise<void> => {
@@ -1396,7 +1396,7 @@ function placeIn(
 }
 
 /**
- * Calls `onLost` once when the OS takes the microphone away from a live
+ * Calls `onLost` when the OS takes the microphone away from a live
  * capture: the track ends, or it is muted (a call, Siri, another app's
  * recording) while the page is on screen. A track muted while the page is
  * hidden is the app leaving, which the shell's background edge reports with

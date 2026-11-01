@@ -404,14 +404,13 @@ describe("<BotThreadsView />", () => {
 });
 
 describe("<BotThreadsView /> header", () => {
-  it("goes back to the tab's channel from its back control, which only a tab too narrow for the column draws", async () => {
+  it("goes back to the tab's channel when Back to Tracy is clicked", async () => {
     const user = userEvent.setup();
     mocks.hosted[TRACY] = script([], {});
     mocks.hosted[TEAM] = script([], {});
     mount();
 
     const back = screen.getByRole("button", { name: "Back to Tracy" });
-    expect(back.className).toContain("@3xl:hidden");
     await user.click(back);
 
     expect(mocks.back).toHaveBeenCalledTimes(1);

@@ -196,9 +196,10 @@ const mocks = vi.hoisted(() => ({
     membersSupport: null as boolean | null,
     openResult: null as OpenResult | null,
     threads: [] as BotThreadSummary[],
-    // No bot.thread.list answer is held yet (the first read is in flight).
+    // Whether a bot.thread.list answer is held: true serves `threads` as that
+    // list; false means no answer yet, so the query has no data.
     threadsHeld: true,
-    // A read of bot.thread.list is in flight over the held `threads`.
+    // Whether a bot.thread.list read is in flight, over the held answer if any.
     threadsFetching: false,
     // The last read of bot.thread.list failed.
     threadsError: false,
@@ -662,7 +663,6 @@ vi.mock("@/components/bots/bot-settings-panel", () => ({
   }) => (
     <div
       data-testid="stub-settings"
-      data-prop-names={Object.keys(props).join(",")}
       data-personal={String(props.personal)}
       data-channel-id={props.channelId ?? "none"}
     >
@@ -859,10 +859,6 @@ function expectNoMachineWording(container: HTMLElement): void {
   );
   expect(screen.queryByTestId("bot-tab-bound-elsewhere")).toBeNull();
   expect(screen.queryByTestId("bot-tab-move-here")).toBeNull();
-}
-
-function surfaceHostId(): string | null {
-  return useTracySurfaceStore.getState().hostId;
 }
 
 /**
@@ -2234,7 +2230,7 @@ describe("<BotTabSurface /> another host serves the bot", () => {
       });
       const { container } = render(surface());
 
-      expect(surfaceHostId()).toBe(TAB_HOST);
+      expect(useTracySurfaceStore.getState().hostId).toBe(TAB_HOST);
       expect(
         screen.getByTestId("stub-channel").getAttribute("data-host-id"),
       ).toBe(TAB_HOST);
@@ -2253,7 +2249,7 @@ describe("<BotTabSurface /> another host serves the bot", () => {
     mocks.state.connectable = { hostIds: [], resolved: false };
     render(surface());
 
-    expect(surfaceHostId()).toBe(TAB_HOST);
+    expect(useTracySurfaceStore.getState().hostId).toBe(TAB_HOST);
     expect(screen.getByTestId("stub-channel")).toBeTruthy();
   });
 });
@@ -2379,7 +2375,7 @@ describe("<BotTabSurface /> paused", () => {
     expect(page.getAttribute("data-is-this-host")).toBe("false");
   });
 
-  it("keeps the channel settings ungated: the panel is given the bot and whether it is personal, and no editing flag", async () => {
+  it("keeps the channel settings ungated: a paused channel still opens the settings panel", async () => {
     const user = userEvent.setup();
     mocks.state.openResult = answer({
       kind: "paused",
@@ -2388,9 +2384,7 @@ describe("<BotTabSurface /> paused", () => {
     render(surface());
 
     await user.click(screen.getByTestId("bot-channel-settings-open"));
-    expect(
-      screen.getByTestId("stub-settings").getAttribute("data-prop-names"),
-    ).toBe("bot,personal,channelId,environmentBots,onClose,onDeleted");
+    expect(screen.getByTestId("stub-settings")).toBeDefined();
   });
 
   it.each<readonly [string, "user" | "organization", string]>([

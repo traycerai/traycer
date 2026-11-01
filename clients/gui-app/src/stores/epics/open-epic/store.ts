@@ -1185,17 +1185,6 @@ export function isProjectionPatch(
 }
 
 /**
- * Constructs a fresh per-Epic session.
- *
- * Responsibilities, all of them adapter-shaped:
- *   - Apply the supplied runtime's projection patches to this store
- *   - Map the runtime's `bindingEpoch` onto the React remount token
- *   - Feed the runtime the signed-in identity, and rebuild the owner-selected
- *     record slices when it changes
- *   - Persist only `lastFocusedArtifactId` + `lastFocusedThreadId` to
- *     localStorage under a key scoped to `epicId`
- */
-/**
  * The title the projection currently shows for a node on any of the three
  * record planes, `null` when none holds it. Read by the rename-in-flight
  * release to tell a rolled-back overlay from one still displayed.
@@ -1216,6 +1205,17 @@ function projectedNodeTitle(
   return null;
 }
 
+/**
+ * Constructs a fresh per-Epic session.
+ *
+ * Responsibilities, all of them adapter-shaped:
+ *   - Apply the supplied runtime's projection patches to this store
+ *   - Map the runtime's `bindingEpoch` onto the React remount token
+ *   - Feed the runtime the signed-in identity, and rebuild the owner-selected
+ *     record slices when it changes
+ *   - Persist only `lastFocusedArtifactId` + `lastFocusedThreadId` to
+ *     localStorage under a key scoped to `epicId`
+ */
 export function createOpenEpicStore(
   options: OpenEpicStoreOptions,
 ): OpenEpicStoreHandle {

@@ -60,7 +60,7 @@ import {
  * to the bell: the thread's store opening, its snapshot loading, the row
  * landing after the notification that named it.
  */
-export const HYDRATION_TIMEOUT_MS = 15_000;
+const HYDRATION_TIMEOUT_MS = 15_000;
 
 /**
  * Everything the queue reads while a session runs: its sources, and the
@@ -387,9 +387,9 @@ function VoiceReadMarker(props: {
 }
 
 /** How long `status` waits for the bot's readings before it says what it has. */
-export const STATUS_READ_TIMEOUT_MS = 4_000;
+const STATUS_READ_TIMEOUT_MS = 4_000;
 /** The usage window `status` reports, in days. */
-export const STATUS_COST_WINDOW_DAYS = 7;
+const STATUS_COST_WINDOW_DAYS = 7;
 
 /**
  * Gathers what `status` says about a bot, from the readings the app already

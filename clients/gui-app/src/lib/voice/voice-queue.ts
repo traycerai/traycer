@@ -187,7 +187,7 @@ export interface VoiceQueue {
 }
 
 /** How many references are hydrated at once. */
-export const MAX_CONCURRENT_HYDRATIONS = 4;
+const MAX_CONCURRENT_HYDRATIONS = 4;
 
 interface Entry {
   item: QueueItem;

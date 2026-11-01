@@ -323,12 +323,6 @@ async function confirmCreateAttachmentHashes(input: {
   return confirmed.byHash;
 }
 
-/**
- * Isolated subscriber for the live draft content. The editor rewrites content
- * on every keystroke; keeping that subscription here (rather than in
- * `NewConversationModalBody`) means only the attachment strip re-renders while
- * typing - the toolbar / workspace controls / editor wrapper stay put.
- */
 const NO_ANNOTATIONS: readonly never[] = [];
 
 /** A staged sandbox's create carries no sidecar, so a capture cannot ride it. */
@@ -395,6 +389,12 @@ function useHasSubmittableContent(
   return hasText || hasCards;
 }
 
+/**
+ * Isolated subscriber for the live draft content. The editor rewrites content
+ * on every keystroke; keeping that subscription here (rather than in
+ * `NewConversationModalBody`) means only the attachment strip re-renders while
+ * typing - the toolbar / workspace controls / editor wrapper stay put.
+ */
 function NewConversationModalAttachmentStrip(props: {
   readonly epicId: string;
   readonly hostId: string | null;

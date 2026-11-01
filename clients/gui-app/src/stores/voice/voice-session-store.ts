@@ -8,7 +8,7 @@ import type { SpeechActivity } from "@/lib/voice/scheduler";
  * voice session has no record in the product: the posts it makes and the
  * replies it reads are the channel's rows, and the only durable thing it
  * leaves is the server's billing row. Nothing here is persisted, and the
- * session's end forgets everything but the dormant answer.
+ * session's end clears its transient conversation state.
  */
 
 /**
@@ -462,7 +462,6 @@ export interface VoiceSessionState {
   /** The engine is being replaced under the same user session: a new generation only. */
   readonly engineReplacing: () => void;
   readonly sessionLive: (session: VoiceSessionRecord) => void;
-  readonly sessionEnding: () => void;
   /**
    * The session is over. Focus, segments, delegations, captions and the
    * pending action are forgotten; the availability and the driver stay.
@@ -593,7 +592,6 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => ({
     }),
   sessionLive: (session) =>
     set({ phase: "live", session, availability: "live", endReason: null }),
-  sessionEnding: () => set({ phase: "ending" }),
   sessionEnded: (reason) =>
     set({
       phase: "idle",
@@ -836,9 +834,4 @@ export function talkToggleAction(
     return "start";
   }
   return null;
-}
-
-/** Whether the session is live and drawn: the strip is on screen. */
-export function isVoiceSessionShown(state: VoiceSessionState): boolean {
-  return state.phase !== "idle" || state.endReason !== null;
 }

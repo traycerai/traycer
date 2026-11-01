@@ -5,7 +5,6 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  CREATURE_MARK_VERSION,
   type CreatureMark,
   type CreatureMarkSize,
   type CreatureSilhouette,
@@ -86,8 +85,7 @@ function syntheticBotIds(count: number): string[] {
   return ids;
 }
 
-// A change to any row here is a deliberate algorithm change, and it bumps
-// CREATURE_MARK_VERSION with it.
+// A change to any row here is a deliberate algorithm change.
 const PINNED: ReadonlyArray<{
   readonly botId: string;
   readonly silhouette: CreatureSilhouette;
@@ -121,8 +119,7 @@ const PINNED: ReadonlyArray<{
 ];
 
 describe("the generator", () => {
-  it("is version 1 and gives fixed ids their exact masks and silhouettes", () => {
-    expect(CREATURE_MARK_VERSION).toBe(1);
+  it("gives fixed ids their exact masks and silhouettes", () => {
     for (const pinned of PINNED) {
       expect(creatureMark(pinned.botId), pinned.botId).toEqual({
         rows: rowsFromStrings(pinned.rows),

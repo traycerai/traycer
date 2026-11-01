@@ -152,15 +152,11 @@ interface Wiring {
 }
 
 /**
- * The say loop with the real route check against {@link DIRECTORY}; the
- * model's answers are queued by hand, so two routes can be out at once.
+ * The say loop with the real route check against the given directory
+ * ({@link DIRECTORY} or one the test composed); the model's answers are
+ * queued by hand, so two routes can be out at once.
  */
-function build(wiring: Wiring) {
-  return buildFor(wiring, DIRECTORY);
-}
-
-/** {@link build} over a directory the test composed. */
-function buildFor(wiring: Wiring, directory: VoiceDirectory) {
+function build(wiring: Wiring, directory: VoiceDirectory) {
   const sends: VoiceFocus[] = [];
   const requests: RouteRequest[] = [];
   const notices: string[] = [];
@@ -247,7 +243,7 @@ beforeEach(() => {
 
 describe("a post bound to the focus while a later request navigates", () => {
   it("is never sent to where the voice moved: it is dropped, said, and its words are spent", async () => {
-    const h = build({ recheckHolds: true, canSend: true });
+    const h = build({ recheckHolds: true, canSend: true }, DIRECTORY);
     const first = heldAnswer();
     h.answers.push(first.answer);
     h.answers.push(() => Promise.resolve(route("navigate", CI, PERSONAL, 2)));
@@ -269,7 +265,7 @@ describe("a post bound to the focus while a later request navigates", () => {
 
   it("waiting for its channel, is dropped when the voice navigates elsewhere", async () => {
     const wiring: Wiring = { recheckHolds: true, canSend: false };
-    const h = build(wiring);
+    const h = build(wiring, DIRECTORY);
     h.answers.push(() => Promise.resolve(route("post", null, null, 2)));
     h.answers.push(() => Promise.resolve(route("navigate", CI, PERSONAL, 2)));
 
@@ -293,7 +289,7 @@ describe("a confirmation", () => {
   ])(
     "for %s takes no yes said before its question was heard, and posts on one said after",
     async (_name, result) => {
-      const h = build({ recheckHolds: true, canSend: true });
+      const h = build({ recheckHolds: true, canSend: true }, DIRECTORY);
       h.answers.push(() => Promise.resolve(result));
 
       speak("hello", " there bot");
@@ -322,7 +318,7 @@ describe("a confirmation", () => {
   );
 
   it("is the only one: a second route needing one while it waits is dropped and said, and the yes answers the first", async () => {
-    const h = build({ recheckHolds: true, canSend: true });
+    const h = build({ recheckHolds: true, canSend: true }, DIRECTORY);
     const first = heldAnswer();
     const second = heldAnswer();
     h.answers.push(first.answer, second.answer);
@@ -355,7 +351,7 @@ describe("a confirmation", () => {
 describe("a post that waited for its focus", () => {
   it("is checked again when it resumes, and refused when its target stopped holding", async () => {
     const wiring: Wiring = { recheckHolds: true, canSend: false };
-    const h = build(wiring);
+    const h = build(wiring, DIRECTORY);
     h.answers.push(() => Promise.resolve(route("post", null, null, 2)));
 
     speak("hello", " tracy");
@@ -374,7 +370,7 @@ describe("a post that waited for its focus", () => {
 
 describe("a confirmation whose answer never closes an utterance", () => {
   it("is not answered by the next request: the held post is dropped and said, and the request routes on its own", async () => {
-    const h = build({ recheckHolds: true, canSend: true });
+    const h = build({ recheckHolds: true, canSend: true }, DIRECTORY);
     h.answers.push(() =>
       Promise.resolve(uncertainly(route("post", CI, PERSONAL, 2))),
     );
@@ -400,7 +396,7 @@ describe("a confirmation whose answer never closes an utterance", () => {
   });
 
   it("is dropped and said once the answer window after the heard question runs out", async () => {
-    const h = build({ recheckHolds: true, canSend: true });
+    const h = build({ recheckHolds: true, canSend: true }, DIRECTORY);
     h.answers.push(() =>
       Promise.resolve(uncertainly(route("post", CI, PERSONAL, 2))),
     );
@@ -423,7 +419,7 @@ describe("a confirmation whose answer never closes an utterance", () => {
   });
 
   it("answered in time, cancels the window", async () => {
-    const h = build({ recheckHolds: true, canSend: true });
+    const h = build({ recheckHolds: true, canSend: true }, DIRECTORY);
     h.answers.push(() =>
       Promise.resolve(uncertainly(route("post", CI, PERSONAL, 2))),
     );
@@ -534,7 +530,7 @@ describe("a routed verb on the queue", () => {
 
   it("reads the item it names, under the request's delegation, and posts nothing", async () => {
     const { enqueued, directory } = withWaitingItem("briefed", null);
-    const h = buildFor({ recheckHolds: true, canSend: true }, directory);
+    const h = build({ recheckHolds: true, canSend: true }, directory);
     h.answers.push(() => Promise.resolve(readOf("r-1")));
 
     speak("read", " it");
@@ -550,7 +546,7 @@ describe("a routed verb on the queue", () => {
 
   it("does not read an item the person set aside while the route was being made", async () => {
     const { queue, enqueued, directory } = withWaitingItem("briefed", null);
-    const h = buildFor({ recheckHolds: true, canSend: true }, directory);
+    const h = build({ recheckHolds: true, canSend: true }, directory);
     const held = heldAnswer();
     h.answers.push(held.answer);
 
@@ -568,7 +564,7 @@ describe("a routed verb on the queue", () => {
 
   it("does not set aside an item that was heard while the route was being made", async () => {
     const { queue, enqueued, directory } = withWaitingItem("briefed", null);
-    const h = buildFor({ recheckHolds: true, canSend: true }, directory);
+    const h = build({ recheckHolds: true, canSend: true }, directory);
     const held = heldAnswer();
     h.answers.push(held.answer);
 
@@ -592,7 +588,7 @@ describe("a routed verb on the queue", () => {
     );
     const offers = enqueued.filter((item) => item.text.endsWith("Want it?"));
     expect(offers).toHaveLength(1);
-    const h = buildFor({ recheckHolds: true, canSend: true }, directory);
+    const h = build({ recheckHolds: true, canSend: true }, directory);
     h.answers.push(() =>
       Promise.resolve({
         ...route("switch", null, null, 2),
@@ -671,7 +667,7 @@ describe("a routed verb on the queue", () => {
 
     it("reads the bot's reply of another thread when the route names only the bot", async () => {
       const { enqueued, directory } = directoryOfThreadB();
-      const h = buildFor({ recheckHolds: true, canSend: true }, directory);
+      const h = build({ recheckHolds: true, canSend: true }, directory);
       h.answers.push(() => Promise.resolve(readNaming(null)));
 
       speak("read", " ci");
@@ -689,7 +685,7 @@ describe("a routed verb on the queue", () => {
         item.text.endsWith("Want it?"),
       );
       expect(offers).toHaveLength(1);
-      const h = buildFor(
+      const h = build(
         { recheckHolds: true, canSend: true },
         focusedOnThreadA(live.queue),
       );
@@ -721,7 +717,7 @@ describe("a routed verb on the queue", () => {
 
     it("says that nothing is waiting when the route names the thread, which has none", async () => {
       const { enqueued, directory } = directoryOfThreadB();
-      const h = buildFor({ recheckHolds: true, canSend: true }, directory);
+      const h = build({ recheckHolds: true, canSend: true }, directory);
       h.answers.push(() => Promise.resolve(readNaming("thread-a")));
 
       speak("read", " thread a");
@@ -735,7 +731,7 @@ describe("a routed verb on the queue", () => {
 
   it("says that nothing is waiting, under the request's delegation, when there is nothing to read", async () => {
     const { enqueued } = liveQueue();
-    const h = build({ recheckHolds: true, canSend: true });
+    const h = build({ recheckHolds: true, canSend: true }, DIRECTORY);
     h.answers.push(() => Promise.resolve(readOf(null)));
 
     speak("read", " it");
@@ -774,7 +770,7 @@ describe("the active card", () => {
 
   it("takes the words it handles: they are never routed, posted or kept", async () => {
     const driver = installDriver("handled");
-    const h = build({ recheckHolds: true, canSend: true });
+    const h = build({ recheckHolds: true, canSend: true }, DIRECTORY);
 
     speak("the second", " one");
     await h.loop.onDelegationCreated("d-1");
@@ -791,7 +787,7 @@ describe("the active card", () => {
 
   it("routes the words it does not take with the card in view, and a post then drops the candidate", async () => {
     const driver = installDriver("route");
-    const h = build({ recheckHolds: true, canSend: true });
+    const h = build({ recheckHolds: true, canSend: true }, DIRECTORY);
     h.answers.push(() => Promise.resolve(route("post", null, null, 2)));
 
     speak("tell", " tracy hello");
@@ -808,7 +804,7 @@ describe("the active card", () => {
 
   it("keeps the candidate when the words routed were an unfinished request", async () => {
     const driver = installDriver("route");
-    const h = build({ recheckHolds: true, canSend: true });
+    const h = build({ recheckHolds: true, canSend: true }, DIRECTORY);
     h.answers.push(() => Promise.resolve(route("fragment", null, null, 2)));
 
     speak("tell", " tracy");
@@ -820,7 +816,7 @@ describe("the active card", () => {
 
   it("hands the router's answer to the card, with its choice and words, and posts nothing", async () => {
     const driver = installDriver("route");
-    const h = build({ recheckHolds: true, canSend: true });
+    const h = build({ recheckHolds: true, canSend: true }, DIRECTORY);
     h.answers.push(() =>
       Promise.resolve({ ...route("answer", null, null, 2), choice: 1 }),
     );
@@ -850,7 +846,7 @@ describe("the active card", () => {
         vi.mocked(driver.answerRouted).mockReturnValue(false);
         vi.mocked(driver.awaitsAnswer).mockReturnValue(false);
       }
-      const h = build({ recheckHolds: true, canSend: true });
+      const h = build({ recheckHolds: true, canSend: true }, DIRECTORY);
       h.answers.push(() => Promise.resolve(route("answer", null, null, 2)));
 
       speak("the", " second one");
@@ -869,7 +865,7 @@ describe("the active card", () => {
   it("leaves a card that waits for nothing out of the words' route", async () => {
     const driver = installDriver("route");
     vi.mocked(driver.awaitsAnswer).mockReturnValue(false);
-    const h = build({ recheckHolds: true, canSend: true });
+    const h = build({ recheckHolds: true, canSend: true }, DIRECTORY);
     h.answers.push(() => Promise.resolve(route("post", null, null, 2)));
 
     speak("tell", " tracy hello");
@@ -965,7 +961,7 @@ describe("the card desk behind the say loop", () => {
   it("never posts an approval said before the list was heard, and shows the router the card for other words", async () => {
     const desk = installDesk();
     desk.show("a");
-    const h = build({ recheckHolds: true, canSend: true });
+    const h = build({ recheckHolds: true, canSend: true }, DIRECTORY);
     h.answers.push(() => Promise.resolve(route("post", null, null, 1)));
 
     speak("approve");
@@ -992,7 +988,7 @@ describe("the card desk behind the say loop", () => {
       const desk = installDesk();
       desk.show("a");
       if (heardFirst) await desk.heard();
-      const h = build({ recheckHolds: true, canSend: true });
+      const h = build({ recheckHolds: true, canSend: true }, DIRECTORY);
       const out = heldAnswer();
       h.answers.push(out.answer);
       speak("please permit that operation");
@@ -1037,7 +1033,7 @@ describe("the card desk behind the say loop", () => {
       const desk = installDesk();
       desk.show("a");
       await desk.heard();
-      const h = build({ recheckHolds: true, canSend: true });
+      const h = build({ recheckHolds: true, canSend: true }, DIRECTORY);
       const out = heldAnswer();
       h.answers.push(out.answer);
       const routeRequest = (): Promise<void> => {
@@ -1097,7 +1093,7 @@ describe("the card desk behind the say loop", () => {
       const desk = installDesk();
       desk.show("a");
       await desk.heard();
-      const h = build({ recheckHolds: true, canSend: true });
+      const h = build({ recheckHolds: true, canSend: true }, DIRECTORY);
       if (chooseExactlyFirst) {
         speak("approve");
         await h.loop.onDelegationCreated("choose");
@@ -1166,7 +1162,7 @@ describe("the card desk behind the say loop", () => {
       const desk = installDesk();
       desk.show("a");
       await desk.heard();
-      const h = build({ recheckHolds: true, canSend: true });
+      const h = build({ recheckHolds: true, canSend: true }, DIRECTORY);
       const out = heldAnswer();
       h.answers.push(out.answer);
       speak("please permit that operation");

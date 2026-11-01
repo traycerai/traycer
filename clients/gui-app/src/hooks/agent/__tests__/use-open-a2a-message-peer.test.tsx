@@ -47,10 +47,6 @@ vi.mock("@/lib/tab-navigation", async (importOriginal) => {
   };
 });
 
-function renderOpenPeer() {
-  return renderHook(() => useOpenA2AMessagePeer());
-}
-
 function peer(overrides: Partial<AgentMessagePeer>): AgentMessagePeer {
   return {
     epicId: "epic-current",
@@ -84,7 +80,7 @@ describe("useOpenA2AMessagePeer", () => {
   });
 
   it("opens a same-task peer through the current task's tile navigation only", () => {
-    const { result } = renderOpenPeer();
+    const { result } = renderHook(() => useOpenA2AMessagePeer());
 
     result.current(peer({}), "Agent One");
 
@@ -96,7 +92,7 @@ describe("useOpenA2AMessagePeer", () => {
   });
 
   it("activates the OTHER task at the top level with the tile prepared, and does not also open a tile here", () => {
-    const { result } = renderOpenPeer();
+    const { result } = renderHook(() => useOpenA2AMessagePeer());
 
     result.current(
       peer({ epicId: "epic-2", hostId: "host-2", agentId: "agent-2" }),
@@ -128,7 +124,7 @@ describe("useOpenA2AMessagePeer", () => {
   });
 
   it("prepares a terminal-agent tile for a cross-task TUI peer", () => {
-    const { result } = renderOpenPeer();
+    const { result } = renderHook(() => useOpenA2AMessagePeer());
 
     result.current(
       peer({ epicId: "epic-2", hostId: "host-2", surface: "tui" }),
@@ -144,7 +140,7 @@ describe("useOpenA2AMessagePeer", () => {
   });
 
   it("opens a bot peer's channel on the window host with the sending session as the landing, and opens no tile or task tab", () => {
-    const { result } = renderOpenPeer();
+    const { result } = renderHook(() => useOpenA2AMessagePeer());
 
     result.current(
       peer({

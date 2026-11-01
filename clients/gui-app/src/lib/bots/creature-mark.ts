@@ -12,11 +12,8 @@
  * the grid: none, ears above the top corners, feet below the bottom corners,
  * or a crest above the centre.
  *
- * A change to anything that moves a bot's creature bumps
- * {@link CREATURE_MARK_VERSION}; the tests pin fixed ids to their masks.
+ * The tests pin fixed ids to their masks so a bot keeps its creature.
  */
-export const CREATURE_MARK_VERSION = 1;
-
 export type CreatureSilhouette = "none" | "ears" | "feet" | "crest";
 
 export interface CreatureMark {
