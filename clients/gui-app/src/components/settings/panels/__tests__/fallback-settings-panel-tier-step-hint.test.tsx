@@ -46,6 +46,7 @@ vi.mock("@/hooks/providers/use-fallback-policy-pattern-lines", () => ({
 }));
 
 const LAST_RUN: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-fable-5-1[1m]",
   permissionMode: "supervised",
@@ -289,6 +290,7 @@ describe("TierStepHint - Pin 11: the catalog changes whether a same-harness patt
   // cases pin that `TierStepHint` now passes `catalog.catalogFor(harnessId)`
   // (fallback-settings-panel.tsx) instead of the old hard-coded `null`.
   const LAST_RUN_CODEX: ChatRunSettings = {
+    ultracode: false,
     harnessId: "codex",
     model: "gpt-6-astra",
     permissionMode: "supervised",
@@ -473,6 +475,7 @@ describe("TierStepHint - R4: a get@1.0 host reads tier rows as family words", ()
 
   function runSettings(harnessId: HarnessId, model: string): ChatRunSettings {
     return {
+      ultracode: false,
       harnessId,
       model,
       permissionMode: "supervised",

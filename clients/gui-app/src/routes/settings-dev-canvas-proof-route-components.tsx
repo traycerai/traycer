@@ -38,6 +38,7 @@ function CanvasProof({ hostId }: { readonly hostId: string }) {
                     epicId={CANVAS_PROOF_EPIC_ID}
                     artifactId={fixture.artifact.id}
                     artifactTitle={fixture.artifact.title}
+                    artifactType="canvas"
                     hostId={hostId}
                     viewTabId={CANVAS_PROOF_VIEW_TAB_ID}
                   >

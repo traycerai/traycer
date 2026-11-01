@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { useBotColumnLayoutStore } from "@/stores/bots/bot-column-layout-store";
 import { useBotPaneWidthsStore } from "@/stores/bots/bot-pane-widths-store";
 import { useCommandPaletteStore } from "@/stores/command-palette/command-palette-store";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
@@ -216,6 +217,11 @@ const STORE_PERSIST_NAME_CASES: ReadonlyArray<
     "useBotPaneWidthsStore",
     useBotPaneWidthsStore,
     "traycer-gui-app:bot-pane-widths",
+  ],
+  [
+    "useBotColumnLayoutStore",
+    useBotColumnLayoutStore,
+    "traycer-gui-app:bot-column-layout",
   ],
 ];
 

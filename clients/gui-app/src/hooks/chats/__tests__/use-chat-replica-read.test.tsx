@@ -14,7 +14,7 @@ import { useChatReplicaRead } from "@/hooks/chats/use-chat-replica-read";
 
 /**
  * `epic.chatReplicaRead` is optional (`degrade: { kind: "unsupported" }`
- * in the registry), so a host built before ticket 34A has never heard of it.
+ * in the registry), so an older host has never heard of it.
  * TanStack still surfaces the rejection on `.error` - this hook does not (and
  * should not) swallow that - but two things must hold for the tile's "no
  * data means no replica" reading to be safe: `.data` stays `undefined` on

@@ -67,7 +67,7 @@ export function PositionHostRow(props: {
   );
 }
 
-/** Which edge of the transcript and artifact the minimap sits on (C9). */
+/** Which edge of the transcript and artifact the minimap sits on. */
 export function PositionSideRow(props: {
   readonly regionId: RegionId;
   readonly arrangement: LayoutArrangement;

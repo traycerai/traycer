@@ -619,15 +619,15 @@ const ID_LIST_SEPARATOR = "\u0000";
 const ID_GROUP_SEPARATOR = "\u0001";
 const ID_GROUP_LIST_SEPARATOR = "\u0002";
 
-/** Byte-order ascending, so every derived id list is stable frame to frame and
- * the indicator slice always covers the same epics. Joined on a NUL, which no
- * id can carry. */
 /** `joinIds` for an already-ordered list, whose order is the caller's answer
  * rather than something to re-sort. */
 function joinList(ids: ReadonlyArray<string>): string {
   return ids.join(ID_LIST_SEPARATOR);
 }
 
+/** Byte-order ascending, so every derived id list is stable frame to frame and
+ * the indicator slice always covers the same epics. Joined on a NUL, which no
+ * id can carry. */
 function joinIds(ids: ReadonlySet<string>): string {
   return Array.from(ids).sort(compareAscending).join(ID_LIST_SEPARATOR);
 }

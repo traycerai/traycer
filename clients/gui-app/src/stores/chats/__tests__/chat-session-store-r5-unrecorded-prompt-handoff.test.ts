@@ -14,8 +14,8 @@
  *
  * Nothing is mocked on the destination side: the handoff's last step is a
  * synchronous `installLandingDraft`, so the REAL landing draft store is both
- * the observation surface and the durability proof. That is the whole point of
- * R5F1 - a document that merely "looks right" to a mock can still be one the
+ * the observation surface and the durability proof: a document that merely
+ * "looks right" to a mock can still be one the
  * real destination refuses, and here there is no gap between the two.
  */
 import {
@@ -102,6 +102,7 @@ const OWNER_ID = "owner-r5";
 const HOST_ID = "host-r5";
 
 const SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "codex",
   model: "gpt-5-codex",
   permissionMode: "supervised",
@@ -226,7 +227,7 @@ function createIdleChatHandle(
 function emitOwnerSnapshot(callbacks: ChatStreamCallbacks): void {
   const epicId = EPIC_ID;
   const chatId = CHAT_ID;
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   const chat: Chat = {
     id: chatId,
     parentId: null,
@@ -1005,8 +1006,8 @@ describe("R5F2: the four-state x cap matrix (each state protects the session, an
       // 5 s deadline fires immediately against an image read that completes in
       // microtasks. Which one wins differs between otherwise identical states.
       //
-      // Not "a harness artefact" - that framing was too categorical and the
-      // reviewer disproved it with a real-timer probe: with the bytes local,
+      // Not "a harness artefact" - that framing was too categorical and a
+      // real-timer probe disproved it: with the bytes local,
       // an event-loop stall long enough to outlast the deadline still drops
       // the image. That is the fallback behaving as designed - the words are
       // what the deadline protects - but it is production behaviour, not a

@@ -14,7 +14,7 @@ import { fixture, nextFrames, wheelsDelivered } from "./support/fixtures";
  * while the reader follows, wheels, drags the scrollbar, clicks a card or
  * resizes the window. Each scenario stops any stream and asks the model's
  * at-rest questions after every step (`expectAtRest`); a failure carries the
- * frame timeline. The F2 cells at the bottom are the stream-wheel
+ * frame timeline. The cells at the bottom are the stream-wheel
  * counterexample of `formal/ChatScroll.tla`: a wheel superseding a pending
  * end correction must not write the pre-wheel scrollTop back.
  */
@@ -557,7 +557,7 @@ for (const line of ["legacy", "windowed"] as const) {
       });
     });
 
-    // ---- F2: wheel superseding a pending end correction while streaming ----
+    // ---- wheel superseding a pending end correction while streaming ----
 
     interface Sample extends ReaderView {
       readonly t: number;

@@ -20,6 +20,30 @@ import {
   type SandboxVerbFetchResult,
   type TraycerModelsFetchResult,
 } from "../sandbox-control";
+import type {
+  SlackAppInstallUrlResult,
+  SlackAppManifestResult,
+  SlackAppReadResult,
+  SlackAppWriteResult,
+} from "../slack-app";
+import {
+  SLACK_APP_REFUSAL_APP_NOT_FOUND,
+  SLACK_APP_REFUSAL_APP_TAKEN,
+  type SlackAppRegisterRequest,
+  type SlackAppView,
+} from "@traycer/protocol/host/slack-app";
+import {
+  voiceSessionsAvailabilityViaHttp,
+  voiceSessionsEndViaHttp,
+  voiceSessionsMintViaHttp,
+  type VoiceAvailabilityFetchResult,
+  type VoiceSessionEndFetchResult,
+  type VoiceSessionIndicator,
+  type VoiceSessionMintFetchResult,
+  type VoiceSessionMintRequest,
+  type VoiceTrayAction,
+} from "../voice-sessions";
+import { voiceRouteViaHttp, type VoiceRouteFetchResult } from "../voice-router";
 import {
   decideSecretRequestViaHttp,
   fetchEnvironmentProvidersViaHttp,
@@ -69,6 +93,7 @@ import type {
   RegisteredHostsChange,
   StoredAuthTokens,
   SystemResumeEvent,
+  SystemSuspendCause,
   StoredCredentials,
   StoredCredentialsIdentity,
   TokenRotateResult,
@@ -177,6 +202,14 @@ export interface MockRunnerHostOptions {
 }
 
 const MOCK_TOKEN_STORE_KEY = "traycer.token";
+/**
+ * The mock's own stand-in for Slack's consent page: opening a URL under it
+ * through `openExternalLink` completes the install, as a person's consent
+ * would. Nothing is opened.
+ */
+const MOCK_SLACK_INSTALL_URL = "https://slack.mock.invalid/oauth/v2/authorize";
+/** The server's install-state life (`SLACK_INSTALL_STATE_TTL_MS`). */
+const MOCK_SLACK_INSTALL_TTL_MS = 600_000;
 const STEP_UP_EXPIRY_SKEW_MS = 5_000;
 
 interface RetainedStepUpCredential {
@@ -219,6 +252,11 @@ export class MockRunnerHost implements IRunnerHost {
   // images, so image-copy affordances render by default in tests.
   readonly canCopyImages: boolean = true;
   readonly openedExternalLinks: string[] = [];
+  private readonly slackApps = new Map<string, SlackAppView>();
+  private readonly slackInstallStates = new Map<
+    string,
+    { readonly state: string; readonly expiresAt: number }
+  >();
   readonly notificationsSent: Array<{
     readonly title: string;
     readonly body: string;
@@ -261,6 +299,9 @@ export class MockRunnerHost implements IRunnerHost {
     (event: SystemResumeEvent) => void
   >();
   private readonly networkPathChangedHandlers = new Set<() => void>();
+  private readonly systemSuspendedHandlers = new Set<
+    (cause: SystemSuspendCause) => void
+  >();
   private localHostUnresponsive: LocalHostUnresponsive | null = null;
   private readonly localHostUnresponsiveHandlers = new Set<
     (state: LocalHostUnresponsive | null) => void
@@ -662,6 +703,72 @@ export class MockRunnerHost implements IRunnerHost {
     return fetchTraycerModelsViaHttp(this.serverBaseUrl, bearerToken, null);
   }
 
+  getVoiceAvailability(
+    bearerToken: string,
+  ): Promise<VoiceAvailabilityFetchResult> {
+    return voiceSessionsAvailabilityViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+    );
+  }
+
+  mintVoiceSession(
+    bearerToken: string,
+    request: VoiceSessionMintRequest,
+  ): Promise<VoiceSessionMintFetchResult> {
+    return voiceSessionsMintViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      request,
+    );
+  }
+
+  endVoiceSession(
+    bearerToken: string,
+    voiceSessionId: string,
+  ): Promise<VoiceSessionEndFetchResult> {
+    return voiceSessionsEndViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      voiceSessionId,
+    );
+  }
+
+  routeVoiceUtterance(
+    bearerToken: string,
+    requestBody: string,
+  ): Promise<VoiceRouteFetchResult> {
+    return voiceRouteViaHttp(
+      this.serverBaseUrl,
+      bearerToken,
+      null,
+      requestBody,
+    );
+  }
+
+  /** The last value a window reported, for a test to read back. */
+  voiceSessionLive = false;
+
+  setVoiceSessionLive(live: boolean): Promise<void> {
+    this.voiceSessionLive = live;
+    return Promise.resolve();
+  }
+
+  setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void> {
+    // No shell item to show it.
+    void indicator;
+    return Promise.resolve();
+  }
+
+  onVoiceTrayAction(handler: (action: VoiceTrayAction) => void): Disposable {
+    // No shell item, so no action ever comes from one.
+    void handler;
+    return { dispose: () => undefined };
+  }
+
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -746,6 +853,131 @@ export class MockRunnerHost implements IRunnerHost {
     );
   }
 
+  // A bot's Slack app, in memory: one app per bot, walked through the
+  // server's three install states without a server or a Slack.
+  async readSlackApp(
+    _bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppReadResult> {
+    return { kind: "ok", app: this.slackApps.get(botId) ?? null };
+  }
+
+  async getSlackAppManifest(
+    _bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppManifestResult> {
+    const manifest = {
+      display_information: { name: "Mock bot" },
+      oauth_config: {
+        redirect_urls: ["https://server.test.invalid/api/slack/oauth/callback"],
+      },
+      settings: {
+        event_subscriptions: {
+          request_url: `https://server.test.invalid/api/slack/events/${botId}`,
+        },
+      },
+    };
+    return { kind: "ok", manifest: JSON.stringify(manifest, null, 2) };
+  }
+
+  async registerSlackApp(
+    _bearerToken: string,
+    request: SlackAppRegisterRequest,
+  ): Promise<SlackAppWriteResult> {
+    for (const app of this.slackApps.values()) {
+      if (app.appId === request.appId && app.botId !== request.botId) {
+        return {
+          kind: "refused",
+          status: 409,
+          code: SLACK_APP_REFUSAL_APP_TAKEN,
+        };
+      }
+    }
+    // A new registration replaces the old one and its install.
+    const app: SlackAppView = {
+      botId: request.botId,
+      appId: request.appId,
+      clientId: request.clientId,
+      installState: "registered",
+      teamId: null,
+      teamName: null,
+      botUserId: null,
+      installedAt: null,
+    };
+    this.slackApps.set(request.botId, app);
+    this.slackInstallStates.delete(request.botId);
+    return { kind: "ok", app };
+  }
+
+  async mintSlackAppInstallUrl(
+    _bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppInstallUrlResult> {
+    if (!this.slackApps.has(botId)) {
+      return {
+        kind: "refused",
+        status: 404,
+        code: SLACK_APP_REFUSAL_APP_NOT_FOUND,
+      };
+    }
+    const expiresAt = Date.now() + MOCK_SLACK_INSTALL_TTL_MS;
+    // Minting another retires the previous one, as the server's does.
+    const state = `${botId}.${expiresAt}`;
+    this.slackInstallStates.set(botId, { state, expiresAt });
+    const url = new URL(MOCK_SLACK_INSTALL_URL);
+    url.searchParams.set("state", state);
+    return { kind: "ok", url: url.toString(), expiresAt };
+  }
+
+  async disconnectSlackApp(
+    _bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppWriteResult> {
+    const app = this.slackApps.get(botId);
+    if (app === undefined) {
+      return {
+        kind: "refused",
+        status: 404,
+        code: SLACK_APP_REFUSAL_APP_NOT_FOUND,
+      };
+    }
+    const next: SlackAppView =
+      app.installState === "installed"
+        ? { ...app, installState: "uninstalled" }
+        : app;
+    this.slackApps.set(botId, next);
+    return { kind: "ok", app: next };
+  }
+
+  /** Test/dev hook: Slack removed the bot's app (`app_uninstalled`). */
+  uninstallSlackAppInSlack(botId: string): void {
+    const app = this.slackApps.get(botId);
+    if (app?.installState === "installed") {
+      this.slackApps.set(botId, { ...app, installState: "uninstalled" });
+    }
+  }
+
+  /** A person's consent on the mock's install page: the bot's app is installed. */
+  private consentToMockSlackInstall(url: string): void {
+    if (!url.startsWith(`${MOCK_SLACK_INSTALL_URL}?`)) return;
+    const state = new URL(url).searchParams.get("state");
+    for (const [botId, pending] of this.slackInstallStates) {
+      if (pending.state !== state) continue;
+      this.slackInstallStates.delete(botId);
+      const app = this.slackApps.get(botId);
+      if (app === undefined || pending.expiresAt <= Date.now()) return;
+      this.slackApps.set(botId, {
+        ...app,
+        installState: "installed",
+        teamId: "T0MOCK",
+        teamName: "Mock workspace",
+        botUserId: "U0MOCK",
+        installedAt: Date.now(),
+      });
+      return;
+    }
+  }
+
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -805,6 +1037,7 @@ export class MockRunnerHost implements IRunnerHost {
 
   async openExternalLink(url: string): Promise<void> {
     this.openedExternalLinks.push(url);
+    this.consentToMockSlackInstall(url);
   }
 
   async getRegisteredUrlSchemes(
@@ -1148,6 +1381,15 @@ export class MockRunnerHost implements IRunnerHost {
     };
   }
 
+  onSystemSuspended(handler: (cause: SystemSuspendCause) => void): Disposable {
+    this.systemSuspendedHandlers.add(handler);
+    return {
+      dispose: () => {
+        this.systemSuspendedHandlers.delete(handler);
+      },
+    };
+  }
+
   onNetworkPathChanged(handler: () => void): Disposable {
     this.networkPathChangedHandlers.add(handler);
     return {
@@ -1190,6 +1432,13 @@ export class MockRunnerHost implements IRunnerHost {
   emitSystemResumed(event: SystemResumeEvent): void {
     for (const handler of this.systemResumedHandlers) {
       handler(event);
+    }
+  }
+
+  /** Test helper: fire the suspend signal to every `onSystemSuspended` subscriber. */
+  emitSystemSuspended(cause: SystemSuspendCause): void {
+    for (const handler of this.systemSuspendedHandlers) {
+      handler(cause);
     }
   }
 

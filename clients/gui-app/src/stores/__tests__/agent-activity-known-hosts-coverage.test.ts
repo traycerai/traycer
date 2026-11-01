@@ -8,7 +8,7 @@ import {
 } from "@/stores/agent-activity-store";
 
 /**
- * `selectKnownHostsActivityCoverage` (F8 round 2): `AgentActivityCoverage`
+ * `selectKnownHostsActivityCoverage`: `AgentActivityCoverage`
  * for something whose agents may be on ANY of the account's machines - a
  * task, or the account as a whole - given the directory's settled host list.
  * Distinct from `selectAgentActivityCoverage`, which answers for ONE named

@@ -68,6 +68,7 @@ import type {
   MigrationRunningSnapshot,
   RegisteredHostsChange,
   SystemResumeEvent,
+  SystemSuspendCause,
   TrayEpic,
   TrayIndicatorState,
   TraycerHostStatusSnapshot,
@@ -154,12 +155,28 @@ import type {
   SandboxVerbFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-control";
 import type {
+  VoiceAvailabilityFetchResult,
+  VoiceSessionEndFetchResult,
+  VoiceSessionIndicator,
+  VoiceSessionMintFetchResult,
+  VoiceSessionMintRequest,
+  VoiceTrayAction,
+} from "@traycer-clients/shared/host-client/voice-sessions";
+import type { VoiceRouteFetchResult } from "@traycer-clients/shared/host-client/voice-router";
+import type {
   EnvironmentProvidersFetchResult,
   SandboxGrantsFetchResult,
   TeamEnvironmentFetchResult,
   SecretRequestDecideFetchResult,
 } from "@traycer-clients/shared/host-client/sandbox-secrets";
 import type { SecretRequestDecision } from "@traycer/protocol/host/sandbox-secrets";
+import type {
+  SlackAppInstallUrlResult,
+  SlackAppManifestResult,
+  SlackAppReadResult,
+  SlackAppWriteResult,
+} from "@traycer-clients/shared/host-client/slack-app";
+import type { SlackAppRegisterRequest } from "@traycer/protocol/host/slack-app";
 import type { ExecutableWriteGrantFetchResult } from "@traycer-clients/shared/host-client/executable-write-grant";
 import type {
   SandboxAutomationOpenTarget,
@@ -238,6 +255,24 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
   ): Promise<SandboxCatalogueFetchResult>;
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult>;
+  getVoiceAvailability(
+    bearerToken: string,
+  ): Promise<VoiceAvailabilityFetchResult>;
+  mintVoiceSession(
+    bearerToken: string,
+    request: VoiceSessionMintRequest,
+  ): Promise<VoiceSessionMintFetchResult>;
+  endVoiceSession(
+    bearerToken: string,
+    voiceSessionId: string,
+  ): Promise<VoiceSessionEndFetchResult>;
+  // The voice router's model call, opaque JSON in and out.
+  routeVoiceUtterance(
+    bearerToken: string,
+    requestBody: string,
+  ): Promise<VoiceRouteFetchResult>;
+  setVoiceSessionLive(live: boolean): Promise<void>;
+  setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void>;
   createSandbox(
     bearerToken: string,
     request: SandboxCreateRequest,
@@ -271,6 +306,23 @@ export interface DesktopPreloadBridge {
     bearerToken: string,
     target: SandboxAutomationOpenTarget | null,
   ): Promise<SandboxAutomationOpenFetchResult>;
+  readSlackApp(bearerToken: string, botId: string): Promise<SlackAppReadResult>;
+  getSlackAppManifest(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppManifestResult>;
+  registerSlackApp(
+    bearerToken: string,
+    request: SlackAppRegisterRequest,
+  ): Promise<SlackAppWriteResult>;
+  mintSlackAppInstallUrl(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppInstallUrlResult>;
+  disconnectSlackApp(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppWriteResult>;
   getSandboxGrants(
     bearerToken: string,
     environmentId: string | null,
@@ -360,6 +412,10 @@ export interface DesktopPreloadBridge {
     handler: (state: LocalHostUnresponsive | null) => void,
   ): { dispose: () => void };
   onSystemResumed(handler: () => void): { dispose: () => void };
+  onSystemSuspended(handler: () => void): { dispose: () => void };
+  onVoiceTrayAction(handler: (action: VoiceTrayAction) => void): {
+    dispose: () => void;
+  };
   requestHostRespawn(): Promise<HostRestartRequestResult>;
   forceRestartUnresponsiveHost(
     offer: LocalHostUnresponsiveOffer,
@@ -1236,6 +1292,41 @@ export class DesktopRunnerHost implements IRunnerHost {
     return this.bridge.getSandboxCatalogue(bearerToken);
   }
 
+  getVoiceAvailability(
+    bearerToken: string,
+  ): Promise<VoiceAvailabilityFetchResult> {
+    return this.bridge.getVoiceAvailability(bearerToken);
+  }
+
+  mintVoiceSession(
+    bearerToken: string,
+    request: VoiceSessionMintRequest,
+  ): Promise<VoiceSessionMintFetchResult> {
+    return this.bridge.mintVoiceSession(bearerToken, request);
+  }
+
+  endVoiceSession(
+    bearerToken: string,
+    voiceSessionId: string,
+  ): Promise<VoiceSessionEndFetchResult> {
+    return this.bridge.endVoiceSession(bearerToken, voiceSessionId);
+  }
+
+  routeVoiceUtterance(
+    bearerToken: string,
+    requestBody: string,
+  ): Promise<VoiceRouteFetchResult> {
+    return this.bridge.routeVoiceUtterance(bearerToken, requestBody);
+  }
+
+  setVoiceSessionLive(live: boolean): Promise<void> {
+    return this.bridge.setVoiceSessionLive(live);
+  }
+
+  setVoiceSessionIndicator(indicator: VoiceSessionIndicator): Promise<void> {
+    return this.bridge.setVoiceSessionIndicator(indicator);
+  }
+
   getTraycerModels(bearerToken: string): Promise<TraycerModelsFetchResult> {
     return this.bridge.getTraycerModels(bearerToken);
   }
@@ -1298,6 +1389,41 @@ export class DesktopRunnerHost implements IRunnerHost {
     target: SandboxAutomationOpenTarget | null,
   ): Promise<SandboxAutomationOpenFetchResult> {
     return this.bridge.openSandboxAutomation(bearerToken, target);
+  }
+
+  readSlackApp(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppReadResult> {
+    return this.bridge.readSlackApp(bearerToken, botId);
+  }
+
+  getSlackAppManifest(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppManifestResult> {
+    return this.bridge.getSlackAppManifest(bearerToken, botId);
+  }
+
+  registerSlackApp(
+    bearerToken: string,
+    request: SlackAppRegisterRequest,
+  ): Promise<SlackAppWriteResult> {
+    return this.bridge.registerSlackApp(bearerToken, request);
+  }
+
+  mintSlackAppInstallUrl(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppInstallUrlResult> {
+    return this.bridge.mintSlackAppInstallUrl(bearerToken, botId);
+  }
+
+  disconnectSlackApp(
+    bearerToken: string,
+    botId: string,
+  ): Promise<SlackAppWriteResult> {
+    return this.bridge.disconnectSlackApp(bearerToken, botId);
   }
 
   getSandboxGrants(
@@ -1381,6 +1507,17 @@ export class DesktopRunnerHost implements IRunnerHost {
         this.systemResumedHandlers.delete(handler);
       },
     };
+  }
+
+  onSystemSuspended(handler: (cause: SystemSuspendCause) => void): Disposable {
+    // A direct per-handler bridge subscription: unlike the resume pulse this
+    // carries no shell-side shaping, so there is nothing to fan out from one
+    // place. Sleep and the screen lock are the desktop's only causes.
+    return toDisposable(this.bridge.onSystemSuspended(() => handler("locked")));
+  }
+
+  onVoiceTrayAction(handler: (action: VoiceTrayAction) => void): Disposable {
+    return toDisposable(this.bridge.onVoiceTrayAction(handler));
   }
 
   onNetworkPathChanged(handler: () => void): Disposable {

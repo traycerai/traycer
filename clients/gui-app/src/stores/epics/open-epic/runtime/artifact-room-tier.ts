@@ -75,9 +75,9 @@ import type { HotDocEvictionOutcome } from "./epic-runtime-accounting-port";
  * Per-artifact-room Y.Doc replicas mirroring the host-side artifact-rooms. The
  * runtime treats these as the GUI-side authority for artifact body fragments;
  * editors bind to `artifactRoom.doc.getXmlFragment(artifact-body:{id})` rather
- * than to anything inside the root Epic doc (per Decision 7 in the artifact-room
- * approach spec). Kept outside any projection because `Y.Doc` mutates in place
- * and cannot cross a structured clone - the rooms plane publishes its own
+ * than to anything inside the root Epic doc.
+ * Kept outside any projection because `Y.Doc` mutates in place and cannot
+ * cross a structured clone - the rooms plane publishes its own
  * availability slice and binding epoch for reactivity instead, and callers reach
  * the live fragment through the runtime's escape hatches.
  */
@@ -113,9 +113,8 @@ export interface ArtifactRoomReplicaEntry {
    * Local artifact-room-body updates produced while the stream is not ready to
    * send are queued here and replayed once the fresh root snapshot confirms
    * write permission. This mirrors the root-doc unsynced queue so reconnect
-   * windows do not silently discard user edits - see ticket
-   * 4a598302-ac79-47a5-a686-cc9e35bde18b "GUI artifact-room-doc awareness and
-   * reconnect-safe body edits".
+   * windows do not silently discard user edits: artifact-room-doc awareness
+   * and reconnect-safe body edits.
    *
    * On viewer downgrade the queue is cleared (fail-closed). When a
    * `artifactRoomSnapshot` arrives, the queue is collapsed into a single
@@ -274,14 +273,6 @@ export const ARTIFACT_ROOM_LEASE_POLICY: LeasePolicy = {
 export type RoomSnapshotOutcome = "filed-cold" | "merged" | "seeded";
 
 /**
- * One inbound body snapshot, with the authority's own account of what it is.
- *
- * The tier used to decide merge-vs-seed by itself - "is there already a replica
- * for this room" - which is the only thing it COULD do on a wire that states
- * nothing. `artifact.subscribe` states both halves, and this is the shape that
- * carries them, so the decision moves to the authority that owns it.
- */
-/**
  * This client's position on one body, in the shape `artifact.subscribe`'s open
  * request takes.
  *
@@ -332,6 +323,14 @@ export type ArtifactRoomColdSettlement =
       readonly reason: "not-held" | "newer-generation" | "pinned";
     };
 
+/**
+ * One inbound body snapshot, with the authority's own account of what it is.
+ *
+ * The tier used to decide merge-vs-seed by itself - "is there already a replica
+ * for this room" - which is the only thing it COULD do on a wire that states
+ * nothing. `artifact.subscribe` states both halves, and this is the shape that
+ * carries them, so the decision moves to the authority that owns it.
+ */
 export interface ArtifactRoomSnapshotInput {
   readonly artifactRoomId: string;
   readonly snapshotBytes: Uint8Array;
@@ -924,22 +923,6 @@ export function createArtifactRoomTier(
   }
 
   /**
-   * True when the room must stay materialized.
-   *
-   * Three reasons, all of which cost correctness rather than memory if
-   * ignored:
-   *  - an editor holds a lease;
-   *  - the replica carries local divergence the host has not acknowledged,
-   *    where cooling would encode away the very bytes the reconnect reconcile
-   *    is supposed to ship and silently lose user edits;
-   *  - a remote collaborator is present in the room. Cooling destroys the
-   *    room's `Awareness`, and while cold every inbound awareness frame is
-   *    dropped with no way to ask for a resync, so a peer who was sitting in
-   *    the body would simply vanish - caret, selection and avatar - until they
-   *    happened to move again. Presence is exactly what a shared room is for,
-   *    so a room someone else is in is not a room worth reclaiming.
-   */
-  /**
    * The pin arms that survive a RELEASED lease: local divergence and remote
    * presence.
    *
@@ -959,6 +942,19 @@ export function createArtifactRoomTier(
     );
   }
 
+  /**
+   * True when the room must stay materialized.
+   *
+   * Three reasons, all of which cost correctness rather than memory if
+   * ignored:
+   *  - an editor holds a lease;
+   *  - the replica carries local divergence the host has not acknowledged,
+   *    where cooling would discard the dirty watermark, pending updates,
+   *    and pending reconcile;
+   *  - a remote collaborator is present in the room. Cooling destroys the
+   *    room's `Awareness`. Presence is exactly what a shared room is for,
+   *    so a room someone else is in is not a room worth reclaiming.
+   */
   function isPinned(artifactRoomId: string): boolean {
     if (leaseCountOf(artifactRoomId) > 0) return true;
     const entry = replicas.get(artifactRoomId);

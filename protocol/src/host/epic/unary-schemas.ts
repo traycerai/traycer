@@ -1,3 +1,8 @@
+import {
+  chatRunSettingsSchema,
+  chatRunSettingsStrictSchema,
+} from "@traycer/protocol/persistence/epic/foundation";
+import { browserAnnotationRecordSchema } from "@traycer/protocol/persistence/epic/messages";
 /**
  * Host ↔ client wire shapes for the `epic.*` RPC surface.
  *
@@ -37,8 +42,8 @@ import {
   searchTextPreviewRangeSchema,
 } from "@traycer/protocol/host/search-text-preview-schema";
 import {
-  chatRunSettingsSchema,
-  chatRunSettingsStrictSchema,
+  chatRunSettingsSchemaPreUltracode,
+  chatRunSettingsStrictSchemaPreUltracode,
   userMessageSenderSchema,
 } from "@traycer/protocol/persistence/epic/schemas";
 import { z } from "zod";
@@ -507,7 +512,7 @@ export const createChatInitialMessageSchema = lazySchema(() =>
     clientActionId: z.string(),
     content: getRecordSchema(commonRecordRegistry, "json-content", "latest"),
     sender: userMessageSenderSchema,
-    settings: chatRunSettingsSchema,
+    settings: chatRunSettingsSchemaPreUltracode,
     // Billing/account context the initial turn runs under. Global app-wide
     // selection (not per-chat), stamped at create time.
     accountContext: accountContextSchema,
@@ -2231,7 +2236,7 @@ export const createChatRequestSchema = lazySchema(() =>
     // Optional per-chat run settings to stamp on the new chat. Existing callers
     // omit this and let the chat start with host defaults; fork creation passes
     // the user's modal-selected provider/model settings.
-    settings: chatRunSettingsSchema.nullable().optional(),
+    settings: chatRunSettingsSchemaPreUltracode.nullable().optional(),
     // Optional intent - when present the host orchestrator resolves it into a
     // local SQLite WorktreeBinding row for this chat before the first
     // chat.subscribe send is processed. Intent only carries mode + entries; the
@@ -2352,7 +2357,7 @@ export const updateChatRunSettingsRequestSchema = lazySchema(() =>
   z.object({
     epicId: z.string(),
     chatId: z.string(),
-    settings: chatRunSettingsSchema,
+    settings: chatRunSettingsSchemaPreUltracode,
   }),
 );
 export type UpdateChatRunSettingsRequest = z.infer<
@@ -2371,13 +2376,13 @@ export type UpdateChatRunSettingsResponse = z.infer<
 // v1.1 tightens `settings` to the wire-strict tuple (every field required, no
 // zod defaults): this method is a whole-tuple WYSIWYG replace, and the strict
 // schema makes a subset-field "patch" a validation error instead of a silent
-// null-clobber of omitted fields. See `chatRunSettingsStrictSchema`.
+// null-clobber of omitted fields. See `chatRunSettingsStrictSchemaPreUltracode`.
 // Profile-only changes belong on `epic.updateChatProfile` below.
 export const updateChatRunSettingsRequestSchemaV11 = lazySchema(() =>
   z.object({
     epicId: z.string(),
     chatId: z.string(),
-    settings: chatRunSettingsStrictSchema,
+    settings: chatRunSettingsStrictSchemaPreUltracode,
   }),
 );
 export type UpdateChatRunSettingsRequestV11 = z.infer<
@@ -3671,4 +3676,77 @@ export const continueSubagentResponseSchema = lazySchema(() =>
 );
 export type ContinueSubagentResponse = z.infer<
   typeof continueSubagentResponseSchema
+>;
+
+/** The opening and the chat record carry the same per-chat request. */
+export const createChatInitialMessageSchemaV14 = lazySchema(() =>
+  createChatInitialMessageSchemaV12.extend({ settings: chatRunSettingsSchema }),
+);
+export type CreateChatInitialMessageV14 = z.infer<
+  typeof createChatInitialMessageSchemaV14
+>;
+export const createChatRequestSchemaV14 = lazySchema(() =>
+  createChatRequestSchemaV13.extend({
+    settings: chatRunSettingsSchema.nullable().optional(),
+    initialMessage: createChatInitialMessageSchemaV14.nullable().optional(),
+  }),
+);
+export type CreateChatRequestV14 = z.infer<typeof createChatRequestSchemaV14>;
+export const createEpicChatSeedSchemaV14 = lazySchema(() =>
+  createEpicChatSeedSchemaV12.extend({
+    initialMessage: createChatInitialMessageSchemaV14.nullable(),
+  }),
+);
+export type CreateEpicChatSeedV14 = z.infer<typeof createEpicChatSeedSchemaV14>;
+export const createEpicRequestSchemaV14 = lazySchema(() =>
+  createEpicRequestSchemaV13.extend({
+    chat: createEpicChatSeedSchemaV14.nullable().optional(),
+  }),
+);
+export type CreateEpicRequestV14 = z.infer<typeof createEpicRequestSchemaV14>;
+
+/**
+ * `@1.5`'s initial message: the composer's browser-annotation sidecar rides
+ * on the create exactly as it rides on a `chat.subscribe` `send` frame, so an
+ * element sent to a chat that does not exist yet arrives with the same card.
+ * The crop bytes travel as the content's image attachments, by hash or inline,
+ * on the same path every other image on a create takes; a record's `imageHash`
+ * names one of them. ABSENT MEANS NONE: `.optional()` rather than the send
+ * frame's `.default([])`, for the reason `attachmentsByHash` gives above - a
+ * default would make the key required in the inferred request type, and
+ * every create surface that carries no sidecar would have to name it.
+ */
+export const createChatInitialMessageSchemaV15 = lazySchema(() =>
+  createChatInitialMessageSchemaV14.extend({
+    browserAnnotations: z.array(browserAnnotationRecordSchema).optional(),
+  }),
+);
+export type CreateChatInitialMessageV15 = z.infer<
+  typeof createChatInitialMessageSchemaV15
+>;
+export const createChatRequestSchemaV15 = lazySchema(() =>
+  createChatRequestSchemaV14.extend({
+    initialMessage: createChatInitialMessageSchemaV15.nullable().optional(),
+  }),
+);
+export type CreateChatRequestV15 = z.infer<typeof createChatRequestSchemaV15>;
+export const createEpicChatSeedSchemaV15 = lazySchema(() =>
+  createEpicChatSeedSchemaV14.extend({
+    initialMessage: createChatInitialMessageSchemaV15.nullable(),
+  }),
+);
+export type CreateEpicChatSeedV15 = z.infer<typeof createEpicChatSeedSchemaV15>;
+export const createEpicRequestSchemaV15 = lazySchema(() =>
+  createEpicRequestSchemaV14.extend({
+    chat: createEpicChatSeedSchemaV15.nullable().optional(),
+  }),
+);
+export type CreateEpicRequestV15 = z.infer<typeof createEpicRequestSchemaV15>;
+export const updateChatRunSettingsRequestSchemaV12 = lazySchema(() =>
+  updateChatRunSettingsRequestSchemaV11.extend({
+    settings: chatRunSettingsStrictSchema,
+  }),
+);
+export type UpdateChatRunSettingsRequestV12 = z.infer<
+  typeof updateChatRunSettingsRequestSchemaV12
 >;

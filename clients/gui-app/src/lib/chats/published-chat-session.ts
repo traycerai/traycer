@@ -349,6 +349,7 @@ export function publishedChatSessionState(
     // A published transcript has no live session at all, so it cannot say -
     // and nothing here offers a permission mode to gate in the first place.
     autoPermissionModeProtocolSupported: null,
+    ultracodeProtocolSupported: false,
     // Not a claim about a protocol line - a copy has none - but this read-only
     // view's rule: it has no queue surface, so it drops no queue text, and a
     // queue-pause notice stays in the transcript. Published and replica alike.
@@ -363,7 +364,7 @@ export function publishedChatSessionState(
     // A published copy is a FULL-materialized transcript, so it is on the
     // legacy side of the window seam by construction: `messages`/`events`
     // above hold everything, and there is no host to hydrate a range from.
-    // The windowed index for a `1.2` head is its own path (`publish-path §4`).
+    // The windowed index for a `1.2` head is its own path.
     transcriptWindow: emptyTranscriptWindow(),
     transcriptDerived: null,
     accumulatedFileChangeCount: 0,

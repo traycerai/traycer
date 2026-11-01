@@ -37,7 +37,7 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
 }));
 vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => null,
 }));
 vi.mock("@/hooks/host/use-host-queries", () => ({

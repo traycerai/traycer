@@ -68,6 +68,7 @@ function catalog(input: {
     modelsLoaded: input.modelsLoaded,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     keepsUnavailablePick: false,
   };
 }
@@ -89,6 +90,7 @@ function createStore(input: {
       input.modelSlug ?? "",
     ].join("-"),
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: input.harnessId ?? "claude",
@@ -101,6 +103,7 @@ function createStore(input: {
     onSettingsChange: input.onSettingsChange ?? null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
 }

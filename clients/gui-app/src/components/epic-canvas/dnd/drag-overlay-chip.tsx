@@ -6,6 +6,9 @@ import { ChatIndicatorHostScopes } from "@/components/notifications/chat-indicat
  * Drag previews mount at the app shell, outside epic session providers.
  * Header tabs share the strip's registry-backed titles and indicators; canvas
  * chips use payload snapshots unless their renderer resolves a live record.
+ * A record-backed tile's snapshot is the last title its strip resolved live
+ * (`useRecordTitleWriteThrough` in the canvas tab strip), not its opening
+ * name, so the chip names the tile the way the strip under it does.
  */
 import { AnimatePresence } from "motion/react";
 import * as m from "motion/react-m";

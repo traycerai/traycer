@@ -712,6 +712,9 @@ export function hostOperationKnownCopy(
       return null;
     // Retains the host-composed copy used by delivery hooks.
     case "managed_command_delivery_parked":
+    // A bot's rows keep the copy their host or the server composed.
+    case "bot_thread_verdict":
+    case "bot_conversation":
       return null;
   }
 }
@@ -778,6 +781,8 @@ function knownTaskTitle(payload: HostNotificationKnownPayload): string | null {
       return payload.taskTitle ?? null;
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
+    case "bot_thread_verdict":
+    case "bot_conversation":
     case "browser_human_needed":
     case "secret_grant_request":
     case "secret_export_minted":
@@ -812,6 +817,8 @@ function knownAgentName(payload: HostNotificationKnownPayload): string | null {
     case "worktree_deletion":
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
+    case "bot_thread_verdict":
+    case "bot_conversation":
     case "browser_human_needed":
     case "secret_grant_request":
     case "secret_export_minted":
@@ -846,6 +853,8 @@ function knownChatTitle(payload: HostNotificationKnownPayload): string | null {
     case "worktree_deletion":
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
+    case "bot_thread_verdict":
+    case "bot_conversation":
     case "browser_human_needed":
     case "secret_grant_request":
     case "secret_export_minted":
@@ -885,6 +894,8 @@ function knownStoppedReason(
     case "worktree_deletion":
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
+    case "bot_thread_verdict":
+    case "bot_conversation":
     case "browser_human_needed":
     case "secret_grant_request":
     case "secret_export_minted":
@@ -923,6 +934,8 @@ function knownProviderId(
     case "worktree_deletion":
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
+    case "bot_thread_verdict":
+    case "bot_conversation":
     case "browser_human_needed":
     case "secret_grant_request":
     case "secret_export_minted":
@@ -973,6 +986,8 @@ function knownUnverified(payload: HostNotificationKnownPayload): boolean {
     case "worktree_deletion":
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
+    case "bot_thread_verdict":
+    case "bot_conversation":
     case "browser_human_needed":
     case "secret_grant_request":
     case "secret_export_minted":
@@ -1009,6 +1024,8 @@ function knownBackgroundWorkRunning(
     case "worktree_deletion":
     case "worktree_auto_cleanup":
     case "managed_command_delivery_parked":
+    case "bot_thread_verdict":
+    case "bot_conversation":
     case "browser_human_needed":
     case "secret_grant_request":
     case "secret_export_minted":

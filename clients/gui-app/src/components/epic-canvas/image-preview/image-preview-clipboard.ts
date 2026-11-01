@@ -1,8 +1,8 @@
 import { copyImageBlobToClipboard } from "@/lib/images/copy-image-to-clipboard";
 
 /**
- * Canvas-converts a rendered `<img>` to PNG for the Clipboard API
- * (image-preview decision log, decision #16) - SVG copies its rasterized
+ * Canvas-converts a rendered `<img>` to PNG for the Clipboard API -
+ * SVG copies its rasterized
  * on-screen rendering rather than raw markup, same as every other format,
  * since it goes through the same `<img>` -> canvas pipeline. This
  * normalization step stays (it's what makes GIF/WebP/SVG copyable at all -
@@ -31,7 +31,7 @@ export async function copyImageToClipboard(
   if (blob === null) {
     throw new Error("This image could not be encoded to copy it.");
   }
-  // `copyImageBlobToClipboard` (ticket 07) tries the browser Clipboard API
+  // `copyImageBlobToClipboard` tries the browser Clipboard API
   // first, then falls back to the Electron `nativeImage` bridge when the
   // renderer clipboard rejects the write - a real desktop gap a
   // browser-only write would bypass.

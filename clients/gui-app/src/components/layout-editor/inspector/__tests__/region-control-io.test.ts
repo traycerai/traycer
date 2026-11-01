@@ -94,7 +94,7 @@ describe("writing and reverting", () => {
   it("reverts nothing for a key the region does not have", () => {
     // Against a region that HAS a change, so the answer comes from the
     // per-key membership test rather than from there being nothing to revert:
-    // a registry typo touches nothing (G1-08).
+    // a registry typo touches nothing.
     writeControlValue("model", "style", "bars");
 
     revertControlValues("model", ["stlye"]);

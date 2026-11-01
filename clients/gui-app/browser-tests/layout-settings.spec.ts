@@ -13,7 +13,7 @@ import { centreOf, fixture, nextFrames } from "./support/fixtures.ts";
 // `fullyParallel`).
 test.describe.configure({ mode: "default" });
 
-// SETTINGS > LAYOUT, IN REAL CHROME (G6, G7, H2).
+// SETTINGS > LAYOUT, IN REAL CHROME (H2).
 //
 // `layout-editor-canvas.html?settings=1` mounts the REAL Settings > Layout
 // panel, either alone in the window (`settingsPage`: a width is the panel's
@@ -278,7 +278,7 @@ test.describe("a setup guide's focus return lands on the control this width draw
 
 // ── A short desktop pane ────────────────────────────────────────────────────
 
-// The desktop Settings modal in a wide, short window (review H2 #2): the rail is
+// The desktop Settings modal in a wide, short window (H2 #2): the rail is
 // taller than the card leaves it, so it scrolls, and every area can be wheeled
 // or scrolled into view and picked with the pointer. Its rows keep their height
 // rather than squeezing to fit.
@@ -395,7 +395,7 @@ test.describe("a short desktop pane (1440x450)", () => {
 
 // ── Below `md` the rail is a select ─────────────────────────────────────────
 
-// Operated as a person would: opened with the pointer, an item picked (review H2
+// Operated as a person would: opened with the pointer, an item picked (H2
 // #4). What the trigger and the open list SAY about changed areas is the
 // markup's, and jsdom's (`layout-settings-panel.test.tsx`). Providers draws the
 // same `SettingsMasterSelect` component but wires its own pick, and its jsdom

@@ -4,13 +4,39 @@
  */
 
 import type { CSSProperties } from "react";
+import type { TargetAndTransition, Transition } from "motion/react";
 import type { EpicNodeKind } from "@/lib/artifacts/node-display";
+import { useReducedMotion } from "@/lib/animation/status-animation-clock";
 import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/stores/settings/settings-store";
 import { SIDEBAR_NODE_REVEAL_VISIBILITY_MS } from "@/stores/epics/sidebar-node-reveal-store";
 
 export const INDENT_PX = 16;
 export const BASE_PAD_LEFT = 8;
+
+/**
+ * The motion props of one chat-tree row, local or cloud: a position-only
+ * layout animation so the row slides when rows around it come and go, a short
+ * exit, and one shared timing. Every row in the tree takes these, because a
+ * row that snaps to its new place while its neighbours slide is drawn through
+ * by them for the length of the transition.
+ *
+ * Reduced motion is read live, so a preference flipped while rows are mounted
+ * reaches the next layout change; the motion library's own hook holds the
+ * value it read at mount.
+ */
+export function useTreeRowMotion(): {
+  readonly layout: "position" | false;
+  readonly exit: TargetAndTransition | undefined;
+  readonly transition: Transition;
+} {
+  const shouldReduceMotion = useReducedMotion();
+  return {
+    layout: shouldReduceMotion ? false : "position",
+    exit: shouldReduceMotion ? undefined : { opacity: 0, x: -8 },
+    transition: { duration: 0.16, ease: "easeOut" },
+  };
+}
 
 /** Same visual treatment and lifetime as a communication-graph transcript jump. */
 export const SIDEBAR_REVEAL_HIGHLIGHT_CLASS =
@@ -232,7 +258,7 @@ export function chatRowClassName(state: {
 
 /**
  * An artifact row's class list, shared by the tree's row button and the
- * sample workspace's sidebar so the two draw one row (F3).
+ * sample workspace's sidebar so the two draw one row.
  */
 export function artifactRowClassName(state: {
   readonly isDragging: boolean;

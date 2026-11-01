@@ -3,7 +3,7 @@
  *
  * The more menu now reads `useColumnOverlayPlacement("row")` so a row's
  * dropdown opens toward the canvas content rather than off the visible edge
- * when the sidebar sits on the right. This is the same D7 wiring covered for
+ * when the sidebar sits on the right. This is the same wiring covered for
  * `ChatFilterMenu` in `epic-sidebar-side.test.tsx`'s "a real sidebar popover
  * under a right sidebar" case, applied to the row-level more menu, whose
  * trigger mounts its Radix root lazily on first use

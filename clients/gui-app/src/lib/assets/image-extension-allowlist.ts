@@ -1,6 +1,6 @@
 /**
- * Single source for the client-side extension gate (image-preview decision
- * log, decision #6): the workspace file tile and git diff tile both check a
+ * Single source for the client-side extension gate: the workspace file
+ * tile and git diff tile both check a
  * path against this allowlist BEFORE opening `workspace.streamAsset` /
  * `git.streamFileAsset`, so a non-asset file never touches the asset stream.
  * The host still validates independently via magic bytes and answers with
@@ -50,8 +50,8 @@ export function isImageAssetPath(path: string): boolean {
 }
 
 /**
- * SVG is text to git and valid UTF-8 to `readFile` (image-preview decision
- * log, decision #5) - both tiles route it to image preview by default with a
+ * SVG is text to git and valid UTF-8 to `readFile` - both tiles route it
+ * to image preview by default with a
  * per-tile toggle back to the existing source view, unlike the other four
  * formats which have no source view at all.
  */

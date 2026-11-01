@@ -43,7 +43,11 @@ import {
   computeDescendantCounts,
   formatCascadeSummary,
 } from "@/lib/epic-tree-cascade";
-import { EPIC_NODE_ICONS } from "@/lib/artifacts/node-display";
+import { isEpicArtifactKind } from "@/lib/artifacts/node-display";
+import {
+  EpicArtifactIcon,
+  StaticEpicNodeIcon,
+} from "@/components/epic-canvas/epic-node-tab-icon";
 import { FileText, Search, SearchX } from "lucide-react";
 import { SidebarPanelEmptyState } from "@/components/epic-canvas/sidebar/sidebar-panel-empty-state";
 import {
@@ -500,7 +504,12 @@ function SwitcherArtifactRow(props: {
       <SwitcherListRow
         disabled={false}
         icon={
-          <SwitcherArtifactIcon type={record.type} status={record.status} />
+          <SwitcherArtifactIcon
+            epicId={epicId}
+            id={record.id}
+            type={record.type}
+            status={record.status}
+          />
         }
         label={record.name}
         secondaryLabel={null}
@@ -539,15 +548,25 @@ function SwitcherArtifactSearchRow(props: {
 }
 
 function SwitcherArtifactIcon(props: {
+  readonly epicId: string;
+  readonly id: string;
   readonly type: EpicTreeRecord["type"];
   readonly status: number | null;
 }) {
   const { type, status } = props;
-  const Icon = EPIC_NODE_ICONS[type];
   const showDot = computeArtifactNodeStatusDot(type, status);
   return (
     <span className="relative inline-flex size-4 shrink-0 items-center justify-center">
-      <Icon aria-hidden className="size-4 text-muted-foreground" />
+      {isEpicArtifactKind(type) ? (
+        <EpicArtifactIcon
+          epicId={props.epicId}
+          artifactId={props.id}
+          kind={type}
+          className="size-4"
+        />
+      ) : (
+        <StaticEpicNodeIcon type={type} className="size-4" />
+      )}
       {showDot && status !== null ? (
         <span
           aria-hidden

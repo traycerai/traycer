@@ -57,6 +57,7 @@ export function TerminalQuoteControl(props: TerminalQuoteControlProps) {
         onSelectNewChat={props.onSendToNewChat}
         open={props.menuOpen}
         onOpenChange={props.onMenuOpenChange}
+        onClosed={null}
         trigger={
           <button
             type="button"

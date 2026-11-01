@@ -40,6 +40,7 @@ import {
   profileEnablementTooltipText,
 } from "@/components/providers/provider-profile-model";
 import {
+  ChatCredentialNotice,
   ProviderRateLimitDetail,
   type ProviderRateLimitQueryState,
 } from "@/components/settings/panels/provider-rate-limit-views";
@@ -453,7 +454,7 @@ function rateLimitProfileId(profile: ProviderProfile): string | null {
 /**
  * The header rate-limit popover content: a left rail (Overview + one tab per
  * connected provider) and a detail pane, mirroring the composer's model-picker
- * shell (Core Flows: "same interaction family as the composer's model picker").
+ * shell.
  * The whole body is a child of `PopoverContent`, so Radix only mounts it - and
  * runs its queries - while the popover is open. The selected tab is persisted
  * separately so reopening restores the provider the user last inspected.
@@ -1474,7 +1475,7 @@ function useTraycerRateLimitUsageState(
 }
 
 /**
- * The rail's icon-only "Refresh all" (Core Flows): ephemeralProcess providers
+ * The rail's icon-only "Refresh all": ephemeralProcess providers
  * refresh with one forced fetch per profile, all sent at once - how many of
  * those probes run together is the host's call - while httpFetch providers
  * refresh alongside via a direct query invalidation.
@@ -1907,7 +1908,7 @@ function ProfileRateLimitProviderBlock({
   // for the highlight to point at and none for the eye to govern, so both go
   // until it returns. Wherever it lives - the status bar, the tab strip or the
   // phone header - it draws through the same selector, so the checks apply to
-  // every placement (G6). The checks stay in the store meanwhile.
+  // every placement. The checks stay in the store meanwhile.
   const readingShown = useRegionShown("usageLimits");
   const shownProfileIds = readingShown
     ? resolveStatusBarProfileIds(profileSelection, providerId, profiles)
@@ -2042,7 +2043,7 @@ function ProfileRateLimitProviderBlock({
                       // Read at write time rather than subscribed: this row
                       // needs the whole arrangement only to spread it, and a
                       // subscription to it re-renders the popover on every
-                      // dock reorder and divider drag (G1-14).
+                      // dock reorder and divider drag.
                       const current = useLayoutStore.getState().arrangement;
                       setArrangement({
                         ...current,
@@ -2605,7 +2606,7 @@ function ProfileUsageUpdatedLabel({
 /**
  * "Updated Xm ago", only once a reading actually exists - and a trailing
  * degraded note appended when a last-known-good reading is being shown after
- * a failed poll (Core Flows degraded state): the specific transient reason's
+ * a failed poll (the degraded state): the specific transient reason's
  * plain-language copy (e.g. "couldn't fetch usage - will retry") when the
  * envelope itself is why (`degradedReason` non-null), or the generic
  * "· refresh failed" when the degrade is only a thrown query-level exception
@@ -2702,6 +2703,9 @@ function RateLimitProviderBody({
         />
       );
     case "unavailable":
+      if (state.chatCredential !== null) {
+        return <ChatCredentialNotice credential={state.chatCredential} />;
+      }
       return (
         <div className="flex flex-col items-start gap-1.5">
           <RateLimitErrorMessage
@@ -2721,7 +2725,7 @@ function RateLimitProviderBody({
       );
     case "ready":
       // Degraded (stale, latest poll failed): dim the reading in place rather
-      // than replacing it with an error (Core Flows).
+      // than replacing it with an error.
       return (
         <div className={cn(state.degraded && "opacity-60")}>
           <ProviderRateLimitDetail
@@ -2780,21 +2784,6 @@ function SignedOutRateLimitMessage(): ReactNode {
 }
 
 /**
- * The synthetic "Traycer" block - the GUI-sourced analogue of
- * `RateLimitProviderBlock`. Its data is the signed-in user's subscription
- * (`useAuthUser`) for the globally-selected account (`useAccountContextStore`),
- * NOT a `host.getRateLimitUsage` provider pull. Header mirrors the provider
- * blocks (name + plan/tier chip + "Updated Xm ago" + refresh) - the chip
- * (`subscriptionPlanLabel`) reflects whichever account is currently selected
- * and is shown on each account card in the single-provider tab. The detail
- * variant and Overview both render Personal/Team cards like the Codex and
- * Claude profile cards; selecting a card updates the global account selection
- * (and therefore Overview, the Settings card, and what a Traycer run bills).
- * Both variants render through the shared `TraycerSubscriptionView`. `onReady` mirrors
- * `RateLimitProviderBlock`'s own - fires once `state.kind` moves past `cold`,
- * `null` on the single-provider detail tab.
- */
-/**
  * The account-scoped Usage half for a popover whose host-scoped half cannot
  * render: eligible Traycer Inference usage, framed like a pane. Returns null
  * for ineligible accounts, so the caller mounts it unconditionally.
@@ -2809,6 +2798,20 @@ function UnscopedTraycerUsage(): ReactNode {
   );
 }
 
+/**
+ * The synthetic "Traycer" block - the GUI-sourced analogue of
+ * `RateLimitProviderBlock`. Its data is the signed-in user's subscription
+ * (`useAuthUser`) for the globally-selected account (`useAccountContextStore`),
+ * NOT a `host.getRateLimitUsage` provider pull. Header shows the name and, in the single-provider tab, refresh.
+ * Each account card shows its own update time and, outside the installed
+ * mobile app, its own plan/tier chip (`subscriptionPlanLabel`). The detail
+ * variant and Overview both render Personal/Team cards like the Codex and
+ * Claude profile cards; selecting a card updates the global account selection
+ * (and therefore Overview, the Settings card, and what a Traycer run bills).
+ * Both variants render through the shared `TraycerSubscriptionView`. `onReady` mirrors
+ * `RateLimitProviderBlock`'s own - fires once `state.kind` moves past `cold`,
+ * `null` on the single-provider detail tab.
+ */
 function TraycerRateLimitBlock({
   variant,
   onReady,
@@ -3069,8 +3072,8 @@ function RateLimitErrorMessage({
 
 /**
  * Cold load (first open this session, no data yet): skeleton bars previewing
- * the eventual window layout, not a spinner replacing the panel (Core Flows -
- * a deliberate difference from the Settings card's spinner).
+ * the eventual window layout, not a spinner replacing the panel -
+ * a deliberate difference from the Settings card's spinner.
  *
  * The per-block `bg-foreground/15` overrides these carried are gone: the
  * `Skeleton` primitive now defaults to a foreground-alpha fill for exactly
@@ -3097,7 +3100,7 @@ function RateLimitDetailSkeleton(): ReactNode {
 }
 
 /**
- * Zero-provider state (Core Flows): no rail, no tabs - a single CTA linking to
+ * Zero-provider state: no rail, no tabs - a single CTA linking to
  * Settings › Providers, since there's nothing yet to switch between.
  */
 function RateLimitZeroState({

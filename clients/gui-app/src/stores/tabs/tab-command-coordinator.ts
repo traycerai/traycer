@@ -160,11 +160,6 @@ export interface ReplaceDraftWithDocumentCommand {
   readonly previousDraftId: string;
   readonly nextDraftId: string;
   /**
-   * Installs the successor row (`nextDraftId`) in the landing store, open.
-   * Runs inside the transaction, after the strip item has been re-keyed
-   * and before the previous row is retired.
-   */
-  /**
    * Puts the successor row in the landing store. Returns whether it did: a
    * `false` aborts the transaction before the layout moves, so the strip
    * item is never re-keyed onto a row that does not exist.
@@ -277,7 +272,7 @@ function currentLayout(): PersistedTabStripLayout {
     );
   if (transactionDepth > 0 || matchesProjection) return layout;
   // Existing tests and unconverted flat callers can still seed `stripOrder`
-  // directly. Outside a coordinator transaction, treat that as the T1
+  // directly. Outside a coordinator transaction, treat that as the
   // compatibility write it is and rebuild the authoritative flat layout.
   return state.stripOrder.reduce(createLayoutItem, {
     version: 2,
@@ -1791,12 +1786,12 @@ export class TabCommandCoordinator {
     pruneRecoveryEpics(epicIds);
     const ids = new Set(epicIds);
     if (ids.size === 0) return;
-    // Ticket 15 (decision #29): drop every durable chat-key entry under
+    // Drop every durable chat-key entry under
     // these epics across all seven per-tab registries - independent of
     // whether any tab for them is currently open (a chat can leave a
     // durable entry behind long after its own tab closed).
     //
-    // Ticket 15 review round 5 (item 2): ONE batched call, not a `forEach`
+    // (item 2): ONE batched call, not a `forEach`
     // of the singular per-epic evict - the canvas close sweep below writes
     // durable state back for whichever of these epics still had open tiles,
     // so every epic in this access-loss batch must still be fenced by the

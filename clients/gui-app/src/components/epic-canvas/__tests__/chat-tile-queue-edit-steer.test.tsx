@@ -49,7 +49,7 @@ import { createEpicSessionTestHarness } from "./test-epic-session-harness";
 import { resetFocusedComposerControlsForTests } from "@/lib/commands/composer-controls-registry";
 
 /**
- * Decision 14 real ChatTile edit arm:
+ * The real ChatTile edit arm:
  * mount ChatTile → open queue-row edit → drive the actual submitMessage path
  * (queueEdit + queueSteerNow for after_safe_point vs queueEdit +
  * queueSettingsUpdate for auto). Captures the tile's onSubmitMessage so
@@ -106,7 +106,7 @@ vi.mock("@/lib/host", () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),
   useHostClient: () => MOCK_HOST_CLIENT,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => MOCK_HOST_CLIENT,
 }));
 
@@ -160,8 +160,8 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 }));
 
 // The Epic session resolves its host through the selection authority's derived
-// pointer (selection model §1), not the active-host projection above - seed the
-// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+// pointer, not the active-host projection above - seed the
+// decider at its own name (the convention in epic-shell-usage-entry-point).
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-test",
 }));
@@ -231,6 +231,7 @@ const QUEUED_CONTENT: JsonContent = {
   ],
 };
 const QUEUED_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-sonnet",
   permissionMode: "supervised",
@@ -336,7 +337,7 @@ function createChatHarness(): {
         (_epicId, _chatId, nextCallbacks) => {
           callbacks = nextCallbacks;
           setTimeout(() => {
-            nextCallbacks.onConnectionStatus("open", null, null);
+            nextCallbacks.onConnectionStatus("open", null, null, null);
             emitChatSnapshot(nextCallbacks, access, queueItems);
           }, 0);
           const client: ChatStreamClientHandle = {

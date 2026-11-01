@@ -23,8 +23,9 @@ export function useArtifactsOpenerItems(
   const defaultHostId =
     useActiveEpicHostId(ctx.activeEpicId) ?? UNKNOWN_HOST_PLACEHOLDER;
   const projection = useActiveEpicProjection(ctx.activeEpicId);
+  const epicId = ctx.activeEpicId;
 
-  if (projection === null) return [];
+  if (projection === null || epicId === null) return [];
   const tree = projectTreeSlice(
     projection.artifacts,
     projection.chats,
@@ -49,8 +50,7 @@ export function useArtifactsOpenerItems(
               : `Untitled ${artifact.kind}`,
           hostId: defaultHostId,
         },
-        // Artifacts carry no per-item hostId (verified host-agnostic, audit
-        // G3) - never badged.
+        // Artifacts carry no per-item hostId and are never badged.
         null,
       ),
     );
@@ -70,6 +70,7 @@ export function useArtifactsOpenerItems(
       items.push({
         ...item,
         artifactTreeRow: {
+          epicId,
           nodeId,
           depth: ancestorIds.length,
           ancestorIds,

@@ -1069,7 +1069,7 @@ describe("<WindowHostModalHost />", () => {
   });
 
   /**
-   * F8's two STRUCTURAL claims, which is all of it jsdom can answer.
+   * The two STRUCTURAL claims jsdom can answer.
    *
    * The finding has a third, geometric half - the toggle centring itself in an
    * otherwise left-aligned card - and no assertion in this file touches it.

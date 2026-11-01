@@ -9,6 +9,10 @@ import {
 } from "lucide-react";
 import type { ReactElement } from "react";
 import { MaterialFileIcon } from "@/components/material-file-icon";
+import {
+  EpicArtifactIcon,
+  StaticEpicNodeIcon,
+} from "@/components/epic-canvas/epic-node-tab-icon";
 import { BrowserFavicon } from "@/components/epic-canvas/browser-favicon";
 import { browserTabFaviconUrl } from "@/lib/browser-view/browser-tab-display";
 import {
@@ -24,7 +28,6 @@ import type {
   WorkspaceEntry,
 } from "@/lib/composer/types";
 import { dirnameOfPath, mentionPathTree } from "@/lib/path";
-import type { EpicArtifactKind } from "@traycer/protocol/common/registry";
 import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
 
 /**
@@ -35,6 +38,7 @@ import { hostNameFromLabel } from "@/hooks/agent/use-host-reachability";
  * caller.
  */
 export const MENU_ICON_CLASS = "size-4 shrink-0 text-muted-foreground";
+const NODE_ROW_ICON_CLASS = "size-4 shrink-0";
 
 /**
  * Interface label for an Agent row. The product axis is
@@ -125,7 +129,7 @@ export function descriptionForSuggestion(
   // slot already shows the url (see `detailForSuggestion`), so the picker's
   // description slot stays empty rather than repeating it. The one thing it
   // does say is that a tab on another host attaches a snapshot, not a handle
-  // the agent can drive (spec decision #10) - naming the host, since that is
+  // the agent can drive - naming the host, since that is
   // the whole reason the row behaves differently.
   if (entry.kind === "browser-tab") {
     return entry.contextOnly
@@ -240,14 +244,31 @@ export function iconForSuggestion(entry: MentionSuggestionEntry): ReactElement {
       return gitIcon();
     case "epic":
       return epicIcon();
+    // A node row draws its node the way the sidebar does, tinted by kind. The
+    // category icons (`agentCategoryIcon` and its siblings) stay muted, since
+    // a category is not a node.
     case "epic-artifact":
-      return artifactIcon(entry.artifactType);
+      return (
+        <EpicArtifactIcon
+          epicId={entry.epicId}
+          artifactId={entry.artifactId}
+          kind={entry.artifactType}
+          className={NODE_ROW_ICON_CLASS}
+        />
+      );
     case "epic-chat":
-      return epicNodeIcon("chat");
+      return <StaticEpicNodeIcon type="chat" className={NODE_ROW_ICON_CLASS} />;
     case "epic-terminal-agent":
-      return epicNodeIcon("terminal-agent");
+      return (
+        <StaticEpicNodeIcon
+          type="terminal-agent"
+          className={NODE_ROW_ICON_CLASS}
+        />
+      );
     case "epic-terminal":
-      return epicNodeIcon("terminal");
+      return (
+        <StaticEpicNodeIcon type="terminal" className={NODE_ROW_ICON_CLASS} />
+      );
     case "browser-tab":
       return browserTabRowIcon(entry);
   }
@@ -276,12 +297,12 @@ function browserTabRowIcon(entry: BrowserTabMentionEntry): ReactElement {
  * interfaces, so the conversational icon would under-describe it.
  */
 export function agentCategoryIcon(): ReactElement {
-  return epicNodeIcon("terminal-agent");
+  return categoryNodeIcon("terminal-agent");
 }
 
 /** Icon for the **Terminals** mention category and its rows. */
 export function terminalCategoryIcon(): ReactElement {
-  return epicNodeIcon("terminal");
+  return categoryNodeIcon("terminal");
 }
 
 /** Icon for the **Browser** mention category itself (not its rows, which favicon). */
@@ -305,17 +326,11 @@ export function epicIcon(): ReactElement {
   return <Layers className={MENU_ICON_CLASS} aria-hidden />;
 }
 
-export function artifactIcon(kind: EpicArtifactKind): ReactElement {
-  return epicNodeIcon(kind);
-}
-
 export function artifactsIcon(): ReactElement {
   return <Files className={MENU_ICON_CLASS} aria-hidden />;
 }
 
-export function epicNodeIcon(
-  kind: "chat" | "terminal-agent" | "terminal" | EpicArtifactKind,
-): ReactElement {
+function categoryNodeIcon(kind: "terminal-agent" | "terminal"): ReactElement {
   const Icon: LucideIcon = EPIC_NODE_ICONS[kind];
   return <Icon className={MENU_ICON_CLASS} aria-hidden />;
 }

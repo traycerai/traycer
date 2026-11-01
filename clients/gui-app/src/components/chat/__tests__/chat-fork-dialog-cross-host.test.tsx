@@ -507,6 +507,7 @@ const OLD_HOST_CLIENT = buildHostClient(OLD_HOST_ID);
 const ABSENT_HOST_CLIENT = buildHostClient(ABSENT_HOST_ID);
 
 const SETTINGS_SEED: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-opus-4-7",
   permissionMode: "supervised",
@@ -1056,6 +1057,21 @@ describe("ChatForkDialog cross-host routing", () => {
     expect(input.settings.model).toBe("claude-sonnet-5");
   });
 
+  it.each([true, false])(
+    "the fork carries the source chat's saved Ultracode request (%s) into the created chat's settings",
+    async (saved) => {
+      renderDialog(
+        forkTarget({ settingsSeed: { ...SETTINGS_SEED, ultracode: saved } }),
+        ignoreOpenChange,
+      );
+
+      const input = await submitFork();
+
+      expect(input.settings.model).toBe(SETTINGS_SEED.model);
+      expect(input.settings.ultracode).toBe(saved);
+    },
+  );
+
   it("a catalog that loads EMPTY still blocks a CROSS-HOST fork", () => {
     // No first row to present: the slug resolves to "", which the store also
     // reports as a substitution, and `chatRunSettingsSchema` refuses an empty
@@ -1455,7 +1471,7 @@ describe("ChatForkDialog cross-host routing", () => {
     const scope = dialogMocks.lastWorkspace?.hostScope;
     expect(scope?.kind === "selected" ? scope.hostId : null).toBe(TAB_HOST_ID);
 
-    // F2: a 1.0 / negotiated-absent row is still in the directory. Inert
+    // A 1.0 / negotiated-absent row is still in the directory. Inert
     // leads, so those rows must not also carry "needs update".
     const oldRow = screen.getByTestId(`fork-host-${OLD_HOST_ID}`);
     const absentRow = screen.getByTestId(`fork-host-${ABSENT_HOST_ID}`);

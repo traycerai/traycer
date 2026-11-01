@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CanvasLayoutSnapshot } from "@traycer/protocol/persistence/epic/canvas-layout";
+import type {
+  CanvasBoardFrame,
+  CanvasLayoutSnapshot,
+} from "@traycer/protocol/persistence/epic/canvas-layout";
 import {
   boardFrame,
   canvasPageItems,
@@ -9,6 +12,42 @@ import {
   type CursorThrottle,
 } from "../canvas-model";
 import { snapshotFromFixture, type CanvasFixtureFile } from "./canvas-fixtures";
+
+const ZERO_FRAME: CanvasBoardFrame = { x: 0, y: 0, w: 0, h: 0 };
+
+/**
+ * `selectLiveBoards` takes one options object; this fills in the parts a
+ * test does not care about so each case only states what it is exercising.
+ * A point used to be the selector's whole notion of "near"; a
+ * zero-size frame at that point reproduces it here, since nothing can
+ * intersect a frame with no area.
+ */
+function liveBoards(
+  snapshot: CanvasLayoutSnapshot,
+  page: string,
+  overrides: Partial<{
+    readonly viewport: CanvasBoardFrame;
+    readonly fullscreenBoard: string | null;
+    readonly playingBoard: string | null;
+    readonly recentBoards: readonly string[];
+    readonly byteLengths: Readonly<Record<string, number>> | null;
+    readonly slotBudget: number;
+  }>,
+): ReadonlySet<string> {
+  return selectLiveBoards({
+    boards: snapshot.boards,
+    pageBoards: canvasPageItems(snapshot, page, null).boards.map(
+      ([path]) => path,
+    ),
+    byteLengths: null,
+    viewport: ZERO_FRAME,
+    fullscreenBoard: null,
+    playingBoard: null,
+    recentBoards: [],
+    slotBudget: 8,
+    ...overrides,
+  });
+}
 
 const NEAR = "boards/near.html";
 const FAR = "boards/far.html";
@@ -81,56 +120,53 @@ describe("canvasPageItems", () => {
 
 describe("selectLiveBoards", () => {
   const snapshot = snapshotFromFixture(twoPageFile);
-  const origin = { x: 50, y: 50 };
+  const origin: CanvasBoardFrame = { x: 50, y: 50, w: 0, h: 0 };
 
   it("picks the boards closest to the viewport centre within the budget", () => {
     expect(
-      selectLiveBoards(canvasPageItems(snapshot, "page-1", null), origin, 2),
+      liveBoards(snapshot, "page-1", { viewport: origin, slotBudget: 2 }),
     ).toEqual(new Set([NEAR, MIDDLE]));
   });
 
   it("follows the centre when the viewport moves", () => {
     expect(
-      selectLiveBoards(
-        canvasPageItems(snapshot, "page-1", null),
-        { x: 5050, y: 50 },
-        1,
-      ),
+      liveBoards(snapshot, "page-1", {
+        viewport: { x: 5050, y: 50, w: 0, h: 0 },
+        slotBudget: 1,
+      }),
     ).toEqual(new Set([FAR]));
   });
 
   it("returns every board of the page when the budget exceeds the count", () => {
     expect(
-      selectLiveBoards(canvasPageItems(snapshot, "page-1", null), origin, 8),
+      liveBoards(snapshot, "page-1", { viewport: origin, slotBudget: 8 }),
     ).toEqual(new Set([NEAR, MIDDLE, FAR]));
   });
 
   it("never includes boards from another page, however near", () => {
-    const live = selectLiveBoards(
-      canvasPageItems(snapshot, "page-1", null),
-      origin,
-      8,
-    );
+    const live = liveBoards(snapshot, "page-1", {
+      viewport: origin,
+      slotBudget: 8,
+    });
     expect(live.has(OTHER_PAGE)).toBe(false);
     expect(
-      selectLiveBoards(canvasPageItems(snapshot, "page-2", null), origin, 8),
+      liveBoards(snapshot, "page-2", { viewport: origin, slotBudget: 8 }),
     ).toEqual(new Set([OTHER_PAGE]));
   });
 
   it("yields nothing for a zero or negative budget", () => {
     expect(
-      selectLiveBoards(canvasPageItems(snapshot, "page-1", null), origin, 0)
-        .size,
+      liveBoards(snapshot, "page-1", { viewport: origin, slotBudget: 0 }).size,
     ).toBe(0);
     expect(
-      selectLiveBoards(canvasPageItems(snapshot, "page-1", null), origin, -3)
-        .size,
+      liveBoards(snapshot, "page-1", { viewport: origin, slotBudget: -3 }).size,
     ).toBe(0);
   });
 
   it("breaks distance ties by layout order", () => {
     const left = "boards/left.html";
     const right = "boards/right.html";
+    const point: CanvasBoardFrame = { x: 0, y: 50, w: 0, h: 0 };
     const tied = snapshotFromFixture({
       pages: [{ id: "page-1", name: "Flow" }],
       boards: {
@@ -142,11 +178,7 @@ describe("selectLiveBoards", () => {
     });
     // Both centres are 300 from x=0, so only the order can decide.
     expect(
-      selectLiveBoards(
-        canvasPageItems(tied, "page-1", null),
-        { x: 0, y: 50 },
-        1,
-      ),
+      liveBoards(tied, "page-1", { viewport: point, slotBudget: 1 }),
     ).toEqual(new Set([right]));
     const swapped = snapshotFromFixture({
       pages: [{ id: "page-1", name: "Flow" }],
@@ -158,12 +190,164 @@ describe("selectLiveBoards", () => {
       order: [left, right],
     });
     expect(
-      selectLiveBoards(
-        canvasPageItems(swapped, "page-1", null),
-        { x: 0, y: 50 },
-        1,
-      ),
+      liveBoards(swapped, "page-1", { viewport: point, slotBudget: 1 }),
     ).toEqual(new Set([left]));
+  });
+
+  describe("priority ladder", () => {
+    const FS = "boards/fullscreen.html";
+    const PLAY = "boards/playing.html";
+    const VIS = "boards/visible.html";
+    const REC = "boards/recent.html";
+    const OFF1 = "boards/off-near.html";
+    const OFF2 = "boards/off-far.html";
+    const ladder: CanvasFixtureFile = {
+      pages: [{ id: "page-1", name: "Flow" }],
+      boards: {
+        // Far from the viewport: only their priority tier admits them.
+        [FS]: { x: 9000, y: 0, w: 100, h: 100 },
+        [PLAY]: { x: 9100, y: 0, w: 100, h: 100 },
+        [REC]: { x: 9200, y: 0, w: 100, h: 100 },
+        // Inside the viewport rect below.
+        [VIS]: { x: 0, y: 0, w: 100, h: 100 },
+        [OFF1]: { x: 1000, y: 0, w: 100, h: 100 },
+        [OFF2]: { x: 2000, y: 0, w: 100, h: 100 },
+      },
+      notes: {},
+      order: [FS, PLAY, REC, VIS, OFF1, OFF2],
+    };
+    const snapshot = snapshotFromFixture(ladder);
+    const viewport: CanvasBoardFrame = { x: -500, y: -500, w: 1000, h: 1000 };
+
+    it("ranks fullscreen above play, an in-viewport board and a recent board", () => {
+      // A single slot forces every tier to compete for it at once; only
+      // fullscreen's win is unambiguous from Set membership alone.
+      const live = liveBoards(snapshot, "page-1", {
+        viewport,
+        fullscreenBoard: FS,
+        playingBoard: PLAY,
+        recentBoards: [REC],
+        slotBudget: 1,
+      });
+      expect(live).toEqual(new Set([FS]));
+    });
+
+    it("ranks the playing board above an in-viewport board", () => {
+      const live = liveBoards(snapshot, "page-1", {
+        viewport,
+        playingBoard: PLAY,
+        slotBudget: 1,
+      });
+      expect(live).toEqual(new Set([PLAY]));
+    });
+
+    it("ranks an in-viewport board above a merely recent one", () => {
+      const live = liveBoards(snapshot, "page-1", {
+        viewport,
+        recentBoards: [REC],
+        slotBudget: 1,
+      });
+      expect(live).toEqual(new Set([VIS]));
+    });
+
+    it("ranks a recent board above an offscreen board nearer the viewport", () => {
+      // VIS fills the first slot (it sits inside the viewport). The real
+      // contest is for the second: OFF1 is nearer by raw distance than REC,
+      // so only insertion order - not Set membership - can show REC (merely
+      // recent) wins it over OFF1 (nearer but plain offscreen).
+      const live = liveBoards(snapshot, "page-1", {
+        viewport,
+        recentBoards: [REC],
+        slotBudget: 2,
+      });
+      expect([...live]).toEqual([VIS, REC]);
+    });
+
+    it("fills remaining slots with offscreen boards nearest the viewport", () => {
+      const live = liveBoards(snapshot, "page-1", {
+        viewport,
+        slotBudget: 2,
+      });
+      expect(live).toEqual(new Set([VIS, OFF1]));
+    });
+
+    it("counts a board named in two tiers only once toward the budget", () => {
+      const live = liveBoards(snapshot, "page-1", {
+        viewport,
+        fullscreenBoard: PLAY,
+        playingBoard: PLAY,
+        recentBoards: [PLAY],
+        slotBudget: 2,
+      });
+      expect(live).toEqual(new Set([PLAY, VIS]));
+    });
+  });
+
+  describe("byte-weighted budget", () => {
+    const P1 = "boards/p1.html";
+    const P2 = "boards/p2.html";
+    const P3 = "boards/p3.html";
+    const file: CanvasFixtureFile = {
+      pages: [{ id: "page-1", name: "Flow" }],
+      boards: {
+        [P1]: { x: 0, y: 0, w: 100, h: 100 },
+        [P2]: { x: 1000, y: 0, w: 100, h: 100 },
+        [P3]: { x: 2000, y: 0, w: 100, h: 100 },
+      },
+      notes: {},
+      order: [P1, P2, P3],
+    };
+    const snapshot = snapshotFromFixture(file);
+
+    it("spends weight 1 + floor(bytes / 40960) of the budget per board", () => {
+      // 90000 bytes -> 1 + floor(90000 / 40960) = 3.
+      const live = liveBoards(snapshot, "page-1", {
+        recentBoards: [P1, P2, P3],
+        byteLengths: { [P1]: 0, [P2]: 90_000, [P3]: 0 },
+        slotBudget: 5,
+      });
+      // P1 (1) + P2 (3) = 4 fits; adding P3 (1) would reach 5, which still
+      // fits, so every board is admitted here.
+      expect(live).toEqual(new Set([P1, P2, P3]));
+    });
+
+    it("skips a later candidate that does not fit, but keeps scanning for one that does", () => {
+      const live = liveBoards(snapshot, "page-1", {
+        recentBoards: [P1, P2, P3],
+        byteLengths: { [P1]: 0, [P2]: 90_000, [P3]: 0 },
+        slotBudget: 3,
+      });
+      // P1 costs 1 (used=1). P2 costs 3: 1+3=4 > 3, so it is skipped, but
+      // scanning continues to P3, which costs 1 and fits (used=2).
+      expect(live).toEqual(new Set([P1, P3]));
+    });
+
+    it("always admits the first candidate even when it alone overshoots the budget", () => {
+      const live = liveBoards(snapshot, "page-1", {
+        recentBoards: [P2],
+        byteLengths: { [P2]: 400_000 },
+        slotBudget: 2,
+      });
+      expect(live).toEqual(new Set([P2]));
+    });
+
+    it("excludes a candidate the byte-length map has no entry for", () => {
+      const live = liveBoards(snapshot, "page-1", {
+        recentBoards: [P1, P2],
+        byteLengths: { [P1]: 0 },
+        slotBudget: 5,
+      });
+      expect(live).toEqual(new Set([P1]));
+    });
+
+    it("treats every board as weight 1 when no byte-length map is given", () => {
+      const live = liveBoards(snapshot, "page-1", {
+        recentBoards: [P1, P2, P3],
+        byteLengths: null,
+        slotBudget: 2,
+      });
+      expect(live.size).toBe(2);
+    });
   });
 });
 
@@ -209,11 +393,10 @@ describe("boardFrame", () => {
     // The unsized board's centre is (640, 400), 60 from the point; an 800 by 600
     // fallback would put it at (400, 300) and lose to the sized board at (550, 400).
     expect(
-      selectLiveBoards(
-        canvasPageItems(snapshot, "page-1", null),
-        { x: 700, y: 400 },
-        1,
-      ),
+      liveBoards(snapshot, "page-1", {
+        viewport: { x: 700, y: 400, w: 0, h: 0 },
+        slotBudget: 1,
+      }),
     ).toEqual(new Set([NEAR]));
   });
 });

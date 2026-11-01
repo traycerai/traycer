@@ -121,7 +121,7 @@ export type HostDirectoryListener = (
  *
  * Composes the event-only `IRunnerHost.onLocalHostChange(...)` stream with
  * the shared stubbed `fetchRemoteHosts` so the merged directory has a
- * stable shape regardless of remote discovery progress (D3).
+ * stable shape regardless of remote discovery progress.
  *
  * Selection is not decided here, and since redesign P4.2 it is not HELD here
  * either. The per-app selection authority owns `preferredHostId` and derives
@@ -273,11 +273,10 @@ export class HostDirectoryService implements IHostDirectoryService {
    */
   private registrySubscription: Disposable | null = null;
   /**
-   * Coalesces concurrent `refresh()` callers onto a single in-flight fetch
-   * (T20 / audit P4) - a foundation for T21's interval + open-time triggers,
-   * which would otherwise stack requests.
-   */
-  /**
+   * Coalesces concurrent `refresh()` callers onto a single in-flight fetch -
+   * a foundation for the interval and open-time triggers, which would
+   * otherwise stack requests.
+   *
    * The in-flight refresh, WITH the credential era it was started for. Joining
    * is only legal for a caller in that same era — see `refreshForEra`.
    */
@@ -649,7 +648,7 @@ export class HostDirectoryService implements IHostDirectoryService {
    * Rules:
    *   - If a local-kind entry exists (desktop path), prefer it. A live local
    *     snapshot always publishes a websocket URL and `available` status, so
-   *     this is already D7's "dialable local first" answer.
+   *     this is already the "dialable local first" answer.
    *   - Else, if the merged directory has exactly one entry, return it.
    *   - Else, return `null` - the zero/many mobile paths require an
    *     explicit user gesture before binding.
@@ -797,7 +796,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     if (typeof window === "undefined") {
       return;
     }
-    // WHO OWNS THE CADENCE (redesign P4.1/F22, connection registry §1b).
+    // WHO OWNS THE CADENCE (redesign P4.1/F22).
     //
     // When the shell polls the registry for the whole app - desktop's main
     // process does, so N windows make ONE `GET /api/v3/hosts` instead of N -
@@ -1011,7 +1010,7 @@ export class HostDirectoryService implements IHostDirectoryService {
     this.lastCommitCredentialGeneration = era.credentialGeneration;
     this.lastCommitIdentity = era.identity;
     // Captured BEFORE the overwrite: this is the only place that holds both
-    // sides of a membership transition (F6b).
+    // sides of a membership transition.
     const previousRemoteIds = new Set(
       this.remoteEntries.map((entry) => entry.hostId),
     );
@@ -1230,24 +1229,6 @@ export class HostDirectoryService implements IHostDirectoryService {
   }
 
   /**
-   * The shell's answer WINS over the persisted one whenever it has one.
-   *
-   * Consulting the shell only when the cache was empty made the persisted value
-   * authoritative, and it is not: the host can be re-enrolled while the
-   * renderer is not running, leaving a stale id behind. On the next launch that
-   * stale value would neutralise an obsolete twin while THIS machine's current
-   * registry entry stayed remote-kind - relay-dialable and auto-selectable -
-   * which is the exact failure this seed exists to prevent, just pointed at a
-   * different id.
-   *
-   * The persisted value survives only as the fallback for a shell that cannot
-   * answer (web/mobile, or a machine that has never enrolled).
-   *
-   * Best-effort throughout: a shell that throws must not stop the directory
-   * from starting. Failing closed here would trade a mislabelled row for an app
-   * that lists no hosts at all.
-   */
-  /**
    * Re-attempt the shell seed while this machine's id is still UNKNOWN.
    *
    * `start()` asks exactly once, and the ask can come back `null` for reasons
@@ -1278,6 +1259,24 @@ export class HostDirectoryService implements IHostDirectoryService {
     await this.seedLocalHostIdFromShell();
   }
 
+  /**
+   * The shell's answer WINS over the persisted one whenever it has one.
+   *
+   * Consulting the shell only when the cache was empty made the persisted value
+   * authoritative, and it is not: the host can be re-enrolled while the
+   * renderer is not running, leaving a stale id behind. On the next launch that
+   * stale value would neutralise an obsolete twin while THIS machine's current
+   * registry entry stayed remote-kind - relay-dialable and auto-selectable -
+   * which is the exact failure this seed exists to prevent, just pointed at a
+   * different id.
+   *
+   * The persisted value survives only as the fallback for a shell that cannot
+   * answer (web/mobile, or a machine that has never enrolled).
+   *
+   * Best-effort throughout: a shell that throws must not stop the directory
+   * from starting. Failing closed here would trade a mislabelled row for an app
+   * that lists no hosts at all.
+   */
   private async seedLocalHostIdFromShell(): Promise<void> {
     let hostId: string | null;
     try {

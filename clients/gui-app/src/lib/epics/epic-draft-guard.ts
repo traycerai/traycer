@@ -1,7 +1,6 @@
 /**
  * Which epics currently hold user-typed text that only exists in a mounted
- * editor - the renderer's own half of parking eligibility (plan C, decision
- * C1).
+ * editor - the renderer's own half of parking eligibility.
  *
  * ## Why this exists
  *

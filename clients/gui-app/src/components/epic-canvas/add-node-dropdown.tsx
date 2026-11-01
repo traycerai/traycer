@@ -304,7 +304,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
   // The host the agent launches on - `hostScope`'s fixed host when a row pins
   // one, else this window's composer surface pin (`pin ?? effective`), which
   // is what the active-scope host list below now writes instead of rebinding
-  // the app (redesign P1.2, selection model §2). Resolved through the SAME
+  // the app. Resolved through the SAME
   // primitive the picker below applies to its `runTargetHostId`, so the
   // toolbar store's catalog, the picker and the saved-args `providers.list`
   // read below can never disagree on the host, and none of them can drift onto
@@ -334,6 +334,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
     hostId: memoryHostId,
     tuiOnly: true,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     stagedSurfaceKey: null,
     sendsToRestingSandbox: false,
   });
@@ -447,6 +448,7 @@ function TerminalAgentSubMenuContent(props: TerminalAgentSubMenuContentProps) {
         <DropdownMenuLabel>Harness</DropdownMenuLabel>
         <div className="flex min-w-0 items-center gap-2 px-1">
           <HarnessModelPicker
+            withUltracode={false}
             maxModeContext={{ kind: "none" }}
             labelDisplay="responsive"
             store={toolbarStore}

@@ -16,7 +16,7 @@ import {
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 
 /**
- * Codex #1243 T-55 - the palette's opener sub-pages froze after a re-point.
+ * The palette's opener sub-pages froze after a re-point.
  *
  * `useActiveEpicProjection` resolved the handle INSIDE a `subscribe` callback
  * keyed on `epicId` alone. A re-point swaps the registry's handle without

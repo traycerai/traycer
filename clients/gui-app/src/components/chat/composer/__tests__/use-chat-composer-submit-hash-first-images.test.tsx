@@ -164,6 +164,7 @@ function mountSubmit(args: {
     reasoningFallback: "model-default",
     seedKey: "hash-first-image-submit",
     values: {
+      ultracode: false,
       permission: "supervised",
       selection: {
         harnessId: "codex",
@@ -176,6 +177,7 @@ function mountSubmit(args: {
     onSettingsChange: null,
     tuiOnly: false,
     chatLineCarriesAutoMode: null,
+    ultracodeCarried: false,
     hostId: null,
   });
   return renderHook(() =>

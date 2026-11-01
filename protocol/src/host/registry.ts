@@ -1,3 +1,24 @@
+import {
+  epicCreateV14,
+  epicCreateUpgradeV13ToV14,
+  epicCreateV15,
+  epicCreateUpgradeV14ToV15,
+  epicCreateChatV14,
+  epicCreateChatUpgradeV13ToV14,
+  epicCreateChatV15,
+  epicCreateChatUpgradeV14ToV15,
+  epicUpdateChatRunSettingsV12,
+  epicUpdateChatRunSettingsUpgradeV11ToV12,
+  epicGetChatRunSettingsV41,
+  epicGetChatRunSettingsUpgradeV40ToV41,
+  epicGetChatRunSettingsDowngradeV41ToV10,
+  epicGetChatRunSettingsDowngradeV41ToV20,
+  epicGetChatRunSettingsDowngradeV41ToV30,
+  epicGetChatRunSettingsBatchV21,
+  epicGetChatRunSettingsBatchUpgradeV20ToV21,
+  epicGetChatRunSettingsBatchDowngradeV21ToV10,
+} from "./epic/contracts";
+import { chatSubscribeV141 } from "./agent/gui/subscribe";
 import type { RequiredHostMethodVersion } from "../host-transport/remote/rpc-types";
 import { chatPrestartRuntimeV10 } from "./agent/gui/prestart-runtime";
 import { PROFILE_SYNC_LINK_RPC_METHODS } from "./profile-sync-link-contracts";
@@ -138,7 +159,11 @@ import {
   agentArchiveV10,
   agentArchiveV11,
 } from "@traycer/protocol/host/agent/archive";
-import { agentResolveMessagePeerV10 } from "@traycer/protocol/host/agent/message-peer";
+import {
+  agentResolveMessagePeerUpgradeV10ToV11,
+  agentResolveMessagePeerV10,
+  agentResolveMessagePeerV11,
+} from "@traycer/protocol/host/agent/message-peer";
 import {
   agentConfigureDowngradeV20ToV10,
   agentConfigureDowngradeV30ToV10,
@@ -653,7 +678,9 @@ import {
   botConversationSendUpgradeV11ToV12,
   botThreadListV10,
   botThreadListV11,
+  botThreadListV12,
   botThreadListUpgradeV10ToV11,
+  botThreadListUpgradeV11ToV12,
   botTurnLocateV10,
   botTaskRunNowV10,
   botTaskSetPausedV10,
@@ -662,9 +689,14 @@ import {
   botOnboardingChooseV10,
   botOnboardingCompleteV10,
   botOnboardingReadV10,
+  botOnboardingReadV11,
+  botOnboardingReadV12,
+  botOnboardingReadUpgradeV10ToV11,
+  botOnboardingReadUpgradeV11ToV12,
   botCreateV10,
   botDeleteV10,
   botListChangedV10,
+  botMemorySubscribeV10,
   botListV10,
   botListV11,
   botListUpgradeV10ToV11,
@@ -675,12 +707,19 @@ import {
   botSubscribeV12,
   botSubscribeV13,
   botSubscribeV14,
+  botSubscribeV15,
+  botSubscribeV16,
+  botSurfaceActV10,
   botUpdateRunSettingsV10,
   botUpdateDirectiveV10,
   botUpdateReplyModeV10,
   botUpdateTitleV10,
   botNotificationLevelReadV10,
   botNotificationLevelSetV10,
+  botThreadFollowReadV10,
+  botThreadFollowSetV10,
+  botReadCursorReadV10,
+  botReadCursorAdvanceV10,
 } from "@traycer/protocol/host/bot/contracts";
 import {
   draftsDeleteV10,
@@ -854,13 +893,9 @@ import {
   epicGetChatRunSettingsV30,
   epicGetChatRunSettingsV40,
   epicGetChatRunSettingsUpgradeV30ToV40,
-  epicGetChatRunSettingsDowngradeV40ToV30,
-  epicGetChatRunSettingsDowngradeV40ToV20,
-  epicGetChatRunSettingsDowngradeV40ToV10,
   epicGetChatRunSettingsBatchV10,
   epicGetChatRunSettingsBatchV20,
   epicGetChatRunSettingsBatchUpgradeV10ToV20,
-  epicGetChatRunSettingsBatchDowngradeV20ToV10,
   epicListChatPublicationTargetsV10,
   epicListCloudChatPayloadsV10,
   epicListCloudChatsV10,
@@ -8160,11 +8195,16 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   "agent.resolveMessagePeer": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: agentResolveMessagePeerV10,
           upgradeFromPreviousVersion: null,
+        },
+        // @1.1 names the bot of a bot session peer (Tracy Bots T107).
+        1: {
+          contract: agentResolveMessagePeerV11,
+          upgradeFromPreviousVersion: agentResolveMessagePeerUpgradeV10ToV11,
         },
       },
       downgradePathsFromLatest: {},
@@ -8490,7 +8530,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   // place: an unknown `kind` fails that peer's whole response parse.
   "epic.create": {
     1: {
-      latestMinor: 3,
+      latestMinor: 5,
       versions: {
         0: {
           contract: epicCreateV10,
@@ -8518,6 +8558,16 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         3: {
           contract: epicCreateV13,
           upgradeFromPreviousVersion: epicCreateUpgradeV12ToV13,
+        },
+        4: {
+          contract: epicCreateV14,
+          upgradeFromPreviousVersion: epicCreateUpgradeV13ToV14,
+        },
+        // v1.5: the folded chat's first message carries the browser-annotation
+        // sidecar. A `@1.4` host strips it, so a caller sending one needs `@1.5`.
+        5: {
+          contract: epicCreateV15,
+          upgradeFromPreviousVersion: epicCreateUpgradeV14ToV15,
         },
       },
       downgradePathsFromLatest: {},
@@ -8935,7 +8985,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   },
   "epic.createChat": {
     1: {
-      latestMinor: 3,
+      latestMinor: 5,
       versions: {
         0: {
           contract: epicCreateChatV10,
@@ -8967,6 +9017,17 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
           contract: epicCreateChatV13,
           upgradeFromPreviousVersion: epicCreateChatUpgradeV12ToV13,
         },
+        4: {
+          contract: epicCreateChatV14,
+          upgradeFromPreviousVersion: epicCreateChatUpgradeV13ToV14,
+        },
+        // v1.5: the first message carries the browser-annotation sidecar, as a
+        // `send` frame does. A `@1.4` host strips it, so a caller sending one
+        // needs `@1.5`.
+        5: {
+          contract: epicCreateChatV15,
+          upgradeFromPreviousVersion: epicCreateChatUpgradeV14ToV15,
+        },
       },
       downgradePathsFromLatest: {},
     },
@@ -8989,7 +9050,7 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
   // persist-on-next-send behavior.
   "epic.updateChatRunSettings": {
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: epicUpdateChatRunSettingsV10,
@@ -9002,6 +9063,10 @@ const HOST_RPC_REGISTRY_BASE_DEFINITION = {
         1: {
           contract: epicUpdateChatRunSettingsV11,
           upgradeFromPreviousVersion: epicUpdateChatRunSettingsUpgradeV10ToV11,
+        },
+        2: {
+          contract: epicUpdateChatRunSettingsV12,
+          upgradeFromPreviousVersion: epicUpdateChatRunSettingsUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -9273,6 +9338,58 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  "bot.threadFollow.read": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botThreadFollowReadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.threadFollow.set": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botThreadFollowSetV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.readCursor.read": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botReadCursorReadV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
+  "bot.readCursor.advance": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botReadCursorAdvanceV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   "bot.delete": {
     degrade: { kind: "unsupported" },
     1: {
@@ -9350,11 +9467,26 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
   },
+  // A member's answer or decision from a bot's surface card (T89), settled
+  // by the host that runs the task's chat.
+  "bot.surface.act": {
+    degrade: { kind: "unsupported" },
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botSurfaceActV10,
+          upgradeFromPreviousVersion: null,
+        },
+      },
+      downgradePathsFromLatest: {},
+    },
+  },
   // The threads of a bot's channel (T41), answered by its bound host.
   "bot.thread.list": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 1,
+      latestMinor: 2,
       versions: {
         0: {
           contract: botThreadListV10,
@@ -9365,6 +9497,11 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
         1: {
           contract: botThreadListV11,
           upgradeFromPreviousVersion: botThreadListUpgradeV10ToV11,
+        },
+        // @1.2 carries each anchor's excerpt (voice VT3b).
+        2: {
+          contract: botThreadListV12,
+          upgradeFromPreviousVersion: botThreadListUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -9442,11 +9579,23 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
   "bot.onboarding.read": {
     degrade: { kind: "unsupported" },
     1: {
-      latestMinor: 0,
+      latestMinor: 2,
       versions: {
         0: {
           contract: botOnboardingReadV10,
           upgradeFromPreviousVersion: null,
+        },
+        // @1.1 names the team's main bot while it is still to be set up
+        // (`setup`, T67).
+        1: {
+          contract: botOnboardingReadV11,
+          upgradeFromPreviousVersion: botOnboardingReadUpgradeV10ToV11,
+        },
+        // @1.2 keeps the setup once the main bot exists (`state: live`,
+        // `arrival`, T67b); a 1.1 caller is served its setup as `null` then.
+        2: {
+          contract: botOnboardingReadV12,
+          upgradeFromPreviousVersion: botOnboardingReadUpgradeV11ToV12,
         },
       },
       downgradePathsFromLatest: {},
@@ -10559,17 +10708,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       },
     },
     4: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicGetChatRunSettingsV40,
           upgradeFromPreviousVersion: epicGetChatRunSettingsUpgradeV30ToV40,
         },
+        1: {
+          contract: epicGetChatRunSettingsV41,
+          upgradeFromPreviousVersion: epicGetChatRunSettingsUpgradeV40ToV41,
+        },
       },
       downgradePathsFromLatest: {
-        1: epicGetChatRunSettingsDowngradeV40ToV10,
-        2: epicGetChatRunSettingsDowngradeV40ToV20,
-        3: epicGetChatRunSettingsDowngradeV40ToV30,
+        1: epicGetChatRunSettingsDowngradeV41ToV10,
+        2: epicGetChatRunSettingsDowngradeV41ToV20,
+        3: epicGetChatRunSettingsDowngradeV41ToV30,
       },
     },
     degrade: { kind: "unsupported" },
@@ -10590,16 +10743,21 @@ const HOST_RPC_REGISTRY_BASE_TAIL_DEFINITION = {
       downgradePathsFromLatest: {},
     },
     2: {
-      latestMinor: 0,
+      latestMinor: 1,
       versions: {
         0: {
           contract: epicGetChatRunSettingsBatchV20,
           upgradeFromPreviousVersion:
             epicGetChatRunSettingsBatchUpgradeV10ToV20,
         },
+        1: {
+          contract: epicGetChatRunSettingsBatchV21,
+          upgradeFromPreviousVersion:
+            epicGetChatRunSettingsBatchUpgradeV20ToV21,
+        },
       },
       downgradePathsFromLatest: {
-        1: epicGetChatRunSettingsBatchDowngradeV20ToV10,
+        1: epicGetChatRunSettingsBatchDowngradeV21ToV10,
       },
     },
     degrade: { kind: "unsupported" },
@@ -15717,7 +15875,13 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
       // @1.4 carries each task's check-in history (`checkins`) and when each
       // notification subscription started (`since`, T86); @1.3 is frozen
       // without them.
-      latestMinor: 4,
+      // @1.5 carries what each task's agents wait on a person for
+      // (`inputNeeded`) and the subscriber's own card actions in flight
+      // (`surfaceActions`, T89); @1.4 is frozen without them.
+      // @1.6 lets a failed turn's reason offer `update-provider` (T71);
+      // @1.1-@1.5 bind activity frozen without it, and the host sends
+      // `none` in its place below 1.6.
+      latestMinor: 6,
       versions: {
         0: {
           contract: botSubscribeV10,
@@ -15734,6 +15898,12 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
         4: {
           contract: botSubscribeV14,
         },
+        5: {
+          contract: botSubscribeV15,
+        },
+        6: {
+          contract: botSubscribeV16,
+        },
       },
     },
   },
@@ -15745,6 +15915,18 @@ const HOST_STREAM_RPC_REGISTRY_FEATURE_DEFINITION = {
       versions: {
         0: {
           contract: botListChangedV10,
+        },
+      },
+    },
+  },
+  // `bot.memory.subscribe` (Tracy Bots T87): a new name on `/stream`, so no
+  // baseline moves; a host without it shows no memory.
+  "bot.memory.subscribe": {
+    1: {
+      latestMinor: 0,
+      versions: {
+        0: {
+          contract: botMemorySubscribeV10,
         },
       },
     },
@@ -15778,7 +15960,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
   ...HOST_STREAM_RPC_REGISTRY_OTHER_DEFINITION,
   "chat.subscribe": {
     1: {
-      latestMinor: 40,
+      latestMinor: 41,
       versions: {
         0: {
           contract: chatSubscribeV10,
@@ -15992,6 +16174,7 @@ const HOST_STREAM_RPC_REGISTRY_DEFINITION = {
         // confirmation (`queueSteerNow.restartConfirmed`), and a refused one
         // names its causes (`actionAck.steerRestartReasons`, stripped below).
         40: { contract: chatSubscribeV140 },
+        41: { contract: chatSubscribeV141 },
       },
     },
   },

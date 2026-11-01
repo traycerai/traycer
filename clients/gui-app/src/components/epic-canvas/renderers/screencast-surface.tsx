@@ -94,7 +94,7 @@ export function ScreencastPixels(props: {
 
 /**
  * The tile's half. ONE plane paints at a time, and the loader covers every gap
- * between two (ticket 26):
+ * between two:
  *
  * ```
  *   loader ──video live──▶ VIDEO ──track death──▶ loader ──JPEG frames──▶ JPEG

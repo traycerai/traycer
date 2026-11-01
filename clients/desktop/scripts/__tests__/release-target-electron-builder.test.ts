@@ -146,7 +146,14 @@ function createProject(
       build: {
         appId: "old.app",
         productName: "Old Traycer",
-        mac: { executableName: "OldTraycer" },
+        mac: {
+          executableName: "OldTraycer",
+          extendInfo: {
+            NSMicrophoneUsageDescription:
+              "Traycer uses the microphone for voice dictation in the composer.",
+            LSFixtureKey: "kept",
+          },
+        },
         win: { executableName: "OldTraycer" },
         linux: { executableName: "old-traycer" },
         deb: { packageName: "old-deb" },
@@ -245,7 +252,16 @@ describe("release-target-electron-builder", () => {
       ],
       nsis: { include: ".release-target-uninstall-host-autostart.nsh" },
     });
-    expect(config.mac).toMatchObject({ executableName: "Traycer Staging" });
+    expect(config.mac).toMatchObject({
+      executableName: "Traycer Staging",
+      // Only a staging target names both uses; every other key of the base
+      // `extendInfo` is carried over.
+      extendInfo: {
+        NSMicrophoneUsageDescription:
+          "Traycer uses the microphone to dictate into the composer and to talk to your bots.",
+        LSFixtureKey: "kept",
+      },
+    });
     expect(config.win).toMatchObject({ executableName: "Traycer-Staging" });
     expect(config.linux).toMatchObject({ executableName: "traycer-staging" });
     const nsis = readFileSync(fixture.generatedPath, "utf8");
@@ -281,6 +297,17 @@ describe("release-target-electron-builder", () => {
     expect(nsis).toContain(
       '!define TRAYCER_HOST_LAUNCHER "$PROFILE\\.traycer\\cli\\host-start-hidden.vbs"',
     );
+  });
+
+  it("keeps the base microphone usage description for a production target", () => {
+    const fixture = createProject("production");
+    expect(run(fixture.projectDir).mac).toMatchObject({
+      extendInfo: {
+        NSMicrophoneUsageDescription:
+          "Traycer uses the microphone for voice dictation in the composer.",
+        LSFixtureKey: "kept",
+      },
+    });
   });
 
   it("refuses an unstamped config", () => {

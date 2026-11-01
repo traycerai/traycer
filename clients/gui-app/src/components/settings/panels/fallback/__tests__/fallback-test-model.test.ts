@@ -42,7 +42,7 @@ function group(id: string, candidates: readonly TierCandidate[]): TierGroup {
   return { id, candidates: [...candidates] };
 }
 
-/** Codex's live catalog (spec §What the live catalogs say), title-cased IDs. */
+/** Codex's live catalog, title-cased IDs. */
 const CODEX_CATALOG: readonly TierModelIdentity[] = [
   { slug: "gpt-6-astra", label: "GPT-6-Astra" },
   { slug: "gpt-6-sol", label: "GPT-6-Sol" },
@@ -186,7 +186,7 @@ describe("testRouting", () => {
     });
   });
 
-  // T2 - Claude `default` against the Claude catalog: `*opus*` reaches it
+  // Claude `default` against the Claude catalog: `*opus*` reaches it
   // through the LABEL ("Default (Opus 5.5)"), not the slug.
   it("Claude default routes to own-tier flagship through *opus*, row 0", () => {
     const groups = [FRONTIER_TIER, FLAGSHIP_TIER, STANDARD_TIER];
@@ -204,7 +204,7 @@ describe("testRouting", () => {
     expect(routing.row).toEqual({ candidateIndex: 0, value: "*opus*" });
   });
 
-  // T2 - with `catalog: null` the router cannot read the label, so `default`
+  // With `catalog: null` the router cannot read the label, so `default`
   // matches no row by slug and falls to the default tier.
   it("Claude default with catalog null routes to default-tier flagship", () => {
     const groups = [FRONTIER_TIER, FLAGSHIP_TIER, STANDARD_TIER];
@@ -284,7 +284,7 @@ describe("testNextSteps", () => {
     });
   });
 
-  // P2 - "another error" is answered only when every failure it stands for
+  // "another error" is answered only when every failure it stands for
   // (provider_unavailable, billing, model_unavailable, auth) agrees.
   //
   // Falsification: replace `OTHER_ERROR_REASONS.map(...)` with
@@ -711,7 +711,7 @@ describe("testPreviewForTier", () => {
     ).toEqual({ kind: "none" });
   });
 
-  // C2 - a WALK for a non-empty tier that came back with only another tier's
+  // A WALK for a non-empty tier that came back with only another tier's
   // rows: the answer is "elsewhere", naming the tier the host actually walked.
   //
   // Falsification: remove the `!walked` guard from `testPreviewForTier` (so
@@ -857,7 +857,7 @@ describe("testableTierNames", () => {
     ).toBe(true);
   });
 
-  // C1 - names compare TRIMMED, the same rule the host applies on the way in
+  // Names compare TRIMMED, the same rule the host applies on the way in
   // (`tierGroupSchema`'s trim): "flagship" and "flagship " are one name.
   //
   // Falsification: drop `.trim()` in `testableTierNames` - the two names would

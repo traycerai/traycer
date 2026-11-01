@@ -125,16 +125,6 @@ const HISTORY_GROUP_LABELS: Record<HistoryRecencyBucket, string> = {
 export const EMPTY_LOCAL_HOMED_TASK_IDS: ReadonlySet<string> = new Set();
 
 /**
- * `localHomedTaskIds` is a REQUIRED argument, not an optional one: the two
- * response shapes that feed this projection carry the home marker in two
- * different places. `epic.listTasks@1.4` puts `home` on the row; a `z.record`
- * forced `epic.getTaskContexts@1.2` to put it in a sibling id list instead.
- * A caller with the sibling in hand and no parameter to pass it through
- * silently projects every context row as cloud-backed, which is exactly what
- * happened to worktree/branch/PR search hits. Callers with no id list pass
- * `EMPTY_LOCAL_HOMED_TASK_IDS` and say so.
- */
-/**
  * Local home, from EITHER carrier.
  *
  * `epic.listTasks@1.4` puts `home` on the row; `epic.getTaskContexts@1.3` had
@@ -158,6 +148,16 @@ function isPreservedOrphanRow(task: ListTaskLight): boolean {
   return "preservation" in task && task.preservation === "orphaned-local-edits";
 }
 
+/**
+ * `localHomedTaskIds` is a REQUIRED argument, not an optional one: the two
+ * response shapes that feed this projection carry the home marker in two
+ * different places. `epic.listTasks@1.4` puts `home` on the row; a `z.record`
+ * forced `epic.getTaskContexts@1.3` to put it in a sibling id list instead.
+ * A caller with the sibling in hand and no parameter to pass it through
+ * silently projects every context row as cloud-backed, which is exactly what
+ * happened to worktree/branch/PR search hits. Callers with no id list pass
+ * `EMPTY_LOCAL_HOMED_TASK_IDS` and say so.
+ */
 export function buildHistoryItemsFromTasks(
   tasks: ReadonlyArray<ListTaskLight>,
   nowMs: number,

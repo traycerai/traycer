@@ -17,7 +17,7 @@ const MONTH = 30 * 24 * 60;
  * It stands in for the host's reading BEFORE the strip's own window catalog and
  * limit selection run, so a sample segment keeps every fixed window the
  * provider reports, under the same keys: a user who picked a weekly or several
- * windows sees that pick drawn, just over invented numbers (C12). `slot` is
+ * windows sees that pick drawn, just over invented numbers. `slot` is
  * the segment's place in the strip, so neighbouring segments rotate through
  * different readings.
  *

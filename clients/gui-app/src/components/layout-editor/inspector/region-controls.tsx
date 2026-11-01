@@ -45,7 +45,7 @@ import { useLayoutStore } from "@/stores/layout/layout-store";
  * around them.
  *
  * Both hosts draw these same controls; a second copy of one is how two
- * vocabularies for one value get built (D5).
+ * vocabularies for one value get built.
  */
 
 /**
@@ -55,7 +55,7 @@ import { useLayoutStore } from "@/stores/layout/layout-store";
  * | --- | --- |
  * | Pull requests, Comments | `Auto` `Shown` `Hidden` (L-47) |
  * | dock row | `Full row` `Chip` `Hidden` |
- * | Access | `Icon and label` `Icon only` (never hidden, G6) |
+ * | Access | `Icon and label` `Icon only` (never hidden) |
  * | Thinking | `Open` `Closed` `Hidden` |
  * | Tool activity | `Open` `Closed` (never hidden) |
  * | everything else that hides | `Shown` `Hidden` |
@@ -165,7 +165,7 @@ function sizeOptions(
 
 /**
  * Whether a region can be hidden at all: it has a `shown` leaf. Access and
- * Model do not - each is a floor the composer always draws (G6) - so they get
+ * Model do not - each is a floor the composer always draws - so they get
  * no Hidden option.
  */
 function regionHides(regionId: RegionId): boolean {

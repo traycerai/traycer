@@ -112,7 +112,7 @@ export const LAYOUT = defineSettingsSection("layout", {
     ],
   },
   /**
-   * What the side strip shows (D8): a surface-level row beside Placement,
+   * What the side strip shows: a surface-level row beside Placement,
    * drawn by `SideStripViewRow` on both hosts.
    */
   sideStripView: {
@@ -274,6 +274,7 @@ export const LAYOUT = defineSettingsSection("layout", {
    * (`components/layout-editor/layout-search.definitions.ts`), so the two
    * picks are findable without an entry here.
    */
+
   /**
    * The grammar's surface tier (L-51): it belongs to no region, and it decides
    * whether the strip exists at all in the phone layout, which withholds the

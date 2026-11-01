@@ -110,7 +110,7 @@ import { useChatOwnerCopyFacts } from "@/hooks/environment/use-team-environment-
  * row metadata that the notice names. A recovery read addresses that owner
  * without changing the host serving the copy.
  *
- * ## The doc-replica fallback (unreachable-owner view, ticket 34A)
+ * ## The doc-replica fallback (unreachable-owner view)
  *
  * A chat this host neither owns nor has ever published still syncs into the
  * epic Y.Doc through ordinary collaboration, so when the cloud read settles
@@ -491,7 +491,7 @@ export function PublishedChatTile(props: PublishedChatTileProps): ReactNode {
     node.chatId,
   ]);
 
-  // Audit S3, at the surface the catalog names: this tile's reads go through
+  // At the surface the catalog names: this tile's reads go through
   // the TAB's client, and when that client is null every `useHostQuery` under
   // it disables itself, leaving `isPending` true, `data` undefined and `error`
   // null - forever. `useCloudChatTranscript` faithfully reports that as

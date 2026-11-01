@@ -89,7 +89,7 @@ import { resetPendingHydrationRestoreForTesting } from "@/stores/chats/chat-tab-
 import type { Message } from "@traycer/protocol/persistence/epic/messages";
 
 /**
- * Ticket 21 slice 5 (jsdom half): the PERMANENT lifecycle-matrix gate for the
+ * The jsdom half of the PERMANENT lifecycle-matrix gate for the
  * REAL `ChatTile -> ChatMessages -> LegendList` chain, routed through the
  * REAL production wiring (`TileCanvas` + a real `StableTileSurfaceHost`
  * sibling using the REAL `renderHostedChatSurfaceBody` renderer), with the
@@ -178,7 +178,7 @@ vi.mock("@/lib/host", () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),
   useHostClient: () => MOCK_HOST_CLIENT,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => MOCK_HOST_CLIENT,
 }));
 
@@ -190,7 +190,7 @@ vi.mock("@/lib/host/runtime", () => ({
     revalidateCurrentContext: () => Promise.resolve({ kind: "valid" as const }),
   }),
   useHostClient: () => MOCK_HOST_CLIENT,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => MOCK_HOST_CLIENT,
 }));
 
@@ -233,8 +233,8 @@ vi.mock("@/hooks/host/use-addressable-host-id", () => ({
 }));
 
 // The Epic session resolves its host through the selection authority's derived
-// pointer (selection model §1), not the active-host projection above - seed the
-// decider at its own name (the P1.2 convention in epic-shell-usage-entry-point).
+// pointer, not the active-host projection above - seed the
+// decider at its own name (the convention in epic-shell-usage-entry-point).
 vi.mock("@/hooks/host/use-effective-host-id", () => ({
   useEffectiveHostId: () => "host-test",
 }));
@@ -338,6 +338,7 @@ const ALL_CHATS: ReadonlyArray<EpicCanvasTileRef> = [
 ];
 
 const CHAT_RUN_SETTINGS: ChatRunSettings = {
+  ultracode: false,
   harnessId: "claude",
   model: "claude-sonnet",
   permissionMode: "supervised",
@@ -373,10 +374,6 @@ function seedDocWithChats(doc: Y.Doc): void {
 }
 
 /**
- * Mutation-check / row 13 helper: remote-delete a chat by removing its entry
- * from the chats map of the live epic Y.Doc.
- */
-/**
  * Edit the root replica through the root-state PORT.
  *
  * A registry handle is a production handle and has no `Y.Doc` - the replica is
@@ -396,6 +393,10 @@ async function editLiveRootDoc(mutate: (root: Y.Doc) => void): Promise<void> {
   scratch.destroy();
 }
 
+/**
+ * Mutation-check / row 13 helper: remote-delete a chat by removing its entry
+ * from the chats map of the live epic Y.Doc.
+ */
 async function deleteChatFromLiveDoc(chatId: string): Promise<void> {
   await editLiveRootDoc((root) => {
     const chatsMap = getChatsMap(root);
@@ -569,7 +570,7 @@ function installChatStreamFactory(
   __setChatStreamClientFactoryForTests((_epicId, chatId, callbacks) => {
     callbacksByChatId.set(chatId, callbacks);
     setTimeout(() => {
-      callbacks.onConnectionStatus("open", null, null);
+      callbacks.onConnectionStatus("open", null, null, null);
       const chat = ALL_CHATS.find((candidate) => candidate.id === chatId);
       if (chat !== undefined) {
         emitChatSnapshot(chat, callbacks, messagesStore.get(chat.id));
@@ -676,7 +677,7 @@ afterEach(() => {
       chatTabPersistenceTabKey({ tileInstanceId: chat.instanceId }),
     ),
   );
-  // Review P2: the pending-hydration registry is module-scope and private to
+  // The pending-hydration registry is module-scope and private to
   // chat-messages.tsx, so it survives an ordinary cache eviction. Rows 16
   // onward reuse the fixed CHAT_TRACKED/CHAT_SIBLING instance ids - without
   // this, a missing-anchor mount in one row can leave a pending entry a
@@ -1157,7 +1158,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     // NEITHER the move source NOR the move target, so this row is a clean
     // test of cross-pane geometry-move stability in isolation. (A two-pane
     // version where the target pane already has an active tab conflates
-    // this with decision #17's real, INTENDED remount-on-deactivation
+    // this with the real, INTENDED remount-on-deactivation
     // policy - see row 11's negative control - because dropping a tab onto
     // a pane makes the dropped tab that pane's new active tab, which
     // legitimately unmounts whatever was active there before.)
@@ -1205,7 +1206,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 3b - two-pane occupied-target move: the dragged chat survives, the displaced destination chat is retained rather than remounted, and the emptied source pane dissolves", async () => {
-    // Review finding 2: row 3 only drives an empty-target move; row 11 only
+    // Row 3 only drives an empty-target move; row 11 only
     // drives `setActiveTileTab` (a plain in-pane switch), never
     // `moveTabOnTabStrip` across two panes. Neither composes the real drop's
     // three simultaneous consequences a genuine drag-onto-an-occupied-pane
@@ -1317,7 +1318,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
     await waitForHostedChatLoaded(container, CHAT_SIBLING.instanceId);
     const trackedBefore = captureRefs(container, CHAT_TRACKED.instanceId);
     // The chat the flat split actually MOVES - this is the row's real
-    // subject. Review finding 1: an earlier version of this row loaded and
+    // subject. An earlier version of this row loaded and
     // asserted only the untouched bystander (tracked), so it never proved
     // content continuity through the same-axis insertion it claims to
     // cover - a `Suspense` boundary keyed by `environment.placement.paneId`
@@ -1606,7 +1607,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 11b - the retained record is genuinely unpainted, through the REAL store -> slot -> publish path", async () => {
-    // Cold review F3: the presentation guard's only other coverage builds
+    // The presentation guard's only other coverage builds
     // `canvasActivity: { tabSelected: false }` by hand, so a regression in
     // `ActiveTabBody`'s `tabSelected={props.selected}` wiring - the thing that
     // actually produces that field in production - would ship green. This row
@@ -1800,7 +1801,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 14 - production visibility boundary: topLevelVisible handoff through real hosted chain restores free-reading position", async () => {
-    // Fixup requirement 3 / review P2: every existing visibility-handoff
+    // Every existing visibility-handoff
     // case in `chat-messages.test.tsx` drives `ChatMessages.visible` via a
     // direct prop re-render, so a broken
     // `environment.presentation.topLevelVisible` bridge would still pass.
@@ -1968,7 +1969,7 @@ describe("StableTileSurfaceHost permanent lifecycle matrix (real store/coordinat
   });
 
   it("row 16 - internal-tab-bottom-follow: reaching true bottom past an in-flight clamped free-scrolling restore releases persistence", async () => {
-    // Regression for the live-Electron identity-pinned P1: a saved
+    // The live-Electron identity-pinned regression: a saved
     // free-scrolling anchor that is missing from `messages` at mount
     // (branch edit / suffix removal) arms a mount-time clamped restore
     // convergence AND `pendingHydrationRestoreAnchorIdRef`. If the reader

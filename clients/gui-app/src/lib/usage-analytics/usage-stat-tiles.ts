@@ -27,7 +27,7 @@ export interface UsageOutputTile {
 }
 
 /**
- * Savings stands ALONE as a catalog-rate estimate (ticket 18). The earlier
+ * Savings stands ALONE as a catalog-rate estimate. The earlier
  * "Nx raw cost" ratio added catalog-derived savings to costs that can be
  * provider-REPORTED - two different bases (call populations, tiers), so the
  * ratio was not a coherent counterfactual (billing-bug pressure test).

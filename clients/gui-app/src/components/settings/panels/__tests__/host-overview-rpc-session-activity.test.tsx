@@ -83,6 +83,7 @@ function createTerminalHandle(sessionId: string): TerminalSessionStoreHandle {
     kind: "terminal-agent",
     viewer: "presentation",
     streamClientFactory: () => ({
+      supportsViewerFrames: () => false,
       sendAction: () => undefined,
       close: () => undefined,
     }),

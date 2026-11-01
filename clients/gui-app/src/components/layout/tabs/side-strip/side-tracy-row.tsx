@@ -58,7 +58,11 @@ export function SideTracyRow(props: {
       inBlock={false}
       // Its label stands where Home's does, after a 16px icon and space.
       titleIcon={
-        <TracyEntryIcon className="me-4" unreadCount={signals.unreadCount} />
+        <TracyEntryIcon
+          className="me-4"
+          unreadCount={signals.unreadCount}
+          muted={signals.muted}
+        />
       }
       tile={{
         kind: "icon",
@@ -66,6 +70,7 @@ export function SideTracyRow(props: {
           <TracyEntryIcon
             className={undefined}
             unreadCount={signals.unreadCount}
+            muted={signals.muted}
           />
         ),
       }}

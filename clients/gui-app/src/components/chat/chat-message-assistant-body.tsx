@@ -1488,11 +1488,9 @@ function ApprovalSegmentCard({
 
 /**
  * A subagent the timeline lifts out of the activity group onto its own card
- * (`promoted_subagent`), as the agent chat's turn draws it. Shared with the
- * other surfaces that draw a turn's timeline, so the card reads the same
- * wherever the turn is shown.
+ * (`promoted_subagent`), as the agent chat's turn draws it.
  */
-export function PromotedSubagentItem(props: {
+function PromotedSubagentItem(props: {
   readonly id: string;
   readonly segment: Extract<MessageSegment, { kind: "subagent" }>;
 }) {
@@ -1588,6 +1586,7 @@ export function AssistantSegment({
           managedCommand={segment.managedCommand}
           agentMessageReceipt={segment.agentMessageReceipt}
           agentMessageDelivery={segment.agentMessageDelivery}
+          botSendReceipt={segment.botSendReceipt}
           isStreaming={segment.isStreaming || isBackgroundRunning}
           endState={isBackgroundRunning ? null : segment.endState}
           stopped={segment.stopped}

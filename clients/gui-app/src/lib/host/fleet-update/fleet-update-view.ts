@@ -116,7 +116,7 @@ export interface FleetUpdateWireObservation {
 
 /**
  * What the DURABLE RECORD on this machine establishes, for the host-down
- * window (Ticket 07 §5.2.7).
+ * window.
  *
  * ## Why this is a second arm rather than a synthesized `operation`
  *
@@ -550,7 +550,7 @@ export function projectFleetUpdateView(
     return UNKNOWN_FLEET_UPDATE_VIEW;
   }
 
-  // THE HOST-DOWN WINDOW (Ticket 07 §5.2.7). Handled before the wire arms
+  // THE HOST-DOWN WINDOW. Handled before the wire arms
   // because it answers a different question with different evidence, and the
   // guards below all presuppose a peer that spoke.
   //
@@ -566,7 +566,7 @@ export function projectFleetUpdateView(
   //                            throwing it away would replace a qualified
   //                            truth with nothing.
   //
-  // That is exactly the distinction §5.2.7 asks for: "attempt progressing" is a
+  // That is exactly the distinction needed: "attempt progressing" is a
   // live `kind`, "attempt exists, host unreachable" is `unknown` + a retained
   // phase, so a surface renders "last seen preparing v2.0.0" rather than either
   // a bare offline badge or a false claim of progress.
@@ -790,8 +790,7 @@ function localLivenessProofHolds(
  * the cause the updater terminated the marker with — the health-check failure
  * that used to be invisible on a @1.3 peer, because the Overview only read the
  * coarse field for peers that could not report an attempt.
- */
-/**
+ *
  * The view the coarse `updateProgress` marker projects on its own, or `null`
  * when the peer reported no marker. Shared by the two arms that have no
  * attempt to read - a pre-@1.3 peer (`operation === null`) and a @1.3 peer
@@ -933,7 +932,7 @@ function attemptOperationView(input: {
   // `projectUpdateOperation` withholds them is a projection detail that can
   // change under us. The debt sentence is derived from the RECORDS, so it has
   // to be reachable whenever the records say debt - deciding it from the wire
-  // leg's phase instead is the class of error findings 1/4/6 were.
+  // leg's phase instead is the same class of error.
   //
   // FALL-BACK, NOT REPLACEMENT: the substitution applies to THIS CHOICE only.
   // With no park the attempt arm below still runs and still answers, so
@@ -1326,7 +1325,7 @@ function clampPercent(percent: number): number {
  * no live source, and offering to end work we cannot count is how a button
  * promises "ends 2 sessions" and ends five.
  *
- * This never gates the host's own Restart control. Per the ticket's standing
+ * This never gates the host's own Restart control. As a standing
  * rule, update state is not a host-action mutex — the overflow Restart stays
  * available whatever this returns.
  */
@@ -1343,7 +1342,7 @@ export function offersForceRestart(view: FleetUpdateView): boolean {
  * hold a page-wide lifecycle gate.
  *
  * This exists because the coarse `updateProgress` field cannot answer it, and
- * the difference is a shipped-defect-sized gap. Ticket 04's derivation maps a
+ * the difference is a shipped-defect-sized gap. The coarse derivation maps a
  * PARKED attempt (`waiting-for-work`, `waiting-to-activate`) to
  * `{state:"updating"}` — correctly, for its own purpose: bytes or an activation
  * really are still pending, and calling it `failed` would be worse. But a
@@ -1351,7 +1350,7 @@ export function offersForceRestart(view: FleetUpdateView): boolean {
  * then locks it for the entire life of the park, and `waiting-to-activate` is
  * designed to survive a reboot and sit for a week.
  *
- * The result would be the exact inversion the ticket forbids twice: a parked
+ * The result would be the exact inversion that must not happen: a parked
  * update disabling Restart, Diagnostics and the service verbs — while the
  * restart it is waiting for is the user's only way out. A banner may inform and
  * may offer **Force restart…**; it may never be the thing standing between a
@@ -1418,7 +1417,7 @@ export function holdsLifecycleGate(view: FleetUpdateView): boolean {
  * can sit for a week (`waiting-to-activate` survives a reboot by design), a
  * terminal one is retained for seven days, and a qualified one is evidence we
  * already know we cannot refresh — none of those justify polling a host every
- * two seconds, and doing so would be the retry storm §6 forbids.
+ * two seconds, and doing so would be a retry storm.
  *
  * The coarse `updating` kind does not earn it either, and for the same
  * reason it does not hold the lifecycle gate: the marker proves a file
@@ -1469,8 +1468,7 @@ function kindWarrantsFastPoll(kind: FleetUpdateViewKind): boolean {
 }
 
 /**
- * Precedence between a live read and the durable record (Ticket 07 §5.2.7,
- * ordering per D13).
+ * Precedence between a live read and the durable record (ordering per D13).
  *
  * A FRESH wire observation always wins: a running host reporting on itself is
  * strictly better evidence than a file describing what it last wrote, and the

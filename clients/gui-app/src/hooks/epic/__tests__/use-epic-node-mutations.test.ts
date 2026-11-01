@@ -32,7 +32,7 @@ vi.mock("@tanstack/react-query", async (importOriginal) => ({
 
 vi.mock("@/lib/host/runtime", () => ({
   useHostClient: () => clients.ambient,
-  // The SPINE, a separate export since redesign P2.1.
+  // The SPINE, a separate export.
   useHostRuntimeClient: () => clients.ambient,
 }));
 

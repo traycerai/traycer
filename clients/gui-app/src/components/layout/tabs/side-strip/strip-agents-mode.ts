@@ -7,7 +7,7 @@ import { useLayoutEditorStore } from "@/stores/layout/layout-editor-store";
 /**
  * How the tasks' nested agents draw: `live` in the Activity view, and
  * `preview` while the layout editor points at Side tab view in Tabs only, so
- * the agents the other value adds show ghosted before it is chosen (C3).
+ * the agents the other value adds show ghosted before it is chosen.
  * `null` when the strip has no room for them: at the top, or collapsed.
  */
 export function useStripAgentsMode(): "live" | "preview" | null {

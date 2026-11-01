@@ -1,5 +1,5 @@
 /**
- * A bot's Activity page (Tracy Bots T86, decision 115). The real page runs
+ * A bot's Activity page (Tracy Bots, decision 115). The real page runs
  * over the real summary hook and the real agent-activity store, driven by its
  * test setters, so what is asserted is the membership rule end to end: which
  * of the working agents on screen are the bot's. Only the external boundaries
@@ -26,7 +26,7 @@ import type {
 } from "@traycer/protocol/host/bot/schemas";
 import { conversationRequestMessageId } from "@traycer/protocol/persistence/epic/messages";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
-import type { BotOpenTurn } from "@/stores/bots/bot-open-thread-store";
+import type { BotTurnOpen } from "@/stores/bots/bot-open-thread-store";
 import {
   __resetAgentActivityStoreForTests,
   __setAgentActivityStateForTests,
@@ -42,7 +42,7 @@ const mocks = vi.hoisted(() => {
     navigateToTabIntent: vi.fn<(...args: unknown[]) => void>(),
     openPost: vi.fn<(open: unknown) => void>(),
     sendMutate: vi.fn<(variables: unknown, options: unknown) => void>(),
-    openTurn: vi.fn<(open: BotOpenTurn) => void>(),
+    openTurn: vi.fn<BotTurnOpen>(),
     /** Each set of check-in turns the page asked the host to locate. */
     locateAsked: [] as Array<ReadonlyArray<BotCheckinTurn>>,
     /** Each member action the page sent, by method. */
@@ -86,6 +86,14 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSchemaVersion: () => ({ major: 1, minor: 9 }),
   useHostMethodSupport: (_hostId: string | null, method: string) =>
     mocks.state.supported.has(method),
+}));
+// A stopped post's Update has its own suite (`bot-channel-failed-answer`).
+vi.mock("@/hooks/providers/use-provider-update", () => ({
+  useProviderUpdateForClient: () => ({
+    update: null,
+    pending: false,
+    failure: null,
+  }),
 }));
 // The member actions' writes: each records the method and what it was sent,
 // and stays pending with those variables while the case's `pending` holds it.
@@ -162,6 +170,7 @@ function task(taskId: string, overrides: Partial<BotTaskEntry>): BotTaskEntry {
     originRequestId: null,
     createdByChatId: null,
     checkins: null,
+    inputNeeded: null,
     pause: null,
     stop: null,
     runRequest: null,
@@ -296,6 +305,7 @@ function thread(
       senderUserId: "user-1",
       sentAt: 1_000,
       resolvedAt: null,
+      excerpt: null,
     },
     replyCount: 2,
     lastReplyAt: 2_000,
@@ -542,7 +552,7 @@ describe("<BotActivityPage /> running now", () => {
     expect(mocks.openPost).toHaveBeenCalledWith({
       anchorMessageId: messageId,
       announcement: true,
-      answer: false,
+      anchorKind: null,
       sent: null,
     });
   });
@@ -633,6 +643,7 @@ describe("<BotActivityPage /> tasks and automations", () => {
       tasks: [
         task("task-old-host", {
           checkins: null,
+          inputNeeded: null,
           lastCheckin: lastCheckin(NOW - 1_000, ["Fix flaky shard"], []),
         }),
         task("task-empty-history", {
@@ -683,7 +694,7 @@ describe("<BotActivityPage /> a check-in's turn", () => {
     return within(taskRow("task-auto")).getByTestId("bot-task-checkin-turn");
   }
 
-  it("links a received check-in to the turn the host names, by the turn's receipt, and opens it with nothing to go back to", async () => {
+  it("links a received check-in to the turn the host names, by the turn's receipt, and opens that turn", async () => {
     const user = userEvent.setup();
     mocks.state.locatedTurns = [located({})];
     mount({
@@ -697,11 +708,7 @@ describe("<BotActivityPage /> a check-in's turn", () => {
     expect(checkinLink().textContent).toBe("Read 2 files · 1m 20s");
     await user.click(checkinLink());
 
-    expect(mocks.openTurn).toHaveBeenCalledWith({
-      ref: located({}),
-      question: null,
-      back: null,
-    });
+    expect(mocks.openTurn).toHaveBeenCalledWith(located({}), null);
   });
 
   it("reads Open the turn for a turn with no summary yet", () => {

@@ -12,20 +12,20 @@ import { usePaneFocused } from "@/components/epic-tabs/pane-visibility-context";
 import { chatBottomOverlayClampedRect } from "@/components/chat/chat-scroll-region-geometry";
 import { cn } from "@/lib/utils";
 import { firstLineRect, firstVisibleLineRect } from "./quote-anchor-rect";
-import { quoteSnapshotIntoDraft } from "./quote-snapshot-into-draft";
 import type { QuoteSelectionSnapshot } from "./use-quote-selection";
 
 interface QuoteSelectionPopoverProps {
-  readonly taskId: string;
   readonly snapshot: QuoteSelectionSnapshot;
+  /** Puts the snapshot where this transcript's quotes go (`QuoteSinkContext`). */
+  readonly onQuote: (snapshot: QuoteSelectionSnapshot) => void;
   readonly onDismiss: () => void;
-  /** Called once the quote is in the chat's draft, before the dismissal. */
+  /** Called once the quote is placed, before the dismissal. */
   readonly onQuoted: () => void;
   /** The scrollable transcript container: the popover is clipped to its bounds
    *  and rides the visible portion of a selection that scrolls past its start. */
   readonly boundaryRef: RefObject<HTMLElement | null>;
   /** Composer/queue dock height overlaying the bottom of `boundaryRef`'s
-   *  region (decision #3, #13, M3) - passed as a value, not read from the
+   *  region - passed as a value, not read from the
    *  DOM, so the clamp recomputes when the dock resizes while the popover is
    *  already open even though that doesn't resize the boundary element itself. */
   readonly bottomOverlayInsetPx: number;
@@ -45,8 +45,8 @@ interface QuoteSelectionPopoverProps {
  */
 export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
   const {
-    taskId,
     snapshot,
+    onQuote,
     onDismiss,
     onQuoted,
     boundaryRef,
@@ -84,8 +84,8 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
       }
       const container = boundaryRef.current;
       // Clamped, not the raw element: the composer/queue dock overlays the
-      // bottom of this region without shrinking its box (decision #3, #13,
-      // M3) - the raw rect's bottom edge extends behind the opaque dock.
+      // bottom of this region without shrinking its box - the raw rect's
+      // bottom edge extends behind the opaque dock.
       const clampedContainerRect =
         container === null
           ? null
@@ -131,7 +131,7 @@ export function QuoteSelectionPopover(props: QuoteSelectionPopoverProps) {
 
   const handleQuote = (): void => {
     // Consume the mouseup snapshot; NEVER read the live Selection here.
-    quoteSnapshotIntoDraft(taskId, snapshot);
+    onQuote(snapshot);
     onQuoted();
     onDismiss();
   };

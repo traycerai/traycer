@@ -16,6 +16,7 @@ import {
   normalizeV16BrowserPayloadsInFrame,
   normalizeV16InterviewFieldsInFrame,
   projectChatClientFrameForVersion,
+  chatLineCarriesUltracode,
   supportsAutoPermissionMode,
   supportsInterviewSettlementActions,
   type ProjectedChatSubscribeClientFrame,
@@ -26,6 +27,7 @@ import type {
   IStreamSession,
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
   StreamFrameEnvelope,
 } from "./i-stream-session";
 import type { IStreamClient } from "./i-stream-client";
@@ -190,6 +192,7 @@ export interface ChatStreamCallbacks {
     status: StreamConnectionStatus,
     reason: StreamCloseReason | null,
     retryCause: FatalErrorDetails | null,
+    continuity: StreamContinuity,
   ) => void;
 
   // ─── The windowed line (`chat.subscribe@1.8`) ─────────────────────────────
@@ -325,8 +328,8 @@ export class ChatStreamClient {
     this.session.onServerFrame((envelope, binaryPayload) => {
       this.handleServerFrame(envelope, binaryPayload);
     });
-    this.session.onStatusChange((status, reason, retryCause) => {
-      this.callbacks.onConnectionStatus(status, reason, retryCause);
+    this.session.onStatusChange((status, reason, retryCause, continuity) => {
+      this.callbacks.onConnectionStatus(status, reason, retryCause, continuity);
     });
   }
 
@@ -420,6 +423,10 @@ export class ChatStreamClient {
     return supportsAutoPermissionMode(
       this.session.getNegotiatedSchemaVersion(),
     );
+  }
+
+  ultracodeProtocolSupported(): boolean {
+    return chatLineCarriesUltracode(this.session.getNegotiatedSchemaVersion());
   }
 
   /**

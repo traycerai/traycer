@@ -48,7 +48,7 @@ export type ClonedChatProfileRecoveryRequired =
  * The target's matching harness accepts neither the source's mode nor anything
  * its demotion chain offers, so there is no tuple to create with.
  *
- * A REFUSAL rather than a third clamp, and the reason is round 11's one-way
+ * A REFUSAL rather than a third clamp, and the reason is the one-way
  * rule: `auto` demotes to `auto_accept_edits` because dropping the judge is the
  * honest half-measure, while a walk to the safest SUPPORTED mode would land a
  * `["full_access"]` target on `supervised` - stricter than the chat the user is

@@ -392,7 +392,7 @@ describe("createHostQueryInvalidator / invalidateHostScope", () => {
     expect(queryClient.getQueryState(controlKey)?.isInvalidated).toBe(false);
   });
 
-  // Codex review, PR #977 thread PRRT_kwDOL6Tbrc6WdeIO: "Do not invalidate
+  // The rule: "Do not invalidate
   // cache-only catalog queries during recovery". Marking them stale without
   // a refetch is not enough - TanStack treats an invalidated query as stale
   // regardless of `staleTime`, so the storm is deferred to the next mount,

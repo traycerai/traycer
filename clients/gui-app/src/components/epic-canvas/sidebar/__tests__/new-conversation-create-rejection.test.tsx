@@ -226,6 +226,7 @@ vi.mock("@/hooks/sandboxes/use-staged-send-sign-in-check", () => ({
 vi.mock("@/components/home/hooks/use-composer-toolbar-store", async () => {
   const { createStore } = await import("zustand/vanilla");
   const store = createStore(() => ({
+    ultracode: false,
     selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
     values: {
       selection: { harnessId: "claude", modelSlug: "sonnet", profileId: null },
@@ -310,7 +311,7 @@ vi.mock("@/hooks/composer/use-composer-paste", async () => {
   return {
     ...actual,
     useComposerPaste: stubPasteResult,
-    // The modal calls `useComposerHashPaste` (T4's hash-only adapter), not
+    // The modal calls `useComposerHashPaste` (the hash-only adapter), not
     // `useComposerPaste` above - without this the real hook ran underneath.
     useComposerHashPaste: stubPasteResult,
   };
@@ -514,7 +515,7 @@ describe("new-conversation modal: a rejected create leaves no live pending tab",
     expect(settled?.failureReason).toBe("Couldn't create the agent.");
   });
 
-  // Review #1297 finding 3, the symmetric case. `markInitialTurnStarted` was
+  // The symmetric case. `markInitialTurnStarted` was
   // dead for the SAME observer-unmount reason as the failure arm: the host has
   // already kicked the provider turn from `initialMessage`, and this is what
   // tells the handoff driver not to send it again. A regression leaves the

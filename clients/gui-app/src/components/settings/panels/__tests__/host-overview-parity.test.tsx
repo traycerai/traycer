@@ -122,7 +122,7 @@ interface OverviewSemanticSnapshot {
    * differences deleted from it.
    *
    * The structural fields above (testids, button names, headings) miss exactly
-   * one class of divergence: prose. A review found a fourth, unlisted visual
+   * one class of divergence: prose. There is a fourth, unlisted visual
    * difference hiding in precisely that gap — `HostRegistryUpdates` forked its
    * auto-update sentence on `isLocalHost`, so the same fixtures produced
    * different Updates explanations for local and remote while every structural
@@ -155,8 +155,8 @@ interface OverviewSemanticSnapshot {
  * says it is called, so a fallback to this string fails `findByText` outright.
  *
  * Same across variants is what lets the prose comparison run without a
- * normalization. A review asked for the previous per-variant names' masking
- * `.split(rowName)` to be dropped on the grounds that `rowName` had no
+ * normalization. Dropping the previous per-variant names' masking
+ * `.split(rowName)` was proposed on the grounds that `rowName` had no
  * legitimate occurrence left in the compared prose. That premise is wrong —
  * `host-settings-panel.tsx` renders it in the panel description ("Status,
  * updates and maintenance for …"), which is shared prose and squarely inside
@@ -534,7 +534,7 @@ describe("<HostSettingsPanel /> Overview local/remote parity", () => {
   });
 
   it("shows the RPC's hostVersion on the health line, and the registry version only in About this host's labelled row", async () => {
-    // The reviewer's actual finding: both a `host.status.hostVersion` and the
+    // The defect: both a `host.status.hostVersion` and the
     // registry row's `version` used to render as the host's version at once.
     // The registry says "1.4.2" here twice over — the scope row's `version`
     // (`hostScopeOptionFixture`'s default) and the account record's

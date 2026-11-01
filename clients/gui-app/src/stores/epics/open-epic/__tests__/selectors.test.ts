@@ -346,6 +346,7 @@ describe("open-epic-store doc projection", () => {
     const projected = projectChats(doc, null);
 
     expect(projected.byId["chat-1"].settings).toEqual({
+      ultracode: false,
       harnessId: "codex",
       model: "gpt-5.6-terra",
       permissionMode: "supervised",

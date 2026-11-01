@@ -161,48 +161,6 @@ function stepPlainHistory(history: RouterHistory, direction: -1 | 1): void {
 }
 
 /**
- * When the landing entry targets a tile under an OPEN Task that no longer
- * resolves, reopens that tile as a preview BEFORE the router navigation
- * fires. Reuses the preserved payload's ORIGINAL `instanceId` (not a fresh
- * one) and prefers the href's own `paneId` when that pane still exists, so
- * the landing href's exact `(paneId, tileInstanceId)` resolves directly on
- * navigation - no URL-rewrite churn, and no risk of landing in an unrelated
- * pane and evicting its preview. Falls back to the active pane (and the
- * route's stale-target canonicalization) only when the original pane is
- * gone. This is the "closed sub-tab of an open Task" case from the behavior
- * spec.
- *
- * Before restoring, two checks can prove the payload permanently unusable
- * and drop it (`discardClosedTilePayload`), treating it as a cache miss -
- * navigation still proceeds, just without the reopen, and the existing
- * stale-route restore takes over exactly as it did before this feature
- * existed:
- *
- * 1. `state.selfDeletedArtifactIds` (global, content-id-keyed) - a
- *    successful LOCAL delete tombstones its id here regardless of whether
- *    the tile's epic session is currently live, so it's checked first and
- *    unconditionally.
- * 2. `isTileRefRecordLive` - the SAME predicate `useEpicRouteSynchronization`'s
- *    cleanup effect uses to close a tile whose backing record was deleted
- *    while it was OPEN. A record can just as well be deleted while the tile
- *    is CLOSED (no open tile for that effect to catch), so this is validated
- *    again here, at restore time, regardless of how or when the payload was
- *    captured. Presence is checked via the live open-Epic session's
- *    projected tree (`getOpenEpicRegistry().peek(epicId)` - `peek`, not
- *    `get`: this is a passive check, not a genuine session open, so it must
- *    not bump the session's MRU recency). Neither "no session live" NOR "a
- *    session exists but its snapshot hasn't loaded yet" (freshly
- *    (re)acquired handle, `tree` still empty) can prove the record is gone,
- *    or a payload captured while its record was still pending projection can
- *    prove the record is gone (the cache keeps that pending marker until the
- *    create flow explicitly clears it). Matching this codebase's conservative
- *    destroy-only-what-a-store-proves-dead liveness rule (`liveness.ts`) -
- *    both are treated as live rather than blocking the restore. A REMOTE
- *    deletion with no live session and no local tombstone is unknowable here
- *    - accepted: the stale restore that can follow is loop-safe (route sync
- *    closes it and canonicalizes once its session loads).
- */
-/**
  * Whether a preserved closed-tile payload still names a record worth
  * restoring. Lifted out of {@link reopenClosedTilePreview}, whose guard
  * sequence was over this repo's complexity ceiling; the checks and their order
@@ -281,6 +239,48 @@ function cloudKnownPredicate(
   return (id: string) => cloudKnownIds.has(id);
 }
 
+/**
+ * When the landing entry targets a tile under an OPEN Task that no longer
+ * resolves, reopens that tile as a preview BEFORE the router navigation
+ * fires. Reuses the preserved payload's ORIGINAL `instanceId` (not a fresh
+ * one) and prefers the href's own `paneId` when that pane still exists, so
+ * the landing href's exact `(paneId, tileInstanceId)` resolves directly on
+ * navigation - no URL-rewrite churn, and no risk of landing in an unrelated
+ * pane and evicting its preview. Falls back to the active pane (and the
+ * route's stale-target canonicalization) only when the original pane is
+ * gone. This is the "closed sub-tab of an open Task" case from the behavior
+ * spec.
+ *
+ * Before restoring, two checks can prove the payload permanently unusable
+ * and drop it (`discardClosedTilePayload`), treating it as a cache miss -
+ * navigation still proceeds, just without the reopen, and the existing
+ * stale-route restore takes over exactly as it did before this feature
+ * existed:
+ *
+ * 1. `state.selfDeletedArtifactIds` (global, content-id-keyed) - a
+ *    successful LOCAL delete tombstones its id here regardless of whether
+ *    the tile's epic session is currently live, so it's checked first and
+ *    unconditionally.
+ * 2. `isTileRefRecordLive` - the SAME predicate `useEpicRouteSynchronization`'s
+ *    cleanup effect uses to close a tile whose backing record was deleted
+ *    while it was OPEN. A record can just as well be deleted while the tile
+ *    is CLOSED (no open tile for that effect to catch), so this is validated
+ *    again here, at restore time, regardless of how or when the payload was
+ *    captured. Presence is checked via the live open-Epic session's
+ *    projected tree (`getOpenEpicRegistry().peek(epicId)` - `peek`, not
+ *    `get`: this is a passive check, not a genuine session open, so it must
+ *    not bump the session's MRU recency). Neither "no session live" NOR "a
+ *    session exists but its snapshot hasn't loaded yet" (freshly
+ *    (re)acquired handle, `tree` still empty) can prove the record is gone,
+ *    or a payload captured while its record was still pending projection can
+ *    prove the record is gone (the cache keeps that pending marker until the
+ *    create flow explicitly clears it). Matching this codebase's conservative
+ *    destroy-only-what-a-store-proves-dead liveness rule (`liveness.ts`) -
+ *    both are treated as live rather than blocking the restore. A REMOTE
+ *    deletion with no live session and no local tombstone is unknowable here
+ *    - accepted: the stale restore that can follow is loop-safe (route sync
+ *    closes it and canonicalizes once its session loads).
+ */
 function reopenClosedTilePreview(href: string): void {
   const epicTab = parseEpicTabHref(href);
   if (epicTab === null) {

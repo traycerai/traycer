@@ -21,7 +21,7 @@ import {
  * APPENDS errors as new blocks, and a retry that succeeds has no durable exit at
  * all - so a block here would leave a permanent "Retrying…" orphan in the
  * transcript of every chat a transient retry rescued. A component that unmounts
- * when the state moves is the whole design (engine spec, §Wait rung, N5).
+ * when the state moves is the whole design (N5).
  *
  * It borrows the streaming notice's LOOK - the accent rule, the pulse, the muted
  * weight - so it reads as part of the turn rather than as a new kind of thing.
@@ -114,7 +114,7 @@ function retryRowText(
   modelLabelFor: FallbackModelLabelResolver,
 ): { readonly retryingOn: string; readonly attemptCount: string } {
   // The tuple being retried is the one that FAILED: a transient retry is the
-  // same tuple again by definition (D57 - a retry never commits settings and
+  // same tuple again by definition (a retry never commits settings and
   // never restamps), so `targetTuple` is null here and reading it would render
   // an empty chip.
   const identity = fallbackTupleIdentity(

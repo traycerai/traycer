@@ -32,7 +32,7 @@ import {
 
 const MB_PER_GIB = 1024;
 
-/** The spec's default shape: 2 vCPU, 4 GB. */
+/** The built-in default shape: 2 vCPU, 4 GB. */
 const DEFAULT_SHAPE = {
   cpus: 2,
   memoryMb: 4 * MB_PER_GIB,
@@ -251,8 +251,8 @@ export interface SandboxConfigurationDefaults {
 /**
  * What a configuration's New row stages when the person opens no gear: its
  * defaults' shape while the catalogue still offers it, in the provider's
- * default region, else the spec's default shape; the defaults' periods
- * either way. With no defaults set, the spec's. `null` when no provider can
+ * default region, else `DEFAULT_SHAPE`; the defaults' periods
+ * either way. With no defaults set, the built-in defaults. `null` when no provider can
  * create.
  */
 export function configurationStageShape(
@@ -518,7 +518,7 @@ export function priceClause(input: ConsequencesInput): ConsequenceClause {
 }
 
 /**
- * Every clause the block shows in full, in the spec's order: the price
+ * Every clause the block shows in full, in order: the price
  * always; the audience when the task has or may gain readers; the reach when
  * it holds a host of another configuration; the team, resting-storage and
  * shared-use clauses on a team; the move clause on an unmoved computer.

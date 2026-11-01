@@ -6,6 +6,7 @@ import {
   screen,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Mock } from "vitest";
 import type {
   Chat,
@@ -241,7 +242,7 @@ function emitSnapshot(
   callbacks: ChatStreamCallbacks,
   pending: PendingFallback | undefined,
 ): void {
-  callbacks.onConnectionStatus("open", null, null);
+  callbacks.onConnectionStatus("open", null, null, null);
   callbacks.onSnapshot({
     kind: "snapshot",
     hasBinaryPayload: false,
@@ -435,7 +436,12 @@ function setUp() {
   const callbacks = harness.callbacks();
   emitSnapshot(callbacks, HOLD_P);
   const spies = spyOnLease(harness.handle);
-  render(<ChooserHarness handle={harness.handle} />);
+  // The chooser's bot write is a Query mutation, built on every chooser.
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ChooserHarness handle={harness.handle} />
+    </QueryClientProvider>,
+  );
   return { harness, callbacks, spies };
 }
 

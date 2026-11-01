@@ -1,5 +1,5 @@
 /**
- * Host-binding-survives-restart guard (ticket 12).
+ * Host-binding-survives-restart guard.
  *
  * Per CLAUDE.md: every
  * `EpicNodeRef` variant - chat, artifact, terminal, terminal-agent,

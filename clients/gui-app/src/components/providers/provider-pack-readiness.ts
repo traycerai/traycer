@@ -220,7 +220,7 @@ function sandboxPackPreparingFromState(
  * costs at worst one bounced turn on a host that has nothing, and the host's
  * typed `preparing` error is the backstop for exactly that.
  *
- * (An earlier note here described the D6 closure-coupled carve as a narrow
+ * (An earlier note here described the closure-coupled carve as a narrow
  * over-openness - a PATH candidate the host would refuse while this reports
  * `available`. The carve was removed host-side on 2026-08-19: auto-PATH now
  * serves closure packs like every other provider, so an `available` PATH

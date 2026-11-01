@@ -2,7 +2,7 @@ import { toast } from "sonner";
 import type { SelectionChangeCause } from "@traycer-clients/shared/host-selection/selection-authority-contract";
 
 /**
- * THE one-line switch toast (status narration §"Action feedback"), and the
+ * THE one-line switch toast, and the
  * only narration a selection move gets.
  *
  * It replaces the audit's two auto-switch toast call sites, which fired from

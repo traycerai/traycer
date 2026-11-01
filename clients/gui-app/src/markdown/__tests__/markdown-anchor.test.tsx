@@ -170,7 +170,7 @@ function renderMarkdownWithBrowserRoutingAndLinkPolicy(
   return render(
     <RunnerHostContext.Provider value={host}>
       <BrowserSessionsContext.Provider value={sessions}>
-        {/* The click-time reader lives on the snapshot context (C8). */}
+        {/* The click-time reader lives on the snapshot context. */}
         <BrowserSessionsSnapshotProvider value={sessions}>
           <LinkTargetProvider epicId="epic-markdown" viewTabId={VIEW_TAB_ID}>
             <MarkdownLinkContext.Provider value={linkPolicy}>

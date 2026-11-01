@@ -61,7 +61,7 @@ const ATTENTION_LABEL: Readonly<Record<RailBadgeKind, string>> = {
 };
 
 /**
- * The meter (D5): one pip per live agent - a breathing pip for a turn, a
+ * The meter: one pip per live agent - a breathing pip for a turn, a
  * hollow one for background work - then one coloured pip for the task's
  * attention state, which is never the one cut. At most four pips; the agents
  * that do not fit become "+N". A trailing "+" marks known agents on a plane

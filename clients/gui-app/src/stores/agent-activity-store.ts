@@ -5,6 +5,7 @@ import { AgentActivityStreamClient } from "@traycer-clients/shared/host-transpor
 import type {
   StreamCloseReason,
   StreamConnectionStatus,
+  StreamContinuity,
 } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
@@ -71,8 +72,8 @@ export interface HostAgentActivity {
   readonly cloudSyncStatus: AgentActivityCloudSyncStatus | null;
   readonly byEpic: ReadonlyMap<string, EpicAgentActivity>;
   /**
-   * Whether a `state` frame has landed since this host's stream last became
-   * `open`.
+   * Whether a `state` frame has landed in this subscription cycle. A held
+   * subscription retains its cycle; a rebuild needs a new frame.
    *
    * The union's attestation marker, and deliberately not inferred from any
    * other field. `servedBy` and `byEpic` outlive both a stream REPLACEMENT
@@ -83,8 +84,8 @@ export interface HostAgentActivity {
    * being read. Anything that reads this store as evidence of what is
    * happening NOW - the cap's busy gate - must gate on the frame.
    *
-   * THE INVARIANT: only a `state` frame sets this true, and EVERY write that
-   * moves `connectionStatus` off `open` sets it false. That is why the status
+   * Only a `state` frame sets this true. A new subscription cycle clears it;
+   * a held stream keeps it while `connectionStatus` withholds its vouch. The status
    * is written through {@link noteAgentActivityConnectionStatus} /
    * {@link markAgentActivityReconnecting} and never with a bare `setState` -
    * a caller that moves the status by hand leaves a stale attestation behind,
@@ -175,8 +176,8 @@ function retireHostEpochHealthClaim(hostId: string): void {
  *   attestation; the reopened session's own frame replaces it.
  * - Any other non-`open` status (`connecting`, `reconnecting`) keeps the
  *   union - a dropped socket does not stop agents from working, and the
- *   presence surfaces would flicker - but drops the attestation: whatever
- *   reconnects has to say so again with a frame of its own.
+ *   presence surfaces would flicker - but drops the attestation unless the
+ *   subscription is held and will continue without another snapshot.
  * - `open` alone attests nothing. It is a socket, not an answer; the `state`
  *   frame is what sets the marker.
  *
@@ -188,9 +189,12 @@ export function noteAgentActivityConnectionStatus(
   hostId: string,
   status: StreamConnectionStatus,
   reason: StreamCloseReason | null,
+  continuity: StreamContinuity,
 ): void {
   patchHost(hostId, (current) => {
-    if (status === "open") {
+    // A held subscription keeps its state-frame proof, but the status gate
+    // withholds its vouch until the same subscription continues.
+    if (status === "open" || continuity === "held") {
       return { ...current, connectionStatus: status };
     }
     if (status !== "closed") {
@@ -219,15 +223,6 @@ export function noteAgentActivityConnectionStatus(
 }
 
 /**
- * Opens the activity stream for ONE host and writes into that host's slice.
- *
- * `hostId` is required and is the whole point of the change: without it the
- * second caller silently replaced the first caller's data. It is also what
- * {@link agentActivityPlaneCoversHost} answers from, so it is known before
- * the socket does anything and needs no re-assertion on a reopen - the reopen
- * lane dials into the same slice.
- */
-/**
  * Everything {@link openAgentActivityStream} needs, as one object because the
  * positional form had reached five parameters. Every field is REQUIRED: the
  * two nullable ones carry a decision (`null` means "no handler" and "host
@@ -238,8 +233,8 @@ export function noteAgentActivityConnectionStatus(
 export interface OpenAgentActivityStreamInput {
   readonly hostId: string;
   /**
-   * THE reconnect policy for this stream's host (redesign P4.1 /
-   * connection-registry §6), acquired from the connection registry by the one
+   * THE reconnect policy for this stream's host (redesign P4.1),
+   * acquired from the connection registry by the one
    * place that opens these streams. This store no longer constructs its own
    * scheduler: the constants, the terminal-close classification and the
    * backoff shape live once, in the engine, and each stream still gets its
@@ -272,6 +267,15 @@ export function rereadAgentActivity(): void {
   for (const reread of [...liveStreamRereads]) reread();
 }
 
+/**
+ * Opens the activity stream for ONE host and writes into that host's slice.
+ *
+ * `hostId` is required and is the whole point of the change: without it the
+ * second caller silently replaced the first caller's data. It is also what
+ * {@link agentActivityPlaneCoversHost} answers from, so it is known before
+ * the socket does anything and needs no re-assertion on a reopen - the reopen
+ * lane dials into the same slice.
+ */
 export function openAgentActivityStream(
   input: OpenAgentActivityStreamInput,
 ): () => void {
@@ -323,9 +327,9 @@ export function openAgentActivityStream(
             stateFrameSeenThisEpoch: true,
           }));
         },
-        onConnectionStatus: (status, reason) => {
+        onConnectionStatus: (status, reason, _retryCause, continuity) => {
           if (currentClient !== client) return;
-          noteAgentActivityConnectionStatus(hostId, status, reason);
+          noteAgentActivityConnectionStatus(hostId, status, reason, continuity);
           if (status === "closed") {
             reopenScheduler.scheduleAfterClose(reason);
             if (isUnauthorized(reason)) onAuthError?.();

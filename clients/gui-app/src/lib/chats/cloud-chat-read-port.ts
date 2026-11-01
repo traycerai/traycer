@@ -34,7 +34,7 @@ import type { HostRpcRegistry } from "@traycer/protocol/host/index";
  * NEXT read, not the one in flight, and the host connection carries no
  * renderer verdict of its own. A refusal here is a plain RPC error the
  * pipeline propagates unchanged, so the read fails where it was already
- * failing for a transport error. Found in review.
+ * failing for a transport error.
  */
 export function createHostCloudChatReadPort(
   client: Pick<HostRequester<HostRpcRegistry>, "request">,

@@ -10,8 +10,8 @@ import { useHostQuery } from "@/hooks/host/use-host-query";
 export const BROWSER_SAVED_LOGIN_SITES_METHOD = "browser.savedLoginSites";
 
 /**
- * Which sites this surface's host still holds saved logins for (spec section
- * 7.3). Names and last-seen times only - the host never puts a cookie value on
+ * Which sites this surface's host still holds saved logins for.
+ * Names and last-seen times only - the host never puts a cookie value on
  * this path, so nothing here can leak one.
  *
  * Scoped to the SURFACE's host, like every other host read in Settings: the

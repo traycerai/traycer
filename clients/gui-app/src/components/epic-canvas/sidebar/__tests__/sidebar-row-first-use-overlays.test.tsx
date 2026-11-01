@@ -306,7 +306,6 @@ const ART_A = "ticket-a";
 const ART_B = "spec-b";
 const TITLE_ART_A = "Alpha ticket";
 const TOOLTIP_DELAY_MS = 150;
-/** Same summary the cloud-row suite already mounts. */
 /** A leaf row: no subagents beneath it, so no expansion state to consult. */
 const NO_CHILDREN: readonly UnifiedCloudChatEntry[] = [];
 const LEAF_EXPANSION: CloudChatRowExpansion = {
@@ -314,6 +313,7 @@ const LEAF_EXPANSION: CloudChatRowExpansion = {
   toggleExpanded: () => undefined,
 };
 
+/** Same summary the cloud-row suite already mounts. */
 const CLOUD_CHAT: CloudChatSummary = {
   identity: {
     taskId: "d60781ca-e0d3-4318-bf2a-e03d8ce4e3a7",

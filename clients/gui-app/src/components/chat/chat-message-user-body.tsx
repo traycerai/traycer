@@ -64,6 +64,7 @@ import { useChatTranscriptJumpStore } from "@/stores/chats/chat-transcript-jump-
 import { cn } from "@/lib/utils";
 import { collapseToSingleLine } from "@/lib/text/format-single-line";
 import { deriveA2AReceivedCollapsibleKey } from "@/components/chat/chat-collapsible-key";
+import { moveChatTimelineScroller } from "@/components/chat/chat-timeline-follow-latch";
 import {
   chatFindA2AReceivedBodyUnitId,
   chatFindMessageContentUnitId,
@@ -271,9 +272,10 @@ function AgentMessageDisplayView({
     // tile, which picks it up whether it is already mounted or is being
     // opened by the call above. This row's own id IS the receipt the sender's
     // harness stamped on its send block, so the landing is the exact "Sent
-    // message" card. A terminal-agent sender has no transcript, and a send
+    // message" card. A terminal-agent sender has no transcript, a bot's
+    // session opens the bot's channel, which has no such card, and a send
     // persisted before receipts existed just leaves the tile open at rest.
-    if (sender.surface !== "gui") return;
+    if (sender.surface !== "gui" || sender.bot !== null) return;
     requestJump(sender.hostId, sender.agentId, {
       kind: "receipt",
       messageId,
@@ -821,7 +823,7 @@ function InlineUserMessageEditor({
     const scrollSnapshot = captureScrollSnapshot(containerRef.current);
     let attempt = 0;
     const focusWhenReady = (): void => {
-      editorRef.current?.focusAtEnd();
+      editorRef.current?.focusAtEnd("hold-view");
       restoreScrollSnapshot(scrollSnapshot);
       attempt += 1;
       if (attempt >= 4) {
@@ -1374,8 +1376,11 @@ function restoreScrollSnapshot(snapshot: ScrollSnapshot): void {
     window.scrollTo(snapshot.left, snapshot.top);
     return;
   }
-  snapshot.container.scrollLeft = snapshot.left;
-  snapshot.container.scrollTop = snapshot.top;
+  const { container } = snapshot;
+  moveChatTimelineScroller(container, snapshot.top, () => {
+    container.scrollLeft = snapshot.left;
+    container.scrollTop = snapshot.top;
+  });
 }
 
 function nearestScrollContainer(element: HTMLElement): HTMLElement | null {
@@ -1405,5 +1410,8 @@ function scrollByAmount(element: HTMLElement | null, top: number): void {
     window.scrollTo({ top: window.scrollY + top, behavior: "auto" });
     return;
   }
-  element.scrollTo({ top: element.scrollTop + top, behavior: "auto" });
+  const target = element.scrollTop + top;
+  moveChatTimelineScroller(element, target, () => {
+    element.scrollTo({ top: target, behavior: "auto" });
+  });
 }

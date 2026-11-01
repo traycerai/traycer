@@ -421,7 +421,7 @@ function seatProps(
           //
           // `y + 34` put it across the desk's own front panel, where muted grey
           // lettering over the wood read as a name with its bottom half missing
-          // (feedback round 1: "lower half of labels on some agents are cut
+          // ("lower half of labels on some agents are cut
           // out"). Nothing was clipping it; it was lettering with no floor
           // behind it.
           y: foot + OFFICE_LABEL_GAP,
