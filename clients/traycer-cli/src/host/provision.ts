@@ -892,7 +892,8 @@ async function provisionInSegment(
  * before the manifest resolves and the run carries ungated evidence to the
  * commit tail. `own-build-minimum` is this CLI's own bundled/`--from` archive:
  * a build stamp with no manifest entry behind it, so the registry is not
- * consulted and the fixed table decides. The two registry policies name a real
+ * consulted, and a target the fixed table cannot place waits for the archive's
+ * own declaration at the commit tail. The two registry policies name a real
  * catalog version and may have published formats.
  */
 async function gateProvisionStoreFormatFloor(
@@ -933,6 +934,7 @@ async function gateProvisionStoreFormatFloor(
     // again against whatever record is on disk at the swap.
     installedVersion: installed.version,
     installedStoreFormats: installed.storeFormats,
+    installedProvenance: installed.provenance,
     consultRegistry: opts.satisfaction.kind !== "own-build-minimum",
     acceptStoreFormatLoss: opts.acceptStoreFormatLoss,
     site: "host ensure",
