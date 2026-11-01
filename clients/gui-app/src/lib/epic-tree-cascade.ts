@@ -145,23 +145,61 @@ export function countDirectAgentChildren(
   if (!Object.hasOwn(tree.childrenByParent, nodeId)) return 0;
   let count = 0;
   for (const childId of tree.childrenByParent[nodeId]) {
-    if (!Object.hasOwn(tree.nodeById, childId)) continue;
-    const { type } = tree.nodeById[childId];
-    if (type === "chat" || type === "terminal-agent") count += 1;
+    if (isAgentNode(tree, childId)) count += 1;
+  }
+  return count;
+}
+
+/** Artifacts never nest under agents, so only the two agent kinds count. */
+function isAgentNode(tree: TreeSlice, nodeId: string): boolean {
+  if (!Object.hasOwn(tree.nodeById, nodeId)) return false;
+  const { type } = tree.nodeById[nodeId];
+  return type === "chat" || type === "terminal-agent";
+}
+
+/**
+ * How many agents a whole SELECTION promotes to the top level: the agents
+ * whose parent is being deleted and which are not being deleted themselves.
+ *
+ * That exclusion is the reason this is not a sum of `countDirectAgentChildren`
+ * over the selection. A child selected alongside its parent is deleted, not
+ * promoted, so counting it would overstate what survives; and a grandchild
+ * whose parent is selected IS promoted, which the same rule gives for free,
+ * since its parent is the one going away. `nodeIds` is read as a set, so a
+ * repeated id cannot count a child twice.
+ */
+export function countPromotedAgentChildren(
+  tree: TreeSlice,
+  nodeIds: readonly string[],
+): number {
+  const deleted = new Set(nodeIds);
+  let count = 0;
+  for (const nodeId of deleted) {
+    if (!Object.hasOwn(tree.childrenByParent, nodeId)) continue;
+    for (const childId of tree.childrenByParent[nodeId]) {
+      if (deleted.has(childId)) continue;
+      if (isAgentNode(tree, childId)) count += 1;
+    }
   }
   return count;
 }
 
 /**
- * Sentence for an AGENT row's delete dialog, or null when it has no nested
- * agents. Deleting an agent removes that one record only: its direct children
- * are kept and the tree draws them at the top level, so the dialog says that
- * instead of the cascade sentence an artifact row gets from
- * `formatCascadeSummary`.
+ * Sentence for an AGENT delete dialog, or null when nothing is promoted.
+ * Deleting an agent removes that one record only: its direct children are kept
+ * and the tree draws them at the top level, so the dialog says that instead of
+ * the cascade sentence an artifact row gets from `formatCascadeSummary`.
+ *
+ * `deletedAgentCount` is what the reader is about to delete - one from a row's
+ * own menu, a whole selection from select mode - and all it decides is whether
+ * the agents are nested under "it" or under "them".
  */
 export function formatAgentDeleteNesting(
   nestedAgentCount: number,
+  deletedAgentCount: number,
 ): string | null {
   if (nestedAgentCount <= 0) return null;
-  return `${nestedAgentCount} ${nestedAgentCount === 1 ? "agent" : "agents"} nested under it will be kept and moved to the top level.`;
+  const nested = nestedAgentCount === 1 ? "agent" : "agents";
+  const parent = deletedAgentCount === 1 ? "it" : "them";
+  return `${nestedAgentCount} ${nested} nested under ${parent} will be kept and moved to the top level.`;
 }

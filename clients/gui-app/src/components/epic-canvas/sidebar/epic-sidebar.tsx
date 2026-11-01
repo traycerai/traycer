@@ -160,6 +160,11 @@ import {
   type EpicTuiAgentProjection,
   type EpicTreeRecord,
 } from "@/lib/epic-selectors";
+import {
+  countPromotedAgentChildren,
+  formatAgentDeleteNesting,
+} from "@/lib/epic-tree-cascade";
+import type { TreeSlice } from "@/stores/epics/open-epic/types";
 import { isEditableRole, mutationDisabledHint } from "@/lib/epic-permissions";
 import { useEpicExportArtifacts } from "@/hooks/epic/use-epic-export-artifacts-mutation";
 import {
@@ -1789,6 +1794,7 @@ function SidebarBulkDeleteController(props: {
       description={describeSidebarBulkDeleteDescription(
         panelId,
         pendingDeleteIds,
+        tree,
       )}
       cascadeSummary={null}
       actionLabel="Delete"
@@ -2029,15 +2035,33 @@ function panelRowNoun(panelId: LeftPanelId, count: number): string {
   return count === 1 ? "artifact" : "artifacts";
 }
 
+/**
+ * Deleting an agent removes that one record: the agents nested under it are
+ * KEPT, and the tree redraws them at the top level. That is a real
+ * consequence, and an agent row's own menu has always disclosed it - so select
+ * mode, which deletes the same records, has to disclose it too.
+ *
+ * It is computed from the selection rather than summed per row, because a
+ * child selected alongside its parent is deleted rather than promoted; see
+ * `countPromotedAgentChildren`. A single selected agent gets the sentence as
+ * well, which is where select mode and the row menu most obviously disagreed.
+ */
 function describeSidebarBulkDeleteDescription(
   panelId: LeftPanelId,
   ids: readonly string[] | null,
+  tree: TreeSlice,
 ): string {
-  if (ids === null || ids.length < 2) return "This action cannot be undone.";
-  // Deleting an agent keeps the agents nested under it, so only artifacts
-  // carry the warning.
-  if (panelId === "chats") return "This action cannot be undone.";
-  return "This action cannot be undone. Nested items under selected rows may also be deleted.";
+  const undone = "This action cannot be undone.";
+  if (ids === null || ids.length === 0) return undone;
+  if (panelId === "chats") {
+    const nesting = formatAgentDeleteNesting(
+      countPromotedAgentChildren(tree, ids),
+      ids.length,
+    );
+    return nesting === null ? undone : `${undone} ${nesting}`;
+  }
+  if (ids.length < 2) return undone;
+  return `${undone} Nested items under selected rows may also be deleted.`;
 }
 
 function usePanelRootIds(panelId: LeftPanelId): ReadonlyArray<string> {

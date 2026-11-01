@@ -3,6 +3,7 @@ import {
   computeDescendantCounts,
   computeDescendantCountsFromTree,
   countDirectAgentChildren,
+  countPromotedAgentChildren,
   formatAgentDeleteNesting,
   formatCascadeSummary,
   type DescendantCounts,
@@ -375,17 +376,88 @@ describe("countDirectAgentChildren", () => {
   });
 });
 
+describe("countPromotedAgentChildren", () => {
+  /**
+   * The count is of what SURVIVES a delete, which is why this is not a sum of
+   * `countDirectAgentChildren` over the selection: a child selected alongside
+   * its parent is deleted rather than promoted. Summing per row would promise
+   * the reader an agent that is about to go.
+   */
+  it("leaves out a child that is itself being deleted", () => {
+    const tree = treeFromRecords([
+      makeRecord("a", "chat", null),
+      makeRecord("b", "chat", "a"),
+      makeRecord("c", "terminal-agent", "a"),
+    ]);
+    expect(countPromotedAgentChildren(tree, ["a"])).toBe(2);
+    expect(countPromotedAgentChildren(tree, ["a", "b"])).toBe(1);
+    expect(countPromotedAgentChildren(tree, ["a", "b", "c"])).toBe(0);
+  });
+
+  /**
+   * The same rule covers depth for free: a grandchild whose own parent is
+   * selected is promoted, because the node it hangs from is the one going
+   * away.
+   */
+  it("counts a grandchild once its own parent is selected too", () => {
+    const tree = treeFromRecords([
+      makeRecord("a", "chat", null),
+      makeRecord("b", "chat", "a"),
+      makeRecord("c", "chat", "b"),
+    ]);
+    expect(countPromotedAgentChildren(tree, ["a"])).toBe(1);
+    expect(countPromotedAgentChildren(tree, ["a", "b"])).toBe(1);
+  });
+
+  it("adds up across several selected parents", () => {
+    const tree = treeFromRecords([
+      makeRecord("a", "chat", null),
+      makeRecord("b", "chat", "a"),
+      makeRecord("t", "terminal-agent", null),
+      makeRecord("u", "terminal-agent", "t"),
+    ]);
+    expect(countPromotedAgentChildren(tree, ["a", "t"])).toBe(2);
+  });
+
+  /** A repeated id must not count the same child twice. */
+  it("reads the selection as a set", () => {
+    const tree = treeFromRecords([
+      makeRecord("a", "chat", null),
+      makeRecord("b", "chat", "a"),
+    ]);
+    expect(countPromotedAgentChildren(tree, ["a", "a"])).toBe(1);
+  });
+
+  it("is zero for an empty selection, a leaf and an unknown id", () => {
+    const tree = treeFromRecords([makeRecord("a", "chat", null)]);
+    expect(countPromotedAgentChildren(tree, [])).toBe(0);
+    expect(countPromotedAgentChildren(tree, ["a"])).toBe(0);
+    expect(countPromotedAgentChildren(tree, ["missing"])).toBe(0);
+  });
+});
+
 describe("formatAgentDeleteNesting", () => {
-  it("returns null when the agent has no nested agents", () => {
-    expect(formatAgentDeleteNesting(0)).toBeNull();
+  it("returns null when nothing is promoted", () => {
+    expect(formatAgentDeleteNesting(0, 1)).toBeNull();
+    expect(formatAgentDeleteNesting(0, 4)).toBeNull();
   });
 
   it("says nested agents are kept and moved to the top level", () => {
-    expect(formatAgentDeleteNesting(1)).toBe(
+    expect(formatAgentDeleteNesting(1, 1)).toBe(
       "1 agent nested under it will be kept and moved to the top level.",
     );
-    expect(formatAgentDeleteNesting(3)).toBe(
+    expect(formatAgentDeleteNesting(3, 1)).toBe(
       "3 agents nested under it will be kept and moved to the top level.",
+    );
+  });
+
+  /** Several agents are being deleted, so they are nested under "them". */
+  it("addresses a whole selection as them", () => {
+    expect(formatAgentDeleteNesting(1, 2)).toBe(
+      "1 agent nested under them will be kept and moved to the top level.",
+    );
+    expect(formatAgentDeleteNesting(2, 3)).toBe(
+      "2 agents nested under them will be kept and moved to the top level.",
     );
   });
 });

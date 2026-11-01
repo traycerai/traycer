@@ -3270,6 +3270,69 @@ describe("epic sidebar selection mode", () => {
 
     expect(markRead).not.toHaveBeenCalled();
   });
+
+  /**
+   * Deleting an agent removes that one record: the agents nested under it are
+   * KEPT and redrawn at the top level. An agent row's own menu has always
+   * disclosed that; select mode deletes the same records and said only "This
+   * action cannot be undone.", so the reader got less warning for the same
+   * act, by the route that deletes MORE at once.
+   */
+  function openChatDeleteDialog(ids: readonly string[]): void {
+    render(<EpicLeftPanelHost epicId={EPIC_ID} tabId={TAB_ID} />);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Select agents" }));
+    for (const id of ids) {
+      fireEvent.click(screen.getByTestId(`epic-sidebar-select-${id}`));
+    }
+    fireEvent.click(screen.getByTestId("epic-sidebar-delete-selected-chats"));
+  }
+
+  it("discloses the agent one selected parent promotes, as the row menu does", () => {
+    seedChatTree();
+
+    openChatDeleteDialog(["chat-root"]);
+
+    expect(
+      screen.getByText(
+        "This action cannot be undone. 1 agent nested under it will be kept and moved to the top level.",
+      ),
+    ).toBeTruthy();
+  });
+
+  /**
+   * The count is of what SURVIVES, which is why it cannot be a sum over the
+   * selected parents: `chat-child` is being deleted alongside its parent, so
+   * nothing is promoted and there is nothing to disclose. A per-row sum would
+   * promise the reader an agent that is about to be deleted.
+   */
+  it("says nothing about a child that is itself selected", () => {
+    seedChatTree();
+
+    openChatDeleteDialog(["chat-root", "chat-child"]);
+
+    expect(screen.getByText("This action cannot be undone.")).toBeTruthy();
+  });
+
+  /** Two parents are "them", not "it". */
+  it("addresses several selected parents as them", () => {
+    seedChatTree();
+
+    openChatDeleteDialog(["chat-root", "agent-root"]);
+
+    expect(
+      screen.getByText(
+        "This action cannot be undone. 1 agent nested under them will be kept and moved to the top level.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("stays plain for a selection that promotes nothing", () => {
+    seedChatTree();
+
+    openChatDeleteDialog(["agent-root"]);
+
+    expect(screen.getByText("This action cannot be undone.")).toBeTruthy();
+  });
 });
 
 /**

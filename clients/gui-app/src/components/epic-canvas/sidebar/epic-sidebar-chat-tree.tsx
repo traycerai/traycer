@@ -2043,7 +2043,7 @@ const ChatNode = memo(function ChatNode(props: ChatNodeProps) {
   if (node === null) return null;
   if (!treeFilter(node.type)) return null;
 
-  const nestingNote = formatAgentDeleteNesting(nestedAgentCount);
+  const nestingNote = formatAgentDeleteNesting(nestedAgentCount, 1);
   const rowClick = (event: React.MouseEvent<HTMLButtonElement>) => {
     if (selectionMode || event.ctrlKey || event.metaKey) {
       event.preventDefault();
