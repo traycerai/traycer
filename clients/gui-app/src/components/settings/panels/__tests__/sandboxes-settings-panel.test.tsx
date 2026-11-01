@@ -1654,6 +1654,90 @@ describe("<SandboxesSettingsPanel />", () => {
         "Didn't destroy 1 of 1 idle sandbox",
       );
       expect(binding.auth.destroySandbox).toHaveBeenCalledOnce();
+      const alert = within(rowOf(first.id)).getByRole("alert", {
+        hidden: true,
+      });
+      expect(alert.textContent).toContain("Couldn't destroy idle-a");
+      expect(
+        within(alert).queryByRole("button", { name: "Retry", hidden: true }),
+      ).toBeNull();
+    });
+
+    it("keeps its dialog and gates Retry when another account signs in over a failed batch", async () => {
+      const { binding } = mount([first]);
+      binding.auth.destroySandbox.mockResolvedValueOnce(
+        refusal(503, "provider-error"),
+      );
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 1" }),
+      );
+      await within(rowOf(first.id)).findByRole("alert", { hidden: true });
+      expect(
+        within(dialog)
+          .getByRole("button", { name: "Retry" })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+      const listed = binding.auth.listSandboxes.mock.calls.length;
+      act(() => {
+        useAuthStore.setState({
+          contextMetadata: { userId: "u2", username: "bea" },
+        });
+      });
+      await waitFor(() =>
+        expect(binding.auth.listSandboxes.mock.calls.length).toBeGreaterThan(
+          listed,
+        ),
+      );
+      await screen.findByText("idle-a");
+      expect(dialog.isConnected).toBe(true);
+      expect(dialog.textContent).toContain("idle-a · couldn't be destroyed");
+      const retry = within(dialog).getByRole("button", { name: "Retry" });
+      expect(retry.hasAttribute("disabled")).toBe(true);
+      fireEvent.click(retry);
+      expect(binding.auth.destroySandbox).toHaveBeenCalledOnce();
+    });
+
+    it("keeps a running batch's dialog when the list empties under it, then closes on its result", async () => {
+      const { binding, client } = mount([first]);
+      const pending = Promise.withResolvers<SandboxVerbFetchResult>();
+      binding.auth.destroySandbox.mockReturnValueOnce(pending.promise);
+      await screen.findByText("idle-a");
+      await choose("state", "suspended");
+      const dialog = await confirmIdle();
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Destroy 1" }),
+      );
+      await waitFor(() =>
+        expect(binding.auth.destroySandbox).toHaveBeenCalled(),
+      );
+      binding.auth.listSandboxes.mockResolvedValue({
+        kind: "ok",
+        response: { sandboxes: [] },
+      });
+      await act(async () => {
+        await client.invalidateQueries({
+          queryKey: sandboxQueryKeys.listAll(),
+        });
+      });
+      await waitFor(() =>
+        expect(screen.queryByTestId("sandboxes-row")).toBeNull(),
+      );
+      expect(dialog.isConnected).toBe(true);
+      expect(
+        screen.getByTestId("confirm-action").hasAttribute("disabled"),
+      ).toBe(true);
+      expect(toastMocks.success).not.toHaveBeenCalled();
+      await act(async () => {
+        pending.resolve({ kind: "ok", settled: true });
+        await pending.promise;
+      });
+      await waitFor(() => expect(closedDialog()).toBe(true));
+      expect(toastMocks.success).toHaveBeenCalledExactlyOnceWith(
+        "Destroyed idle-a",
+      );
     });
 
     it("holds Retry for a failed target until its typed name is entered again", async () => {

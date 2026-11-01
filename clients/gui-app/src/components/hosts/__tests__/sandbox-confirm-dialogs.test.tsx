@@ -15,7 +15,6 @@ import { EMPTY_FOCUS_MODEL } from "@/lib/home-focus/build-focus-model";
 import type { FocusModel } from "@/lib/home-focus/focus-model";
 import type { TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import type { NestedFocusTarget } from "@/lib/epic-nested-focus-route";
-import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import {
   createTerminalSessionStore,
@@ -776,48 +775,5 @@ describe("sandbox confirm dialogs", () => {
       expect.objectContaining({ targets: [requestTargets[1]] }),
       expect.any(Object),
     );
-  });
-
-  it("gates a failed target's Retry while the signed-in account is not the one that confirmed", () => {
-    useAuthStore.setState({
-      status: "signed-in",
-      contextMetadata: { userId: "u1", username: "ada" },
-    });
-    const target = sandboxSummaryFixture({
-      id: "sbx-a",
-      hostId: "host-a",
-      displayName: "box-a",
-      state: "suspended",
-    });
-    render(
-      <SandboxDestroyAllIdleDialog
-        targets={[target]}
-        open
-        onOpenChange={vi.fn()}
-      />,
-    );
-    fireEvent.click(screen.getByTestId("confirm-action"));
-    act(() =>
-      mocks.batch.mutate.mock.calls[0][1].onSuccess([
-        {
-          sandboxId: target.id,
-          name: target.displayName,
-          outcome: { kind: "failed", message: "busy" },
-        },
-      ]),
-    );
-    expect(
-      screen.getByRole("button", { name: "Retry" }).hasAttribute("disabled"),
-    ).toBe(false);
-    act(() =>
-      useAuthStore.setState({
-        contextMetadata: { userId: "u2", username: "bea" },
-      }),
-    );
-    const retry = screen.getByRole("button", { name: "Retry" });
-    expect(retry.hasAttribute("disabled")).toBe(true);
-    fireEvent.click(retry);
-    expect(mocks.batch.mutate).toHaveBeenCalledOnce();
-    useAuthStore.setState({ status: "signed-out", contextMetadata: null });
   });
 });
