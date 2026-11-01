@@ -33,7 +33,12 @@ import type { HostClient } from "@traycer-clients/shared/host-client/host-client
 import { useHostClient, type HostRpcRegistry } from "@/lib/host";
 import { toast } from "sonner";
 import { wasEpicCreatedThisSession } from "@/lib/epics/session-created-epics";
-import { DISCARD_CREATED_EPIC_FAILED_COPY } from "@/hooks/epic/use-epic-batch-delete-mutation";
+import {
+  DISCARD_CREATED_EPIC_FAILED_COPY,
+  DISCARD_CREATED_EPIC_UNREAD_COPY,
+} from "@/hooks/epic/use-epic-batch-delete-mutation";
+import { useEpicCreateTuiAgentForClient } from "@/hooks/epic/use-epic-tui-agent-mutations";
+import { agentMutationKeys, epicMutationKeys } from "@/lib/query-keys";
 import type { ImageBytes } from "@/lib/attachments/image-bytes";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import {
@@ -80,7 +85,11 @@ import {
   MESSAGE_CONTENT,
   PICKED_SETTINGS,
 } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  MutationObserver,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { useLandingReturnedSandbox } from "@/hooks/sandboxes/use-returned-sandbox-stage";
@@ -1391,6 +1400,250 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       queryClient.clear();
     },
   );
+
+  /**
+   * An agent create of the person's, in flight on the Send's own client: a
+   * real mutation on the real key, held open until `settle`.
+   */
+  async function startAgentCreate(
+    queryClient: QueryClient,
+    mutationKey: readonly string[],
+  ): Promise<{
+    readonly submittedAt: number;
+    readonly settle: () => Promise<void>;
+  }> {
+    const held = deferred<null>();
+    const observer = new MutationObserver(queryClient, {
+      mutationKey,
+      mutationFn: () => held.promise,
+    });
+    const done = observer.mutate().catch(() => undefined);
+    await waitFor(() => {
+      expect(observer.getCurrentResult().status).toBe("pending");
+    });
+    return {
+      submittedAt: observer.getCurrentResult().submittedAt,
+      settle: async () => {
+        await act(async () => {
+          held.resolve(null);
+          await done;
+        });
+      },
+    };
+  }
+
+  /** Both of the rollback's reads, held until `release` answers them empty. */
+  function holdReads(): { readonly release: () => Promise<void> } {
+    const reads = new Map<string, Deferred<unknown>>();
+    landingMocks.readRequest.mockImplementation((_hostId, method) => {
+      const held = deferred<unknown>();
+      reads.set(method, held);
+      return held.promise;
+    });
+    return {
+      release: async () => {
+        await act(async () => {
+          for (const [method, held] of reads)
+            held.resolve(heldRows(method, []));
+          await Promise.all([...reads.values()].map((held) => held.promise));
+        });
+      },
+    };
+  }
+
+  /** The rollback decided to keep the task: it never asked the host to delete. */
+  function expectTaskKept(queryClient: QueryClient, epicId: string): void {
+    expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
+    expect(
+      queryClient
+        .getMutationCache()
+        .findAll({ mutationKey: epicMutationKeys.discardCreated() }),
+    ).toEqual([]);
+    expect(wasEpicCreatedThisSession(epicId)).toBe(true);
+    expect(toast.error).not.toHaveBeenCalledWith(
+      DISCARD_CREATED_EPIC_FAILED_COPY,
+    );
+    expect(toast.error).not.toHaveBeenCalledWith(
+      DISCARD_CREATED_EPIC_UNREAD_COPY,
+    );
+  }
+
+  const AGENT_CREATE_KEYS = [
+    ["a chat", epicMutationKeys.createChat()],
+    ["a terminal agent", epicMutationKeys.createTuiAgent()],
+    ["a terminal agent's launch", agentMutationKeys.startTerminalSession()],
+  ] as const;
+
+  it.each(AGENT_CREATE_KEYS)(
+    "a Send refused while the task is still being set up keeps an empty task while %s is being created, and the message comes back unsent",
+    async (_label, mutationKey) => {
+      vi.mocked(toast.error).mockClear();
+      const { epicId, refuseAttach, queryClient } =
+        await startSendWithHeldAttach();
+      const reads = holdReads();
+      const create = await startAgentCreate(queryClient, mutationKey);
+      await refuseAttach(attachBusy());
+      await bothReadsSent();
+      await reads.release();
+      await waitFor(() => {
+        expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+      });
+
+      expectTaskKept(queryClient, epicId);
+      expectMessageBackUnsent();
+      await create.settle();
+      queryClient.clear();
+    },
+  );
+
+  it.each(AGENT_CREATE_KEYS)(
+    "a Send refused while the task is still being set up keeps an empty task when %s was being created and has landed since the reads were sent",
+    async (_label, mutationKey) => {
+      vi.mocked(toast.error).mockClear();
+      const { epicId, refuseAttach, queryClient } =
+        await startSendWithHeldAttach();
+      const reads = holdReads();
+      const create = await startAgentCreate(queryClient, mutationKey);
+      await refuseAttach(attachBusy());
+      await bothReadsSent();
+      // The create lands while the reads are out, and they answer empty.
+      await create.settle();
+      await reads.release();
+      await waitFor(() => {
+        expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+      });
+
+      expectTaskKept(queryClient, epicId);
+      expectMessageBackUnsent();
+      queryClient.clear();
+    },
+  );
+
+  it.each(AGENT_CREATE_KEYS)(
+    "a Send refused while the task is still being set up keeps an empty task when %s is started after the reads were sent and lands before they answer",
+    async (_label, mutationKey) => {
+      vi.mocked(toast.error).mockClear();
+      const { epicId, refuseAttach, queryClient } =
+        await startSendWithHeldAttach();
+      const reads = holdReads();
+      await refuseAttach(attachBusy());
+      await bothReadsSent();
+      const create = await startAgentCreate(queryClient, mutationKey);
+      await create.settle();
+      await reads.release();
+      await waitFor(() => {
+        expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+      });
+
+      expectTaskKept(queryClient, epicId);
+      expectMessageBackUnsent();
+      queryClient.clear();
+    },
+  );
+
+  it("a Send refused while the task is still being set up keeps an empty task while the terminal-agent create hook has its request out", async () => {
+    vi.mocked(toast.error).mockClear();
+    const { epicId, refuseAttach, queryClient } =
+      await startSendWithHeldAttach();
+    const created = deferred<unknown>();
+    const sendRequest = landingMocks.request.getMockImplementation();
+    landingMocks.request.mockImplementation((method, payload) =>
+      method === "epic.createTuiAgent"
+        ? created.promise
+        : (sendRequest?.(method, payload) ?? Promise.resolve(null)),
+    );
+    const { result } = renderHook(
+      () => useEpicCreateTuiAgentForClient(useHostClient()),
+      { wrapper: queryClientWrapper(queryClient) },
+    );
+    act(() => {
+      result.current.mutate({
+        epicId,
+        parentId: null,
+        title: "",
+        harnessId: "claude",
+        harnessSessionId: null,
+        terminalAgentArgs: null,
+        terminalShellCommand: null,
+        terminalShellArgs: null,
+        hostId: TEST_HOST_ID,
+        workspaceFolders: [],
+        workspaceMode: undefined,
+        model: null,
+        reasoningEffort: null,
+        agentMode: "regular",
+        tuiAgentId: "tui-in-flight",
+        profileId: null,
+        forkSourceHarnessSessionId: null,
+      });
+    });
+    await waitFor(() => {
+      expect(
+        landingMocks.request.mock.calls.some(
+          ([method]) => method === "epic.createTuiAgent",
+        ),
+      ).toBe(true);
+    });
+    const reads = holdReads();
+    await refuseAttach(attachBusy());
+    await bothReadsSent();
+    await reads.release();
+    await waitFor(() => {
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+    });
+
+    expect(
+      landingMocks.request.mock.calls.filter(
+        ([method]) => method === "epic.batchDelete",
+      ),
+    ).toEqual([]);
+    expectTaskKept(queryClient, epicId);
+    // The message is back; the held create is the one request beyond the Send's.
+    expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    expect(useLandingDraftStore.getState().drafts[0]).toMatchObject({
+      content: MESSAGE_CONTENT,
+      closed: false,
+      returnedSandbox: { target: TEAM_TARGET },
+    });
+    expect(landingMocks.request.mock.calls.map(([method]) => method)).toEqual([
+      "epic.create",
+      "epic.attachEnvironment",
+      "epic.createTuiAgent",
+    ]);
+    await act(async () => {
+      created.resolve({ tuiAgentId: "tui-in-flight" });
+      await waitFor(() => {
+        expect(result.current.isPending).toBe(false);
+      });
+    });
+    queryClient.clear();
+  });
+
+  it("a Send refused while the task is still being set up still deletes an empty task when an agent create settled before the reads were sent", async () => {
+    const { epicId, refuseAttach, queryClient } =
+      await startSendWithHeldAttach();
+    const create = await startAgentCreate(
+      queryClient,
+      epicMutationKeys.createChat(),
+    );
+    await create.settle();
+    // The reads must be sent in a later millisecond than the create.
+    await waitFor(() => {
+      expect(Date.now()).toBeGreaterThan(create.submittedAt);
+    });
+    await refuseAttach(attachBusy());
+
+    await waitFor(() => {
+      expect(landingMocks.deleteRequest).toHaveBeenCalledWith(TEST_HOST_ID, {
+        ids: [epicId],
+      });
+    });
+    await waitFor(() => {
+      expect(wasEpicCreatedThisSession(epicId)).toBe(false);
+    });
+    expectMessageBackUnsent();
+    queryClient.clear();
+  });
 
   it.each([
     ["E_SHARE_NOT_OWNED", attachRefusal("E_SHARE_NOT_OWNED")],

@@ -34,7 +34,11 @@ import {
 } from "@/lib/host/owner-gone-write-routing";
 import type { SurfacePinFleetView } from "@/stores/host/surface-host-selection-store";
 import { useHostMutation } from "@/hooks/host/use-host-query";
-import { hostQueryKeys, epicMutationKeys } from "@/lib/query-keys";
+import {
+  agentMutationKeys,
+  epicMutationKeys,
+  hostQueryKeys,
+} from "@/lib/query-keys";
 import { invalidateWorktreeListingAndBindingCaches } from "@/hooks/worktree/invalidations";
 import { useWorktreeDeleteStreamTransportFactory } from "@/lib/host/use-worktree-delete-stream-transport";
 import {
@@ -840,11 +844,37 @@ interface DiscardCreatedEpicContext {
 }
 
 /**
+ * Every mutation that starts a Task's first agent: `epic.createChat` from any
+ * surface, and a terminal agent's `agent.tui.prepareLaunch` then
+ * `epic.createTuiAgent`. Their keys name no Task, so any of them in flight
+ * counts for every Task.
+ */
+const AGENT_CREATE_MUTATION_KEYS = [
+  epicMutationKeys.createChat(),
+  epicMutationKeys.createTuiAgent(),
+  agentMutationKeys.startTerminalSession(),
+];
+
+/** One of them is in flight, or was sent at `since` or later. */
+function agentCreateSince(queryClient: QueryClient, since: number): boolean {
+  return AGENT_CREATE_MUTATION_KEYS.some((mutationKey) =>
+    queryClient
+      .getMutationCache()
+      .findAll({ mutationKey })
+      .some(
+        ({ state }) => state.status === "pending" || state.submittedAt >= since,
+      ),
+  );
+}
+
+/**
  * Deletes a Task this window has just created, on the host it was created on,
  * when the Send that created it did not go through and the Task still holds no
  * agent: that Send leaves no Task behind. The Task is open while the Send is
  * being set up, so the person may have started an agent in it, and any row
- * keeps it, as does a read that fails. Answers whether it was deleted.
+ * keeps it, as does a read that fails, or any agent create this window has in
+ * flight around the reads: it can land after them, and the delete is
+ * unconditional. Answers whether it was deleted.
  *
  * Below `epic.listTuiAgents@1.1` a host leaves doc-only agents off its list, so
  * an empty answer proves nothing there. The floor rides the read, because only
@@ -944,6 +974,8 @@ export function useEpicDiscardCreatedIfEmpty(): (
   }).mutateAsync;
   return async (variables) => {
     const userId = activeClient.getRequestContextUserId();
+    const readsSentAt = Date.now();
+    const createBeforeReads = agentCreateSince(queryClient, readsSentAt);
     let holdsAgent: boolean;
     try {
       const [chats, terminalAgents] = await Promise.all([
@@ -961,7 +993,12 @@ export function useEpicDiscardCreatedIfEmpty(): (
     }
     // The reads are a wait the account can change in, and a delete never
     // crosses accounts.
-    if (holdsAgent || activeClient.getRequestContextUserId() !== userId) {
+    if (
+      holdsAgent ||
+      activeClient.getRequestContextUserId() !== userId ||
+      createBeforeReads ||
+      agentCreateSince(queryClient, readsSentAt)
+    ) {
       return false;
     }
     try {
