@@ -58,7 +58,10 @@ import {
   type SandboxRowOperation,
 } from "@/hooks/sandboxes/use-sandbox-operation";
 import { formatRelativeTimestamp, useSampledNow } from "@/lib/relative-time";
-import { sandboxRegionLabel } from "@/lib/sandboxes/sandbox-row-lines";
+import {
+  sandboxRegionLabel,
+  sandboxReportedAt,
+} from "@/lib/sandboxes/sandbox-row-lines";
 import {
   formatRunway,
   sandboxBalanceMc,
@@ -303,6 +306,7 @@ function SandboxFacts(props: {
       ? null
       : sandboxSuspendKeepsLine(provider.suspendFidelity);
   const regionLabel = sandboxRegionLabel(summary);
+  const reportedAt = sandboxReportedAt(summary.lastActivityAt);
   return (
     <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-ui-xs">
       <dt className="text-muted-foreground">Size</dt>
@@ -331,9 +335,9 @@ function SandboxFacts(props: {
       )}
       <dt className="text-muted-foreground">Last active</dt>
       <dd data-testid="sandbox-card-last-active">
-        {summary.lastActivityAt === null
+        {reportedAt === null
           ? "No activity reported yet"
-          : formatRelativeTimestamp(summary.lastActivityAt, now)}
+          : formatRelativeTimestamp(reportedAt, now)}
       </dd>
       {summary.burst ? (
         <>

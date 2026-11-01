@@ -51,7 +51,9 @@ export interface InlineRename {
  *
  * `onCommit` receives the trimmed value and is called only when it is non-empty
  * and actually changed; pass a stable (memoised) callback to keep `inputProps`
- * referentially stable.
+ * referentially stable. The seed left as it was is not a change, even if `value`
+ * moved during the edit: an agent's title landing mid-edit must not lose to a
+ * stale seed, which for an untitled agent is the "Untitled agent" fallback.
  */
 export function useInlineRename(args: {
   readonly value: string;
@@ -63,6 +65,7 @@ export function useInlineRename(args: {
   const [editValue, setEditValue] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
   const settledRef = useRef(true);
+  const seedRef = useRef("");
 
   useLayoutEffect(() => {
     if (!isEditing) return;
@@ -80,6 +83,7 @@ export function useInlineRename(args: {
   const startEditing = useCallback(() => {
     if (!canEdit) return;
     settledRef.current = false;
+    seedRef.current = value;
     setEditValue(value);
     setIsEditing(true);
   }, [canEdit, value]);
@@ -91,7 +95,13 @@ export function useInlineRename(args: {
       setIsEditing(false);
       if (!commit) return;
       const trimmed = editValue.trim();
-      if (trimmed.length === 0 || trimmed === value) return;
+      if (
+        trimmed.length === 0 ||
+        trimmed === value ||
+        trimmed === seedRef.current.trim()
+      ) {
+        return;
+      }
       onCommit(trimmed);
     },
     [editValue, onCommit, value],

@@ -11,10 +11,11 @@ import { useInlineRename } from "@/hooks/ui/use-inline-rename";
 const TITLE = "Original title";
 
 function InlineRenameHarness(props: {
+  readonly value: string;
   readonly onCommit: (next: string) => void;
 }) {
   const rename = useInlineRename({
-    value: TITLE,
+    value: props.value,
     canEdit: true,
     onCommit: props.onCommit,
   });
@@ -75,7 +76,7 @@ describe("useInlineRename", () => {
     const focusSpy = vi.spyOn(HTMLInputElement.prototype, "focus");
     const selectSpy = vi.spyOn(HTMLInputElement.prototype, "select");
 
-    render(<InlineRenameHarness onCommit={() => undefined} />);
+    render(<InlineRenameHarness value={TITLE} onCommit={() => undefined} />);
 
     fireEvent.click(screen.getByRole("button", { name: /edit/i }));
     const input = getRenameInput();
@@ -100,7 +101,7 @@ describe("useInlineRename", () => {
   it("leaves an IME's confirming Enter to the composition, then commits on a plain Enter", () => {
     installAnimationFrameMock();
     const onCommit = vi.fn();
-    render(<InlineRenameHarness onCommit={onCommit} />);
+    render(<InlineRenameHarness value={TITLE} onCommit={onCommit} />);
 
     fireEvent.click(screen.getByRole("button", { name: /edit/i }));
     const input = getRenameInput();
@@ -113,5 +114,39 @@ describe("useInlineRename", () => {
 
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onCommit).toHaveBeenCalledExactlyOnceWith("日本");
+  });
+
+  it("treats the seed left untouched as no change when value moves mid-edit", () => {
+    installAnimationFrameMock();
+    const onCommit = vi.fn();
+    const { rerender } = render(
+      <InlineRenameHarness value="Untitled agent" onCommit={onCommit} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /edit/i }));
+    const input = getRenameInput();
+    expect(input.value).toBe("Untitled agent");
+
+    rerender(<InlineRenameHarness value="Landed title" onCommit={onCommit} />);
+    fireEvent.keyDown(getRenameInput(), { key: "Enter" });
+
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("counts a seed with surrounding whitespace as untouched, and still commits a typed name", () => {
+    installAnimationFrameMock();
+    const onCommit = vi.fn();
+    const { rerender } = render(
+      <InlineRenameHarness value="  Padded seed  " onCommit={onCommit} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /edit/i }));
+
+    rerender(<InlineRenameHarness value="Landed title" onCommit={onCommit} />);
+    fireEvent.keyDown(getRenameInput(), { key: "Enter" });
+    expect(onCommit).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /edit/i }));
+    fireEvent.change(getRenameInput(), { target: { value: "Typed name" } });
+    fireEvent.keyDown(getRenameInput(), { key: "Enter" });
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith("Typed name");
   });
 });
