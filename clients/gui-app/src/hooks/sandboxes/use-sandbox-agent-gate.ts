@@ -12,10 +12,13 @@ import type {
 import { useConfigurationProvidersOpener } from "@/hooks/sandboxes/use-open-configuration-providers";
 import { useSandboxHostConfiguration } from "@/hooks/sandboxes/use-on-team-sandbox";
 import { useSandboxCatalogue } from "@/hooks/sandboxes/use-sandbox-catalogue-query";
+import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
 import {
   sandboxAgentNotOfferedNotice,
   sandboxAgentRefusedNotice,
   sandboxAgentsUncheckedNotice,
+  sandboxModelNotOfferedNotice,
+  traycerModelRefused,
   type SandboxAgentRemedies,
 } from "@/lib/sandboxes/sandbox-agent-refusal";
 import type { HostRpcRegistry } from "@/lib/host";
@@ -256,9 +259,15 @@ export function useRestingSandboxAgentGate(
     /** The resting sandbox's own host. */
     readonly hostId: string | null;
     readonly harnessId: GuiHarnessId | null;
+    /** The model the send carries, and its name on the chip. */
+    readonly modelSlug: string;
+    readonly modelName: string;
   } & SandboxAgentRemedies,
 ): SandboxAgentGate {
   const catalogue = useSandboxCatalogue(input.resting);
+  const traycerModels = useSandboxTraycerModels(
+    input.resting && input.harnessId === "traycer",
+  ).data;
   const traycerOff = useLastKnownTraycerInferenceOff(
     input.resting ? input.hostId : null,
   );
@@ -278,7 +287,17 @@ export function useRestingSandboxAgentGate(
     return { blocked: true, hint: notice.message, notice };
   }
   const offeredAgents = catalogue.data.offeredAgents;
-  if (offeredAgents === undefined || offeredAgents.includes(input.harnessId))
+  if (offeredAgents !== undefined && !offeredAgents.includes(input.harnessId))
+    return notOfferedGate(input.harnessId, offeredAgents, input);
+  if (
+    input.harnessId !== "traycer" ||
+    !traycerModelRefused(traycerModels, input.modelSlug)
+  )
     return NOT_BLOCKED;
-  return notOfferedGate(input.harnessId, offeredAgents, input);
+  const notice = sandboxModelNotOfferedNotice(
+    input.modelName,
+    offeredAgents ?? null,
+    input,
+  );
+  return { blocked: true, hint: notice.message, notice };
 }

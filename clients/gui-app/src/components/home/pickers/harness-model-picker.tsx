@@ -45,9 +45,12 @@ import {
   useGuiHarnessesQueryForClient,
   useRefreshHarnessCatalogForClient,
   type CatalogModelsError,
+  type GuiHarnessCatalog,
   type GuiHarnessCatalogEntry,
 } from "@/hooks/harnesses/use-gui-harness-catalog";
+import type { RestingSandboxHost } from "@/hooks/sandboxes/use-resting-sandbox-host";
 import { useSandboxTraycerModels } from "@/hooks/sandboxes/use-sandbox-traycer-models-query";
+import { traycerModelsUnknown } from "@/lib/sandboxes/sandbox-agent-refusal";
 import {
   buildAllHarnessModelRows,
   createModelRowSearchIndex,
@@ -129,6 +132,7 @@ import {
   useCreateProfileHostIsLocal,
 } from "@/components/home/pickers/harness-model-picker-create-profile-gate";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import { ALL_PERMISSION_MODES } from "@traycer/protocol/persistence/epic/foundation";
 import type {
   ProviderCliState,
   ProviderProfile,
@@ -153,6 +157,23 @@ import { teamSandboxHarnessBlocked } from "@/lib/sandboxes/team-sandbox-harness"
 export type { ReasoningFooterConfig, ServiceTierFooterConfig };
 
 const EMPTY_MODELS: ReadonlyArray<ModelOption> = [];
+/**
+ * Traycer's entry for a send to a sandbox when no host names it: the host
+ * asked is the resting sandbox itself, or has never answered.
+ */
+const CLOUD_TRAYCER_HARNESS: HarnessOption = {
+  id: "traycer",
+  label: "Traycer",
+  enabled: true,
+  available: true,
+  error: null,
+  unavailableReason: null,
+  modes: ["gui"],
+  requiresApiKey: false,
+  supportedPermissionModes: [...ALL_PERMISSION_MODES],
+  nativeAutoJudge: false,
+  availabilityPending: false,
+};
 // No working directory is scoped to the picker surface itself - this feeds
 // the commands prewarm query below, where an empty set is the correct shape
 // (see the comment at its call site).
@@ -806,7 +827,7 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
             restrictToTui(catalog.harnesses, tuiOnly),
             offeredAgents,
           ),
-          harnesses,
+          cloudTraycerBase(harnesses, tuiOnly),
           cloudTraycer,
         ),
       ),
@@ -823,9 +844,12 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     runTargetReachability,
     sandboxPick.target,
   );
-  const handleRefreshCatalog = useCallback(async () => {
-    await refreshCatalog();
-  }, [refreshCatalog]);
+  const restingRunHost = useStore(store, (s) => s.restingRunHost);
+  const handleRefreshCatalog = useCatalogRefresh(
+    refreshCatalog,
+    cloudTraycer,
+    restingRunHost,
+  );
   const selected = selectedModelsState({
     sandboxPick,
     hostModels: selectedModelsQuery.data?.models ?? EMPTY_MODELS,
@@ -841,10 +865,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
   const selectedModels = selected.models;
   const modelsPending = selected.pending;
   const stagedModelName = useStore(store, (s) =>
-    s.sandboxRunTarget === "staged" ? chipModelName(s) : "",
+    s.sandboxRunTarget === null ? "" : chipModelName(s),
   );
   const harnessesPending = harnessesQueryPending(
-    activityEnabled,
+    activityEnabled && sandboxPick.target === null,
     runTargetClient,
     harnessesQuery.isPending,
   );
@@ -1342,7 +1366,11 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
     regionId: "model",
     instanceId: tileId,
   });
-  const selectedHarnessLabel = selectedHarness?.label ?? selection.harnessId;
+  const selectedHarnessLabel = harnessLabelOf(
+    selectedHarness,
+    catalogHarnesses,
+    selection.harnessId,
+  );
   // Layout ▸ Composer ▸ Reasoning level. Read here rather than in the trigger
   // so the chip stays a pure function of its props, and both surfaces that
   // mount this picker (the chat composer, the terminal launcher) follow it.
@@ -1427,7 +1455,10 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         degradedHarnessIds={degradedHarnessIds}
         preparingByHarnessId={preparingByHarnessId}
         onRetryPack={handleRetryPack}
-        catalogHarnessesLoading={catalog.harnessesLoading}
+        catalogHarnessesLoading={hostCatalogLoading(
+          catalog,
+          sandboxPick.target,
+        )}
         onEntryChange={handleRailEntryChange}
         onProfileChange={handleProfileChange}
         onRefreshCatalog={handleRefreshCatalog}
@@ -1441,7 +1472,12 @@ function HarnessModelPickerImpl(props: HarnessModelPickerProps) {
         effectiveActiveRowId={effectiveActiveRowId}
         hoveredRowId={hoveredRowId}
         initialTopMostItemIndex={initialTopMostItemIndex}
-        catalogHarnessesError={catalog.harnessesError !== null}
+        catalogHarnessesError={hostCatalogFailed(catalog, sandboxPick.target)}
+        restingModelPrompt={restingPrompt(
+          restingRunHost,
+          cloudTraycer,
+          tuiOnly,
+        )}
         activeProvider={activeProvider}
         onHoverRow={setHoveredRowId}
         onActiveRow={setActiveRowId}
@@ -1940,7 +1976,13 @@ function useSandboxTraycerPick(
   const fromCloud =
     harnessId === "traycer" &&
     cloudTraycerOffered(offeredAgents, target !== null);
-  return { target, models: fromCloud ? models : null, modelsLoaded };
+  // Read here only for how it ended: the store's own read drives it.
+  const cloudRead = useSandboxTraycerModels(false);
+  return {
+    target,
+    models: fromCloud ? models : null,
+    modelsLoaded: modelsLoaded || traycerModelsUnknown(cloudRead),
+  };
 }
 
 /** Whether the run-target host is the one to ask for the selected models. */
@@ -1983,6 +2025,7 @@ interface CloudTraycerModels {
   readonly models: ReadonlyArray<ModelOption>;
   readonly loading: boolean;
   readonly error: CatalogModelsError | null;
+  readonly refetch: () => Promise<unknown>;
 }
 
 const EMPTY_CLOUD_MODELS: ReadonlyArray<ModelOption> = [];
@@ -2014,18 +2057,88 @@ function useCloudTraycerModels(
 ): CloudTraycerModels | null {
   const sandboxTraycer = cloudTraycerOffered(offeredAgents, sendsToSandbox);
   const query = useSandboxTraycerModels(catalogActive && sandboxTraycer);
-  const { data, error, isPending } = query;
+  const { data, error, isPending, fetchStatus, refetch } = query;
+  // A disabled read with no list stays pending: only one under way is loading.
+  const loading = isPending && fetchStatus !== "idle";
   return useMemo(
     (): CloudTraycerModels | null =>
       sandboxTraycer
         ? {
             models: data ?? EMPTY_CLOUD_MODELS,
-            loading: isPending,
+            loading,
             error,
+            refetch,
           }
         : null,
-    [data, error, isPending, sandboxTraycer],
+    [data, error, loading, refetch, sandboxTraycer],
   );
+}
+
+/**
+ * The refresh button's work. A resting host answers nothing, so its list is
+ * the cloud's alone.
+ */
+function useCatalogRefresh(
+  refreshCatalog: () => Promise<unknown>,
+  cloud: CloudTraycerModels | null,
+  restingRunHost: RestingSandboxHost | null,
+): () => Promise<void> {
+  const refetchCloud = cloud === null ? null : cloud.refetch;
+  const hostAtRest = restingRunHost !== null;
+  return useCallback(async () => {
+    if (refetchCloud !== null) await refetchCloud();
+    if (!hostAtRest) await refreshCatalog();
+  }, [hostAtRest, refetchCloud, refreshCatalog]);
+}
+
+/**
+ * The picker's own host says nothing about a send to a sandbox, so its catalog
+ * neither loads nor fails on the picker's face.
+ */
+function hostCatalogLoading(
+  catalog: Pick<GuiHarnessCatalog, "harnessesLoading">,
+  target: SandboxRunTarget,
+): boolean {
+  return target === null && catalog.harnessesLoading;
+}
+
+function hostCatalogFailed(
+  catalog: Pick<GuiHarnessCatalog, "harnessesError">,
+  target: SandboxRunTarget,
+): boolean {
+  return target === null && catalog.harnessesError !== null;
+}
+
+/**
+ * The resting sandbox to wake for a model list, when there is none to show.
+ * The terminal surface lists no Traycer, so only its host could answer.
+ */
+function restingPrompt(
+  restingRunHost: RestingSandboxHost | null,
+  cloud: CloudTraycerModels | null,
+  tuiOnly: boolean,
+): RestingSandboxHost | null {
+  if (restingRunHost === null) return null;
+  if (cloud === null || tuiOnly) return restingRunHost;
+  return !cloud.loading && cloud.models.length === 0 ? restingRunHost : null;
+}
+
+function harnessLabelOf(
+  selected: HarnessOption | undefined,
+  catalogHarnesses: ReadonlyArray<HarnessOption>,
+  harnessId: ProviderId,
+): string {
+  const entry =
+    selected ?? catalogHarnesses.find((harness) => harness.id === harnessId);
+  return entry?.label ?? harnessId;
+}
+
+/** The harnesses Traycer's cloud entry can be built on, itself included. */
+function cloudTraycerBase(
+  harnesses: ReadonlyArray<HarnessOption>,
+  tuiOnly: boolean,
+): ReadonlyArray<HarnessOption> {
+  return tuiOnly ? harnesses : [...harnesses, CLOUD_TRAYCER_HARNESS];
 }
 
 /**
@@ -2279,8 +2392,9 @@ function modelPickerHostUnavailableLabel(
   reachability: HostReachability,
   sandboxRunTarget: SandboxRunTarget,
 ): string | null {
-  // A resting sandbox is not an offline host: its next message wakes it.
-  if (sandboxRunTarget === "resting") return null;
+  // The send runs on a sandbox, not on this host, and a resting sandbox is
+  // not an offline host: its next message wakes it.
+  if (sandboxRunTarget !== null) return null;
   if (hasRpcEndpoint && reachability.status !== "unreachable") {
     return null;
   }

@@ -562,7 +562,7 @@ function BotRunSettingsForm(props: { readonly bot: BotRecord }): ReactNode {
       chatLineCarriesAutoMode: null,
       ultracodeCarried: false,
       stagedSurfaceKey: null,
-      sendsToRestingSandbox: false,
+      restingSandbox: null,
     },
   );
   const selection = useStore(toolbarStore, (s) => s.selection);

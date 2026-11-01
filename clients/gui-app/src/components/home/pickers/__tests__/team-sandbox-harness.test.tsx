@@ -254,6 +254,7 @@ function renderPanel(input: {
     hoveredRowId: "",
     initialTopMostItemIndex: { index: 0, align: "center", behavior: "auto" },
     catalogHarnessesError: false,
+    restingModelPrompt: null,
     activeProvider: active,
     onHoverRow: noop,
     onActiveRow: noop,

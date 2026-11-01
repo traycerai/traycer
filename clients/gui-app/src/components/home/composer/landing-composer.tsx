@@ -414,7 +414,7 @@ export function LandingComposer(props: LandingComposerProps) {
       chatLineCarriesAutoMode: null,
       ultracodeCarried,
       stagedSurfaceKey: composerSurfaceKey,
-      sendsToRestingSandbox: false,
+      restingSandbox: null,
     },
   );
   // A stage's kept pick goes to this draft only, never to the host's

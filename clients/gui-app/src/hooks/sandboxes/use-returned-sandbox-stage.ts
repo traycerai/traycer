@@ -38,12 +38,13 @@ function taskReturnedSandbox(
 
 /**
  * The task's new-agent composer, unnamed: stages its draft's returned
- * sandbox. A modal that names its host (`hostId`) stages nothing.
+ * sandbox. A modal that names its host (`hostId`) stages nothing. Answers
+ * whether the draft holds one: that is where its Send goes.
  */
 export function useNewConversationReturnedSandbox(
   epicId: string,
   hostId: string | null,
-): void {
+): boolean {
   const surfaceKey = hostId === null ? newConversationSurfaceKey(epicId) : null;
   const userId = useAuthStore((state) => state.contextMetadata?.userId ?? null);
   const returned = useStoreWithEqualityFn(
@@ -65,6 +66,7 @@ export function useNewConversationReturnedSandbox(
     [epicId],
   );
   useReturnedSandboxStage(surfaceKey, returned, read, forget);
+  return surfaceKey !== null && returned !== null;
 }
 
 function landingReturnedSandbox(

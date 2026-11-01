@@ -590,7 +590,7 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
       chatLineCarriesAutoMode: null,
       ultracodeCarried,
       stagedSurfaceKey: forkSurfaceKey,
-      sendsToRestingSandbox: false,
+      restingSandbox: null,
     },
   );
   // An existing cross-host destination asks a DIFFERENT question from same-host.
