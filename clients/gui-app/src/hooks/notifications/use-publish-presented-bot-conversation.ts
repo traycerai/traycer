@@ -41,6 +41,7 @@ export function usePublishPresentedBotConversation(
     );
   }, [botId, presentedId]);
   // Withdrawal on unmount is its own effect: in the publish effect's cleanup, a
-  // channel switch would pass through the canvas's entity and consume it.
+  // channel switch would announce an empty entity between the two conversations
+  // instead of replacing one with the other.
   useEffect(() => () => setPresentedBotConversation(null), []);
 }

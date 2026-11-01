@@ -807,7 +807,6 @@ describe("cloud-mode consumption of a presented bot conversation", () => {
     });
   }
 
-  /** A bot post: a cloud row from the bot's bound host, not the serving one. */
   function taskChatRow(entryId: string) {
     const row = cloudRow({
       entryId,
@@ -818,6 +817,7 @@ describe("cloud-mode consumption of a presented bot conversation", () => {
     return { ...row, entry: { ...row.entry, epicId: BEHIND_EPIC_ID } };
   }
 
+  /** A bot post: a cloud row from the bot's bound host, not the serving one. */
   function botPost(entryId: string, chatId: string) {
     return cloudRow({
       entryId,
