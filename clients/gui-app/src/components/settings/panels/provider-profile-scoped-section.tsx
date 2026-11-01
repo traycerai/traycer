@@ -626,14 +626,23 @@ function EmptyProviderProfiles(props: {
  * row's own status alone: that row can lag a probe-less `unauthenticated`
  * stamped at the top level, and reading only the row showed "couldn't be
  * checked" for a login that was definitively absent.
+ *
+ * `checking` is the same exception the rail word carries: a still-running
+ * probe (`authPending`) is not a failed one, so it reads as a neutral wait
+ * rather than `unchecked`'s "couldn't check" failure framing with Retry.
  */
-type AmbientLoginReadState = "signed-in" | "signed-out" | "unchecked";
+type AmbientLoginReadState =
+  | "signed-in"
+  | "signed-out"
+  | "checking"
+  | "unchecked";
 
 function ambientLoginReadState(state: ProviderCliState): AmbientLoginReadState {
   if (isProviderAmbientSignedOut(state)) return "signed-out";
   if (isProviderAmbientAuthenticated(state) || ambientLoginConfigured(state)) {
     return "signed-in";
   }
+  if (state.authPending) return "checking";
   return "unchecked";
 }
 
@@ -692,6 +701,19 @@ function OwnLoginSummary(props: {
             </Button>
           </span>
         </TooltipWrapper>
+      </div>
+    );
+  }
+
+  if (readState === "checking") {
+    return (
+      <div
+        data-slot="profile-summary-actions"
+        className="flex min-w-0 flex-wrap items-center gap-1 text-ui-xs text-muted-foreground"
+      >
+        <span className="min-w-0">
+          Checking {providerLabel}&apos;s login on {hostName}…
+        </span>
       </div>
     );
   }

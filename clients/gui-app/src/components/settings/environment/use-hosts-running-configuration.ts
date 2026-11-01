@@ -122,6 +122,7 @@ export function useHostsRunningConfiguration(
     state = "failed";
   return {
     hosts: model.hosts,
+    thisComputerUnread: unreadHostIds.size > 0,
     collisions: model.collisions,
     state,
     retry,

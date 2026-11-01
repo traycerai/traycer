@@ -4388,6 +4388,7 @@ describe("<ProvidersSettingsPanel />", () => {
     // in a fixture that only varies one of the two.
     function renderOwnLogin(
       authStatus: ProviderProfile["auth"]["status"],
+      authPending: boolean,
     ): HTMLElement {
       useSettingsEnvironmentPickStore.setState({
         pick: {
@@ -4421,7 +4422,7 @@ describe("<ProvidersSettingsPanel />", () => {
                 envOverrides: [],
               },
               auth,
-              false,
+              authPending,
             ),
             profiles: [
               profile({
@@ -4463,7 +4464,7 @@ describe("<ProvidersSettingsPanel />", () => {
     }
 
     it("names the computer and badges an authenticated login Signed in", () => {
-      const row = renderOwnLogin("authenticated");
+      const row = renderOwnLogin("authenticated", false);
 
       expect(
         within(row).getByText("works on this computer only"),
@@ -4476,7 +4477,7 @@ describe("<ProvidersSettingsPanel />", () => {
     });
 
     it("shows no own-login row for a definitively signed-out login, only Sign in", () => {
-      const row = renderOwnLogin("unauthenticated");
+      const row = renderOwnLogin("unauthenticated", false);
 
       expect(within(row).getByText(/isn't signed in on/)).toBeDefined();
       expect(within(row).queryByText("works on this computer only")).toBeNull();
@@ -4491,7 +4492,7 @@ describe("<ProvidersSettingsPanel />", () => {
     });
 
     it("says a failed check couldn't be checked, never Unavailable, and Retry refreshes the providers", () => {
-      const row = renderOwnLogin("unavailable");
+      const row = renderOwnLogin("unavailable", false);
 
       expect(within(row).getByText(/Couldn't check/)).toBeDefined();
       expect(within(row).queryByText(/Unavailable/i)).toBeNull();
@@ -4505,6 +4506,19 @@ describe("<ProvidersSettingsPanel />", () => {
       fireEvent.click(within(row).getByRole("button", { name: "Retry" }));
 
       expect(providerMocks.refreshProviders).toHaveBeenCalledOnce();
+    });
+
+    it("renders a neutral checking state while the probe is still running, never the failure message or Retry", () => {
+      const row = renderOwnLogin("unavailable", true);
+
+      expect(within(row).getByText(/Checking/)).toBeDefined();
+      expect(within(row).queryByText(/Couldn't check/)).toBeNull();
+      expect(within(row).queryByRole("button", { name: "Retry" })).toBeNull();
+      expect(
+        within(row).queryByText("Signed in", {
+          selector: '[data-slot="badge"]',
+        }),
+      ).toBeNull();
     });
   });
 

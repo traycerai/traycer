@@ -39,6 +39,7 @@ const hostsRunningPersonalMock = vi.hoisted(
     current: {
       readonly hosts: readonly { readonly hostId: string }[];
       readonly state: "loading" | "ready" | "failed";
+      readonly thisComputerUnread?: boolean;
     };
   } => ({
     current: { hosts: [], state: "ready" },
@@ -54,6 +55,7 @@ vi.mock(
     useHostsRunningPersonal: (enabled: boolean) => {
       useHostsRunningPersonalSpy(enabled);
       return {
+        thisComputerUnread: false,
         ...hostsRunningPersonalMock.current,
         collisions: [],
         retry: () => {},
@@ -1160,6 +1162,22 @@ describe("ProviderEnvOverridesSection on a Personal page with a held value", () 
           expect(screen.queryByText(/Applying on/)).toBeNull();
         },
       );
+
+      it("keeps the plain label while another host is listed but this computer's own status is unread, never an understated count", async () => {
+        hostsRunningPersonalMock.current = {
+          hosts: [{ hostId: "host-a" }],
+          state: "ready",
+          thisComputerUnread: true,
+        };
+        pendingSetOverride();
+        renderProviderEnvTab("cursor", null, []);
+        await typeVariable("CURSOR_BASE_URL", "https://example.invalid");
+
+        expect(screen.getByRole("status").textContent).toBe(
+          "CURSOR_BASE_URL · Adding",
+        );
+        expect(screen.queryByText(/Applying on/)).toBeNull();
+      });
     });
 
     it("issues no host-list read on a Local row, which never shows a host count", async () => {

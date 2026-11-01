@@ -179,11 +179,16 @@ export function ProviderEnvOverridesSection({
   // `ready` with zero is not either: the list goes `ready` as soon as the
   // cloud read answers, while this computer's own status can still be
   // unresolved and held out of `hosts` a moment longer - presenting any of
-  // that as an exact "on N hosts" would misstate the reach the save has.
+  // that as an exact "on N hosts" would misstate the reach the save has. Nor
+  // while this computer's own status is unread even with another host
+  // already listed (`thisComputerUnread`): `hosts` can already hold that
+  // other host while this computer's own membership is still unknown, and an
+  // exact count taken then would understate the real total.
   const hostsRunningPersonal = useHostsRunningPersonal(!local);
   const applyingHostsCount =
     !local &&
     hostsRunningPersonal.state === "ready" &&
+    !hostsRunningPersonal.thisComputerUnread &&
     hostsRunningPersonal.hosts.length > 0
       ? hostsRunningPersonal.hosts.length
       : null;
