@@ -980,10 +980,9 @@ export type HostNotificationEnvironmentApplyFailedPayload = z.infer<
  * carries agent states only, and this is its one named exception — a member is
  * told their role changed the way a task's collaborators are told theirs did —
  * so the server writes it and readers show it. It announces itself nowhere:
- * no toast, no chime, no push. A notification hook does not see it either,
- * and not because hooks filter on kind — they filter on severity alone — but
- * because they observe a host's own notification store and this kind is
- * written only server-side, so no row of it ever reaches one.
+ * no toast, no chime, no push. No notification hook sees it either: hooks
+ * observe a host's own notification store, and this kind is written only
+ * server-side.
  */
 export const hostNotificationTeamRoleChangedPayloadSchema = lazySchema(() =>
   z
