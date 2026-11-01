@@ -7,6 +7,7 @@
  * list, the account's host directory, and each host's `harnesses` and
  * `providers` answers, `epic.createChat` and the terminal create.
  */
+import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
 import { useSyncExternalStore } from "react";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
@@ -350,6 +351,8 @@ interface HostAnswers {
 }
 
 const mocks = vi.hoisted(() => ({
+  /** The hosts the task lists; none unless a case names a sandbox. */
+  taskHosts: [] as TaskHostRow[],
   /** What each host's `harnesses` and `providers` queries answer. */
   hostAnswers: new Map<string, unknown>(),
   answerListeners: new Set<() => void>(),
@@ -702,6 +705,12 @@ const hostBinding = vi.hoisted(() => ({
 vi.mock("@/lib/host", () => ({
   useHostClient: () => null,
   useHostBinding: () => hostBinding,
+}));
+vi.mock("@/hooks/epic/use-task-hosts-view", () => ({
+  useTaskHostsView: () =>
+    mocks.taskHosts.length === 0
+      ? { kind: "none" }
+      : { kind: "hosts", hosts: mocks.taskHosts },
 }));
 // A rested receipt reads its sandbox's state like the chat does; no host row is needed.
 vi.mock("@/hooks/host/use-host-directory-entry", () => ({
@@ -5784,7 +5793,7 @@ describe("a send whose created sandbox stalled on settings, on a host with only 
   );
 });
 
-describe("a send whose sandbox rested on its own after the create timed out", () => {
+describe("a send whose sandbox left awake on its own after the create timed out", () => {
   const FRESH = Date.now() + 60_000;
   let restoreLocks: () => void = () => undefined;
   beforeEach(() => {
@@ -5810,18 +5819,17 @@ describe("a send whose sandbox rested on its own after the create timed out", ()
       phase: "creating",
       created: true,
     });
+    // Latched before the first render: the held send stops the run, so the
+    // stage cannot hand off and deliver while the case is still arranging.
+    useStagedSandboxStore.getState().report(SURFACE, {
+      step: "applying",
+      stepAt: Date.now(),
+      failure: { kind: "timed-out", step: "applying" },
+    });
     mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("awake")]));
     answerSandboxRows([rowIn("awake")], FRESH);
     answerHost(SANDBOX_HOST, CODEX_READY);
     mount();
-    await screen.findByTestId("pending-sandbox-sends");
-    act(() => {
-      useStagedSandboxStore.getState().report(SURFACE, {
-        step: "applying",
-        stepAt: Date.now(),
-        failure: { kind: "timed-out", step: "applying" },
-      });
-    });
     await screen.findByTestId("sandbox-setup-line");
     expect(document.body.textContent).toContain("compute is charged");
   }
@@ -5857,6 +5865,64 @@ describe("a send whose sandbox rested on its own after the create timed out", ()
       "build-box is suspended · your next message resumes it",
     );
     expect(line.textContent).not.toContain("wasn't sent");
+  });
+
+  it("ends the create line and says the failed sandbox's line, with the message back and no sandbox kept", async () => {
+    await mountTimedOut();
+
+    answerSandboxRows([rowIn("failed")], FRESH + 1);
+
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    expect(screen.queryByTestId("sandbox-setup-line")).toBeNull();
+    expect(mocks.wake).not.toHaveBeenCalled();
+    // The sandbox ended, so the message is saved as a draft that names none.
+    expect(useLandingDraftStore.getState().drafts).toMatchObject([
+      { content: MESSAGE_CONTENT, closed: true, returnedSandbox: null },
+    ]);
+    const line = await screen.findByTestId("sandbox-stopped-line");
+    expect(line.textContent).toContain("Couldn't start build-box");
+    expect(line.textContent).not.toContain("wasn't sent");
+  });
+
+  it("falls back to the receipt's sentence when the sandbox is absent from the list and the task names no end", async () => {
+    await mountTimedOut();
+
+    answerSandboxRows([], FRESH + 1);
+
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    const line = await screen.findByTestId("sandbox-stopped-line");
+    expect(line.textContent).toContain(
+      "Your message wasn't sent; it's saved in your drafts.",
+    );
+    expect(line.textContent).not.toContain("this chat stays readable");
+  });
+
+  it("falls back to the receipt's sentence when the task names the sandbox but the list lacks its row", async () => {
+    mocks.taskHosts = [
+      {
+        hostId: SANDBOX_HOST,
+        label: "build-box",
+        principal: { kind: "user", id: "user-1" },
+        reach: "same_principal",
+        sandboxEnd: null,
+      },
+    ];
+    onTestFinished(() => {
+      mocks.taskHosts = [];
+    });
+    await mountTimedOut();
+
+    answerSandboxRows([], FRESH + 1);
+
+    const line = await screen.findByTestId("sandbox-stopped-line");
+    expect(line.textContent).toContain(
+      "Your message wasn't sent; it's saved in your drafts.",
+    );
+    expect(line.textContent).not.toContain("build-box");
   });
 
   it("drops the footer once the sandbox is awake again", async () => {
