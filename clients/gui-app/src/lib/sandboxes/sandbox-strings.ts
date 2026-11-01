@@ -479,6 +479,11 @@ export function agentNotOfferedOnSandboxesLine(agent: string): string {
   return `${agent} doesn't run on sandboxes. Choose a Traycer model to run agents here.`;
 }
 
+/** A Traycer model this sandbox's catalog does not list. */
+export function modelNotOnSandboxLine(model: string): string {
+  return `${model} doesn't run on this sandbox. Choose another Traycer model to run agents here.`;
+}
+
 /**
  * The sandbox's own Traycer Inference switch is off. A line that names the
  * sandbox passes its name; a composer on that sandbox passes `null`.
