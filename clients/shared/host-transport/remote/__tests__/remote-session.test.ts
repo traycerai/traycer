@@ -142,7 +142,7 @@ import {
   SILENCE_FLOOR_METHODS,
   silenceProbeRegistry,
   unauthorizedDetails,
-} from "@traycer-clients/shared/test-fixtures/fake-relay-host";
+} from "@traycer-clients/shared/host-transport/remote/__tests__/fake-relay-host";
 import { WorktreeDeleteBatchStreamClient } from "../../worktree-delete-batch-stream-client";
 
 // Integration-style tests for the session lifecycle edges a cold audit found
