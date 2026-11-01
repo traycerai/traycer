@@ -4,7 +4,9 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type Query,
   type QueryClient,
+  type QueryFilters,
   type UseQueryResult,
 } from "@tanstack/react-query";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
@@ -86,6 +88,56 @@ export function useEnvironmentInvitationsQuery(
 }
 
 /**
+ * Every cache entry an invitations read can land in, in both routes' slots.
+ * The two matchers are kept here, beside each other, so "the invitations
+ * reads" means one set to everything that cancels them, counts them or waits
+ * on them — a caller matching only the slot it happens to be served from
+ * would be blind to the other the moment host readiness moved it.
+ */
+function invitationReadMatchers(): readonly QueryFilters[] {
+  return [
+    {
+      predicate: (query) =>
+        hostQueryKeys.matchesMethodOnAnyHost(
+          query.queryKey,
+          "environment.invitations.list",
+        ),
+    },
+    { queryKey: authQueryKeys.environmentInvitationsAll() },
+  ];
+}
+
+/**
+ * How many times an invitations read has ANSWERED, counted across both
+ * routes' slots. It only ever rises, and only on a success: a failure leaves
+ * it where it was.
+ *
+ * This is the clock-free form of "has the read answered since I asked", and it
+ * is clock-free on purpose. `dataUpdatedAt` is `Date.now()` stamped on every
+ * success (`query-core`'s `successState`), so two answers of one key inside
+ * the same millisecond are indistinguishable and a timestamp comparison reads
+ * a confirmed answer as no answer. A count cannot tie.
+ *
+ * It spans both slots for the same reason it is a count: the two entries keep
+ * independent `dataUpdatedAt` clocks, and an entry that never fetched reports
+ * `0`, so comparing a sample taken on one route with a value read on the other
+ * — which is what host readiness moving mid-session produces — can accept a
+ * cached answer older than the question. A sum over both rises only when some
+ * invitations read really answered, whichever slot it landed in.
+ */
+export function countEnvironmentInvitationAnswers(
+  queryClient: QueryClient,
+): number {
+  const cache = queryClient.getQueryCache();
+  const counted = new Set<Query>();
+  for (const filters of invitationReadMatchers())
+    for (const query of cache.findAll(filters)) counted.add(query);
+  let answers = 0;
+  for (const query of counted) answers += query.state.dataUpdateCount;
+  return answers;
+}
+
+/**
  * Stops every invitations read in flight, in both routes' slots, so the
  * caller's own request is the next one made.
  *
@@ -95,6 +147,14 @@ export function useEnvironmentInvitationsQuery(
  * (`Query.fetch`), and otherwise hands back the running request's promise —
  * and the reply it would join can carry a snapshot the server assembled before
  * whatever prompted the call.
+ *
+ * Note which cancel this is, because the two differ where it matters. This one
+ * REVERTS, which is `cancelQueries`' default, and a reverted cancel resolves
+ * whoever was awaiting that request with the cache as it stands — the answer
+ * from before their question. `refetch({ cancelRefetch: true })` cancels
+ * SILENTLY instead, and a silent cancel hands its caller the replacement
+ * retryer's promise, so that caller gets the fresh result and needs none of
+ * this care.
  *
  * It returns nothing on purpose, and the caller asks in the same synchronous
  * step. `cancelQueries` rejects each retryer as it walks the matches, and a
@@ -107,16 +167,8 @@ export function useEnvironmentInvitationsQuery(
 export function cancelEnvironmentInvitationReads(
   queryClient: QueryClient,
 ): void {
-  void queryClient.cancelQueries({
-    predicate: (query) =>
-      hostQueryKeys.matchesMethodOnAnyHost(
-        query.queryKey,
-        "environment.invitations.list",
-      ),
-  });
-  void queryClient.cancelQueries({
-    queryKey: authQueryKeys.environmentInvitationsAll(),
-  });
+  for (const filters of invitationReadMatchers())
+    void queryClient.cancelQueries(filters);
 }
 
 /** Accepts one invitation; the team then lists among the person's environments. */

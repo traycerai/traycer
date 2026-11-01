@@ -223,6 +223,21 @@ describe("DemotionPreviewDialog", () => {
     );
   });
 
+  // What the role loses is the dialog's own description, so a screen reader is
+  // read the question AND the thing it is about. Most demotions unlink no plan
+  // and so have no plan lead to describe them; without this they would be
+  // announced as the question alone.
+  it("describes the dialog with what the role loses, plan or no plan", () => {
+    renderFailedCheck({ currentRole: "editor", nextRole: "viewer" });
+
+    const dialog = screen.getByTestId("members-demotion-preview");
+    const describedBy = dialog.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy ?? "")?.textContent).toBe(
+      "Priya can no longer change Acme's settings. They can still see them.",
+    );
+  });
+
   it("keeps the confirm off only while the plan check is loading", () => {
     render(
       <DemotionPreviewDialog

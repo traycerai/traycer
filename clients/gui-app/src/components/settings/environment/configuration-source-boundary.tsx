@@ -14,11 +14,13 @@ import { Button } from "@/components/ui/button";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import {
   cancelEnvironmentInvitationReads,
+  countEnvironmentInvitationAnswers,
   useEnvironmentInvitationsQuery,
 } from "@/hooks/environment/use-environment-invitations";
 import { useHostClient } from "@/lib/host";
 import {
   moveEnvironmentPick,
+  moveEnvironmentSurface,
   PERSONAL_PICK,
 } from "@/lib/settings-environment-pages";
 import type { SettingsSectionId } from "@/lib/settings-sections";
@@ -194,38 +196,6 @@ type ReadLabel = {
   readonly label: string;
 };
 
-/**
- * The question asked on account of one membership answer: when that answer
- * arrived, and what the invitations read had last answered at the moment it
- * was asked.
- *
- * The reply is that read's next answer, and never the promise `refetch` hands
- * back. That promise resolves with the OBSERVER's state, not with this
- * request's outcome: `QueryObserver.fetch` swallows the rejection and returns
- * `#currentResult`, so a request cancelled by anything else — another page
- * asking its own question, a sweep — resolves it with the answer already in
- * cache and `isSuccess` true. That is the answer from before the question.
- */
-type AskedInvitations = {
-  readonly listedAt: number;
-  readonly answeredAt: number;
-};
-
-/**
- * The read asked for on account of the membership answer now in hand, or
- * `null` where none has been: one asked for an earlier answer says nothing
- * about this one, so a new membership answer asks again. Nothing else
- * refreshes that read — it does not poll, it does not refresh on focus, and
- * the configuration invalidator leaves it alone.
- */
-function answerFor(
-  asked: AskedInvitations | null,
-  listedAt: number,
-): AskedInvitations | null {
-  if (asked === null || asked.listedAt !== listedAt) return null;
-  return asked;
-}
-
 /** The remembered label, where it still names the configuration on screen. */
 function labelOf(
   remembered: ReadLabel | null,
@@ -289,19 +259,43 @@ function useGoneConfiguration(input: {
   const queryClient = useQueryClient();
   const { refetch: readInvitations } = invitations;
   const absent = settled && listed === null && environmentId !== null;
-  const [asked, setAsked] = useState<AskedInvitations | null>(null);
-  const answer = answerFor(asked, listedAt);
 
-  // Asked once per membership answer, and only once the list stops carrying
-  // the team: the read is account-wide, and nothing else has reason to
-  // refresh it. Marked while rendering, like the label above it, so the
-  // request below is started once for one question, and the answer it is
-  // waiting for is named before anything can arrive.
-  if (absent && answer === null)
-    setAsked({ listedAt, answeredAt: invitations.dataUpdatedAt });
+  // The membership answer this page has to ask about, or `null` where it has
+  // none: one question per answer, and only once the list stops carrying the
+  // team. The read is account-wide and nothing else has reason to refresh it.
+  const question = absent ? listedAt : null;
+  // The membership answer whose question has been answered, once one has.
+  const [answeredQuestion, setAnsweredQuestion] = useState<number | null>(null);
 
+  // Asks, and watches for the answer. Three plausible ways of recognising that
+  // answer are wrong, and the fourth looks like overkill until you know why.
+  //
+  // NOT the promise `readInvitations` hands back. It resolves with the
+  // OBSERVER's state, not with this request's outcome: `QueryObserver.fetch`
+  // swallows the rejection and returns `#currentResult`, so a request killed by
+  // anything else with a REVERTING cancel — another page asking its own
+  // question, a sweep, anything through `cancelQueries` — resolves it with the
+  // answer already in cache and `isSuccess` true. That is the answer from
+  // before the question. (A caller cancelling through
+  // `refetch({ cancelRefetch: true })` cancels silently and is handed the
+  // replacement's result, so it is not the hazard.)
+  //
+  // NOT `dataUpdatedAt` moving. It is `Date.now()` stamped on every success, so
+  // an ask and its reply inside one millisecond are indistinguishable on it and
+  // the comparison reads a confirmed answer as no answer — which a warm answer
+  // produces, and nothing recovers from, because a page that cannot be read
+  // writes nothing and so has no next membership answer to ask again on.
+  //
+  // NOT one slot's own clock or counter. Which slot serves this read follows
+  // host readiness and can move mid-session, and a slot that never fetched
+  // reads as `0`, so a sample taken on one and compared against the other
+  // accepts a cached answer the question predates.
+  //
+  // It is a COUNT of answers across BOTH slots. The count only rises, and only
+  // on a success, so it cannot tie, a failure is not an answer, and surfacing
+  // another slot's cached data does not raise it.
   useEffect(() => {
-    if (answer === null) return;
+    if (question === null) return;
     // Cancelled and asked in one step, with nothing awaited in between: the
     // cancel marks every retryer rejected before the read below looks at
     // them, so the read starts a request of its own instead of JOINING one
@@ -309,22 +303,45 @@ function useGoneConfiguration(input: {
     // and no observer is left sitting between a cancelled read and its
     // replacement.
     //
-    // The promise is dropped on the floor, deliberately. What answers this
-    // question is the read's next answer, below.
+    // The baseline is sampled HERE, between the two, and that is the only
+    // place it is true: the cancel is synchronous, so at this instant nothing
+    // is in flight. A read already in flight that resolves between the render
+    // and this line increments the count BEFORE the sample, which moves the
+    // baseline instead of clearing it — and a cancel could not have undone it,
+    // which is why the sample cannot be taken during the render that asks.
+    //
+    // This effect re-runs when the serving route moves, because `readInvitations`
+    // is that route's own `refetch`. The new route is then cancelled, sampled
+    // and asked exactly like the first: whatever it had cached is behind the
+    // baseline, and the forced read is what answers.
+    //
+    // The answer is watched for rather than read off a render, because the
+    // cache is an external system and the answer is an event in it.
     cancelEnvironmentInvitationReads(queryClient);
+    const asked = countEnvironmentInvitationAnswers(queryClient);
+    const watching = queryClient
+      .getQueryCache()
+      .subscribe(() =>
+        setAnsweredQuestion((answered) =>
+          countEnvironmentInvitationAnswers(queryClient) > asked
+            ? question
+            : answered,
+        ),
+      );
     void readInvitations({ cancelRefetch: true });
-  }, [answer, queryClient, readInvitations]);
+    return watching;
+  }, [question, queryClient, readInvitations]);
 
-  // Answered once the read has answered AGAIN since the question was asked.
-  // With nothing in flight at the ask, an answer later than that one can only
-  // come from a request started after the membership answer — which is the
-  // provenance a timestamp cannot carry on its own, and the reason the cancel
-  // above is load-bearing rather than tidiness. A read that fails moves
-  // `errorUpdatedAt` and not this, so a failure is not an answer, and the one
-  // thing a tie of the two stamps can cost is this question: the next
-  // membership answer asks a new one.
-  const answered =
-    answer !== null && invitations.dataUpdatedAt > answer.answeredAt;
+  // Answered once the read has answered AGAIN since the question went out.
+  // With nothing in flight at the sample, a later answer can only come from a
+  // request made after the membership answer — the provenance no stamp carries
+  // on its own, and the reason the cancel above is load-bearing rather than
+  // tidiness. A read that fails does not count as an answer, so a failing read
+  // ends the asking rather than confirming a removal.
+  //
+  // The question is named by the membership answer it was asked for, so one
+  // answered for an EARLIER membership answer says nothing about this one.
+  const answered = answeredQuestion !== null && answeredQuestion === listedAt;
 
   // The team that is gone, where one is. Nothing is gone until the read asked
   // for this answer has answered: an invitation the page could not read is
@@ -366,6 +383,11 @@ function useGoneConfiguration(input: {
     // guard the picker's own moves do: it takes the surface off a page the
     // selection it lands on does not offer.
     //
+    // It moves that surface as a server fact, not as a gesture. Nobody pressed
+    // anything, and this page can be a Settings pane in a split the person is
+    // not looking at, so activating Settings here would take the focus and the
+    // route off the work they are actually doing.
+    //
     // The selection is a store every page and the picker's trigger read, so
     // it moves after the render that found the team gone, never during it. It
     // moves whether or not the team can be named: no page can read it.
@@ -373,6 +395,7 @@ function useGoneConfiguration(input: {
       next: PERSONAL_PICK,
       activeSection: section,
       setPick,
+      moveSurface: moveEnvironmentSurface.onServerFact,
     });
   }, [goneId, label, section, setPick]);
 

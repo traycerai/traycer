@@ -99,10 +99,23 @@ export function DemotionPreviewDialog(props: {
               props.nextRole,
             )}
           </DialogTitle>
+          {/* What the role loses is the dialog's own description, always:
+              Radix announces `Dialog.Description` with the dialog, so a
+              demotion with no plan to unlink would otherwise be read out as
+              the question alone, without the thing the question is about. It
+              needs no read, so it is here even while the plan check is out. */}
+          <DialogDescription data-testid="members-demotion-loss">
+            {demotionConfirmBody(
+              props.memberName,
+              props.teamName,
+              props.currentRole,
+              props.nextRole,
+            )}
+          </DialogDescription>
           {planRows === null ? null : (
-            <DialogDescription>
+            <p className="max-w-[72ch] text-ui-sm text-muted-foreground">
               {planUnlinkLead(props.teamName)}
-            </DialogDescription>
+            </p>
           )}
         </DialogHeader>
         {preview.status === "loading" ? (
@@ -132,19 +145,6 @@ export function DemotionPreviewDialog(props: {
             testId="members-demotion-preview-table"
             rows={planRows}
           />
-        )}
-        {preview.status === "loading" ? null : (
-          <p
-            className="max-w-[72ch] text-ui-sm"
-            data-testid="members-demotion-loss"
-          >
-            {demotionConfirmBody(
-              props.memberName,
-              props.teamName,
-              props.currentRole,
-              props.nextRole,
-            )}
-          </p>
         )}
         {props.blockedReason === null ? null : (
           <p

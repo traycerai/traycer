@@ -37,6 +37,7 @@ import {
 import {
   environmentPickValue,
   moveEnvironmentPick,
+  moveEnvironmentSurface,
   PERSONAL_PICK,
   type EnvironmentPick,
 } from "@/lib/settings-environment-pages";
@@ -103,6 +104,8 @@ export function EnvironmentPicker(props: {
       next,
       activeSection: props.activeSection,
       setPick,
+      // A person just pressed this row, so the surface follows the press.
+      moveSurface: moveEnvironmentSurface.onGesture,
     });
   };
   // Finish moving and Rename both continue on that host's Overview.

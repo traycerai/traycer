@@ -26,6 +26,22 @@ export function TeamProviderKeys(): ReactNode {
   const [adding, setAdding] = useState(false);
   const keys =
     query.data?.secrets.filter((secret) => secret.kind === "provider") ?? [];
+  // A reader who cannot edit, once the read has ANSWERED. `keys` is `[]` while
+  // it is still out and `[]` again when it failed, and the list's "No secrets."
+  // is a claim about the configuration — on a failed read it would sit beside
+  // the line saying the keys could not be read, contradicting it. The editor's
+  // list says nothing in those states because an empty list is silent; this
+  // one has to be withheld.
+  const viewerNames =
+    query.data === undefined ? null : (
+      <TeamSecretNames
+        secrets={keys.map((secret) => ({
+          id: secret.secretId,
+          name: secret.name,
+          revoked: secret.revoked,
+        }))}
+      />
+    );
   const reread = (): void => {
     void queries.invalidateQueries({
       queryKey: hostQueryKeys.methodScope(
@@ -81,13 +97,7 @@ export function TeamProviderKeys(): ReactNode {
           ))}
         </ul>
       ) : (
-        <TeamSecretNames
-          secrets={keys.map((secret) => ({
-            id: secret.secretId,
-            name: secret.name,
-            revoked: secret.revoked,
-          }))}
-        />
+        viewerNames
       )}
       {canEdit ? (
         <AddSecretDialog

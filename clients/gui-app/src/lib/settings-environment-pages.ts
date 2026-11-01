@@ -1,5 +1,9 @@
 import type { SettingsSectionId } from "@/lib/settings-sections";
-import { navigateToSettingsSection } from "@/lib/settings-navigation";
+import {
+  navigateToSettingsSection,
+  rememberSettingsTabSection,
+} from "@/lib/settings-navigation";
+import { getSystemTabModalApi } from "@/stores/tabs/system-tab-modal-bridge";
 
 /**
  * The pages of Settings ▸ Environment, addressed by the configuration they
@@ -130,21 +134,59 @@ export function environmentSectionShown(
  * Personal has no Members page, so a person removed from the team they were
  * reading would otherwise be left on a panel that renders nothing, with the
  * sidebar row they were standing on gone from under them. `activeSection` is
- * `null` where the mover does not know the page — nothing is navigated then.
+ * `null` where the mover does not know the page — nothing is moved then.
+ *
+ * What is NOT shared is how the surface moves, because the two movers differ
+ * in the only way that matters here: whether a person asked for this. A press
+ * on a picker row is a gesture, and taking the surface with it is the whole
+ * point. A removal is a fact the server reported, and Settings may be sitting
+ * in a split pane the person is not looking at — so the caller passes the move
+ * rather than inheriting one, and `moveEnvironmentSurface` has the two.
  */
 export function moveEnvironmentPick(input: {
   readonly next: EnvironmentPick;
   readonly activeSection: SettingsSectionId | null;
   readonly setPick: (next: EnvironmentPick) => void;
+  readonly moveSurface: (section: SettingsSectionId) => void;
 }): void {
   input.setPick(input.next);
   if (
     input.activeSection !== null &&
     !environmentSectionShown(input.next, input.activeSection)
   ) {
-    navigateToSettingsSection("providers");
+    input.moveSurface("providers");
   }
 }
+
+/**
+ * The two ways the Settings surface is taken off a page, for
+ * `moveEnvironmentPick`'s `moveSurface`.
+ *
+ * `onGesture` is the command: it opens Settings and focuses it, which is right
+ * when a person just pressed something on it.
+ *
+ * `onServerFact` never activates anything. `navigateToSettingsSection` would,
+ * and in a split that takes the partner pane's focus and route — so a
+ * membership changing in the background would pull the person off the work
+ * they were doing, which is a worse failure than the blank panel this guard
+ * exists to prevent. When Settings is the live overlay the section is simply
+ * set, which moves what the person is already looking at and activates
+ * nothing; otherwise the Settings tab is only told where it is, and the
+ * section it draws follows that whenever a split partner owns the route.
+ */
+export const moveEnvironmentSurface = {
+  onGesture: (section: SettingsSectionId): void => {
+    navigateToSettingsSection(section);
+  },
+  onServerFact: (section: SettingsSectionId): void => {
+    const api = getSystemTabModalApi();
+    if (api !== null && api.isOverlayActive("settings")) {
+      api.setSection(section);
+      return;
+    }
+    rememberSettingsTabSection(section);
+  },
+};
 
 /** The pick an address names; a Local row is never addressed by one. */
 export function pickForConfiguration(

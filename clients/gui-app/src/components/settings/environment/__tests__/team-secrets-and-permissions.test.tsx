@@ -267,6 +267,52 @@ describe("TeamProviderKeys", () => {
     expect(screen.queryByTestId("secret-kind-picker")).toBeNull();
     expect(screen.queryByTestId("secret-provider-keys-line")).toBeNull();
   });
+
+  // "No secrets." is a claim about the configuration, and a read that failed
+  // supports no claim about it. Worse, the page says on the same screen that
+  // the keys could not be read, so the two lines would contradict each other.
+  it("says nothing to a viewer about a list it could not read", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const harness = mountTeamPage(poolSource("viewer"), {
+      "environment.secrets.list": () => {
+        throw new Error("down");
+      },
+      "environment.list": () => environments,
+    });
+    render(<TeamProviderKeys />, { wrapper: harness.Wrapper });
+
+    expect(await screen.findByText(/Couldn't read .*keys\./)).toBeTruthy();
+    expect(screen.queryByTestId("secrets-none")).toBeNull();
+  });
+
+  // And it says nothing before the answer, either: an empty list and an
+  // unanswered read look the same from here, and only one of them means there
+  // are none.
+  it("says nothing to a viewer until the read answers, then says there are none", async () => {
+    useSettingsEnvironmentPickStore.setState({
+      pick: { kind: "team", environmentId: "env-a" },
+    });
+    const answer = Promise.withResolvers<void>();
+    const harness = mountTeamPage(poolSource("viewer"), {
+      "environment.secrets.list": async () => {
+        await answer.promise;
+        return { secrets: [], removed: [] };
+      },
+      "environment.list": () => environments,
+    });
+    render(<TeamProviderKeys />, { wrapper: harness.Wrapper });
+
+    expect(
+      await screen.findByRole("heading", { name: "Model provider keys" }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("secrets-none")).toBeNull();
+
+    answer.resolve();
+
+    expect(await screen.findByTestId("secrets-none")).toBeTruthy();
+  });
 });
 
 describe("TeamPermissions", () => {

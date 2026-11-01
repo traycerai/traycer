@@ -103,9 +103,24 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
   useHostClient: () => null,
 }));
-const navigation = vi.hoisted(() => ({ navigate: vi.fn() }));
-vi.mock("@/lib/settings-navigation", () => ({
-  navigateToSettingsSection: navigation.navigate,
+/**
+ * The press arm of the surface move, asserted as the command it issues rather
+ * than as a call to the helper that issues it: the removal gate deliberately
+ * takes a non-activating path, so which path a PRESS takes is a claim worth
+ * holding here. `navigateToSettingsSection` is real and reaches this bridge.
+ */
+const surface = vi.hoisted(() => ({
+  openSettings: vi.fn(),
+  setSection: vi.fn(),
+}));
+vi.mock("@/stores/tabs/system-tab-modal-bridge", () => ({
+  getSystemTabModalApi: () => ({
+    isOverlayActive: () => false,
+    openSettings: surface.openSettings,
+    setSection: surface.setSection,
+    active: null,
+    close: () => undefined,
+  }),
 }));
 
 const V11 = { major: 1, minor: 1 } as const;
@@ -210,7 +225,8 @@ beforeEach(() => {
   reads.environments = [];
   reads.invitationReads = 0;
   runningOn([], {});
-  navigation.navigate.mockClear();
+  surface.openSettings.mockClear();
+  surface.setSection.mockClear();
   useSettingsEnvironmentPickStore.setState({
     pick: null,
     defaultPick: PERSONAL_PICK,
@@ -302,7 +318,9 @@ describe("<EnvironmentPicker />", () => {
 
     fireEvent.click(screen.getByTestId("environment-picker-finish-old"));
     expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("old");
-    expect(navigation.navigate).toHaveBeenCalledWith("host");
+    expect(surface.openSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ section: "host" }),
+    );
   });
 
   it("greys a host that cannot show its settings, and gives an applied 1.0 host no row", () => {
@@ -455,7 +473,9 @@ describe("<EnvironmentPicker />", () => {
     );
     fireEvent.click(line);
     expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("mac");
-    expect(navigation.navigate).toHaveBeenCalledWith("host");
+    expect(surface.openSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ section: "host" }),
+    );
     cleanup();
 
     useSettingsHostScopeStore.setState({ scopedHostId: null });
@@ -475,6 +495,9 @@ describe("<EnvironmentPicker />", () => {
     expect(useSettingsHostScopeStore.getState().scopedHostId).toBe("other");
   });
 
+  // A press takes the surface with it, which is the whole point of pressing:
+  // the person is looking at Settings and asked for this. That is the opposite
+  // of what the removal gate does, so it is asserted as the command.
   it("picking a row that hides the open page leaves it for Providers", () => {
     answer("old", awaiting, V11);
     renderPicker("mac");
@@ -488,7 +511,9 @@ describe("<EnvironmentPicker />", () => {
       hostId: "old",
       hostName: "Old laptop",
     });
-    expect(navigation.navigate).toHaveBeenCalledWith("providers");
+    expect(surface.openSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ section: "providers" }),
+    );
   });
 
   // The invitations read is account-wide. The only thing that needs it before

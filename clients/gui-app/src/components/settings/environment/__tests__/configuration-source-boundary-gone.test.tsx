@@ -44,9 +44,34 @@ import {
  * cloud-read page at once.
  */
 
-const navigation = vi.hoisted(() => ({ navigate: vi.fn() }));
-vi.mock("@/lib/settings-navigation", () => ({
-  navigateToSettingsSection: navigation.navigate,
+/**
+ * The surface moves are asserted as the COMMANDS they issue, not as a call to
+ * the helper that issues them: which helper runs is the thing under test, so a
+ * mock of it would pass whatever it was handed. `navigateToSettingsSection` is
+ * the real one here, reaching this recording modal bridge, and only
+ * `rememberSettingsTabSection` is stood in for — its own target is a tab this
+ * suite does not lay out, and what matters is that it, and nothing that
+ * activates, is what a server fact reaches for.
+ */
+const surface = vi.hoisted(() => ({
+  openSettings: vi.fn(),
+  setSection: vi.fn(),
+  remember: vi.fn(),
+  overlayActive: false,
+}));
+vi.mock("@/stores/tabs/system-tab-modal-bridge", () => ({
+  getSystemTabModalApi: () => ({
+    isOverlayActive: (kind: string) =>
+      kind === "settings" && surface.overlayActive,
+    openSettings: surface.openSettings,
+    setSection: surface.setSection,
+    active: null,
+    close: () => undefined,
+  }),
+}));
+vi.mock("@/lib/settings-navigation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/settings-navigation")>()),
+  rememberSettingsTabSection: surface.remember,
 }));
 vi.mock("@/lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host")>()),
@@ -67,7 +92,10 @@ afterEach(() => {
   cleanup();
   resetTeamPageHarness();
   resetNegotiatedManifests();
-  navigation.navigate.mockClear();
+  surface.openSettings.mockClear();
+  surface.setSection.mockClear();
+  surface.remember.mockClear();
+  surface.overlayActive = false;
   useSettingsEnvironmentPickStore.setState({
     pick: null,
     defaultPick: PERSONAL_PICK,
@@ -393,7 +421,15 @@ describe("a team the environment list no longer carries", () => {
   // while a membership changes. Moving the selection there without moving the
   // surface leaves the person on a panel that renders nothing, with the
   // sidebar row they were standing on gone from under them.
-  it("moves the surface off a page the selection it lands on does not offer", async () => {
+  //
+  // The two arms below are the same removal on the two presentations Settings
+  // has, and they want different commands. With the overlay up, the person is
+  // looking at Settings, and the section it shows is swapped in place. With it
+  // down, Settings is a tab that may be sitting in a split pane nobody is
+  // looking at — so the tab is told where it is and NOTHING is activated,
+  // because `openSettings` would take the partner pane's focus and route for a
+  // membership change the person never asked for.
+  async function removalOnMembers(): Promise<void> {
     negotiateMethods({
       "environment.invitations.list": V10,
       "environment.invitations.accept": V10,
@@ -413,7 +449,6 @@ describe("a team the environment list no longer carries", () => {
       </HeldValueHostRuntime>,
       { wrapper: harness.Wrapper },
     );
-
     await waitFor(
       () =>
         expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
@@ -421,7 +456,31 @@ describe("a team the environment list no longer carries", () => {
         ),
       { timeout: 5000 },
     );
-    expect(navigation.navigate).toHaveBeenCalledWith("providers");
+  }
+
+  it("swaps the section in place when the person is looking at Settings", async () => {
+    surface.overlayActive = true;
+
+    await removalOnMembers();
+
+    expect(surface.setSection).toHaveBeenCalledWith("providers");
+    expect(surface.openSettings).not.toHaveBeenCalled();
+    expect(surface.remember).not.toHaveBeenCalled();
+  });
+
+  it("moves a background Settings tab without activating it", async () => {
+    surface.overlayActive = false;
+
+    await removalOnMembers();
+
+    // Where Settings has to end up: on a page Personal offers.
+    expect(surface.remember).toHaveBeenCalledWith("providers");
+    // What must not happen to the pane the person IS working in. This is the
+    // whole assertion: `openSettings` focuses the Settings tab and changes the
+    // active route, so a split partner would lose both to a membership change
+    // in the background.
+    expect(surface.openSettings).not.toHaveBeenCalled();
+    expect(surface.setSection).not.toHaveBeenCalled();
   });
 
   // A page the selection still offers is left where it is.
@@ -456,7 +515,9 @@ describe("a team the environment list no longer carries", () => {
         ),
       { timeout: 5000 },
     );
-    expect(navigation.navigate).not.toHaveBeenCalled();
+    expect(surface.openSettings).not.toHaveBeenCalled();
+    expect(surface.setSection).not.toHaveBeenCalled();
+    expect(surface.remember).not.toHaveBeenCalled();
   });
 
   // `refetch`'s promise resolves with the OBSERVER's state, so a request
@@ -611,6 +672,79 @@ describe("a team the environment list no longer carries", () => {
       kind: "team",
       environmentId: "env-a",
     });
+  });
+
+  // The evidence is a COUNT, and the reason is this case. `dataUpdatedAt` is
+  // `Date.now()` stamped on every success, so an ask and its reply inside one
+  // millisecond are indistinguishable on that clock — which a warm answer is.
+  // A `>` comparison then reads the reply as no reply, and the removal is
+  // never confirmed: no toast, no move, and the person left on a team no page
+  // can read with the Accept never offered. Nothing recovers it either, since
+  // a page that cannot be read writes nothing, so there is no next membership
+  // answer to ask again on.
+  //
+  // The clock is frozen, which makes every stamp equal and the tie certain
+  // rather than likely. Timers are left real; only the stamp source is held.
+  it("confirms a reply that shares its millisecond with the question", async () => {
+    const frozen = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(frozen);
+    try {
+      negotiateMethods({
+        "environment.invitations.list": V10,
+        "environment.invitations.accept": V10,
+      });
+      useSettingsEnvironmentPickStore.setState({
+        pick: { kind: "team", environmentId: "env-a" },
+      });
+      let asked = 0;
+      const listed = { current: [PERSONAL, team("editor")] };
+      const harness = mountTeamPage(poolSource("editor"), {
+        "environment.list": () => ({ environments: listed.current }),
+        "environment.invitations.list": () => {
+          asked += 1;
+          return { invitations: [] };
+        },
+      });
+      render(
+        <HeldValueHostRuntime>
+          <PersonalPageFrame section="secrets">
+            <Probe />
+          </PersonalPageFrame>
+        </HeldValueHostRuntime>,
+        { wrapper: harness.Wrapper },
+      );
+      await waitFor(() => expect(asked).toBe(1));
+
+      listed.current = [PERSONAL];
+      await act(async () => {
+        await harness.queryClient.invalidateQueries({
+          predicate: (query) => query.queryKey.includes("environment.list"),
+        });
+      });
+
+      // Both answers carry the same stamp. The question was still answered,
+      // and the removal is said once and acted on.
+      await waitFor(
+        () =>
+          expect(hoisted.toasts).toEqual([
+            {
+              message: "You're no longer in Acme.",
+              options: { id: "environment-left:env-a" },
+            },
+          ]),
+        { timeout: 5000 },
+      );
+      expect(useSettingsEnvironmentPickStore.getState().pick).toEqual(
+        PERSONAL_PICK,
+      );
+      // No request count here, unlike the cases above: a held clock makes
+      // `timeUntilStale` zero, so every read is perpetually stale and the
+      // harness refetches more than the design asks for. That is the frozen
+      // clock's arithmetic, not the page's behaviour, and the counts are
+      // asserted where they mean something — against a running clock.
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("asks again on the membership answer after a failed read, and keeps the invited team", async () => {
