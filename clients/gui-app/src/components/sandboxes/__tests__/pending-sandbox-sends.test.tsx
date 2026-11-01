@@ -9112,6 +9112,215 @@ describe("choosing Stop on an unclaimed send", () => {
     },
   );
 
+  const SUSPENDED_DRAFT_RECEIPT =
+    "build-box is suspended. Your message wasn't sent; it's saved in your drafts.";
+
+  function expectNoStoppedReceipt(): void {
+    expect(document.body.textContent).not.toContain("Stopped ");
+    expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Choose another host" }),
+    ).toBeNull();
+  }
+
+  /** A Stop left unanswered while the sandbox suspends on its own and a fresh row says so. */
+  async function suspendBeforeStopAnswers(): Promise<
+    Deferred<SandboxVerbOutcome>
+  > {
+    const answer = deferred<SandboxVerbOutcome>();
+    mocks.verbAnswer = answer.promise;
+    onTestFinished(async () => {
+      await act(async () => {
+        answer.resolve({ kind: "settled", state: "suspended" });
+        await answer.promise;
+      });
+    });
+    await chooseStop();
+    await waitFor(() => {
+      expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
+    });
+    answerSandboxRows(
+      [
+        sandboxSummaryFixture({
+          id: SANDBOX_ID,
+          hostId: SANDBOX_HOST,
+          state: "suspended",
+        }),
+      ],
+      FRESH,
+    );
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    return answer;
+  }
+
+  it("says the sandbox is suspended, not Stopped, when a fresh row reads suspended before the Stop answers and the composer is occupied", async () => {
+    act(() => {
+      useNewConversationModalStore
+        .getState()
+        .setContent("epic-1", OCCUPIED_NEW_CHAT_CONTENT);
+    });
+    await suspendBeforeStopAnswers();
+
+    const line = await screen.findByTestId("sandbox-stopped-line");
+    expect(line.textContent).toContain(SUSPENDED_DRAFT_RECEIPT);
+    expectNoStoppedReceipt();
+    expect(useLandingDraftStore.getState().drafts).toMatchObject([
+      { content: MESSAGE_CONTENT, closed: true },
+    ]);
+  });
+
+  it("puts the message back in the free composer on its resume pick when a fresh row reads suspended before the Stop answers", async () => {
+    await suspendBeforeStopAnswers();
+
+    await screen.findByTestId("sandbox-stopped-line");
+    expectNoStoppedReceipt();
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+    ).toMatchObject({
+      content: MESSAGE_CONTENT,
+      returnedSandbox: {
+        target: { kind: "existing", hostId: SANDBOX_HOST, verb: "resume" },
+      },
+    });
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+  });
+
+  it("says the sandbox is suspended, not Stopped, when the Stop itself settles suspended", async () => {
+    act(() => {
+      useNewConversationModalStore
+        .getState()
+        .setContent("epic-1", OCCUPIED_NEW_CHAT_CONTENT);
+    });
+    const answer = deferred<SandboxVerbOutcome>();
+    mocks.verbAnswer = answer.promise;
+    await chooseStop();
+    await waitFor(() => {
+      expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
+    });
+    answerSandboxRows(
+      [
+        sandboxSummaryFixture({
+          id: SANDBOX_ID,
+          hostId: SANDBOX_HOST,
+          state: "suspended",
+        }),
+      ],
+      1,
+    );
+    await act(async () => {
+      answer.resolve({ kind: "settled", state: "suspended" });
+      await answer.promise;
+    });
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    // The receipt reads the row; the earlier read was too old to return the send itself.
+    answerSandboxRows(
+      [
+        sandboxSummaryFixture({
+          id: SANDBOX_ID,
+          hostId: SANDBOX_HOST,
+          state: "suspended",
+        }),
+      ],
+      FRESH,
+    );
+
+    const line = await screen.findByTestId("sandbox-stopped-line");
+    expect(line.textContent).toContain(SUSPENDED_DRAFT_RECEIPT);
+    expectNoStoppedReceipt();
+  });
+
+  it("still says Stopped, with Start and Choose another host, when the row reads stopped before the Stop answers", async () => {
+    act(() => {
+      useNewConversationModalStore
+        .getState()
+        .setContent("epic-1", OCCUPIED_NEW_CHAT_CONTENT);
+    });
+    const answer = deferred<SandboxVerbOutcome>();
+    mocks.verbAnswer = answer.promise;
+    onTestFinished(async () => {
+      await act(async () => {
+        answer.resolve({ kind: "settled", state: "stopped" });
+        await answer.promise;
+      });
+    });
+    await chooseStop();
+    await waitFor(() => {
+      expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
+    });
+    answerSandboxRows(
+      [
+        sandboxSummaryFixture({
+          id: SANDBOX_ID,
+          hostId: SANDBOX_HOST,
+          state: "stopped",
+        }),
+      ],
+      FRESH,
+    );
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+
+    const line = await screen.findByTestId("sandbox-stopped-line");
+    expect(line.textContent).toContain(SAVED_DRAFT_RECEIPT);
+    expect(screen.getByRole("button", { name: "Start" })).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Choose another host" }),
+    ).toBeDefined();
+  });
+
+  it("returns a chat's message to its composer with no Stopped receipt and no state receipt when a fresh row reads suspended before the Stop answers", async () => {
+    const answer = deferred<SandboxVerbOutcome>();
+    mocks.verbAnswer = answer.promise;
+    onTestFinished(async () => {
+      await act(async () => {
+        answer.resolve({ kind: "settled", state: "suspended" });
+        await answer.promise;
+      });
+    });
+    seed({
+      ...SEEDED,
+      elapsedSeconds: 120,
+      send: { request: { kind: "message", chatId: "existing-chat" } },
+    });
+    answerHost(SANDBOX_HOST, CODEX_DOWNLOADING);
+    mountInChat();
+    await screen.findByTestId("sandbox-setup-line");
+    act(() => {
+      useStagedSandboxStore.getState().report(SURFACE, {
+        failure: { kind: "settings", code: "SBX-0520" },
+      });
+    });
+    fireEvent.click(await screen.findByTestId("sandbox-setup-stop"));
+    await waitFor(() => {
+      expect(mocks.stopSandbox).toHaveBeenCalledWith("stop");
+    });
+    answerSandboxRows(
+      [
+        sandboxSummaryFixture({
+          id: SANDBOX_ID,
+          hostId: SANDBOX_HOST,
+          state: "suspended",
+        }),
+      ],
+      FRESH,
+    );
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+
+    expect(document.body.textContent).not.toContain("Stopped ");
+    expect(screen.getByTestId("sandbox-stopped-line").textContent).toBe(
+      "Your message wasn't sent; it's back in the composer.",
+    );
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(createChatCalls()).toEqual([]);
+  });
+
   /** Shows Stop on an unclaimed send, then makes writes to `storageKey` throw as a full disk would. */
   async function stopWithFailingWrite(storageKey: string) {
     seed({ ...SEEDED, elapsedSeconds: 120 });
