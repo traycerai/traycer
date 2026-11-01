@@ -3868,7 +3868,9 @@ export class RemoteSession<
     if (!this.isCurrent(generation)) {
       return;
     }
-    if (handoff !== null && this.isReady()) {
+    if (handoff !== null) {
+      // Through an outage too: the scheduler holds the frame until a resume
+      // sends it, and a rebuild discards it with the attach it was minted for.
       this.enqueueMemberCredential(connection, handoff);
       return;
     }

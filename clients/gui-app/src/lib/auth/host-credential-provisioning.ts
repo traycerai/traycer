@@ -476,9 +476,10 @@ function startHostCredentialAttempt(
  * every wake owes one at re-attach whenever the last mint was. The server's
  * mint budget bounds them instead.
  *
- * The claim gate is skipped too, so a caller that joins an attempt gets its
- * outcome. One session serves a host per person, so a joiner is that session's
- * newest attach, and the older attach it joined discards the credential.
+ * The per-caller claim is skipped too, so a caller that joins an attempt gets
+ * its outcome: the attach it joined may be gone, and a gone attach discards the
+ * credential. Two live sessions can both be handed one, and the host declines
+ * the second as the family it already holds.
  *
  * `null` when nothing was minted, which the remote session logs, goes on from
  * and re-asks after.
