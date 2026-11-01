@@ -622,4 +622,23 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
       expect(read(opened.store.getState())).toBe(true);
     },
   );
+
+  it("forgets a failed terminal-agent list on a user switch, since the failure was the old viewer's", () => {
+    signedInAs("user-a");
+    const { factory } = fakeFactory();
+    handle = openStoreForTest({
+      epicId: "epic-list-failed-roundtrip",
+      userId: null,
+      factories: { streamClientFactory: factory, laneSelection: null },
+      writeCommand: null,
+    });
+    const { store } = handle;
+
+    store.getState().markTuiAgentRecordListFailed();
+    expect(store.getState().tuiAgentRecordListFailed).toBe(true);
+
+    signedInAs("user-b");
+
+    expect(store.getState().tuiAgentRecordListFailed).toBe(false);
+  });
 });

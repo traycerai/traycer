@@ -9,6 +9,7 @@ import {
   planSegmentIdForApproval,
   receiptAnchorBlockId,
   resolveApprovalJumpLanding,
+  sentMessageAnchorId,
 } from "@/components/epic-canvas/renderers/chat-tile-jump-logic";
 import type {
   ChatMessage,
@@ -90,6 +91,7 @@ function toolSegment(input: {
     readonly receiverAgentId: string;
     readonly message: string;
   };
+  readonly startedAt?: number;
 }): ToolSegment {
   return {
     id: input.id,
@@ -124,7 +126,7 @@ function toolSegment(input: {
     progress: null,
     backgroundOutput: null,
     backgroundTask: null,
-    startedAt: 0,
+    startedAt: input.startedAt ?? 0,
     durationMs: null,
     parentId: null,
     imageResults: [],
@@ -747,6 +749,70 @@ describe("coldJumpOrdinal: a `message` target", () => {
   it("stays null while neither the skeleton nor the host has an answer", () => {
     expect(
       coldJumpOrdinal(window, { kind: "message", messageId: "m-turn" }, null),
+    ).toBeNull();
+  });
+});
+
+describe("sentMessageAnchorId", () => {
+  // The same candidates as the host locator's chat-publication-reads fixture:
+  // identical text to one receiver starting at 100, 110, 200 and 400, plus a
+  // send to another receiver and a different text that must never match.
+  function sendTo(
+    id: string,
+    receiverAgentId: string,
+    message: string,
+    startedAt: number,
+  ): ToolSegment {
+    return toolSegment({
+      id,
+      agentMessageReceipt: null,
+      agentMessageSend: { receiverAgentId, message },
+      startedAt,
+    });
+  }
+
+  const messages = [
+    messageWithSegments("m1", [sendTo("s100", "agent-r1", "ping", 100)]),
+    messageWithSegments("m2", [
+      sendTo("s110", "agent-r1", "ping", 110),
+      sendTo("s120", "agent-r2", "ping", 120),
+    ]),
+    messageWithSegments("m3", [
+      sendTo("s200", "agent-r1", "ping", 200),
+      sendTo("s210", "agent-r1", "different text", 210),
+    ]),
+    messageWithSegments("m5", [sendTo("s400", "agent-r1", "ping", 400)]),
+  ];
+
+  it.each([
+    ["a time tie goes to the first send", 105, "m1"],
+    ["a capture just after a send picks that send", 111, "m2"],
+    ["a capture nearer a later send picks it", 199, "m3"],
+    ["a capture past the last send picks the last", 9_999, "m5"],
+  ] as const)("%s", (_name, timestamp, expected) => {
+    expect(
+      sentMessageAnchorId(messages, {
+        receiverAgentId: "agent-r1",
+        messageText: "ping",
+        timestamp,
+      }),
+    ).toBe(expected);
+  });
+
+  it("matches only the receiver and verbatim text", () => {
+    expect(
+      sentMessageAnchorId(messages, {
+        receiverAgentId: "agent-r2",
+        messageText: "ping",
+        timestamp: 0,
+      }),
+    ).toBe("m2");
+    expect(
+      sentMessageAnchorId(messages, {
+        receiverAgentId: "agent-r1",
+        messageText: "no such text",
+        timestamp: 105,
+      }),
     ).toBeNull();
   });
 });

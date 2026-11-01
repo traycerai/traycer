@@ -16,7 +16,12 @@ import {
 } from "@/components/epic-tabs/pane-visibility-context";
 import type { EpicNodeRef } from "@/stores/epics/canvas/types";
 import { useOpenEpicId } from "@/lib/epic-selectors";
-import { useEpicTerminalAgent } from "@/lib/epic-selectors";
+import {
+  useEpicTerminalAgent,
+  useEpicTuiAgentRecordListAuthoritative,
+  useEpicTuiAgentRecordListFailed,
+} from "@/lib/epic-selectors";
+import { useEpicSessionHostId } from "@/hooks/epic/use-epic-session-host-id";
 import {
   TerminalXtermHost,
   useTerminalTileBootstrap,
@@ -86,6 +91,7 @@ import { useTuiSetupTerminalListRefreshDriver } from "@/hooks/agent/use-tui-setu
 import { useTuiSetupTerminalTabRegisterDriver } from "@/hooks/agent/use-tui-setup-terminal-tab-register-driver";
 import { SetupCardSegment } from "@/components/chat/segments/setup-card-segment";
 import { buildTuiAgentSetupCardModel } from "@/stores/chats/tui-agent-setup-card-model";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useAgentStopControls } from "@/hooks/agent/use-agent-stop-controls";
 import { AgentStopList } from "@/components/chat/chat-agent-stop-list";
 import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
@@ -376,6 +382,70 @@ function sleepsUntilRequested(input: {
 }): boolean {
   if (input.isCloudReplica || input.startRequested) return false;
   return input.agent !== null && input.agent.sessionState === "sleeping";
+}
+
+/**
+ * No record for this agent yet. Same stable skeleton the reachability-check,
+ * pre-launch, and xterm suspense states use, so the create→ready transition
+ * reads as one continuous loading state instead of a sequence of placeholder
+ * strings. The worktree-setup notice still rides on top (it keys off the
+ * tab/node id, not the pending agent projection), so a just-created worktree
+ * agent shows its notice before the record lands.
+ *
+ * Unless nothing is going to end the wait. A failed list cannot call this agent
+ * deleted, so the tile stays open. A list that answered without an agent bound
+ * to ANOTHER host cannot either, because that record is host-authoritative, so
+ * the route sweep never closes that tile: a late replica and a create that
+ * failed over there look the same to the session's list. A skeleton in either
+ * case would wait forever with nothing to say why. A same-host agent missing from an
+ * answered list is not here: the sweep closes it, or the tile shows it deleted.
+ * Nor is an agent still being created, whose record does not exist yet: the
+ * wait there is the setup the notice is showing.
+ */
+function TuiAgentAwaitingRecord(props: {
+  readonly node: EpicNodeRef;
+  readonly tileId: string;
+  readonly viewTabId: string;
+  readonly hostId: string;
+  readonly hostLabel: string;
+  readonly onClose: () => void;
+}) {
+  const recordListFailed = useEpicTuiAgentRecordListFailed();
+  const recordListAnswered = useEpicTuiAgentRecordListAuthoritative();
+  const sessionHostId = useEpicSessionHostId();
+  const isPendingCreate = useEpicCanvasStore((state) =>
+    state.pendingCreateArtifactIds.has(props.node.id),
+  );
+  const isOnAnotherHost =
+    sessionHostId !== null && sessionHostId !== props.hostId;
+  const recordUnavailable =
+    !isPendingCreate &&
+    (recordListFailed || (recordListAnswered && isOnAnotherHost));
+  return (
+    <TerminalAgentTileShell tileId={props.tileId}>
+      <TerminalAgentWorktreeNotice
+        owningTileInstanceId={props.node.instanceId}
+        hostId={props.hostId}
+        agentId={props.node.id}
+        viewTabId={props.viewTabId}
+        layout="bar"
+      />
+      <div className="flex min-h-0 flex-1 items-center justify-center">
+        {recordUnavailable ? (
+          <TerminalDeadTileBanner
+            reason="record-unavailable"
+            destroyedLine={null}
+            hostLabel={props.hostLabel}
+            ownerKind="agent"
+            onClose={props.onClose}
+            testId={`terminal-agent-tile-record-unavailable-${props.tileId}`}
+          />
+        ) : (
+          <TerminalLoadingSkeleton />
+        )}
+      </div>
+    </TerminalAgentTileShell>
+  );
 }
 
 function TuiAgentTileLive(
@@ -869,25 +939,15 @@ function TuiAgentTileLive(
   }
 
   if (agent === null) {
-    // Same stable skeleton the reachability-check, pre-launch, and xterm
-    // suspense states use, so the create→ready transition reads as one
-    // continuous loading state instead of a sequence of placeholder strings.
-    // The worktree-setup notice still rides on top (it keys off the tab/node
-    // id, not the pending agent projection), so a just-created worktree agent
-    // shows its notice before the record lands.
     return (
-      <TerminalAgentTileShell tileId={props.tileId}>
-        <TerminalAgentWorktreeNotice
-          owningTileInstanceId={props.node.instanceId}
-          hostId={hostId}
-          agentId={props.node.id}
-          viewTabId={props.viewTabId}
-          layout="bar"
-        />
-        <div className="flex min-h-0 flex-1 items-center justify-center">
-          <TerminalLoadingSkeleton />
-        </div>
-      </TerminalAgentTileShell>
+      <TuiAgentAwaitingRecord
+        node={props.node}
+        tileId={props.tileId}
+        viewTabId={props.viewTabId}
+        hostId={hostId}
+        hostLabel={hostLabel}
+        onClose={closeTile}
+      />
     );
   }
 

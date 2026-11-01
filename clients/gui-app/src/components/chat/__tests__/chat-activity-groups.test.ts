@@ -622,6 +622,53 @@ describe("chat activity grouping", () => {
     expect(done[0].group.activeStartedAt).toBeNull();
   });
 
+  it("anchors the group heartbeat on the latest-started streaming child, native start or not", () => {
+    const streamingTool = (id: string, startedAt: number) => ({
+      ...toolSegment(id, "read_file", { path: `/repo/${id}.ts` }),
+      isStreaming: true,
+      startedAt,
+    });
+    const heartbeat = (
+      segments: ReadonlyArray<MessageSegment>,
+    ): number | null => {
+      const timeline = buildCompleteTimeline(segments);
+      if (timeline[0]?.kind !== "activity_group") {
+        throw new Error("Expected activity group");
+      }
+      return timeline[0].group.activeStartedAt;
+    };
+
+    // A native start earlier than the host's receipt of the other tool loses to it.
+    expect(
+      heartbeat([
+        streamingTool("native", 4_000),
+        streamingTool("receipt", 9_000),
+      ]),
+    ).toBe(9_000);
+    // The same tool with a later native start wins, whichever order they arrived in.
+    expect(
+      heartbeat([
+        streamingTool("receipt", 9_000),
+        streamingTool("native", 12_000),
+      ]),
+    ).toBe(12_000);
+    // A native start that is ahead of the host clock is kept as recorded, not clamped.
+    const futureStartedAt = Date.now() + 3_600_000;
+    expect(
+      heartbeat([
+        streamingTool("future-native", futureStartedAt),
+        streamingTool("receipt", 9_000),
+      ]),
+    ).toBe(futureStartedAt);
+    // A finished tool never supplies the heartbeat, whatever its start.
+    expect(
+      heartbeat([
+        { ...streamingTool("done", 50_000), isStreaming: false },
+        streamingTool("running", 9_000),
+      ]),
+    ).toBe(9_000);
+  });
+
   it("keeps the trailing activity group active while the assistant turn is live", () => {
     const timeline = buildActiveTimeline([
       fileChangeSegment("file-change-1", "/repo/src/app.ts", false),

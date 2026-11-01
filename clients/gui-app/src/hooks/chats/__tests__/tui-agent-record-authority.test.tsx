@@ -33,6 +33,7 @@ import {
 } from "@/stores/epics/open-epic/test-support/open-store-for-test";
 import { useAuthStore } from "@/stores/auth/auth-store";
 import { useEpicSyncTuiAgentRecords } from "@/hooks/chats/use-epic-tui-agent-records";
+import { useEpicTuiAgentRetraction } from "@/lib/epic-selectors";
 
 const EPIC_ID = "epic-tui-authority";
 const VIEWER_ID = "viewer-1";
@@ -295,6 +296,37 @@ describe("terminal-agent list authority", () => {
     });
 
     expect(mounted.listCalls.value).toBe(1);
+  });
+
+  it("reads a retraction the record plane announced, for that agent alone", async () => {
+    const mounted = mount(null);
+    await waitFor(() => {
+      expect(readAuthority(mounted)).toBe(true);
+    });
+
+    mounted.handle.store.getState().applyTuiAgentRecordDelta({
+      kind: "tuiRemove",
+      epicId: EPIC_ID,
+      tuiAgentId: AGENT_ID,
+      reason: "deleted",
+    });
+
+    const { result } = renderHook(
+      () => ({
+        retracted: useEpicTuiAgentRetraction(AGENT_ID),
+        other: useEpicTuiAgentRetraction("tui-other"),
+        none: useEpicTuiAgentRetraction(null),
+      }),
+      { wrapper: mounted.Wrapper },
+    );
+
+    await waitFor(() => {
+      expect(result.current).toEqual({
+        retracted: "deleted",
+        other: null,
+        none: null,
+      });
+    });
   });
 
   it("stays false through a transient failure, retries included", async () => {
