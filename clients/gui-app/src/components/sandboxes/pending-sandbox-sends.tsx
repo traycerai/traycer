@@ -488,8 +488,18 @@ function usePendingSendRecovery(
     if (
       plan.effects.includes("return-message") ||
       plan.effects.includes("remove")
-    )
-      returnPendingSandboxSendOnItsSandbox(id);
+    ) {
+      const returned = returnPendingSandboxSendOnItsSandbox(id);
+      // A send whose window went before its task was confirmed: nothing else
+      // is left to say where its message went. Stopped and rested sends have
+      // receipts of their own.
+      if (
+        !send.epicConfirmed &&
+        send.ended !== true &&
+        returned.kind === "landing-draft"
+      )
+        recordCancelledSandboxSend(send, returned);
+    }
     if (plan.effects.includes("rehydrate"))
       void usePendingSandboxSendStore.persist.rehydrate();
   }, [id, send, stage]);

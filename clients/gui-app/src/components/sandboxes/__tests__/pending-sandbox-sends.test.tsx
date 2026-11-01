@@ -136,7 +136,10 @@ import {
 } from "../pending-sandbox-sends";
 import { registerChatCloneOpener } from "@/lib/chats/chat-clone-registry";
 import { registerActiveModelPicker } from "@/lib/commands/active-model-picker-registry";
-import { StoppedSandboxSendReceiptStrip } from "../stopped-sandbox-send-receipts";
+import {
+  StoppedSandboxSendReceiptStrip,
+  StoppedSandboxSendReceipts,
+} from "../stopped-sandbox-send-receipts";
 import { stagedRunActive } from "@/lib/sandboxes/staged-sandbox-run";
 import { TileCanvas } from "@/components/epic-canvas/canvas/tile-canvas";
 import type { SplitPaneComponentProps } from "@/components/epic-canvas/canvas/split-container";
@@ -3193,6 +3196,166 @@ describe("a send whose task may not exist yet", () => {
     await waitFor(() => {
       expect(mocks.createSandbox).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("a send recovered without its message going back to a task", () => {
+  const SAVED_LINE = "Your message wasn't sent; it's saved in your drafts.";
+  let restoreLocks: () => void = () => undefined;
+  beforeEach(() => {
+    restoreLocks = installImmediateExclusiveLocks();
+  });
+  afterEach(() => {
+    restoreLocks();
+  });
+
+  /** The driver and the app's receipts, as a window with no task open has them. */
+  function mountDriverWithReceipts(): void {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      <RunnerHostContext.Provider value={RUNNER_HOST}>
+        <QueryClientProvider client={client}>
+          <PendingSandboxSendsDriver />
+          <StoppedSandboxSendReceipts />
+        </QueryClientProvider>
+      </RunnerHostContext.Provider>,
+    );
+  }
+
+  async function sendRecovered(): Promise<void> {
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+  }
+
+  it("records a receipt for an unconfirmed send recovered into a landing draft", async () => {
+    // Seeded the way a rehydrated record is: this window never handed it.
+    seed({
+      ...SEEDED,
+      send: { epicConfirmed: false },
+      phase: "creating",
+      created: false,
+    });
+    mountDriverWithReceipts();
+
+    await sendRecovered();
+    const [draft] = useLandingDraftStore.getState().drafts;
+    expect(draft).toMatchObject({ content: MESSAGE_CONTENT, closed: true });
+    expect(
+      useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
+    ).toMatchObject({
+      kind: "cancelled",
+      epicId: "epic-1",
+      userId: "user-1",
+      returned: { kind: "landing-draft", draftId: draft.id },
+    });
+  });
+
+  it("says the message is saved in Drafts after a reload, and Open draft opens that draft", async () => {
+    seed({
+      ...SEEDED,
+      send: { epicConfirmed: false },
+      phase: "creating",
+      created: false,
+    });
+    await reloadPendingSandboxStores();
+    expect(useStoppedSandboxSendReceiptStore.getState().receipts).toEqual({});
+    mountDriverWithReceipts();
+
+    const toastId = `sandbox-stopped:${SEND_ID}`;
+    await waitFor(() => {
+      expect(toastSpies.activeReceiptToasts.has(toastId)).toBe(true);
+    });
+    await sendRecovered();
+    const [draft] = useLandingDraftStore.getState().drafts;
+    const shown = toastSpies.activeReceiptToasts.get(toastId);
+    if (shown === undefined) throw new Error("expected the receipt's toast");
+    const view = render(shown.content);
+    expect(view.container.textContent).toContain(SAVED_LINE);
+    // The receipt did not dismiss itself while the stores settled.
+    expect(
+      useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
+    ).toBeDefined();
+    expect(toastSpies.activeReceiptToasts.has(toastId)).toBe(true);
+
+    fireEvent.click(
+      within(view.container).getByRole("button", { name: "Open draft" }),
+    );
+
+    expect(useLandingDraftStore.getState().activeDraftId).toBe(draft.id);
+    expect(
+      useStoppedSandboxSendReceiptStore.getState().receipts[SEND_ID],
+    ).toBeUndefined();
+  });
+
+  it("adds no receipt for a confirmed send whose message went to Drafts because the composer was occupied", async () => {
+    // Its stage is gone and its task confirmed: the composer holds another
+    // message, so this one is saved in Drafts.
+    usePendingSandboxSendStore
+      .getState()
+      .add(pendingSend({ id: SEND_ID, epicConfirmed: true }));
+    useNewConversationModalStore
+      .getState()
+      .setContent("epic-1", OCCUPIED_NEW_CHAT_CONTENT);
+    mountDriverWithReceipts();
+
+    await sendRecovered();
+    expect(useLandingDraftStore.getState().drafts).toMatchObject([
+      { content: MESSAGE_CONTENT, closed: true },
+    ]);
+    expect(useStoppedSandboxSendReceiptStore.getState().receipts).toEqual({});
+    expect(toastSpies.activeReceiptToasts.size).toBe(0);
+  });
+
+  it("adds no receipt for an ended send saved to Drafts", async () => {
+    seed({
+      ...SEEDED,
+      send: { epicConfirmed: false, ended: true },
+      phase: "creating",
+      created: false,
+    });
+    mountDriverWithReceipts();
+
+    await sendRecovered();
+    expect(useLandingDraftStore.getState().drafts).toMatchObject([
+      { content: MESSAGE_CONTENT, closed: true },
+    ]);
+    expect(useStoppedSandboxSendReceiptStore.getState().receipts).toEqual({});
+    expect(toastSpies.activeReceiptToasts.size).toBe(0);
+  });
+
+  it("neither withdraws nor records a receipt for an unconfirmed send this window handed in", async () => {
+    const composerSurface = "landing:draft-1";
+    useStagedSandboxStore.getState().stage(composerSurface, NEW_TARGET);
+    const id = handPendingSandboxSend({
+      fromSurfaceKey: composerSurface,
+      epicId: "epic-1",
+      request: { kind: "chat", parentId: null, placement: null },
+      content: MESSAGE_CONTENT,
+      text: "fix the login bug",
+      settings: PICKED_SETTINGS,
+      epicConfirmed: false,
+      now: Date.now(),
+    });
+    if (id === null) throw new Error("expected the Send to hand over");
+    mountDriverWithReceipts();
+    // The driver has taken the send up once it holds its ownership.
+    const ownership = holdPendingSandboxSendOwnership(id);
+    try {
+      await act(async () => {
+        await ownership.ready;
+      });
+    } finally {
+      ownership.release();
+    }
+
+    expect(Object.keys(usePendingSandboxSendStore.getState().sends)).toEqual([
+      id,
+    ]);
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    expect(useStoppedSandboxSendReceiptStore.getState().receipts).toEqual({});
   });
 });
 
