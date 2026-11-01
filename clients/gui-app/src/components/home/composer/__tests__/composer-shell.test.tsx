@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { use, type ReactNode } from "react";
+import { use, useState, type ReactNode } from "react";
 
 import { createComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
 import type { ComposerExpansion } from "@/components/home/composer/composer-shell";
@@ -451,6 +451,67 @@ describe("ComposerShell focus layout", () => {
     renderUnder(false, false);
     expect(shell().hasAttribute("data-composer-focus-row")).toBe(false);
     expect(screen.getByRole("status").textContent).toBe("false");
+  });
+
+  describe("the pull zone over the draft's side of the row", () => {
+    beforeEach(() => {
+      viewportMock.phone = true;
+      HTMLElement.prototype.setPointerCapture = vi.fn();
+    });
+
+    /** The row with its owner's state, so opening the sheet re-renders it. */
+    function RowWithOwner(props: {
+      readonly onExpandedChange: (expanded: boolean) => void;
+    }): ReactNode {
+      const [expanded, setExpanded] = useState(false);
+      return (
+        <ComposerFocusLayoutContext value>
+          {shellWith(
+            {
+              expanded,
+              onExpandedChange: (next) => {
+                props.onExpandedChange(next);
+                setExpanded(next);
+              },
+            },
+            FITTING_EDITOR,
+          )}
+        </ComposerFocusLayoutContext>
+      );
+    }
+
+    function draftZone(): Element | null {
+      return document.querySelector("[data-composer-draft-grabber]");
+    }
+
+    it("is the edge's pull: hidden from assistive technology, and one pull opens the sheet once and ends on release", () => {
+      const onExpandedChange = vi.fn();
+      render(<RowWithOwner onExpandedChange={onExpandedChange} />);
+      const zone = draftZone();
+      if (zone === null) throw new Error("no draft zone");
+      expect(zone.getAttribute("aria-hidden")).toBe("true");
+      expect(zone.childElementCount).toBe(0);
+
+      fireEvent.pointerDown(zone, { clientY: 100, pointerId: 1 });
+      fireEvent.pointerMove(zone, { clientY: 40, pointerId: 1 });
+      // What follows the finger is the card, as from the edge's zone.
+      expect(shell().hasAttribute("data-composer-pulling")).toBe(true);
+      // The sheet took the row, and the zone with it; the sheet holds the
+      // pointer, so the release reaches it.
+      expect(draftZone()).toBeNull();
+      fireEvent.pointerUp(shell(), { clientY: 40, pointerId: 1 });
+
+      expect(shell().hasAttribute("data-composer-pulling")).toBe(false);
+      expect(shell().style.getPropertyValue("--composer-sheet-top")).toBe("");
+      expect(onExpandedChange).toHaveBeenCalledTimes(1);
+      expect(onExpandedChange).toHaveBeenCalledWith(true);
+    });
+
+    it("is not drawn off the row", () => {
+      renderShellWithEditor(makeExpansion(false), FITTING_EDITOR);
+      expect(grabber()).not.toBeNull();
+      expect(draftZone()).toBeNull();
+    });
   });
 
   it("keeps a sheet pulled open as the sheet, with the full toolbar", () => {

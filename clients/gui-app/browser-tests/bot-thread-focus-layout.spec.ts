@@ -123,10 +123,47 @@ test.describe("a long draft", () => {
   });
 });
 
+// The iPad mini in landscape, as the second tile: 744 tall, a 32 status bar and
+// a 428 keyboard leave the pane ending at 316.
+test.describe("iPad mini, a short post", () => {
+  test.use({ viewport: { width: 1133, height: 744 } });
+  const keyboardTop = 744 - 428;
+
+  for (const [threadName, thread] of [
+    ["no reply", "zero"],
+    ["no listing yet", "posted"],
+  ] as const) {
+    test(`with ${threadName}: the box rests on the keyboard, the post's region filling above it`, async ({
+      page,
+    }) => {
+      await openFocused(
+        page,
+        `?thread=${thread}&post=short&keyboard=428&top=32`,
+      );
+      const { composer } = await readBands(page);
+      expect(composer.bottom).toBeGreaterThanOrEqual(keyboardTop - 0.5);
+      expect(composer.bottom).toBeLessThanOrEqual(keyboardTop + 0.5);
+      const post = await page.locator(ANCHOR).boundingBox();
+      if (post === null) throw new Error("no post");
+      // Short: well clear of the box, so only a filling region puts it there.
+      expect(post.y + post.height).toBeLessThan(composer.top - 40);
+    });
+  }
+});
+
 test.describe("the iPad Pro 11's keyboard", () => {
   test.use({ viewport: { width: 1210, height: 834 } });
 
-  test("leaves 406, which keeps the full box", async ({ page }) => {
+  test("leaves 374 under its 32 status bar, which takes the one row", async ({
+    page,
+  }) => {
+    await openFocused(page, "?thread=zero&post=long&keyboard=428&top=32");
+    await expect(page.locator(ACTIVITY)).toBeHidden();
+  });
+
+  test("would leave 406 with no status bar, which keeps the full box", async ({
+    page,
+  }) => {
     await page.goto(
       `${fixture("bot-thread-tasks-bound")}?thread=zero&post=long&keyboard=428`,
     );

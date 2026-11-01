@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
 import { RemoveScroll } from "react-remove-scroll";
@@ -45,6 +46,8 @@ import {
 import { MentionMenuItem } from "./mention-menu-item";
 import { MentionPreviewPanel } from "./mention-preview-panel";
 import {
+  clearOfRow,
+  COMPOSER_MENU_ROWS_ABOVE_ROW,
   composerMenuMiddleware,
   initialComposerMenuPlacement,
   readComposerMenuReservedEdges,
@@ -99,10 +102,12 @@ function selectMenuSlice(state: {
 
 export interface ComposerMenuProps {
   readonly pickerStore: ComposerPickerStore;
+  /** The composer's one row on the focus layout, which the menu ends above; `null` elsewhere. */
+  readonly replyRow: RefObject<HTMLElement | null> | null;
 }
 
 export function ComposerMenu(props: ComposerMenuProps) {
-  const { pickerStore } = props;
+  const { pickerStore, replyRow } = props;
   const slice = useStore(pickerStore, useShallow(selectMenuSlice));
   const {
     open,
@@ -127,6 +132,7 @@ export function ComposerMenu(props: ComposerMenuProps) {
   return (
     <ComposerMenuPortal
       pickerStore={pickerStore}
+      replyRow={replyRow}
       kind={kind}
       slashTrigger={slashTrigger}
       items={items}
@@ -143,6 +149,7 @@ export function ComposerMenu(props: ComposerMenuProps) {
 
 interface ComposerMenuPortalProps {
   readonly pickerStore: ComposerPickerStore;
+  readonly replyRow: RefObject<HTMLElement | null> | null;
   readonly kind: "mention" | "slash" | null;
   readonly slashTrigger: ComposerSlashTrigger | null;
   readonly items: ReadonlyArray<ComposerPickerItem>;
@@ -158,6 +165,7 @@ interface ComposerMenuPortalProps {
 function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   const {
     pickerStore,
+    replyRow,
     kind,
     slashTrigger,
     items,
@@ -236,7 +244,8 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
   // inside the usable viewport. The menu never occupies the strip the
   // software keyboard covers: the keyboard inset is read on every pass, and a
   // keyboard opening or closing - which moves nothing `autoUpdate` observes -
-  // repositions it too.
+  // repositions it too. On the focus layout's one row it keeps clear of the
+  // row as well, while three rows fit above it (`clearOfRow`).
   useLayoutEffect(() => {
     const floating = floatingRef.current;
     if (floating === null) return;
@@ -249,7 +258,17 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
     };
 
     const reposition = (): void => {
-      const reserved = readComposerMenuReservedEdges();
+      const edges = readComposerMenuReservedEdges();
+      const row = replyRow?.current ?? null;
+      const reserved =
+        row === null
+          ? edges
+          : clearOfRow(
+              edges,
+              row.getBoundingClientRect().top,
+              window.innerHeight,
+              firstRowsHeight(floating),
+            );
       void computePosition(virtualReference, floating, {
         placement: initialComposerMenuPlacement(
           pickerStore.getState().clientRect?.() ?? null,
@@ -271,7 +290,7 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
       stopAutoUpdate();
       unsubscribeKeyboard();
     };
-  }, [pickerStore]);
+  }, [pickerStore, replyRow]);
 
   const headerLabel = copy.header;
   // A step can say something truer than the provider's generic copy - an empty
@@ -414,6 +433,26 @@ function ComposerMenuPortal(props: ComposerMenuPortalProps) {
       )}
     </>
   );
+}
+
+/**
+ * How tall the menu has to be to show its first `COMPOSER_MENU_ROWS_ABOVE_ROW`
+ * result rows, from its top, as laid out with the list unscrolled; all of it
+ * when it has fewer rows than that, or none.
+ */
+function firstRowsHeight(menu: HTMLElement): number {
+  const top = menu.getBoundingClientRect().top;
+  const list = menu.querySelector<HTMLElement>('[role="listbox"]');
+  if (list === null) return menu.scrollHeight;
+  const rows = list.querySelectorAll<HTMLElement>('[role="option"]');
+  const last =
+    rows.length === 0
+      ? null
+      : rows.item(Math.min(rows.length, COMPOSER_MENU_ROWS_ABOVE_ROW) - 1);
+  if (last === null) {
+    return list.getBoundingClientRect().top - top + list.scrollHeight;
+  }
+  return last.getBoundingClientRect().bottom + list.scrollTop - top;
 }
 
 function activeDialogContentShard(): HTMLElement | null {
