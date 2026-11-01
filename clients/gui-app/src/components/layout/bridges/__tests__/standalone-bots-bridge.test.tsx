@@ -24,7 +24,10 @@ import {
   hostRpcRegistry,
   type HostRpcRegistry,
 } from "@traycer/protocol/host/index";
+import type { StreamFrameEnvelope } from "@traycer-clients/shared/host-transport/i-stream-session";
 import { BotChannelTitle } from "@/components/bots/bot-channel-level2";
+import { MockWsStreamClient } from "@/components/epic-canvas/pr/__tests__/pr-stream-test-fixtures";
+import { __resetBotListChangedSessionsForTesting } from "@/hooks/bots/use-bot-list-changed-subscription";
 import type { BotThreadsViewState } from "@/components/bots/bot-channel-sidebar";
 import { TeamSetupChannel } from "@/components/bots/team-setup-channel";
 import { StandaloneBotsBridge } from "@/components/layout/bridges/standalone-bots-bridge";
@@ -48,6 +51,8 @@ const host = vi.hoisted(() => ({
   support: true as boolean | null,
   reachability: "reachable",
   leaseStatus: null as string | null,
+  stream: null as MockWsStreamClient<StreamFrameEnvelope> | null,
+  setupBotId: "",
 }));
 
 vi.mock("next-themes", () => ({
@@ -72,6 +77,13 @@ vi.mock("@/hooks/host/use-host-supports-method", () => ({
   useHostMethodSupport: () => host.support,
   useHostMethodSchemaVersion: () =>
     host.support === true ? { major: 1, minor: 1 } : null,
+}));
+vi.mock("@/lib/host/stream-runtime-context", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@/lib/host/stream-runtime-context")
+  >()),
+  useStreamHostId: () => (host.stream === null ? null : "host-1"),
+  useWsStreamClient: () => host.stream,
 }));
 vi.mock("@/hooks/agent/use-host-reachability", () => ({
   useHostReachability: () => ({ status: host.reachability }),
@@ -181,7 +193,8 @@ function mountHost(answers: HostAnswers): (children: ReactNode) => ReactNode {
       handlers: {
         "environment.list": () => answers.environments(),
         "bot.list": () => answers.bots(),
-        "bot.onboarding.read": () => onboardingWith(NEEDS_HOST),
+        "bot.onboarding.read": () =>
+          onboardingWith({ ...NEEDS_HOST, botId: host.setupBotId }),
       },
     }),
   });
@@ -280,6 +293,8 @@ beforeEach(() => {
   host.support = true;
   host.reachability = "reachable";
   host.leaseStatus = null;
+  host.stream = null;
+  host.setupBotId = SETUP_BOT_ID;
   signIn("user-a");
 });
 
@@ -287,6 +302,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   toast.dismiss();
+  __resetBotListChangedSessionsForTesting();
   useStandaloneBotsStore.setState(EMPTY_DIRECTORY_STATE);
   useAuthStore.setState({ status: "signed-out", contextMetadata: null });
 });
@@ -335,6 +351,115 @@ describe("<StandaloneBotsBridge /> on window focus", () => {
   });
 });
 
+describe("<StandaloneBotsBridge /> and a change to the bots elsewhere", () => {
+  const CHANGED: StreamFrameEnvelope = {
+    kind: "changed",
+    hasBinaryPayload: false,
+  };
+
+  class SupportedStream extends MockWsStreamClient<StreamFrameEnvelope> {
+    override getMethodSupport(): "supported" {
+      return "supported";
+    }
+
+    override subscribeMethodSupport(): () => void {
+      return () => undefined;
+    }
+  }
+
+  /** The only bots surface mounted: the bridge and a closed picker. */
+  function mountOnlyBridge(
+    answers: { bots: BotListResponse },
+    pickerBotId: string,
+  ): {
+    readonly ringBell: () => void;
+  } {
+    const stream = new SupportedStream();
+    host.stream = stream;
+    const app = mountHost({
+      environments: () => ({
+        environments: [personal(), team("traycerai")],
+      }),
+      bots: () => answers.bots,
+    });
+    render(app(pickerOn(pickerBotId)));
+    return {
+      ringBell: () => {
+        const session = stream.getSession("bot.listChanged", {});
+        if (session === undefined) {
+          throw new Error("bot.listChanged not subscribed");
+        }
+        act(() => {
+          session.emitFrame(CHANGED);
+        });
+      },
+    };
+  }
+
+  it("places a team's bot once its main bot is created elsewhere", async () => {
+    const answers: { bots: BotListResponse } = {
+      bots: {
+        bots: [
+          tracyRecord(PERSONAL_MAIN_BOT_ID, "env-me"),
+          tracyRecord(TEAM_MAIN_BOT_ID, "env-team"),
+        ],
+        mainBotIds: { "env-me": PERSONAL_MAIN_BOT_ID },
+      },
+    };
+    const { ringBell } = mountOnlyBridge(answers, TEAM_MAIN_BOT_ID);
+    await waitFor(() => {
+      expect(useStandaloneBotsStore.getState().settled).toBe(true);
+    });
+    expect(titleText()).toBe("Tracy");
+
+    answers.bots = BOTH_BOTS;
+    ringBell();
+
+    await waitFor(() => {
+      expect(titleText()).toBe("Tracy · traycerai");
+    });
+  });
+
+  it("publishes a setup that changes while the lists do not", async () => {
+    const NEXT_SETUP_BOT_ID = "bot_01ARZ3NDEKTSV4RRFFQ69G5FAY";
+    const answers = { bots: PERSONAL_BOTS };
+    const { ringBell } = mountOnlyBridge(answers, NEXT_SETUP_BOT_ID);
+    await waitFor(() => {
+      expect(useStandaloneBotsStore.getState().directory.setups).toHaveLength(
+        1,
+      );
+    });
+    const model = useStandaloneBotsStore.getState().directory.model;
+    expect(titleText()).toBe("Tracy");
+
+    host.setupBotId = NEXT_SETUP_BOT_ID;
+    ringBell();
+
+    await waitFor(() => {
+      expect(titleText()).toBe("Tracy · traycerai");
+    });
+    expect(useStandaloneBotsStore.getState().directory.model).toBe(model);
+  });
+
+  it("drops the place once the other main bot is archived elsewhere", async () => {
+    const answers = { bots: BOTH_BOTS };
+    const { ringBell } = mountOnlyBridge(answers, TEAM_MAIN_BOT_ID);
+    await waitFor(() => {
+      expect(titleText()).toBe("Tracy · traycerai");
+    });
+
+    answers.bots = {
+      bots: [tracyRecord(TEAM_MAIN_BOT_ID, "env-team")],
+      mainBotIds: { "env-team": TEAM_MAIN_BOT_ID },
+    };
+    ringBell();
+
+    await waitFor(() => {
+      expect(titleText()).toBe("Tracy");
+    });
+  });
+});
+
 describe("<StandaloneBotsBridge /> and a main bot still to be set up", () => {
   function setupChannel(environmentLabel: string): ReactNode {
     return (
@@ -364,6 +489,30 @@ describe("<StandaloneBotsBridge /> and a main bot still to be set up", () => {
 
     await waitFor(() => {
       expect(titleText()).toBe("Tracy · traycerai");
+    });
+  });
+
+  it("publishes a setup's real change and no equal one", async () => {
+    let label = "traycerai";
+    const app = mountHost({
+      environments: () => ({ environments: [personal(), team(label)] }),
+      bots: () => PERSONAL_BOTS,
+    });
+    const { rerender } = render(app(pickerOn(SETUP_BOT_ID)));
+    await waitFor(() => {
+      expect(titleText()).toBe("Tracy · traycerai");
+    });
+    const published = useStandaloneBotsStore.getState().directory;
+
+    rerender(app(pickerOn(SETUP_BOT_ID)));
+    expect(useStandaloneBotsStore.getState().directory).toBe(published);
+
+    label = "renamed";
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => {
+      expect(titleText()).toBe("Tracy · renamed");
     });
   });
 

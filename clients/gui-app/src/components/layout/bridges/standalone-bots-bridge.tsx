@@ -1,9 +1,10 @@
 import { useEffect, useMemo } from "react";
 import { useHostReachability } from "@/hooks/agent/use-host-reachability";
+import { useBotListChangedSubscriptionForApp } from "@/hooks/bots/use-bot-list-changed-subscription";
 import { useBotListQuery } from "@/hooks/bots/use-bot-list-query";
 import { useEnvironmentListQuery } from "@/hooks/bots/use-environment-list-query";
 import { useRereadEnvironmentListOnFocus } from "@/hooks/bots/use-reread-environment-list-on-focus";
-import { useTeamSetups } from "@/hooks/bots/use-team-setups";
+import { useTeamSetups, type TeamSetup } from "@/hooks/bots/use-team-setups";
 import { useCloudChatViewerId } from "@/hooks/chats/use-cloud-chat-queries";
 import { useBoundedHostLoad } from "@/hooks/host/use-bounded-host-load";
 import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
@@ -11,6 +12,24 @@ import { useNotificationResolveHost } from "@/hooks/notifications/use-notificati
 import { buildHomeBotsModel } from "@/lib/home-bots/bots-model";
 import { UNKNOWN_HOST_PLACEHOLDER } from "@/lib/host/constants";
 import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
+
+function sameSetups(
+  a: ReadonlyArray<TeamSetup>,
+  b: ReadonlyArray<TeamSetup>,
+): boolean {
+  return (
+    a.length === b.length &&
+    a.every((setup, index) => {
+      const other = b[index];
+      return (
+        setup.environmentId === other.environmentId &&
+        setup.teamName === other.teamName &&
+        setup.botId === other.botId &&
+        setup.title === other.title
+      );
+    })
+  );
+}
 
 /**
  * Keeps the standalone names' directory current. Every read is the same from
@@ -29,6 +48,9 @@ export function StandaloneBotsBridge(): null {
   const supported = support === true;
   const viewerUserId = useCloudChatViewerId();
   useRereadEnvironmentListOnFocus(supported);
+  // With Show Tracy off and neither Home nor a bot tab open, nothing else keeps
+  // the list current when a main bot is created or archived elsewhere.
+  useBotListChangedSubscriptionForApp(supported);
   const environments = useEnvironmentListQuery(client, supported);
   const bots = useBotListQuery(client, supported);
   const environmentData = environments.data;
@@ -65,7 +87,17 @@ export function StandaloneBotsBridge(): null {
     reachability.status === "unreachable" ||
     directoryWait.kind === "dead" ||
     directoryWait.kind === "timed-out";
+  // `useTeamSetups` answers a new array each render: an equal one is no change
+  // to everything reading the store.
   useEffect(() => {
+    const current = useStandaloneBotsStore.getState();
+    if (
+      current.settled === settled &&
+      current.directory.model === model &&
+      sameSetups(current.directory.setups, setups)
+    ) {
+      return;
+    }
     useStandaloneBotsStore.setState({
       directory: { model, setups },
       settled,

@@ -165,6 +165,10 @@ vi.mock("@/lib/host", () => ({
 // streams on, so the `For` variants take that client as an argument instead of
 // reaching for the app-wide binding. The app-wide pair is still exported for
 // the surfaces that legitimately use it, so both stay mocked here.
+vi.mock("@/hooks/bots/use-bot-list-changed-subscription", () => ({
+  useBotListChangedSubscriptionForApp: () => undefined,
+}));
+
 vi.mock("@/lib/host/stream-runtime-context", () => ({
   useStreamMethodSupport: (method: keyof HostStreamRpcRegistry & string) =>
     streamState.useClientSupport
