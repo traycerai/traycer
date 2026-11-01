@@ -1735,11 +1735,13 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     }
     const shownBefore = toastLog.length;
     await refuseAttach(error);
-    // A task still being set up is rolled back unless the Send was taken back:
-    // its delete is the last thing that can follow.
+    // A task still being set up is rolled back unless the Send was taken back
+    // or its message did not come back: its delete is the last thing that can
+    // follow.
     if (
       fate !== "taken-back" &&
       fate !== "cancelled" &&
+      fate !== "nowhere" &&
       PROMOTION_PENDING_CODES.some((code) => code === error.code)
     ) {
       await waitFor(() => {
@@ -1962,6 +1964,33 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       ]);
     },
   );
+
+  it("keeps a task whose message did not come back, with its pending send, when the refusal says it is still being set up", async () => {
+    vi.mocked(toast.error).mockClear();
+    const { epicId, refuseAttach, queryClient } =
+      await startSendWithHeldAttach();
+    const send = onlyPendingSend();
+    const pending = pendingSendSurfaceKey(send.id);
+    // The stage is gone, so the message has nowhere to come back to.
+    useStagedSandboxStore.setState((state) => ({
+      bySurface: Object.fromEntries(
+        Object.entries(state.bySurface).filter(([key]) => key !== pending),
+      ),
+    }));
+    const shownBefore = toastLog.length;
+    await refuseAttach(attachBusy());
+    await waitFor(() => {
+      expect(toastLog.slice(shownBefore)).toEqual([errorToast(NOT_SENT_LINE)]);
+    });
+    await refusalSettled(queryClient);
+
+    // Nothing was asked of the host about the task, let alone deleted.
+    expect(landingMocks.readRequest).not.toHaveBeenCalled();
+    expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
+    expect(onlyPendingSend()).toMatchObject({ id: send.id, epicId });
+    expect(wasEpicCreatedThisSession(epicId)).toBe(true);
+    queryClient.clear();
+  });
 
   it("says nothing when the account changed during the wait", async () => {
     const { refuseAttach, queryClient } = await startSendWithHeldAttach();

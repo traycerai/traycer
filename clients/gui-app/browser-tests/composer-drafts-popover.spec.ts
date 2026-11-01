@@ -47,6 +47,15 @@ async function probeState(page: Page): Promise<ProbeState> {
 async function openList(page: Page): Promise<void> {
   await page.goto(fixture("composer-drafts-popover"));
   await page.waitForFunction("window.__draftsProbeReady === true");
+  // The premise the launch flags create: a fine, hovering pointer, where the
+  // row's actions are hidden until hover. On a coarse one they are always
+  // visible and the hover waits below would prove nothing.
+  expect(
+    await page.evaluate(
+      () => matchMedia("(hover: hover) and (pointer: fine)").matches,
+    ),
+    "the pointer must be fine and hovering",
+  ).toBe(true);
   // Real focus in the editor, as when the person is typing.
   await page.locator(EDITOR).click();
   await expect(page.locator(EDITOR)).toBeFocused();

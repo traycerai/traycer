@@ -12,7 +12,7 @@ import { toast } from "sonner";
 import { CommandPaletteRouterContext } from "@/components/command-palette/command-palette-context";
 import { ChatSandboxFooter } from "@/components/chat/chat-sandbox-footer";
 import { chatSandboxStateLine } from "@/components/epic-canvas/renderers/chat-sandbox-state-line";
-import { TabHostProvider } from "@/components/epic-canvas/tab-host-provider";
+import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { Button } from "@/components/ui/button";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
 import { resolveChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
@@ -202,11 +202,12 @@ function SandboxStateReceipt(props: {
         {slot === null || inDrafts ? null : (
           <>
             <span>{slot.line}</span>
-            {/* The strip sits above the tiles: its actions bind the host a
-                chat of this sandbox would. */}
-            <TabHostProvider hostId={receipt.hostId}>
+            {/* The strip sits above the tiles, or in a tile bound elsewhere:
+                its actions bind the host a chat of this sandbox would. Only
+                the binding, since this is no tab to mirror drafts for. */}
+            <TabHostContext.Provider value={receipt.hostId}>
               {slot.actions}
-            </TabHostProvider>
+            </TabHostContext.Provider>
           </>
         )}
         {inDrafts ? <span>{restedDraftLine(line.text)}</span> : null}

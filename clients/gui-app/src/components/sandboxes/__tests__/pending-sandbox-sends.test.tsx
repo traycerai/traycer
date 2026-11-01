@@ -9,6 +9,7 @@
  */
 import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
 import { useSyncExternalStore } from "react";
+import { TabHostContext } from "@/components/epic-canvas/hooks/use-tab-host-id";
 import { useComposerDraftStore } from "@/stores/composer/composer-draft-store";
 import type { ChatSessionStoreHandle } from "@/stores/chats/chat-session-store";
 import {
@@ -478,11 +479,13 @@ const clients = vi.hoisted(
       }
     >(),
 );
+const requestedClientHosts = vi.hoisted(() => new Set<string>());
 const refetchNothing = vi.hoisted(() => () => Promise.resolve(undefined));
 
 vi.mock("@/hooks/host/use-host-client-for-host-id", () => ({
   useHostDirectoryEntryForHostId: () => null,
   useHostClientForHostId: (hostId: string | null) => {
+    if (hostId !== null) requestedClientHosts.add(hostId);
     if (hostId === null || mocks.nullClientHosts.has(hostId)) return null;
     const known = clients.get(hostId);
     if (known !== undefined) return known;
@@ -712,9 +715,22 @@ vi.mock("@/lib/host", () => ({
   useAuthService: () => hostBinding.auth,
 }));
 // The real TabHostProvider mounts a draft mirror that needs a live stream client.
-vi.mock("@/hooks/drafts/use-tab-draft-mirror", () => ({
-  TabDraftMirrorMount: () => null,
-}));
+// Only the mount is replaced: it records the host each mirror would bind.
+const mirrorMountHosts = vi.hoisted(() => [] as string[]);
+vi.mock("@/hooks/drafts/use-tab-draft-mirror", async () => {
+  const { useEffect } = await import("react");
+  const { useTabHostId } =
+    await import("@/components/epic-canvas/hooks/use-tab-host-id");
+  return {
+    TabDraftMirrorMount: () => {
+      const hostId = useTabHostId();
+      useEffect(() => {
+        mirrorMountHosts.push(hostId);
+      }, [hostId]);
+      return null;
+    },
+  };
+});
 vi.mock("@/hooks/epic/use-task-hosts-view", () => ({
   useTaskHostsView: () =>
     mocks.taskHosts.length === 0
@@ -1043,6 +1059,23 @@ function mount() {
       <QueryClientProvider client={client}>
         <PendingSandboxSendsDriver />
         <PendingSandboxSendStrip epicId="epic-1" tabId="tab-1" />
+      </QueryClientProvider>
+    </RunnerHostContext.Provider>,
+  );
+}
+
+/** `mount`, inside a tile bound to another host than the strip's receipt. */
+function mountInTileBoundTo(tileHostId: string) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return render(
+    <RunnerHostContext.Provider value={RUNNER_HOST}>
+      <QueryClientProvider client={client}>
+        <TabHostContext.Provider value={tileHostId}>
+          <PendingSandboxSendsDriver />
+          <PendingSandboxSendStrip epicId="epic-1" tabId="tab-1" />
+        </TabHostContext.Provider>
       </QueryClientProvider>
     </RunnerHostContext.Provider>,
   );
@@ -5802,6 +5835,38 @@ describe("a send whose sandbox left awake on its own after the create timed out"
     });
     expect(await screen.findByTestId("sandbox-row-menu-details")).toBeDefined();
     expect(screen.getByTestId("sandbox-row-menu-destroy")).toBeDefined();
+  });
+
+  it("binds the failed line's actions to the sandbox's host in a tile bound elsewhere, without opening a draft mirror for it", async () => {
+    const TILE_HOST = "tile-host";
+    seed({
+      ...SEEDED,
+      send: SEND_BY_KIND.chat,
+      phase: "creating",
+      created: true,
+    });
+    useStagedSandboxStore.getState().report(SURFACE, {
+      step: "applying",
+      stepAt: Date.now(),
+      failure: { kind: "timed-out", step: "applying" },
+    });
+    mocks.listSandboxes.mockResolvedValue(listAnswers([rowIn("awake")]));
+    answerSandboxRows([rowIn("awake")], FRESH);
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mirrorMountHosts.length = 0;
+    requestedClientHosts.clear();
+    mountInTileBoundTo(TILE_HOST);
+    await screen.findByTestId("sandbox-setup-line");
+
+    answerSandboxRows([rowIn("failed")], FRESH + 1);
+
+    const line = await screen.findByTestId("sandbox-stopped-line");
+    expect(line.textContent).toContain("Couldn't start build-box");
+    expect(within(line).getByTestId("sandbox-row-retry")).toBeDefined();
+    // The actions resolved their host client for the sandbox's host...
+    expect(requestedClientHosts.has(SANDBOX_HOST)).toBe(true);
+    // ...and no mirror of this tile's drafts was mounted for it.
+    expect(mirrorMountHosts).not.toContain(SANDBOX_HOST);
   });
 
   it("says a stopped sandbox's draft line in the stopped form when the composer is occupied", async () => {

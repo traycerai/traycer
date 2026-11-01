@@ -1662,7 +1662,8 @@ export function useLandingComposerActions(
       // attachment refused because the task is still reaching the cloud then
       // deletes it, unless an agent was started in it meanwhile: the next Send
       // creates its own. Any other refusal keeps it: the task may have reached
-      // the cloud, where an agent on another host can't be ruled out.
+      // the cloud, where an agent on another host can't be ruled out. So does
+      // a message that didn't come back: its send still names the task.
       const giveBack = (): LandingGiveBack | null => {
         if (!sameAccount() || !handed.isCurrent()) return null;
         const returned = handed.giveBack();
@@ -1690,12 +1691,13 @@ export function useLandingComposerActions(
         // The account moved on, or the person took the message back: nothing
         // here is theirs to hear about.
         if (!sameAccount() || !handed.isCurrent()) return;
+        const returned = giveBack();
         const line = landingAttachRefusalLine(
           classifySendRefusal(error),
-          giveBack(),
+          returned,
         );
         if (line !== null) toastSendRefusal(error, line);
-        if (!isAttachPromotionPending(error)) return;
+        if (returned === null || !isAttachPromotionPending(error)) return;
         void discardCreatedIfEmpty({ epicId, hostId }).then((discarded) => {
           if (discarded) unmarkEpicCreatedThisSession(epicId);
         });
