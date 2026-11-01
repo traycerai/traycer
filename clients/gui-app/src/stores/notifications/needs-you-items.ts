@@ -144,7 +144,7 @@ export function selectNeedsYouItems(
  * untitled), else by the names its prompt was filed under. A prompt is filed
  * with the titles of that moment, so a chat titled after it asked (the usual
  * case: titles are generated from the first prompt) would otherwise stay
- * "Untitled agent". An agent's name that only repeats its task's is dropped:
+ * "New agent". An agent's name that only repeats its task's is dropped:
  * the task already says it.
  */
 export function withLiveTitles(

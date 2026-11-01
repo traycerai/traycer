@@ -6,7 +6,7 @@ import type {
   WorktreeIntent,
 } from "@traycer/protocol/host/worktree-schemas";
 import { pathContainsDirectory as pathIsUnderRoot } from "@/lib/path/cross-platform-path";
-import { displayTitle } from "@/lib/display-title";
+import { isAgentFallbackName } from "@/lib/display-title";
 
 /**
  * Phase-1 (client-local) owner-scoped teardown snapshot.
@@ -290,16 +290,11 @@ function chatTurnWillCallAgentStop(input: OwnerTeardownSnapshotInput): boolean {
 /**
  * Evidence-naming fallback for a holder row. Untitled chats/agents use the
  * short "This agent" so the tab-strip's empty-title state doesn't overflow
- * the disclosure as "Untitled agent is working…".
+ * the disclosure as "New agent is working…".
  */
 export function teardownOwnerDisplayName(ownerLabel: string): string {
   const trimmed = ownerLabel.trim();
-  if (
-    trimmed.length === 0 ||
-    trimmed === displayTitle("", "agent") ||
-    trimmed === displayTitle("", "chat") ||
-    trimmed === displayTitle("", "terminal-agent")
-  ) {
+  if (trimmed.length === 0 || isAgentFallbackName(trimmed)) {
     return "This agent";
   }
   return trimmed;

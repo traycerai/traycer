@@ -149,7 +149,6 @@ const activeInTab: { artifactId: string | null; tileId: string | null } = {
 };
 
 vi.mock("@/stores/epics/canvas/store", () => ({
-  useHasPendingChatTitle: () => false,
   useIsActiveEpicArtifact: (_tabId: string | undefined, nodeId: string) =>
     activeInTab.artifactId === nodeId,
   useIsActiveTile: (_tabId: string | undefined, tileId: string | null) =>

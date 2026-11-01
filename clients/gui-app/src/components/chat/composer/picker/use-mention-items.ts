@@ -939,7 +939,7 @@ function buildChatMentionEntry(
     epicTitle,
     chatId: chat.id,
     // The picker addresses the durable Agent, so an untitled record falls back
-    // to "Untitled agent" regardless of interface. A record whose stored title
+    // to "New agent" regardless of interface. A record whose stored title
     // literally reads "Untitled chat" keeps that text - it is data, not a
     // fallback, and is indistinguishable from a title the user chose.
     label: displayTitle(chat.title, "agent"),

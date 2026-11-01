@@ -40,6 +40,7 @@ import type {
 } from "@traycer-clients/shared/host-transport/resources-stream-client";
 import type { IHostStreamClient } from "@traycer-clients/shared/host-transport/host-stream-client";
 import type { HostStreamRpcRegistry } from "@traycer/protocol/host/registry";
+import { sanitizePersistedCanvasState } from "@/stores/epics/canvas/canvas-persistence";
 import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-popover";
 import {
   hostScopeFixture,
@@ -3093,7 +3094,7 @@ describe("ResourceMonitorPopover", () => {
     expect(tabNavigationMock.activateTabIntent).toHaveBeenCalledTimes(1);
   });
 
-  it("opens an untitled live-only agent under the untitled-agent fallback, not a blank tile", async () => {
+  it("opens an untitled live-only agent under the New agent fallback, not a blank tile", async () => {
     // `useEpicTabDisplayTitle` projects an untitled agent's live title as
     // `null` and lands on the tile's own `name`, so an unnamed record has to
     // carry the render-tier fallback itself or the tab strip renders blank.
@@ -3127,7 +3128,7 @@ describe("ResourceMonitorPopover", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     const row = await screen.findByRole<HTMLButtonElement>("button", {
-      name: /^Untitled agent/,
+      name: /^New agent/,
     });
     expect(row.disabled).toBe(false);
     fireEvent.click(row);
@@ -3140,7 +3141,7 @@ describe("ResourceMonitorPopover", () => {
     if (!isRecord(input.preparation.node)) {
       throw new Error("expected resource tile node");
     }
-    expect(input.preparation.node.name).toBe("Untitled agent");
+    expect(input.preparation.node.name).toBe("New agent");
   });
 
   it("links an agent row that only the live epic projection knows (no tile, no canvas record)", async () => {
@@ -3236,7 +3237,7 @@ describe("ResourceMonitorPopover", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     expect(screen.queryByText("Live Agent")).toBeNull();
     const row = await screen.findByRole<HTMLButtonElement>("button", {
-      name: /^Untitled agent/,
+      name: /^New agent/,
     });
     expect(row.disabled).toBe(true);
     fireEvent.click(row);
@@ -3319,7 +3320,7 @@ describe("ResourceMonitorPopover", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Resources" }));
     const row = await screen.findByRole<HTMLButtonElement>("button", {
-      name: /^Untitled agent/,
+      name: /^New agent/,
     });
     expect(row.disabled).toBe(true);
     fireEvent.click(row);
@@ -4321,6 +4322,65 @@ describe("ResourceMonitorPopover · shells nested under their creator", () => {
     expect(node.hostId).toBe("host-1");
     expect(tabNavigationMock.activateTabIntent).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    ["Untitled agent", "New agent"],
+    ["Planner", "Planner"],
+  ])(
+    "names a terminal agent from a persisted tree record saved as %j as %j",
+    (saved, shown) => {
+      const persisted = sanitizePersistedCanvasState({
+        artifactTreeByEpicId: {
+          "epic-1": [
+            {
+              id: "tui-saved",
+              parentId: null,
+              name: saved,
+              type: "terminal-agent",
+              hostId: "host-1",
+            },
+          ],
+        },
+      }).artifactTreeByEpicId["epic-1"];
+      const record = persisted?.[0];
+      if (record === undefined) throw new Error("expected the saved record");
+      const tree = canvasMock.state.artifactTreeByEpicId["epic-1"];
+      tree.push({ ...record, parentId: null });
+      try {
+        emitOwners([
+          owner({
+            owner: {
+              kind: "terminal-agent",
+              hostId: "host-1",
+              epicId: "epic-1",
+              ownerId: "tui-saved",
+            },
+            harnessId: "codex",
+            activeProcessName: "codex",
+            rootPids: [500],
+            processCount: 1,
+            cpuPercent: 2,
+            rssBytes: 10 * MiB,
+            processes: [
+              resourceProcess({
+                pid: 500,
+                rootPid: 500,
+                name: "codex",
+                command: "codex",
+                cpuPercent: 2,
+                rssBytes: 10 * MiB,
+              }),
+            ],
+          }),
+        ]);
+
+        expect(rowButton(shown)).toBeTruthy();
+        expect(screen.queryByText("Untitled agent")).toBeNull();
+      } finally {
+        tree.pop();
+      }
+    },
+  );
 
   it("tucks a TUI agent's shell behind that agent's row the same way", () => {
     // The nesting rule is uniform across creator kinds: a shell made by an

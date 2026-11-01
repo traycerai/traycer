@@ -1396,7 +1396,7 @@ function collectRawTreeRecords(
       id,
       parentIdRaw: chat.parentId,
       // Durable Agent tree row: an untitled Chat-interface Agent falls back to
-      // "Untitled agent", not "Untitled chat". `type` stays the structural
+      // "New agent". `type` stays the structural
       // "chat" interface discriminator.
       title: displayTitle(chat.title, "agent"),
       type: "chat",
@@ -1411,7 +1411,7 @@ function collectRawTreeRecords(
       id,
       parentIdRaw: agent.parentId,
       // Durable Agent tree row: an untitled Terminal-interface Agent falls back
-      // to "Untitled agent" too (harness identity is separate interface
+      // to "New agent" too (harness identity is separate interface
       // metadata, not the title fallback). `type` stays the interface
       // discriminator.
       title: displayTitle(agent.title, "agent"),

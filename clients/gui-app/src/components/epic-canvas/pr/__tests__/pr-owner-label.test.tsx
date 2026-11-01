@@ -56,6 +56,13 @@ function treeIndexFromParents(): EpicTreeIndex {
  */
 let deletedNodeIds: ReadonlySet<string> = new Set<string>();
 
+/** Owner ids whose projected title is still empty. */
+let untitledNodeIds: ReadonlySet<string> = new Set<string>();
+
+function ownerTitle(prefix: string, id: string): string {
+  return untitledNodeIds.has(id) ? "" : `${prefix} ${id}`;
+}
+
 // Both lookup hooks run unconditionally (rules-of-hooks) with the id gated to
 // `null` for the kind that doesn't apply, so each owner resolves through
 // exactly one of them. Titled from the id so every chip is distinguishable.
@@ -66,9 +73,13 @@ let deletedNodeIds: ReadonlySet<string> = new Set<string>();
 vi.mock("@/lib/epic-selectors", async (importActual) => ({
   ...(await importActual<typeof import("@/lib/epic-selectors")>()),
   useChatById: (id: string | null) =>
-    id === null || deletedNodeIds.has(id) ? null : { title: `Chat ${id}` },
+    id === null || deletedNodeIds.has(id)
+      ? null
+      : { title: ownerTitle("Chat", id) },
   useEpicTerminalAgent: (id: string | null) =>
-    id === null || deletedNodeIds.has(id) ? null : { title: `Agent ${id}` },
+    id === null || deletedNodeIds.has(id)
+      ? null
+      : { title: ownerTitle("Agent", id) },
   useEpicNodeHostId: () => "host-1",
   useEpicTreeIndex: () => {
     treeIndexReads += 1;
@@ -142,6 +153,7 @@ afterEach(() => {
   openTile.mockReset();
   parentByNodeId = {};
   deletedNodeIds = new Set<string>();
+  untitledNodeIds = new Set<string>();
   presentNodeIds = [];
   treeIndexReads = 0;
 });
@@ -247,6 +259,21 @@ describe("PrOwnerBadges overflow", () => {
  * keeps naming owners whose chat is gone. They used to render as bare "Removed
  * chat" text in a row of pills - no title, no tile, nothing to click.
  */
+describe("PrOwnerBadges untitled owners", () => {
+  it.each([
+    ["chat", chatOwners(1)],
+    ["terminal agent", terminalAgentOwners(1)],
+  ] as const)("names an untitled %s owner 'New agent'", (_kind, owners) => {
+    untitledNodeIds = new Set(owners.map((owner) => owner.ownerId));
+    renderBadges(owners);
+
+    expect(screen.getByTestId("pr-owner-badge").textContent).toContain(
+      "New agent",
+    );
+    expect(screen.getByLabelText("Open New agent")).toBeTruthy();
+  });
+});
+
 describe("PrOwnerBadges deleted owners", () => {
   it("renders nothing for an owner whose chat has been deleted", () => {
     deletedNodeIds = new Set(["chat-2"]);

@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import { displayTitle } from "@/lib/display-title";
 import { MobileCurrentTileBar } from "@/components/epic-canvas/mobile/mobile-current-tile-bar";
 import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
 import {
@@ -310,12 +311,11 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
-  it("paints New agent while the chat's first title is awaited, then the title in place", () => {
-    useEpicCanvasStore.getState().markChatTitlePending(CHAT_TILE.id, "");
+  it("reads New agent until the chat has a title, then the title in place", () => {
     render(
       <MobileCurrentTileBar
         epicId="epic-1"
-        tile={CHAT_TILE}
+        tile={{ ...CHAT_TILE, name: displayTitle("", "agent") }}
         level2="bar"
         trailing={null}
       />,
@@ -349,7 +349,7 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
     );
   });
 
-  it("shows the cloud list's title, not New agent, for a chat the projection has no record of", () => {
+  it("shows the cloud list's title for a chat the projection has no record of", () => {
     cloudList.rows = [
       {
         identity: {
@@ -372,11 +372,10 @@ describe("<MobileCurrentTileBar trailing={null} />", () => {
         isOwnedByViewer: true,
       },
     ];
-    useEpicCanvasStore.getState().markChatTitlePending(CHAT_TILE.id, "");
     render(
       <MobileCurrentTileBar
         epicId="epic-1"
-        tile={CHAT_TILE}
+        tile={{ ...CHAT_TILE, name: displayTitle("", "agent") }}
         level2="bar"
         trailing={null}
       />,

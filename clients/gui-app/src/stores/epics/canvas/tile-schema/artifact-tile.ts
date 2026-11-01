@@ -9,6 +9,7 @@ import {
  * `isRecordBacked`: chat / agents / collab docs are Y.Doc-backed;
  * terminal / workspace-file are not.
  */
+import { agentTileName } from "@/lib/display-title";
 import type { DesktopJsonValue } from "@/lib/windows/types";
 import { providerIdSchema } from "@traycer/protocol/host/provider-schemas";
 import { DEFAULT_TERMINAL_TITLE } from "@/lib/terminals/terminal-title";
@@ -92,6 +93,12 @@ function parseTerminalOriginProviderId(
 ): EpicTerminalRef["originProviderId"] {
   const parsed = providerIdSchema.safeParse(value);
   return parsed.success ? parsed.data : undefined;
+}
+
+function savedNodeName(type: string, name: string): string {
+  return type === "chat" || type === "terminal-agent"
+    ? agentTileName(name)
+    : name;
 }
 
 function parseTerminalTitleSource(
@@ -246,7 +253,7 @@ export function parseEpicNodeRef(value: unknown): EpicNodeRef | null {
     id: value.id,
     instanceId,
     type: value.type,
-    name: value.name,
+    name: savedNodeName(value.type, value.name),
     hostId: value.hostId,
     ...(htmlVersion === undefined ? {} : { htmlVersion }),
   };

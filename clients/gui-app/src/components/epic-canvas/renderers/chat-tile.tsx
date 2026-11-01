@@ -4300,7 +4300,7 @@ function useChatTileSessionViewModel(
     node,
     // The title the tab strip shows. `node.name` is the tile's persisted
     // opening-name snapshot, so a chat opened before its title was generated
-    // announced every finished turn as "Untitled agent" for the tile's life.
+    // announced every finished turn as "New agent" for the tile's life.
     taskTitle:
       projectedChatTitle ??
       (chatStateTitle.length > 0 ? chatStateTitle : node.name),
