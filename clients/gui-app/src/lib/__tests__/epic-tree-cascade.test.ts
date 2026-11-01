@@ -3,7 +3,8 @@ import {
   computeDescendantCounts,
   computeDescendantCountsFromTree,
   countDirectAgentChildren,
-  formatAgentDeleteNesting,
+  countPromotedAgentChildren,
+  formatAgentDeleteDescription,
   formatCascadeSummary,
   type DescendantCounts,
 } from "@/lib/epic-tree-cascade";
@@ -375,17 +376,79 @@ describe("countDirectAgentChildren", () => {
   });
 });
 
-describe("formatAgentDeleteNesting", () => {
-  it("returns null when the agent has no nested agents", () => {
-    expect(formatAgentDeleteNesting(0)).toBeNull();
+describe("countPromotedAgentChildren", () => {
+  it("leaves out a child that is itself being deleted", () => {
+    const tree = treeFromRecords([
+      makeRecord("a", "chat", null),
+      makeRecord("b", "chat", "a"),
+      makeRecord("c", "terminal-agent", "a"),
+    ]);
+    expect(countPromotedAgentChildren(tree, ["a"])).toBe(2);
+    expect(countPromotedAgentChildren(tree, ["a", "b"])).toBe(1);
+    expect(countPromotedAgentChildren(tree, ["a", "b", "c"])).toBe(0);
+  });
+
+  /** Depth comes out of the same rule: see `countPromotedAgentChildren`. */
+  it("counts a grandchild once its own parent is selected too", () => {
+    const tree = treeFromRecords([
+      makeRecord("a", "chat", null),
+      makeRecord("b", "chat", "a"),
+      makeRecord("c", "chat", "b"),
+    ]);
+    expect(countPromotedAgentChildren(tree, ["a"])).toBe(1);
+    expect(countPromotedAgentChildren(tree, ["a", "b"])).toBe(1);
+  });
+
+  it("adds up across several selected parents", () => {
+    const tree = treeFromRecords([
+      makeRecord("a", "chat", null),
+      makeRecord("b", "chat", "a"),
+      makeRecord("t", "terminal-agent", null),
+      makeRecord("u", "terminal-agent", "t"),
+    ]);
+    expect(countPromotedAgentChildren(tree, ["a", "t"])).toBe(2);
+  });
+
+  /** A repeated id must not count the same child twice. */
+  it("reads the selection as a set", () => {
+    const tree = treeFromRecords([
+      makeRecord("a", "chat", null),
+      makeRecord("b", "chat", "a"),
+    ]);
+    expect(countPromotedAgentChildren(tree, ["a", "a"])).toBe(1);
+  });
+
+  it("is zero for an empty selection, a leaf and an unknown id", () => {
+    const tree = treeFromRecords([makeRecord("a", "chat", null)]);
+    expect(countPromotedAgentChildren(tree, [])).toBe(0);
+    expect(countPromotedAgentChildren(tree, ["a"])).toBe(0);
+    expect(countPromotedAgentChildren(tree, ["missing"])).toBe(0);
+  });
+});
+
+describe("formatAgentDeleteDescription", () => {
+  const UNDONE = "This action cannot be undone.";
+
+  it("says only that the delete cannot be undone when nothing is promoted", () => {
+    expect(formatAgentDeleteDescription(0, 1)).toBe(UNDONE);
   });
 
   it("says nested agents are kept and moved to the top level", () => {
-    expect(formatAgentDeleteNesting(1)).toBe(
-      "1 agent nested under it will be kept and moved to the top level.",
+    expect(formatAgentDeleteDescription(1, 1)).toBe(
+      `${UNDONE} 1 agent nested under it will be kept and moved to the top level.`,
     );
-    expect(formatAgentDeleteNesting(3)).toBe(
-      "3 agents nested under it will be kept and moved to the top level.",
+    expect(formatAgentDeleteDescription(3, 1)).toBe(
+      `${UNDONE} 3 agents nested under it will be kept and moved to the top level.`,
+    );
+  });
+
+  /** Several agents are being deleted, so they are nested under "them". */
+  it("addresses a whole selection as them", () => {
+    expect(formatAgentDeleteDescription(1, 2)).toBe(
+      `${UNDONE} 1 agent nested under them will be kept and moved to the top level.`,
+    );
+    expect(formatAgentDeleteDescription(2, 3)).toBe(
+      `${UNDONE} 2 agents nested under them will be kept and moved to the top level.`,
     );
   });
 });
