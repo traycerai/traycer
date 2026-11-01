@@ -14,29 +14,19 @@ import { useStandaloneBotsStore } from "@/stores/bots/standalone-bots-store";
 
 /**
  * Keeps the standalone names' directory current. Every read is the same from
- * any host, so the host that serves the notification feed asks them. It
- * settles once each read has answered or failed; a failed read leaves the
- * directory short, which only ever means the plain name. So does a host whose
- * handshake has not completed by the host-load budget: no read is ever sent to
- * it, while the cloud feed, which does not depend on it, keeps delivering. That
- * says nothing about the host itself, which may be up for another window.
+ * any host, so the host that serves the notification feed asks them. It settles
+ * once each read has answered or failed; a failed read leaves the directory
+ * short, which only ever means the plain name. So does a wait that outlives the
+ * host-load budget, or a host known to be gone, whatever kept the reads from
+ * being sent (no handshake, no usable client): the cloud feed does not depend
+ * on this host and keeps delivering. Running out of budget says nothing about
+ * the host, which may be up for another window, and a read that answers later
+ * still names what arrives after it.
  */
 export function StandaloneBotsBridge(): null {
   const { hostId, client } = useNotificationResolveHost();
   const support = useHostMethodSupport(hostId, "bot.list");
   const supported = support === true;
-  const hostKey = hostId ?? UNKNOWN_HOST_PLACEHOLDER;
-  const reachability = useHostReachability(hostKey);
-  const handshakeWait = useBoundedHostLoad({
-    hostId: hostKey,
-    hostLabel: null,
-    pending: support === null,
-  });
-  const handshakeGivenUp =
-    support === null &&
-    (reachability.status === "unreachable" ||
-      handshakeWait.kind === "dead" ||
-      handshakeWait.kind === "timed-out");
   const viewerUserId = useCloudChatViewerId();
   useRereadEnvironmentListOnFocus(supported);
   const environments = useEnvironmentListQuery(client, supported);
@@ -61,11 +51,20 @@ export function StandaloneBotsBridge(): null {
     groups: listsSettled ? model.groups : null,
   });
   const setups = teamSetups.setups;
+  const readsSettled =
+    hostId === null || support === false || (supported && teamSetups.settled);
+  const hostKey = hostId ?? UNKNOWN_HOST_PLACEHOLDER;
+  const reachability = useHostReachability(hostKey);
+  const directoryWait = useBoundedHostLoad({
+    hostId: hostKey,
+    hostLabel: null,
+    pending: !readsSettled,
+  });
   const settled =
-    hostId === null ||
-    support === false ||
-    handshakeGivenUp ||
-    (supported && teamSetups.settled);
+    readsSettled ||
+    reachability.status === "unreachable" ||
+    directoryWait.kind === "dead" ||
+    directoryWait.kind === "timed-out";
   useEffect(() => {
     useStandaloneBotsStore.setState({
       directory: { model, setups },

@@ -257,6 +257,16 @@ function deferred<T>(): {
   return { promise, resolve, reject };
 }
 
+function nativeTarget() {
+  return {
+    showNotification: vi.fn((_request: { readonly title: string }) =>
+      Promise.resolve<NotificationShowOutcome>("presented"),
+    ),
+    playChime: vi.fn(),
+    onToastClick: vi.fn(),
+  };
+}
+
 function signIn(userId: string): void {
   useAuthStore.setState({
     status: "signed-in",
@@ -373,16 +383,6 @@ describe("<StandaloneBotsBridge /> and a main bot still to be set up", () => {
 });
 
 describe("a bot's notification before the directory has answered", () => {
-  function nativeTarget() {
-    return {
-      showNotification: vi.fn((_request: { readonly title: string }) =>
-        Promise.resolve<NotificationShowOutcome>("presented"),
-      ),
-      playChime: vi.fn(),
-      onToastClick: vi.fn(),
-    };
-  }
-
   it("names the native notification and the toast once the lists answer", async () => {
     const lists = deferred<BotListResponse>();
     const app = mountHost({
@@ -471,16 +471,6 @@ describe("a bot's notification before the directory has answered", () => {
 });
 
 describe("a bot's notification while the serving host has no handshake", () => {
-  function nativeTarget() {
-    return {
-      showNotification: vi.fn((_request: { readonly title: string }) =>
-        Promise.resolve<NotificationShowOutcome>("presented"),
-      ),
-      playChime: vi.fn(),
-      onToastClick: vi.fn(),
-    };
-  }
-
   function appWithNoAnswers(): ReactNode {
     return mountHost({
       environments: () => ({ environments: [] }),
@@ -547,7 +537,7 @@ describe("a bot's notification while the serving host has no handshake", () => {
 
   describe.each([
     ["ready", "ready"],
-    ["connecting", null],
+    ["connecting", "connecting"],
   ])("with a reachable host and a %s lease", (_name, leaseStatus) => {
     beforeEach(() => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -582,5 +572,123 @@ describe("a bot's notification while the serving host has no handshake", () => {
       expect(target.showNotification.mock.calls[0]?.[0].title).toBe("Tracy");
       expect(await screen.findByText("Tracy")).toBeTruthy();
     });
+  });
+});
+
+describe("a bot's notification while a known host cannot take a read", () => {
+  /** Support known and the host id kept, with no requester to send a read. */
+  function mountWithoutClient(): {
+    readonly tree: () => ReactNode;
+    readonly recover: () => void;
+  } {
+    const app = mountHost({
+      environments: () => ({
+        environments: [personal(), team("traycerai")],
+      }),
+      bots: () => BOTH_BOTS,
+    });
+    const client = host.client;
+    host.client = null;
+    return {
+      tree: () =>
+        app(
+          <>
+            <Toaster />
+            {pickerOn(TEAM_MAIN_BOT_ID)}
+          </>,
+        ),
+      recover: () => {
+        host.client = client;
+      },
+    };
+  }
+
+  function laterArrival(): HostNotificationsCloudFeedRowV16 {
+    return {
+      ...verdictArrival(TEAM_MAIN_BOT_ID),
+      entryId: "verdict-2",
+      coalesceKey: "verdict-2",
+    };
+  }
+
+  describe("within the host-load budget", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("shows the plain name when the budget runs out, and names what arrives after the reads resume", async () => {
+      const { tree, recover } = mountWithoutClient();
+      const { rerender } = render(tree());
+      const target = nativeTarget();
+
+      const delivery = displayCloudSnapshotArrivals(
+        [verdictArrival(TEAM_MAIN_BOT_ID)],
+        target,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(TILE_CONTENT_BUDGET_MS - 1_000);
+      });
+      expect(target.showNotification).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      await act(async () => {
+        await delivery;
+      });
+      expect(target.showNotification.mock.calls[0]?.[0].title).toBe("Tracy");
+      // The closed picker's title and the toast.
+      await waitFor(() => {
+        expect(screen.getAllByText("Tracy")).toHaveLength(2);
+      });
+
+      recover();
+      rerender(tree());
+      await waitFor(() => {
+        expect(titleText()).toBe("Tracy · traycerai");
+      });
+
+      await act(async () => {
+        await displayCloudSnapshotArrivals([laterArrival()], target);
+      });
+      expect(target.showNotification.mock.calls[1]?.[0].title).toBe(
+        "Tracy · traycerai",
+      );
+    });
+  });
+
+  it("does not wait out the budget for a host known to be unreachable", async () => {
+    host.reachability = "unreachable";
+    const { tree } = mountWithoutClient();
+    render(tree());
+    const target = nativeTarget();
+
+    await act(async () => {
+      await displayCloudSnapshotArrivals(
+        [verdictArrival(TEAM_MAIN_BOT_ID)],
+        target,
+      );
+    });
+
+    expect(target.showNotification.mock.calls[0]?.[0].title).toBe("Tracy");
+  });
+
+  it("does not wait out the budget for a host whose lease is dead", async () => {
+    host.leaseStatus = "dead";
+    const { tree } = mountWithoutClient();
+    render(tree());
+    const target = nativeTarget();
+
+    await act(async () => {
+      await displayCloudSnapshotArrivals(
+        [verdictArrival(TEAM_MAIN_BOT_ID)],
+        target,
+      );
+    });
+
+    expect(target.showNotification.mock.calls[0]?.[0].title).toBe("Tracy");
   });
 });
