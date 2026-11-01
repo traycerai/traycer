@@ -1,4 +1,6 @@
+import type { FetchStatus } from "@tanstack/react-query";
 import type { GuiHarnessId } from "@traycer/protocol/host/index";
+import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import type {
   ComposerHostNoticeAction,
   ComposerHostNoticeState,
@@ -18,6 +20,7 @@ import {
   OPEN_TERMINAL_INSTEAD,
   RETRY,
 } from "@/lib/sandboxes/sandbox-strings";
+import { modelCoveredByCatalog } from "@/stores/composer/composer-toolbar-store";
 import type { StagedSandbox } from "@/stores/composer/staged-sandbox-store";
 
 /** Only the catalogue's transient wait is shown before a person presses Send. */
@@ -123,6 +126,33 @@ export function sandboxAgentRefusedNotice(
     },
     secondaryActions: extra === null ? exits : [...exits, extra],
   };
+}
+
+/**
+ * Whether a read of the Traycer list ended with no list: failed, or one
+ * nothing will run. A read paused offline has not answered yet.
+ */
+export function traycerModelsUnknown(query: {
+  readonly data: ReadonlyArray<GuiAgentModelOption> | undefined;
+  readonly isPending: boolean;
+  readonly fetchStatus: FetchStatus;
+}): boolean {
+  return (
+    query.data === undefined &&
+    (!query.isPending || query.fetchStatus === "idle")
+  );
+}
+
+/** Whether a list that answered leaves this Traycer model out. */
+export function traycerModelRefused(
+  models: ReadonlyArray<GuiAgentModelOption> | undefined,
+  modelSlug: string,
+): boolean {
+  return (
+    models !== undefined &&
+    modelSlug.length > 0 &&
+    !modelCoveredByCatalog(models, "traycer", modelSlug)
+  );
 }
 
 /** A Traycer model the sandbox's catalog does not list; the same remedies. */

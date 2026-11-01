@@ -1,5 +1,6 @@
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GuiAgentModelOption } from "@traycer/protocol/host/agent/gui/unary-schemas";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import type { ChatComposerSubmitInput } from "@/components/chat/composer/chat-composer";
 import { useBoundSandboxSend } from "@/hooks/sandboxes/use-bound-sandbox-send";
@@ -31,6 +32,15 @@ const catalogue = vi.hoisted(() => ({
 // unless a test says otherwise.
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({ data: catalogue.data }),
+}));
+
+// The cloud's Traycer list: `undefined` while it is not known.
+const traycerList = vi.hoisted(() => ({
+  data: undefined as ReadonlyArray<GuiAgentModelOption> | undefined,
+}));
+
+vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
+  useSandboxTraycerModels: () => ({ data: traycerList.data }),
 }));
 
 const OFFERS_PICK: SandboxCatalogue = {
@@ -74,6 +84,7 @@ function pendingSends() {
 
 beforeEach(() => {
   catalogue.data = OFFERS_PICK;
+  traycerList.data = undefined;
   usePendingSandboxSendStore.setState({ sends: {} });
   useStagedSandboxStore.setState({ bySurface: {} });
 });
@@ -207,6 +218,63 @@ describe("useBoundSandboxSend", () => {
       }),
     );
     expect(decision.effects).toContain("run-stage");
+  });
+
+  describe("a Traycer pick", () => {
+    const TRAYCER_INPUT: ChatComposerSubmitInput = {
+      ...INPUT,
+      settings: { ...PICKED_SETTINGS, harnessId: "traycer", model: "trc-x" },
+    };
+    const traycerModel = (slug: string): GuiAgentModelOption => ({
+      harnessId: "traycer",
+      slug,
+      label: slug,
+      description: null,
+      contextWindow: null,
+      maxOutputTokens: null,
+      defaultReasoningEffort: null,
+      supportedReasoningEfforts: [],
+      defaultServiceTier: null,
+      supportedServiceTiers: [],
+      deprecationNotice: null,
+      metadata: {},
+    });
+    const send = () =>
+      renderHook(() =>
+        useBoundSandboxSend({
+          epicId: "epic-1",
+          chatId: "chat-1",
+          target: resting("suspended"),
+        }),
+      ).result.current;
+
+    beforeEach(() => {
+      catalogue.data = { providers: [], offeredAgents: ["traycer"] };
+    });
+
+    it("is refused, with nothing staged, when the cloud's list leaves the model out", () => {
+      traycerList.data = [traycerModel("trc-listed")];
+
+      expect(send()(TRAYCER_INPUT)).toBe(false);
+
+      expect(pendingSends()).toEqual([]);
+      expect(useStagedSandboxStore.getState().bySurface).toEqual({});
+    });
+
+    it("stages the wake when the cloud's list holds the model", () => {
+      traycerList.data = [traycerModel("trc-x")];
+
+      expect(send()(TRAYCER_INPUT)).toBe(true);
+
+      expect(pendingSends()).toHaveLength(1);
+      expect(
+        Object.keys(useStagedSandboxStore.getState().bySurface),
+      ).toHaveLength(1);
+    });
+
+    it("goes through when no list is known, as the gate does", () => {
+      expect(send()(TRAYCER_INPUT)).toBe(true);
+    });
   });
 
   it("sends nothing and stages nothing without a resting target", () => {

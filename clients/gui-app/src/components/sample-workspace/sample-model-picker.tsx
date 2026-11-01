@@ -117,6 +117,7 @@ function SampleModelPickerBody(): ReactNode {
         behavior: "auto",
       }}
       catalogHarnessesError={false}
+      restingModelPrompt={null}
       activeProvider={SAMPLE_ACTIVE_HARNESS}
       onHoverRow={sampleNoop}
       onActiveRow={sampleNoop}

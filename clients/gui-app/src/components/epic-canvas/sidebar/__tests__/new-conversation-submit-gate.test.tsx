@@ -371,6 +371,7 @@ vi.mock("@/hooks/use-epic-store", () => ({
 }));
 
 vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHostOrNull: () => null,
   useRunnerHost: () => ({
     fileDrops: {
       resolveDroppedFilePaths: () => Promise.resolve([]),

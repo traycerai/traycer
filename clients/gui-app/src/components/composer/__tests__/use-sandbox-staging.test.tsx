@@ -87,6 +87,11 @@ const mocks = vi.hoisted(() => ({
   openSettings: vi.fn<(opts: { readonly section: string | null }) => void>(),
   /** Whether the directory has a row for the composer's host. */
   directoryNamesHost: true,
+  /** The cloud's Traycer list: held (`data`), or not known (`undefined`). */
+  traycerModels: {
+    data: undefined as ReadonlyArray<object> | undefined,
+    error: null as Error | null,
+  },
 }));
 
 vi.mock("@/hooks/auth/use-auth-user-query", () => ({
@@ -94,6 +99,14 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({ data: mocks.catalogue }),
+}));
+vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
+  useSandboxTraycerModels: () => ({
+    data: mocks.traycerModels.data,
+    error: mocks.traycerModels.error,
+    isPending: false,
+    fetchStatus: "idle" as const,
+  }),
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-costs-query", () => ({
   useSandboxCosts: () => ({ data: mocks.costs }),
@@ -312,6 +325,7 @@ beforeEach(() => {
   mocks.costs = null;
   mocks.openSettings.mockClear();
   mocks.directoryNamesHost = true;
+  mocks.traycerModels = { data: [{ slug: "traycer:gpt-6-1" }], error: null };
   useStagedSandboxStore.setState({ bySurface: {} });
   usePendingSandboxSendStore.setState({ sends: {} });
   useSandboxShapeMemoryStore.setState({
@@ -1057,6 +1071,35 @@ describe("useSandboxStaging host picks", () => {
       expect(staging().composer.stagedLabel).toBe(label);
     },
   );
+
+  it.each([
+    { row: SUSPENDED, label: "box-suspended · suspended" },
+    { row: STOPPED, label: "box-stopped · stopped" },
+  ])(
+    "promises no Send for a resting pick with no model list known: $label",
+    ({ row, label }) => {
+      mocks.traycerModels = { data: undefined, error: new Error("offline") };
+      mount([LAPTOP, row]);
+
+      act(() => staging().composer.onPickHost(row));
+
+      expect(staging().composer.stagedLabel).toBe(label);
+    },
+  );
+
+  it("keeps the Send clause when a refetch of the held model list fails", () => {
+    mocks.traycerModels = {
+      data: [{ slug: "traycer:gpt-6-1" }],
+      error: new Error("offline"),
+    };
+    mount([LAPTOP, SUSPENDED]);
+
+    act(() => staging().composer.onPickHost(SUSPENDED));
+
+    expect(staging().composer.stagedLabel).toBe(
+      "box-suspended · suspended, resumes on send",
+    );
+  });
 
   it("labels a restored sandbox by its verb while no row is listed for it", () => {
     mount([LAPTOP]);

@@ -317,7 +317,10 @@ const stubHostClient = {
   getRequestContext: () => null,
   getRequestContextUserId: () => null,
 };
-vi.mock("@/lib/host", () => ({ useHostClient: () => stubHostClient }));
+vi.mock("@/lib/host", () => ({
+  useHostClient: () => stubHostClient,
+  useHostBinding: () => null,
+}));
 vi.mock("@/lib/host/runtime", () => ({ useHostClient: () => stubHostClient }));
 
 vi.mock("@/hooks/host/use-host-directory-list-query", () => ({
@@ -340,6 +343,7 @@ vi.mock("@/hooks/use-epic-store", () => ({
   }),
 }));
 vi.mock("@/providers/use-runner-host", () => ({
+  useRunnerHostOrNull: () => null,
   useRunnerHost: () => ({
     fileDrops: {
       resolveDroppedFilePaths: () => Promise.resolve([]),
