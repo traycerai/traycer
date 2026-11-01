@@ -89,6 +89,7 @@ import { useTuiSetupTerminalListRefreshDriver } from "@/hooks/agent/use-tui-setu
 import { useTuiSetupTerminalTabRegisterDriver } from "@/hooks/agent/use-tui-setup-terminal-tab-register-driver";
 import { SetupCardSegment } from "@/components/chat/segments/setup-card-segment";
 import { buildTuiAgentSetupCardModel } from "@/stores/chats/tui-agent-setup-card-model";
+import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useAgentStopControls } from "@/hooks/agent/use-agent-stop-controls";
 import { AgentStopList } from "@/components/chat/chat-agent-stop-list";
 import type { TuiAgentProjection } from "@/stores/epics/open-epic/types";
@@ -391,7 +392,8 @@ function sleepsUntilRequested(input: {
  *
  * Unless the list has failed: nothing can call this agent deleted until the
  * list answers, so the tile stays open, and a skeleton there would wait forever
- * with nothing to say why.
+ * with nothing to say why. Not for an agent still being created, whose record
+ * does not exist yet: the wait there is the setup the notice is showing.
  */
 function TuiAgentAwaitingRecord(props: {
   readonly node: EpicNodeRef;
@@ -402,18 +404,9 @@ function TuiAgentAwaitingRecord(props: {
   readonly onClose: () => void;
 }) {
   const recordListFailed = useEpicTuiAgentRecordListFailed();
-  if (recordListFailed) {
-    return (
-      <TerminalDeadTileBanner
-        reason="record-unavailable"
-        destroyedLine={null}
-        hostLabel={props.hostLabel}
-        ownerKind="agent"
-        onClose={props.onClose}
-        testId={`terminal-agent-tile-${props.tileId}`}
-      />
-    );
-  }
+  const isPendingCreate = useEpicCanvasStore((state) =>
+    state.pendingCreateArtifactIds.has(props.node.id),
+  );
   return (
     <TerminalAgentTileShell tileId={props.tileId}>
       <TerminalAgentWorktreeNotice
@@ -424,7 +417,18 @@ function TuiAgentAwaitingRecord(props: {
         layout="bar"
       />
       <div className="flex min-h-0 flex-1 items-center justify-center">
-        <TerminalLoadingSkeleton />
+        {recordListFailed && !isPendingCreate ? (
+          <TerminalDeadTileBanner
+            reason="record-unavailable"
+            destroyedLine={null}
+            hostLabel={props.hostLabel}
+            ownerKind="agent"
+            onClose={props.onClose}
+            testId={`terminal-agent-tile-record-unavailable-${props.tileId}`}
+          />
+        ) : (
+          <TerminalLoadingSkeleton />
+        )}
       </div>
     </TerminalAgentTileShell>
   );

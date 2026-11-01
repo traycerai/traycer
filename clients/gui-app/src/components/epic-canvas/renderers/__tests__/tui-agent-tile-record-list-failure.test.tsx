@@ -8,7 +8,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { mockLocalHostEntry } from "@traycer-clients/shared/host-client/mock/mock-host-directory";
 import { MockHostMessenger } from "@traycer-clients/shared/host-client/mock/mock-host-messenger";
@@ -34,6 +41,13 @@ const HOST_ID = mockLocalHostEntry.hostId;
 const runtime: { client: HostClient<HostRpcRegistry> | null } = vi.hoisted(
   () => ({ client: null }),
 );
+
+const canvas = vi.hoisted(() => ({
+  pendingCreateArtifactIds: new Set<string>(),
+  prepareCloseCanvasTabFocusTarget:
+    vi.fn<(tabId: string, paneId: string, instanceId: string) => void>(),
+  tabsById: {},
+}));
 
 vi.mock("@/lib/host/runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/host/runtime")>()),
@@ -106,8 +120,24 @@ vi.mock("@/hooks/terminal/use-terminal-kill-for-mutation", () => ({
 }));
 
 vi.mock("@/stores/epics/canvas/store", () => ({
-  useEpicCanvasStore: (selector: (s: unknown) => unknown) =>
-    selector({ closeCanvasTab: () => undefined }),
+  useEpicCanvasStore: Object.assign(
+    (selector: (s: typeof canvas) => unknown) => selector(canvas),
+    { getState: () => canvas },
+  ),
+}));
+
+vi.mock("@/hooks/epic/use-epic-nested-focus-navigation", () => ({
+  useEpicNestedFocusNavigation: () => () => undefined,
+}));
+
+// A setup is in flight, so the notice renders its card: the surface a failing
+// list must not take away.
+vi.mock("@/stores/chats/tui-agent-setup-card-model", () => ({
+  buildTuiAgentSetupCardModel: () => ({}),
+}));
+
+vi.mock("@/components/chat/segments/setup-card-segment", () => ({
+  SetupCardSegment: () => <span>Setup card</span>,
 }));
 
 vi.mock("@/hooks/worktree/use-worktree-get-binding-query", () => ({
@@ -169,7 +199,8 @@ function SyncRecords(): null {
 }
 
 const SKELETON = "Starting terminal";
-const TILE_TEST_ID = "terminal-agent-tile-tile-1";
+const SETUP_CARD = "Setup card";
+const BANNER_TEST_ID = "terminal-agent-tile-record-unavailable-tile-1";
 
 /** What the fake host does with the next `epic.listTuiAgents`. */
 type ListBehaviour = "reject" | "hang" | "answer-empty";
@@ -280,6 +311,8 @@ function refetchList(mounted: Mounted): void {
 const sessions: OpenedStoreForTest[] = [];
 
 beforeEach(() => {
+  canvas.pendingCreateArtifactIds = new Set();
+  canvas.prepareCloseCanvasTabFocusTarget.mockClear();
   useAuthStore.setState({
     contextMetadata: { userId: VIEWER_ID, username: VIEWER_ID },
   });
@@ -310,10 +343,37 @@ describe("<TuiAgentTile /> with a record list that keeps failing", () => {
 
     expect(listCalls.value).toBe(3);
     expect(screen.queryByText(SKELETON)).toBeNull();
-    expect(screen.getByTestId(TILE_TEST_ID).textContent).toContain(
-      "Couldn't load this agent",
-    );
+    const banner = screen.getByTestId(BANNER_TEST_ID).textContent;
+    expect(banner).toContain("Couldn't load this agent");
+    // The failing list is the session host's, which need not be this tile's.
+    expect(banner).not.toContain("Test host");
+    expect(screen.queryByText(SETUP_CARD)).not.toBeNull();
     expect(handle.store.getState().tuiAgentRecordListAuthoritative).toBe(false);
+  });
+
+  it("closes the tile from the banner", async () => {
+    await mountOnceFailed();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close tab" }));
+
+    expect(canvas.prepareCloseCanvasTabFocusTarget).toHaveBeenCalledWith(
+      "tab-test",
+      "tile-1",
+      "inst-agent-1",
+    );
+  });
+
+  it("stays on the skeleton and the setup card for an agent still being created", async () => {
+    canvas.pendingCreateArtifactIds = new Set(["agent-1"]);
+    const { handle } = mountTile("reject");
+
+    await waitFor(() => {
+      expect(handle.store.getState().tuiAgentRecordListFailed).toBe(true);
+    });
+
+    expect(screen.queryByTestId(BANNER_TEST_ID)).toBeNull();
+    expect(screen.queryByText(SKELETON)).not.toBeNull();
+    expect(screen.queryByText(SETUP_CARD)).not.toBeNull();
   });
 
   it("holds the banner through the next poll, when the query drops back to pending", async () => {

@@ -61,9 +61,10 @@ export type DeadTileOwnerKind = "terminal" | "agent";
  * live-only by construction; the owner's machine is the only place it can be
  * started.
  *
- * `record-unavailable` - the host is reachable, but its agent list keeps failing
- * and this agent's record has not arrived. The agent may be alive or deleted:
- * only the list can say, so the banner claims neither.
+ * `record-unavailable` - the epic session's agent list keeps failing and this
+ * agent's record has not arrived. That list is the SESSION host's, which need
+ * not be this tile's, so the banner names no host. The agent may be alive or
+ * deleted: only the list can say, so the banner claims neither.
  *
  * `sandbox-stopped` - the bound host is a sandbox someone stopped. Its PTYs
  * ended with it, and Start is the remedy, so a terminal or a terminal
@@ -88,14 +89,14 @@ function terminalDeadTileMessage(
   if (reason === "sandbox-destroyed" && destroyedLine !== null) {
     return destroyedLine;
   }
-  const named = tileHostName(
-    hostLabel === UNNAMED_HOST_LABEL ? null : hostLabel,
-  );
   if (reason === "not-running-remotely") {
+    const named = tileHostName(
+      hostLabel === UNNAMED_HOST_LABEL ? null : hostLabel,
+    );
     return `This agent is not running on ${named} right now, and it can only be started on that computer. The agent and its transcript are kept there — closing this tab only removes it from the canvas.`;
   }
   if (reason === "record-unavailable") {
-    return `Couldn't load this agent from ${named}. Traycer keeps trying, and it opens here once it loads. Closing this tab only removes it from the canvas.`;
+    return "Couldn't load this agent. Traycer keeps trying, and it opens here once it loads. Closing this tab only removes it from the canvas.";
   }
   if (reason === "sandbox-stopped") {
     return `${hostLabelAtSentenceStart(hostLabel)} is stopped. Start it to use this terminal again.`;
@@ -118,7 +119,7 @@ function agentReportCopy(reason: DeadTileReason): {
   if (reason === "record-unavailable") {
     return {
       title: "Agent could not be loaded",
-      message: "The host's agent list keeps failing.",
+      message: "The agent list keeps failing.",
     };
   }
   return {
