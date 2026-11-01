@@ -52,10 +52,10 @@ import { describe, expect, it } from "vitest";
  *   inside `useEpicArchiveChatMutation`'s own body - it never fires unless
  *   the archive write it follows (`epic.setChatArchived`, itself gated) already
  *   went through.
- * - A per-call gate on a read whose host is a variable, so no hook can ask:
- *   `epic.listTuiAgents` in `useEpicDiscardCreatedIfEmpty` asks the negotiated
- *   manifest for the exact host when it runs, as `chat.continueHere` does, and
- *   an old host's refusal keeps the Task rather than reading as empty.
+ * - A version floor on the dispatch, for a read whose host is a variable, so
+ *   no hook can ask: `epic.listTuiAgents` in `useEpicDiscardCreatedIfEmpty`
+ *   carries `requiredHostMethodVersion`, and the refusal keeps the Task rather
+ *   than reading as empty.
  * - A method the doc comment argues needs no gate at all:
  *   `epic.recordViewed`'s local-home arm "exists on every host this client
  *   negotiates with" per its own doc comment, unlike the cloud arm of its
@@ -132,9 +132,9 @@ const VERIFIED_ALTERNATE_GATE: Readonly<Record<string, string>> = {
   "epic.updateChatProfile":
     "documented fire-and-forget, same convention as epic.updateChatRunSettings (use-epic-chat-mutations.ts)",
   "epic.listChatRecords":
-    "reachable from two reads with no control to hide: a post-write consistency read inside the already-gated useEpicArchiveChatMutation (use-epic-chat-mutations.ts), and useEpicDiscardCreatedIfEmpty's emptiness read, same per-call gate and call-and-catch as epic.listTuiAgents",
+    "reachable from two reads with no control to hide: a post-write consistency read inside the already-gated useEpicArchiveChatMutation (use-epic-chat-mutations.ts), and useEpicDiscardCreatedIfEmpty's emptiness read, where an E_HOST_UNSUPPORTED rejects as a failed read that keeps the Task (use-epic-batch-delete-mutation.ts)",
   "epic.listTuiAgents":
-    "per-call gate plus call-and-catch, because the read's host is a variable and a hook can only ask about one host at render: useEpicDiscardCreatedIfEmpty asks readEpicDocRecordArms(hostId), which reads the negotiated manifest for the exact host and version (absent, @1.0 and no handshake all answer that the doc is still a source), and skips both reads as failed; an E_HOST_UNSUPPORTED from a stale manifest rejects into the same failed read, so an old host keeps the Task and never reads as empty (use-epic-batch-delete-mutation.ts)",
+    "version floor on the dispatch plus call-and-catch, because the read's host is a variable and a hook can only ask about one host at render: useEpicDiscardCreatedIfEmpty requires @1.1, the first minor that lists doc-only agents, through requiredHostMethodVersion, which the connection carrying the read answers, so an absent method, @1.0 or a host replaced mid-Send rejects as a failed read that keeps the Task and never reads as empty (use-epic-batch-delete-mutation.ts)",
   "chat.continueHere":
     "target-choice gate plus call-and-catch: continueTargetHostId skips a host whose negotiated manifest (getNegotiatedHostMethods) lacks the method, and onError turns E_HOST_UNSUPPORTED into the Clone fallback (use-chat-continue-here.ts)",
   "epic.recordViewed":

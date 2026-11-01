@@ -60,7 +60,7 @@ import {
   clearDeletedEpicRunSettings,
   epicIdsLostInWindow,
 } from "@/lib/epics/deleted-epic-scope";
-import { readEpicDocRecordArms } from "@/stores/epics/open-epic/doc-record-arms";
+import { TUI_AGENTS_REMAINDER_MINOR } from "@/stores/epics/open-epic/doc-record-arms";
 import { tabCommandCoordinator } from "@/stores/tabs/tab-command-coordinator";
 import { pickNeighborAfterRemovingTabs } from "@/stores/tabs/neighbor";
 import { tabResolveIntent } from "@/stores/tabs/registry";
@@ -846,10 +846,11 @@ interface DiscardCreatedEpicContext {
  * being set up, so the person may have started an agent in it, and any row
  * keeps it, as does a read that fails. Answers whether it was deleted.
  *
- * Asked per call, because the host is: one whose doc is still a record source
- * can leave an agent off both lists (`readEpicDocRecordArms`), so an empty
- * answer proves nothing there and the reads count as failed. The attach that
- * was refused proves nothing about this host: it may have gone to another.
+ * Below `epic.listTuiAgents@1.1` a host leaves doc-only agents off its list, so
+ * an empty answer proves nothing there. The floor rides the read, because only
+ * the connection carrying it can say which host process answers, and the
+ * refused attach says nothing about this host: it may have gone to another. A
+ * host below the floor, or without either list, refuses the read: a failed read.
  *
  * The two lists are that host's own view, which is the whole of the Task only
  * while it has not reached the cloud: call this only for such a Task
@@ -900,6 +901,10 @@ export function useEpicDiscardCreatedIfEmpty(): (
       hasDocReplica: false,
       knownRevision: null,
     }),
+    requiredHostMethodVersion: () => ({
+      method: "epic.listTuiAgents",
+      version: { major: 1, minor: TUI_AGENTS_REMAINDER_MINOR },
+    }),
     options: null,
   }).mutateAsync;
   const discard = useHostMutation<
@@ -939,11 +944,6 @@ export function useEpicDiscardCreatedIfEmpty(): (
   }).mutateAsync;
   return async (variables) => {
     const userId = activeClient.getRequestContextUserId();
-    const docArms = readEpicDocRecordArms(variables.hostId);
-    if (docArms.chats || docArms.tuiAgents) {
-      toast.error(DISCARD_CREATED_EPIC_UNREAD_COPY);
-      return false;
-    }
     let holdsAgent: boolean;
     try {
       const [chats, terminalAgents] = await Promise.all([
