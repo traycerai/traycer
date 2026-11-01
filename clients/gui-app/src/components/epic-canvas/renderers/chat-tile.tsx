@@ -3567,7 +3567,7 @@ function useChatTileSessionViewModel(
         onHistoryUnavailable: (reason) => {
           toast(
             reason === "no-checkpoint"
-              ? "This agent hasn't replied yet, so the side chat starts without its history."
+              ? "This agent's history can't be carried, so the side chat starts without it."
               : "This host can't fork chat history yet, so the side chat starts without it.",
           );
         },
