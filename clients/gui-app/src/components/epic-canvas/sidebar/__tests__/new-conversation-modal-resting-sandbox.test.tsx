@@ -15,7 +15,9 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { JsonContent } from "@traycer/protocol/common/registry";
+import type { ProviderCliState } from "@traycer/protocol/host/provider-schemas";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
+import type { SandboxListFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
 
 import type { ComposerBodyProps } from "@/components/home/composer/composer-body";
 import type { ComposerPromptEditorHandle } from "@/components/chat/composer/composer-prompt-editor";
@@ -42,6 +44,18 @@ const host = vi.hoisted(() => ({
   /** The host's Traycer list, by slug and chip label. */
   traycerHostModels: [{ slug: "traycer-default", label: "traycer-default" }],
   createChat: vi.fn(),
+  /** Whether the body would let Send through. */
+  canSubmit: false,
+  navigate: vi.fn(),
+  /** Every toast the modal raised, with its action's label. */
+  toasts: [] as Array<{
+    readonly message: string;
+    readonly action: {
+      readonly label: string;
+      readonly onClick: () => void;
+    } | null;
+  }>,
+  handoffFailures: [] as Array<{ readonly chatId: string }>,
 }));
 
 function modelOption(harnessId: GuiHarnessId, slug: string): ModelOption {
@@ -129,6 +143,29 @@ vi.mock("@/hooks/auth/use-auth-user-query", () => ({
     refetch: () => Promise.resolve({ data: null, isError: false }),
   }),
 }));
+// The awake sandbox's own agents are installed and ready.
+const READY_PROVIDERS = vi.hoisted(() => ({
+  list: null as { readonly providers: ReadonlyArray<ProviderCliState> } | null,
+}));
+vi.mock(
+  "@/hooks/providers/use-providers-list-query",
+  async (importOriginal) => {
+    const { providerRow } =
+      await import("@/lib/sandboxes/__tests__/pending-send-fixtures");
+    READY_PROVIDERS.list = {
+      providers: [providerRow("claude-code", { status: "installed" })],
+    };
+    return {
+      ...(await importOriginal<
+        typeof import("@/hooks/providers/use-providers-list-query")
+      >()),
+      useProvidersListForClient: () => ({
+        data: READY_PROVIDERS.list,
+        isError: false,
+      }),
+    };
+  },
+);
 vi.mock("@/lib/links/open-link", () => ({ useOpenLink: () => vi.fn() }));
 vi.mock("@/hooks/command-palette/use-register-composer-controls", () => ({
   useRegisterFocusedComposerControls: () => undefined,
@@ -144,6 +181,7 @@ vi.mock("@/components/home/composer/composer-body", () => ({
   ComposerBody: (props: ComposerBodyProps) => {
     host.toolbar = props.toolbarStore;
     host.bodySubmit = props.onSubmit;
+    host.canSubmit = props.canSubmit;
     host.installEditor = () => {
       props.editorRef.current = editorHandle();
     };
@@ -185,9 +223,6 @@ vi.mock("@/hooks/host/use-composer-placement", () => ({
       followsEffective: true,
     };
   },
-}));
-vi.mock("@/hooks/sandboxes/use-sandbox-agent-gate", () => ({
-  useSandboxAgentGate: () => ({ blocked: false, hint: null, notice: null }),
 }));
 vi.mock("@/components/composer/use-staged-sandbox-send", () => ({
   useStagedSandboxSend: () => ({ intercept: () => false, line: null }),
@@ -337,19 +372,51 @@ vi.mock("@/stores/epics/canvas/store", () => ({
     getState: () => ({
       markChatTitlePending: vi.fn(),
       clearChatTitlePending: vi.fn(),
+      resolveTargetTabForEpic: () => "tab-1",
     }),
   },
 }));
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => host.navigate,
+}));
+vi.mock("sonner", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("sonner")>();
+  return {
+    ...actual,
+    toast: Object.assign(
+      (
+        message: string,
+        options: {
+          readonly action?: {
+            readonly label: string;
+            readonly onClick: () => void;
+          };
+        },
+      ): string => {
+        host.toasts.push({ message, action: options.action ?? null });
+        return message;
+      },
+      actual.toast,
+    ),
+  };
+});
 vi.mock("@/stores/epics/initial-chat-handoff-store", () => ({
   useInitialChatHandoffStore: {
     getState: () => ({
       register: vi.fn(),
       markInitialTurnStarted: vi.fn(),
-      markFailedByAction: vi.fn(),
+      markFailedByAction: (_key: unknown, chatId: string) => {
+        host.handoffFailures.push({ chatId });
+      },
     }),
   },
 }));
 
+import { RetryableTransportError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { CHECKING_SANDBOX_AGENTS } from "@/lib/sandboxes/sandbox-strings";
+import { useNewConversationModalOpenStore } from "@/stores/epics/new-conversation-modal-open-store";
+import { harnessRow } from "@/lib/sandboxes/__tests__/pending-send-fixtures";
 import { sandboxSummaryFixture } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import {
   createRestingBinding,
@@ -536,6 +603,10 @@ beforeEach(() => {
     { slug: "traycer-default", label: "traycer-default" },
   ];
   host.createChat.mockReset();
+  host.navigate.mockReset();
+  host.toasts.length = 0;
+  host.handoffFailures.length = 0;
+  host.canSubmit = false;
   useStagedSandboxStore.setState({ bySurface: {} });
   useHostPickRequestStore.setState({ bySurface: {} });
   useComposerHarnessMemoryStore.getState().resetForTests();
@@ -814,6 +885,299 @@ describe("a new-conversation modal on a host that rests", () => {
           .map((button) => button.textContent)
           .filter((label) => /^Use /.test(label)),
       ).toEqual([]);
+    });
+  });
+
+  describe("before the sandbox list has been read", () => {
+    /** The directory says the host rests; the cloud's list read has not answered. */
+    function holdSandboxList() {
+      let answer: (result: SandboxListFetchResult) => void = () => undefined;
+      host.binding?.auth.listSandboxes.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
+      return {
+        settle: () => {
+          answer({
+            kind: "ok",
+            response: { sandboxes: [restingSandboxSummary()] },
+          });
+        },
+        fail: () => {
+          answer({ kind: "network-error", detail: "list unreachable" });
+        },
+      };
+    }
+
+    it("holds Send with the checking line and no press, then stages on the list and sends once", async () => {
+      pickTraycer("trc-s");
+      cloudLists("trc-s");
+      const list = holdSandboxList();
+      renderModal();
+      act(() => {
+        host.installEditor?.();
+      });
+
+      expect(await screen.findByText(CHECKING_SANDBOX_AGENTS)).toBeDefined();
+      expect(host.canSubmit).toBe(false);
+      act(() => {
+        host.bodySubmit?.();
+      });
+      expect(host.createChat).not.toHaveBeenCalled();
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+          ?.content,
+      ).toEqual(DIRTY_CONTENT);
+
+      await act(async () => {
+        list.settle();
+        await Promise.resolve();
+      });
+
+      await waitFor(() =>
+        expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+          hostId: "host-a",
+          verb: "resume",
+        }),
+      );
+      await waitFor(() => expect(host.canSubmit).toBe(true));
+      expect(screen.queryByText(CHECKING_SANDBOX_AGENTS)).toBeNull();
+      act(() => {
+        host.bodySubmit?.();
+      });
+      await waitFor(() =>
+        expect(
+          Object.keys(usePendingSandboxSendStore.getState().sends),
+        ).toHaveLength(1),
+      );
+      expect(host.createChat).not.toHaveBeenCalled();
+      expect(host.binding?.auth.runSandboxVerb).not.toHaveBeenCalled();
+    });
+
+    it("keeps holding Send, with the draft, when the list read is refused", async () => {
+      pickTraycer("trc-s");
+      cloudLists("trc-s");
+      const list = holdSandboxList();
+      renderModal();
+      act(() => {
+        host.installEditor?.();
+      });
+      expect(await screen.findByText(CHECKING_SANDBOX_AGENTS)).toBeDefined();
+
+      await act(async () => {
+        list.fail();
+        await Promise.resolve();
+      });
+
+      expect(screen.getByText(CHECKING_SANDBOX_AGENTS)).toBeDefined();
+      expect(host.canSubmit).toBe(false);
+      act(() => {
+        host.bodySubmit?.();
+      });
+      expect(readStagedSandbox(SURFACE)).toBeNull();
+      expect(host.createChat).not.toHaveBeenCalled();
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+          ?.content,
+      ).toEqual(DIRTY_CONTENT);
+    });
+  });
+
+  describe("when the directory still says awake and the create does not happen", () => {
+    const DETACHED = new RetryableTransportError({
+      replaySafetyFromKey: false,
+      code: "RPC_ERROR",
+      message: "Host detached",
+      requestId: "request-modal-detached",
+      method: "epic.createChat",
+      fatalDetails: {
+        code: "RPC_REQUEST_TIMEOUT",
+        reason: "Host detached",
+        incompatibleMethods: null,
+        upgradeGuidance: null,
+        retryable: true,
+      },
+    });
+    const SAVED_LINE = "Your message wasn't sent; it's saved in your drafts.";
+
+    interface HeldCreate {
+      readonly reject: (error: unknown) => void;
+      readonly refuse: () => void;
+    }
+
+    /** The host is stale-awake in the directory, resting in the cloud; Send goes to create. */
+    async function sendToAStaleAwakeHost(): Promise<HeldCreate> {
+      restingDirectory.setSandbox("host-a", "Laptop box", "awake");
+      host.harnesses = {
+        harnesses: [harnessRow("claude", {}), harnessRow("codex", {})],
+      };
+      useNewConversationModalStore.getState().setSettings(EPIC_ID, {
+        ...PICK,
+        harnessId: "claude",
+        model: "sonnet-5.5",
+        reasoningEffort: null,
+      });
+      let rejectCreate: (error: unknown) => void = () => undefined;
+      let resolveCreate: (response: unknown) => void = () => undefined;
+      host.createChat.mockImplementation(
+        () =>
+          new Promise((resolve, reject) => {
+            resolveCreate = resolve;
+            rejectCreate = reject;
+          }),
+      );
+      renderModal();
+      await waitFor(() =>
+        expect(toolbar().getState().selection.harnessId).toBe("claude"),
+      );
+      act(() => {
+        host.installEditor?.();
+      });
+      act(() => {
+        host.bodySubmit?.();
+      });
+      await waitFor(() => expect(host.createChat).toHaveBeenCalledTimes(1));
+      // The modal clears its draft as it sends.
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+          ?.content ?? null,
+      ).toBeNull();
+      return {
+        reject: rejectCreate,
+        refuse: () => {
+          resolveCreate({
+            chatId: "chat-never-made",
+            refusal: { kind: "host-refused" },
+          });
+        },
+      };
+    }
+
+    function openDraftToast() {
+      expect(host.toasts).toHaveLength(1);
+      const [toasted] = host.toasts;
+      expect(toasted.message).toBe(SAVED_LINE);
+      expect(toasted.action?.label).toBe("Open draft");
+      return toasted;
+    }
+
+    it("gives the message back to the draft with the toast, fails the eager tab's handoff, and sends once to the sandbox when the row rests", async () => {
+      const create = await sendToAStaleAwakeHost();
+
+      await act(async () => {
+        create.reject(DETACHED);
+        await Promise.resolve();
+      });
+
+      await waitFor(() =>
+        expect(
+          useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+            ?.content,
+        ).toEqual(DIRTY_CONTENT),
+      );
+      const toasted = openDraftToast();
+      // The failed create marks the handoff failed by its action id.
+      expect(host.handoffFailures).toHaveLength(1);
+
+      act(() => {
+        toasted.action?.onClick();
+      });
+      expect(useNewConversationModalOpenStore.getState().request).toMatchObject(
+        { epicId: EPIC_ID },
+      );
+
+      act(() => {
+        restingDirectory.setSandbox("host-a", "Laptop box", "suspended");
+      });
+      await waitFor(() =>
+        expect(readStagedSandbox(SURFACE)?.target).toMatchObject({
+          hostId: "host-a",
+          verb: "resume",
+        }),
+      );
+      await waitFor(() => expect(host.canSubmit).toBe(true));
+      act(() => {
+        host.bodySubmit?.();
+      });
+      await waitFor(() =>
+        expect(
+          Object.keys(usePendingSandboxSendStore.getState().sends),
+        ).toHaveLength(1),
+      );
+      expect(host.createChat).toHaveBeenCalledTimes(1);
+      expect(host.binding?.auth.runSandboxVerb).not.toHaveBeenCalled();
+    });
+
+    it("gives the message back the same way when the host refuses the create", async () => {
+      const create = await sendToAStaleAwakeHost();
+
+      await act(async () => {
+        create.refuse();
+        await Promise.resolve();
+      });
+
+      await waitFor(() =>
+        expect(
+          useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+            ?.content,
+        ).toEqual(DIRTY_CONTENT),
+      );
+      openDraftToast();
+      expect(host.handoffFailures).toHaveLength(1);
+    });
+
+    it("leaves a draft the person has started since alone, with no toast", async () => {
+      const create = await sendToAStaleAwakeHost();
+      const started: JsonContent = {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "newer" }] },
+        ],
+      };
+      act(() => {
+        useNewConversationModalStore.getState().setContent(EPIC_ID, started);
+      });
+
+      await act(async () => {
+        create.reject(DETACHED);
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(host.handoffFailures).toHaveLength(1));
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+          ?.content,
+      ).toEqual(started);
+      expect(host.toasts).toEqual([]);
+    });
+
+    it("restores nothing and says nothing once the account has changed", async () => {
+      const create = await sendToAStaleAwakeHost();
+      act(() => {
+        useAuthStore
+          .getState()
+          .setSignedIn(
+            { userId: "user-b", userName: "B", email: "b@example.com" },
+            { userId: "user-b", username: "user-b" },
+            [],
+          );
+      });
+
+      await act(async () => {
+        create.reject(DETACHED);
+        await Promise.resolve();
+      });
+
+      await waitFor(() => expect(host.handoffFailures).toHaveLength(1));
+      expect(
+        useNewConversationModalStore.getState().draftPatchesByEpicId[EPIC_ID]
+          ?.content ?? null,
+      ).toBeNull();
+      expect(host.toasts).toEqual([]);
     });
   });
 });

@@ -30,6 +30,8 @@ import {
 } from "@traycer/protocol/host/index";
 import type { ChatRunSettings } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import type { SandboxListFetchResult } from "@traycer-clients/shared/host-client/sandbox-control";
+import { CHECKING_SANDBOX_AGENTS } from "@/lib/sandboxes/sandbox-strings";
 import { resetNegotiatedManifests } from "@traycer-clients/shared/host-transport/negotiated-manifest-registry";
 import { useImperativeHandle, type RefObject } from "react";
 import type { ChatForkPublicationState } from "../chat-fork-target";
@@ -757,6 +759,134 @@ describe("a fork dialog on a tab whose host is a sandbox that rests", () => {
     await act(() => Promise.resolve());
 
     expect(readStagedSandbox(FORK_SURFACE)?.target).toEqual(NEW_SANDBOX);
+  });
+
+  describe("before the sandbox list has been read", () => {
+    interface HeldList {
+      readonly settle: (state: "suspended" | "stopped") => void;
+      readonly fail: () => void;
+    }
+
+    /** The directory says the tab's host rests; the cloud's list read has not answered. */
+    function holdSandboxList(): HeldList {
+      restingDirectory.setSandbox(TAB_HOST_ID, RESTING_NAME, "suspended");
+      let answer: (result: SandboxListFetchResult) => void = () => undefined;
+      dialogMocks.binding?.auth.listSandboxes.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            answer = resolve;
+          }),
+      );
+      return {
+        settle: (state) => {
+          answer({
+            kind: "ok",
+            response: { sandboxes: [restingSummary(state)] },
+          });
+        },
+        fail: () => {
+          answer({ kind: "network-error", detail: "list unreachable" });
+        },
+      };
+    }
+
+    it("holds Fork with the checking line and no press, then takes the stage the list brings and forks once", async () => {
+      const list = holdSandboxList();
+      renderResting(null);
+      fillTitle();
+
+      expect(await screen.findByText(CHECKING_SANDBOX_AGENTS)).toBeDefined();
+      expect(forkButton().disabled).toBe(true);
+      expect(readStagedSandbox(FORK_SURFACE)).toBeNull();
+      fireEvent.click(forkButton());
+      expect(dialogMocks.createMutate).not.toHaveBeenCalled();
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+
+      await act(async () => {
+        list.settle("suspended");
+        await Promise.resolve();
+      });
+
+      await waitFor(() =>
+        expect(readStagedSandbox(FORK_SURFACE)?.target).toMatchObject({
+          kind: "existing",
+          hostId: TAB_HOST_ID,
+          verb: "resume",
+        }),
+      );
+      await waitFor(() => expect(forkButton().disabled).toBe(false));
+      expect(screen.queryByText(CHECKING_SANDBOX_AGENTS)).toBeNull();
+      fireEvent.click(forkButton());
+      await waitFor(() =>
+        expect(dialogMocks.onOpenChange).toHaveBeenCalledWith(false),
+      );
+      expect(onlyPendingSend().request.kind).toBe("fork");
+      expect(dialogMocks.createMutate).not.toHaveBeenCalled();
+      expect(dialogMocks.binding?.auth.runSandboxVerb).not.toHaveBeenCalled();
+    });
+
+    it("keeps holding Fork when the list read is refused", async () => {
+      const list = holdSandboxList();
+      renderResting(null);
+      fillTitle();
+      expect(await screen.findByText(CHECKING_SANDBOX_AGENTS)).toBeDefined();
+
+      await act(async () => {
+        list.fail();
+        await Promise.resolve();
+      });
+
+      expect(screen.getByText(CHECKING_SANDBOX_AGENTS)).toBeDefined();
+      expect(forkButton().disabled).toBe(true);
+      fireEvent.click(forkButton());
+      expect(readStagedSandbox(FORK_SURFACE)).toBeNull();
+      expect(dialogMocks.createMutate).not.toHaveBeenCalled();
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+      expect(dialogMocks.onOpenChange).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("when the directory still says awake and the create is refused", () => {
+    it("keeps the dialog open, and once the row rests Fork goes staged and forks once", async () => {
+      restingDirectory.setSandbox(TAB_HOST_ID, RESTING_NAME, "awake");
+      dialogMocks.binding?.auth.listSandboxes.mockImplementation(() =>
+        Promise.resolve({
+          kind: "ok",
+          response: { sandboxes: [restingSummary("suspended")] },
+        }),
+      );
+      renderResting(null);
+      fillTitle();
+      await waitFor(() => expect(forkButton().disabled).toBe(false));
+
+      fireEvent.click(forkButton());
+
+      expect(dialogMocks.createMutate).toHaveBeenCalledTimes(1);
+      // The host refused it: the mutation reports that itself and never calls
+      // the dialog's success path, so the dialog is left as it was.
+      expect(dialogMocks.onOpenChange).not.toHaveBeenCalled();
+      expect(readStagedSandbox(FORK_SURFACE)).toBeNull();
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+
+      act(() => {
+        restingDirectory.setSandbox(TAB_HOST_ID, RESTING_NAME, "suspended");
+      });
+      await waitFor(() =>
+        expect(readStagedSandbox(FORK_SURFACE)?.target).toMatchObject({
+          hostId: TAB_HOST_ID,
+          verb: "resume",
+        }),
+      );
+      await waitFor(() => expect(forkButton().disabled).toBe(false));
+      fireEvent.click(forkButton());
+
+      await waitFor(() =>
+        expect(dialogMocks.onOpenChange).toHaveBeenCalledWith(false),
+      );
+      expect(onlyPendingSend().request.kind).toBe("fork");
+      expect(dialogMocks.createMutate).toHaveBeenCalledTimes(1);
+      expect(dialogMocks.binding?.auth.runSandboxVerb).not.toHaveBeenCalled();
+    });
   });
 
   describe("Fork on the source's own resting sandbox", () => {

@@ -65,7 +65,7 @@ import { RestingHostStage } from "@/components/composer/resting-host-stage";
 import { useStageFallbackHostLine } from "@/hooks/sandboxes/use-stage-fallback-host-line";
 import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
 import { useStagedSendSignInCheck } from "@/hooks/sandboxes/use-staged-send-sign-in-check";
-import { stagedSandboxCheckingNotice } from "@/lib/sandboxes/sandbox-agent-refusal";
+import { sendHoldNotice } from "@/lib/sandboxes/resting-stage-hold";
 import { fallbackSeedSource } from "@/lib/composer/composer-seed-source";
 import {
   selectGlobalLastRunSettings,
@@ -622,9 +622,10 @@ export function LandingComposer(props: LandingComposerProps) {
     },
   });
   const stagedNow = readStagedSandbox(composerSurfaceKey);
-  const stagedCatalogueNotice = stagedSandboxCheckingNotice(
+  const stagedCatalogueNotice = sendHoldNotice(
     stagedNow,
     stagedSignInCheck.check,
+    sandboxAgentGate,
   );
   const sendRefusal = landingSendRefusal(
     stagedNow,

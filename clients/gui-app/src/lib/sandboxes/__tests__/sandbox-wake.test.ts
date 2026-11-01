@@ -543,8 +543,10 @@ describe("wakeSandboxOnPick", () => {
 
     wakeSandboxOnPick(sandboxOption("suspended", false), null);
     await settleWake();
-    // The one timer left is the mutation cache's own gc timer for the settled
-    // wake; an uncancelled 120 s budget would make it two.
+    // The wake reads the list through the query cache, whose gc timer is not a
+    // budget. Without it the one timer left is the mutation cache's own for the
+    // settled wake; an uncancelled 120 s budget would make it two.
+    queryClient.getQueryCache().clear();
     expect(vi.getTimerCount()).toBe(1);
     // Past the cache's gc window that one is gone too.
     await vi.advanceTimersByTimeAsync(10 * 60 * 1000);

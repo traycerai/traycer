@@ -43,18 +43,37 @@ export const restingDirectory = {
   ): void => {
     rows.set(
       hostId,
-      sandboxEntry(
-        hostId,
-        name,
-        state,
-        state === "awake" ? "connectable" : "offline",
-      ),
+      sandboxEntry(hostId, name, state, {
+        connectivity: state === "awake" ? "connectable" : "offline",
+        frozen: false,
+      }),
     );
     notify(hostId);
   },
   /** An awake sandbox whose host has not yet reported: no route answers. */
   setUnreportedSandbox: (hostId: string, name: string): void => {
-    rows.set(hostId, sandboxEntry(hostId, name, "awake", "offline"));
+    rows.set(
+      hostId,
+      sandboxEntry(hostId, name, "awake", {
+        connectivity: "offline",
+        frozen: false,
+      }),
+    );
+    notify(hostId);
+  },
+  /** A sandbox the account has frozen: it wakes by the resume verb, whatever its state. */
+  setFrozenSandbox: (
+    hostId: string,
+    name: string,
+    state: NonNullable<HostListItem["sandboxState"]>,
+  ): void => {
+    rows.set(
+      hostId,
+      sandboxEntry(hostId, name, state, {
+        connectivity: "offline",
+        frozen: true,
+      }),
+    );
     notify(hostId);
   },
   clear: (): void => {
@@ -84,7 +103,10 @@ function sandboxEntry(
   hostId: string,
   name: string,
   state: NonNullable<HostListItem["sandboxState"]>,
-  connectivity: "connectable" | "offline",
+  facts: {
+    readonly connectivity: "connectable" | "offline";
+    readonly frozen: boolean;
+  },
 ): RemoteHostDirectoryEntry {
   return hostListItemToDirectoryEntry(
     {
@@ -95,7 +117,7 @@ function sandboxEntry(
       publicKey: "pk",
       createdAt: "2026-10-01T00:00:00.000Z",
       status: {
-        connectivity,
+        connectivity: facts.connectivity,
         viewerReachability: "unknown",
         clientCloud: "ok",
         updateState: "current",
@@ -104,7 +126,7 @@ function sandboxEntry(
       },
       updatePolicy: "manual",
       sandboxState: state,
-      sandboxFrozen: false,
+      sandboxFrozen: facts.frozen,
       profile: "agent",
     },
     "wss://relay.example.test",

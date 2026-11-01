@@ -24,6 +24,7 @@ import {
   type CommGraphFeedHealth,
 } from "@/components/epic-canvas/comm-graph/use-comm-graph-feed-health";
 import { useCanvasHostId } from "@/components/epic-canvas/hooks/use-canvas-host-id";
+import { useSandboxRestLine } from "@/hooks/sandboxes/use-resting-sandbox-host";
 import { cn } from "@/lib/utils";
 import {
   useAgentActivityPresenceDegraded,
@@ -107,6 +108,7 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
   const commGraphFeedHealth = useCommGraphFeedHealth(props.epicId);
   const resolvedCanvasHostId = useCanvasHostId();
   const canvasHostId = resolvedCanvasHostId ?? UNKNOWN_HOST_PLACEHOLDER;
+  const sandboxRestLine = useSandboxRestLine(resolvedCanvasHostId);
   const terminalAuthority = useHostPlainTerminalAuthority({
     hostId: canvasHostId,
     scope: { kind: "epic", epicId: props.epicId },
@@ -136,14 +138,18 @@ export function EpicConnectionPill(props: EpicConnectionPillProps) {
     presenceDegraded,
   };
   const selected = highestSeverityIndicator({
-    artifactIndicator: indicatorFor(state, linkDownTooLong),
+    artifactIndicator:
+      sandboxRestIndicator(state, sandboxRestLine) ??
+      indicatorFor(state, linkDownTooLong),
     ...secondarySignals,
   });
   // The graced verdict, not the settled one: a cloud drop inside its grace
   // must read as quiet on hover too, or the tooltip names an outage the dot
   // is deliberately not showing.
   const rawSelected = highestSeverityIndicator({
-    artifactIndicator: indicatorFor(graced, linkDownTooLong),
+    artifactIndicator:
+      sandboxRestIndicator(graced, sandboxRestLine) ??
+      indicatorFor(graced, linkDownTooLong),
     ...secondarySignals,
   });
   const { indicator } = selected;
@@ -430,6 +436,29 @@ function linkDownIndicator(
     pulse: null,
     tooltip: message,
     ariaLabel: message,
+  };
+}
+
+/**
+ * A sandbox at rest answers nobody, and that is not a link fault: while the
+ * link is down this says what the host chip says instead of "connecting".
+ */
+function sandboxRestIndicator(
+  state: EpicSyncPillState,
+  restLine: string | null,
+): PillIndicator | null {
+  if (restLine === null) return null;
+  if (state !== "connecting" && state !== "reconnecting" && state !== "offline")
+    return null;
+  return {
+    severity: "activity",
+    containerClassName: QUIET_CONTAINER_CLASS,
+    dotClassName: "bg-muted-foreground",
+    label: restLine,
+    showAgentSpinner: false,
+    pulse: null,
+    tooltip: restLine,
+    ariaLabel: restLine,
   };
 }
 

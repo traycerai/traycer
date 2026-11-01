@@ -7,6 +7,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
+import { restingDirectory } from "@/hooks/sandboxes/__tests__/resting-directory-fixture";
 import { EpicConnectionPill } from "@/components/epic-canvas/panels/epic-connection-pill";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type {
@@ -81,6 +82,21 @@ vi.mock(
 vi.mock("@/components/epic-canvas/hooks/use-canvas-host-id", () => ({
   useCanvasHostId: () => "host-a",
 }));
+// The person's host directory, as the pill's rest line reads the canvas host's row.
+vi.mock(
+  "@traycer-clients/shared/host-client/host-connection-registry",
+  async (importOriginal) => {
+    const { restingDirectory } =
+      await import("@/hooks/sandboxes/__tests__/resting-directory-fixture");
+    return {
+      ...(await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-connection-registry")
+      >()),
+      readHostDirectoryEntry: restingDirectory.read,
+      subscribeHostRowChanged: restingDirectory.subscribe,
+    };
+  },
+);
 vi.mock("@/hooks/terminal/use-plain-terminal-authority", () => ({
   useHostPlainTerminalAuthority: () => ({
     hostId: "host-a",
@@ -155,6 +171,7 @@ describe("<EpicConnectionPill />", () => {
     };
     mocks.commGraphFeedHealth = null;
     mocks.writeCommandAlert = null;
+    restingDirectory.clear();
   });
 
   it("renders the synced state icon-only with the claim on the accessible name", () => {
@@ -1241,6 +1258,142 @@ describe("<EpicConnectionPill />", () => {
       expect(pill.innerHTML).toContain("bg-muted-foreground/50");
       expect(pill.innerHTML).not.toContain("bg-amber-500");
       expect(pill.innerHTML).not.toContain("bg-red-500");
+    });
+  });
+  // A sandbox at rest answers nobody. While its link is down the pill says what
+  // the host chip says, never a link fault the person could act on.
+  describe("on a canvas host that is a sandbox", () => {
+    const HOST = "host-a";
+    const LINK_FAULT_WORDS =
+      /still connecting|still reconnecting|retrying|keep it open/i;
+
+    /** Every place the pill puts words: label, name, hover and announcement. */
+    async function pillWords(): Promise<string> {
+      const pill = screen.getByTestId("epic-connection-pill");
+      fireEvent.focus(pill);
+      const tooltip = await screen.findByRole("tooltip");
+      return [
+        pill.textContent,
+        pill.getAttribute("aria-label"),
+        tooltip.textContent,
+        screen.getByRole("status").textContent,
+      ].join(" | ");
+    }
+
+    function linkDownTooLong(state: EpicSyncPillState) {
+      vi.useFakeTimers();
+      mocks.hostTransportStatus = "reconnecting";
+      const view = renderPill(state);
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      vi.useRealTimers();
+      return view;
+    }
+
+    it("reads suspended, not a link fault, once the link has been down past the escalation", async () => {
+      restingDirectory.setSandbox(HOST, "Laptop box", "suspended");
+      linkDownTooLong("reconnecting");
+
+      const pill = screen.getByTestId("epic-connection-pill");
+      expect(pill.textContent).toBe("Laptop box · suspended");
+      expect(pill.getAttribute("aria-label")).toBe("Laptop box · suspended");
+      expect(await pillWords()).not.toMatch(LINK_FAULT_WORDS);
+    });
+
+    it.each([
+      {
+        row: () => restingDirectory.setSandbox(HOST, "Laptop box", "stopped"),
+        words: "Laptop box · stopped",
+      },
+      {
+        row: () =>
+          restingDirectory.setFrozenSandbox(HOST, "Laptop box", "awake"),
+        words: "Laptop box · suspended",
+      },
+      {
+        row: () => restingDirectory.setSandbox(HOST, "Laptop box", "resuming"),
+        words: "Laptop box resuming",
+      },
+      {
+        row: () => restingDirectory.setSandbox(HOST, "Laptop box", "starting"),
+        words: "Laptop box starting",
+      },
+    ])("reads $words in the same outage", async ({ row, words }) => {
+      row();
+      linkDownTooLong("reconnecting");
+
+      expect(screen.getByTestId("epic-connection-pill").textContent).toBe(
+        words,
+      );
+      expect(await pillWords()).not.toMatch(LINK_FAULT_WORDS);
+    });
+
+    it.each(["connecting", "reconnecting", "offline"] as const)(
+      "reads the rest, never Offline or a retry, in the %s state",
+      async (state) => {
+        restingDirectory.setSandbox(HOST, "Laptop box", "suspended");
+        mocks.hostTransportStatus = "reconnecting";
+        renderPill(state);
+
+        expect(screen.getByTestId("epic-connection-pill").textContent).toBe(
+          "Laptop box · suspended",
+        );
+        const words = await pillWords();
+        expect(words).not.toMatch(/offline/i);
+        expect(words).not.toMatch(LINK_FAULT_WORDS);
+      },
+    );
+
+    it("keeps today's words for an awake sandbox whose link is down", () => {
+      restingDirectory.setSandbox(HOST, "Laptop box", "awake");
+      linkDownTooLong("reconnecting");
+
+      expect(screen.getByText("Still reconnecting…")).not.toBeNull();
+      expect(
+        screen.getByTestId("epic-connection-pill").getAttribute("aria-label"),
+      ).toBe(
+        "Still reconnecting. This keeps retrying on its own — unsent changes stay in this window, so keep it open.",
+      );
+    });
+
+    it("keeps today's words for a host that is not a sandbox", () => {
+      linkDownTooLong("reconnecting");
+
+      expect(screen.getByText("Still reconnecting…")).not.toBeNull();
+    });
+
+    it("does not override a link that is up", () => {
+      restingDirectory.setSandbox(HOST, "Laptop box", "suspended");
+      renderPill("synced");
+
+      expect(pillClaimsSynced()).toBe(true);
+    });
+
+    it("follows the row on the same mounted pill", () => {
+      restingDirectory.setSandbox(HOST, "Laptop box", "awake");
+      mocks.hostTransportStatus = "reconnecting";
+      renderPill("reconnecting");
+      expect(screen.getByText("Reconnecting…")).not.toBeNull();
+
+      act(() => {
+        restingDirectory.setSandbox(HOST, "Laptop box", "suspended");
+      });
+      expect(screen.getByTestId("epic-connection-pill").textContent).toBe(
+        "Laptop box · suspended",
+      );
+
+      act(() => {
+        restingDirectory.setSandbox(HOST, "Laptop box", "resuming");
+      });
+      expect(screen.getByTestId("epic-connection-pill").textContent).toBe(
+        "Laptop box resuming",
+      );
+
+      act(() => {
+        restingDirectory.setSandbox(HOST, "Laptop box", "awake");
+      });
+      expect(screen.getByText("Reconnecting…")).not.toBeNull();
     });
   });
 });

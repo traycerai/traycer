@@ -126,6 +126,7 @@ import { createEmptyNewConversationContent } from "@/stores/epics/new-conversati
 import type { StageConfiguration } from "@/lib/sandboxes/sandbox-stage-model";
 import { ComposerHostNotice } from "@/components/home/composer/composer-host-notice";
 import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
+import { sendHoldNotice } from "@/lib/sandboxes/resting-stage-hold";
 import { useStagedSendSignInCheck } from "@/hooks/sandboxes/use-staged-send-sign-in-check";
 import { carryComposerDraft } from "@/lib/drafts/carry-composer-draft";
 import { PrimaryActionShortcutHint } from "@/components/ui/primary-action-shortcut-hint";
@@ -672,8 +673,6 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   });
   const stagedCheck =
     forkStage === null ? null : stagedSignInCheck.check(forkStage);
-  const stagedCatalogueNotice =
-    stagedCheck?.pending === true ? stagedCheck : null;
   // On a sandbox host an agent that cannot run there is refused at Fork, with
   // the configuration's Providers, never swapped; a staged fork is checked
   // above instead.
@@ -685,6 +684,11 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
     onChooseModel: (offeredAgents) =>
       forkModelPickerRef.current?.("traycer", offeredAgents),
   });
+  const stagedCatalogueNotice = sendHoldNotice(
+    forkStage,
+    stagedSignInCheck.check,
+    sandboxAgentGate,
+  );
   // What Fork would be refused for now, by the stage's check or this host's.
   const forkRefusal =
     forkStage === null ? sandboxAgentGate.notice : stagedCheck;
@@ -701,7 +705,8 @@ function ChatForkDialogBody(props: ChatForkDialogProps) {
   const modelResolved =
     forkStage !== null
       ? stagedCatalogueNotice === null
-      : modelSlugPresent &&
+      : stagedCatalogueNotice === null &&
+        modelSlugPresent &&
         (!isCrossHost || catalogConfirmed || catalogSubstituted);
   const modelPickerKey =
     target === null
