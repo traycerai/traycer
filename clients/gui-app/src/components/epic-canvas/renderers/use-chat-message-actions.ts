@@ -231,7 +231,7 @@ export interface ChatMessageActionsInput {
   readonly fallbackToGlobalMentionRoots: boolean;
   readonly currentEpicId: string;
   readonly node: ChatSurfaceNode;
-  readonly chatTitle: string | null;
+  readonly chatTitle: string;
   readonly chatParentId: string | null;
   readonly messages: ChatSessionState["messages"];
   readonly events: ChatSessionState["events"];
@@ -968,7 +968,7 @@ export function useChatMessageActions(
       clearChatForkWorkspacesForEpic(currentEpicId);
       setForkTarget({
         sourceChatId: node.id,
-        sourceChatTitle: chatTitle ?? node.name,
+        sourceChatTitle: chatTitle,
         assistantMessageId,
         interviewBlockId,
         parentId: chatParentId,
@@ -994,7 +994,6 @@ export function useChatMessageActions(
       currentComposerSettings,
       currentEpicId,
       node.id,
-      node.name,
       setForkTarget,
       worktreeBinding,
     ],

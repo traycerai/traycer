@@ -2104,7 +2104,7 @@ function ChatLiveAnnouncements(props: ChatLiveAnnouncementsProps) {
     props.chatId,
     props.hostId,
   );
-  const { announcement, enqueue, reset } = useChatAnnouncementQueue();
+  const { announcement, enqueue, reset, retire } = useChatAnnouncementQueue();
   const lastCompletion = useRef<number | null>(null);
   const observeCompletion = useEffectEvent((rebase: boolean) => {
     if (rebase) {
@@ -2124,6 +2124,12 @@ function ChatLiveAnnouncements(props: ChatLiveAnnouncementsProps) {
   useLayoutEffect(() => {
     observeCompletion(true);
   }, [props.baselineEpoch, props.visible]);
+  // A first turn usually finishes before its title lands. That sentence was
+  // right when it was spoken, but a live region keeps its text, so a new name
+  // retires it rather than leaving the old name beside the title.
+  useLayoutEffect(() => {
+    retire();
+  }, [props.taskTitle, retire]);
   useLayoutEffect(() => {
     observeCompletion(false);
   }, [props.completion]);
