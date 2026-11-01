@@ -1,3 +1,5 @@
+import { PACKAGE_MANAGER_UPGRADE_COMMAND } from "@traycer-clients/shared/cli-install/package-manager-upgrade-command";
+import { isStrictlyNewerHostVersion } from "@traycer-clients/shared/host-version/compare-host-versions";
 import { execFile } from "node:child_process";
 import { access, constants, realpath, stat } from "node:fs/promises";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
@@ -55,6 +57,9 @@ async function reportedVersion(binary: string): Promise<string | null> {
     const { stdout } = await execFileAsync(binary, ["--version"], {
       encoding: "utf8",
       timeout: CLI_VERSION_TIMEOUT_MS,
+      // SIGKILL: under Bun a child that ignores SIGTERM holds this call for as
+      // long as it lives, however short the timeout.
+      killSignal: "SIGKILL",
       windowsHide: true,
     });
     const version = stdout.trim();
@@ -92,14 +97,18 @@ export async function probeCliShadowedOnPath(
     if (pathVersion === null || managedVersion === null) return null;
     if (pathVersion === managedVersion) return null;
     const managedDir = dirname(managedBinary);
-    const wayOut = pathBinaryRealPath.includes("/Cellar/")
-      ? `Run 'brew upgrade traycer', or put ${managedDir} first on PATH.`
+    // Upgrading only helps a Homebrew CLI that is behind.
+    const upgradeHelps =
+      pathBinaryRealPath.includes("/Cellar/") &&
+      isStrictlyNewerHostVersion(managedVersion, pathVersion);
+    const wayOut = upgradeHelps
+      ? `Run '${PACKAGE_MANAGER_UPGRADE_COMMAND.homebrew}', or put ${managedDir} first on PATH.`
       : `Put ${managedDir} first on PATH.`;
     return {
       code: DOCTOR_ISSUE_CODES.CLI_SHADOWED_ON_PATH,
       severity: "warning",
       title: "Another Traycer CLI comes first on PATH",
-      message: `'traycer' runs ${pathBinary} (${pathVersion}), not the managed CLI at ${managedBinary} (${managedVersion}). ${wayOut}`,
+      message: `'traycer' runs ${pathBinary} (${pathVersion}), not the CLI Traycer installed at ${managedBinary} (${managedVersion}). ${wayOut}`,
       fixAction: null,
       terminalCommand: null,
       details: { pathBinary, pathVersion, managedBinary, managedVersion },

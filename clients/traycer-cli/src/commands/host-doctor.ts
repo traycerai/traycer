@@ -93,7 +93,7 @@ export const hostDoctorCommand: CommandFn = async (
 /**
  * The host's list, with the PATH check swapped for this run's own. That check
  * answers for the PATH of the process that ran it, and the host's child read
- * the host's: the person reading this report types in this one.
+ * the host's, which is not the one this report's reader resolves `traycer` on.
  */
 function withThisProcessPathIssue(
   hostIssues: readonly HostDoctorIssue[],

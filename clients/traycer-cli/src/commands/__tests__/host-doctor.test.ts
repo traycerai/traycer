@@ -334,6 +334,8 @@ describe("hostDoctorCommand asks the running host", () => {
     const result = await hostDoctorCommand(makeCtx());
 
     expect(result.data).toMatchObject({ issues: [hostOnly, shell] });
+    expect(result.human).toContain("this shell's PATH");
+    expect(result.human).not.toContain(hostsPath.message);
   });
 
   it("drops the host's PATH check when this process's PATH is clean", async () => {
@@ -344,6 +346,7 @@ describe("hostDoctorCommand asks the running host", () => {
     const result = await hostDoctorCommand(makeCtx());
 
     expect(result.data).toMatchObject({ issues: [hostOnly] });
+    expect(result.human).not.toContain("CLI_SHADOWED_ON_PATH");
   });
 
   it("lets the host's warning-only list replace a local error", async () => {

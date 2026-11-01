@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -38,6 +39,13 @@ function placeCli(path: string, version: string): void {
   chmodSync(path, 0o755);
 }
 
+function placeScript(path: string, body: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `#!/bin/sh\n/usr/bin/touch "$0.ran"\n${body}\n`, {
+    mode: 0o755,
+  });
+}
+
 function ran(path: string): boolean {
   return existsSync(`${path}.ran`);
 }
@@ -66,6 +74,14 @@ afterEach(() => {
 });
 
 describe.skipIf(process.platform === "win32")("doctor, CLI on PATH", () => {
+  // The probe reads a failed spawn as "version unknown", which is what the
+  // silent rows expect and the reporting rows see as a missing issue. A machine
+  // that cannot run the stand-ins at all fails here, by name.
+  beforeEach(() => {
+    execFileSync(managedBinary, ["--version"]);
+    rmSync(`${managedBinary}.ran`);
+  });
+
   it("names a stale Homebrew CLI ahead of the managed one and the way out", async () => {
     const cellarBinary = join(dir, "Cellar/traycer/1.0.0/bin/traycer");
     const linkDir = join(dir, "homebrew/bin");
@@ -80,7 +96,7 @@ describe.skipIf(process.platform === "win32")("doctor, CLI on PATH", () => {
       code: DOCTOR_ISSUE_CODES.CLI_SHADOWED_ON_PATH,
       severity: "warning",
       title: "Another Traycer CLI comes first on PATH",
-      message: `'traycer' runs ${brewBinary} (1.0.0), not the managed CLI at ${managedBinary} (1.5.2-rc.2). Run 'brew upgrade traycer', or put ${dirname(managedBinary)} first on PATH.`,
+      message: `'traycer' runs ${brewBinary} (1.0.0), not the CLI Traycer installed at ${managedBinary} (1.5.2-rc.2). Run 'brew upgrade traycer', or put ${dirname(managedBinary)} first on PATH.`,
       fixAction: null,
       terminalCommand: null,
       details: {
@@ -99,7 +115,7 @@ describe.skipIf(process.platform === "win32")("doctor, CLI on PATH", () => {
     const issue = await pathIssue(`${dirname(staging)}:/usr/bin`);
 
     expect(issue?.message).toBe(
-      `'traycer' runs ${staging} (1.5.2-staging.181.g0e77910), not the managed CLI at ${managedBinary} (1.5.2-rc.2). Put ${dirname(managedBinary)} first on PATH.`,
+      `'traycer' runs ${staging} (1.5.2-staging.181.g0e77910), not the CLI Traycer installed at ${managedBinary} (1.5.2-rc.2). Put ${dirname(managedBinary)} first on PATH.`,
     );
   });
 
@@ -154,46 +170,77 @@ describe.skipIf(process.platform === "win32")("doctor, CLI on PATH", () => {
     expect(ran(other)).toBe(true);
   });
 
-  it.each([
-    ["exits non-zero", "#!/bin/sh\nexit 1\n"],
-    ["prints nothing", "#!/bin/sh\n"],
-    ["prints more than a version", "#!/bin/sh\necho 'one\ntwo'\n"],
-  ])(
-    "stays silent when the binary on PATH %s",
-    async (_name, script: string) => {
-      const other = join(dir, "bin/traycer");
-      mkdirSync(dirname(other), { recursive: true });
-      writeFileSync(other, script, { mode: 0o755 });
+  it("offers only PATH order when the Homebrew CLI is the newer one", async () => {
+    const cellarBinary = join(dir, "Cellar/traycer/1.6.0/bin/traycer");
+    placeCli(cellarBinary, "1.6.0");
 
-      expect(await pathIssue(dirname(other))).toBeUndefined();
-    },
-  );
+    const issue = await pathIssue(dirname(cellarBinary));
+
+    expect(issue?.message).toBe(
+      `'traycer' runs ${cellarBinary} (1.6.0), not the CLI Traycer installed at ${managedBinary} (1.5.2-rc.2). Put ${dirname(managedBinary)} first on PATH.`,
+    );
+  });
+
+  // Each leaves the mark: a row that never ran would be as silent.
+  it.each([
+    ["exits non-zero", "exit 1"],
+    ["prints nothing", "exit 0"],
+    ["prints more than a version", "echo 'one\ntwo'"],
+    ["prints a version with a space", "echo '1.0.0 beta'"],
+    ["prints a token over 64 characters", `echo '${"1".repeat(65)}'`],
+  ])("stays silent when the binary on PATH %s", async (_name, body: string) => {
+    const other = join(dir, "bin/traycer");
+    placeScript(other, body);
+
+    expect(await pathIssue(dirname(other))).toBeUndefined();
+    expect(ran(other)).toBe(true);
+  });
+
+  // The row's own timeout is the witness: the stand-in outlives it unless the
+  // probe gives up at its deadline.
+  it("gives up on a binary that ignores the timeout", async () => {
+    const other = join(dir, "bin/traycer");
+    placeScript(other, "trap '' TERM\n/bin/sleep 30");
+
+    expect(await pathIssue(dirname(other))).toBeUndefined();
+    expect(ran(other)).toBe(true);
+  }, 15_000);
 
   it("stays silent when the managed CLI cannot name its version", async () => {
-    writeFileSync(managedBinary, "#!/bin/sh\nexit 1\n");
+    placeScript(managedBinary, "exit 1");
     const other = join(dir, "bin/traycer");
     placeCli(other, "1.0.0");
 
     expect(await pathIssue(dirname(other))).toBeUndefined();
+    expect(ran(managedBinary)).toBe(true);
   });
 
-  it("finds a Windows binary through PATHEXT", async () => {
-    const realPlatform = process.platform;
-    Object.defineProperty(process, "platform", { value: "win32" });
-    const winManaged = wellKnownCliBinaryPath(ENVIRONMENT);
-    placeCli(winManaged, "1.5.2-rc.2");
-    const other = join(dir, "bin/traycer.exe");
-    placeCli(other, "1.0.0");
-    vi.stubEnv("PATHEXT", ".EXE;.CMD");
+  it.each([
+    ["a list", ".EXE;.CMD"],
+    ["an empty member", ";.EXE"],
+    ["nothing set", undefined],
+  ])(
+    "finds a Windows binary through PATHEXT with %s",
+    async (_name, pathExt) => {
+      const realPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const winManaged = wellKnownCliBinaryPath(ENVIRONMENT);
+      placeCli(winManaged, "1.5.2-rc.2");
+      const other = join(dir, "bin/traycer.exe");
+      placeCli(other, "1.0.0");
+      // Windows would not run this one, whatever PATHEXT holds.
+      placeCli(join(dir, "bin/traycer"), "0.0.1");
+      vi.stubEnv("PATHEXT", pathExt);
 
-    try {
-      const issue = await pathIssue(dirname(other));
+      try {
+        const issue = await pathIssue(dirname(other));
 
-      expect(issue?.details).toMatchObject({ pathBinary: other });
-    } finally {
-      Object.defineProperty(process, "platform", { value: realPlatform });
-      rmSync(winManaged, { force: true });
-      rmSync(`${winManaged}.ran`, { force: true });
-    }
-  });
+        expect(issue?.details).toMatchObject({ pathBinary: other });
+      } finally {
+        Object.defineProperty(process, "platform", { value: realPlatform });
+        rmSync(winManaged, { force: true });
+        rmSync(`${winManaged}.ran`, { force: true });
+      }
+    },
+  );
 });
