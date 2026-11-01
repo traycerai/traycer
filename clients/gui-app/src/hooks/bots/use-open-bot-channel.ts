@@ -1,30 +1,26 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
-import { botTabIntent } from "@/lib/tab-navigation/intents";
-import { navigateToTabIntent } from "@/lib/tab-navigation";
-import {
-  rebindUnreachableBotTab,
-  useBotTabsStore,
-} from "@/stores/bots/bot-tabs-store";
+import { openBotChannel } from "@/lib/bots/open-bot-channel";
+import type { BotTabLanding } from "@/stores/bots/bot-tab-landing-store";
 
 /**
- * Opens a bot's tab from inside another bot's, through that tab's host,
- * which asks where the bot is served and follows the answer; a tab left on a
- * host this client can no longer dial is moved to `hostId` first.
+ * `openBotChannel` from a component: the Tracy surface on a bot's channel,
+ * landed where `landing` asks, with the directory's answer on which hosts
+ * this client can dial.
  */
-export function useOpenBotChannel(
-  hostId: string,
-): (channel: { readonly botId: string; readonly title: string }) => void {
+export function useOpenBotChannel(): (
+  botId: string,
+  landing: BotTabLanding | null,
+) => void {
   const navigate = useNavigate();
   const connectable = useConnectableHostIds();
-  const openBotTab = useBotTabsStore((s) => s.openBotTab);
-  return (channel) => {
-    rebindUnreachableBotTab(
-      channel.botId,
-      hostId,
-      connectable.resolved ? (id) => connectable.hostIds.includes(id) : null,
-    );
-    openBotTab({ botId: channel.botId, hostId, title: channel.title });
-    navigateToTabIntent(navigate, botTabIntent(channel.botId), undefined);
+  return (botId, landing) => {
+    openBotChannel(navigate, botId, {
+      landing,
+      isConnectable: connectable.resolved
+        ? (id) => connectable.hostIds.includes(id)
+        : null,
+      onRejected: null,
+    });
   };
 }

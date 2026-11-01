@@ -28,8 +28,8 @@ export function SideTracyRow(props: {
   readonly entry: TracyStripEntry;
 }): ReactNode {
   const { variant } = props;
-  const { tab, isActive, onActivate } = props.entry;
-  const signals = useTracyEntrySignals(tab.id);
+  const { isActive, onActivate } = props.entry;
+  const signals = useTracyEntrySignals();
   const frame: SideRowFrame = {
     role: "tab",
     tabIndex: 0,
@@ -94,7 +94,7 @@ export function SideTracyRow(props: {
       section={{ title: signals.unread ? "strong" : "normal", detail: null }}
       disclosure={null}
       title={TRACY_ENTRY_LABEL}
-      hoverCardBody={<TracyEntryHoverBody title={tab.name} signals={signals} />}
+      hoverCardBody={<TracyEntryHoverBody signals={signals} />}
       hoverCardOnOverflow={false}
       leaderBadge={null}
       close={null}

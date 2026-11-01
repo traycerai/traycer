@@ -1,19 +1,21 @@
 import { create } from "zustand";
 import { isPhoneLayoutOnly } from "@/lib/mobile-app";
-import type { TabRef } from "@/stores/tabs/types";
 
 /**
- * The bot a task's tab was opened from, per tab, for the pane header's way back
- * (leaving a task opened from Tracy returns there, not to Home). Session-only:
- * after a restart there is no opening to return along.
+ * The Tracy channel a task's tab was opened from, per tab, for the pane header's
+ * way back (leaving a task opened from Tracy returns to that channel, not to
+ * Home, whichever channel the surface has moved to since). Session-only: after a
+ * restart there is no opening to return along.
  *
  * Installed app only, where the pane header draws it.
  */
 interface MobileTabOriginState {
   readonly botIdByTabId: Readonly<Record<string, string>>;
   readonly clear: (tabId: string) => void;
-  /** The bot's tab closed: reopening it later is not the tab these tasks came from. */
+  /** The channel's bot is gone: there is nothing to return to. */
   readonly forgetBot: (botId: string) => void;
+  /** The surface closed: reopening it later is not where these tasks came from. */
+  readonly clearAll: () => void;
 }
 
 export const useMobileTabOriginStore = create<MobileTabOriginState>((set) => ({
@@ -35,22 +37,30 @@ export const useMobileTabOriginStore = create<MobileTabOriginState>((set) => ({
         : { botIdByTabId: Object.fromEntries(kept) };
     });
   },
+  clearAll: () => {
+    set((state) =>
+      Object.keys(state.botIdByTabId).length === 0
+        ? state
+        : { botIdByTabId: {} },
+    );
+  },
 }));
 
 /**
- * A task opened, from whichever tab was in front: a bot's is its origin, and any
- * other opening means the way back no longer leads where the person came from.
+ * A task opened: `channelBotId` is the channel Tracy showed in front when it
+ * did, and `null`, for any other opening, means the way back no longer leads
+ * where the person came from.
  */
 export function recordMobileTabOrigin(
   tabId: string,
-  from: TabRef | null,
+  channelBotId: string | null,
 ): void {
   if (!isPhoneLayoutOnly()) return;
-  if (from?.kind !== "bot") {
+  if (channelBotId === null) {
     useMobileTabOriginStore.getState().clear(tabId);
     return;
   }
   useMobileTabOriginStore.setState((state) => ({
-    botIdByTabId: { ...state.botIdByTabId, [tabId]: from.id },
+    botIdByTabId: { ...state.botIdByTabId, [tabId]: channelBotId },
   }));
 }

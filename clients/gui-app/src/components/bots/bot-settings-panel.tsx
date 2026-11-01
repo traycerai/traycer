@@ -42,7 +42,6 @@ import {
   useBotNotificationLevelSetMutation,
   useBotNotificationLevelsQuery,
 } from "@/hooks/bots/use-bot-notification-level";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
 import { channelNotificationLevel } from "@/lib/bots/bot-notification-settings";
 import { AvatarStack, BotAvatar } from "@/components/bots/bot-avatars";
 import {
@@ -95,6 +94,8 @@ export function BotChannelSettingsPanel(props: {
   /** The bots of the bot's environment; `null` until the list answers. */
   readonly environmentBots: ReadonlyArray<BotRecord> | null;
   readonly onClose: () => void;
+  /** The bot was deleted: the surface moves to its default channel. */
+  readonly onDeleted: () => void;
 }): ReactNode {
   const { bot, personal, channelId, environmentBots, onClose } = props;
   const panelRef = useRef<HTMLElement | null>(null);
@@ -159,7 +160,7 @@ export function BotChannelSettingsPanel(props: {
         )}
         <BotSlackSettings botId={bot.botId} />
         <BotUsageSection botId={bot.botId} onClose={onClose} />
-        <BotDeleteSection bot={bot} />
+        <BotDeleteSection bot={bot} onDeleted={props.onDeleted} />
       </div>
     </aside>
   );
@@ -479,7 +480,6 @@ function BotTitleForm(props: { readonly bot: BotRecord }): ReactNode {
   const { bot } = props;
   const client = useTabHostClient();
   const update = useBotUpdateTitleMutation(client);
-  const setBotTabTitle = useBotTabsStore((s) => s.setBotTabTitle);
   const [title, setTitle] = useState(bot.title);
   const inputId = useId();
   const trimmed = title.trim();
@@ -496,13 +496,7 @@ function BotTitleForm(props: { readonly bot: BotRecord }): ReactNode {
       onSubmit={(event) => {
         event.preventDefault();
         if (!canSave) return;
-        update.mutate(
-          { botId: bot.botId, title: trimmed },
-          {
-            onSuccess: (response) =>
-              setBotTabTitle(bot.botId, response.bot.title),
-          },
-        );
+        update.mutate({ botId: bot.botId, title: trimmed });
       }}
     >
       <Label htmlFor={inputId}>Name</Label>
@@ -739,11 +733,13 @@ function ChoiceOption(props: {
   );
 }
 
-function BotDeleteSection(props: { readonly bot: BotRecord }): ReactNode {
-  const { bot } = props;
+function BotDeleteSection(props: {
+  readonly bot: BotRecord;
+  readonly onDeleted: () => void;
+}): ReactNode {
+  const { bot, onDeleted } = props;
   const client = useTabHostClient();
   const remove = useBotDeleteMutation(client);
-  const closeBotTab = useBotTabsStore((s) => s.closeBotTab);
   const [open, setOpen] = useState(false);
   return (
     <section
@@ -782,7 +778,7 @@ function BotDeleteSection(props: { readonly bot: BotRecord }): ReactNode {
             {
               onSuccess: () => {
                 setOpen(false);
-                closeBotTab(bot.botId);
+                onDeleted();
               },
             },
           )

@@ -23,10 +23,3 @@ export function useInstalledAppTileForm(
   const { level2, tiles } = useMobileLayoutForm(openTiles);
   return isPhoneLayoutOnly() ? { level2, tiles } : null;
 }
-
-/** Just level 2 of {@link useInstalledAppTileForm}. */
-export function useInstalledAppLevel2Form(
-  openTiles: MobileTileCount,
-): MobileLevel2Form | null {
-  return useInstalledAppTileForm(openTiles)?.level2 ?? null;
-}

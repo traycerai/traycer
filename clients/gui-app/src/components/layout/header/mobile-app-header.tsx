@@ -201,7 +201,7 @@ type MobileHeaderSurface =
   | { readonly kind: "home" }
   | { readonly kind: "settings"; readonly path: string | null }
   | { readonly kind: "composer" }
-  // A bot tab draws its own header band (title, host, environment), so the
+  // The Tracy surface draws its own header band (title, host, environment), so the
   // app header presents no title for it - the same answer the composer
   // surfaces give, kept as its own kind so nothing mistakes it for one.
   | { readonly kind: "bot" };
@@ -251,7 +251,7 @@ function useMobileHeaderSurface(): MobileHeaderSurface {
             kind: "settings",
             path: state.systemTabs.settings?.lastPath ?? null,
           };
-        case "bot":
+        case "tracy":
           return BOT_SURFACE;
         case "sample-workspace":
         case "draft":

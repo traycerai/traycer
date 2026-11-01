@@ -1,17 +1,16 @@
 import type { ReactNode } from "react";
-import { useNavigate } from "@tanstack/react-router";
 import { ChevronLeft, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { navigateToTabIntent } from "@/lib/tab-navigation";
-import { botTabIntent } from "@/lib/tab-navigation/intents";
-import { useBotTabsStore } from "@/stores/bots/bot-tabs-store";
+import { useOpenBotChannel } from "@/hooks/bots/use-open-bot-channel";
 import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { useMobileTabOriginStore } from "@/stores/epics/mobile-tab-origin-store";
+import { TRACY_TAB_LABEL } from "@/stores/tabs/kinds/tracy";
 
 /**
- * The way back to the bot this task was opened from, in the current tile's
- * header. Nothing for a task opened any other way, or once that bot's tab is
- * gone. It is spent by being used: the bot's tab is where the person is then.
+ * The way back to the Tracy channel this task was opened from, in the current
+ * tile's header. Nothing for a task opened any other way, or once that channel
+ * or the surface is gone. It is spent by being used: the channel is where the
+ * person is then.
  */
 export function MobileTileOriginCrumb(props: {
   readonly tabId: string;
@@ -20,36 +19,32 @@ export function MobileTileOriginCrumb(props: {
   const botId = useMobileTabOriginStore((s) =>
     Object.hasOwn(s.botIdByTabId, tabId) ? s.botIdByTabId[tabId] : null,
   );
-  const title = useBotTabsStore((s) =>
-    botId !== null && Object.hasOwn(s.tabs, botId) ? s.tabs[botId].title : null,
-  );
-  if (botId === null || title === null) return null;
-  return <OriginCrumbButton tabId={tabId} botId={botId} title={title} />;
+  if (botId === null) return null;
+  return <OriginCrumbButton tabId={tabId} botId={botId} />;
 }
 
 function OriginCrumbButton(props: {
   readonly tabId: string;
   readonly botId: string;
-  readonly title: string;
 }): ReactNode {
-  const { tabId, botId, title } = props;
-  const navigate = useNavigate();
+  const { tabId, botId } = props;
+  const openChannel = useOpenBotChannel();
   const clear = useMobileTabOriginStore((s) => s.clear);
   return (
     <Button
       type="button"
       variant="ghost"
       size="sm"
-      aria-label={`Back to ${title}`}
+      aria-label={`Back to ${TRACY_TAB_LABEL}`}
       data-testid="mobile-tile-origin-crumb"
       className="min-w-0 max-w-[40%] shrink"
       onClick={() => {
         clear(tabId);
-        navigateToTabIntent(navigate, botTabIntent(botId), undefined);
+        openChannel(botId, null);
       }}
     >
       <ChevronLeft aria-hidden="true" />
-      <span className="min-w-0 truncate">{title}</span>
+      <span className="min-w-0 truncate">{TRACY_TAB_LABEL}</span>
     </Button>
   );
 }

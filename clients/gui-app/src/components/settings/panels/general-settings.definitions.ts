@@ -203,8 +203,7 @@ export const GENERAL = defineSettingsSection("general", {
     group: "bots",
     search: { anchor: "general-show-tracy" },
     label: "Show Tracy",
-    description:
-      "Keep Tracy next to Home. When off, open Tracy from the bots list.",
+    description: "Keep Tracy next to Home. When off, open Tracy from Home.",
     availableWhen: () => UNRELEASED_FEATURES_ENABLED,
     keywords: ["tracy", "bot", "tab strip", "home", "pin", "sidebar"],
   },

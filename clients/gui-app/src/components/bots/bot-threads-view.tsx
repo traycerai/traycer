@@ -21,7 +21,6 @@ import { postTextOf } from "@/lib/bots/reply-row";
 import type { MobileLevel2Form } from "@/lib/layout/mobile-layout-form";
 import { useRelativeTimestamp } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
-import { useBotTabLandingStore } from "@/stores/bots/bot-tab-landing-store";
 
 const EMPTY_BOTS: ReadonlyArray<BotRecord> = [];
 const NO_EPIC_IDS: ReadonlyArray<string> = [];
@@ -31,8 +30,9 @@ const NO_EPIC_IDS: ReadonlyArray<string> = [];
  * thread the person follows across the bots the column lists, newest reply
  * first, each named by its bot and the post it hangs off, with its replies,
  * whether some are new, and how many of its notifications are unread.
- * Choosing one opens it beside its channel in its bot's tab, as a tapped push
- * does (the tab's landing); its menu unfollows it, which drops it here.
+ * Choosing one shows its bot's channel in the surface with the thread beside
+ * it, as a tapped push does (the channel's landing); its menu unfollows it,
+ * which drops it here.
  *
  * Where the tab draws no column, whose channel row is the way back, the header
  * goes back to the tab's channel itself: as the installed app's form says, and
@@ -146,14 +146,13 @@ function ThreadList(props: {
     chatEpicIds,
     enabled: threadIds.length > 0,
   });
-  const openChannel = useOpenBotChannel(hostId);
+  const openChannel = useOpenBotChannel();
   const open = (entry: BotFollowedThread): void => {
-    useBotTabLandingStore.getState().request(entry.bot.botId, {
+    openChannel(entry.bot.botId, {
       kind: "thread",
       threadId: entry.thread.threadId,
       messageId: null,
     });
-    openChannel(entry.bot);
   };
   return (
     <ul className="flex flex-col gap-1">

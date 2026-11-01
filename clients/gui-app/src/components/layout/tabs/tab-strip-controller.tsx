@@ -20,13 +20,9 @@ import {
   useHeaderTabs,
 } from "@/stores/tabs/use-header-tabs";
 import { useTabsStore } from "@/stores/tabs/store";
-import {
-  rebindUnreachableBotTab,
-  useBotTabsStore,
-} from "@/stores/bots/bot-tabs-store";
-import { useEffectiveHostId } from "@/hooks/host/use-effective-host-id";
 import { useConnectableHostIds } from "@/hooks/host/use-connectable-host-ids";
 import { useTracyEntryItemId } from "@/stores/bots/tracy-entry";
+import { openTracyEntry } from "@/lib/bots/open-bot-channel";
 import { useHostClient } from "@/lib/host";
 import { tabDuplicate, tabResolveIntent } from "@/stores/tabs/registry";
 import type { HeaderTab, TabRef } from "@/stores/tabs/types";
@@ -334,19 +330,16 @@ function useStripWithoutTracy(): {
   const layoutItems = useTabsStore((state) => state.items);
   const activeItemId = useTabsStore((state) => state.activeItemId);
   const headerTabs = useHeaderTabs();
-  const fixedBotId = useBotTabsStore((state) => state.fixedBotId);
   const tracyItemId = useTracyEntryItemId();
   const tracyTab = useMemo(
     () =>
       tracyItemId === null
         ? null
-        : (headerTabs.find(
-            (tab) => tab.kind === "bot" && tab.id === fixedBotId,
-          ) ?? null),
-    [fixedBotId, headerTabs, tracyItemId],
+        : (headerTabs.find((tab) => tab.kind === "tracy") ?? null),
+    [headerTabs, tracyItemId],
   );
   const tracyIsActive = tracyItemId !== null && activeItemId === tracyItemId;
-  const onActivateTracy = useOpenTracyEntry(tracyTab);
+  const onActivateTracy = useOpenTracyEntry();
   return useMemo(() => {
     if (tracyItemId === null || tracyTab === null) {
       return { headerItemIds, layoutItems, allTabs: headerTabs, tracy: null };
@@ -373,24 +366,19 @@ function useStripWithoutTracy(): {
 }
 
 /**
- * Opens the entry's tab as Home's bots list opens a bot: a restored tab whose
- * host this client can no longer dial first moves to this window's host.
+ * Opens the surface on the channel it shows, as Home's bots list opens a
+ * bot: a restored surface whose host this client can no longer dial first
+ * moves to this window's host.
  */
-function useOpenTracyEntry(tab: HeaderTab | null): () => void {
+function useOpenTracyEntry(): () => void {
   const navigate = useNavigate();
-  const hostId = useEffectiveHostId();
   const connectable = useConnectableHostIds();
   return useCallback(() => {
-    if (tab === null) return;
-    if (hostId !== null) {
-      rebindUnreachableBotTab(
-        tab.id,
-        hostId,
-        connectable.resolved ? (id) => connectable.hostIds.includes(id) : null,
-      );
-    }
-    navigateToTabIntent(navigate, tabResolveIntent(tab), undefined);
-  }, [connectable.hostIds, connectable.resolved, hostId, navigate, tab]);
+    openTracyEntry(
+      navigate,
+      connectable.resolved ? (id) => connectable.hostIds.includes(id) : null,
+    );
+  }, [connectable.hostIds, connectable.resolved, navigate]);
 }
 
 /** The one pin dispatch site for the whole tab tree, Undo included. */

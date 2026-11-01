@@ -344,6 +344,41 @@ describe("<BotChannelView tiles={null} /> a message the host refuses", () => {
   });
 });
 
+describe("<BotChannelView tiles={null} /> a channel message left unsent when the pane goes", () => {
+  it("shows the typed text again when the channel is shown again", async () => {
+    mount(null);
+    const user = userEvent.setup();
+    await user.type(
+      screen.getByRole("textbox", { name: "Message Release Bot" }),
+      "Ship it",
+    );
+
+    cleanup();
+    mount(null);
+
+    const box = screen.getByRole("textbox", { name: "Message Release Bot" });
+    expect((box as HTMLTextAreaElement).value).toBe("Ship it");
+  });
+
+  it("keeps nothing of a message once the host has taken it", async () => {
+    mount(null);
+    const box = screen.getByRole("textbox", { name: "Message Release Bot" });
+    await typeAndEnter(box, "Ship it");
+    await settle("succeed");
+
+    cleanup();
+    mount(null);
+
+    const remounted = screen.getByRole("textbox", {
+      name: "Message Release Bot",
+    });
+    expect((remounted as HTMLTextAreaElement).value).toBe("");
+    expect(
+      useBotDraftsStore.getState().threadBoxes[BOT_ID]?.[CHANNEL_ID],
+    ).toBeUndefined();
+  });
+});
+
 describe("<BotChannelView tiles={null} /> an option pick the host refuses", () => {
   it("says so in the channel's dock, not in a toast, and a new pick clears it", async () => {
     const user = userEvent.setup();
