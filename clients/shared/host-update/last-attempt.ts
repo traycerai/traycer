@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { renameWithWindowsRetry } from "@traycer/protocol/config/credentials-fs";
+import { redactSensitiveText } from "../platform/sensitive-text";
 import type { HostUpdateTrigger } from "./record";
 
 /**
- * What the last `host update` or `host apply` came to, whoever ran it.
+ * What the last `host update`, `host apply` or failed `host download` came to,
+ * whoever ran it.
  *
  * ## Why this is not `update-attempt.json`
  *
@@ -20,14 +23,29 @@ import type { HostUpdateTrigger } from "./record";
  *    `decideDesktopUpdateExecutorCohort` fences off, and a `desktop` trigger
  *    would read as corrupt to every host and CLI already deployed.
  *
- * So the answer to "did my update work" lives here, beside it. Three places
- * write it: the two commands as they exit, and Desktop once it has seen the
- * host it applied come up, which neither command waits for. It carries no
- * authority: nothing admits or refuses on it, it takes no lock, and the last
- * writer wins, which is what "latest" means. Losing a write costs a stale line
- * in `host status`, so a failed write never fails the run it describes.
+ * So the answer to "did my update work" lives here, beside it. The commands
+ * write it as they exit. Desktop writes it for what no command saw: the host it
+ * applied coming up or not, and a child that died before it could say. It
+ * carries no authority: nothing admits or refuses on it, it takes no lock, and
+ * the last writer wins, which is what "latest" means. Losing a write costs a
+ * stale line in `host status`, so a failed write never fails the run it
+ * describes.
+ *
+ * `host status` shows it and support reads it, so it is held to what a log is:
+ * error text is quoted here, and error text carries paths with the account name
+ * in them, emails and signed URLs. See `recordableText`.
+ *
+ * A download records only how it failed. It runs in the background whether or
+ * not anyone asked, so a clean one would overwrite the update that mattered with
+ * "nothing to do"; it clears its own failure instead (`clearHostDownloadFailure`).
  */
 const UPDATE_LAST_ATTEMPT_FILENAME = "update-last-attempt.json";
+const MAX_RECORDED_TEXT_LENGTH = 2_000;
+
+// Whoever's home it is: a lock or service error can name another account's.
+const HOME_DIRECTORY_PATTERN =
+  /((?:[A-Za-z]:)?[\\/](?:Users|home)[\\/])[^\\/"'\n]+/g;
+const EMAIL_PATTERN = /[^\s@"'<>/:[\]]+@[^\s@"'<>/]+\.[A-Za-z]{2,}/g;
 
 export type HostUpdateAttemptInitiator = HostUpdateTrigger | "desktop";
 
@@ -44,7 +62,7 @@ export type HostUpdateAttemptOutcome =
   | "failed";
 
 export interface HostUpdateLastAttempt {
-  readonly command: "host update" | "host apply";
+  readonly command: "host update" | "host apply" | "host download";
   readonly initiator: HostUpdateAttemptInitiator;
   readonly outcome: HostUpdateAttemptOutcome;
   /** `null` when the run stopped before it knew its target. */
@@ -59,6 +77,19 @@ export interface HostUpdateLastAttempt {
 
 function lastAttemptPath(hostHome: string): string {
   return join(hostHome, UPDATE_LAST_ATTEMPT_FILENAME);
+}
+
+/** What of an error's text may be kept: no credential and no account name. */
+function recordableText(text: string): string {
+  const home = homedir();
+  const redacted = redactSensitiveText(
+    home === "/" ? text : text.replaceAll(home, "~"),
+  )
+    .replace(HOME_DIRECTORY_PATTERN, "$1[redacted]")
+    .replace(EMAIL_PATTERN, "[redacted]");
+  return redacted.length <= MAX_RECORDED_TEXT_LENGTH
+    ? redacted
+    : `${redacted.slice(0, MAX_RECORDED_TEXT_LENGTH)}...`;
 }
 
 export async function writeHostUpdateLastAttempt(
@@ -77,7 +108,16 @@ export async function writeHostUpdateLastAttempt(
     await mkdir(dirname(path), { recursive: true });
     await writeFile(
       temporary,
-      `${JSON.stringify({ ...attempt, recordedAt: new Date().toISOString() })}\n`,
+      `${JSON.stringify({
+        ...attempt,
+        targetVersion:
+          attempt.targetVersion === null
+            ? null
+            : recordableText(attempt.targetVersion),
+        message:
+          attempt.message === null ? null : recordableText(attempt.message),
+        recordedAt: new Date().toISOString(),
+      })}\n`,
       { encoding: "utf8", mode: 0o600 },
     );
     await renameWithWindowsRetry(temporary, path, 0);
@@ -85,7 +125,7 @@ export async function writeHostUpdateLastAttempt(
     await rm(temporary, { force: true }).catch(() => undefined);
     logger.info("Host update could not record its outcome", {
       outcome: attempt.outcome,
-      error: err instanceof Error ? err.message : String(err),
+      error: recordableText(err instanceof Error ? err.message : String(err)),
     });
   }
 }
@@ -106,6 +146,16 @@ export async function readHostUpdateLastAttempt(
   }
 }
 
+/** A download that got through: the failure it replaces is no longer true. */
+export async function clearHostDownloadFailure(
+  hostHome: string,
+): Promise<void> {
+  const recorded = await readHostUpdateLastAttempt(hostHome);
+  if (recorded?.command === "host download") {
+    await removeHostUpdateLastAttempt(hostHome);
+  }
+}
+
 /** Removed with the install it describes. */
 export async function removeHostUpdateLastAttempt(
   hostHome: string,
@@ -122,7 +172,13 @@ function parseLastAttempt(value: unknown): HostUpdateLastAttempt | null {
   const record = value as Record<string, unknown>;
   const { command, initiator, outcome, recordedAt } = record;
   const { targetVersion, attemptId, code, message } = record;
-  if (command !== "host update" && command !== "host apply") return null;
+  if (
+    command !== "host update" &&
+    command !== "host apply" &&
+    command !== "host download"
+  ) {
+    return null;
+  }
   if (
     initiator !== "manual" &&
     initiator !== "automatic" &&

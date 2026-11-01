@@ -1,4 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { rm } from "node:fs/promises";
+import { join } from "node:path";
+import {
+  readHostUpdateLastAttempt,
+  writeHostUpdateLastAttempt,
+} from "@traycer-clients/shared/host-update";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   downloadAndStageHostMock: vi.fn(),
@@ -11,6 +17,8 @@ vi.mock("../../installer/download-stage", () => ({
 import { buildHostDownloadCommand } from "../host-download";
 import type { CommandContext } from "../../runner/runner";
 import type { HostDownloadOutcome } from "../../installer/download-stage";
+import { CLI_ERROR_CODES, cliError } from "../../runner/errors";
+import { hostHomeDir } from "../../store/paths";
 
 function fakeCtx(): CommandContext {
   return {
@@ -160,4 +168,105 @@ describe("buildHostDownloadCommand", () => {
       expect(result.exitCode).toBe(0);
     },
   );
+});
+
+describe("the record a download leaves", () => {
+  const home = (): string => hostHomeDir("production");
+  const last = () => readHostUpdateLastAttempt(home());
+  const busy = cliError({
+    code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
+    message: "Another Traycer command is updating the host",
+    details: {},
+    exitCode: 75,
+  });
+
+  beforeEach(async () => {
+    await rm(join(home(), "update-last-attempt.json"), { force: true });
+  });
+
+  afterEach(() => {
+    vi.resetAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  function download(versionRequest: string | null): Promise<unknown> {
+    return buildHostDownloadCommand({ versionRequest, automatic: false })(
+      fakeCtx(),
+    );
+  }
+
+  it("one stopped before any transfer did not run", async () => {
+    mocks.downloadAndStageHostMock.mockRejectedValue(busy);
+    await expect(download("1.5.0")).rejects.toBe(busy);
+    expect(await last()).toMatchObject({
+      command: "host download",
+      initiator: "manual",
+      outcome: "refused",
+      targetVersion: "1.5.0",
+      code: CLI_ERROR_CODES.CLI_LOCK_BUSY,
+      message: busy.message,
+    });
+  });
+
+  it("one that broke in transfer failed, and names what it was fetching", async () => {
+    const lost = new Error("connection reset");
+    mocks.downloadAndStageHostMock.mockImplementation(
+      async (options: {
+        readonly onWillDownload: (version: string) => Promise<void>;
+      }) => {
+        await options.onWillDownload("1.6.0");
+        throw lost;
+      },
+    );
+    await expect(download(null)).rejects.toBe(lost);
+    expect(await last()).toMatchObject({
+      outcome: "failed",
+      targetVersion: "1.6.0",
+      code: null,
+      message: "connection reset",
+    });
+  });
+
+  it("one the app ran says so", async () => {
+    mocks.downloadAndStageHostMock.mockRejectedValue(busy);
+    vi.stubEnv("TRAYCER_HOST_UPDATE_INITIATOR", "desktop");
+    await expect(download(null)).rejects.toBe(busy);
+    expect(await last()).toMatchObject({ initiator: "desktop" });
+  });
+
+  const failure = {
+    command: "host download",
+    initiator: "desktop",
+    outcome: "failed",
+    targetVersion: "1.5.0",
+    attemptId: null,
+    code: null,
+    message: "connection reset",
+  } as const;
+  const noOp = {
+    outcome: "short-circuit",
+    reason: "installed-up-to-date",
+    installedVersion: "1.5.0",
+  } as HostDownloadOutcome;
+
+  it("one that gets through clears the failure before it", async () => {
+    await writeHostUpdateLastAttempt(home(), failure, { info: vi.fn() });
+    mocks.downloadAndStageHostMock.mockResolvedValue(noOp);
+    await download(null);
+    expect(await last()).toBeNull();
+  });
+
+  it("one with nothing to do leaves the update before it standing", async () => {
+    await writeHostUpdateLastAttempt(
+      home(),
+      { ...failure, command: "host apply", outcome: "complete" },
+      { info: vi.fn() },
+    );
+    mocks.downloadAndStageHostMock.mockResolvedValue(noOp);
+    await download(null);
+    expect(await last()).toMatchObject({
+      command: "host apply",
+      outcome: "complete",
+    });
+  });
 });

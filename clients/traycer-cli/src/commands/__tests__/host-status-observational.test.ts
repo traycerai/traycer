@@ -422,6 +422,28 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
     }
   });
 
+  it("human output says a failed download was a download", async () => {
+    await writeHostUpdateLastAttempt(
+      hostHomeDir("production"),
+      {
+        command: "host download",
+        initiator: "desktop",
+        outcome: "failed",
+        targetVersion: "1.5.2",
+        attemptId: null,
+        code: null,
+        message: null,
+      },
+      { info: vi.fn() },
+    );
+    try {
+      const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+      expect(result.human).toContain("download failed");
+    } finally {
+      await removeHostUpdateLastAttempt(hostHomeDir("production"));
+    }
+  });
+
   it("human output on the not-running branch includes the 'host ensure' hint", async () => {
     mocks.readHostPidMetadataMock.mockResolvedValue(null);
     mocks.isProcessAliveMock.mockReturnValue(false);

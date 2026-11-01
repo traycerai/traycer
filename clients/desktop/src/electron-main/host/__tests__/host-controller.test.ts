@@ -383,6 +383,7 @@ import {
   type HostUpdateAttemptIdentity,
   type LockMetadata,
   readHostUpdateLastAttempt,
+  writeHostUpdateLastAttempt,
 } from "@traycer-clients/shared/host-update";
 
 const ORIGINAL_HOME = process.env.HOME;
@@ -3926,6 +3927,255 @@ describe("platform matrix", () => {
     });
   });
 
+  describe("the record an apply leaves", () => {
+    // What the stream wrapper rejects with when the child left no terminal line.
+    const silentDeath = (): Error =>
+      Object.assign(
+        new TraycerCliError("unused", "traycer-cli was killed by SIGKILL"),
+        { code: null },
+      );
+    const lastAttempt = () =>
+      readHostUpdateLastAttempt(getHostFsLayout("production").rootDir);
+    const recordApply = (outcome: "applied" | "refused"): Promise<void> =>
+      writeHostUpdateLastAttempt(
+        getHostFsLayout("production").rootDir,
+        {
+          command: "host apply",
+          initiator: "desktop",
+          outcome,
+          targetVersion: "1.8.0",
+          attemptId: null,
+          code: null,
+          message: null,
+        },
+        { info: vi.fn() },
+      );
+
+    function stagedUpdate(): HostController {
+      const controller = newController("production");
+      writeInstallRecord("production", {
+        version: "1.7.0",
+        runtimeVersion: "1.7.0",
+      });
+      writePidMetadata("production", {
+        version: "1.7.0",
+        pid: process.pid,
+        websocketUrl: "ws://127.0.0.1:55555/rpc",
+      });
+      writeStagedRecord("production", "1.8.0", "1.8.0");
+      vi.mocked(runBundledTraycerCliJson).mockResolvedValue(
+        availableSnapshotFixture("1.8.0", ["1.8.0"]),
+      );
+      return controller;
+    }
+
+    function appliesTheBytes(): void {
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(
+        async (opts) => {
+          if (opts.args.includes("apply")) {
+            writeInstallRecord("production", {
+              version: "1.8.0",
+              runtimeVersion: "1.8.0",
+            });
+            await recordApply("applied");
+            return {
+              data: {
+                outcome: "applied",
+                record: { version: "1.8.0", runtimeVersion: "1.8.0" },
+                runningActivated: false,
+                installGeneration: null,
+              },
+            };
+          }
+          return { data: {} };
+        },
+      );
+    }
+
+    it("a packaged-macOS activation that finds the host busy is waiting, and a later one completes it", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = stagedUpdate();
+      appliesTheBytes();
+      vi.mocked(probeHostActivityBusy).mockResolvedValue(true);
+
+      const outcome = await controller.applyStaged("manual", false);
+
+      expect(outcome.kind).toBe("busy");
+      expect(await lastAttempt()).toMatchObject({
+        outcome: "parked",
+        targetVersion: "1.8.0",
+      });
+
+      vi.mocked(probeHostActivityBusy).mockResolvedValue(false);
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.8.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+      const retried = await controller.activateInstalled(false, false);
+
+      expect(retried.kind).toBe("ok");
+      expect(await lastAttempt()).toMatchObject({
+        outcome: "complete",
+        targetVersion: "1.8.0",
+        message: null,
+      });
+    });
+
+    it("a packaged-macOS activation that fails records the failure", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = stagedUpdate();
+      appliesTheBytes();
+      vi.mocked(registerHostLoginItem).mockRejectedValue(
+        new Error("login item refused"),
+      );
+
+      const outcome = await controller.applyStaged("manual", false);
+
+      expect(outcome.kind).toBe("failed");
+      expect(await lastAttempt()).toMatchObject({
+        outcome: "failed",
+        targetVersion: "1.8.0",
+      });
+    });
+
+    it("an activation with no apply waiting on it writes nothing", async () => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = stagedUpdate();
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.7.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+
+      await controller.activateInstalled(false, false);
+
+      expect(await lastAttempt()).toBeNull();
+    });
+
+    it("a host that never came up fails the apply that was waiting on it", async () => {
+      const controller = stagedUpdate();
+      appliesTheBytes();
+
+      const outcome = await controller.applyStaged("manual", false);
+
+      expect(outcome.kind).toBe("installed-not-converged");
+      expect(await lastAttempt()).toMatchObject({
+        command: "host apply",
+        initiator: "desktop",
+        outcome: "failed",
+        targetVersion: "1.8.0",
+        message: expect.stringContaining("Doctor"),
+      });
+    });
+
+    it("an apply that changed nothing stays a no-op over an unreachable host", async () => {
+      const controller = stagedUpdate();
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(
+        async (opts) => {
+          if (opts.args.includes("apply")) {
+            removePidMetadata("production");
+            await writeHostUpdateLastAttempt(
+              getHostFsLayout("production").rootDir,
+              {
+                command: "host apply",
+                initiator: "desktop",
+                outcome: "no-op",
+                targetVersion: null,
+                attemptId: null,
+                code: null,
+                message: null,
+              },
+              { info: vi.fn() },
+            );
+            return { data: { outcome: "no-op", installedVersion: "1.7.0" } };
+          }
+          return { data: {} };
+        },
+      );
+
+      const outcome = await controller.applyStaged("launch", false);
+
+      expect(outcome.kind).toBe("installed-not-converged");
+      expect(await lastAttempt()).toMatchObject({ outcome: "no-op" });
+    });
+
+    it("a refusal the command recorded stays what it said", async () => {
+      const controller = stagedUpdate();
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(
+        async (opts) => {
+          if (opts.args.includes("apply")) {
+            await recordApply("refused");
+            throw new TraycerCliError("E_HOST_NOT_INSTALLED", "not installed");
+          }
+          return { data: {} };
+        },
+      );
+
+      await controller.applyStaged("manual", false);
+
+      expect(await lastAttempt()).toMatchObject({ outcome: "refused" });
+    });
+
+    it("an apply whose child died before reporting is recorded here", async () => {
+      const controller = stagedUpdate();
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(
+        async (opts) => {
+          if (opts.args.includes("apply")) throw silentDeath();
+          return { data: {} };
+        },
+      );
+
+      await controller.applyStaged("manual", false);
+
+      expect(await lastAttempt()).toMatchObject({
+        command: "host apply",
+        initiator: "desktop",
+        outcome: "failed",
+        targetVersion: "1.8.0",
+        message: "traycer-cli was killed by SIGKILL",
+      });
+    });
+
+    it("a download whose child died before reporting is recorded here", async () => {
+      const controller = stagedUpdate();
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(
+        async (opts) => {
+          if (opts.args.includes("download")) throw silentDeath();
+          return { data: {} };
+        },
+      );
+
+      await controller.stageLatest();
+
+      expect(await lastAttempt()).toMatchObject({
+        command: "host download",
+        initiator: "desktop",
+        outcome: "failed",
+      });
+    });
+
+    it("a download that reported its failure wrote its own record", async () => {
+      const controller = stagedUpdate();
+      vi.mocked(streamBundledTraycerCliJson).mockImplementation(
+        async (opts) => {
+          if (opts.args.includes("download")) {
+            throw new TraycerCliError("E_REGISTRY_UNAVAILABLE", "offline");
+          }
+          return { data: {} };
+        },
+      );
+
+      await controller.stageLatest();
+
+      expect(await lastAttempt()).toBeNull();
+    });
+  });
+
   it("installVersion on packaged macOS installs bytes with --no-service-register, then runs the locked activation cycle", async () => {
     vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
     const controller = newController("production");
@@ -6622,15 +6872,6 @@ describe("applyStagedCliOwned stamping decision (fixup B9)", () => {
       message: expect.stringContaining("Doctor"),
     });
     expect(waitForHostReady).not.toHaveBeenCalled();
-    expect(
-      await readHostUpdateLastAttempt(getHostFsLayout("production").rootDir),
-    ).toMatchObject({
-      command: "host apply",
-      initiator: "desktop",
-      outcome: "failed",
-      targetVersion: "1.8.0",
-      message: expect.stringContaining("Doctor"),
-    });
   });
 
   it("reports a failed apply when a null-runtime activation never becomes ready", async () => {

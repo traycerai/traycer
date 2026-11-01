@@ -98,9 +98,9 @@ export interface AcquireUpdateAttemptLockOptions {
   /**
    * How long to wait for the lock.
    *
-   * A CONTENDER passes `0`: §1.1 requires a successful contender to acquire
-   * with no wait, so that losing the race resolves to `busy` immediately and
-   * the loser attaches or refuses rather than queueing behind a segment that
+   * Bounded, never open-ended: the CLI's contenders wait 30 seconds, so a
+   * short holder still lets them run, and one that needs longer resolves to
+   * `busy` and the loser refuses rather than queueing behind a segment that
    * may run for minutes.
    */
   readonly waitMs: number;

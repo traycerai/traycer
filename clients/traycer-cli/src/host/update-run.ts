@@ -402,12 +402,29 @@ export async function runHostUpdate(
 ): Promise<HostUpdateRunOutcome> {
   const { environment, logger } = args;
   const home = hostHomeDir(environment);
+  const trigger = triggerFromEnvironment(env);
+  const attempt: RunAttemptFacts = {
+    home,
+    initiator: trigger,
+    targetVersion: args.versionRequest,
+    claimedAttemptId: null,
+  };
   // FIRST, before anything is read or written: a run dispatched with a nonce
   // this build cannot honour has already lost the correlation its caller is
   // waiting on, and discovering that after staging bytes would mean doing
   // destructive work for a dispatch that can only ever report indeterminate.
-  const ack = installDispatchAckStamper(home, args.ackNonce);
-  const trigger = triggerFromEnvironment(env);
+  // It has no settlement to answer through, so its refusal is recorded here.
+  let ack: DispatchAckStamper | null;
+  try {
+    ack = installDispatchAckStamper(home, args.ackNonce);
+  } catch (err) {
+    await writeHostUpdateLastAttempt(
+      home,
+      { ...attemptFields(attempt), outcome: "refused", ...errorFacts(err) },
+      logger,
+    );
+    throw err;
+  }
 
   const mirror = createMarkerMirror(environment, logger);
   const writerRef: { current: AttemptRecordWriter | null } = { current: null };
@@ -449,12 +466,6 @@ export async function runHostUpdate(
   const settlement = createDispatchSettlement(ack, logger);
   // Every exit below passes through one of the two writes at the foot of this
   // function, so the last-attempt record cannot miss an arm.
-  const attempt: RunAttemptFacts = {
-    home,
-    initiator: trigger,
-    targetVersion: args.versionRequest,
-    claimedAttemptId: null,
-  };
   try {
     // Inside the try, so exits 2 and 3 answer their dispatcher like every
     // other refusal. Nothing has been read or written at this point.
@@ -509,6 +520,9 @@ export async function runHostUpdate(
       },
       async (claim) => {
         attempt.claimedAttemptId = claim.identity.attemptId;
+        // The claim can differ from the plan: an install landing during the
+        // waits above is what an implicit run then activates.
+        attempt.targetVersion = claim.record.targetVersion;
         await settlement.claimed(claim);
       },
       async (capability, claim, complete, advance) =>
@@ -532,7 +546,7 @@ export async function runHostUpdate(
       selection,
       segment,
     });
-    await recordReturnedAttempt(args, attempt, outcome);
+    await recordReturnedAttempt(args, attempt, outcome, segment);
     return outcome;
   } catch (err) {
     await settlement.refused(refusedAckReason(err));
@@ -651,21 +665,40 @@ function outcomeOfPhase(
 }
 
 /**
+ * The attempt a release concluded, when it did: a run that recovers an
+ * interrupted attempt and then finds nothing left to do releases, and what it
+ * reports is that attempt's fate. `null` for a plain release.
+ */
+function concludedRecordOf(
+  segment: ExecutorSegmentOutcome<LegacyHostUpdateResult>,
+): HostUpdateAttemptRecord | null {
+  if (segment.kind === "terminalized") return segment.record;
+  return segment.kind === "released" ? segment.outcome : null;
+}
+
+/**
  * What a returned run came to. A park never returns: every park here throws.
- * A release with work still owed is a refusal, at exit 0, and only
- * `nothing-to-do` means nothing was. `foreignRuntimeVersion` is a run that
- * left a developer's build alone, which started nothing.
+ * A release is read from the record it concluded, if it did: its reason is
+ * written for the dispatcher, and carries no outcome. `foreignRuntimeVersion`
+ * is a run that left a developer's build alone, which started nothing.
  */
 function returnedOutcome(
   outcome: HostUpdateRunOutcome,
+  concluded: HostUpdateAttemptRecord | null,
 ): Pick<HostUpdateLastAttempt, "outcome" | "code"> {
   if (outcome.releasedReason === null) {
     return outcome.foreignRuntimeVersion === null
       ? { outcome: "complete", code: null }
       : { outcome: "no-op", code: null };
   }
-  return baseDispatchAckReason(outcome.releasedReason) === "nothing-to-do"
-    ? { outcome: "no-op", code: null }
+  if (baseDispatchAckReason(outcome.releasedReason) === "nothing-to-do") {
+    return { outcome: "no-op", code: null };
+  }
+  if (concluded?.phase === "complete") {
+    return { outcome: "complete", code: outcome.releasedReason };
+  }
+  return concluded?.phase === "failed"
+    ? { outcome: "failed", code: outcome.releasedReason }
     : { outcome: "refused", code: outcome.releasedReason };
 }
 
@@ -673,14 +706,17 @@ async function recordReturnedAttempt(
   args: HostUpdateRunArgs,
   attempt: RunAttemptFacts,
   outcome: HostUpdateRunOutcome,
+  segment: ExecutorSegmentOutcome<LegacyHostUpdateResult>,
 ): Promise<void> {
+  const concluded = concludedRecordOf(segment);
   await writeHostUpdateLastAttempt(
     attempt.home,
     {
       ...attemptFields(attempt),
-      ...returnedOutcome(outcome),
+      ...returnedOutcome(outcome, concluded),
       targetVersion: attempt.targetVersion ?? outcome.legacy.version,
-      message: null,
+      attemptId: attempt.claimedAttemptId ?? concluded?.attemptId ?? null,
+      message: concluded?.error?.message ?? null,
     },
     args.logger,
   );
@@ -4136,11 +4172,7 @@ async function projectSegment(
   // owed no work" is a property of the decision, not of any record, so the
   // base reason is the only place it is written down.
   const concludedRecordComplete =
-    segment.kind === "terminalized"
-      ? segment.outcome === "complete"
-      : segment.kind === "released" &&
-        segment.outcome !== null &&
-        segment.outcome.phase === "complete";
+    concludedRecordOf(segment)?.phase === "complete";
   if (concludedRecordComplete && runningVersion !== null) {
     await clearConcludedUpdatingMarker(
       args.logger,

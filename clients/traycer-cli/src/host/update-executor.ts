@@ -32,6 +32,7 @@ import {
 } from "@traycer-clients/shared/host-update/contender";
 import { hostHomeDir } from "../store/paths";
 import {
+  lockReasonOf,
   updateLockBusyMessage,
   withCliAttemptMutation,
   withCliExecutorRecoveryEvidence,
@@ -182,7 +183,7 @@ async function withCliAttemptExecutorCompletion<T>(
   const outcome = await withUpdateExecutorCompletionSegment(
     {
       hostHomeDir: options.hostHomeDir ?? hostHomeDir(options.environment),
-      reason: options.reason,
+      reason: lockReasonOf(options.reason),
       waitMs: options.waitMs,
       pollIntervalMs: options.pollIntervalMs,
     },

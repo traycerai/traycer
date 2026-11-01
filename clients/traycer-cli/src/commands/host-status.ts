@@ -361,7 +361,12 @@ function lastUpdateRows(
   attempt: HostUpdateLastAttempt,
 ): readonly (readonly [string, string])[] {
   const rows: (readonly [string, string])[] = [
-    ["Result", LAST_UPDATE_OUTCOME_LABELS[attempt.outcome]],
+    [
+      "Result",
+      attempt.command === "host download"
+        ? `download ${LAST_UPDATE_OUTCOME_LABELS[attempt.outcome]}`
+        : LAST_UPDATE_OUTCOME_LABELS[attempt.outcome],
+    ],
     ["Version", attempt.targetVersion ?? "unknown"],
     ["Started by", LAST_UPDATE_INITIATOR_LABELS[attempt.initiator]],
     ["When", formatStartedAt(attempt.recordedAt, c)],
