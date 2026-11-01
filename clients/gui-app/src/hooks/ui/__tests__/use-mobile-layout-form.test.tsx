@@ -40,9 +40,9 @@ function fakeMatchMedia(
   MediaQueryList,
   "matches" | "addEventListener" | "removeEventListener"
 > {
-  const limit = /^\(width < (\d+)px\)$/.exec(query)?.[1];
+  const limit = /^\(max-width: (\d+)px\)$/.exec(query)?.[1];
   return {
-    matches: viewport.width < Number(limit),
+    matches: viewport.width <= Number(limit),
     addEventListener: () => {},
     removeEventListener: () => {},
   };
