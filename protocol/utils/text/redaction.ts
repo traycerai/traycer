@@ -491,8 +491,8 @@ const HOME_PATH_CLOSER = String.raw`(?:["\x60\]}>]|[')](?![0-9a-z_\u0080-\uffff]
 const HOME_PATH_OPENER_LOOKBACK = 16;
 
 /**
- * The segment right after a `Users` (macOS, Windows) or `home` (Linux) root
- * that starts an absolute path, under either separator, and under doubled ones
+ * The segment right after a `Users` (macOS, Windows) or `home`/`homes` (Linux)
+ * root * that starts an absolute path, under either separator, and under doubled ones
  * (a JSON-escaped Windows path). Where a separator follows, or a delimiter
  * that closes the path's quote or bracket, the whole segment goes, with any
  * run of spaces or tabs before or between its words (a macOS full-name folder,
@@ -506,7 +506,7 @@ const HOME_PATH_OPENER_LOOKBACK = 16;
  * gives back once per word.
  */
 const HOME_FOLDER_NAME_PATTERN = new RegExp(
-  String.raw`((?:${HOME_ROOT_START})(?:${HOME_ROOT_MOUNT})?[/\\]+(Users|home)[/\\]+)([^\S\r\n]*${HOME_FOLDER_NAME_WORD}(?:[^\S\r\n]+${HOME_FOLDER_NAME_WORD})*(?=[/\\]|${HOME_PATH_CLOSER})|${HOME_FOLDER_NAME_BARE})`,
+  String.raw`((?:${HOME_ROOT_START})(?:${HOME_ROOT_MOUNT})?[/\\]+(Users|homes?)[/\\]+)([^\S\r\n]*${HOME_FOLDER_NAME_WORD}(?:[^\S\r\n]+${HOME_FOLDER_NAME_WORD})*(?=[/\\]|${HOME_PATH_CLOSER})|${HOME_FOLDER_NAME_BARE})`,
   "gi",
 );
 

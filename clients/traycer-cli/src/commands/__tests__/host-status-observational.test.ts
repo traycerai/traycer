@@ -449,17 +449,11 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
       });
 
     afterEach(async () => {
-      vi.useRealTimers();
       await removeHostUpdateLastAttempt(hostHomeDir("production"));
     });
 
     it("shows beside the last update, not over it", async () => {
-      vi.useFakeTimers({
-        now: Date.parse("2026-11-01T07:00:00.000Z"),
-        toFake: ["Date"],
-      });
-      await write(update);
-      vi.setSystemTime(Date.parse("2026-11-01T08:00:00.000Z"));
+      await write({ ...update, outcome: "refused" });
       await write(failure);
 
       const result = await hostStatusCommand(makeCtx(makeRuntime({})));
@@ -469,31 +463,19 @@ describe("hostStatusCommand - observational (CLI-001)", () => {
       expect(result.human).toContain("connection reset");
     });
 
-    it.each(["refused", "parked", "failed"] as const)(
-      "stays after an update that ended %s",
-      async (outcome) => {
-        vi.useFakeTimers({
-          now: Date.parse("2026-11-01T07:00:00.000Z"),
-          toFake: ["Date"],
-        });
-        await write(failure);
-        vi.setSystemTime(Date.parse("2026-11-01T08:00:00.000Z"));
-        await write({ ...update, outcome });
-
-        const result = await hostStatusCommand(makeCtx(makeRuntime({})));
-
-        expect(result.human).toContain("Last download");
-      },
-    );
-
-    it("goes quiet once an update has run since", async () => {
-      vi.useFakeTimers({
-        now: Date.parse("2026-11-01T07:00:00.000Z"),
-        toFake: ["Date"],
-      });
+    it("a no-op says nothing about the bytes that never came", async () => {
       await write(failure);
-      vi.setSystemTime(Date.parse("2026-11-01T08:00:00.000Z"));
+      await write({ ...update, outcome: "no-op" });
+
+      const result = await hostStatusCommand(makeCtx(makeRuntime({})));
+
+      expect(result.human).toContain("Last download");
+    });
+
+    it("does not come back once an update has got past it", async () => {
+      await write(failure);
       await write(update);
+      await write({ ...update, targetVersion: "1.6.0", outcome: "refused" });
 
       const result = await hostStatusCommand(makeCtx(makeRuntime({})));
 

@@ -3,7 +3,10 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { renameWithWindowsRetry } from "@traycer/protocol/config/credentials-fs";
-import { redactSensitiveText } from "../platform/sensitive-text";
+import {
+  redactHomeDirectoryNames,
+  redactSensitiveText,
+} from "@traycer/protocol/utils/text/redaction";
 import type { HostUpdateTrigger } from "./record";
 
 /**
@@ -38,7 +41,8 @@ import type { HostUpdateTrigger } from "./record";
  * A download has a file of its own. It runs in the background whether or not
  * anyone asked, so in this one it would replace the update that mattered, a
  * parked one included, and hide the apply Desktop is waiting to conclude. It
- * records only how it failed, and clears that when one gets through.
+ * records only how it failed, and that goes when a download or an update gets
+ * through.
  */
 const UPDATE_LAST_ATTEMPT_FILENAME = "update-last-attempt.json";
 const HOST_DOWNLOAD_FAILURE_FILENAME = "update-last-download-failure.json";
@@ -46,10 +50,7 @@ const HOST_DOWNLOAD_FAILURE_FILENAME = "update-last-download-failure.json";
 const MAX_SCANNED_TEXT_LENGTH = 16_000;
 const MAX_RECORDED_TEXT_LENGTH = 2_000;
 
-// Whoever's home it is, in any case: a lock or service error can name another
-// account's, Windows paths are case-insensitive, and JSON doubles a backslash.
-const HOME_DIRECTORY_PATTERN =
-  /((?:[A-Za-z]:)?[\\/]+(?:Users|homes?)[\\/]+)[^\\/"'\n]+/gi;
+const REDACTED = "<redacted>";
 const EMAIL_PATTERN = /[^\s@"'<>/:[\]]+@[^\s@"'<>/]+\.[A-Za-z]{2,}/g;
 
 export type HostUpdateAttemptInitiator = HostUpdateTrigger | "desktop";
@@ -99,31 +100,32 @@ function escapedForPattern(text: string): string {
 /**
  * What of an error's text may be kept: no credential and no account name.
  *
- * In this order. A bare name is stripped last, and only where a path, a domain
- * or a mailbox puts it: anywhere else it can be a word the message needs, a
- * home called `traycer` being the plain case, and a mark left early would stop
- * the email and home patterns matching.
+ * Credentials and home folders are the shared rules. What is added here is what
+ * a record needs and a log does not: this account's home wherever it lives, and
+ * emails. In this order. A bare name is stripped last, and only where a path, a
+ * domain or a mailbox puts it: anywhere else it can be a word the message needs,
+ * a home called `traycer` being the plain case, and a mark left early would stop
+ * the email and home rules matching.
  */
 function recordableText(text: string): string {
   const home = homedir();
   const name = basename(home);
-  // An empty or root home names nothing, and `replaceAll("", ...)` would shred
-  // the text.
-  const known = home.length > 1 && name.length > 1;
   let redacted = redactSensitiveText(text.slice(0, MAX_SCANNED_TEXT_LENGTH));
-  if (known) {
+  // An empty or root home has no name and stands for nothing to strip.
+  if (name !== "") {
     redacted = redacted.replace(
       new RegExp(`${escapedForPattern(home)}(?![^\\\\/\\s"':,)])`, "gi"),
       "~",
     );
   }
-  redacted = redacted
-    .replace(HOME_DIRECTORY_PATTERN, "$1[redacted]")
-    .replace(EMAIL_PATTERN, "[redacted]");
-  if (known) {
+  redacted = redactHomeDirectoryNames(redacted).replace(
+    EMAIL_PATTERN,
+    REDACTED,
+  );
+  if (name !== "") {
     redacted = redacted.replace(
       new RegExp(`(?<=[\\\\/~@])${escapedForPattern(name)}(?![\\w-])`, "gi"),
-      "[redacted]",
+      REDACTED,
     );
   }
   return redacted.length <= MAX_RECORDED_TEXT_LENGTH
@@ -160,6 +162,11 @@ export async function writeHostUpdateLastAttempt(
       { encoding: "utf8", mode: 0o600 },
     );
     await renameWithWindowsRetry(temporary, path, 0);
+    // The bytes arrived, whichever way, so a download that failed no longer
+    // stands between this install and them.
+    if (attempt.outcome === "complete" || attempt.outcome === "applied") {
+      await clearHostDownloadFailure(hostHome);
+    }
   } catch (err) {
     await rm(temporary, { force: true }).catch(() => undefined);
     logger.info("Host update could not record its outcome", {
@@ -197,7 +204,7 @@ export function readHostDownloadFailure(
   return readAttemptAt(lastAttemptPath(hostHome, "host download"));
 }
 
-/** A download that got through: the failure it replaces is no longer true. */
+/** The bytes got through: the failure it replaces is no longer true. */
 export async function clearHostDownloadFailure(
   hostHome: string,
 ): Promise<void> {

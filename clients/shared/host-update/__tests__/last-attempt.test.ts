@@ -100,48 +100,89 @@ describe("writeHostUpdateLastAttempt", () => {
     [
       "another account's macOS home",
       "EPERM: /Users/alice/.traycer/lock",
-      "EPERM: /Users/[redacted]/.traycer/lock",
+      "EPERM: /Users/<redacted>/.traycer/lock",
     ],
     [
       "another account's Linux home",
       "held from /home/alice/.traycer",
-      "held from /home/[redacted]/.traycer",
+      "held from /home/<redacted>/.traycer",
     ],
     [
       "a Windows home, spaces and all",
       "EBUSY: C:\\Users\\Jo Bloggs\\.traycer\\lock",
-      "EBUSY: C:\\Users\\[redacted]\\.traycer\\lock",
+      "EBUSY: C:\\Users\\<redacted>\\.traycer\\lock",
     ],
     [
       "an email",
       "signed in as jo.bloggs@example.com, refused",
-      "signed in as [redacted], refused",
+      "signed in as <redacted>, refused",
     ],
     [
       "a signed URL",
       "GET https://cdn.example.com/a?X-Amz-Signature=abc123 returned 503",
-      "GET https://cdn.example.com/a?X-Amz-Signature=[redacted] returned 503",
+      "GET https://cdn.example.com/a?X-Amz-Signature=<redacted> returned 503",
     ],
     [
       "URL credentials",
       "GET https://jo:hunter2@mirror.example.com/a failed",
-      "GET https://[redacted]@mirror.example.com/a failed",
+      "GET https://<redacted>@mirror.example.com/a failed",
     ],
-    ["a bearer token", "sent Bearer abc.def.ghi", "sent Bearer [redacted]"],
+    ["a bearer token", "sent Bearer abc.def.ghi", "sent Bearer <redacted>"],
+    [
+      "a token behind another scheme",
+      "authorization: token ghs_abcdefghijklmnopqrstuvwxyz0123456789",
+      "authorization: token <redacted>",
+    ],
+    [
+      "a token in a JSON body",
+      '{"accessToken":"sekret123"}',
+      '{"accessToken":<redacted>}',
+    ],
   ])("keeps %s out of the record", async (_name, message, expected) => {
     expect(await recorded(message)).toBe(expected);
   });
 
   it.each([
-    ["any case", "c:\\users\\alice\\x", "c:\\users\\[redacted]\\x"],
+    ["any case", "c:\\users\\alice\\x", "c:\\users\\<redacted>\\x"],
     [
       "a JSON-escaped path",
       "C:\\\\Users\\\\alice",
-      "C:\\\\Users\\\\[redacted]",
+      "C:\\\\Users\\\\<redacted>",
     ],
-    ["a plural mount", "/homes/alice/x", "/homes/[redacted]/x"],
+    ["a plural mount", "/homes/alice/x", "/homes/<redacted>/x"],
   ])("keeps a home out of %s", async (_name, message, expected) => {
     expect(await recorded(message)).toBe(expected);
+  });
+
+  it.each([
+    [
+      "after a path that ends at a home",
+      "cannot read /Users/bob as it is locked; run 'traycer host status' next",
+      "cannot read /Users/<redacted> as it is locked; run 'traycer host status' next",
+    ],
+    [
+      "after a sentence that ends at a home",
+      "EPERM /Users/alice. Run traycer host status",
+      "EPERM /Users/<redacted> Run traycer host status",
+    ],
+    [
+      "in a URL that merely has a home segment",
+      "GET https://example.com/home/page.html returned 500",
+      "GET https://example.com/home/page.html returned 500",
+    ],
+  ])("keeps the sentence %s", async (_name, message, expected) => {
+    expect(await recorded(message)).toBe(expected);
+  });
+
+  it("leaves a version whole", async () => {
+    await writeHostUpdateLastAttempt(
+      home,
+      { ...attempt, targetVersion: "1.5.2-staging.181.g0e77910" },
+      { info: vi.fn() },
+    );
+    expect(await readHostUpdateLastAttempt(home)).toMatchObject({
+      targetVersion: "1.5.2-staging.181.g0e77910",
+    });
   });
 
   describe("with this account's home somewhere unusual", () => {
@@ -156,32 +197,33 @@ describe("writeHostUpdateLastAttempt", () => {
 
     it.each([
       ["outside the usual roots", "/var/lib/ali", "/var/lib/ali/x", "~/x"],
+      ["named by one letter", "/data/a", "open /data/a/lock", "open ~/lock"],
       [
         "a sibling sharing its prefix",
         "/data/ali",
         "/data/alicia/x",
         "/data/alicia/x",
       ],
-      ["behind a domain", "/data/alice", "CORP\\alice", "CORP\\[redacted]"],
-      ["on another path", "/data/alice", "/mnt/alice/x", "/mnt/[redacted]/x"],
-      ["at a sentence end", "/data/alice", "/srv/alice.", "/srv/[redacted]."],
+      ["behind a domain", "/data/alice", "CORP\\alice", "CORP\\<redacted>"],
+      ["on another path", "/data/alice", "/mnt/alice/x", "/mnt/<redacted>/x"],
+      ["at a sentence end", "/data/alice", "/srv/alice.", "/srv/<redacted>."],
       [
         "as a mailbox",
         "/data/alice",
         "from alice@example.com, refused",
-        "from [redacted], refused",
+        "from <redacted>, refused",
       ],
       [
         "as a mail domain too",
         "/data/alice",
         "from alice@alice-consulting.com",
-        "from [redacted]",
+        "from <redacted>",
       ],
       [
         "and a home named like a root",
         "/data/home",
         "/home/bob/.traycer",
-        "/[redacted]/[redacted]/.traycer",
+        "/<redacted>/<redacted>/.traycer",
       ],
       [
         "as a word a message needs",
@@ -200,7 +242,14 @@ describe("writeHostUpdateLastAttempt", () => {
     ])("%s home leaves the other rules working", async (_name, path) => {
       homeIs(path);
       expect(await recorded("sent Bearer abc at /Users/bob/x")).toBe(
-        "sent Bearer [redacted] at /Users/[redacted]/x",
+        "sent Bearer <redacted> at /Users/<redacted>/x",
+      );
+    });
+
+    it("a root home does not read a bare root as a home", async () => {
+      homeIs("/");
+      expect(await recorded("cannot write to / now")).toBe(
+        "cannot write to / now",
       );
     });
   });
@@ -218,7 +267,7 @@ describe("writeHostUpdateLastAttempt", () => {
       { info: vi.fn() },
     );
     expect(await readHostUpdateLastAttempt(home)).toMatchObject({
-      targetVersion: "/Users/[redacted]/build/host",
+      targetVersion: "/Users/<redacted>/build/host",
     });
   });
 
@@ -286,6 +335,35 @@ describe("a download's failure", () => {
     expect(await readHostDownloadFailure(home)).toBeNull();
     expect(await readHostUpdateLastAttempt(home)).toMatchObject(parked);
   });
+
+  it.each(["complete", "applied"] as const)(
+    "goes when an update ends %s, leaving that update's record",
+    async (outcome) => {
+      await writeHostUpdateLastAttempt(home, failure, { info: vi.fn() });
+      await writeHostUpdateLastAttempt(
+        home,
+        { ...parked, outcome },
+        { info: vi.fn() },
+      );
+
+      expect(await readHostDownloadFailure(home)).toBeNull();
+      expect(await readHostUpdateLastAttempt(home)).toMatchObject({ outcome });
+    },
+  );
+
+  it.each(["no-op", "parked", "refused", "failed"] as const)(
+    "stays when an update ends %s",
+    async (outcome) => {
+      await writeHostUpdateLastAttempt(home, failure, { info: vi.fn() });
+      await writeHostUpdateLastAttempt(
+        home,
+        { ...parked, outcome },
+        { info: vi.fn() },
+      );
+
+      expect(await readHostDownloadFailure(home)).not.toBeNull();
+    },
+  );
 
   it("goes with the install", async () => {
     await writeHostUpdateLastAttempt(home, parked, { info: vi.fn() });

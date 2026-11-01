@@ -6269,6 +6269,25 @@ describe("acceptance: cells with no legacy ancestor", () => {
     });
   });
 
+  it("a recovery that settled the attempt complete still says so when the host is then gone", async () => {
+    await seedInstalled("1.0.0");
+    world.runningVersion = "1.0.0";
+    const crashed = await crashAtRestarting("2.0.0");
+    world.runningVersion = "2.0.0";
+    mocks.readHostPidMetadata.mockImplementation(async () =>
+      (await readRecord())?.phase === "complete" ? null : pidMetadata("2.0.0"),
+    );
+
+    await expect(
+      runUpdate({ intent: "continue", expectAttempt: crashed.attemptId }),
+    ).rejects.toMatchObject({ code: CLI_ERROR_CODES.HOST_NOT_RUNNING });
+
+    expect(await readHostUpdateLastAttempt(currentHome.value)).toMatchObject({
+      outcome: "complete",
+      attemptId: crashed.attemptId,
+    });
+  });
+
   it("a recovery that failed names the attempt's version, not the host's", async () => {
     await seedInstalled("1.0.0");
     world.runningVersion = "1.0.0";

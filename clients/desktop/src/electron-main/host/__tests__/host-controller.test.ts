@@ -4229,6 +4229,44 @@ describe("platform matrix", () => {
       });
     });
 
+    it.each([
+      ["a host update of its own", { command: "host update" }],
+      ["an apply of another version", { targetVersion: "1.7.0" }],
+    ] as const)("an activation leaves %s standing", async (_name, recorded) => {
+      vi.mocked(hostManagesHostLoginItem).mockResolvedValue(true);
+      const controller = stagedUpdate();
+      appliesTheBytes();
+      vi.mocked(probeHostActivityBusy).mockResolvedValue(true);
+      await controller.applyStaged("manual", false);
+      const standing = {
+        command: "host apply",
+        initiator: "manual",
+        outcome: "parked",
+        targetVersion: "1.8.0",
+        attemptId: null,
+        code: null,
+        message: null,
+        ...recorded,
+      } as const;
+      await writeHostUpdateLastAttempt(
+        getHostFsLayout("production").rootDir,
+        standing,
+        { info: vi.fn() },
+      );
+
+      vi.mocked(probeHostActivityBusy).mockResolvedValue(false);
+      vi.mocked(waitForHostReady).mockResolvedValue({
+        ready: true,
+        version: "1.8.0",
+        pid: process.pid,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        reason: "ready",
+      });
+      await controller.activateInstalled(false, false);
+
+      expect(await lastAttempt()).toMatchObject(standing);
+    });
+
     it("bytes installed over a service its owner disabled are waiting on it", async () => {
       const controller = stagedUpdate();
       vi.mocked(streamBundledTraycerCliJson).mockImplementation(

@@ -78,12 +78,12 @@ interface HostStatusOutput {
    * `updateAttempt` above is only ever one still standing.
    */
   readonly lastUpdateAttempt: HostUpdateLastAttempt | null;
-  /** Why the last download did not get through, until an update has since. */
+  /** Why the last download did not get through, until a download or update has. */
   readonly lastDownloadFailure: HostUpdateLastAttempt | null;
   /**
    * Who holds the update lock right now and what they are doing, or `null`
-   * when nobody does. A download holds it and writes no record, so this is the
-   * only thing here that moves while one runs.
+   * when nobody does. A download holds it and records only how it failed, so
+   * this is the only thing here that moves while one runs.
    */
   readonly updateLockHolder: string | null;
 }
@@ -165,9 +165,9 @@ async function readNonterminalUpdateAttempt(
 // it does for every command (`index.ts`). The reads below touch pid.json,
 // bootstrap.log, the lifecycle records (`host/lifecycle-snapshot.ts`), the
 // update attempt record with the install record it is compared against, the
-// last-attempt record and the update lock's holder, and nothing else, so
-// `host status` is safe to poll, safe in CI, and safe on a machine whose host
-// is deliberately uninstalled.
+// last-attempt and download-failure records and the update lock's holder, and
+// nothing else, so `host status` is safe to poll, safe in CI, and safe on a
+// machine whose host is deliberately uninstalled.
 //
 // JSON mode emits the runner's NDJSON envelope; the legacy `--json`
 // pretty-print is replaced by the runner's `{ type:"result", status:"ok",
@@ -197,8 +197,6 @@ export const hostStatusCommand: CommandFn = async (
     ctx.runtime.environment,
   );
   const hostHome = hostHomeDir(ctx.runtime.environment);
-  const lastUpdateAttempt = await readHostUpdateLastAttempt(hostHome);
-  const lastDownloadFailure = await readHostDownloadFailure(hostHome);
   const output: HostStatusOutput = {
     running,
     pidMetadata,
@@ -211,15 +209,8 @@ export const hostStatusCommand: CommandFn = async (
       running,
     ),
     updateAttempt: updateAttempt === null ? null : updateAttempt.summary,
-    lastUpdateAttempt,
-    lastDownloadFailure:
-      lastDownloadFailure !== null &&
-      lastUpdateAttempt !== null &&
-      UPDATE_OUTCOMES_THAT_GOT_THROUGH.has(lastUpdateAttempt.outcome) &&
-      Date.parse(lastUpdateAttempt.recordedAt) >=
-        Date.parse(lastDownloadFailure.recordedAt)
-        ? null
-        : lastDownloadFailure,
+    lastUpdateAttempt: await readHostUpdateLastAttempt(hostHome),
+    lastDownloadFailure: await readHostDownloadFailure(hostHome),
     updateLockHolder: await readUpdateLockHolder(ctx.runtime.environment),
   };
 
@@ -357,10 +348,6 @@ function renderHumanStatus(
   lines.push(c.dim("Run with --json for the full structured payload."));
   return lines.join("\n");
 }
-
-/** A download failure is old news after these; after the rest it still matters. */
-const UPDATE_OUTCOMES_THAT_GOT_THROUGH: ReadonlySet<HostUpdateAttemptOutcome> =
-  new Set(["complete", "applied", "no-op"]);
 
 const LAST_UPDATE_OUTCOME_LABELS: Record<HostUpdateAttemptOutcome, string> = {
   complete: "updated",
