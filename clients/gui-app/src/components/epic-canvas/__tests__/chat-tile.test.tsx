@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useEpicTabDisplayTitle } from "@/lib/epic-selectors";
 import { parseTileRef } from "@/stores/epics/canvas/tile-schema";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import { TestRouterProvider } from "@/__tests__/with-test-router";
@@ -7859,6 +7860,8 @@ describe("<ChatTile />", () => {
     async function announcedAfterCompletedTurn(input: {
       readonly seed: (doc: Y.Doc) => void;
       readonly stateTitle: string;
+      readonly refName: string;
+      readonly beside: ReactNode;
     }): Promise<string> {
       harness.teardown();
       chatHarness.teardown();
@@ -7869,13 +7872,21 @@ describe("<ChatTile />", () => {
       });
       // The tile ref keeps its opening-name snapshot, as a chat opened before
       // its title was generated does, loaded through the saved-tile parse.
-      const saved = parseTileRef({ ...CHAT_ARTIFACT, name: REF_NAME });
+      const saved = parseTileRef({ ...CHAT_ARTIFACT, name: input.refName });
       if (saved === null) throw new Error("expected the saved chat tile");
       render(
-        chatTileTestTree(queryClient, true, {
-          ...CHAT_ARTIFACT,
-          name: saved.name,
-        }),
+        chatTileProviders(
+          queryClient,
+          <>
+            {input.beside}
+            <ChatTile
+              node={{ ...CHAT_ARTIFACT, name: saved.name }}
+              viewTabId="tab-test"
+              tileId="pane-test"
+              isActive
+            />
+          </>,
+        ),
       );
       await waitForChatTileLoaded();
 
@@ -7912,6 +7923,8 @@ describe("<ChatTile />", () => {
       // finished responding." here: the loaded ref name is "New agent" while
       // the store holds "Real Title", so the exact-text assertion goes red.
       const text = await announcedAfterCompletedTurn({
+        refName: REF_NAME,
+        beside: null,
         seed: seedDocWithChatTitle("Real Title"),
         stateTitle: "State Title",
       });
@@ -7920,6 +7933,8 @@ describe("<ChatTile />", () => {
 
     it("falls back to the chat state title when the live title is empty", async () => {
       const text = await announcedAfterCompletedTurn({
+        refName: REF_NAME,
+        beside: null,
         seed: seedDocWithChatTitle(""),
         stateTitle: "State Title",
       });
@@ -7928,6 +7943,8 @@ describe("<ChatTile />", () => {
 
     it('falls back to the loaded tile name, a saved "Untitled agent" read as New agent, when both titles are empty', async () => {
       const text = await announcedAfterCompletedTurn({
+        refName: REF_NAME,
+        beside: null,
         seed: seedDocWithChatTitle(""),
         stateTitle: "",
       });
@@ -7984,6 +8001,8 @@ describe("<ChatTile />", () => {
       cloudChatListTestState.titles.set(CHAT_ARTIFACT.id, "Cloud title");
 
       const text = await announcedAfterCompletedTurn({
+        refName: REF_NAME,
+        beside: null,
         seed: seedDocWithoutChatRecord,
         stateTitle: "",
       });
@@ -8001,6 +8020,8 @@ describe("<ChatTile />", () => {
       ];
 
       const text = await announcedAfterCompletedTurn({
+        refName: REF_NAME,
+        beside: null,
         seed: seedDocWithUntitledChatOn(HOST_ID, ""),
         stateTitle: "",
       });
@@ -8008,8 +8029,61 @@ describe("<ChatTile />", () => {
       expect(text).toBe("Arm title finished responding.");
     });
 
+    it("keeps a projected title that looks like a fallback", async () => {
+      const text = await announcedAfterCompletedTurn({
+        refName: REF_NAME,
+        beside: null,
+        seed: seedDocWithChatTitle("Untitled chat"),
+        stateTitle: "",
+      });
+
+      expect(text).toBe("Untitled chat finished responding.");
+    });
+
+    it("announces the saved tile name over a stale session title when no source names the tab", async () => {
+      const text = await announcedAfterCompletedTurn({
+        refName: "Saved Title",
+        beside: null,
+        seed: seedDocWithChatTitle(""),
+        stateTitle: "State Title",
+      });
+
+      expect(text).toBe("Saved Title finished responding.");
+    });
+
+    it("announces the name the tab's own resolver gives for the same state", async () => {
+      cloudChatListTestState.knownChatIds.add(CHAT_ARTIFACT.id);
+      cloudChatListTestState.titles.set(CHAT_ARTIFACT.id, "Cloud title");
+      function TabNameProbe(): ReactNode {
+        const name = useEpicTabDisplayTitle(
+          {
+            id: CHAT_ARTIFACT.id,
+            name: REF_NAME,
+            type: "chat",
+            hostId: CHAT_ARTIFACT.hostId,
+          },
+          EPIC_ID,
+          null,
+        );
+        return <span data-testid="tab-name-probe">{name}</span>;
+      }
+
+      const text = await announcedAfterCompletedTurn({
+        refName: REF_NAME,
+        beside: <TabNameProbe />,
+        seed: seedDocWithoutChatRecord,
+        stateTitle: "State Title",
+      });
+
+      const tabName = screen.getByTestId("tab-name-probe").textContent;
+      expect(tabName).toBe("Cloud title");
+      expect(text).toBe(`${tabName} finished responding.`);
+    });
+
     it("does not take the title of a record held on another host than the tab", async () => {
       const text = await announcedAfterCompletedTurn({
+        refName: REF_NAME,
+        beside: null,
         seed: seedDocWithUntitledChatOn("other-host", "Other host title"),
         stateTitle: "",
       });
@@ -8019,6 +8093,8 @@ describe("<ChatTile />", () => {
 
     it("says New agent for an untitled chat, then empties the region when the title lands through the projection", async () => {
       const text = await announcedAfterCompletedTurn({
+        refName: REF_NAME,
+        beside: null,
         seed: seedDocWithChatTitle(""),
         stateTitle: "",
       });
@@ -8134,6 +8210,22 @@ describe("<ChatTile />", () => {
       const input = await openFork();
 
       expect(input.value).toBe("Fork - Arm title");
+    });
+
+    it("seeds the fork title from a projected title that looks like a fallback", async () => {
+      await renderOnRecord("Untitled chat");
+
+      const input = await openFork();
+
+      expect(input.value).toBe("Fork - Untitled chat");
+    });
+
+    it("starts a side chat named after a projected title that looks like a fallback", async () => {
+      await renderOnRecord("Untitled chat");
+
+      sendBareSideChat();
+
+      expect(lastSideChatTitle()).toBe("Side - Untitled chat");
     });
 
     it("starts a side chat from an untitled agent with an empty source title", async () => {
