@@ -123,7 +123,7 @@ function renderToolbarStore() {
       chatLineCarriesAutoMode: null,
       ultracodeCarried: false,
       stagedSurfaceKey: null,
-      sendsToRestingSandbox: false,
+      restingSandbox: null,
     }),
   );
 }

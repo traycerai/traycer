@@ -357,6 +357,23 @@ export function suspendedPickLabel(name: string): string {
 export function stoppedPickLabel(name: string): string {
   return `${name} · stopped, starts on send`;
 }
+/** A resting pick with no model list to send on: it promises no Send. */
+export function restingPickLabel(
+  name: string,
+  verb: "resume" | "start",
+): string {
+  return `${name} · ${verb === "resume" ? "suspended" : "stopped"}`;
+}
+/** A resting sandbox's model picker with no list to show. */
+export function wakeToChooseModelLine(
+  name: string,
+  verb: "resume" | "start",
+): string {
+  return `${wakeSandboxLabel(verb)} ${name} to choose a model.`;
+}
+export function wakeSandboxLabel(verb: "resume" | "start"): string {
+  return verb === "resume" ? "Resume" : "Start";
+}
 /** A resting pick once its wake is done: `api-refactor · awake`. */
 export function awakePickLabel(name: string): string {
   return `${name} · awake`;

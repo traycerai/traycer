@@ -284,7 +284,7 @@ function TerminalAgentForkDialogBody(props: TerminalAgentForkDialogProps) {
       chatLineCarriesAutoMode: null,
       ultracodeCarried: false,
       stagedSurfaceKey: null,
-      sendsToRestingSandbox: false,
+      restingSandbox: null,
     },
   );
   const createAgent = useCreateTuiAgentForClient(hostClient, hostId);

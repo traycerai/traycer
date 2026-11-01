@@ -3,6 +3,7 @@ import { useHostMethodSupport } from "@/hooks/host/use-host-supports-method";
 import { useChatPrestartRuntime } from "@/hooks/chats/use-chat-prestart-runtime";
 import { useAccountContextStore } from "@/stores/auth/account-context-store";
 import {
+  chipModelName,
   settingsFromDerived,
   type ComposerToolbarStore,
 } from "@/stores/composer/composer-toolbar-store";
@@ -87,6 +88,7 @@ import {
 } from "@/hooks/sandboxes/use-sandbox-agent-gate";
 import { useBoundSandboxRemedies } from "@/hooks/sandboxes/use-bound-sandbox-remedies";
 import type { SandboxAgentRemedies } from "@/lib/sandboxes/sandbox-agent-refusal";
+import type { RestingSandboxHost } from "@/hooks/sandboxes/use-resting-sandbox-host";
 import type { RestingChatSandbox } from "@/lib/sandboxes/chat-sandbox-state";
 import { hasLandingImageBytes } from "@/lib/composer/landing-image-store";
 import { useChatComposerDraftAuthority } from "@/hooks/drafts/use-chat-composer-draft-authority";
@@ -355,6 +357,8 @@ function useAgentRunGate(input: {
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
   readonly harnessId: GuiHarnessId | null;
+  readonly modelSlug: string;
+  readonly modelName: string;
   readonly focused: boolean;
   readonly restingSandbox: RestingChatSandbox | null;
   readonly remedies: SandboxAgentRemedies;
@@ -379,6 +383,8 @@ function useAgentRunGate(input: {
     resting,
     hostId: restingHostId,
     harnessId,
+    modelSlug: input.modelSlug,
+    modelName: input.modelName,
   });
   const sandboxAgentGate = resting ? restingAgentGate : liveAgentGate;
   return {
@@ -427,7 +433,7 @@ type ChatComposerToolbarInput = Pick<
   readonly hostClient: HostClient<HostRpcRegistry> | null;
   readonly hostId: string | null;
   readonly focused: boolean;
-  readonly resting: boolean;
+  readonly restingHost: RestingSandboxHost | null;
 };
 
 /**
@@ -461,10 +467,23 @@ function useChatComposerToolbar(input: ChatComposerToolbarInput): {
       ultracodeCarried:
         input.ultracodeProtocolSupported && settingsWriteSupported,
       stagedSurfaceKey: null,
-      sendsToRestingSandbox: input.resting,
+      restingSandbox: input.restingHost,
     },
   );
   return { seedSource, toolbarStore };
+}
+
+/** The sandbox a resting chat's next message wakes, stable while it rests. */
+function useRestingChatHost(
+  restingSandbox: RestingChatSandbox | null,
+): RestingSandboxHost | null {
+  const hostId = restingSandbox?.sandbox.hostId ?? null;
+  const name = restingSandbox?.sandbox.displayName ?? "";
+  const verb = restingSandbox?.sandbox.state === "stopped" ? "start" : "resume";
+  return useMemo(
+    () => (hostId === null ? null : { hostId, name, verb }),
+    [hostId, name, verb],
+  );
 }
 
 function ChatComposerImpl(props: ChatComposerProps) {
@@ -515,6 +534,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
   // providers, packs, profiles and limits say nothing about that send.
   const resting = restingSandbox !== null;
   const runHostClient = resting ? null : hostClient;
+  const restingHost = useRestingChatHost(restingSandbox);
   const guideRef = useRef<HTMLDivElement | null>(null);
   const submitWithGuide = useFirstTaskSubmit(
     onSubmitMessage,
@@ -626,7 +646,7 @@ function ChatComposerImpl(props: ChatComposerProps) {
     hostClient,
     hostId: tabHostId,
     focused,
-    resting,
+    restingHost,
   });
   const prestartSupport = useHostMethodSupport(
     tabHostId,
@@ -690,6 +710,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
   }, [toolbarStore, draftHasText, draftHasImages, requestPrestart]);
   const harnessId = useStore(toolbarStore, (s) => s.selection.harnessId);
   const profileId = useStore(toolbarStore, (s) => s.selection.profileId);
+  const chipModel = useStore(toolbarStore, (s) => s.selection.modelSlug);
+  const chipName = useStore(toolbarStore, chipModelName);
   // Connection-level auth gate for the selected provider, scoped to the tab's
   // host. When the provider CLI is signed out it blocks send and mounts the
   // re-auth banner above the composer; a doomed turn can't start. Off for a
@@ -724,6 +746,8 @@ function ChatComposerImpl(props: ChatComposerProps) {
     hostClient: runHostClient,
     hostId: tabHostId,
     harnessId,
+    modelSlug: chipModel,
+    modelName: chipName,
     focused,
     restingSandbox,
     remedies: boundSandboxRemedies,

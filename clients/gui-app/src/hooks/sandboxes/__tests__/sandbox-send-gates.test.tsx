@@ -10,7 +10,11 @@
  *
  * Real hooks and the real host directory; only the host reads are answered.
  */
-import type { QueryObserverResult } from "@tanstack/react-query";
+import {
+  QueryClient,
+  QueryClientProvider,
+  type QueryObserverResult,
+} from "@tanstack/react-query";
 import { renderHook } from "@testing-library/react";
 import type { SandboxCatalogue } from "@traycer/protocol/host/sandbox-control";
 import type { AuthenticatedUser } from "@traycer/protocol/auth";
@@ -56,6 +60,8 @@ const answers = vi.hoisted(() => ({
   providers: undefined as ReadonlyArray<unknown> | undefined,
   catalogue: undefined as SandboxCatalogue | undefined,
   user: null as AuthenticatedUser | null,
+  /** The cloud's Traycer slugs: `undefined` while no list is known. */
+  traycerSlugs: undefined as ReadonlyArray<string> | undefined,
   refetchUser:
     vi.fn<
       () => Promise<
@@ -113,7 +119,14 @@ vi.mock("@/hooks/providers/use-providers-list-query", () => ({
   }),
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-traycer-models-query", () => ({
-  useSandboxTraycerModels: () => ({ data: undefined, isFetching: false }),
+  useSandboxTraycerModels: () => ({
+    data: answers.traycerSlugs?.map((slug) => ({
+      harnessId: "traycer",
+      slug,
+      metadata: {},
+    })),
+    isFetching: false,
+  }),
 }));
 vi.mock("@/hooks/sandboxes/use-sandbox-catalogue-query", () => ({
   useSandboxCatalogue: () => ({
@@ -143,7 +156,10 @@ vi.mock("@/lib/host", async (importOriginal) => ({
   useHostClient: () => null,
 }));
 
-import { useSandboxAgentGate } from "@/hooks/sandboxes/use-sandbox-agent-gate";
+import {
+  useRestingSandboxAgentGate,
+  useSandboxAgentGate,
+} from "@/hooks/sandboxes/use-sandbox-agent-gate";
 import { ChatOpencodeLineContext } from "@/hooks/harnesses/chat-opencode-line-context";
 import { useStagedSendSignInCheck } from "@/hooks/sandboxes/use-staged-send-sign-in-check";
 import {
@@ -179,6 +195,7 @@ const PACKS_INSTALLED: ReadonlyArray<ProviderCliState> = [
 
 beforeEach(() => {
   answers.user = null;
+  answers.traycerSlugs = undefined;
   answers.refetchUser.mockReset();
   answers.refetchUser.mockResolvedValue({ data: null, isError: false });
   answers.harnesses = CODEX_SIGNED_OUT;
@@ -753,5 +770,58 @@ describe("useStagedSendSignInCheck", () => {
     answers.catalogue = { providers: [], offeredAgents: [] };
 
     expect(checkFor(null)(stageIn({ kind: "personal" }))).toBeNull();
+  });
+});
+
+describe("useRestingSandboxAgentGate on a Traycer model", () => {
+  const MODEL_REFUSED =
+    "Retired Model doesn't run on this sandbox. Choose another Traycer model to run agents here.";
+
+  function restingGate(modelSlug: string) {
+    const wrapper = ({ children }: { readonly children: ReactNode }) => (
+      <QueryClientProvider client={new QueryClient()}>
+        {children}
+      </QueryClientProvider>
+    );
+    return renderHook(
+      () =>
+        useRestingSandboxAgentGate({
+          resting: true,
+          hostId: SANDBOX_HOST,
+          harnessId: "traycer",
+          modelSlug,
+          modelName: "Retired Model",
+          onChooseModel: answers.openForHarness.bind(null, "traycer"),
+          onOpenTerminalInstead: answers.onOpenTerminalInstead,
+        }),
+      { wrapper },
+    ).result.current;
+  }
+
+  beforeEach(() => {
+    answers.catalogue = { providers: [], offeredAgents: ["traycer"] };
+  });
+
+  it("blocks a model the cloud's list leaves out, naming it and offering the bound remedies", () => {
+    answers.traycerSlugs = ["trc-listed"];
+
+    const gate = restingGate("trc-retired");
+
+    expect(gate.blocked).toBe(true);
+    expect(gate.hint).toBe(MODEL_REFUSED);
+    expect(gate.notice).toMatchObject({
+      kind: "refused",
+      message: MODEL_REFUSED,
+      action: { label: "Choose a model" },
+      secondaryActions: [{ label: "Open terminal instead" }],
+    });
+  });
+
+  it("passes a listed model, and every model while no list is known", () => {
+    answers.traycerSlugs = ["trc-listed"];
+    expect(restingGate("trc-listed").blocked).toBe(false);
+
+    answers.traycerSlugs = undefined;
+    expect(restingGate("trc-retired").blocked).toBe(false);
   });
 });

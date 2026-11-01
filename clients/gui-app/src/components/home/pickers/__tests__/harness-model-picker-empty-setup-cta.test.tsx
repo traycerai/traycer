@@ -173,6 +173,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         ModelRowsState({
           catalogLoading: false,
           catalogError: false,
+          restingModelPrompt: null,
           hostUnavailableLabel: null,
           hasQuery: false,
           activeProvider: harnessEntry({
@@ -228,6 +229,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       ModelRowsState({
         catalogLoading: false,
         catalogError: false,
+        restingModelPrompt: null,
         hostUnavailableLabel: null,
         hasQuery: false,
         activeProvider: harnessEntry({
@@ -268,6 +270,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         ModelRowsState({
           catalogLoading: false,
           catalogError: false,
+          restingModelPrompt: null,
           hostUnavailableLabel: null,
           hasQuery: false,
           activeProvider: harnessEntry({
@@ -307,6 +310,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         ModelRowsState({
           catalogLoading: false,
           catalogError: false,
+          restingModelPrompt: null,
           hostUnavailableLabel: null,
           hasQuery: false,
           activeProvider: harnessEntry({
@@ -338,6 +342,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
         ModelRowsState({
           catalogLoading: false,
           catalogError: false,
+          restingModelPrompt: null,
           hostUnavailableLabel: null,
           hasQuery: false,
           activeProvider: harnessEntry({
@@ -366,6 +371,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       ModelRowsState({
         catalogLoading: false,
         catalogError: false,
+        restingModelPrompt: null,
         hostUnavailableLabel: null,
         hasQuery: false,
         activeProvider: harnessEntry({
@@ -420,6 +426,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       ModelRowsState({
         catalogLoading: false,
         catalogError: false,
+        restingModelPrompt: null,
         hostUnavailableLabel: null,
         hasQuery: false,
         activeProvider: provider,
@@ -474,6 +481,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       ModelRowsState({
         catalogLoading: false,
         catalogError: false,
+        restingModelPrompt: null,
         hostUnavailableLabel: null,
         hasQuery: false,
         activeProvider: provider,
@@ -501,6 +509,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       ModelRowsState({
         catalogLoading: false,
         catalogError: false,
+        restingModelPrompt: null,
         hostUnavailableLabel: null,
         hasQuery: false,
         activeProvider: provider,
@@ -534,6 +543,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       ModelRowsState({
         catalogLoading: false,
         catalogError: false,
+        restingModelPrompt: null,
         hostUnavailableLabel: null,
         hasQuery: false,
         activeProvider: provider,
@@ -587,6 +597,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       ModelRowsState({
         catalogLoading: false,
         catalogError: false,
+        restingModelPrompt: null,
         hostUnavailableLabel: null,
         hasQuery: false,
         activeProvider: provider,
@@ -637,6 +648,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       ModelRowsState({
         catalogLoading: false,
         catalogError: false,
+        restingModelPrompt: null,
         hostUnavailableLabel: null,
         hasQuery: false,
         activeProvider: provider,
@@ -682,6 +694,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       ModelRowsState({
         catalogLoading: false,
         catalogError: false,
+        restingModelPrompt: null,
         hostUnavailableLabel: null,
         hasQuery: false,
         activeProvider: provider,
@@ -716,6 +729,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       ModelRowsState({
         catalogLoading: false,
         catalogError: false,
+        restingModelPrompt: null,
         hostUnavailableLabel: null,
         hasQuery: false,
         activeProvider: provider,
@@ -758,6 +772,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       ModelRowsState({
         catalogLoading: false,
         catalogError: false,
+        restingModelPrompt: null,
         hostUnavailableLabel: null,
         hasQuery: false,
         activeProvider: provider,
@@ -794,6 +809,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       ModelRowsState({
         catalogLoading: false,
         catalogError: false,
+        restingModelPrompt: null,
         hostUnavailableLabel: null,
         hasQuery: false,
         activeProvider: provider,
@@ -833,6 +849,7 @@ describe("<ModelRowsState /> provider setup CTA (reasonix)", () => {
       ModelRowsState({
         catalogLoading: false,
         catalogError: false,
+        restingModelPrompt: null,
         hostUnavailableLabel: null,
         hasQuery: false,
         activeProvider: provider,
