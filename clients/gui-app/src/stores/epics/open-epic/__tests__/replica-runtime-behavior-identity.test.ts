@@ -45,7 +45,10 @@ import type { ChatRecordSummaryV11 } from "@traycer/protocol/host/epic/chat-reco
 import type { EpicStreamCallbacks } from "@traycer-clients/shared/host-transport/epic-stream-client";
 import type { SnapshotMetaEpic } from "@traycer/protocol/host/epic/snapshot-meta";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { type EpicStreamClientFactory } from "@/stores/epics/open-epic/store";
+import {
+  type EpicStreamClientFactory,
+  type OpenEpicState,
+} from "@/stores/epics/open-epic/store";
 import {
   openStoreForTest,
   type OpenedStoreForTest,
@@ -553,52 +556,70 @@ describe("replica runtime behaviour identity - epic.subscribe@1 scripted sequenc
     expect(after.chats.allIds.length).toBeGreaterThan(0);
   });
 
-  it("chatRecordListAuthoritative round-trips through the sink across a user switch", () => {
-    signedInAs("user-a");
-    const { factory, handle: streamHandle } = fakeFactory();
-    handle = openStoreForTest({
-      epicId: "epic-authoritative-roundtrip",
-      userId: null,
-      // The factories go to the COMPOSITION now, not the store:
-      // `createOpenEpicStore` stopped constructing a runtime, so a
-      // suite that used to hand it a `streamClientFactory` has nothing
-      // to hand it. `handle.doc` still resolves because this harness
-      // builds the runtime in THIS thread.
-      factories: {
-        streamClientFactory: factory,
-        laneSelection: null,
+  it.each([
+    [
+      "chatRecordListAuthoritative",
+      (state: OpenEpicState): boolean => state.chatRecordListAuthoritative,
+      (state: OpenEpicState): void => {
+        state.markChatRecordListAuthoritative();
       },
-      // Explicit: `null` means this suite never writes, so a write in
-      // one that said so fails rather than resolving quietly.
-      writeCommand: null,
-    });
-    const opened = handle;
+    ],
+    [
+      "tuiAgentRecordListAuthoritative",
+      (state: OpenEpicState): boolean => state.tuiAgentRecordListAuthoritative,
+      (state: OpenEpicState): void => {
+        state.markTuiAgentRecordListAuthoritative();
+      },
+    ],
+  ])(
+    "%s round-trips through the sink across a user switch",
+    (_field, read, mark) => {
+      signedInAs("user-a");
+      const { factory, handle: streamHandle } = fakeFactory();
+      handle = openStoreForTest({
+        epicId: "epic-authoritative-roundtrip",
+        userId: null,
+        // The factories go to the COMPOSITION now, not the store:
+        // `createOpenEpicStore` stopped constructing a runtime, so a
+        // suite that used to hand it a `streamClientFactory` has nothing
+        // to hand it. `handle.doc` still resolves because this harness
+        // builds the runtime in THIS thread.
+        factories: {
+          streamClientFactory: factory,
+          laneSelection: null,
+        },
+        // Explicit: `null` means this suite never writes, so a write in
+        // one that said so fails rather than resolving quietly.
+        writeCommand: null,
+      });
+      const opened = handle;
 
-    const donor = new Y.Doc();
-    donor.getMap("epic").set("title", "Authoritative roundtrip epic");
-    streamHandle().callbacks.onConnectionStatus("open", null, false, null);
-    streamHandle().callbacks.onSnapshot(
-      buildMeta("editor", donor),
-      Y.encodeStateAsUpdate(donor),
-    );
+      const donor = new Y.Doc();
+      donor.getMap("epic").set("title", "Authoritative roundtrip epic");
+      streamHandle().callbacks.onConnectionStatus("open", null, false, null);
+      streamHandle().callbacks.onSnapshot(
+        buildMeta("editor", donor),
+        Y.encodeStateAsUpdate(donor),
+      );
 
-    // Step 1: mark authoritative, store reads true.
-    opened.store.getState().markChatRecordListAuthoritative();
-    expect(opened.store.getState().chatRecordListAuthoritative).toBe(true);
+      // Step 1: mark authoritative, store reads true.
+      mark(opened.store.getState());
+      expect(read(opened.store.getState())).toBe(true);
 
-    // Step 2: a real user switch clears it through
-    // `runtime.markChatRecordListNotAuthoritative()`, which writes the SAME
-    // sink the setter's change gate reads.
-    signedInAs("user-b");
-    expect(opened.store.getState().chatRecordListAuthoritative).toBe(false);
+      // Step 2: a real user switch clears it through the runtime's
+      // `mark…NotAuthoritative()`, which writes the SAME sink the setter's change
+      // gate reads.
+      signedInAs("user-b");
+      expect(read(opened.store.getState())).toBe(false);
 
-    // Step 3: the whole point of this test. Against the bug, the sink was
-    // still holding `true` from step 1 (the clear in step 2 wrote the store
-    // directly, never the sink), so this call's early-out
-    // (`if (sink.read().chatRecordListAuthoritative) return;`) would silently
-    // no-op and the flag would stay `false` forever. Not collapsed into a
-    // two-step assertion - this is the regression the fix targets.
-    opened.store.getState().markChatRecordListAuthoritative();
-    expect(opened.store.getState().chatRecordListAuthoritative).toBe(true);
-  });
+      // Step 3: the whole point of this test. Against the bug, the sink was
+      // still holding `true` from step 1 (the clear in step 2 wrote the store
+      // directly, never the sink), so this call's early-out
+      // (`if (sink.read().chatRecordListAuthoritative) return;`) would silently
+      // no-op and the flag would stay `false` forever. Not collapsed into a
+      // two-step assertion - this is the regression the fix targets.
+      mark(opened.store.getState());
+      expect(read(opened.store.getState())).toBe(true);
+    },
+  );
 });

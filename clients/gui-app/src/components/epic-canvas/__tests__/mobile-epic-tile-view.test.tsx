@@ -83,6 +83,7 @@ vi.mock("@/lib/epic-selectors", async (importOriginal) => ({
   useEpicArtifact: (id: string) => ({ id }),
   useEpicTitle: () => "Epic 1",
   useEpicChatRecordListAuthoritative: () => true,
+  useEpicTuiAgentRecordListAuthoritative: () => true,
   useEpicChatRetraction: () => null,
   useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,
   useEpicLiveArtifactTitleGenerating: () => false,

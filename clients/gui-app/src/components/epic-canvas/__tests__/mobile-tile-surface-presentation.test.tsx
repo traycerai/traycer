@@ -55,6 +55,7 @@ const EPIC_B = { epicId: "epic-2", viewTabId: "view-tab-2", paneId: "pane-B" };
 vi.mock("@/lib/epic-selectors", () => ({
   useEpicArtifact: (id: string) => ({ id, userId: "user-1" }),
   useEpicChatRecordListAuthoritative: () => true,
+  useEpicTuiAgentRecordListAuthoritative: () => true,
   useEpicChatRetraction: () => null,
   useEpicTabDisplayTitle: (node: { readonly name: string }) => node.name,
   useEpicLiveArtifactTitleGenerating: () => false,

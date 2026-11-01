@@ -285,6 +285,14 @@ export interface EpicRecordsReplica extends Replica<
    * cleared.
    */
   markChatRecordListNotAuthoritative(): void;
+  /** The terminal twin of {@link EpicRecordsReplica.markChatRecordListAuthoritative}. */
+  markTuiAgentRecordListAuthoritative(): void;
+  /**
+   * The terminal twin of
+   * {@link EpicRecordsReplica.markChatRecordListNotAuthoritative}, and through
+   * the sink for the same reason.
+   */
+  markTuiAgentRecordListNotAuthoritative(): void;
   applyTuiAgentRecords(
     records: readonly TuiAgentRecordSummaryV13[],
     issuedAtSeq: number | null,
@@ -1634,6 +1642,16 @@ export function createEpicRecordsReplica(
     markChatRecordListAuthoritative(): void {
       if (isDisposed() || sink.read().chatRecordListAuthoritative) return;
       publish({ chatRecordListAuthoritative: true });
+    },
+
+    markTuiAgentRecordListNotAuthoritative(): void {
+      if (isDisposed() || !sink.read().tuiAgentRecordListAuthoritative) return;
+      publish({ tuiAgentRecordListAuthoritative: false });
+    },
+
+    markTuiAgentRecordListAuthoritative(): void {
+      if (isDisposed() || sink.read().tuiAgentRecordListAuthoritative) return;
+      publish({ tuiAgentRecordListAuthoritative: true });
     },
 
     applyTuiAgentRecords(records, issuedAtSeq): void {
