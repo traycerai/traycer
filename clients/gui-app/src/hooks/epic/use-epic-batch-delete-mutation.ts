@@ -845,6 +845,10 @@ interface DiscardCreatedEpicContext {
  * being set up, so the person may have started an agent in it, and any row
  * keeps it, as does a read that fails. Answers whether it was deleted.
  *
+ * The two lists are that host's own view, which is the whole of the Task only
+ * while it has not reached the cloud: call this only for such a Task
+ * (`isAttachPromotionPending`).
+ *
  * No progress or outcome toast, since the person never asked for the Task;
  * only a Task left behind by a failure is told.
  */

@@ -1,6 +1,7 @@
 import { toast } from "sonner";
 import type { HostClient } from "@traycer-clients/shared/host-client/host-client";
 import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import { epicShareRefusalFromErrorCode } from "@traycer/protocol/host/epic/share-refusal";
 import type { HostRpcRegistry } from "@traycer/protocol/host/index";
 import { reopenEnvironmentArms } from "@/hooks/environment/use-environment-arms";
 import { useHostMutation } from "@/hooks/host/use-host-query";
@@ -29,6 +30,19 @@ export function toastAttachEnvironmentNeedsOwnHost(): void {
 /** A host that predates `epic.attachEnvironment` answers this for it alone. */
 export function isAttachEnvironmentUnsupported(error: unknown): boolean {
   return error instanceof HostRpcError && error.code === "E_HOST_UNSUPPORTED";
+}
+
+/**
+ * Whether the attachment stopped at the share gate because the task has not
+ * reached the cloud: the gate reports this only after reading it local-homed,
+ * and the attachment itself was never sent. Any other failure may follow a
+ * task that reached the cloud, which another host can serve.
+ */
+export function isAttachPromotionPending(error: unknown): boolean {
+  return (
+    error instanceof HostRpcError &&
+    epicShareRefusalFromErrorCode(error.code)?.kind === "promotion-pending"
+  );
 }
 
 /**

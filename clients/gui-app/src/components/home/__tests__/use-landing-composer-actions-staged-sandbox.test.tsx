@@ -11,7 +11,10 @@ import { handLandingSandboxSend } from "@/components/home/hooks/landing-sandbox-
 import { useLandingComposerActions } from "@/components/home/hooks/use-landing-composer-actions";
 import type { LandingPlacementTarget } from "@/lib/composer/landing-placement";
 import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  HostTransportFailureError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
 import { returnedSandboxMessageLine } from "@/lib/sandboxes/sandbox-strings";
 import { sandboxHostEntry } from "@/lib/sandboxes/__tests__/sandbox-host-directory-fixture";
 // Type-only, so it is erased before `vi.hoisted` runs and cannot re-enter the
@@ -315,6 +318,30 @@ function heldRows(method: string, rows: ReadonlyArray<object>): unknown {
 }
 
 const READ_METHODS = ["epic.listChatRecords", "epic.listTuiAgents"] as const;
+
+/** The share gate's refusals that mean the task is still being set up. */
+const PROMOTION_PENDING_CODES = [
+  "E_SHARE_PENDING_BUSY",
+  "E_SHARE_PENDING_RECENT_ATTEMPT",
+  "E_SHARE_PENDING_OFFLINE",
+  "E_SHARE_PENDING_UNVERIFIED",
+  "E_SHARE_PENDING_FAILED",
+] as const;
+
+/** `epic.attachEnvironment` refused because the task is still being set up. */
+function attachBusy(): HostRpcError {
+  return attachRefusal("E_SHARE_PENDING_BUSY");
+}
+
+function attachRefusal(code: HostRpcError["code"]): HostRpcError {
+  return new HostRpcError({
+    code,
+    message: "This task cannot be attached to that team.",
+    requestId: "request-attach-refused",
+    method: "epic.attachEnvironment",
+    fatalDetails: null,
+  });
+}
 
 function newQueryClient(): QueryClient {
   return new QueryClient({
@@ -677,15 +704,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       useStagedSandboxStore.getState().stage(SURFACE, target);
       landingMocks.request.mockImplementation((method: string) => {
         if (method === "epic.attachEnvironment") {
-          return Promise.reject(
-            new HostRpcError({
-              code: "FORBIDDEN",
-              message: "This task cannot be attached to that team.",
-              requestId: "request-attach-refused",
-              method,
-              fatalDetails: null,
-            }),
-          );
+          return Promise.reject(attachBusy());
         }
         return Promise.resolve({ roomInfo: null });
       });
@@ -994,7 +1013,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     useStagedSandboxStore.getState().stage(SURFACE, NEW_TARGET);
     const newerStage = readStagedSandbox(SURFACE);
     await act(async () => {
-      attach.reject(new Error("attachment refused"));
+      attach.reject(attachBusy());
       await attach.promise.catch(() => undefined);
     });
     await waitFor(() => expect(result.current.isPending).toBe(false));
@@ -1022,7 +1041,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       vi.fn<(method: string, payload: unknown) => Promise<unknown>>();
     placementRequest.mockImplementation((method: string) =>
       method === "epic.attachEnvironment"
-        ? Promise.reject(new Error("attachment refused"))
+        ? Promise.reject(attachBusy())
         : Promise.resolve({ roomInfo: null }),
     );
     const placementClient = {
@@ -1119,7 +1138,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
    */
   async function startSendWithHeldAttach(): Promise<{
     readonly epicId: string;
-    readonly refuseAttach: () => Promise<void>;
+    readonly refuseAttach: (error: HostRpcError) => Promise<void>;
     readonly queryClient: QueryClient;
   }> {
     useStagedSandboxStore.getState().stage(SURFACE, TEAM_TARGET);
@@ -1153,9 +1172,9 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     return {
       epicId: createdEpicId(),
       queryClient,
-      refuseAttach: async () => {
+      refuseAttach: async (error) => {
         await act(async () => {
-          attach.reject(new Error("attachment refused"));
+          attach.reject(error);
           await attach.promise.catch(() => undefined);
         });
       },
@@ -1187,31 +1206,34 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     });
   }
 
-  it("a refused Send on an empty task leaves no task, and the message comes back unsent", async () => {
-    const { epicId, refuseAttach, queryClient } =
-      await startSendWithHeldAttach();
-    await refuseAttach();
+  it.each(PROMOTION_PENDING_CODES)(
+    "a Send refused while the task is still being set up leaves no empty task, and the message comes back unsent (%s)",
+    async (code) => {
+      const { epicId, refuseAttach, queryClient } =
+        await startSendWithHeldAttach();
+      await refuseAttach(attachRefusal(code));
 
-    await waitFor(() => {
-      expect(landingMocks.deleteRequest).toHaveBeenCalledWith(TEST_HOST_ID, {
-        ids: [epicId],
+      await waitFor(() => {
+        expect(landingMocks.deleteRequest).toHaveBeenCalledWith(TEST_HOST_ID, {
+          ids: [epicId],
+        });
       });
-    });
-    await waitFor(() => {
-      expect(wasEpicCreatedThisSession(epicId)).toBe(false);
-    });
-    expect(Object.values(useEpicCanvasStore.getState().tabsById)).toHaveLength(
-      0,
-    );
-    expectMessageBackUnsent();
-    queryClient.clear();
-  });
+      await waitFor(() => {
+        expect(wasEpicCreatedThisSession(epicId)).toBe(false);
+      });
+      expect(
+        Object.values(useEpicCanvasStore.getState().tabsById),
+      ).toHaveLength(0);
+      expectMessageBackUnsent();
+      queryClient.clear();
+    },
+  );
 
   it.each([
     ["a chat", "epic.listChatRecords", { chatId: "chat-started" }],
     ["a terminal agent", "epic.listTuiAgents", { tuiAgentId: "tui-started" }],
   ] as const)(
-    "a refused Send keeps a task with another agent in it, with that agent, and the message comes back unsent (%s)",
+    "a Send refused while the task is still being set up keeps a task with an agent in it, and the message comes back unsent (%s)",
     async (_label, readMethod, row) => {
       vi.mocked(toast.error).mockClear();
       const { epicId, refuseAttach, queryClient } =
@@ -1220,7 +1242,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       landingMocks.readRequest.mockImplementation((_hostId, method) =>
         Promise.resolve(heldRows(method, method === readMethod ? [row] : [])),
       );
-      await refuseAttach();
+      await refuseAttach(attachBusy());
 
       await bothReadsSent();
       await flushPending();
@@ -1232,6 +1254,45 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       expect(toast.error).not.toHaveBeenCalledWith(
         DISCARD_CREATED_EPIC_FAILED_COPY,
       );
+      expectMessageBackUnsent();
+      queryClient.clear();
+    },
+  );
+
+  it.each([
+    ["E_SHARE_NOT_OWNED", attachRefusal("E_SHARE_NOT_OWNED")],
+    ["E_SHARE_NEEDS_CLOUD_SYNC", attachRefusal("E_SHARE_NEEDS_CLOUD_SYNC")],
+    ["E_SHARE_REFUSED", attachRefusal("E_SHARE_REFUSED")],
+    ["FORBIDDEN", attachRefusal("FORBIDDEN")],
+    ["a plain RPC_ERROR", attachRefusal("RPC_ERROR")],
+    [
+      "a transport failure",
+      new HostTransportFailureError({
+        code: "RPC_ERROR",
+        message: "Host is unreachable",
+        requestId: "request-attach-transport",
+        method: "epic.attachEnvironment",
+        fatalDetails: null,
+      }),
+    ],
+  ] as const)(
+    "a Send refused for any other reason keeps its empty task, and the message comes back unsent (%s)",
+    async (_label, error) => {
+      const { epicId, refuseAttach, queryClient } =
+        await startSendWithHeldAttach();
+      await refuseAttach(error);
+
+      await waitFor(() => {
+        expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+      });
+      await flushPending();
+      // Nothing was asked of the host about the task, let alone deleted.
+      expect(landingMocks.readRequest).not.toHaveBeenCalled();
+      expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
+      expect(wasEpicCreatedThisSession(epicId)).toBe(true);
+      expect(
+        Object.values(useEpicCanvasStore.getState().tabsById),
+      ).toHaveLength(1);
       expectMessageBackUnsent();
       queryClient.clear();
     },
@@ -1256,7 +1317,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       vi.mocked(toast.error).mockClear();
       const { epicId, refuseAttach, queryClient } =
         await startSendWithHeldAttach();
-      await refuseAttach();
+      await refuseAttach(attachBusy());
 
       await waitFor(() => {
         expect(toast.error).toHaveBeenCalledWith(
@@ -1279,7 +1340,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     });
     const { epicId, refuseAttach, queryClient } =
       await startSendWithHeldAttach();
-    await refuseAttach();
+    await refuseAttach(attachBusy());
     await bothReadsSent();
 
     landingMocks.getRequestContextUserId.mockReturnValue("other-user");
@@ -1324,7 +1385,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       useStagedSandboxStore.getState().stage(SURFACE, TEAM_TARGET);
       landingMocks.request.mockImplementation((method: string) =>
         method === "epic.attachEnvironment"
-          ? Promise.reject(new Error("attachment refused"))
+          ? Promise.reject(attachBusy())
           : Promise.resolve({ roomInfo: null }),
       );
       landingMocks.deleteRequest.mockImplementation((_hostId, payload) =>
@@ -1399,7 +1460,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       );
     });
     await act(async () => {
-      attach.reject(new Error("attachment refused"));
+      attach.reject(attachBusy());
       await attach.promise.catch(() => undefined);
     });
 

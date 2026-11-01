@@ -30,6 +30,7 @@ import { useEpicCreateForClient } from "@/hooks/epic/use-epic-create-mutation";
 import {
   ATTACH_ENVIRONMENT_NEEDS_OWN_HOST_COPY,
   isAttachEnvironmentUnsupported,
+  isAttachPromotionPending,
   useEpicAttachmentClient,
   useEpicAttachEnvironment,
 } from "@/hooks/epic/use-epic-attach-environment-mutation";
@@ -1650,8 +1651,10 @@ export function useLandingComposerActions(
       const sameAccount = (): boolean =>
         (useAuthStore.getState().profile?.userId ?? null) === dispatchUserId;
       // A create or attachment refusal returns the only message copy. An
-      // attachment refusal then deletes the task it created unless an agent
-      // was started in it meanwhile: the next Send creates its own.
+      // attachment refused because the task is still reaching the cloud then
+      // deletes it, unless an agent was started in it meanwhile: the next Send
+      // creates its own. Any other refusal keeps it: the task may have reached
+      // the cloud, where an agent on another host can't be ruled out.
       const giveBack = (): void => {
         if (!sameAccount() || !handed.isCurrent()) return;
         const returned = handed.giveBack();
@@ -1674,9 +1677,10 @@ export function useLandingComposerActions(
         unmarkEpicCreatedThisSession(epicId);
         giveBack();
       };
-      const attachRefused = (): void => {
+      const attachRefused = (error: unknown): void => {
         if (!sameAccount() || !handed.isCurrent()) return;
         giveBack();
+        if (!isAttachPromotionPending(error)) return;
         void discardCreatedIfEmpty({ epicId, hostId }).then((discarded) => {
           if (discarded) unmarkEpicCreatedThisSession(epicId);
         });
@@ -1712,7 +1716,7 @@ export function useLandingComposerActions(
               await attachEnvironmentAsync({ epicId, teamId: attachTeamId });
             } catch (error) {
               if (!isAttachEnvironmentUnsupported(error)) {
-                attachRefused();
+                attachRefused(error);
                 return;
               }
             }
