@@ -206,6 +206,12 @@ export function stagingSurfaceKey(
   return surface === null ? null : surface.surfaceKey;
 }
 
+export interface RestingHostStageInput {
+  readonly surfaceKey: string | null;
+  readonly hostId: string | null;
+  readonly named: boolean;
+}
+
 /**
  * Stages the sandbox a composer already rests on, which it reached by naming
  * or by default rather than by a pick: its gates ask a host that answers
@@ -213,11 +219,7 @@ export function stagingSurfaceKey(
  * wakes or the surface goes unsent; a send has moved it by then. A named host
  * takes the place of a stage still waiting, since naming it is the request.
  */
-export function useRestingHostStage(input: {
-  readonly surfaceKey: string | null;
-  readonly hostId: string | null;
-  readonly named: boolean;
-}): void {
+export function useRestingHostStage(input: RestingHostStageInput): void {
   const { surfaceKey, hostId, named } = input;
   const resting = useRestingSandboxHost(hostId);
   const verb = resting === null ? null : resting.verb;

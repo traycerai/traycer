@@ -182,9 +182,9 @@ import { ActiveHostWorkspaceControls } from "@/components/home/host-workspace-se
 import {
   stagingSurfaceKey,
   useInTaskSandboxStagingSurface,
-  useRestingHostStage,
   useUnstagedNamedHost,
 } from "@/components/composer/use-sandbox-staging";
+import { RestingHostStage } from "@/components/composer/resting-host-stage";
 import {
   useStagedSandboxHandoff,
   useStagedSandboxSend,
@@ -1262,11 +1262,6 @@ export function NewConversationModalBody(props: {
     unstagedHostId,
     openTerminalInstead,
   );
-  useRestingHostStage({
-    surfaceKey: stagingSurfaceKey(sandboxStaging),
-    hostId: resolvedHostId,
-    named: hostId !== null,
-  });
   useNewConversationReturnedSandbox(epicId, hostId);
   const workspaceGate = useStagedWorkspaceGate(
     stagingSurfaceKey(sandboxStaging),
@@ -2543,6 +2538,11 @@ export function NewConversationModalBody(props: {
     <ComposerStagedSurfaceKeyProvider
       surfaceKey={stagingSurfaceKey(sandboxStaging)}
     >
+      <RestingHostStage
+        surfaceKey={stagingSurfaceKey(sandboxStaging)}
+        hostId={resolvedHostId}
+        named={hostId !== null}
+      />
       <ComposerBody
         pickerStore={pickerStore}
         editorRef={editorRef}
