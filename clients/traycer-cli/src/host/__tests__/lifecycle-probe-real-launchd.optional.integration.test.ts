@@ -988,9 +988,12 @@ async function withScopedSupervisorProbe(
    * discovery from a source checkout — and no caller ever passed it, so the
    * branch sat here naming an outcome production had already renamed. An
    * unexercised arm named after a status is how a probe "passes" against a
-   * union member that no longer exists. The degraded/`addon-load-failed` path
-   * has its own row above (`runLayer0Producer`), which really does drive
-   * `acquireHostLayer0Lock`, and its own packaged-SEA gate.
+   * union member that no longer exists. The `runLayer0Producer` row above
+   * drives `acquireHostLayer0Lock` through the fd contract on the real addon
+   * (the `acquired` frame); the degraded/`addon-load-failed` frame is asserted
+   * where the addon load is simulated, in traycer-host's
+   * `layer0-lock-addon-load.test.ts`, and discovery has its own packaged-SEA
+   * gate.
    */
   await writeFile(
     hostScript,
