@@ -1,6 +1,6 @@
 import type { HostUpdateAttemptOutcome } from "@traycer-clients/shared/host-update";
-import { HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE } from "@traycer/protocol/host/lifecycle-constants";
 import { CLI_ERROR_CODES, CliError } from "../runner/errors";
+import { isUnstartableServiceRefusal } from "./update-service-unstartable";
 
 /**
  * The outcome a thrown run reports. `disturbed`: it had reached work that
@@ -12,8 +12,7 @@ export function outcomeOfThrow(
 ): HostUpdateAttemptOutcome {
   if (
     err instanceof CliError &&
-    (err.exitCode === HOST_UPDATE_SERVICE_UNSTARTABLE_EXIT_CODE ||
-      err.code === CLI_ERROR_CODES.HOST_BUSY)
+    (isUnstartableServiceRefusal(err) || err.code === CLI_ERROR_CODES.HOST_BUSY)
   ) {
     return "parked";
   }
