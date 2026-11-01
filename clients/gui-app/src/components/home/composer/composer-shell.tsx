@@ -1,5 +1,6 @@
 import {
   memo,
+  use,
   useRef,
   type DragEventHandler,
   type PointerEvent,
@@ -9,6 +10,7 @@ import { FileText, Files, ImageIcon } from "lucide-react";
 
 import { ComposerMenu } from "@/components/chat/composer/menu/composer-menu";
 import type { ComposerPickerStore } from "@/components/chat/composer/picker/composer-picker-store";
+import { ComposerFocusLayoutContext } from "@/components/home/composer/composer-focus-layout-context";
 import { ComposerNarrowProvider } from "@/components/home/composer/composer-narrow-context";
 import { useComposerNarrowObserver } from "@/components/home/composer/composer-narrow-hooks";
 import { useComposerSheetPin } from "@/components/home/composer/use-composer-sheet-pin";
@@ -208,6 +210,10 @@ function ComposerAreaImpl({
   expansion,
 }: ComposerAreaProps): ReactNode {
   const expanded = expansion?.expanded === true;
+  // One row, the editor beside Send. A draft pulled open as a sheet keeps the
+  // sheet, which is how a long draft gets its room back. The same elements
+  // restyle, so the editor keeps its focus.
+  const focusRow = use(ComposerFocusLayoutContext) && !expanded;
   // A BROWSER's keyboard (iOS Safari overlays it and leaves `--keyboard-inset`
   // at 0, so the surface still runs under it): the sheet's bottom is lifted
   // by the measured cover. The installed app measures the same cover but its
@@ -243,8 +249,10 @@ function ComposerAreaImpl({
         ref={sheetRef}
         data-composer-shell=""
         data-composer-expanded={expanded ? "" : undefined}
+        data-composer-focus-row={focusRow ? "" : undefined}
         className={cn(
           "relative rounded-lg bg-foreground/3 ring-1 ring-border ring-inset focus-within:ring-ring/30",
+          focusRow && "flex items-center",
           // The sheet fills the SURFACE the card sits on, by taking the box
           // of the slot above (`useComposerSheetPin`). The slot is `fixed`, so
           // it does not depend on the positioned wrappers between it and
@@ -282,7 +290,9 @@ function ComposerAreaImpl({
           data-composer-editor-frame=""
           data-layout-passive
           className={cn(
-            "px-4 pt-4",
+            focusRow
+              ? "min-w-0 flex-1 px-3 [&_[data-composer-editor]]:max-h-10 [&_[data-composer-editor]]:py-2"
+              : "px-4 pt-4",
             expanded &&
               "min-h-0 flex-1 overflow-y-auto overscroll-y-contain [&_[data-composer-editor]]:max-h-none",
           )}
@@ -295,7 +305,9 @@ function ComposerAreaImpl({
           </div>
           {editor}
         </div>
-        {toolbar}
+        <ComposerFocusLayoutContext value={focusRow}>
+          {toolbar}
+        </ComposerFocusLayoutContext>
       </div>
     </div>
   );

@@ -10,6 +10,7 @@ import { ResourceMonitorPopover } from "@/components/resources/resource-monitor-
 import { MobileNotificationsButton } from "@/components/notifications/mobile-notifications-button";
 import { MobileEpicHeaderTitle } from "@/components/epic-canvas/mobile/epic-mobile-header-actions";
 import { useMobileStripForm } from "@/components/layout/tabs/mobile-strip-form-context";
+import { useKeyboardFocusOwner } from "@/hooks/ui/use-keyboard-focus-layout";
 import "@/components/layout/shell/mobile-shell-touch-targets.css";
 import { useRegisteredEpicTitle } from "@/lib/epic-selectors";
 import { useRegionShown, useStatusBarVisible } from "@/lib/layout-overrides";
@@ -26,7 +27,9 @@ import { selectHostFocusedRef } from "@/stores/tabs/selectors";
  * right slot the focused surface fills with its own actions. Rendered only
  * below md (see `AppHeader`), so desktop is untouched. While the form draws the
  * strip, the strip carries the menu and Notifications, so the header gives up
- * the hamburger and the bell.
+ * the hamburger and the bell. While the focus layout serves a composer or a
+ * terminal, the row gives its height up; it stays mounted, so its chords stay
+ * registered.
  */
 export function MobileAppHeader(): ReactNode {
   const setNavOpen = useMobileNavStore((state) => state.setOpen);
@@ -54,8 +57,10 @@ export function MobileAppHeader(): ReactNode {
   const epicId = useMobileHeaderEpicId(epicTabId);
   const title = useMobileHeaderTitle(surface, epicId, epicTabId);
   const settingsSection = settingsSectionLabel(surface);
+  const collapsed = useKeyboardFocusOwner() !== null;
   return (
     <header
+      hidden={collapsed}
       data-testid="app-header"
       data-variant="app"
       data-mobile-shell-touch-scope=""

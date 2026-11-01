@@ -1,6 +1,6 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
+import { use, type ReactNode } from "react";
 import type {
   HeldManagedCommandUpdate,
   ManagedCommand,
@@ -45,11 +45,28 @@ vi.mock(
 // The composer's own spacing is one class off its `topSpacing` prop
 // (`pt-4` for "normal", `pt-0` for "connected"), so the stub records the
 // decision and spares the test the composer's whole provider stack.
-vi.mock("@/components/chat/composer/chat-composer", () => ({
-  ChatComposer: (props: {
-    readonly topSpacing: ChatLowerSurfaceTopSpacing;
-  }) => <div data-testid="composer-stub" data-top-spacing={props.topSpacing} />,
-}));
+// It also stands where the real composer's frame does: the focus owner around a
+// text entry, and what the surfaces hand it through the focus layout context.
+vi.mock("@/components/chat/composer/chat-composer", async () => {
+  const { ComposerFocusLayoutContext } =
+    await import("@/components/home/composer/composer-focus-layout-context");
+  const { KEYBOARD_FOCUS_OWNER_PROPS } =
+    await import("@/hooks/ui/use-keyboard-focus-layout");
+  return {
+    ChatComposer: (props: {
+      readonly topSpacing: ChatLowerSurfaceTopSpacing;
+    }) => (
+      <div
+        data-testid="composer-stub"
+        data-top-spacing={props.topSpacing}
+        data-focus-layout={String(use(ComposerFocusLayoutContext))}
+        {...KEYBOARD_FOCUS_OWNER_PROPS}
+      >
+        <textarea aria-label="Message" />
+      </div>
+    ),
+  };
+});
 vi.mock("@/components/chat/chat-stop-children-dialog", () => ({
   StopChildrenDialog: () => null,
 }));
@@ -80,6 +97,14 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { WORKSPACE_COMPOSER_READY } from "@/lib/composer/workspace-composer-availability";
 import { NO_PROVIDER_FALLBACK } from "@/components/chat/fallback/fallback-state";
 import type { ChatRestoreContextValue } from "@/components/chat/chat-restore-context-core";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import {
+  holdScreenLandscape,
+  IPHONE_17,
+  lowerNativeKeyboard,
+  raiseNativeKeyboard,
+  restoreKeyboardEnvironment,
+} from "../../../../../__tests__/short-keyboard-viewport-harness";
 import {
   ChatLowerInteractionSurfaces,
   type ChatLowerInteractionSurfacesProps,
@@ -359,5 +384,42 @@ describe("background section and composer spacing", () => {
 
     expect(screen.queryByTestId("chat-lower-dock")).toBeNull();
     expect(composerTopSpacing()).toBe("normal");
+  });
+});
+
+describe("the dock and the composer on a short viewport under the keyboard", () => {
+  beforeEach(() => {
+    setPhoneLayoutOnly(true);
+    holdScreenLandscape();
+    raiseNativeKeyboard(IPHONE_17);
+  });
+
+  afterEach(() => {
+    setPhoneLayoutOnly(false);
+    restoreKeyboardEnvironment();
+  });
+
+  function focusLayoutOfComposer(): string | null {
+    return screen
+      .getByTestId("composer-stub")
+      .getAttribute("data-focus-layout");
+  }
+
+  it("gives the dock up and hands the composer the focus layout while the composer has the focus, and restores both with the keyboard down", () => {
+    renderSurfaces();
+    act(() => {
+      chatSession.setCommands([RUNNING_MONITOR]);
+    });
+    const dock = screen.getByTestId("chat-lower-dock");
+    expect(dock.closest("[hidden]")).toBeNull();
+    expect(focusLayoutOfComposer()).toBe("false");
+
+    act(() => screen.getByLabelText("Message").focus());
+    expect(dock.closest("[hidden]")).not.toBeNull();
+    expect(focusLayoutOfComposer()).toBe("true");
+
+    lowerNativeKeyboard();
+    expect(dock.closest("[hidden]")).toBeNull();
+    expect(focusLayoutOfComposer()).toBe("false");
   });
 });

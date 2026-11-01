@@ -24,6 +24,7 @@ import type {
   ChatRunSettings,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ChatStreamCallbacks } from "@traycer-clients/shared/host-transport/chat-stream-client";
+import { ComposerFocusLayoutContext } from "@/components/home/composer/composer-focus-layout-context";
 import {
   ChatComposer,
   type ChatComposerSubmitInput,
@@ -806,6 +807,9 @@ const queryClient = new QueryClient({
  * What the tile's `dispatchUserSend` does once the composer has built its
  * submit input: put it in the store as the person's own send.
  */
+/** `?focus-row`: the composer as the keyboard focus layout draws it. */
+const FOCUS_ROW = new URLSearchParams(window.location.search).has("focus-row");
+
 function submitFromComposer(input: ChatComposerSubmitInput): boolean {
   const sent = handle.store.getState().sendMessage({
     content: input.content,
@@ -1041,42 +1045,47 @@ export function Fixture(): ReactElement {
                 onBackgroundItemsStopAll={sampleNoopAction}
                 onBackgroundSessionStop={sampleNoopAction}
               />
-              <ChatComposer
-                taskId={CHAT_ID}
-                isActive
-                sendDisabled={false}
-                sendDisabledHint={null}
-                mentionRoots={[]}
-                fallbackToGlobalMentionRoots={false}
-                currentEpicId={EPIC_ID}
-                viewTabId="view-tab"
-                settingsSeed={SETTINGS}
-                fallbackSettingsSeed={SETTINGS}
-                providerFallback={NO_PROVIDER_FALLBACK}
-                onSubmitMessage={submitFromComposer}
-                onSideChat={null}
-                onSettingsChange={null}
-                activeTurnStatus={composerStatus}
-                steerCapable={false}
-                steerProtocolSupported={false}
-                autoPermissionModeProtocolSupported={null}
-                ultracodeProtocolSupported={false}
-                getDraftBlobBridgeSupported={() => false}
-                getActiveTurnForSteer={() => null}
-                editingQueueItemId={null}
-                onCancelQueueEdit={null}
-                hasPendingApprovals={false}
-                stopDisabled={false}
-                onStopTurn={() => {
-                  handle.store.getState().stopTurn();
-                }}
-                workspaceControls={null}
-                workspaceAvailability={{ status: "ready", disabledHint: null }}
-                topSpacing="normal"
-                topSlot={null}
-                suggestedPrompt={undefined}
-                restingSandbox={null}
-              />
+              <ComposerFocusLayoutContext value={FOCUS_ROW}>
+                <ChatComposer
+                  taskId={CHAT_ID}
+                  isActive
+                  sendDisabled={false}
+                  sendDisabledHint={null}
+                  mentionRoots={[]}
+                  fallbackToGlobalMentionRoots={false}
+                  currentEpicId={EPIC_ID}
+                  viewTabId="view-tab"
+                  settingsSeed={SETTINGS}
+                  fallbackSettingsSeed={SETTINGS}
+                  providerFallback={NO_PROVIDER_FALLBACK}
+                  onSubmitMessage={submitFromComposer}
+                  onSideChat={null}
+                  onSettingsChange={null}
+                  activeTurnStatus={composerStatus}
+                  steerCapable={false}
+                  steerProtocolSupported={false}
+                  autoPermissionModeProtocolSupported={null}
+                  ultracodeProtocolSupported={false}
+                  getDraftBlobBridgeSupported={() => false}
+                  getActiveTurnForSteer={() => null}
+                  editingQueueItemId={null}
+                  onCancelQueueEdit={null}
+                  hasPendingApprovals={false}
+                  stopDisabled={false}
+                  onStopTurn={() => {
+                    handle.store.getState().stopTurn();
+                  }}
+                  workspaceControls={null}
+                  workspaceAvailability={{
+                    status: "ready",
+                    disabledHint: null,
+                  }}
+                  topSpacing="normal"
+                  topSlot={null}
+                  suggestedPrompt={undefined}
+                  restingSandbox={null}
+                />
+              </ComposerFocusLayoutContext>
             </ChatDockCompactStripProvider>
           </ChatDiffTargetContext.Provider>
         </TabHostContext.Provider>

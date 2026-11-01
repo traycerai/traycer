@@ -19,6 +19,7 @@ import { useEpicCanvasStore } from "@/stores/epics/canvas/store";
 import { collectPanes } from "@/stores/epics/canvas/tile-tree";
 import { tileIntent, type TileOpenIntent } from "@/lib/canvas/tile-open/intent";
 import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import { useKeyboardFocusOwner } from "@/hooks/ui/use-keyboard-focus-layout";
 import {
   commitWithoutNavigation,
   MANUAL_TILE_OPEN,
@@ -37,6 +38,12 @@ import {
   SHELL_WIDTH_TWO_TILES,
   type ShellFormHarness,
 } from "../../../../__tests__/mobile-level2-form-harness";
+import {
+  IPHONE_17,
+  lowerNativeKeyboard,
+  raiseNativeKeyboard,
+  restoreKeyboardEnvironment,
+} from "../../../../__tests__/short-keyboard-viewport-harness";
 import type { ReactNode } from "react";
 import type { StreamConnectionStatus } from "@traycer-clients/shared/host-transport/i-stream-session";
 import type {
@@ -97,6 +104,7 @@ vi.mock("@/components/epic-canvas/renderers/epic-node-tile", async () => {
       const { openTile } = useEpicTileNavigation();
       return (
         <div data-testid={`tile-${node.id}`}>
+          <input data-testid={`entry-${node.id}`} />
           <button
             type="button"
             data-testid={`open-from-${node.id}`}
@@ -294,6 +302,18 @@ vi.mock("@/lib/registries/chat-session-registry", async (importOriginal) => ({
   useExistingChatSessionHandle: () => null,
   useExistingChatSessionFatalClose: () => null,
 }));
+
+function terminal(n: number): EpicCanvasTileRef {
+  return {
+    id: `terminal-${n}`,
+    instanceId: `terminal-inst-${n}`,
+    type: "terminal",
+    name: `Terminal ${n}`,
+    hostId: "host-A",
+    titleSource: "default",
+    cwd: "/",
+  };
+}
 
 function spec(n: number): EpicCanvasTileRef {
   return {
@@ -604,6 +624,7 @@ describe("<MobileEpicTileView />", () => {
     });
     afterEach(() => {
       shell.dispose();
+      restoreKeyboardEnvironment();
       pendingOpen.value = { intent: null };
     });
 
@@ -641,6 +662,77 @@ describe("<MobileEpicTileView />", () => {
     function secondPane(): HTMLElement {
       return screen.getByTestId("mobile-epic-second-tile");
     }
+
+    // The terminal in the first pane, a spec beside it in the second.
+    function seedTerminalBesideSpec(): void {
+      const root: TileGroup = {
+        kind: "group",
+        id: "root-group",
+        direction: "horizontal",
+        children: [
+          makePane("pane-A", [terminal(1)], "terminal-inst-1"),
+          makePane("pane-B", [spec(3)], "inst-3"),
+        ],
+      };
+      seed({
+        root,
+        activePaneId: "pane-A",
+        tilesByInstanceId: {
+          "terminal-inst-1": terminal(1),
+          "inst-3": spec(3),
+        },
+        sizesByGroupId: { "root-group": [0.5, 0.5] },
+      });
+      showSecond("inst-3", false);
+    }
+
+    function keyCount(pane: HTMLElement): number {
+      return within(pane).queryAllByTestId(/^terminal-key-/).length;
+    }
+
+    it("gives the terminal's key bar up when the other pane is engaged on a short viewport, and takes it back when it is engaged again", () => {
+      seedTerminalBesideSpec();
+      raiseNativeKeyboard(IPHONE_17);
+      renderView();
+      expect(keyCount(primaryPane())).toBe(8);
+
+      fireEvent.pointerDown(within(secondPane()).getByTestId("tile-spec-3"));
+      expect(keyCount(primaryPane())).toBe(0);
+      expect(within(secondPane()).queryByTestId("tile-spec-3")).not.toBeNull();
+
+      fireEvent.pointerDown(primaryPane());
+      expect(keyCount(primaryPane())).toBe(8);
+    });
+
+    it("draws the terminal's whole key bar again when the keyboard goes down, engaged or not", () => {
+      seedTerminalBesideSpec();
+      raiseNativeKeyboard(IPHONE_17);
+      renderView();
+      lowerNativeKeyboard();
+      expect(keyCount(primaryPane())).toBe(12);
+
+      raiseNativeKeyboard(IPHONE_17);
+      fireEvent.pointerDown(within(secondPane()).getByTestId("tile-spec-3"));
+      expect(keyCount(primaryPane())).toBe(0);
+      lowerNativeKeyboard();
+      expect(keyCount(primaryPane())).toBe(12);
+    });
+
+    it("makes a focus inside the terminal's body the focus owner, and not one in the other pane", () => {
+      function OwnerProbe(): ReactNode {
+        return <output>{String(useKeyboardFocusOwner() !== null)}</output>;
+      }
+      seedTerminalBesideSpec();
+      raiseNativeKeyboard(IPHONE_17);
+      render(<OwnerProbe />);
+      renderView();
+      const owned = (): string => screen.getByRole("status").textContent;
+
+      act(() => within(secondPane()).getByTestId("entry-spec-3").focus());
+      expect(owned()).toBe("false");
+      act(() => within(primaryPane()).getByTestId("entry-terminal-1").focus());
+      expect(owned()).toBe("true");
+    });
 
     it("mounts two tiles with level 2 as the menu, each under its own header", () => {
       seed(twoPaneCanvas("pane-A"));
@@ -940,6 +1032,7 @@ describe("<MobileEpicTileView /> with two tiles and chats painted by the stable 
   afterEach(() => {
     cleanup();
     shell.dispose();
+    restoreKeyboardEnvironment();
     reset();
   });
 
@@ -1016,6 +1109,22 @@ describe("<MobileEpicTileView /> with two tiles and chats painted by the stable 
       fireEvent.focusIn(screen.getByTestId("input-chat-2"));
       expect(activeOf("chat-2")).toBe("true");
       expect(activeOf("chat-1")).toBe("false");
+    });
+
+    it("takes a terminal's key bar away when focus moves into a chat painted outside its pane", () => {
+      raiseNativeKeyboard(IPHONE_17);
+      mountHosted(
+        paneCanvas([terminal(1), chat(2)], "terminal-inst-1", [
+          "terminal-inst-1",
+          "chat-inst-2",
+        ]),
+      );
+      showSecond("chat-inst-2", false);
+      expect(screen.getAllByTestId(/^terminal-key-/)).toHaveLength(8);
+
+      act(() => screen.getByTestId("input-chat-2").focus());
+      expect(screen.queryAllByTestId(/^terminal-key-/)).toHaveLength(0);
+      expect(screen.queryByTestId("hosted-chat-2")).not.toBeNull();
     });
 
     it("keeps the first chat engaged after it is used while the second is away, once two tiles show again", () => {

@@ -6,10 +6,18 @@
  * each post, the chat the thread panel reads, and where each box writes.
  */
 import type { MobileTileCount } from "@/lib/layout/mobile-layout-form";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
+import { setPhoneLayoutOnly } from "@/lib/mobile-app";
+import {
+  holdScreenLandscape,
+  IPHONE_17,
+  lowerNativeKeyboard,
+  raiseNativeKeyboard,
+  restoreKeyboardEnvironment,
+} from "../../../../__tests__/short-keyboard-viewport-harness";
 import {
   afterEach,
   beforeEach,
@@ -117,6 +125,8 @@ const mocks = vi.hoisted(() => {
       // The person's notification levels by channel id; `undefined` = not read.
       levels: undefined as Record<string, BotNotificationLevel> | undefined,
       chats,
+      // Whether the boxes are the real message box rather than a stub.
+      realComposer: false,
     },
   };
 });
@@ -289,37 +299,41 @@ function ChannelChoice(props: {
   return <ChooseStub chooseOption={props.chooseOption} />;
 }
 
-vi.mock("@/components/bots/bot-message-composer", () => ({
-  BotMessageComposer: (props: {
-    conversationId: string;
-    threadId: string | null;
-    announcementId: string | null;
-    sendable: boolean;
-    placeholder: string;
-    testId: string;
-    failure: { readonly failed: boolean };
-    onSent: (response: BotConversationSendResponse, text: string) => boolean;
-  }) => (
-    <div
-      data-testid={`stub-${props.testId}`}
-      data-conversation-id={props.conversationId}
-      data-thread-id={props.threadId ?? "none"}
-      data-announcement-id={props.announcementId ?? "none"}
-      data-sendable={String(props.sendable)}
-      data-placeholder={props.placeholder}
-    >
-      {props.failure.failed ? (
-        <BotSendFailedNotice testId={`${props.testId}-send-failed`} />
-      ) : null}
-      {/* The host accepting what the box sent, answering `mocks.sendResponse`. */}
-      <button
-        type="button"
-        data-testid={`stub-${props.testId}-sent`}
-        onClick={() => props.onSent(mocks.sendResponse, POSTED_TEXT)}
-      />
-    </div>
-  ),
-}));
+vi.mock("@/components/bots/bot-message-composer", async (importOriginal) => {
+  const original =
+    await importOriginal<
+      typeof import("@/components/bots/bot-message-composer")
+    >();
+  return {
+    ...original,
+    BotMessageComposer: (
+      props: ComponentProps<typeof original.BotMessageComposer>,
+    ) =>
+      // The real box only where a case is about the box itself.
+      mocks.state.realComposer ? (
+        <original.BotMessageComposer {...props} />
+      ) : (
+        <div
+          data-testid={`stub-${props.testId}`}
+          data-conversation-id={props.conversationId}
+          data-thread-id={props.threadId ?? "none"}
+          data-announcement-id={props.announcementId ?? "none"}
+          data-sendable={String(props.sendable)}
+          data-placeholder={props.placeholder}
+        >
+          {props.failure.failed ? (
+            <BotSendFailedNotice testId={`${props.testId}-send-failed`} />
+          ) : null}
+          {/* The host accepting what the box sent, answering `mocks.sendResponse`. */}
+          <button
+            type="button"
+            data-testid={`stub-${props.testId}-sent`}
+            onClick={() => props.onSent(mocks.sendResponse, POSTED_TEXT)}
+          />
+        </div>
+      ),
+  };
+});
 
 function ChooseStub(props: {
   readonly chooseOption: (choice: string) => void;
@@ -573,6 +587,7 @@ beforeEach(() => {
   mocks.state.conversationsError = false;
   mocks.state.sending = false;
   mocks.state.chats = {};
+  mocks.state.realComposer = false;
   mocks.state.follows = undefined;
   mocks.state.readCursors = undefined;
   mocks.state.readCursorsKept = true;
@@ -1771,6 +1786,56 @@ describe("<BotChannelView /> open thread by the tiles the installed app shows", 
     expect(classesOf("bot-channel")).toContain("@3xl:flex");
     expect(classesOf("bot-thread-pane")).toContain("@3xl:flex-none");
     expect(classesOf("bot-thread-pane-resize-handle")).toContain("@3xl:block");
+  });
+});
+
+describe("<BotChannelView /> boxes on a short viewport under the keyboard", () => {
+  beforeEach(() => {
+    mocks.state.threads = [
+      thread("thread-a", "post-a", {
+        conversationId: "conversation-channel",
+        sessionChatId: "session-a",
+        replyCount: 2,
+        lastReplyAt: 7_000,
+      }),
+    ];
+    mocks.postIds = ["post-a"];
+    mocks.state.realComposer = true;
+    mountTiles = 2;
+    setPhoneLayoutOnly(true);
+    holdScreenLandscape();
+    raiseNativeKeyboard(IPHONE_17);
+  });
+
+  afterEach(() => {
+    setPhoneLayoutOnly(false);
+    restoreKeyboardEnvironment();
+  });
+
+  function formOf(testId: string): string | null {
+    return screen.getByTestId(testId).getAttribute("data-box-form");
+  }
+
+  it("collapses only the box that has the focus, and restores both with the keyboard down", async () => {
+    const user = userEvent.setup();
+    mount({ openThreadPostId: "post-a" });
+    expect(formOf("bot-channel-composer")).toBe("full");
+    expect(formOf("bot-thread-composer")).toBe("full");
+
+    await user.click(
+      within(screen.getByTestId("bot-thread-composer")).getByRole("textbox"),
+    );
+    expect(formOf("bot-thread-composer")).toBe("one-row");
+    expect(formOf("bot-channel-composer")).toBe("full");
+
+    await user.click(
+      within(screen.getByTestId("bot-channel-composer")).getByRole("textbox"),
+    );
+    expect(formOf("bot-channel-composer")).toBe("one-row");
+    expect(formOf("bot-thread-composer")).toBe("full");
+
+    lowerNativeKeyboard();
+    expect(formOf("bot-channel-composer")).toBe("full");
   });
 });
 
