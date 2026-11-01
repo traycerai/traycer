@@ -142,6 +142,12 @@ export function CanvasSelectionOverlay(props: {
   readonly controls?: ReactNode;
   readonly actionControls?: ReactNode;
   readonly hideAction?: boolean;
+  /**
+   * Paint the action bar invisible but keep it mounted: another surface is
+   * offering the same actions for the moment, and the bar's send keeps state
+   * worth coming back to (which chat it attached to).
+   */
+  readonly concealAction?: boolean;
   readonly commenting?: boolean;
   readonly hideHandles?: boolean;
   readonly scope: CanvasAnnotationScope;
@@ -466,7 +472,14 @@ export function CanvasSelectionOverlay(props: {
         selection={selection}
         box={box}
         frame={frame}
-        hideAction={Boolean(props.hideAction) || pointerDown}
+        // A press while the bar is concealed is the user working in the
+        // surface standing in for it (typing in the draft box, pressing its
+        // buttons); the bar is already out of sight, and unmounting it would
+        // drop the chat its send remembers.
+        hideAction={
+          Boolean(props.hideAction) || (pointerDown && !props.concealAction)
+        }
+        concealAction={Boolean(props.concealAction)}
         hideHandles={props.hideHandles}
         capturing={capturing}
         scope={props.scope}
@@ -483,6 +496,7 @@ function CanvasSelectionPaint(props: {
   readonly box: CanvasBox | null;
   readonly frame: HTMLIFrameElement | null;
   readonly hideAction: boolean;
+  readonly concealAction: boolean;
   readonly hideHandles: boolean | undefined;
   readonly capturing: boolean;
   readonly scope: CanvasAnnotationScope;
@@ -517,11 +531,11 @@ function CanvasSelectionPaint(props: {
         <SelectionActionBar
           frame={props.frame}
           box={props.box}
-          hidden={props.capturing}
+          hidden={props.capturing || props.concealAction}
         >
           {props.actionControls}
           <CanvasSelectionAction
-            key={`${props.selection.servedSha256}:${props.selection.element.marker ?? props.selection.element.selector}:${props.selection.textRange?.start ?? ""}:${props.selection.textRange?.end ?? ""}`}
+            key={`${props.selection.servedSha256}:${props.selection.element.tid ?? ""}:${props.selection.element.marker ?? props.selection.element.selector}:${props.selection.textRange?.start ?? ""}:${props.selection.textRange?.end ?? ""}`}
             scope={props.scope}
             selection={props.selection}
             captureRect={props.captureRect}
