@@ -8,6 +8,7 @@
  * the suite decides which harness ids are blocked.
  */
 
+import { toast } from "sonner";
 import { useRef, useState, type ReactNode } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -116,7 +117,10 @@ vi.mock("@/hooks/sandboxes/use-team-sandbox-harness-blocked", () => {
 
 interface PlacementTargetShape {
   readonly resolvedHostId: string | null;
-  readonly client: { readonly getActiveHostId: () => string | null } | null;
+  readonly client: {
+    readonly getActiveHostId: () => string | null;
+    readonly request: (method: string, payload: unknown) => Promise<unknown>;
+  } | null;
   readonly hostLabel: string;
   readonly isPinned: boolean;
   readonly namedHostDead: boolean;
@@ -125,7 +129,10 @@ interface PlacementTargetShape {
 function usablePlacement(): PlacementTargetShape {
   return {
     resolvedHostId: "host-a",
-    client: { getActiveHostId: () => "host-a" },
+    client: {
+      getActiveHostId: () => "host-a",
+      request: (method, payload) => testState.hostRequest(method, payload),
+    },
     hostLabel: "Studio Mac",
     isPinned: false,
     namedHostDead: false,
@@ -165,11 +172,13 @@ const testState = vi.hoisted(() => ({
     }>
   >(() => Promise.resolve({ initialTurnStarted: false })),
   attachEnvironment: vi.fn<
-    (input: {
-      readonly epicId: string;
-      readonly teamId: string;
-    }) => Promise<{ readonly attached: true }>
+    (input: unknown) => Promise<{ readonly attached: true }>
   >(() => Promise.resolve({ attached: true })),
+  /** Every host request the real attach hook sends; only the attach is served. */
+  hostRequest: (method: string, payload: unknown): Promise<unknown> =>
+    method === "epic.attachEnvironment"
+      ? testState.attachEnvironment(payload)
+      : Promise.reject(new Error(`unexpected ${method}`)),
   createTerminalAgent: vi.fn(() => Promise.resolve(null)),
   onSubmitted: vi.fn(),
   /** The editor's @/slash menu dismissal. */
@@ -190,7 +199,11 @@ const testState = vi.hoisted(() => ({
   placement: ((): { current: PlacementTargetShape } => ({
     current: {
       resolvedHostId: "host-a",
-      client: { getActiveHostId: () => "host-a" },
+      client: {
+        getActiveHostId: () => "host-a",
+        request: (method: string, payload: unknown) =>
+          testState.hostRequest(method, payload),
+      },
       hostLabel: "Studio Mac",
       isPinned: false,
       namedHostDead: false,
@@ -313,15 +326,18 @@ vi.mock("@/hooks/epic/use-epic-chat-mutations", () => ({
 
 vi.mock(
   "@/hooks/epic/use-epic-attach-environment-mutation",
-  async (importOriginal) => ({
-    ...(await importOriginal<
-      typeof import("@/hooks/epic/use-epic-attach-environment-mutation")
-    >()),
-    useEpicAttachEnvironment: () => ({
-      isPending: false,
-      mutateAsync: testState.attachEnvironment,
-    }),
-  }),
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@/hooks/epic/use-epic-attach-environment-mutation")
+      >();
+    return {
+      ...actual,
+      // The real hook, on a client whose `epic.attachEnvironment` is the
+      // test's: its refusal copy is what the person reads.
+      useEpicAttachEnvironment: actual.useEpicAttachEnvironment,
+    };
+  },
 );
 
 vi.mock("@/hooks/agent/use-create-tui-agent", () => ({
@@ -396,6 +412,8 @@ vi.mock("@/lib/epic-selectors", () => ({
 }));
 
 const stubHostClient = {
+  request: (method: string, payload: unknown): Promise<unknown> =>
+    testState.hostRequest(method, payload),
   getActiveHostId: () => "host-a",
   getRequestContext: () => null,
   getRequestContextUserId: () => null,
@@ -1050,6 +1068,43 @@ describe("new-conversation modal's send on a staged sandbox", () => {
     expect(draftSurvived()).toBe(true);
     expect(testState.createChat).not.toHaveBeenCalled();
     expect(testState.onSubmitted).not.toHaveBeenCalled();
+  });
+
+  it("tells the person to Send again, exactly, and creates no chat when the task is still being set up", async () => {
+    const errorToast = vi.spyOn(toast, "error");
+    const attach = deferred<{ readonly attached: true }>();
+    testState.attachEnvironment.mockReturnValue(attach.promise);
+    renderModal();
+    act(() => {
+      useStagedSandboxStore.getState().stage(SANDBOX_SURFACE, TEAM_SANDBOX);
+      testState.bodySubmit?.();
+    });
+    await waitFor(() => {
+      expect(testState.attachEnvironment).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      attach.reject(
+        new HostRpcError({
+          code: "E_SHARE_PENDING_BUSY",
+          message: "busy",
+          requestId: "request-attach-busy",
+          method: "epic.attachEnvironment",
+          fatalDetails: null,
+        }),
+      );
+      await attach.promise.catch(() => undefined);
+    });
+
+    await waitFor(() => {
+      expect(errorToast.mock.calls.map(([message]) => message)).toEqual([
+        "This task is still being set up. Send again in a moment.",
+      ]);
+    });
+    expect(testState.createChat).not.toHaveBeenCalled();
+    expect(testState.onSubmitted).not.toHaveBeenCalled();
+    expect(draftSurvived()).toBe(true);
+    errorToast.mockRestore();
   });
 
   it("keeps the staged chat and draft when the account changes during attachment", async () => {

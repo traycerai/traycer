@@ -33,7 +33,7 @@ import {
   useEpicAttachmentClient,
   useEpicAttachEnvironment,
 } from "@/hooks/epic/use-epic-attach-environment-mutation";
-import { useEpicDiscardCreated } from "@/hooks/epic/use-epic-batch-delete-mutation";
+import { useEpicDiscardCreatedIfEmpty } from "@/hooks/epic/use-epic-batch-delete-mutation";
 import { useCreateTuiAgentForClient } from "@/hooks/agent/use-create-tui-agent";
 import {
   authorizesCloudCapability,
@@ -363,7 +363,7 @@ export function useLandingComposerActions(
   const attachClient = useEpicAttachmentClient(target.client);
   const attachEnvironment = useEpicAttachEnvironment(attachClient, "Send");
   const attachEnvironmentAsync = attachEnvironment.mutateAsync;
-  const discardCreatedAsync = useEpicDiscardCreated().mutateAsync;
+  const discardCreatedIfEmpty = useEpicDiscardCreatedIfEmpty();
   const terminalAgentCreate = useCreateTuiAgentForClient(
     target.client,
     target.resolvedHostId ?? UNKNOWN_HOST_PLACEHOLDER,
@@ -1650,8 +1650,8 @@ export function useLandingComposerActions(
       const sameAccount = (): boolean =>
         (useAuthStore.getState().profile?.userId ?? null) === dispatchUserId;
       // A create or attachment refusal returns the only message copy. An
-      // attachment refusal then deletes the task it created, which holds
-      // nothing yet: the next Send creates its own.
+      // attachment refusal then deletes the task it created unless an agent
+      // was started in it meanwhile: the next Send creates its own.
       const giveBack = (): void => {
         if (!sameAccount() || !handed.isCurrent()) return;
         const returned = handed.giveBack();
@@ -1677,14 +1677,9 @@ export function useLandingComposerActions(
       const attachRefused = (): void => {
         if (!sameAccount() || !handed.isCurrent()) return;
         giveBack();
-        // `useEpicDiscardCreated` says when this rejects.
-        void discardCreatedAsync({ epicId, hostId })
-          .then((response) => {
-            if (response.results.some((row) => row.success)) {
-              unmarkEpicCreatedThisSession(epicId);
-            }
-          })
-          .catch(() => undefined);
+        void discardCreatedIfEmpty({ epicId, hostId }).then((discarded) => {
+          if (discarded) unmarkEpicCreatedThisSession(epicId);
+        });
       };
       void createLandingEpic({
         epicId,
@@ -1731,7 +1726,7 @@ export function useLandingComposerActions(
       attachClient,
       attachEnvironmentAsync,
       createLandingEpic,
-      discardCreatedAsync,
+      discardCreatedIfEmpty,
       navigate,
       resolveAdmittedPlacement,
     ],

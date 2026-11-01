@@ -823,6 +823,10 @@ function settleDeletedEpics(input: {
 export const DISCARD_CREATED_EPIC_FAILED_COPY =
   "Couldn't remove the empty task this Send created. Delete it from your tasks.";
 
+/** Shown when nothing says whether that Task holds work, so it stays. */
+export const DISCARD_CREATED_EPIC_UNREAD_COPY =
+  "Couldn't check the task this Send created, so it stays. Delete it from your tasks if you don't need it.";
+
 interface DiscardCreatedEpicVariables {
   readonly epicId: string;
   /** The host the Task was created on, which alone may hold it yet. */
@@ -835,17 +839,18 @@ interface DiscardCreatedEpicContext {
 }
 
 /**
- * Deletes a Task this window has just created, on the host it was created
- * on, when the Send that created it did not go through: that Send leaves no
- * Task behind. No progress or outcome toast, since the person never asked
- * for the Task; only a delete that fails is told.
+ * Deletes a Task this window has just created, on the host it was created on,
+ * when the Send that created it did not go through and the Task still holds no
+ * agent: that Send leaves no Task behind. The Task is open while the Send is
+ * being set up, so the person may have started an agent in it, and any row
+ * keeps it, as does a read that fails. Answers whether it was deleted.
+ *
+ * No progress or outcome toast, since the person never asked for the Task;
+ * only a Task left behind by a failure is told.
  */
-export function useEpicDiscardCreated(): UseMutationResult<
-  ResponseOfMethod<HostRpcRegistry, "epic.batchDelete">,
-  HostRpcError,
-  DiscardCreatedEpicVariables,
-  DiscardCreatedEpicContext
-> {
+export function useEpicDiscardCreatedIfEmpty(): (
+  variables: DiscardCreatedEpicVariables,
+) => Promise<boolean> {
   const activeClient = useHostClient();
   const binding = useHostBinding();
   const queryClient = useQueryClient();
@@ -853,13 +858,47 @@ export function useEpicDiscardCreated(): UseMutationResult<
   // Read when the delete lands, not subscribed: the Send's surface would
   // otherwise re-render on every navigation for a delete it rarely makes.
   const router = useRouter();
-  return useHostMutation<
+  const clientFor = (variables: DiscardCreatedEpicVariables) =>
+    resolveNamedHostClient(binding, variables.hostId);
+  // `knownRevision: null` holds no list stamp, so the host always answers
+  // `snapshot`; `hasDocReplica: false` asks for the doc-resident rows too.
+  const readChats = useHostMutation<
+    HostRpcRegistry,
+    "epic.listChatRecords",
+    unknown,
+    DiscardCreatedEpicVariables
+  >({
+    client: clientFor,
+    method: "epic.listChatRecords",
+    mapVariables: ({ epicId }) => ({
+      epicId,
+      hasDocReplica: false,
+      knownRevision: null,
+    }),
+    options: null,
+  }).mutateAsync;
+  const readTerminalAgents = useHostMutation<
+    HostRpcRegistry,
+    "epic.listTuiAgents",
+    unknown,
+    DiscardCreatedEpicVariables
+  >({
+    client: clientFor,
+    method: "epic.listTuiAgents",
+    mapVariables: ({ epicId }) => ({
+      epicId,
+      hasDocReplica: false,
+      knownRevision: null,
+    }),
+    options: null,
+  }).mutateAsync;
+  const discard = useHostMutation<
     HostRpcRegistry,
     "epic.batchDelete",
     DiscardCreatedEpicContext,
     DiscardCreatedEpicVariables
   >({
-    client: (variables) => resolveNamedHostClient(binding, variables.hostId),
+    client: clientFor,
     method: "epic.batchDelete",
     mapVariables: (variables) => ({ ids: [variables.epicId] }),
     options: {
@@ -887,7 +926,39 @@ export function useEpicDiscardCreated(): UseMutationResult<
         toastFromOwnerHostWriteError(error, DISCARD_CREATED_EPIC_FAILED_COPY);
       },
     },
-  });
+  }).mutateAsync;
+  return async (variables) => {
+    const userId = activeClient.getRequestContextUserId();
+    let holdsAgent: boolean;
+    try {
+      const [chats, terminalAgents] = await Promise.all([
+        readChats(variables),
+        readTerminalAgents(variables),
+      ]);
+      holdsAgent =
+        chats.kind !== "snapshot" ||
+        chats.chats.length > 0 ||
+        terminalAgents.kind !== "snapshot" ||
+        terminalAgents.tuiAgents.length > 0;
+    } catch {
+      toast.error(DISCARD_CREATED_EPIC_UNREAD_COPY);
+      return false;
+    }
+    // The reads are a wait the account can change in, and a delete never
+    // crosses accounts.
+    if (holdsAgent || activeClient.getRequestContextUserId() !== userId) {
+      return false;
+    }
+    try {
+      const { results } = await discard(variables);
+      return results.some(
+        (row) => row.taskId === variables.epicId && row.success,
+      );
+    } catch {
+      // `discard`'s `onError` told the person.
+      return false;
+    }
+  };
 }
 
 /**
