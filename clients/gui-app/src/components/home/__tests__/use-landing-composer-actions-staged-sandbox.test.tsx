@@ -1243,6 +1243,16 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     ]);
   }
 
+  /**
+   * The attachment is refused and the rollback, when there is one, is over:
+   * no mutation of the Send's client is left pending.
+   */
+  async function refusalSettled(queryClient: QueryClient): Promise<void> {
+    await waitFor(() => {
+      expect(queryClient.isMutating()).toBe(0);
+    });
+  }
+
   async function bothReadsSent(): Promise<void> {
     await waitFor(() => {
       expect(
@@ -1290,7 +1300,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       await refuseAttach(attachBusy());
 
       await bothReadsSent();
-      await flushPending();
+      await refusalSettled(queryClient);
       expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
       expect(wasEpicCreatedThisSession(epicId)).toBe(true);
       expect(
@@ -1327,10 +1337,11 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
         await startSendWithHeldAttach();
       await refuseAttach(error);
 
+      // Nothing follows the message's return but the refusal's own line.
       await waitFor(() => {
         expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
       });
-      await flushPending();
+      await refusalSettled(queryClient);
       // Nothing was asked of the host about the task, let alone deleted.
       expect(landingMocks.readRequest).not.toHaveBeenCalled();
       expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
@@ -1373,7 +1384,17 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     }
     const shownBefore = toastLog.length;
     await refuseAttach(error);
-    await flushPending();
+    // A task still being set up is rolled back unless the Send was taken back:
+    // its delete is the last thing that can follow.
+    if (
+      fate !== "taken-back" &&
+      PROMOTION_PENDING_CODES.some((code) => code === error.code)
+    ) {
+      await waitFor(() => {
+        expect(landingMocks.deleteRequest).toHaveBeenCalledTimes(1);
+      });
+    }
+    await refusalSettled(queryClient);
     queryClient.clear();
     return toastLog.slice(shownBefore);
   }
@@ -1439,6 +1460,67 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     ).toEqual([{ via: "toast", message: BACK_IN_COMPOSER_LINE, action: null }]);
   });
 
+  it.each([
+    [
+      "an aborted request",
+      new HostRequestAbortedError({
+        message: "authority replaced",
+        requestId: "request-attach-abort",
+        method: "epic.attachEnvironment",
+        mayHaveDispatched: false,
+      }),
+    ],
+    [
+      "a recoverable sign-in check",
+      new HostRpcError({
+        code: "UNAUTHORIZED",
+        message: "token refresh in flight",
+        requestId: "request-attach-auth",
+        method: "epic.attachEnvironment",
+        fatalDetails: null,
+      }),
+    ],
+  ] as const)(
+    "puts the message in Drafts without a word when the attachment is silent and the composer holds a newer message (%s)",
+    async (_label, error) => {
+      expect(await toastsFromRefusal("drafts", error)).toEqual([]);
+      expect(useLandingDraftStore.getState().drafts).toHaveLength(1);
+      expect(useLandingDraftStore.getState().drafts[0]).toMatchObject({
+        content: MESSAGE_CONTENT,
+        settings: PICKED_SETTINGS,
+        returnedSandbox: { target: TEAM_TARGET },
+      });
+    },
+  );
+
+  it.each([
+    [
+      "an aborted request",
+      new HostRequestAbortedError({
+        message: "authority replaced",
+        requestId: "request-attach-abort",
+        method: "epic.attachEnvironment",
+        mayHaveDispatched: false,
+      }),
+    ],
+    [
+      "a recoverable sign-in check",
+      new HostRpcError({
+        code: "UNAUTHORIZED",
+        message: "token refresh in flight",
+        requestId: "request-attach-auth",
+        method: "epic.attachEnvironment",
+        fatalDetails: null,
+      }),
+    ],
+  ] as const)(
+    "says nothing and saves no draft when the attachment is silent and nothing was returned (%s)",
+    async (_label, error) => {
+      expect(await toastsFromRefusal("nowhere", error)).toEqual([]);
+      expect(useLandingDraftStore.getState().drafts).toEqual([]);
+    },
+  );
+
   it("keeps a retryable attestation a plain notice, with the host's raw reason shown nowhere", async () => {
     const shown = await toastsFromRefusal(
       "composer",
@@ -1498,7 +1580,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
     });
     const shownBefore = toastLog.length;
     await refuseAttach(attachBusy());
-    await flushPending();
+    await refusalSettled(queryClient);
     expect(toastLog.slice(shownBefore)).toEqual([]);
     queryClient.clear();
   });
@@ -1593,7 +1675,7 @@ describe("useLandingComposerActions.startTaskOnStagedSandbox", () => {
       for (const [method, held] of reads) held.resolve(heldRows(method, []));
       await Promise.all([...reads.values()].map((held) => held.promise));
     });
-    await flushPending();
+    await refusalSettled(queryClient);
 
     expect(landingMocks.deleteRequest).not.toHaveBeenCalled();
     expect(wasEpicCreatedThisSession(epicId)).toBe(true);

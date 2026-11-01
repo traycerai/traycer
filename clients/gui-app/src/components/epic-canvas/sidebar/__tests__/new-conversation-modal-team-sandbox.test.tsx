@@ -229,6 +229,8 @@ const testState = vi.hoisted(() => ({
   /** The editor's @/slash menu dismissal. */
   dismissSuggestion: vi.fn(() => false),
   bodySubmit: null as (() => void) | null,
+  /** Whether the surface shows the composer as submitting, on its latest render. */
+  bodySubmitting: false,
   bodyStartTerminal: null as
     | ((launch: TerminalAgentLaunch, assembledFor: string | null) => void)
     | null,
@@ -273,6 +275,7 @@ vi.mock("@/components/home/composer/composer-body", async () => {
   return {
     ComposerBody: (props: ComposerBodyProps) => {
       testState.bodySubmit = props.onSubmit;
+      testState.bodySubmitting = props.isSubmitting;
       testState.bodyStartTerminal = props.onStartTerminal;
       testState.installEditor = () => {
         props.editorRef.current = editorHandle();
@@ -1192,19 +1195,19 @@ describe("new-conversation modal's send on a staged sandbox", () => {
       await waitFor(() => {
         expect(testState.attachEnvironment).toHaveBeenCalledTimes(1);
       });
+      await waitFor(() => {
+        expect(testState.bodySubmitting).toBe(true);
+      });
 
       await act(async () => {
         attach.reject(error);
         await attach.promise.catch(() => undefined);
       });
 
-      if (expected.length > 0) {
-        await waitFor(() => {
-          expect(toastLog).toHaveLength(expected.length);
-        });
-      }
-      await act(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 0));
+      // The attachment has settled once the surface is idle again, and its
+      // refusal toast is shown before it is.
+      await waitFor(() => {
+        expect(testState.bodySubmitting).toBe(false);
       });
       expect(toastLog).toEqual(expected);
       expect(testState.createChat).not.toHaveBeenCalled();
