@@ -25,7 +25,10 @@ import type {
   SandboxListResponse,
 } from "@traycer/protocol/host/sandbox-control";
 import { useAuthStore } from "@/stores/auth/auth-store";
-import { unusedSettingLabel } from "@/components/settings/details/details-unused-setting";
+import {
+  oneLinePerAgent,
+  unusedSettingLabel,
+} from "@/components/settings/details/details-unused-setting";
 import { sandboxSettingsFailed } from "@traycer/protocol/host/sandbox-settings";
 
 type HistoryResponse = ResponseOfMethod<HostRpcRegistry, "environment.history">;
@@ -210,14 +213,14 @@ async function deliveryHostRows(input: {
     ];
   return [
     current,
-    ...(input.unusedListed ? [] : unused).map(
-      ({ key: itemKey }): DetailsHostStatus => ({
-        ...current,
-        item: unusedSettingLabel(itemKey),
-        state: "not_used",
-        recovery: null,
-      }),
-    ),
+    ...oneLinePerAgent(input.unusedListed ? [] : unused, ({ key }) =>
+      unusedSettingLabel(key),
+    ).map(({ key: itemKey }): DetailsHostStatus => ({
+      ...current,
+      item: unusedSettingLabel(itemKey),
+      state: "not_used",
+      recovery: null,
+    })),
   ];
 }
 
@@ -262,7 +265,7 @@ async function loadEnvironmentDetails(
       })
       .filter(([key]) => key.at(-1) === viewer)
       .flatMap(([, answer]) => answer?.sandboxes ?? []);
-    const serverUnused = hosts
+    const reportedUnused = hosts
       .filter((host) => host.state === "not_used")
       .map((host) => ({
         ...host,
@@ -270,6 +273,13 @@ async function loadEnvironmentDetails(
           sandboxes.find((row) => row.hostId === host.hostId)?.displayName ??
           host.name,
       }));
+    // The export keeps every reported row, for support.
+    const serverUnused = diagnostics
+      ? reportedUnused
+      : oneLinePerAgent(
+          reportedUnused,
+          (host) => `${host.hostId}:${host.item ?? ""}`,
+        );
     const rows = await Promise.all(
       hosts
         .filter((host) => host.state !== "not_used")

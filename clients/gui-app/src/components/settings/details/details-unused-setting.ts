@@ -15,3 +15,20 @@ export function unusedSettingLabel(item: string | null): string {
     provider === undefined ? "Agent" : providerDisplayName(provider.providerId);
   return `${label} key`;
 }
+
+/**
+ * The rows a person reads: one line per agent, however many keys are stored.
+ * A line names the agent and never the key, so a second key adds nothing to it.
+ */
+export function oneLinePerAgent<T>(
+  rows: readonly T[],
+  lineOf: (row: T) => string,
+): T[] {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const line = lineOf(row);
+    if (seen.has(line)) return false;
+    seen.add(line);
+    return true;
+  });
+}
