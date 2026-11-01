@@ -2832,6 +2832,47 @@ describe("a claimed request whose sandbox rests", () => {
   });
 });
 
+describe("Retry on a settings blocker when the sandbox rests", () => {
+  const restingFacts = (rowId: string): PendingSendFacts => ({
+    ...defaultFacts(rowId),
+    host: "resting",
+  });
+
+  it.each(["S.settings", "Q.settings"])(
+    "%s drops the blocker and wakes, because settings are said of an awake sandbox",
+    (rowId) => {
+      const retried = run(stateOf("chat", rowId), "retry", restingFacts(rowId));
+      expect(retried.effects).toEqual(["retry", "poll", "wake"]);
+      expect(retried.state).toMatchObject({
+        phase: "sending",
+        blocker: "host",
+      });
+    },
+  );
+
+  it.each(["S.settings", "Q.settings"])(
+    "%s keeps the blocker on an awake sandbox and wakes nothing",
+    (rowId) => {
+      const retried = run(stateOf("chat", rowId), "retry", {
+        ...defaultFacts(rowId),
+        host: "awake",
+      });
+      expect(retried.effects).not.toContain("wake");
+      expect(retried.state.blocker).toBe("settings");
+    },
+  );
+
+  it("W.settings, an unclaimed send, still gives the message back at rest and wakes nothing", () => {
+    const retried = run(
+      stateOf("chat", "W.settings"),
+      "retry",
+      restingFacts("W.settings"),
+    );
+    expect(retried.effects).not.toContain("wake");
+    expect(retried.state).toMatchObject({ phase: "returned" });
+  });
+});
+
 describe("a wake already in flight", () => {
   it.each(["W.host", "W.model", "W.provider", "W.none", "S.none", "S.host"])(
     "PS.%s.rest polls and does not wake a second time",

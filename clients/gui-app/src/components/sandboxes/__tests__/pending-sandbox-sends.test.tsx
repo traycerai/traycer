@@ -17,7 +17,12 @@ import {
   type MessageSessionHarness,
 } from "./message-session-harness";
 import type { ReactNode } from "react";
-import { HostRpcError } from "@traycer-clients/shared/host-transport/host-messenger";
+import {
+  HostRpcError,
+  HostTransportFailureError,
+} from "@traycer-clients/shared/host-transport/host-messenger";
+import { markMayHaveReachedHost } from "@traycer/protocol/host-transport/remote/rpc-types";
+import { appLogger } from "@/lib/logger";
 import type { JsonContent } from "@traycer/protocol/common/registry";
 import type { ExternalToast } from "sonner";
 import {
@@ -5238,6 +5243,221 @@ describe("a pending chat create", () => {
   );
 });
 
+describe("a create the host's access check refused", () => {
+  const REJECTED = "Pending sandbox dispatch rejected";
+
+  function unauthorized(): HostRpcError {
+    return new HostRpcError({
+      code: "UNAUTHORIZED",
+      message: "Not signed in.",
+      requestId: "request-1",
+      method: "epic.createChat",
+      fatalDetails: null,
+    });
+  }
+
+  function dispatchOf(): PendingSandboxSendDispatch | null {
+    return (
+      usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch ?? null
+    );
+  }
+
+  function refusalLine(): HTMLElement {
+    return screen.getByTestId("sandbox-refusal-line");
+  }
+
+  function expectUncertainClaim(): void {
+    expect(
+      screen.getByTestId("pending-sandbox-dispatch").textContent,
+    ).toContain("Couldn't confirm the agent was created.");
+    expect(screen.getByTestId("pending-sandbox-dispatch-retry")).toBeDefined();
+    expect(dispatchOf()).toMatchObject({ status: "uncertain" });
+    expect(screen.queryByTestId("sandbox-refusal-line")).toBeNull();
+    expect(usePendingSandboxSendStore.getState().sends[SEND_ID]).toBeDefined();
+    expect(useLandingDraftStore.getState().drafts).toEqual([]);
+  }
+
+  async function waitForRefusalLine(): Promise<void> {
+    await waitFor(() => {
+      expect(readStagedSandbox(SURFACE)?.failure).toEqual({ kind: "not-sent" });
+    });
+  }
+
+  it("releases a first attempt rejected UNAUTHORIZED: ready but nothing sent, Retry and the exit actions, no claim left", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    seed(SEEDED);
+    mocks.createChatError = unauthorized();
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitForRefusalLine();
+    expect(createChatCalls()).toHaveLength(1);
+    expect(dispatchOf()).toBeNull();
+    expect(screen.queryByTestId("pending-sandbox-dispatch-retry")).toBeNull();
+    expect(document.body.textContent).not.toContain("Couldn't confirm");
+    expect(refusalLine().textContent).toContain(
+      `${NEW_TARGET.name} is ready, but nothing was sent.`,
+    );
+    expect(
+      within(refusalLine()).getByRole("button", { name: "Retry" }),
+    ).toBeDefined();
+    expect(
+      await within(refusalLine()).findByRole("button", {
+        name: "Use Task host",
+      }),
+    ).toBeDefined();
+    expect(mocks.wake).not.toHaveBeenCalled();
+  });
+
+  it("gives the message back, with no wake, when the sandbox rests after that refusal", async () => {
+    onTestFinished(installImmediateExclusiveLocks());
+    seed(SEEDED);
+    mocks.createChatError = unauthorized();
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await waitForRefusalLine();
+
+    answerSandboxRows(
+      [
+        sandboxSummaryFixture({
+          id: SANDBOX_ID,
+          hostId: SANDBOX_HOST,
+          state: "suspended",
+        }),
+      ],
+      Date.now() + 120_000,
+    );
+
+    await waitFor(() => {
+      expect(usePendingSandboxSendStore.getState().sends).toEqual({});
+    });
+    expect(mocks.wake).not.toHaveBeenCalled();
+    expect(createChatCalls()).toHaveLength(1);
+    expect(
+      useNewConversationModalStore.getState().draftPatchesByEpicId["epic-1"],
+    ).toMatchObject({ content: MESSAGE_CONTENT });
+  });
+
+  it("makes one more create with the same IDs on Retry, and delivers exactly once when the credential is back", async () => {
+    seed(SEEDED);
+    mocks.createChatError = unauthorized();
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+    await waitForRefusalLine();
+    const first = createChatCalls()[0].input;
+
+    mocks.createChatError = null;
+    fireEvent.click(
+      within(refusalLine()).getByRole("button", { name: "Retry" }),
+    );
+
+    await waitForCreateChats(2);
+    expect(createChatCalls()[1]?.input).toMatchObject({
+      chatId: first.chatId,
+      initialMessage: {
+        messageId: first.initialMessage?.messageId,
+        clientActionId: first.initialMessage?.clientActionId,
+      },
+    });
+    await waitFor(() => {
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
+      ).toMatchObject({ hostId: SANDBOX_HOST, sandboxId: SANDBOX_ID });
+    });
+    expect(createChatCalls()).toHaveLength(2);
+    expect(mocks.wake).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a lost reply", () => new Error("The reply was lost.")],
+    [
+      "a transport failure",
+      () =>
+        new HostTransportFailureError({
+          code: "RPC_ERROR",
+          message: "Connection dropped.",
+          requestId: "request-1",
+          method: "epic.createChat",
+          fatalDetails: null,
+        }),
+    ],
+  ] as const)(
+    "keeps the claim uncertain when a Retry after %s is rejected UNAUTHORIZED, and a third Retry delivers",
+    async (_label, failure) => {
+      seed(SEEDED);
+      mocks.createChatError = failure();
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      mount();
+      await waitFor(() => {
+        expect(dispatchOf()).toMatchObject({ status: "uncertain" });
+      });
+      expect(createChatCalls()).toHaveLength(1);
+
+      mocks.createChatError = unauthorized();
+      fireEvent.click(
+        await screen.findByTestId("pending-sandbox-dispatch-retry"),
+      );
+      await waitForCreateChats(2);
+      await waitFor(() => {
+        expect(mocks.wake).not.toHaveBeenCalled();
+        expectUncertainClaim();
+      });
+      expect(dispatchOf()).not.toBeNull();
+
+      mocks.createChatError = null;
+      fireEvent.click(screen.getByTestId("pending-sandbox-dispatch-retry"));
+      await waitForCreateChats(3);
+      await waitFor(() => {
+        expect(
+          usePendingSandboxSendStore.getState().sends[SEND_ID]?.delivery,
+        ).toMatchObject({ hostId: SANDBOX_HOST, sandboxId: SANDBOX_ID });
+      });
+      expect(createChatCalls()).toHaveLength(3);
+    },
+  );
+
+  it("keeps a first attempt uncertain when the UNAUTHORIZED may have reached the host", async () => {
+    seed(SEEDED);
+    const error = unauthorized();
+    markMayHaveReachedHost(error);
+    mocks.createChatError = error;
+    answerHost(SANDBOX_HOST, CODEX_READY);
+    mount();
+
+    await waitFor(() => {
+      expect(dispatchOf()).toMatchObject({ status: "uncertain" });
+    });
+    expect(createChatCalls()).toHaveLength(1);
+    expectUncertainClaim();
+  });
+
+  it.each([
+    ["a host-answered UNAUTHORIZED", unauthorized, "UNAUTHORIZED"],
+    [
+      "an error that is no host answer",
+      () => new Error("The reply was lost."),
+      "unknown",
+    ],
+  ] as const)(
+    "logs only the code of a rejection: %s",
+    async (_label, failure, code) => {
+      const warn = vi.spyOn(appLogger, "warn");
+      onTestFinished(() => warn.mockRestore());
+      seed(SEEDED);
+      mocks.createChatError = failure();
+      answerHost(SANDBOX_HOST, CODEX_READY);
+      mount();
+
+      await waitForCreateChats(1);
+      await waitFor(() => {
+        expect(
+          warn.mock.calls.filter(([message]) => message === REJECTED),
+        ).toEqual([[REJECTED, { code }]]);
+      });
+    },
+  );
+});
+
 describe("cancelling a refused pending message", () => {
   it.each([false, true])(
     "returns the message with occupied composer=%s and leaves its sandbox alone",
@@ -7260,6 +7480,8 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       const input = await seedClaim(kind, "sending", SANDBOX_ID);
       answerSandboxRows([rowIn(state)], FRESH);
       answerHost(SANDBOX_HOST, CODEX_READY);
+      const wake = deferred<{ readonly kind: "awake" } | null>();
+      mocks.wake.mockReturnValue(wake.promise);
       mount();
 
       const retry = await screen.findByTestId("pending-sandbox-dispatch-retry");
@@ -7280,7 +7502,12 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       });
       expect(createChatCalls()).toEqual([]);
 
+      // The row says awake before the wake answers, as it does for real.
       answerSandboxRows([rowIn("awake")], FRESH + 1);
+      await act(async () => {
+        wake.resolve({ kind: "awake" });
+        await wake.promise;
+      });
       await waitForCreateChats(1);
       expect(createChatCalls()[0]?.input).toEqual(input);
       expect(mocks.wake).toHaveBeenCalledTimes(1);
@@ -7331,6 +7558,8 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       const input = await seedClaim(kind, "uncertain", SANDBOX_ID);
       answerSandboxRows([rowIn(state)], FRESH);
       answerHost(SANDBOX_HOST, CODEX_READY);
+      const wake = deferred<{ readonly kind: "awake" } | null>();
+      mocks.wake.mockReturnValue(wake.promise);
       mount();
 
       const retry = await screen.findByTestId("pending-sandbox-dispatch-retry");
@@ -7342,7 +7571,12 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
       });
       expect(createChatCalls()).toEqual([]);
 
+      // The row says awake before the wake answers, as it does for real.
       answerSandboxRows([rowIn("awake")], FRESH + 1);
+      await act(async () => {
+        wake.resolve({ kind: "awake" });
+        await wake.promise;
+      });
       await waitForCreateChats(1);
       expect(createChatCalls()[0]?.input).toEqual(input);
     },
@@ -7645,12 +7879,13 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
         usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
       ).not.toMatchObject({ blocker: "wake" });
 
+      // The row says awake before the wake answers, as it does for real.
+      mocks.listReadSentAt = superseding + 2;
+      answerSandboxRows([rowIn("awake")], FRESH + 2);
       await act(async () => {
         second.resolve({ kind: "awake" });
         await second.promise;
       });
-      mocks.listReadSentAt = superseding + 2;
-      answerSandboxRows([rowIn("awake")], FRESH + 2);
       await waitForCreateChats(1);
       expect(createChatCalls()).toHaveLength(1);
       expect(createChatCalls()[0]?.input).toEqual(input);
@@ -8041,6 +8276,182 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
           usePendingSandboxSendStore.getState().sends[SEND_ID].dispatch,
         ).toMatchObject({ status: "uncertain" });
         expect(useNewConversationModalOpenStore.getState().request).toBeNull();
+      },
+    );
+  });
+
+  describe("when Retry wakes a sandbox that rests", () => {
+    const realNow = Date.now.bind(Date);
+    let skew = 0;
+
+    beforeEach(() => {
+      skew = 0;
+      const clock = vi
+        .spyOn(Date, "now")
+        .mockImplementation(() => realNow() + skew);
+      onTestFinished(() => clock.mockRestore());
+    });
+
+    /** Real time passes between Retry and the wake's answer. */
+    function advanceClock(): void {
+      skew += 1_000;
+    }
+
+    function boundary(): number {
+      const at =
+        usePendingSandboxSendStore.getState().sends[SEND_ID]
+          ?.observationRequestedAt;
+      if (typeof at !== "number") throw new Error("no observation boundary");
+      return at;
+    }
+
+    function expectStillSending(): void {
+      expect(
+        usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
+      ).toMatchObject({ status: "sending" });
+      expect(screen.queryByTestId("pending-sandbox-dispatch-retry")).toBeNull();
+    }
+
+    function readSentAt(sentAt: number, state: "suspended" | "awake"): void {
+      mocks.listReadSentAt = sentAt;
+      answerSandboxRows([rowIn(state)], FRESH);
+    }
+
+    async function answerWakeAwake(
+      wake: Deferred<{ readonly kind: "awake" } | null>,
+    ): Promise<void> {
+      await act(async () => {
+        wake.resolve({ kind: "awake" });
+        await wake.promise;
+      });
+    }
+
+    it.each(KINDS)(
+      "holds a %s claim sending through the wake, whatever a suspended read says, then delivers once the sandbox answers awake",
+      async (kind) => {
+        const { input, wake } = await startClaimedWake(kind);
+        const requested = boundary();
+
+        // The read held from before Retry, then a read that beat the verb.
+        readSentAt(requested - 1, "suspended");
+        expectStillSending();
+        readSentAt(requested + 1, "suspended");
+        expectStillSending();
+        expect(createChatCalls()).toEqual([]);
+
+        advanceClock();
+        await answerWakeAwake(wake);
+        const held = boundary();
+        expect(held).toBeGreaterThan(requested + 1);
+        readSentAt(held + 1, "awake");
+
+        await waitForCreateChats(1);
+        expect(createChatCalls()[0]?.input).toEqual(input);
+        expect(mocks.wake).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it.each(KINDS)(
+      "does not read a %s claim as rested from a suspended read that outlasts the wake's awake answer",
+      async (kind) => {
+        const { input, wake } = await startClaimedWake(kind);
+        const requested = boundary();
+        readSentAt(requested + 1, "suspended");
+        expectStillSending();
+
+        advanceClock();
+        await answerWakeAwake(wake);
+        // The same cached read, seen again after the answer.
+        readSentAt(requested + 1, "suspended");
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expectStillSending();
+        expect(createChatCalls()).toEqual([]);
+
+        readSentAt(boundary() + 1, "awake");
+        await waitForCreateChats(1);
+        expect(createChatCalls()[0]?.input).toEqual(input);
+        expect(mocks.wake).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it.each(KINDS)(
+      "still reads a %s claim as rested when a read sent after the awake answer says suspended, and a second Retry wakes again",
+      async (kind) => {
+        const { input, wake } = await startClaimedWake(kind);
+        advanceClock();
+        await answerWakeAwake(wake);
+        const second = deferred<{ readonly kind: "awake" } | null>();
+        mocks.wake.mockReturnValue(second.promise);
+
+        readSentAt(boundary() + 1, "suspended");
+        const retry = await screen.findByTestId(
+          "pending-sandbox-dispatch-retry",
+        );
+        expect(
+          screen.getByTestId("pending-sandbox-dispatch").textContent,
+        ).toContain("Couldn't confirm");
+        expect(
+          usePendingSandboxSendStore.getState().sends[SEND_ID]?.dispatch,
+        ).toMatchObject({ status: "uncertain" });
+        expect(createChatCalls()).toEqual([]);
+
+        fireEvent.click(retry);
+        await waitFor(() => {
+          expect(mocks.wake).toHaveBeenCalledTimes(2);
+        });
+        advanceClock();
+        await answerWakeAwake(second);
+        readSentAt(boundary() + 1, "awake");
+
+        await waitForCreateChats(1);
+        expect(createChatCalls()[0]?.input).toEqual(input);
+        expect(mocks.wake).toHaveBeenCalledTimes(2);
+      },
+    );
+
+    it.each(byKind(["sending", "uncertain"] as const))(
+      "wakes a rested %s %s claim holding a settings blocker on Retry, then delivers once its settings are ready",
+      async (kind, status) => {
+        const input = await seedClaim(kind, status, SANDBOX_ID);
+        usePendingSandboxSendStore.setState((state) => {
+          const send = state.sends[SEND_ID];
+          const dispatch = send.dispatch;
+          if (dispatch === null || dispatch === undefined)
+            throw new Error("the claim was not seeded");
+          return {
+            sends: {
+              ...state.sends,
+              [SEND_ID]: {
+                ...send,
+                dispatch: { ...dispatch, blocker: "settings" },
+              },
+            },
+          };
+        });
+        answerSandboxRows([rowIn("suspended")], FRESH);
+        answerHost(SANDBOX_HOST, CODEX_READY);
+        const wake = deferred<{ readonly kind: "awake" } | null>();
+        mocks.wake.mockReturnValue(wake.promise);
+        mount();
+
+        fireEvent.click(
+          await screen.findByTestId("pending-sandbox-dispatch-retry"),
+        );
+        await waitFor(() => {
+          expect(mocks.wake).toHaveBeenCalledTimes(1);
+        });
+        expect(createChatCalls()).toEqual([]);
+        readSentAt(boundary() + 1, "suspended");
+        expectStillSending();
+
+        advanceClock();
+        await answerWakeAwake(wake);
+        readSentAt(boundary() + 1, "awake");
+        await waitForCreateChats(1);
+        expect(createChatCalls()[0]?.input).toEqual(input);
+        expect(mocks.wake).toHaveBeenCalledTimes(1);
       },
     );
   });
