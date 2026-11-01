@@ -164,7 +164,7 @@ export interface HostInstallArgs {
  * For `--from` that version is the extracted archive's own `version.json`
  * stamp and NOT this command's `local-<basename>-<stamp>` record version - a
  * released archive installed from a file is judged as the release it is (see
- * `storeFormatFloorTargetVersion`).
+ * `storeFormatFloorBuildVersion`).
  *
  * A function rather than a conditional expression at the call site so the
  * install record is read only on the branch that consults it: the ungated
@@ -190,6 +190,7 @@ async function gateInstallStoreFormatFloor(
     targetVersion: args.versionRequest,
     installedVersion: installed.version,
     installedStoreFormats: installed.storeFormats,
+    installedProvenance: installed.provenance,
     consultRegistry: true,
     acceptStoreFormatLoss: args.acceptStoreFormatLoss,
     site: "host install",
