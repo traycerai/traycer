@@ -522,6 +522,30 @@ describe("applyHost", () => {
       expect(mocks.lifecycleCalls).toHaveLength(0);
     });
 
+    it("evaluates a staged registry build whose stamp disagrees with its catalog version", async () => {
+      // Both strings sort above the install, so the version shortcut would
+      // stand aside. Nothing places the stamp, and a store is on disk.
+      await writeInstall("1.3.0-rc.4", {});
+      await writeStaged("1.4.0", { runtimeVersion: "1.5.0" });
+      await writeStampedChatDbFor(ENV, "epic-on-disk", 9);
+
+      await expect(
+        applyHost({
+          environment: ENV,
+          force: false,
+          noService: false,
+          expectedStageFingerprint: null,
+          onProgress: () => {},
+        }),
+      ).rejects.toMatchObject({ code: "E_HOST_STORE_FORMAT_FLOOR" });
+
+      // The commit tail repeats the identity test, so this gate's own answer
+      // shows only in its operands: it must refuse here, before the busy gate.
+      expect(
+        mocks.assertHostStoreFormatFloorMock.mock.calls[0]?.[0],
+      ).toMatchObject({ targetIdentity: "local-archive" });
+    });
+
     it("judges a side-loaded install by its runtime version and clears the identical archive", async () => {
       await writeInstall("local-host.tar.gz-2026-11-01T07-54-28-844Z", {
         runtimeVersion: "1.3.0-rc.4",

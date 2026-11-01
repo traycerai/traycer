@@ -4,6 +4,7 @@ import {
   currentDataRootResolution,
   defaultDataRoot,
 } from "@traycer/protocol/config/data-root";
+import { isReleasedHostVersion } from "@traycer/protocol/host/store-formats";
 import { configuredSupportedHostVersion } from "../host/supported-host-version";
 import type { Environment } from "../runner/environment";
 import { CLI_ERROR_CODES, cliError } from "../runner/errors";
@@ -81,8 +82,13 @@ export function refuseOlderHostWhileDataMoved(input: {
   });
 }
 
-/** `target` is orderable against `floor` and not below it. */
+/**
+ * `target` is orderable against `floor` and not below it. The source-tree
+ * sentinel parses as SemVer and sorts below every release, but says nothing
+ * about what wrote the data, so it orders nothing.
+ */
 function atOrAbove(target: string, floor: string): boolean {
+  if (!isReleasedHostVersion(floor)) return false;
   const comparison = compareHostVersions(target, floor);
   return comparison.comparable && comparison.ordering !== "less";
 }

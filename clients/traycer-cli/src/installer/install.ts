@@ -48,6 +48,7 @@ import {
   installedProvenanceOf,
   isSameArchive,
   stagedOrEvidencedStoreFormats,
+  storeFloorTargetIdentity,
   type StoreFormatFloorEvidence,
   type TargetRegistryEntry,
 } from "../host/store-format-floor";
@@ -941,11 +942,7 @@ export async function commitInstallFromSource(
     // INSTALLED tree that `host ensure --from` recorded under the CLI's
     // version, which a registry artifact of that version must not read as
     // the same build.
-    targetIdentity:
-      opts.source.kind === "registry" &&
-      (previous === null || previous.source.kind === "registry")
-        ? "registry-artifact"
-        : "local-archive",
+    targetIdentity: storeFloorTargetIdentity(opts, previous),
     // Resolved once for both checks: on dev this can span a run slot AND the
     // pooled identity homes, and the two checks must judge the same machine.
     surveyRoots: await resolveChatStoreSurveyRoots(opts.environment),

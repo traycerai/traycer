@@ -149,7 +149,8 @@ export type StoreFormatFloorSite =
  * identities, the version shortcuts hold, and the target's declaration only
  * resolves its format. `local-archive`: either end is a tree that named
  * itself - `host install --from`, a bundled desktop build, a stage promoted
- * from a local file - so a version string on one side or the other is not
+ * from a local file, or a registry archive whose own stamp disagrees with its
+ * catalog version - so a version string on one side or the other is not
  * identity. The installed side matters as much as the target: `host ensure
  * --from` records a local archive under the CLI's OWN version, so a registry
  * artifact of that version landing over it is a same-string move between
@@ -880,6 +881,29 @@ export function installedFloorVersion(
     : record.version;
 }
 
+/**
+ * The identity of a move, from both ends' records. See
+ * `StoreFloorTargetIdentity`.
+ *
+ * A registry archive counts as named by its version only while its own stamp
+ * agrees. Where they differ, the version shortcuts would decide on the catalog
+ * string alone, and the archive's declaration would get no vote.
+ */
+export function storeFloorTargetIdentity(
+  target: Pick<HostInstallRecord, "version" | "runtimeVersion" | "source">,
+  installed: Pick<HostInstallRecord, "source"> | null,
+): StoreFloorTargetIdentity {
+  const targetNamedByVersion =
+    target.source.kind === "registry" &&
+    (target.runtimeVersion === null ||
+      target.runtimeVersion === target.version);
+  const installedNamedByVersion =
+    installed === null || installed.source.kind === "registry";
+  return targetNamedByVersion && installedNamedByVersion
+    ? "registry-artifact"
+    : "local-archive";
+}
+
 /** The floor's view of an install record. */
 export function installedProvenanceOf(
   record: HostInstallRecord,
@@ -955,7 +979,9 @@ export async function assertStoreFormatFloorAtCommit(args: {
   // the tree about to land calls itself something else then that entry
   // describes a different build. Dropping them sends the resolution to the
   // archive's own declaration and then to the fixed table - the fail-closed
-  // direction - rather than clearing these bytes on another build's word.
+  // direction - rather than clearing these bytes on another build's word. A
+  // staged registry entry cannot differ here: it names these bytes, and the
+  // judged version is its own.
   const sameBytesAsGated = args.evidence.clearedVersion === targetVersion;
   if (!sameBytesAsGated && args.evidence.clearedVersion !== null) {
     args.logger.warn(

@@ -20,6 +20,7 @@ import {
   installedFloorVersion,
   installedProvenanceOf,
   isSameArchive,
+  storeFloorTargetIdentity,
   storeFormatFloorBuildVersion,
 } from "../host/store-format-floor";
 import type { ServiceState } from "../service";
@@ -359,10 +360,7 @@ export async function applyHost(
     // install that was one too keeps the version shortcuts; a local file on
     // either end (an `ensure --from` install records the CLI's version) means
     // the declaration judges.
-    targetIdentity:
-      staged.source.kind === "registry" && installed.source.kind === "registry"
-        ? "registry-artifact"
-        : "local-archive",
+    targetIdentity: storeFloorTargetIdentity(staged, installed),
     surveyRoots: await resolveChatStoreSurveyRoots(opts.environment),
     targetVersion: floorTargetVersion,
     publishedStoreFormats: null,

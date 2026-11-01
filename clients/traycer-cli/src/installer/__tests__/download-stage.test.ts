@@ -2623,6 +2623,26 @@ describe("downloadAndStageHost", () => {
       expect(await readHostStagedRecord(ENV)).toBeNull();
     });
 
+    it("refuses a registry target over an install recorded as the source-tree sentinel", async () => {
+      await writeInstall("0.0.0-dev", {});
+      dataRootMock.movedRoot = join(sandboxRoot, "moved-data");
+
+      await expect(
+        resolveUpdatePlan({
+          environment: ENV,
+          request: {
+            intent: "install",
+            versionRequest: null,
+            allowDowngrade: false,
+          },
+          onProgress: noopProgress,
+          registryClient: registry("1.5.0"),
+        }),
+      ).rejects.toMatchObject({
+        code: CLI_ERROR_CODES.HOST_UPDATE_NOT_NEWER,
+      });
+    });
+
     it("plans an upgrade over a side-loaded install its runtime version orders", async () => {
       await writeInstall("local-host-20261017", {
         runtimeVersion: "1.0.0",

@@ -114,12 +114,11 @@ interface InstalledFixture {
   readonly archiveSha256: string;
 }
 
-/**
- * The record and tree `host install --from` leaves on disk. A record with no
- * `runtimeVersion` beside a versioned sidecar is what an older CLI left.
- */
-async function writeSideLoadedInstall(
+async function writeInstall(
   fixture: InstalledFixture,
+  version: string,
+  source: HostInstallRecord["source"],
+  signatureKeyId: string,
 ): Promise<void> {
   const runtimeDir = join(hostHome(), "install", "host-runtime");
   mkdirSync(runtimeDir, { recursive: true });
@@ -132,20 +131,51 @@ async function writeSideLoadedInstall(
   }
   const record: HostInstallRecord = {
     installId: randomUUID(),
-    version: INSTALLED_LABEL,
+    version,
     runtimeVersion: fixture.runtimeVersion,
     platform: "darwin",
     arch: "arm64",
     installedAt: "2026-11-01T07:54:30.662Z",
-    source: { kind: "local-file", value: "dl/traycer-host.tar.gz" },
+    source,
     archiveSha256: fixture.archiveSha256,
     signatureVerifiedAt: "2026-11-01T07:54:28.844Z",
-    signatureKeyId: "local-file:unsigned",
+    signatureKeyId,
     sizeBytes: 1,
     executablePath: join(runtimeDir, "traycer-host"),
     executableSha256: null,
   };
   await writeHostInstallRecord(ENV, record);
+}
+
+/**
+ * The record and tree `host install --from` leaves on disk. A record with no
+ * `runtimeVersion` beside a versioned sidecar is what an older CLI left.
+ */
+async function writeSideLoadedInstall(
+  fixture: InstalledFixture,
+): Promise<void> {
+  await writeInstall(
+    fixture,
+    INSTALLED_LABEL,
+    { kind: "local-file", value: "dl/traycer-host.tar.gz" },
+    "local-file:unsigned",
+  );
+}
+
+async function writeRegistryInstall(
+  version: string,
+  storeFormats: { readonly chatDb: number },
+): Promise<void> {
+  await writeInstall(
+    {
+      runtimeVersion: version,
+      sidecar: { version, storeFormats },
+      archiveSha256: INSTALLED_SHA,
+    },
+    version,
+    { kind: "registry", value: version },
+    "fake-key-id",
+  );
 }
 
 async function writeStampedChatDb(
@@ -318,6 +348,7 @@ async function expectInstalledFromRegistry(version: string): Promise<void> {
 }
 
 const RC2 = "1.5.2-rc.2";
+const STAMP_OFF_LADDER = "staging.1783550586518.bb8c937d9";
 const RC2_SIDECAR = { version: RC2, storeFormats: { chatDb: 22 } };
 
 beforeEach(() => {
@@ -443,31 +474,71 @@ describe("host install --release over a side-loaded install", () => {
   });
 
   it.each([
-    ["off the ladder", "staging.1783550586518.bb8c937d9"],
-    ["above the install", "1.5.9"],
+    [
+      "off the ladder, over a registry install",
+      STAMP_OFF_LADDER,
+      { storeFormats: { chatDb: 20 } },
+      async () => writeRegistryInstall("1.5.2", { chatDb: 22 }),
+    ],
+    [
+      "above a registry install",
+      "1.5.9",
+      { storeFormats: { chatDb: 20 } },
+      async () => writeRegistryInstall("1.5.2", { chatDb: 22 }),
+    ],
+    [
+      "off the ladder and undeclaring, over a side-load",
+      STAMP_OFF_LADDER,
+      {},
+      async () =>
+        writeSideLoadedInstall({
+          runtimeVersion: RC2,
+          sidecar: RC2_SIDECAR,
+          archiveSha256: INSTALLED_SHA,
+        }),
+    ],
   ])(
     "judges a deferred target by its catalog version when the archive's stamp is %s",
-    async (_shape, stamp) => {
-      await writeSideLoadedInstall({
-        runtimeVersion: RC2,
-        sidecar: RC2_SIDECAR,
-        archiveSha256: INSTALLED_SHA,
-      });
+    async (_shape, stamp, declaration, install) => {
+      await install();
       await writeStampedChatDb("epic-at-22", 22);
       publish({
         version: "1.5.1",
         storeFormats: { chatDb: 20 },
         archiveSha256: TARGET_SHA,
-        sidecar: { version: stamp, storeFormats: { chatDb: 20 } },
+        sidecar: { version: stamp, ...declaration },
       });
       manifestReadTimesOut();
 
       const refusal = await refusalOf("1.5.1");
 
-      expect(refusal.message).toContain(
-        "refusing to install host 1.5.1 over the installed",
-      );
+      expect(downloadStarts).toHaveBeenCalledTimes(1);
       expect(refusal.message).toContain("it reads chat store format 20");
+    },
+  );
+
+  it.each([
+    ["undeclaring", {}, "cannot tell which chat store format 1.4.0 reads"],
+    [
+      "declaring an older format",
+      { storeFormats: { chatDb: 8 } },
+      "it reads chat store format 8",
+    ],
+  ])(
+    "gives an archive stamped below its catalog version a vote when it is %s",
+    async (_shape, declaration, reason) => {
+      await writeRegistryInstall("1.3.0-rc.4", { chatDb: 9 });
+      await writeStampedChatDb("epic-at-9", 9);
+      publish({
+        version: "1.4.0",
+        storeFormats: null,
+        archiveSha256: TARGET_SHA,
+        sidecar: { version: "1.2.0", ...declaration },
+      });
+
+      const refusal = await refusalOf("1.4.0");
+
+      expect(refusal.message).toContain(reason);
     },
   );
 
