@@ -251,7 +251,7 @@ function StandaloneBody(props: {
   readonly showOnboarding: boolean;
   readonly admissionRefusal: ShellAdmissionRefusal | null;
 }) {
-  if (props.showOnboarding) return <OnboardingPage replay={false} />;
+  if (props.showOnboarding) return <OnboardingPage />;
   if (props.admissionRefusal !== null) {
     return <AuthLandingPage refusal={props.admissionRefusal} />;
   }

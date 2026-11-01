@@ -1,8 +1,7 @@
-import { useRef, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { ArtifactProofRoute } from "@/routes/settings-dev-artifact-proof-route-components";
 import { CanvasProofRoute } from "@/routes/settings-dev-canvas-proof-route-components";
 import { GettingStartedSettingsPanel } from "./panels/getting-started-settings-panel";
-import { SettingsSetupGuide } from "./settings-setup-guide";
 import { SettingsDensityContext } from "@/providers/settings-density-context";
 import { SettingsSidebar } from "@/components/settings/settings-sidebar";
 import {
@@ -146,14 +145,10 @@ export function SettingsPanelForSection(props: {
   // tab render their panel THROUGH this function, so one watcher covers both
   // and there is no arrangement of surfaces that gets two of them.
   useSettingsAnchorReveal(section);
-  const rootRef = useRef<HTMLDivElement>(null);
   const Panel = SETTINGS_PANELS[section];
   return (
-    <div ref={rootRef} className="contents">
-      <PersonalPageFrame section={section}>
-        <Panel />
-      </PersonalPageFrame>
-      <SettingsSetupGuide section={section} rootRef={rootRef} />
-    </div>
+    <PersonalPageFrame section={section}>
+      <Panel />
+    </PersonalPageFrame>
   );
 }

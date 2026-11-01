@@ -61,7 +61,6 @@ describe("useLoginImportRun setup completion", () => {
     browserView = new FakeBrowserViewBridge({});
     useOnboardingStore.setState({
       setupProgress: { agents: -1, appearance: -1, cookies: -1 },
-      activeSetup: null,
       completedAt: null,
       step: 0,
     });

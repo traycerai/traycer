@@ -128,9 +128,6 @@ export function LayoutSettingsPanel(): ReactNode {
               if (next !== undefined) setArea(next.id);
             }}
             orientation="vertical"
-            // The setup guide's "Every piece has a row" target: the areas and
-            // the picked one together, on a phone as on a desktop.
-            data-layout-areas
             className="flex flex-col md:h-full md:min-h-0"
           >
             <SettingsMasterDetail

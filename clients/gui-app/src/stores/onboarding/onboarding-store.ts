@@ -4,7 +4,6 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { basePersistOptions, persistKey, STORE_KEYS } from "@/lib/persist";
 import {
   availableSetupGuideIds,
-  setupGuide,
   setupGuideCompletedBy,
   setupGuideLength,
   SETUP_GUIDE_IDS,
@@ -45,26 +44,19 @@ export const isLastOnboardingStep = (
 /**
  * Onboarding and optional setup progress, persisted locally. The tour runs once per
  * machine. `completedAt` is set when the tour is finished or skipped; `step`
- * is intentionally session-local so a closed or replayed tour starts from the
- * first step instead of resuming from the last viewed page. The store owns step
+ * is intentionally session-local so a closed tour starts from the first step
+ * instead of resuming from the last viewed page. The store owns step
  * movement and bounds - callers just invoke the actions.
  */
 interface OnboardingState {
   readonly setupReminderDismissed: boolean;
   readonly dismissSetupReminder: () => void;
   readonly setupProgress: Record<SetupGuideId, number>;
-  readonly activeSetup: {
-    readonly id: SetupGuideId;
-    readonly step: number;
-  } | null;
-  readonly startSetup: (id: SetupGuideId) => void;
-  readonly advanceSetup: () => void;
-  readonly retreatSetup: (stepCount: number) => void;
   readonly completeSetup: (id: SetupGuideId) => void;
   /**
    * The product reporting something a guide may be waiting for. Whichever
-   * guide the step table says cares is advanced or completed; a call site
-   * names the event, never a guide.
+   * guide the table says cares is completed; a call site names the event,
+   * never a guide.
    */
   readonly notifySetupEvent: (event: SetupGuideEvent) => void;
   readonly completedAt: number | null;
@@ -184,75 +176,16 @@ export const useOnboardingStore = create<OnboardingState>()(
       setupReminderDismissed: false,
       dismissSetupReminder: () => set({ setupReminderDismissed: true }),
       setupProgress: emptySetupProgress,
-      activeSetup: null,
-      startSetup: (id) => {
-        const progress = get().setupProgress[id];
-        set({
-          setupProgress: {
-            ...get().setupProgress,
-            [id]: Math.max(0, progress),
-          },
-          activeSetup: {
-            id,
-            step: progress >= setupGuideLength(id) ? 0 : Math.max(0, progress),
-          },
-        });
-      },
-      advanceSetup: () => {
-        const active = get().activeSetup;
-        if (active === null) return;
-        // A step the product finishes is never walked off by Continue: the
-        // guide waits there until the real thing happens, so it may walk its
-        // steps and still never run off the end of them.
-        if (setupGuide(active.id).steps[active.step].completesOn !== undefined)
-          return;
-        const step = active.step + 1;
-        set({
-          setupProgress: {
-            ...get().setupProgress,
-            [active.id]: Math.max(step, get().setupProgress[active.id]),
-          },
-          activeSetup:
-            step >= setupGuideLength(active.id)
-              ? null
-              : { id: active.id, step },
-        });
-      },
-      // Clamped from the same place the card reads (`setupGuideStepsFor`'s
-      // length, the same shape the tour's own `retreat` takes): a step
-      // resumed past a shell-filtered guide's shown end must land Back on
-      // the predecessor of the step it can actually SEE, not one below its
-      // own stale, unfiltered value.
-      retreatSetup: (stepCount) => {
-        const active = get().activeSetup;
-        if (active === null) return;
-        set({
-          activeSetup: {
-            ...active,
-            step: Math.max(0, clampOnboardingStep(active.step, stepCount) - 1),
-          },
-        });
-      },
       completeSetup: (id) =>
         set({
           setupProgress: {
             ...get().setupProgress,
             [id]: setupGuideLength(id),
           },
-          activeSetup: get().activeSetup?.id === id ? null : get().activeSetup,
         }),
       notifySetupEvent: (event) => {
-        // Completion does not need the guide to be running: the user may have
-        // done the thing on their own, and the card is about the state of the
-        // account, not about a card being open.
         const completed = setupGuideCompletedBy(event);
         if (completed !== null) get().completeSetup(completed);
-        const active = get().activeSetup;
-        if (
-          active !== null &&
-          setupGuide(active.id).steps[active.step].advanceOn === event
-        )
-          get().advanceSetup();
       },
       completedAt: null,
       step: 0,
@@ -280,7 +213,6 @@ export const useOnboardingStore = create<OnboardingState>()(
           step: 0,
           setupReminderDismissed: false,
           setupProgress: emptySetupProgress,
-          activeSetup: null,
         }),
     }),
     {
@@ -292,7 +224,6 @@ export const useOnboardingStore = create<OnboardingState>()(
       merge: (persistedState, currentState) => ({
         ...currentState,
         ...readOnboardingPersistedState(persistedState),
-        activeSetup: null,
         step: 0,
       }),
       partialize: (state) => ({

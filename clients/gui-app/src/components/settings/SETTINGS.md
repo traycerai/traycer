@@ -93,7 +93,7 @@ Two rules for a stacked page:
   dropdown with a sentence per option (General ▸ When you quit Traycer), not a
   permanent block of radios.
 
-One rule for a rail page, and it has three callers. **Whatever points at a
+One rule for a rail page, and it has two callers. **Whatever points at a
 control has to pick that control's area first**, because only the picked area
 is on screen (`settings-master-detail-area.ts`):
 
@@ -101,79 +101,42 @@ is on screen (`settings-master-detail-area.ts`):
   A row with no anchor of its own contributes its name to its GROUP, never to
   the page: a page result opens the page on its first area, so the page's own
   keywords name only what that first area holds.
-- **A setup guide step** picks the area that holds its target
-  (`useSettingsGuideArea`), found through the `data-settings-area` each area's
-  panel carries. Without it the coachmark has no visible target and the guide
-  has no card to continue from. An armed reveal for a row of the page outranks
-  it: a guide stays active while Settings is closed, so the page can mount
-  with both, and the reveal is what the person asked for a moment ago.
 - **A link from outside Settings** to something that is not in the first area
   arms the same reveal a search result does, with the group's anchor (the
   start page's "Customize start page" button).
 
 ## Getting started
 
-`/settings/getting-started` is the persistent setup checklist for agent selection,
-appearance and layout, and browser sign-ins.
-Cards launch guides over the existing controls
-through `SettingsSetupGuide`, shared by the modal and routed settings surfaces.
-It uses the same nonmodal coachmark as the first-task guide: no overlay or
-focus trap, and nested pickers pause it. In a modal it portals inside that modal.
+`/settings/getting-started` is the setup checklist: the cards in
+`onboarding/getting-started-checklist.ts`, each checked off by what is already
+true for the person and leading to the place that does the work. Its header
+reads "n of m complete" over the cards that apply, and each card's label and
+copy come from `getting-started-settings.definitions.ts`, like any other
+searchable setting.
+
+The first-task guide draws a nonmodal coachmark: no overlay or focus trap, and
+nested pickers pause it. In a modal it portals inside that modal.
 A halo marks the target; there is no arrow. While the card has focus, Right/Enter
 continues and Left goes back; Tab and Enter retain native button behavior.
 Action-required steps press the real control when it is a button or link, and focus it when it is a field, instead of skipping it. Once focus
 moves into a control, the coachmark does not take it back. Text fields and pickers
-keep their own keys. Keyboard navigation reveals settings instantly.
-Escape closes the guide before Settings can close and returns focus to its target, and it works from anywhere on the surface rather than only from the card or its target - unless a picker, menu or dialog is open, which answers its own Escape first.
-Closing a guide is a skip, and a skip is done: Escape and the card's X both mark that guide complete, so a card the person has seen and declined never comes back asking again.
-Closing the settings surface mid-guide is not a skip - `activeSetup` is session-local presence, so the guide simply resumes at its step when Settings reopens.
+keep their own keys.
+Escape closes the guide and returns focus to its target, and it works from anywhere on the surface rather than only from the card or its target - unless a picker, menu or dialog is open, which answers its own Escape first.
 
-**Every step names its own section**, not the guide.
-The guide draws only while the mounted section is the one the current step points at, Continue navigates to the next step's section when it differs, and Back navigates to the previous step's.
-`setupGuideStepSection` is the same answer for a card: resuming lands on the section of the step it resumes at, not on a section hardcoded per guide.
-The engine's mount point survives a section change (`SettingsPanelForSection` swaps the panel beneath it), so crossing sections does not pause the guide.
+`onboarding-store` also keeps local setup progress, which the sidebar's progress ring and the start page's reminder count: -1 means not started, and a guide's length in `stores/onboarding/setup-guides.ts` means complete.
+That file is React-free and holds only what the stored format and those counts need: each guide's length, the event that completes it, and whether this shell can offer it.
+A guide gated out (`requiresBrowserView` on a build with no browser bridge) drops out of the numerator and the denominator alike.
 
-**The guides are a table, not four special cases.**
-`stores/onboarding/setup-guides.ts` holds every step - its section, its selector, its copy - and is React-free, so the store, the coachmark and the product code a step waits on all read the same rows.
-`SETUP_GUIDE_LENGTHS` is gone with it: `setupGuideLength(id)` is the step list's own length, never a number copied beside it.
-
-The three guides: agent selection is three steps on Agents (the editor shell, its Edit/Preview toggle, the Revert button).
-Appearance and layout is six, and it crosses surfaces: theme mode, wallpaper and interface font on Appearance, then the density preset, the region sections and the Customize layout entry on Layout.
-Its final step is the one that SHOWS the editor instead of entering it (L-50): a step may carry `litChrome`, and while it is up `useLayoutLitMoment` puts `data-layout-lit` on the document element, which is the second selector on `layout-editor.css`'s passive-dim rules.
-The real chrome around Settings dims exactly as it does on the canvas; closing the step ends the effect and completes the guide, and nothing is entered, leased or written.
-The runner (`SettingsSetupGuide`) draws nothing while a layout-editor session is running - the editor owns the screen and its Escape - and resumes at the same step afterwards.
-Browser sign-ins is two steps on Browser: the "Save website sessions" switch, then the "Choose source…" button, which is action-required and is where the guide waits.
-It is also the one guide with a `requiresBrowserView` flag, because without the desktop browser bridge there is no way to finish it.
-
-Progress is local in `onboarding-store`: -1 means not started, intermediate steps
-resume, and the guide length means complete. Active guides are session-local;
-replaying a completed guide does not clear completion. Agent selection and
-appearance finish on Done, so keeping defaults is valid.
+The import mutation reports `browser-logins-imported` through `notifySetupEvent` only when cookies were successfully imported, so cancelled, blocked, and empty imports leave that guide unfinished, and the hook names no guide.
+Import is offered only when the desktop browser bridge and host binding are present.
 
 The store is persisted at version 2.
 The migration settles a checklist nobody has touched for anyone who finished the tour before the checklist shipped: every guide is marked complete and the reminder is dismissed, because they have been using the app already and three open cards would be a nag rather than a checklist.
-Someone part-way through a guide keeps their progress and is still offered the rest of it, and a user who has not finished the tour is left alone.
-
-**A step the product finishes says so in the table, and the product reports an event rather than a guide id.**
-A step carries `advanceOn` for an event that moves past it in place of Continue, and `completesOn` for the event that ends the guide from it.
-`SettingsSetupGuide` reads those flags: a step with `completesOn` offers no Done and waits, and `advanceSetup` refuses to walk off it, so the guide can only end with the real thing having happened.
-Both call sites go through `notifySetupEvent`: the "Save website sessions" switch reports `browser-save-enabled`, which auto-advances to the import step (the switch IS the step, so there is nothing to confirm), and the existing import mutation reports `browser-logins-imported` only when cookies were successfully imported.
-Cancelled, blocked, and empty imports leave the card unfinished, and neither `browser-settings-section.tsx` nor the mutation hook names a guide.
-Import is offered only when the desktop browser bridge and host binding are present.
-
-A started, unfinished card reads "Step n of total" and draws a thin meter along its bottom edge; a finished one keeps the green check and "Complete".
-The meter is a native `<progress>` filled with the steps already COMPLETED, styled through `getting-started-settings.css`: the last unfinished step draws a nearly-full bar, not a full one, and no table of width classes has to track the step counts.
-The header count is "n of m complete" over the guides this shell can OFFER - the tour plus the available ones.
-A guide gated out (`requiresBrowserView` on a build with no browser bridge) drops out of the numerator and the denominator alike, so the panel never reads one short for ever and the start page's reminder, which is that same difference, goes quiet once the reachable work is done.
-The sidebar's progress ring counts the same way.
-
-Each card's label and copy come from `getting-started-settings.definitions.ts`, like any other searchable setting.
-Only the replay card owns a search ENTRY and an anchor - it inherited the removed General "Product tour" row, keywords included, so "walkthrough" and "first run" still land on it.
-The three guide cards contribute their words to the page instead: each one names a settings page that already has an entry of its own, and a second result under the same label would outrank the page the person typing it wants.
+Someone part-way through a guide keeps their progress, and a user who has not finished the tour is left alone.
 
 **Set up Personal** (`components/onboarding/set-up-personal-group.tsx`, its
 rules in `set-up-personal.ts`) sits
-under the guide cards on this page and on Home. It is not a guide and not part
+under the cards on this page and on Home. It is not a guide and not part
 of the "n of m complete" count: three optional steps, each a sentence about
 what it does for the person and an Open button to its page - link a plan or
 add an API key (Providers), add a secret your agents will need (Secrets),
@@ -213,10 +176,8 @@ The Home tab draws the checklist itself, above its task sections
 (`onboarding/getting-started-cards.tsx`) and the same count
 (`onboarding/getting-started-checklist.ts`) as this panel. The Home copy is
 denser, steps between whole rows (4 / 2×2 / 1) off its own container width,
-omits a guide the shell can never offer, and carries no search anchors, so the
-reveal still lands on the Settings card when both are mounted. While anything
-is left it is open; once every offered guide is complete it folds into one row,
-closed by default each time Home mounts.
+and carries no search anchors, so the reveal still lands on the Settings card
+when both are mounted. Once every card is complete it is gone.
 
 ## Search
 
@@ -1582,14 +1543,6 @@ means the drain UI renders NOTHING - never a zero, which would offer to end
       its in-flight save. The client never schedules archiving: the
       host's sweep does, and a task nothing holds open is swept when a host
       next opens it, which is why the copy makes no wall-clock promise.
-  - **Onboarding**: Product tour (replay onboarding), and nothing else. Import
-    your work and Data migration used to share this group under the name
-    "Setup & migration"; both moved to the scoped host's **Overview**, because
-    each acts on ONE machine's local data and General is app-wide - the rows
-    could only ever speak for whichever host the window happened to point at,
-    while naming none. The tour stays because it is genuinely window-level:
-    replaying it re-runs this app's onboarding, which no host owns. The group
-    is named for its subject rather than for its single row.
   - **Danger Zone** (`DangerZoneSection`, `SettingsGroup` with `tone:
 "danger"`, `data-testid="settings-danger-zone"`, kept last): **Local app state
     only** (reset tabs/layout/drafts/settings/view prefs + reload) - the one

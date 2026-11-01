@@ -10,7 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useNavigate, useRouter } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import {
   AnimatePresence,
   useReducedMotion,
@@ -138,7 +138,7 @@ function stepMotion(direction: number, reduced: boolean): StepMotion {
 }
 
 /**
- * First run, and the Settings replay.
+ * First run.
  *
  * Two shapes, and the signal that picks between them is the PRODUCT one
  * (`isMobileApp`), never the viewport: a narrow desktop window is a desktop
@@ -154,9 +154,9 @@ function stepMotion(direction: number, reduced: boolean): StepMotion {
  * and can never flip, so branching above the hooks is safe: neither shape ever
  * has to become the other.
  */
-export function OnboardingPage(props: { readonly replay: boolean }) {
-  if (isMobileApp()) return <OnboardingWelcomeRun replay={props.replay} />;
-  return <OnboardingActs replay={props.replay} />;
+export function OnboardingPage() {
+  if (isMobileApp()) return <OnboardingWelcomeRun />;
+  return <OnboardingActs />;
 }
 
 /**
@@ -170,8 +170,7 @@ export function OnboardingPage(props: { readonly replay: boolean }) {
  * and the app opens on a new draft, where the guide takes over and teaches the
  * menu and the drawer (or the add-folder flow, for an account with no tasks).
  */
-function OnboardingWelcomeRun(props: { readonly replay: boolean }) {
-  const { replay } = props;
+function OnboardingWelcomeRun() {
   const reducedMotion = useReducedMotion() === true;
   const [welcomePhase, setWelcomePhase] = useState<WelcomePhase>("welcome");
   const navigate = useNavigate();
@@ -181,16 +180,14 @@ function OnboardingWelcomeRun(props: { readonly replay: boolean }) {
 
   useLayoutEffect(() => {
     restart();
-    if (!replay) {
-      useFirstTaskGuideStore.getState().prepare();
-      // Browser setup stays in Getting started instead of interrupting the first task.
-      useFeatureAnnouncementsStore.getState().consume("login-import");
-      // The phone has no import act by design (its users imported on the
-      // desktop), so the toast that announces importing has nothing to follow
-      // up on here.
-      useFeatureAnnouncementsStore.getState().consume("session-import");
-    }
-  }, [restart, replay]);
+    useFirstTaskGuideStore.getState().prepare();
+    // Browser setup stays in Getting started instead of interrupting the first task.
+    useFeatureAnnouncementsStore.getState().consume("login-import");
+    // The phone has no import act by design (its users imported on the
+    // desktop), so the toast that announces importing has nothing to follow
+    // up on here.
+    useFeatureAnnouncementsStore.getState().consume("session-import");
+  }, [restart]);
 
   // Holds the announcement toasts off the welcome, the same as the desktop
   // stage. The guide takes the hold over from here, before this unmounts.
@@ -201,9 +198,9 @@ function OnboardingWelcomeRun(props: { readonly replay: boolean }) {
 
   useEffect(() => {
     Analytics.getInstance().track(AnalyticsEvent.OnboardingStarted, {
-      mode: replay ? "replay" : "first_run",
+      mode: "first_run",
     });
-  }, [replay]);
+  }, []);
 
   useEffect(() => {
     if (welcomePhase === "ready") return;
@@ -235,18 +232,10 @@ function OnboardingWelcomeRun(props: { readonly replay: boolean }) {
     Analytics.getInstance().track(AnalyticsEvent.OnboardingCompleted, {
       last_step: "welcome",
     });
-    const guide = useFirstTaskGuideStore.getState();
-    // A replay re-arms from scratch: `prepare` clears the hints the last run
-    // acknowledged, without which "Replay" would show a tour that is already
-    // finished. First run prepared at mount.
-    if (replay) guide.prepare();
-    guide.activate();
+    useFirstTaskGuideStore.getState().activate();
     complete();
-    // Not `router.history.back()`, which is what the desktop replay does: the
-    // guide this replay just armed lives on the landing page, so going back to
-    // Settings would arm it behind the panel the user is looking at.
     void navigate({ to: "/draft/new", replace: true });
-  }, [welcomePhase, replay, complete, navigate]);
+  }, [welcomePhase, complete, navigate]);
 
   return (
     <main className="onboarding-shell relative isolate flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-background font-heading text-foreground">
@@ -267,7 +256,7 @@ function OnboardingWelcomeRun(props: { readonly replay: boolean }) {
   );
 }
 
-function OnboardingActs(props: { readonly replay: boolean }) {
+function OnboardingActs() {
   const [scopedHostId, setScopedHostId] = useState<string | null>(null);
   const scope = useHostScopeFor({ scopedHostId, setScopedHostId });
   // The ambient capability fixes the tour's shape. The import stage checks
@@ -288,7 +277,6 @@ function OnboardingActs(props: { readonly replay: boolean }) {
         value={scopedStreamBinding ?? ambientStreamBinding}
       >
         <OnboardingTour
-          replay={props.replay}
           steps={steps}
           phone={phone}
           scope={scope}
@@ -301,14 +289,13 @@ function OnboardingActs(props: { readonly replay: boolean }) {
 }
 
 function OnboardingTour(props: {
-  readonly replay: boolean;
   readonly steps: ReadonlyArray<OnboardingStep>;
   readonly phone: boolean;
   readonly scope: HostScope;
   readonly scopedHostId: string | null;
   readonly setScopedHostId: (hostId: string) => void;
 }) {
-  const { steps, phone, scope, scopedHostId, setScopedHostId, replay } = props;
+  const { steps, phone, scope, scopedHostId, setScopedHostId } = props;
   const [stepDirection, setStepDirection] = useState(1);
   const reducedMotion = useReducedMotion() === true;
   const [welcomePhase, setWelcomePhase] = useState<WelcomePhase>("welcome");
@@ -332,7 +319,6 @@ function OnboardingTour(props: {
   const stageRef = useRef<HTMLDivElement | null>(null);
   const headingRef = useRef<HTMLHeadingElement | null>(null);
   const navigate = useNavigate();
-  const router = useRouter();
   const storedStep = useOnboardingStore((state) => state.step);
   const index = clampOnboardingStep(storedStep, steps.length);
   const isLastStep = isLastOnboardingStep(storedStep, steps.length);
@@ -359,11 +345,10 @@ function OnboardingTour(props: {
     }),
     [scope, setScopedHostId, scopedHostId, streamBinding],
   );
-  // A tour that opens (or is replayed) while a sandbox is the active host
-  // moves itself to the first personal host it can reach: its stages sign
-  // providers in and import onto their host, and a sandbox takes neither.
-  // With none, the stages stay held (`onboardingHostReadiness`) until one is
-  // picked.
+  // A tour that opens while a sandbox is the active host moves itself to the
+  // first personal host it can reach: its stages sign providers in and import
+  // onto their host, and a sandbox takes neither. With none, the stages stay
+  // held (`onboardingHostReadiness`) until one is picked.
   const personalFallbackHostId = onboardingHostIsSandbox(hostPicker)
     ? (credentialTargetHostOptions(scope.hosts).find((host) => host.connectable)
         ?.hostId ?? null)
@@ -376,21 +361,19 @@ function OnboardingTour(props: {
 
   useLayoutEffect(() => {
     restart();
-    if (!replay) {
-      useFirstTaskGuideStore.getState().prepare();
-      // Browser setup stays in Getting started instead of interrupting the first task.
-      useFeatureAnnouncementsStore.getState().consume("login-import");
-    }
-  }, [restart, replay]);
+    useFirstTaskGuideStore.getState().prepare();
+    // Browser setup stays in Getting started instead of interrupting the first task.
+    useFeatureAnnouncementsStore.getState().consume("login-import");
+  }, [restart]);
 
   // Reaching the import act IS the announcement, so the "Bring your work with
   // you" toast is spent the moment the act is on screen. Someone who skipped
   // the tour before this act, or whose host could not offer it, never consumed
   // it and still gets the toast once they are in the app.
   useEffect(() => {
-    if (!replay && step.id === "session-import")
+    if (step.id === "session-import")
       useFeatureAnnouncementsStore.getState().consume("session-import");
-  }, [replay, step.id]);
+  }, [step.id]);
 
   useEffect(() => {
     if (welcomePhase !== "ready") return;
@@ -406,9 +389,9 @@ function OnboardingTour(props: {
 
   useEffect(() => {
     Analytics.getInstance().track(AnalyticsEvent.OnboardingStarted, {
-      mode: replay ? "replay" : "first_run",
+      mode: "first_run",
     });
-  }, [replay]);
+  }, []);
 
   const finish = useCallback(
     (outcome: "completed" | "skipped"): void => {
@@ -418,19 +401,13 @@ function OnboardingTour(props: {
           : AnalyticsEvent.OnboardingSkipped,
         { last_step: step.id },
       );
-      if (!replay) {
-        const guide = useFirstTaskGuideStore.getState();
-        if (outcome === "completed") guide.activate();
-        else guide.dismiss();
-      }
+      const guide = useFirstTaskGuideStore.getState();
+      if (outcome === "completed") guide.activate();
+      else guide.dismiss();
       complete();
-      if (replay) {
-        router.history.back();
-        return;
-      }
       void navigate({ to: "/draft/new", replace: true });
     },
-    [step.id, complete, navigate, replay, router],
+    [step.id, complete, navigate],
   );
 
   const back = useCallback((): void => {
@@ -638,7 +615,7 @@ function OnboardingTour(props: {
                     sessionImportScan={sessionImportScan}
                     onAdvance={advance}
                     onImportStarted={() => {
-                      if (!replay && streamHostId !== null)
+                      if (streamHostId !== null)
                         useFirstTaskGuideStore
                           .getState()
                           .rememberImport(streamHostId);
@@ -649,7 +626,7 @@ function OnboardingTour(props: {
                         { last_step: step.id },
                       );
                       // Mount AppShell before the import wizard requests its task tab.
-                      if (!replay) useFirstTaskGuideStore.getState().activate();
+                      useFirstTaskGuideStore.getState().activate();
                       complete();
                       return Promise.resolve(true);
                     }}
