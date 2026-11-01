@@ -113,7 +113,7 @@ function BotThreadsBody(props: { readonly hostId: string }): ReactNode {
   if (followed.threads.length === 0) {
     if (failure !== null) return failure;
     if (followed.pending) return <ThreadsLoading />;
-    return <EmptyLine text="Threads you take part in appear here." />;
+    return <EmptyLine text="No threads yet." />;
   }
   return (
     <div className="flex flex-col gap-3">

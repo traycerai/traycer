@@ -443,9 +443,7 @@ describe("<BotThreadsView /> before the bots are listed", () => {
     mount();
 
     expect(screen.getByTestId("bot-threads-loading")).toBeTruthy();
-    expect(
-      screen.queryByText("Threads you take part in appear here."),
-    ).toBeNull();
+    expect(screen.queryByText("No threads yet.")).toBeNull();
   });
 
   it("says the read failed when the bot list does, and Retry reads it again", async () => {
@@ -455,9 +453,7 @@ describe("<BotThreadsView /> before the bots are listed", () => {
 
     const failure = screen.getByTestId("bot-threads-error");
     expect(failure.textContent).toContain("Couldn't load your threads.");
-    expect(
-      screen.queryByText("Threads you take part in appear here."),
-    ).toBeNull();
+    expect(screen.queryByText("No threads yet.")).toBeNull();
     await user.click(within(failure).getByRole("button", { name: "Retry" }));
 
     expect(mocks.refetchBots).toHaveBeenCalledTimes(1);
@@ -465,14 +461,12 @@ describe("<BotThreadsView /> before the bots are listed", () => {
 });
 
 describe("<BotThreadsView /> with nothing to list", () => {
-  it("says threads the person takes part in appear here when they follow none", async () => {
+  it("says there are no threads yet when the person follows none", async () => {
     mocks.hosted[TRACY] = script([thread(TRACY, "tracy-a", 1_000)], {});
     mocks.hosted[TEAM] = script([], {});
     mount();
 
-    expect(
-      await screen.findByText("Threads you take part in appear here."),
-    ).toBeTruthy();
+    expect(await screen.findByText("No threads yet.")).toBeTruthy();
   });
 
   it("says once that the host cannot list the threads, where it does not read follows", () => {
