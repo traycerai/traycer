@@ -86,7 +86,9 @@ describe("the sandbox list query", () => {
       expect(endedSandboxHost("host-gone")).toEqual({
         name: "e2e-sbx-win2",
         at: 7_000,
+        cause: "verb",
         actor: { userId: "u-me", displayName: "Me" },
+        idleMinutes: null,
       });
     });
     expect(endedSandboxHost("host-fine")).toBeNull();

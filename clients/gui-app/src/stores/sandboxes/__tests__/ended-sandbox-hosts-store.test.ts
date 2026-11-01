@@ -18,6 +18,13 @@ import {
 } from "@/stores/sandboxes/ended-sandbox-hosts-store";
 
 const ME = { userId: "u-me", displayName: "Me" };
+const OWN_DESTROY = {
+  name: "box-a",
+  at: 1_000,
+  cause: "verb",
+  actor: ME,
+  idleMinutes: null,
+};
 
 function notificationIds(): string[] {
   return Object.keys(useAppLocalNotificationsStore.getState().byId).sort();
@@ -46,12 +53,8 @@ describe("the ended sandbox hosts store", () => {
   });
 
   it("records a destroy and forgets one that did not happen", () => {
-    recordEndedSandboxHost("host-a", { name: "box-a", at: 1_000, actor: ME });
-    expect(endedSandboxHost("host-a")).toEqual({
-      name: "box-a",
-      at: 1_000,
-      actor: ME,
-    });
+    recordEndedSandboxHost("host-a", OWN_DESTROY);
+    expect(endedSandboxHost("host-a")).toEqual(OWN_DESTROY);
 
     forgetEndedSandboxHost("host-a");
 
@@ -78,7 +81,7 @@ describe("the ended sandbox hosts store", () => {
     });
     expect(notificationIds()).toHaveLength(4);
 
-    recordEndedSandboxHost("host-a", { name: "box-a", at: 1_000, actor: ME });
+    recordEndedSandboxHost("host-a", OWN_DESTROY);
 
     expect(notificationIds()).toEqual([
       "stream.transport.error:host-b:chat-3:CONNECTION_LOST",
@@ -107,7 +110,9 @@ describe("the ended sandbox hosts store", () => {
       expect(endedSandboxHost("host-moving")).toEqual({
         name: "name-host-moving",
         at: 5_000,
+        cause: "verb",
         actor: ME,
+        idleMinutes: null,
       });
       expect(endedSandboxHost("host-gone")?.at).toBe(6_000);
     });
@@ -117,18 +122,19 @@ describe("the ended sandbox hosts store", () => {
       expect(endedSandboxHost("host-a")).toBeNull();
     });
 
-    it("records no row whose operation has no member behind it", () => {
-      recordListedDestroys([row("host-a", { actor: null })]);
-      expect(endedSandboxHost("host-a")).toBeNull();
-    });
-
-    it("records no row the system destroyed (idle, resting or erasure)", () => {
+    it("records a row the system destroyed, with its cause and no actor", () => {
       recordListedDestroys([
-        row("host-idle", { cause: "burst-idle" }),
-        row("host-resting", { cause: "resting" }),
+        row("host-idle", { cause: "burst-idle", actor: null }),
+        row("host-resting", { cause: "resting", actor: null }),
       ]);
-      expect(endedSandboxHost("host-idle")).toBeNull();
-      expect(endedSandboxHost("host-resting")).toBeNull();
+      expect(endedSandboxHost("host-idle")).toMatchObject({
+        cause: "burst-idle",
+        actor: null,
+      });
+      expect(endedSandboxHost("host-resting")).toMatchObject({
+        cause: "resting",
+        actor: null,
+      });
     });
 
     it("records no row that is only suspending or stopping", () => {
@@ -141,11 +147,7 @@ describe("the ended sandbox hosts store", () => {
     });
 
     it("keeps the record already held for a host and its stream failures withdrawn once", () => {
-      recordEndedSandboxHost("host-a", {
-        name: "own-record",
-        at: 1_000,
-        actor: ME,
-      });
+      recordEndedSandboxHost("host-a", { ...OWN_DESTROY, name: "own-record" });
       raiseStreamFailure("host-a", "chat-1");
 
       recordListedDestroys([row("host-a", { state: "destroyed", at: 9_000 })]);

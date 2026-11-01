@@ -87,7 +87,9 @@ describe("useHostSandboxEnd", () => {
     recordEndedSandboxHost("host-sbx", {
       name: "e2e-sbx-p1",
       at: new Date(2026, 9, 25, 11, 1).getTime(),
+      cause: "verb",
       actor: { userId: "u-me", displayName: null },
+      idleMinutes: null,
     });
 
     expect(end()).toEqual({

@@ -22,7 +22,6 @@ import { PendingSandboxSendForChat } from "@/components/sandboxes/pending-sandbo
 import { SandboxReadyLineForChat } from "@/components/sandboxes/pending-sandbox-sends";
 import { queueWithDrainingPrompts } from "@/stores/chats/chat-send-state";
 import { useFallbackProfileLabels } from "@/components/chat/fallback/fallback-identity";
-import { ChatSandboxDestroyedLine } from "@/components/chat/chat-sandbox-destroyed-line";
 import {
   useCallback,
   useEffect,
@@ -272,6 +271,7 @@ import {
 } from "./dead-tile-banner";
 import { useHostQuery } from "@/hooks/host/use-host-query";
 import { useRecordHostOlderThanDataRefusal } from "@/hooks/chats/use-host-refuses-epic-store";
+import { useTaskHostsView } from "@/hooks/epic/use-task-hosts-view";
 import { useHostDirectoryEntry } from "@/hooks/host/use-host-directory-entry";
 import { useTabHostClient } from "@/hooks/host/use-tab-host-client";
 import { useQueuedPromptBlobRepair } from "@/hooks/chats/use-queued-prompt-blob-repair";
@@ -1064,11 +1064,22 @@ function ChatDeadTileBannerWithOffer(
     ownedByViewer,
     environmentOwned,
   });
+  const taskHosts = useTaskHostsView(props.epicId);
+  const sourceEntry = useHostDirectoryEntry(props.sourceHostId);
   const continues = continueOffer.eligible && props.reason === "host-offline";
   const ownerName = useCollaboratorDisplayName(props.epicId, sourceOwnerUserId);
   const cloneTargetLabel = useChatCloneTargetLabel();
   // A sandbox's footer under the chat says its state.
   if (sandbox.line?.place === "footer") return null;
+  // A host the directory does not hold may be a destroyed sandbox, and only
+  // the task's hosts can tell: no Clone offer until they have answered.
+  if (
+    sandbox.line === null &&
+    sourceEntry === null &&
+    taskHosts.kind === "pending"
+  ) {
+    return null;
+  }
   const stateLine = chatSandboxStateLine(
     sandbox.line,
     sandboxState.kind === "destroyed" ? (
@@ -2003,7 +2014,6 @@ function ChatTileSessionViewBody(props: ChatTileSessionViewProps) {
                 data-chat-pane=""
                 className="relative flex min-h-0 flex-1 flex-col [container-type:size]"
               >
-                <ChatSandboxDestroyedLine hostId={view.tabHostId} />
                 <TranscriptQueuePauseReasonSupportContext
                   value={queuePauseReasonSupport}
                 >

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import type { ChatServing } from "@traycer/protocol/host/chat-serving/index";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import type { AuthService } from "@/lib/auth/auth-service";
 import { useHostBinding } from "@/lib/host";
@@ -7,6 +8,7 @@ import { useChatServing } from "@/lib/chats/chat-serving-witness";
 import { useChatStreamSyncState } from "@/hooks/chats/use-chat-stream-sync-state";
 import { useExistingChatSessionFatalClose } from "@/lib/registries/chat-session-registry";
 import { useChatSandboxState } from "@/hooks/sandboxes/use-chat-sandbox-state";
+import { useSandboxEndRead } from "@/hooks/sandboxes/use-sandbox-end-read";
 import { useSandboxWakeWait } from "@/hooks/sandboxes/use-sandbox-wake-wait";
 import {
   sandboxListQueryOptions,
@@ -108,23 +110,16 @@ export function useLiveChatSandboxState(
     (!ownerReachable || (stream.hasContent && stream.status !== "open"));
   const reachable = !atRest && !disconnected;
   const state = useChatSandboxState(epicId, hostId, reachable);
+  const endRead = useSandboxEndRead(epicId, state.kind === "pending");
   const sandbox = list.data?.sandboxes.find((row) => row.hostId === hostId);
   const known =
     state.kind === "none" ? sandbox !== undefined : state.kind !== "destroyed";
-  const servingKey =
-    serving === null
-      ? null
-      : JSON.stringify([
-          serving.ownerHostId,
-          serving.state,
-          serving.catchingUp,
-        ]);
   const reading = useSandboxLifecycleRead(
     {
       hostId,
       known,
       disconnected,
-      serving: servingKey,
+      serving: servingKeyOf(serving),
     },
     atRest,
   );
@@ -144,7 +139,16 @@ export function useLiveChatSandboxState(
       reachable: false,
     };
   }
-  return { state, reachable };
+  return { state, reachable: reachable || endRead };
+}
+
+function servingKeyOf(serving: ChatServing | null): string | null {
+  if (serving === null) return null;
+  return JSON.stringify([
+    serving.ownerHostId,
+    serving.state,
+    serving.catchingUp,
+  ]);
 }
 
 /**

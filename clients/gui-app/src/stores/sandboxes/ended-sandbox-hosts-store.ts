@@ -6,14 +6,20 @@ import type {
 import { useAppLocalNotificationsStore } from "@/stores/notifications/app-local-notifications-store";
 
 /**
- * A sandbox host a member destroyed: its name, when, and by whom. Its relay
- * session then ends as a revocation, which is not a fault: the chat that ran
- * there says who destroyed it, and nothing is raised as needing attention.
+ * A sandbox host known to be destroyed, before the task's end record says so:
+ * its name, when, and why. Its relay session then ends as a revocation, which
+ * is not a fault: the chat that ran there says how it ended, and nothing is
+ * raised as needing attention.
  */
 export interface EndedSandboxHost {
   readonly name: string;
   readonly at: number;
-  readonly actor: SandboxMember;
+  /** The destroy's transition cause, as a row's `operation` reads it. */
+  readonly cause: string;
+  /** The member who destroyed it; `null` for a system cause. */
+  readonly actor: SandboxMember | null;
+  /** The sandbox's idle period; `null` when it has none of its own. */
+  readonly idleMinutes: number | null;
 }
 
 interface EndedSandboxHostsState {
@@ -61,9 +67,9 @@ export function useEndedSandboxHost(
 }
 
 /**
- * Records every listed row a member is destroying, from its `operation`: a
- * destroy started in another window or by another member is known before
- * its host's session ends.
+ * Records every listed row being destroyed, from its `operation`: a destroy
+ * started in another window, by another member or by the system is known
+ * before its host's session ends.
  */
 export function recordListedDestroys(
   sandboxes: readonly SandboxSummary[],
@@ -72,8 +78,6 @@ export function recordListedDestroys(
     const operation = row.operation;
     if (
       operation === null ||
-      operation.actor === null ||
-      operation.cause !== "verb" ||
       (operation.state !== "destroying" && operation.state !== "destroyed")
     ) {
       continue;
@@ -82,7 +86,9 @@ export function recordListedDestroys(
     recordEndedSandboxHost(row.hostId, {
       name: row.displayName,
       at: operation.at,
+      cause: operation.cause,
       actor: operation.actor,
+      idleMinutes: row.idleMinutes,
     });
   }
 }

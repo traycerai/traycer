@@ -26,7 +26,10 @@ import {
   tryReserveLandingImageBudget,
 } from "@/lib/composer/landing-image-budget";
 import { useSelectionAuthorityStore } from "@/stores/host/selection-authority-store";
-import type { HostDirectoryEntry } from "@traycer-clients/shared/host-client/host-directory";
+import {
+  POOL_HOST_ID,
+  type HostDirectoryEntry,
+} from "@traycer-clients/shared/host-client/host-directory";
 import {
   BrowserSessionsContext,
   type BrowserSessionsState,
@@ -140,6 +143,7 @@ vi.mock(
   }),
 );
 
+const requesterTestState = vi.hoisted(() => ({ hostIds: [] as string[] }));
 const MOCK_HOST_CLIENT = {
   request: (
     method: string,
@@ -167,6 +171,12 @@ const MOCK_HOST_CLIENT = {
     return new Promise<never>(() => {});
   },
   getActiveHostId: () => HOST_ID,
+  // A read for the peer that serves a chat the pool holds; the host ids asked
+  // for are how a case sees which peer a chat's reads went to.
+  createRequesterForHostId: (hostId: string) => {
+    requesterTestState.hostIds.push(hostId);
+    return MOCK_HOST_CLIENT;
+  },
   // The merged render tree reaches `client?.getActiveHost()` (owner-identity /
   // stream-runtime seam x #1227's in-tile fork dialog) - a partial client
   // mock fails every case in this file at once through the error boundary.
@@ -181,11 +191,32 @@ const MOCK_HOST_ENTRY = {
   websocketUrl: "ws://127.0.0.1:1/rpc",
   streamUrl: "ws://127.0.0.1:1/stream",
 };
+// The rows the directory answers for a host, when a case says what they are;
+// otherwise it holds this suite's one local host. A change notifies readers.
+const directoryRowsTestState = vi.hoisted(() => ({
+  rows: null as ReadonlyMap<string, unknown> | null,
+  listeners: new Set<() => void>(),
+}));
 const MOCK_HOST_DIRECTORY = {
-  onChange: () => ({ dispose() {} }),
-  findById: (hostId: string) =>
-    hostId === MOCK_HOST_ENTRY.hostId ? MOCK_HOST_ENTRY : null,
+  onChange: (listener: () => void) => {
+    directoryRowsTestState.listeners.add(listener);
+    return {
+      dispose() {
+        directoryRowsTestState.listeners.delete(listener);
+      },
+    };
+  },
+  findById: (hostId: string) => {
+    const rows = directoryRowsTestState.rows;
+    if (rows !== null) return rows.get(hostId) ?? null;
+    return hostId === MOCK_HOST_ENTRY.hostId ? MOCK_HOST_ENTRY : null;
+  },
 };
+function setDirectoryRows(rows: readonly HostDirectoryEntry[] | null): void {
+  directoryRowsTestState.rows =
+    rows === null ? null : new Map(rows.map((row) => [row.hostId, row]));
+  for (const listener of directoryRowsTestState.listeners) listener();
+}
 
 // The directory list the reachability hook reads. `null` leaves the real hook
 // in charge (this file mounts no host binding, so it answers nothing); a case
@@ -242,6 +273,73 @@ vi.mock("@/hooks/host/use-host-directory-list-query", async (importActual) => {
       const entries = directoryListTestState.entries;
       if (entries === null) return real;
       return { ...real, data: entries, fetchStatus: "idle" as const };
+    },
+  };
+});
+
+// The process's tier plan: no pool unless a case says its build has one.
+const poolPlanTestState = vi.hoisted(() => ({ pool: false }));
+vi.mock(
+  "@traycer-clients/shared/host-client/host-rpc-routing",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@traycer-clients/shared/host-client/host-rpc-routing")
+      >();
+    return {
+      ...actual,
+      readProcessHostRpcTierPlan: () =>
+        poolPlanTestState.pool
+          ? actual.createHostRpcTierPlan(poolEntry)
+          : actual.readProcessHostRpcTierPlan(),
+    };
+  },
+);
+
+// A published copy's cloud read settles unpublished, and the device's synced
+// replica answers with what a case says: the copy tile is the real one.
+const replicaReadTestState = vi.hoisted(() => ({
+  messages: [] as Record<string, unknown>[],
+}));
+vi.mock("@/hooks/chats/use-cloud-chat-transcript", () => ({
+  useCloudChatTranscript: () => ({
+    kind: "refused",
+    read: { chat: null, outcome: { kind: "unpublished" } },
+  }),
+}));
+vi.mock("@/hooks/chats/use-chat-replica-read", () => ({
+  useChatReplicaRead: () => ({
+    isPending: false,
+    data: {
+      outcome: {
+        status: "ok",
+        chat: {
+          chatId: "chat-1",
+          title: "Replica title",
+          userId: "owner-1",
+          hostId: "owner-sandbox-host",
+          createdAt: 1,
+          updatedAt: 2,
+        },
+        messages: replicaReadTestState.messages,
+        events: [],
+      },
+    },
+  }),
+}));
+
+// What the task's hosts read as, when a case says; otherwise the real read.
+const taskHostsTestState = vi.hoisted(() => ({
+  view: null as TaskHostsView | null,
+}));
+vi.mock("@/hooks/epic/use-task-hosts-view", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/hooks/epic/use-task-hosts-view")>();
+  return {
+    ...actual,
+    useTaskHostsView: (epicId: string) => {
+      const real = actual.useTaskHostsView(epicId);
+      return taskHostsTestState.view ?? real;
     },
   };
 });
@@ -564,6 +662,7 @@ import type {
   ChatRunSettings,
   ChatRunStatus,
   ChatSubscribeClientFrame,
+  ChatSubscribeServerFrame,
 } from "@traycer/protocol/host/agent/gui/subscribe";
 import type { ManagedCommand } from "@traycer/protocol/host/managed-command/unary-schemas";
 import type {
@@ -591,6 +690,27 @@ import {
   sandboxSummaryFixture,
 } from "@/hooks/sandboxes/__tests__/sandbox-fixtures";
 import { useSandboxWakeReportStore } from "@/stores/sandboxes/sandbox-wake-report-store";
+import type { TaskHostsView } from "@/hooks/epic/use-task-hosts-view";
+import type { AttributableDurableStreamTransport } from "@/lib/host/durable-stream-transport";
+import {
+  fakeDurableStreamTransports,
+  resetFakeDurableStreamTransports,
+} from "@/lib/host/test-support/fake-durable-stream-transport";
+import { PublishedChatTile } from "@/components/epic-canvas/renderers/published-chat-tile";
+import { TILE_KIND_PUBLISHED_CHAT } from "@/stores/epics/canvas/tile-kinds";
+import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
+import {
+  poolEntry,
+  remoteEntry,
+  sandboxFacts,
+} from "@traycer-clients/shared/host-client/__tests__/routing-entry-fixtures";
+import { FakeStreamClient } from "@traycer-clients/shared/host-transport/__testing__/fake-stream-client";
+import { ChatServingWitnessContext } from "@/lib/chats/chat-serving-witness";
+import { PoolChatServingWitness } from "@/lib/chats/pool-chat-serving-witness";
+import {
+  recordEndedSandboxHost,
+  useEndedSandboxHostsStore,
+} from "@/stores/sandboxes/ended-sandbox-hosts-store";
 import type { TaskSandboxHost } from "@/hooks/epic/use-task-sandbox-end";
 import type { SandboxSummary } from "@traycer/protocol/host/sandbox-control";
 import { usePendingSandboxSendStore } from "@/stores/sandboxes/pending-sandbox-send-store";
@@ -882,7 +1002,20 @@ function emitChatSnapshotWithMessages(input: {
   readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
   readonly managedCommands?: ReadonlyArray<ManagedCommand>;
 }): void {
-  input.callbacks.onSnapshot({
+  input.callbacks.onSnapshot(chatSnapshotFrame(input));
+}
+
+function chatSnapshotFrame(input: {
+  readonly access: "owner" | "viewer";
+  readonly queueItems: ReadonlyArray<ChatQueuedItem>;
+  readonly settings: ChatRunSettings | null;
+  readonly messages: ReadonlyArray<Message>;
+  readonly events?: ReadonlyArray<ChatEvent>;
+  readonly activeTurn: ChatActiveTurn | null;
+  readonly pendingInterviews?: ReadonlyArray<ChatPendingInterviewState>;
+  readonly managedCommands?: ReadonlyArray<ManagedCommand>;
+}): Extract<ChatSubscribeServerFrame, { readonly kind: "snapshot" }> {
+  return {
     kind: "snapshot",
     hasBinaryPayload: false,
     epicId: EPIC_ID,
@@ -924,7 +1057,7 @@ function emitChatSnapshotWithMessages(input: {
       heldUpdates: [],
       portForwards: [],
     },
-  });
+  };
 }
 
 function testWorktreeBinding(): WorktreeBinding {
@@ -2136,6 +2269,492 @@ describe("<ChatTile />", () => {
     },
   );
 
+  describe("a team sandbox's chat through the production session gate", () => {
+    const VIEWER = "viewer-1";
+    const DESTROYED_AT = new Date(2026, 9, 28, 1, 27).getTime();
+    const SANDBOX_NAME = "e2e-sbx-t1";
+    const teamDirectoryRow = remoteEntry(HOST_ID, sandboxFacts("team-1"));
+
+    const teamTaskHosts: TaskHostsView = {
+      kind: "hosts",
+      hosts: [
+        {
+          hostId: HOST_ID,
+          label: SANDBOX_NAME,
+          principal: { kind: "team", id: "team-1" },
+          reach: "same_principal",
+          sandboxEnd: null,
+        },
+      ],
+    };
+
+    interface OpenedTransport {
+      readonly hostId: string;
+      readonly client: FakeStreamClient;
+      closeCount: number;
+    }
+    const opened: OpenedTransport[] = [];
+    const defaultOpener = fakeDurableStreamTransports().opener;
+
+    /** A transport for the two peers a chat can ride; others get the suite's default. */
+    function openChatTransport(
+      hostId: string,
+    ): AttributableDurableStreamTransport {
+      if (hostId !== POOL_HOST_ID && hostId !== HOST_ID) {
+        return defaultOpener(hostId);
+      }
+      const record: OpenedTransport = {
+        hostId,
+        client: new FakeStreamClient(true),
+        closeCount: 0,
+      };
+      opened.push(record);
+      const close = (): void => {
+        record.closeCount += 1;
+      };
+      return {
+        wsStreamClient: record.client,
+        close,
+        closeWithReason: close,
+      };
+    }
+
+    /** The peers a `chat.subscribe` went to (the epic session's own socket rides this host too). */
+    function chatPeers(): string[] {
+      return opened
+        .filter((t) =>
+          t.client.subscribes.some((sub) => sub.method === "chat.subscribe"),
+        )
+        .map((t) => t.hostId);
+    }
+
+    /**
+     * Plays the server for the pool: answers the witness's serving stream at
+     * rest and the chat stream with the transcript, each once, as the tile
+     * opens them. The caller's wait ends on the message on screen, so a chat
+     * that never reaches a stream fails there and not on a stream count.
+     */
+    function playPoolServer(
+      witnessClient: FakeStreamClient,
+      answered: { serving: boolean; transcript: boolean },
+    ): void {
+      const serving = witnessClient.sessions.at(0);
+      if (serving !== undefined && !answered.serving) {
+        answered.serving = true;
+        act(() => {
+          serving.emit(
+            {
+              kind: "serving",
+              hasBinaryPayload: false,
+              serving: {
+                ownerHostId: HOST_ID,
+                state: "at-rest",
+                catchingUp: null,
+              },
+            },
+            null,
+          );
+        });
+      }
+      const chatStream = opened.find(
+        (t) =>
+          t.hostId === POOL_HOST_ID &&
+          t.client.subscribes.some((sub) => sub.method === "chat.subscribe"),
+      )?.client.sessions[0];
+      if (chatStream !== undefined && !answered.transcript) {
+        answered.transcript = true;
+        act(() => {
+          chatStream.emit(
+            chatSnapshotFrame({
+              access: "owner",
+              queueItems: [],
+              settings: null,
+              messages: [hostUserMessage()],
+              activeTurn: null,
+            }),
+            null,
+          );
+        });
+      }
+    }
+
+    async function messageOnScreen(witnessClient: FakeStreamClient) {
+      const answered = { serving: false, transcript: false };
+      await waitFor(() => {
+        playPoolServer(witnessClient, answered);
+        expect(screen.getByText("Host chat content")).not.toBeNull();
+      });
+    }
+
+    function newQueryClient(): QueryClient {
+      return new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+    }
+
+    function poolWitnessAtRest() {
+      const client = new FakeStreamClient(true);
+      const witness = new PoolChatServingWitness();
+      witness.setStreamClient(client);
+      return { witness, client };
+    }
+
+    function tree(queryClient: QueryClient, witness: PoolChatServingWitness) {
+      return (
+        <ChatServingWitnessContext.Provider value={witness}>
+          {chatTileTestTree(queryClient, true, { ...CHAT_ARTIFACT })}
+        </ChatServingWitnessContext.Provider>
+      );
+    }
+
+    beforeEach(() => {
+      // The production gate, not the override, decides whether a session may
+      // be held: `transportKey` and `ownerIdentityKey` come from the
+      // directory rows below.
+      __setChatStreamClientFactoryForTests(null);
+      opened.length = 0;
+      fakeDurableStreamTransports().opener = openChatTransport;
+      poolPlanTestState.pool = true;
+      useEndedSandboxHostsStore.setState({ byHostId: {} });
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: { userId: VIEWER, userName: "V", email: "v@example.com" },
+        contextMetadata: { userId: VIEWER, username: "V" },
+      });
+      directoryListTestState.entries = [teamDirectoryRow];
+      setDirectoryRows([teamDirectoryRow, poolEntry]);
+      taskHostsTestState.view = teamTaskHosts;
+    });
+
+    afterEach(() => {
+      setDirectoryRows(null);
+      resetFakeDurableStreamTransports();
+      poolPlanTestState.pool = false;
+      taskHostsTestState.view = null;
+      useEndedSandboxHostsStore.setState({ byHostId: {} });
+    });
+
+    it("keeps the message on screen and the session held when the sandbox's row leaves the directory", async () => {
+      const { witness, client } = poolWitnessAtRest();
+      render(tree(newQueryClient(), witness));
+      await messageOnScreen(client);
+      const pool = opened.filter((t) => t.hostId === POOL_HOST_ID);
+
+      // The destroy: recorded here, the row gone from the directory.
+      act(() => {
+        recordEndedSandboxHost(HOST_ID, {
+          name: SANDBOX_NAME,
+          at: DESTROYED_AT,
+          cause: "verb",
+          actor: { userId: VIEWER, displayName: null },
+          idleMinutes: null,
+        });
+      });
+      directoryListTestState.entries = [];
+      act(() => setDirectoryRows([poolEntry]));
+
+      await waitFor(() => {
+        expect(
+          screen.getAllByText(
+            `${SANDBOX_NAME} was destroyed on Oct 28 at 01:27 by you. Its files are gone; this chat stays readable.`,
+          ),
+        ).toHaveLength(1);
+      });
+      // The reader's whole complaint: the message is still on screen.
+      expect(screen.getByText("Host chat content")).not.toBeNull();
+      const handle = __getChatSessionRegistryForTests().peek(
+        EPIC_ID,
+        CHAT_ARTIFACT.id,
+        HOST_ID,
+      );
+      expect(handle).not.toBeNull();
+      expect(handle?.store.getState().snapshotLoaded).toBe(true);
+      // No other peer was dialled, and the pool's transport never closed.
+      expect(chatPeers()).toEqual([POOL_HOST_ID]);
+      expect(pool.map((t) => t.closeCount)).toEqual([0]);
+      expect(
+        screen.getAllByRole("button", { name: "Continue on another host" }),
+      ).toHaveLength(1);
+      witness.dispose();
+    });
+
+    it("reads the message on a fresh mount with no directory row for the sandbox and the task's end record", async () => {
+      directoryListTestState.entries = [];
+      setDirectoryRows([poolEntry]);
+      taskHostsTestState.view = {
+        kind: "hosts",
+        hosts: [
+          {
+            hostId: HOST_ID,
+            label: SANDBOX_NAME,
+            principal: { kind: "team", id: "team-1" },
+            reach: "same_principal",
+            sandboxEnd: {
+              state: "destroyed",
+              destroyedAt: DESTROYED_AT,
+              cause: "verb",
+              actor: "you",
+              idleMinutes: null,
+            },
+          },
+        ],
+      };
+      const { witness, client } = poolWitnessAtRest();
+      render(tree(newQueryClient(), witness));
+      await messageOnScreen(client);
+
+      expect(screen.getByText("Host chat content")).not.toBeNull();
+      expect(chatPeers()).toEqual([POOL_HOST_ID]);
+      expect(
+        screen.getAllByText(
+          `${SANDBOX_NAME} was destroyed on Oct 28 at 01:27 by you. Its files are gone; this chat stays readable.`,
+        ),
+      ).toHaveLength(1);
+      witness.dispose();
+    });
+  });
+
+  describe("the Clone offer for an offline host", () => {
+    const offlineRemote: HostDirectoryEntry = remoteEntry(HOST_ID, null);
+
+    function markHostOffline(): void {
+      useSelectionAuthorityStore.setState({
+        attached: true,
+        leases: [
+          { hostId: HOST_ID, status: "dead", dead: { reason: "offline" } },
+        ],
+      });
+    }
+
+    function cloneOffer(): HTMLElement | null {
+      return screen.queryByRole("button", { name: /Clone agent/ });
+    }
+
+    afterEach(() => {
+      setDirectoryRows(null);
+      taskHostsTestState.view = null;
+    });
+
+    it("waits for the task's hosts when the directory holds no row, then offers once they name no sandbox", async () => {
+      markHostOffline();
+      setDirectoryRows([]);
+      taskHostsTestState.view = { kind: "pending" };
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+      const rendered = render(
+        chatTileTestTree(queryClient, true, CHAT_ARTIFACT),
+      );
+      await advanceLegendListTime(0);
+      await waitForChatTileLoaded();
+      expect(cloneOffer()).toBeNull();
+
+      taskHostsTestState.view = {
+        kind: "hosts",
+        hosts: [
+          {
+            hostId: "host-person",
+            label: null,
+            principal: { kind: "user", id: "viewer-1" },
+            reach: "same_principal",
+            sandboxEnd: null,
+          },
+        ],
+      };
+      rendered.rerender(
+        chatTileTestTree(queryClient, true, { ...CHAT_ARTIFACT }),
+      );
+
+      await waitFor(() => {
+        expect(cloneOffer()).not.toBeNull();
+      });
+    });
+
+    it("offers at once when the directory holds the host's row", async () => {
+      markHostOffline();
+      setDirectoryRows([offlineRemote]);
+      directoryListTestState.entries = [offlineRemote];
+      taskHostsTestState.view = { kind: "pending" };
+      renderChatTile();
+      await advanceLegendListTime(0);
+
+      await waitFor(() => {
+        expect(cloneOffer()).not.toBeNull();
+      });
+    });
+  });
+
+  describe("a team sandbox's chat the pool serves", () => {
+    const VIEWER = "viewer-1";
+    // Local time, as every sandbox row states it.
+    const DESTROYED_AT = new Date(2026, 9, 28, 1, 27).getTime();
+    const SANDBOX_NAME = "e2e-sbx-t1";
+    const BY_YOU_LINE = `${SANDBOX_NAME} was destroyed on Oct 28 at 01:27 by you. Its files are gone; this chat stays readable.`;
+    const teamDirectoryRow = remoteEntry(HOST_ID, sandboxFacts("team-1"));
+
+    function teamTaskRow(sandboxEnd: TaskHostRow["sandboxEnd"]): TaskHostsView {
+      return {
+        kind: "hosts",
+        hosts: [
+          {
+            hostId: HOST_ID,
+            label: SANDBOX_NAME,
+            principal: { kind: "team", id: "team-1" },
+            reach: "same_principal",
+            sandboxEnd,
+          },
+        ],
+      };
+    }
+
+    /** The pool's serving stream for this chat, answered at rest. */
+    function poolWitnessAtRest() {
+      const client = new FakeStreamClient(true);
+      const witness = new PoolChatServingWitness();
+      witness.setStreamClient(client);
+      return { witness, client };
+    }
+
+    async function answerAtRest(client: FakeStreamClient): Promise<void> {
+      // The tile retains the chat once its record gate opens.
+      await waitFor(() => {
+        expect(client.sessions).toHaveLength(1);
+      });
+      act(() => {
+        client.sessions[0]?.emit(
+          {
+            kind: "serving",
+            hasBinaryPayload: false,
+            serving: {
+              ownerHostId: HOST_ID,
+              state: "at-rest",
+              catchingUp: null,
+            },
+          },
+          null,
+        );
+      });
+    }
+
+    function witnessedTree(
+      queryClient: QueryClient,
+      witness: PoolChatServingWitness,
+      node: typeof CHAT_ARTIFACT,
+    ) {
+      return (
+        <ChatServingWitnessContext.Provider value={witness}>
+          {chatTileTestTree(queryClient, true, node)}
+        </ChatServingWitnessContext.Provider>
+      );
+    }
+
+    /** The peers the open chat's reads went to: the pool, never the dead host. */
+    function expectReadsOnlyFromPool(): void {
+      expect(requesterTestState.hostIds.length).toBeGreaterThan(0);
+      expect(new Set(requesterTestState.hostIds)).toEqual(
+        new Set([POOL_HOST_ID]),
+      );
+    }
+
+    function newQueryClient(): QueryClient {
+      return new QueryClient({
+        defaultOptions: { queries: { retry: false, gcTime: 0 } },
+      });
+    }
+
+    beforeEach(() => {
+      poolPlanTestState.pool = true;
+      requesterTestState.hostIds.length = 0;
+      useEndedSandboxHostsStore.setState({ byHostId: {} });
+      useAuthStore.setState({
+        status: "signed-in",
+        profile: { userId: VIEWER, userName: "V", email: "v@example.com" },
+        contextMetadata: { userId: VIEWER, username: "V" },
+      });
+      directoryListTestState.entries = [teamDirectoryRow];
+      setDirectoryRows([teamDirectoryRow]);
+      taskHostsTestState.view = teamTaskRow(null);
+    });
+
+    afterEach(() => {
+      setDirectoryRows(null);
+      poolPlanTestState.pool = false;
+      taskHostsTestState.view = null;
+      useEndedSandboxHostsStore.setState({ byHostId: {} });
+    });
+
+    it("keeps the transcript and the session when the sandbox is destroyed, and puts the one end line in the composer slot", async () => {
+      const { witness, client } = poolWitnessAtRest();
+      const queryClient = newQueryClient();
+      render(witnessedTree(queryClient, witness, CHAT_ARTIFACT));
+      await answerAtRest(client);
+      await waitForChatTileLoaded();
+      expect(chatHarness.streamCreations()).toBe(1);
+      expect(screen.queryByText(/was destroyed/)).toBeNull();
+
+      // The destroy: this device records it before the server answers, and
+      // the sandbox's directory row leaves. The task's hosts still name the
+      // team's sandbox.
+      act(() => {
+        recordEndedSandboxHost(HOST_ID, {
+          name: SANDBOX_NAME,
+          at: DESTROYED_AT,
+          cause: "verb",
+          actor: { userId: VIEWER, displayName: null },
+          idleMinutes: null,
+        });
+      });
+      directoryListTestState.entries = [];
+      act(() => setDirectoryRows([]));
+
+      await waitFor(() => {
+        expect(screen.getAllByText(BY_YOU_LINE)).toHaveLength(1);
+      });
+      expect(screen.getByText("Host chat content")).not.toBeNull();
+      // The same session: no second subscribe on another peer.
+      expect(chatHarness.streamCreations()).toBe(1);
+      expect(client.subscribes).toHaveLength(1);
+      expectReadsOnlyFromPool();
+      expect(
+        screen.getAllByRole("button", { name: "Continue on another host" }),
+      ).toHaveLength(1);
+      expect(screen.getAllByRole("button", { name: "Details" })).toHaveLength(
+        1,
+      );
+      expect(screen.queryByTestId("chat-sandbox-destroyed")).toBeNull();
+      expect(document.body.textContent).not.toContain("isn't available");
+      witness.dispose();
+    });
+
+    it("shows the transcript from the pool on a fresh mount with no directory row and the task's end record", async () => {
+      directoryListTestState.entries = [];
+      setDirectoryRows([]);
+      taskHostsTestState.view = teamTaskRow({
+        state: "destroyed",
+        destroyedAt: DESTROYED_AT,
+        cause: "verb",
+        actor: "you",
+        idleMinutes: null,
+      });
+      const { witness, client } = poolWitnessAtRest();
+      render(witnessedTree(newQueryClient(), witness, CHAT_ARTIFACT));
+      await answerAtRest(client);
+      await waitForChatTileLoaded();
+
+      expect(screen.getByText("Host chat content")).not.toBeNull();
+      expect(screen.getAllByText(BY_YOU_LINE)).toHaveLength(1);
+      expect(chatHarness.streamCreations()).toBe(1);
+      // The chat rides the pool's serving stream, not a dead host's.
+      expect(client.subscribes).toHaveLength(1);
+      expectReadsOnlyFromPool();
+      expect(
+        screen.getAllByRole("button", { name: "Continue on another host" }),
+      ).toHaveLength(1);
+      expect(screen.queryByTestId("chat-sandbox-destroyed")).toBeNull();
+      witness.dispose();
+    });
+  });
+
   it.each(["owner", "viewer"] as const)(
     "says a destroyed sandbox's end in one line, with its actions and no composer, to the %s",
     async (access) => {
@@ -2684,6 +3303,87 @@ describe("<ChatTile />", () => {
     });
     usePendingSandboxSendStore.setState({ sends: {} });
     useStagedSandboxStore.getState().clearAll();
+  });
+
+  it("reads a personal sandbox's destroyed chat from its published copy: the transcript and the one end line, together", async () => {
+    taskSandboxTestState.task = {
+      kind: "ended",
+      ended: {
+        name: "e2e-sbx-p1",
+        end: {
+          state: "destroyed",
+          destroyedAt: new Date(2026, 9, 28, 1, 27).getTime(),
+          cause: "burst-idle",
+          actor: null,
+          idleMinutes: 12,
+        },
+      },
+    };
+    replicaReadTestState.messages = [
+      {
+        role: "assistant",
+        messageId: "copy-message-1",
+        timestamp: 1,
+        turnId: null,
+        usage: null,
+        sender: {
+          type: "agent",
+          harnessId: "claude",
+          agentId: "agent-1",
+          displayName: null,
+          reply: { expectsReply: false },
+          inReplyTo: null,
+        },
+        blocks: [
+          {
+            blockId: "copy-block-1",
+            status: "completed",
+            timestamp: 1,
+            parentBlockId: null,
+            type: "text",
+            text: "Published copy transcript",
+            providerNotice: null,
+          },
+        ],
+      },
+    ];
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    });
+    render(
+      chatTileProviders(
+        queryClient,
+        <PublishedChatTile
+          node={{
+            id: "published:epic-chat-tile:owner-1:chat-1",
+            instanceId: "inst-published-1",
+            type: TILE_KIND_PUBLISHED_CHAT,
+            name: CHAT_ARTIFACT.name,
+            hostId: HOST_ID,
+            taskId: EPIC_ID,
+            chatId: CHAT_ARTIFACT.id,
+            ownerUserId: "owner-1",
+            ownerHostId: "owner-sandbox-host",
+          }}
+          viewTabId="tab-test"
+          tileId="pane-test"
+          isActive
+          epicId={EPIC_ID}
+        />,
+      ),
+    );
+    await settleLegendList();
+
+    await waitFor(() => {
+      expect(screen.getByText("Published copy transcript")).not.toBeNull();
+    });
+    expect(
+      screen.getAllByText(
+        "e2e-sbx-p1 was destroyed on Oct 28 at 01:27 after 12 idle minutes. Its files are gone; this chat stays readable.",
+      ),
+    ).toHaveLength(1);
+    expect(screen.queryByTestId("chat-sandbox-destroyed")).toBeNull();
+    replicaReadTestState.messages = [];
   });
 
   it("never says a published copy is reconnecting: its stream is closed for good, not down", async () => {

@@ -130,7 +130,9 @@ describe("a chat session's fatal close notification", () => {
     recordEndedSandboxHost("host-1", {
       name: "e2e-sbx-win2",
       at: 1_000,
+      cause: "verb",
       actor: { userId: "user-1", displayName: null },
+      idleMinutes: null,
     });
     const session = buildSession("host-1", {});
 
@@ -143,7 +145,9 @@ describe("a chat session's fatal close notification", () => {
     recordEndedSandboxHost("host-1", {
       name: "e2e-sbx-win2",
       at: 1_000,
+      cause: "verb",
       actor: { userId: "user-1", displayName: null },
+      idleMinutes: null,
     });
     const session = buildSession("host-2", {});
 

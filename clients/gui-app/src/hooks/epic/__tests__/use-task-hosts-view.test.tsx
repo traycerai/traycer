@@ -4,6 +4,8 @@ import type { TaskHostRow } from "@traycer/protocol/host/task-host-summary";
 
 interface TaskHostsState {
   readonly isPending: boolean;
+  readonly isFetching: boolean;
+  readonly failureCount: number;
   readonly isError: boolean;
   readonly error: { readonly code: string } | null;
   readonly data: { readonly hosts: readonly TaskHostRow[] } | undefined;
@@ -59,6 +61,8 @@ const HOSTS: readonly TaskHostRow[] = [
 function answered(hosts: readonly TaskHostRow[]): TaskHostsState {
   return {
     isPending: false,
+    isFetching: false,
+    failureCount: 0,
     isError: false,
     error: null,
     data: { hosts },
@@ -69,6 +73,8 @@ function answered(hosts: readonly TaskHostRow[]): TaskHostsState {
 function failedWithoutData(code: string): TaskHostsState {
   return {
     isPending: false,
+    isFetching: false,
+    failureCount: 0,
     isError: true,
     error: { code },
     data: undefined,
@@ -82,6 +88,8 @@ function failedOverData(
 ): TaskHostsState {
   return {
     isPending: false,
+    isFetching: false,
+    failureCount: 0,
     isError: true,
     error: { code },
     data: { hosts },
@@ -132,9 +140,41 @@ describe("useTaskHostsView", () => {
     expect(result.current).toEqual({ kind: "none" });
   });
 
+  it("is pending while the first attempt is in flight", () => {
+    mocks.taskHosts = {
+      isPending: true,
+      isFetching: true,
+      failureCount: 0,
+      isError: false,
+      error: null,
+      data: undefined,
+      refetch: mocks.refetch,
+    };
+    const { result } = renderHook(() => useTaskHostsView(EPIC_ID));
+
+    expect(result.current).toEqual({ kind: "pending" });
+  });
+
+  it("is no longer pending once the first attempt failed and its retries are running, so a hold on it is bounded", () => {
+    mocks.taskHosts = {
+      isPending: true,
+      isFetching: true,
+      failureCount: 1,
+      isError: false,
+      error: null,
+      data: undefined,
+      refetch: mocks.refetch,
+    };
+    const { result } = renderHook(() => useTaskHostsView(EPIC_ID));
+
+    expect(result.current).toEqual({ kind: "none" });
+  });
+
   it("is none while the query is pending", () => {
     mocks.taskHosts = {
       isPending: true,
+      isFetching: false,
+      failureCount: 0,
       isError: false,
       error: null,
       data: undefined,

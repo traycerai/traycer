@@ -287,7 +287,9 @@ describe("<TerminalTile /> on an unreachable host", () => {
     recordEndedSandboxHost(HOST_ID, {
       name: "e2e-sbx-p1",
       at: new Date(2026, 9, 25, 11, 1).getTime(),
+      cause: "verb",
       actor: { userId: "user-2", displayName: "Priya" },
+      idleMinutes: null,
     });
 
     renderErroredTile();
