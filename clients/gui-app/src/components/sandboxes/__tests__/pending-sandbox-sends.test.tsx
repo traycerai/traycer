@@ -8412,7 +8412,7 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
     );
 
     it.each(byKind(["sending", "uncertain"] as const))(
-      "wakes a rested %s %s claim holding a settings blocker on Retry, then delivers once its settings are ready",
+      "reads a rested %s %s claim holding a settings blocker as unconfirmed, wakes it on Retry, then delivers once its settings are ready",
       async (kind, status) => {
         const input = await seedClaim(kind, status, SANDBOX_ID);
         usePendingSandboxSendStore.setState((state) => {
@@ -8436,9 +8436,15 @@ describe("a durable dispatch claim and its sandbox's lifecycle", () => {
         mocks.wake.mockReturnValue(wake.promise);
         mount();
 
-        fireEvent.click(
-          await screen.findByTestId("pending-sandbox-dispatch-retry"),
+        const retry = await screen.findByTestId(
+          "pending-sandbox-dispatch-retry",
         );
+        const line = screen.getByTestId("pending-sandbox-dispatch").textContent;
+        expect(line).toContain("Couldn't confirm the agent was created.");
+        expect(line).not.toContain("Applying settings");
+        expect(mocks.wake).not.toHaveBeenCalled();
+
+        fireEvent.click(retry);
         await waitFor(() => {
           expect(mocks.wake).toHaveBeenCalledTimes(1);
         });

@@ -664,7 +664,8 @@ function claimResting(
  * A Stop ends once the row proves the rest. Whatever else held the delivery,
  * a sandbox that rested on its own ends it too: the message goes back, and
  * only the person's next message or Resume wakes it. A request that may
- * already be running cannot go back, so it says so and waits for its Retry.
+ * already be running cannot go back, so it says so and waits for its Retry,
+ * whatever settings it was waiting on: nothing applies on a resting sandbox.
  */
 function endedAtRest(
   state: PendingSendState,
@@ -674,6 +675,15 @@ function endedAtRest(
     return facts.host === "resting"
       ? withdraw(state, facts)
       : result(state, ["poll"], facts);
+  if (
+    state.blocker === "settings" &&
+    claimed(state) &&
+    facts.host === "resting" &&
+    !facts.frozen
+  ) {
+    const cleared: PendingSendState = { ...state, blocker: "none" };
+    return endedAtRest(cleared, facts) ?? result(cleared, ["poll"], facts);
+  }
   if (
     facts.host === "resting" &&
     facts.stageRested &&

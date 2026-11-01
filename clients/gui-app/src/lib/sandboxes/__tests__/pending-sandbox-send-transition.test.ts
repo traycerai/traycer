@@ -943,7 +943,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "late-accept": ["A", "record-receipt", "a"],
     "stop-result": ["S.settings", "", "i"],
     "stop-failed": ["S.settings", "", "i"],
-    rest: ["S.settings", "poll", "a"],
+    rest: ["Q.none", "uncertain+poll", "a"],
     awake: ["S.settings", "poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
     frozen: ["S.credits", "poll", "a"],
@@ -1203,7 +1203,7 @@ const GRID: Readonly<Record<string, Readonly<Record<string, Cell>>>> = {
     "late-accept": ["A", "record-receipt", "a"],
     "stop-result": ["Q.settings", "", "i"],
     "stop-failed": ["Q.settings", "", "i"],
-    rest: ["Q.settings", "poll", "a"],
+    rest: ["Q.none", "poll", "a"],
     awake: ["Q.settings", "poll", "a"],
     "terminal-row": ["E", "end-host", "a"],
     frozen: ["Q.credits", "poll", "a"],
@@ -2733,7 +2733,6 @@ describe("a resting sandbox wakes only for work that can proceed there", () => {
     "W.notsent",
     "W.wake",
     "S.credits",
-    "S.settings",
     "S.wake",
     "Q.client",
   ];
@@ -2769,6 +2768,17 @@ describe("a resting sandbox wakes only for work that can proceed there", () => {
       );
       expect(resting.state.phase).toBe("returned");
       expect(resting.effects).toEqual(["return-message", "remove"]);
+      // A claim can't go back: it says so, and still nothing wakes for it.
+      const claim = run(stateOf("chat", "S.settings"), event, {
+        ...defaultFacts("S.settings"),
+        clientReady: false,
+      });
+      const rested = run(claim.state, "rest", factsFor("S.settings", "rest"));
+      expect(rested.state).toMatchObject({
+        phase: "uncertain",
+        blocker: "none",
+      });
+      expect(rested.effects).not.toContain("wake");
     },
   );
 
@@ -2847,6 +2857,43 @@ describe("Retry on a settings blocker when the sandbox rests", () => {
         phase: "sending",
         blocker: "host",
       });
+    },
+  );
+
+  it.each(["S.settings", "Q.settings"])(
+    "%s reads as unconfirmed at rest, with no setup line and no wake",
+    (rowId) => {
+      const observed = run(
+        stateOf("chat", rowId),
+        "observe",
+        restingFacts(rowId),
+      );
+      expect(observed.state).toMatchObject({
+        phase: "uncertain",
+        blocker: "none",
+      });
+      expect(observed.view.line).toBe("uncertain");
+      expect(observed.effects).not.toContain("wake");
+    },
+  );
+
+  it("S.settings keeps its request in flight at rest, with no setup line", () => {
+    const observed = run(stateOf("chat", "S.settings"), "observe", {
+      ...restingFacts("S.settings"),
+      inFlight: true,
+    });
+    expect(observed.state).toMatchObject({ phase: "sending", blocker: "none" });
+    expect(observed.view.line).toBe("waiting");
+  });
+
+  it.each(["S.settings", "Q.settings"])(
+    "%s says credits, not settings, on a frozen sandbox at rest",
+    (rowId) => {
+      const observed = run(stateOf("chat", rowId), "observe", {
+        ...restingFacts(rowId),
+        frozen: true,
+      });
+      expect(observed.view.line).toBe("credits");
     },
   );
 
