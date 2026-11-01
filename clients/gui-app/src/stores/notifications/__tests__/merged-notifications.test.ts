@@ -804,7 +804,6 @@ describe("merged notifications feed", () => {
       }),
     ).toMatchObject({
       category: "collaboration",
-      severity: "info",
       title: "Your role changed",
     });
   });

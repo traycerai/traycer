@@ -25,8 +25,9 @@ const DROPPED_NOTIFICATION_KINDS: ReadonlySet<HostNotificationKind> = new Set(
  * `team.role.changed` is the one — a member is told their own role moved the
  * way a task's collaborators are, and that tell has never had a live surface
  * or a push either. Mirrored by the server's own push set, which keeps the
- * same kind out of the phone push. A person's own notification hook is outside
- * this gate and fires on severity alone, by their own standing rule.
+ * same kind out of the phone push. A notification hook is not a surface this
+ * set has to cover: hooks observe the host's own origin store, and this kind
+ * is written only server-side, so no hook ever sees a row of it.
  */
 const NO_LIVE_ANNOUNCE_NOTIFICATION_KINDS: ReadonlySet<HostNotificationKind> =
   new Set(["team.role.changed"]);

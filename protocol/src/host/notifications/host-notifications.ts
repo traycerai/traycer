@@ -827,8 +827,7 @@ export function streamCarriesChannelEmissionFrame(
  * role moved the way a task's collaborators are told theirs did, so that kind
  * is read in the center like any other row — and announced nowhere live, which
  * the clients own through their own live-announce set, mirrored by the server's
- * own push set. A person's own notification hook still fires on it, on
- * severity alone.
+ * own push set.
  */
 export const RETIRED_HOST_NOTIFICATION_KINDS: readonly HostNotificationKind[] =
   [
