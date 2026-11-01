@@ -4,16 +4,25 @@ import {
   formatHostVersion,
   formatPlatform,
 } from "@/components/settings/host-scope/host-scope-model";
+import type { HostLastReport } from "@/components/settings/host-scope/host-last-report";
 import { formatElapsed } from "@/components/settings/panels/my-hosts-model";
 import { formatSettingsDate } from "@/lib/settings/settings-date";
 
 /**
- * What About this host is drawn from: the ACCOUNT's record of the host, and
- * the clock its "Last seen" is worded on. None of it is a host RPC, which is
- * the whole reason the group still reads while the host cannot be reached.
+ * What About this host is drawn from: the ACCOUNT's record of the host, its
+ * last report, and the clock its "Last seen" is worded on. None of it waits on
+ * a host RPC, which is the whole reason the group still reads while the host
+ * cannot be reached.
  */
 export interface HostOverviewAboutSource {
   readonly item: HostListItem;
+  readonly lastReport: HostLastReport;
+  /**
+   * The version the header shows. A sandbox's row has no `appVersion` (its
+   * writer is the credential refresh, which a sandbox never runs), so this is
+   * the only version the page has for one.
+   */
+  readonly headerVersion: string | null;
   /** The scope's clock - the one the header's "Last seen …" is worded on. */
   readonly nowMs: number;
 }
@@ -29,7 +38,7 @@ export interface HostOverviewAboutView {
 const NOT_REPORTED = "Not reported yet";
 
 /**
- * Last seen is the account's own stamp, always - the row has no second
+ * Last seen is the host's last report, always - the row has no second
  * wording, and that is the fix rather than a simplification.
  *
  * It used to read "Online now" while the header's live evidence held
@@ -55,9 +64,11 @@ export function deriveAboutThisHost(
   return {
     hostId: item.hostId,
     addedToAccount: formatAccountDate(item.createdAt),
-    lastSeen: describeLastSeen(item.status.lastSeenAt, source.nowMs),
+    lastSeen: describeLastSeen(source.lastReport, source.nowMs),
     lastReportedVersion:
-      formatHostVersion(item.status.appVersion) ?? NOT_REPORTED,
+      formatHostVersion(
+        item.kind === "sandbox" ? source.headerVersion : item.status.appVersion,
+      ) ?? NOT_REPORTED,
     platform: describePlatform(item.platform),
   };
 }
@@ -73,11 +84,12 @@ function formatAccountDate(iso: string): string {
  * "3h ago" - the same ladder, and the same clock, as the header's "Last seen
  * 3h ago" for a host that is offline, so the two never disagree on one screen.
  */
-function describeLastSeen(lastSeenAt: string | null, nowMs: number): string {
-  if (lastSeenAt === null) return "Not seen yet";
-  const then = Date.parse(lastSeenAt);
-  if (Number.isNaN(then)) return "Unknown";
-  const elapsed = formatElapsed(Math.max(0, Math.round((nowMs - then) / 1000)));
+function describeLastSeen(report: HostLastReport, nowMs: number): string {
+  if (report.kind === "none") return "Not seen yet";
+  if (report.kind === "unknown") return "Unknown";
+  const elapsed = formatElapsed(
+    Math.max(0, Math.round((nowMs - report.at) / 1000)),
+  );
   return elapsed.charAt(0).toUpperCase() + elapsed.slice(1);
 }
 

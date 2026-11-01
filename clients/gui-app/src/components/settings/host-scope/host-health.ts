@@ -4,6 +4,7 @@ import type {
   HostLeaseDeadState,
   HostLeaseSnapshot,
 } from "@traycer-clients/shared/host-selection/selection-authority-contract";
+import type { HostLastReport } from "@/components/settings/host-scope/host-last-report";
 import {
   deriveHostPresence,
   formatLastSeen,
@@ -125,6 +126,8 @@ export interface DeriveHostHealthOptions {
    * evidence below rather than terminate the derivation.
    */
   readonly lease: HostLeaseSnapshot | null;
+  /** When the account last heard from this host: an offline host's detail. */
+  readonly lastReport: HostLastReport;
   /**
    * Whether this window's selection kernel has attached at all.
    *
@@ -222,7 +225,7 @@ function localServiceHealth(
 
 /** What the dead-reason table needs to word an answer. */
 interface DeadHealthContext {
-  readonly item: HostListItem | null;
+  readonly lastReport: HostLastReport;
   readonly nowMs: number;
 }
 
@@ -240,9 +243,7 @@ const DEAD_HEALTH: Record<
   offline: (context) => ({
     state: "offline",
     label: "Offline",
-    detail: capitalize(
-      formatLastSeen(context.item?.status.lastSeenAt ?? null, context.nowMs),
-    ),
+    detail: capitalize(formatLastSeen(context.lastReport, context.nowMs)),
     tone: HOST_HEALTH_TONE.offline,
     live: false,
   }),
@@ -318,7 +319,7 @@ function leaseHealth(options: DeriveHostHealthOptions): HostHealth | null {
       };
     case "dead":
       return DEAD_HEALTH[lease.dead.reason]({
-        item: options.item,
+        lastReport: options.lastReport,
         nowMs: options.nowMs,
       });
   }
@@ -330,7 +331,7 @@ function leaseHealth(options: DeriveHostHealthOptions): HostHealth | null {
  * declined.
  */
 function registryHealth(options: DeriveHostHealthOptions): HostHealth {
-  const { item, hasLiveSession, nowMs } = options;
+  const { item, hasLiveSession, lastReport, nowMs } = options;
   if (item === null) {
     // In the runtime directory but not the cloud registry, and no lease: we
     // can reach it, yet nothing vouches for its liveness. Claiming either
@@ -395,7 +396,7 @@ function registryHealth(options: DeriveHostHealthOptions): HostHealth {
         live: false,
       };
     case "offline":
-      return DEAD_HEALTH.offline({ item, nowMs });
+      return DEAD_HEALTH.offline({ lastReport, nowMs });
   }
 }
 
