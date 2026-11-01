@@ -23,10 +23,7 @@ function item(
     publicKey: "pk",
     createdAt: "2026-03-03T12:00:00Z",
     status: {
-      // The account cannot reach this host, which is the state every Last
-      // seen wording below is about. The one "Online now" case sets
-      // `connectable` itself.
-      connectivity: "offline",
+      connectivity: "connectable",
       viewerReachability: "unknown",
       clientCloud: "ok",
       updateState: "current",
@@ -63,43 +60,15 @@ describe("deriveAboutThisHost", () => {
     expect(view.addedToAccount).toBe("24 Oct");
   });
 
-  it("says 'Online now' while the account holds the host, whatever lastSeenAt says", () => {
-    const stale = item("2026-09-24T09:00:00Z", {});
-    const view = deriveAboutThisHost({
-      item: {
-        ...stale,
-        status: { ...stale.status, connectivity: "connectable" },
-      },
-      nowMs: NOW_MS,
-    });
-    expect(view.lastSeen).toBe("Online now");
-    expect(view.online).toBe(true);
-  });
-
-  it("does not say 'Online now' from a connectable record this viewer cannot refresh", () => {
-    const stale = item("2026-09-24T09:00:00Z", {});
-    const view = deriveAboutThisHost({
-      item: {
-        ...stale,
-        status: {
-          ...stale.status,
-          connectivity: "connectable",
-          clientCloud: "down",
-        },
-      },
-      nowMs: NOW_MS,
-    });
-    expect(view.lastSeen).toBe("3h ago");
-    expect(view.online).toBe(false);
-  });
-
-  it("words the account's own timestamp on the given clock, capitalised", () => {
+  // The fixture's record is `connectable`, so this also pins that the cloud's
+  // lease reading does not word the row: a lease read up to its TTL old is not
+  // evidence of a check-in, and the row has one wording.
+  it("words a stale lastSeenAt on the given clock, capitalised", () => {
     const view = deriveAboutThisHost({
       item: item("2026-09-24T09:00:00Z", {}),
       nowMs: NOW_MS,
     });
     expect(view.lastSeen).toBe("3h ago");
-    expect(view.online).toBe(false);
   });
 
   it("says 'Just now' for a stamp inside the header's 45s window", () => {

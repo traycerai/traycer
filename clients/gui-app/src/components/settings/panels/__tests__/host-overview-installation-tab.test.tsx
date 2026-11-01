@@ -117,9 +117,7 @@ function registryItem(overrides: Partial<HostListItem>): HostListItem {
     publicKey: "pk",
     createdAt: "2026-03-03T12:00:00Z",
     status: {
-      // The account does not hold this host, which is what every Last seen
-      // assertion below is about. The "Online now" case sets `connectable`.
-      connectivity: "offline",
+      connectivity: "connectable",
       viewerReachability: "unknown",
       clientCloud: "ok",
       updateState: "current",
@@ -396,39 +394,18 @@ describe("Overview ▸ Installation — About this host", () => {
     expect((await screen.findByRole("tooltip")).textContent).toBe(HOST_ID);
   });
 
-  it("says 'Online now' while the account holds the host, whatever lastSeenAt says", async () => {
+  it("words lastSeenAt on the scope's clock even while the header's live evidence holds", async () => {
     setReadyScope({
       isLocalMachine: false,
       item: registryItem({
         status: {
           ...registryItem({}).status,
-          connectivity: "connectable",
           lastSeenAt: new Date(NOW_MS - THREE_HOURS_MS).toISOString(),
         },
       }),
-      live: false,
-      fixture: fixtureFor(false, undefined, undefined),
-      methods: [...OVERVIEW_METHODS, ...SERVICE_METHODS],
-    });
-    mount(null);
-    await selectHostOverviewTab("installation");
-
-    expect(
-      screen.getByTestId("host-overview-about-last-seen").textContent,
-    ).toBe("Online now");
-  });
-
-  it("words the account's own timestamp for a host serving this computer whose account record is cold", async () => {
-    setReadyScope({
-      isLocalMachine: true,
-      item: registryItem({
-        status: {
-          ...registryItem({}).status,
-          lastSeenAt: new Date(NOW_MS - THREE_HOURS_MS).toISOString(),
-        },
-      }),
-      // The header's live dot, which the local process read lights whatever
-      // the relay uplink is doing. Last seen must not follow it.
+      // The header's live dot, which a running local process lights whatever
+      // the relay uplink is doing. This row must not follow it: it read
+      // "Online now" here, claiming a check-in the account had not received.
       live: true,
       fixture: fixtureFor(false, undefined, undefined),
       methods: [...OVERVIEW_METHODS, ...SERVICE_METHODS],
@@ -436,9 +413,10 @@ describe("Overview ▸ Installation — About this host", () => {
     mount(null);
     await selectHostOverviewTab("installation");
 
-    expect(
-      screen.getByTestId("host-overview-about-last-seen").textContent,
-    ).toBe("3h ago");
+    const lastSeen = screen.getByTestId("host-overview-about-last-seen");
+    expect(lastSeen.textContent).toBe("3h ago");
+    // The green fill carried the same claim as the wording.
+    expect(lastSeen.className).not.toContain("text-success-foreground");
   });
 
   it("still reads when the host cannot be reached, and says nothing was reported for a host that never checked in", async () => {

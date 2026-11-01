@@ -4,10 +4,7 @@ import {
   formatHostVersion,
   formatPlatform,
 } from "@/components/settings/host-scope/host-scope-model";
-import {
-  deriveHostPresence,
-  formatElapsed,
-} from "@/components/settings/panels/my-hosts-model";
+import { formatElapsed } from "@/components/settings/panels/my-hosts-model";
 import { formatSettingsDate } from "@/lib/settings/settings-date";
 
 /**
@@ -25,7 +22,6 @@ export interface HostOverviewAboutView {
   readonly hostId: string;
   readonly addedToAccount: string;
   readonly lastSeen: string;
-  readonly online: boolean;
   readonly lastReportedVersion: string;
   readonly platform: string;
 }
@@ -33,45 +29,33 @@ export interface HostOverviewAboutView {
 const NOT_REPORTED = "Not reported yet";
 
 /**
- * Whether the ACCOUNT holds this host right now, which is the only evidence
- * "Online now" can stand on in a row whose subject is when the account last
- * heard from the host.
+ * Last seen is the account's own stamp, always - the row has no second
+ * wording, and that is the fix rather than a simplification.
  *
- * Read from the account's own presence derivation with NO session evidence
- * (`hasLiveSession: false`), which is the fix rather than a simplification.
- * The row used to follow the header's live dot (`HostScopeOption.health.live`),
- * and that dot's strongest source is the local process read - firsthand about
- * a process on this box and worth nothing about the account's reach. A host
- * whose identity plane has paused serves this app over its local stream while
- * its relay uplink is down, so the header read Online, the account had not
- * heard from it in minutes, and this row said "Online now" - a claim about
- * every other device, made from evidence that covers only this one.
+ * It used to read "Online now" while the header's live evidence held
+ * (`HostScopeOption.health.live`), and that flag's strongest source is the
+ * local process read: firsthand about a process on this box, and worth nothing
+ * about the account's reach. A host whose identity plane has paused serves this
+ * app over its local stream while its relay uplink is down, so the header read
+ * Online, the account had not heard from it in minutes, and this row claimed a
+ * check-in no other device could see.
  *
- * `deriveHostPresence` answers `reported-reachable` for exactly that fact (the
- * account's relay holds a live attachment) and `client-offline` when this
- * viewer cannot refresh the record at all, so a stale `connectable` behind a
- * dropped cloud link does not word the row either.
+ * Nothing on this record supports a second wording either. The cloud's
+ * `connectable` is a lease read up to its TTL old - `deriveHostPresence` words
+ * it "Reported reachable" and deliberately not "Online", and that reading is
+ * step 3 of `deriveHostHealth`'s precedence rather than something a surface
+ * renders. The honest line is the one the label already promises: when the
+ * account last heard from the host, on the header's own ladder and clock, so
+ * the two can never disagree on one screen.
  */
-function accountHoldsHostNow(item: HostListItem): boolean {
-  const presence = deriveHostPresence({
-    status: item.status,
-    hasLiveSession: false,
-  });
-  return presence.reading === "reported-reachable";
-}
-
 export function deriveAboutThisHost(
   source: HostOverviewAboutSource,
 ): HostOverviewAboutView {
   const { item } = source;
-  const online = accountHoldsHostNow(item);
   return {
     hostId: item.hostId,
     addedToAccount: formatAccountDate(item.createdAt),
-    lastSeen: online
-      ? "Online now"
-      : describeLastSeen(item.status.lastSeenAt, source.nowMs),
-    online,
+    lastSeen: describeLastSeen(item.status.lastSeenAt, source.nowMs),
     lastReportedVersion:
       formatHostVersion(item.status.appVersion) ?? NOT_REPORTED,
     platform: describePlatform(item.platform),
